@@ -42,8 +42,8 @@ function activity(
     pending_input_count: pendingInputCount,
     selected_status: alias
       ? {
-          session: {
-            id: "session-1",
+          thread: {
+            id: "thread-1",
             alias,
             state: "turn_active",
             working: true,
@@ -125,7 +125,7 @@ test("selection restores a valid saved agent then falls back to the first", () =
 });
 
 test("tab routing remounts existing selected-agent pages", () => {
-  assert.equal(agentTabFromPath("/agents/alpha/sessions/s1"), "chat");
+  assert.equal(agentTabFromPath("/agents/alpha/threads/s1"), "chat");
   assert.equal(agentTabFromPath("/agents/alpha/history"), "chat");
   assert.equal(agentTabFromPath("/agents/alpha/runtime"), "runtime");
   assert.equal(agentTabFromPath("/agents/alpha/runtime/extensions"), "runtime");

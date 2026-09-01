@@ -459,7 +459,7 @@ class SmokeResult:
     tools_capability: str
     thinking_effort: str
     status: str = "fail"
-    session_id: str = ""
+    thread_id: str = ""
     tool_status: str = "no"
     exec_command_status: str = "no"
     tty_status: str = "no"
@@ -502,7 +502,7 @@ class ProviderSmokeContext:
 class ScenarioRunOutcome:
     kind: str
     report: contract_oracle.ContractReport
-    session_id: str = ""
+    thread_id: str = ""
     validation_outcome: outcomes.ValidationOutcome | None = None
     attempt_count: int = 1
 
@@ -572,35 +572,34 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         case_dir,
         case_config,
         "turn1",
-        ["--new", prompt],
+        [prompt],
     )
     if turn_status != 0:
         return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "turn1 failed", turn_outcome)
-    session_id = json_file_value(case_dir / "turn1.stdout.json", "session_id")
-    if not session_id:
-        return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "missing session_id")
-    result.session_id = session_id
+    thread_id = json_file_value(case_dir / "turn1.stdout.json", "thread_id")
+    if not thread_id:
+        return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "missing thread_id")
+    result.thread_id = thread_id
     if not file_contains(case_dir / "turn1.stdout.json", f"EVAL_PASS {token}"):
         return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "missing final EVAL_PASS token")
 
-    sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
-    conversation = sessions / session_id / "conversation.jsonl"
-    if not conversation.is_file():
-        return fail_smoke_case(result, case_dir, artifact_dir, "session", "missing conversation log")
+    threads = agent_threads_dir(case_dir, case_dir / "home" / ".juex")
+    journal = threads / thread_id / "journal.jsonl"
+    if not journal.is_file():
+        return fail_smoke_case(result, case_dir, artifact_dir, "thread", "missing Thread Journal")
     ok, detail = validate_agent_smoke_files(notes_file, case_dir / "tty-result.txt", token)
     if not ok:
         return fail_smoke_case(result, case_dir, artifact_dir, "filesystem", detail)
     result.filesystem_status = "yes"
-    events = sessions / session_id / "events.jsonl"
-    contract_report = contract_oracle.validate_agent_smoke_contract(conversation, events, token)
+    contract_report = contract_oracle.validate_agent_smoke_contract(journal, journal, token)
     if not contract_report.passed:
-        return fail_smoke_case(result, case_dir, artifact_dir, "session", contract_report.message())
+        return fail_smoke_case(result, case_dir, artifact_dir, "thread", contract_report.message())
     result.tool_status = "yes"
     result.exec_command_status = "yes"
     result.tty_status = "yes"
     result.stdin_status = "yes"
     result.event_contract_status = "yes"
-    result.thinking_status = "observed" if file_contains(conversation, '"type":"reasoning"') else "not_exposed"
+    result.thinking_status = "observed" if file_contains(journal, '"type":"reasoning"') else "not_exposed"
     copy_case_artifacts(case_dir, artifact_dir)
     schedule_key = f"{int(time.time())}-{random.randrange(0x1000000):06x}"
     existing_schedule_id = (
@@ -636,12 +635,12 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         outcomes.success(attempt_count=2 if turn_attempt_count > 1 or schedule_outcome.attempt_count > 1 else 1),
     )
     print(
-        f"ok  {row.ref} session={session_id} toolcall={result.tool_status} "
+        f"ok  {row.ref} thread={thread_id} toolcall={result.tool_status} "
         f"exec_command={result.exec_command_status} tty={result.tty_status} "
         f"stdin={result.stdin_status} events={result.event_contract_status} "
         f"thinking={result.thinking_status} schedule_routing={result.schedule_routing_status} "
         f"schedule_variant={result.schedule_routing_variant} "
-        f"schedule_session={schedule_outcome.session_id} artifacts={artifact_dir}"
+        f"schedule_thread={schedule_outcome.thread_id} artifacts={artifact_dir}"
     )
     return result
 
@@ -791,7 +790,7 @@ def run_schedule_routing_case(
                 attempt_count=attempt,
             )
 
-        status = run_turn(ctx, case_dir, case_config, "turn1", ["--new", prompt])
+        status = run_turn(ctx, case_dir, case_config, "turn1", [prompt])
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
         if status != 0:
             write_error_tail(case_dir, attempt_artifacts)
@@ -815,25 +814,25 @@ def run_schedule_routing_case(
                 attempt_count=attempt,
             )
 
-        session_id = json_file_value(case_dir / "turn1.stdout.json", "session_id")
-        if not session_id:
-            report = contract_oracle.ContractReport(False, ["schedule routing turn missing session_id"])
+        thread_id = json_file_value(case_dir / "turn1.stdout.json", "thread_id")
+        if not thread_id:
+            report = contract_oracle.ContractReport(False, ["schedule routing turn missing thread_id"])
             write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
             return ScenarioRunOutcome(
                 SCENARIO_HARD_FAILED,
                 report,
-                validation_outcome=product_outcome("schedule routing turn omitted its session ID", "schedule-routing-session"),
+                validation_outcome=product_outcome("schedule routing turn omitted its Thread ID", "schedule-routing-thread"),
                 attempt_count=attempt,
             )
         try:
-            sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
+            threads = agent_threads_dir(case_dir, case_dir / "home" / ".juex")
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            report = contract_oracle.ContractReport(False, [f"schedule routing session artifacts: {exc}"])
+            report = contract_oracle.ContractReport(False, [f"schedule routing Thread artifacts: {exc}"])
             write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
             return ScenarioRunOutcome(
                 SCENARIO_HARD_FAILED,
                 report,
-                session_id,
+                thread_id,
                 outcomes.ValidationOutcome(
                     outcomes.ENVIRONMENT_FAILURE,
                     "schedule routing artifacts could not be read",
@@ -843,9 +842,9 @@ def run_schedule_routing_case(
                 ),
                 attempt,
             )
-        conversation = sessions / session_id / "conversation.jsonl"
+        journal = threads / thread_id / "journal.jsonl"
         observables = case_dir / ".juex" / "observables.json"
-        validation = schedule_routing.validate_outcome(conversation, observables, expectation)
+        validation = schedule_routing.validate_outcome(journal, observables, expectation)
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
         write_contract_report(attempt_artifacts, validation.kind, validation.report)
         validation_outcome = (
@@ -853,7 +852,7 @@ def run_schedule_routing_case(
             if validation.report.passed
             else product_outcome(validation.report.message(), "schedule-routing-contract")
         )
-        return ScenarioRunOutcome(validation.kind, validation.report, session_id, validation_outcome, attempt)
+        return ScenarioRunOutcome(validation.kind, validation.report, thread_id, validation_outcome, attempt)
     report = contract_oracle.ContractReport(False, ["schedule routing retries exhausted"])
     return ScenarioRunOutcome(
         SCENARIO_HARD_FAILED,
@@ -889,12 +888,21 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
         "--config",
         str(case_config),
         "--enable-user-agents-resources=false",
-        "run",
+        "send",
+        "--wait",
         "--json",
         *args,
     ]
     with stdout_file.open("wb") as stdout, stderr_file.open("wb") as stderr:
-        return run_subprocess_with_timeout(command, ctx.timeout_seconds, env=env, stdout=stdout, stderr=stderr)
+        status = run_subprocess_with_timeout(
+            command,
+            ctx.timeout_seconds,
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    stop_agent_runtime(ctx.juex_bin, case_dir, env)
+    return status
 
 
 def run_subprocess_with_timeout(
@@ -1013,12 +1021,12 @@ def copy_case_artifacts(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> N
     for path in sorted(case_dir.glob("*.stdout.json")) + sorted(case_dir.glob("*.stderr.log")):
         shutil.copy2(path, artifact_dir / path.name)
     try:
-        sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
+        threads = agent_threads_dir(case_dir, case_dir / "home" / ".juex")
     except (OSError, ValueError, json.JSONDecodeError):
         return
-    if sessions.is_dir():
-        for path in sorted(sessions.rglob("*")):
-            if path.is_file() and path.name in {"conversation.jsonl", "events.jsonl"}:
+    if threads.is_dir():
+        for path in sorted(threads.rglob("*")):
+            if path.is_file() and path.name in {"journal.jsonl", "thread.json"}:
                 shutil.copy2(path, artifact_dir / path.name)
 
 
@@ -1046,13 +1054,33 @@ def write_contract_report(
     )
 
 
-def agent_sessions_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
+def agent_threads_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
     marker_path = work_dir / ".juex" / "juex.local.json"
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     agent_id = marker.get("agent_id") if isinstance(marker, dict) else None
     if not isinstance(agent_id, str) or re.fullmatch(r"[a-z2-7]{6}", agent_id) is None:
         raise ValueError(f"invalid or missing agent_id in {marker_path}")
-    return juex_home / "agents" / agent_id / "sessions"
+    return juex_home / "agents" / agent_id / "threads"
+
+
+def stop_agent_runtime(juex_bin: str, work_dir: pathlib.Path, env: dict[str, str]) -> None:
+    """Best-effort cleanup for the resident Runtime started by `juex send`."""
+    marker_path = work_dir / ".juex" / "juex.local.json"
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        agent_id = marker.get("agent_id") if isinstance(marker, dict) else None
+        if not isinstance(agent_id, str) or re.fullmatch(r"[a-z2-7]{6}", agent_id) is None:
+            return
+        subprocess.run(
+            [juex_bin, "fleet", "stop", agent_id],
+            env=env,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
+        return
 
 
 def write_error_tail(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> None:
@@ -1569,7 +1597,7 @@ def write_development_record(
             model, score = scorecard_model_and_score(scorecard)
             lines.append(f"- {model}: {score}")
     else:
-        lines.append("- Not run. Run with `--compaction-eval` when touching compaction, context projection, provider replay, or long-session behavior.")
+        lines.append("- Not run. Run with `--compaction-eval` when touching compaction, context projection, provider replay, or long-Thread behavior.")
     record_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -2411,11 +2439,18 @@ def dump_yaml(value: Any) -> str:
 
 def json_file_value(path: pathlib.Path, key: str) -> str:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        lines = path.read_text(encoding="utf-8").splitlines()
     except Exception:  # noqa: BLE001
         return ""
-    value = data.get(key) if isinstance(data, dict) else ""
-    return "" if value is None else str(value)
+    for line in lines:
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        value = data.get(key) if isinstance(data, dict) else None
+        if value is not None:
+            return str(value)
+    return ""
 
 
 def file_contains(path: pathlib.Path, needle: str) -> bool:

@@ -9,7 +9,7 @@
 
 Juex 最初通过 `internal/app` 中 Feature 特定的调用，以及 Runtime loop 中的字段或 callback 组装 Feature 行为。这使生命周期顺序、Tool 注册、prompt context、清理和 status projection 依赖多条人工维护路径。一个 Feature 可能在某个界面被隐藏，但其 constructor、process、subscription 或 cleanup 仍在运行。替换 Feature 还需要修改 Framework 代码。
 
-Agent、Session、Turn、Provider iteration、Tool Call、compaction 和 shutdown 生命周期包含持久的顺序规则。替换机制不能让 Feature 代码绕过 admission、Tool declaration 与 outcome、pending input、Request Epoch、cancellation、compaction 或 completion commit。同时，Goal、Notes、Skills、Hooks、MCP、Observables 和 Side Sessions 等产品能力也不应硬编码进这些生命周期。
+Agent、Thread、Turn、Provider iteration、Tool Call、compaction 和 shutdown 生命周期包含持久的顺序规则。替换机制不能让 Feature 代码绕过 admission、Tool declaration 与 outcome、pending input、Request Epoch、cancellation、compaction 或 completion commit。同时，Goal、Notes、Skills、Hooks、MCP、Observables 和 Worker Threads 等产品能力也不应硬编码进这些生命周期。
 
 外部 Extension 是独立的信任与部署边界。它们是被选中的资源 bundle，不是 Juex 加载到 Go 进程中的代码。Module 架构必须保留这一差别。
 
@@ -19,7 +19,7 @@ Agent、Session、Turn、Provider iteration、Tool Call、compaction 和 shutdow
 
 Juex 使用三层职责：
 
-- **Foundation** 负责与业务无关的原语，例如 Provider Adapter、Tool value 与执行、Event 与持久 sink、Session persistence、sandboxing、Artifact、环境处理和进程管理。
+- **Foundation** 负责与业务无关的原语，例如 Provider Adapter、Tool value 与执行、Event 与持久 sink、Thread persistence、sandboxing、spool/media storage、环境处理和进程管理。
 - **Framework** 负责稳定的 Agent 与 Runtime 生命周期、持久顺序、Module contract、capability index、验证和 scoped lifecycle orchestration。
 - **Features** 负责可替换的产品能力与策略。可信的编译期 Feature 可以通过 Framework 自有的窄接口提供 Tool、context、policy、observation、status 或 scoped resource。
 
@@ -31,7 +31,7 @@ Juex 使用三层职责：
 
 Module 拥有一个稳定身份且只注册一次，即使它实现了多个类型化 capability。注册顺序显式且确定。Framework 在发布前验证 identity、contribution、provenance 与跨 scope Tool catalog，随后密封集合，使 serving code 不能修改它。
 
-Runtime 与 Session resource 有各自类型化生命周期。它们按注册顺序启动，失败回滚或关闭时使用反向顺序，尝试每一项清理，并把 failure 与 Module/phase identity 合并。已禁用 factory 在构造前过滤。Session replacement 在原子发布前构建并验证完整 candidate set；如果 candidate 发布失败，previous set 仍是 authoritative。
+Agent Runtime 与 Thread resource 有各自类型化生命周期。它们按注册顺序启动，失败回滚或关闭时使用反向顺序，尝试每一项清理，并把 failure 与 Module/phase identity 合并。已禁用 factory 在构造前过滤。Context Generation change 在同一个 Thread 内重建 prompt projection，不替换 Thread resource set。
 
 Feature dependency 在 composition root 使用 constructor injection。一个 Feature 可选消费另一个 Feature 时，由 consumer 定义它所需的最小类型化接口。Framework 不增加 Feature 特定字段或协议来代理该协作。
 
@@ -86,7 +86,7 @@ Extension provenance 保持 `ext:<name>`。可变状态由 Agent 与逻辑 Exten
 
 ### Hot reload 或“一切皆 plugin”的 Runtime
 
-动态发现和 hot replacement 要求在任意执行点增加 compatibility、quiescence、dependency 与 rollback contract。Juex 当前需要确定性构造和原子的 Runtime 或 Session 边界，而不是任意原地 mutation。Restart 和已验证的 Session-set replacement 是受支持的重新配置边界。
+动态发现和 hot replacement 要求在任意执行点增加 compatibility、quiescence、dependency 与 rollback contract。Juex 当前需要确定性构造和显式 Runtime 或 Thread 边界，而不是任意原地 mutation。Agent restart 与已验证的 Thread 创建/关闭是受支持的 resource reconfiguration boundary；`/new` 与 `/compact` 在现有 Thread 内重建 context。
 
 ## 实现证据
 
@@ -100,7 +100,7 @@ Extension provenance 保持 `ext:<name>`。可变状态由 Agent 与逻辑 Exten
 
 ## 参考
 
-- [架构：Module Set 与 Lifecycle](../../ARCHITECTURE.zh.md#22-module-set-与-lifecycle)
-- [领域生命周期](../../DOMAIN.zh.md#生命周期)
+- [架构：模块所有权](../../ARCHITECTURE.zh.md#模块所有权)
+- [领域：Input、Attempt、Turn 与订阅](../../DOMAIN.zh.md#inputattemptturn-与订阅)
 - [哲学：优先使用显式界面](../../PHILOSOPHY.zh.md#优先使用显式界面)
 - [`internal/runtime/module`](../../internal/runtime/module/)

@@ -506,7 +506,7 @@ func loadUserConfigForWorkDir(workDir string, explicitPaths ...string) (Config, 
 	return cfg, nil
 }
 
-// LoadFromFile is a convenience for tests / `juex run --config <path>`.
+// LoadFromFile is a convenience for tests and explicit CLI configuration.
 // It applies overrides from path on top of Load(); WorkDir is unaffected.
 func LoadFromFile(path string) (Config, error) {
 	return LoadFromFileForWorkDir(path, "")
@@ -757,19 +757,19 @@ func (c Config) SkillDirs() []string {
 	return c.ResourcePaths().SkillDirs
 }
 
-// SessionsDir returns the resolved agent sessions root.
-func (c Config) SessionsDir() string {
-	return c.RuntimePaths().SessionsDir
+// ThreadsDir returns the resolved agent threads root.
+func (c Config) ThreadsDir() string {
+	return c.RuntimePaths().ThreadsDir
 }
 
-// HistoryPath returns the resolved agent session history index path.
-func (c Config) HistoryPath() string {
-	return c.RuntimePaths().HistoryPath
+// ThreadIndexPath returns the resolved Agent Thread index path.
+func (c Config) ThreadIndexPath() string {
+	return c.RuntimePaths().ThreadIndexPath
 }
 
-// ArtifactDir returns the current Agent's managed Artifact root.
-func (c Config) ArtifactDir() string {
-	return c.RuntimePaths().ArtifactDir
+// MediaDir returns the current Agent's managed Media root.
+func (c Config) MediaDir() string {
+	return c.RuntimePaths().MediaDir
 }
 
 // RuntimeConfigPath returns the work-local runtime config file path.

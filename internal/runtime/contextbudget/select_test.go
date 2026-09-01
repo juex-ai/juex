@@ -99,7 +99,7 @@ func TestSelectCompactionInputReferencesOversizedImageOnlyInput(t *testing.T) {
 		Role: llm.RoleUser,
 		Kind: llm.MessageKindDirect,
 		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
-			ArtifactPath: "sessions/session/media/photo.png",
+			ArtifactPath: "threads/thread/media/photo.png",
 			MediaType:    "image/png",
 			SHA256:       "image-sha",
 			Width:        4000,
@@ -158,17 +158,17 @@ func TestSelectCompactionInputOmitsPolicyBlockedMessages(t *testing.T) {
 	}
 }
 
-func TestSelectCompactionInputTreatsSideSessionResultAsRealInput(t *testing.T) {
+func TestSelectCompactionInputTreatsSideThreadResultAsRealInput(t *testing.T) {
 	direct := testMsg("direct-1", llm.RoleUser, "delegate research")
 	direct.Kind = llm.MessageKindDirect
-	side := testMsg("side-1", llm.RoleUser, "Side Session result")
-	side.Kind = llm.MessageKindSideSession
+	side := testMsg("side-1", llm.RoleUser, "Side Thread result")
+	side.Kind = llm.MessageKindWorkerThread
 	history := []llm.Message{direct, testMsg("assistant-1", llm.RoleAssistant, "waiting"), side}
 	budget := EstimateMessageTokens([]llm.Message{direct, side})
 
 	selection := SelectInput(history, Policy{KeepRecentTokens: budget})
 	if got := selection.RetainedMessageIDs; len(got) != 2 || got[0] != "direct-1" || got[1] != "side-1" {
-		t.Fatalf("retained ids = %v, want direct and Side Session inputs", got)
+		t.Fatalf("retained ids = %v, want direct and Side Thread inputs", got)
 	}
 }
 

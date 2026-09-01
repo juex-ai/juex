@@ -74,7 +74,7 @@ func compactionSummaryFits(sys string, previous llm.Message, input []llm.Message
 func (e *Engine) compactionSummaryStateLocked() (compactionSummaryState, error) {
 	var summaryState compactionSummaryState
 	var goalProvider, notesProvider runtimemodule.ID
-	modules := e.SessionRuntimeSnapshot().Modules
+	modules := e.ThreadRuntimeSnapshot().Modules
 	if modules == nil {
 		return summaryState, nil
 	}

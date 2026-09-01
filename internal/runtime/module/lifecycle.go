@@ -10,7 +10,7 @@ type Scope string
 
 const (
 	ScopeRuntime Scope = "runtime"
-	ScopeSession Scope = "session"
+	ScopeThread  Scope = "thread"
 )
 
 type RuntimeResource interface {
@@ -22,13 +22,37 @@ type RuntimeQuiescer interface {
 	QuiesceRuntime(context.Context) error
 }
 
-type SessionResource interface {
-	StartSession(context.Context, SessionContext) error
-	CloseSession(context.Context) error
+type ThreadResource interface {
+	StartThread(context.Context, ThreadContext) error
+	CloseThread(context.Context) error
 }
 
-type SessionQuiescer interface {
-	QuiesceSession(context.Context) error
+type ThreadQuiescer interface {
+	QuiesceThread(context.Context) error
+}
+
+// ContextRenewalObserver receives the post-commit boundary created by New.
+// It is intentionally notification-only: the Journal transition is already
+// durable, so observers must update derived or transient state without trying
+// to veto or re-enter the Engine.
+type ContextRenewalObserver interface {
+	ContextRenewed(context.Context)
+}
+
+// NotifyContextRenewed invokes observers in set and registration order. A
+// module registered in more than one set is responsible for idempotence.
+func NotifyContextRenewed(ctx context.Context, sets ...*Set) {
+	ctx = nonNilContext(ctx)
+	for _, set := range sets {
+		if set == nil {
+			continue
+		}
+		for _, mod := range set.Modules() {
+			if observer, ok := mod.(ContextRenewalObserver); ok {
+				observer.ContextRenewed(ctx)
+			}
+		}
+	}
 }
 
 type RuntimeFactorySpec struct {
@@ -37,10 +61,10 @@ type RuntimeFactorySpec struct {
 	New     func(context.Context, RuntimeContext) (Module, error)
 }
 
-type SessionFactorySpec struct {
+type ThreadFactorySpec struct {
 	ID      ID
 	Enabled bool
-	New     func(context.Context, SessionContext) (Module, error)
+	New     func(context.Context, ThreadContext) (Module, error)
 }
 
 func BuildRuntimeSet(ctx context.Context, specs []RuntimeFactorySpec, runtimeContext RuntimeContext, toolContext ToolContext) (*Set, error) {
@@ -107,8 +131,8 @@ func constructRuntimeRegistry(ctx context.Context, specs []RuntimeFactorySpec, r
 	return registry, nil
 }
 
-func BuildSessionSet(ctx context.Context, specs []SessionFactorySpec, sessionContext SessionContext, toolContext ToolContext) (*Set, error) {
-	registry, err := constructSessionRegistry(ctx, specs, sessionContext)
+func BuildThreadSet(ctx context.Context, specs []ThreadFactorySpec, threadContext ThreadContext, toolContext ToolContext) (*Set, error) {
+	registry, err := constructThreadRegistry(ctx, specs, threadContext)
 	if err != nil {
 		return nil, err
 	}
@@ -116,14 +140,14 @@ func BuildSessionSet(ctx context.Context, specs []SessionFactorySpec, sessionCon
 	if err != nil {
 		return nil, err
 	}
-	set.scope = ScopeSession
+	set.scope = ScopeThread
 	return set, nil
 }
 
-// BuildAndStartSessionSet is the Session-scoped counterpart to
+// BuildAndStartThreadSet is the Thread-scoped counterpart to
 // BuildAndStartRuntimeSet.
-func BuildAndStartSessionSet(ctx context.Context, specs []SessionFactorySpec, sessionContext SessionContext, toolContext ToolContext) (*Set, error) {
-	registry, err := constructSessionRegistry(ctx, specs, sessionContext)
+func BuildAndStartThreadSet(ctx context.Context, specs []ThreadFactorySpec, threadContext ThreadContext, toolContext ToolContext) (*Set, error) {
+	registry, err := constructThreadRegistry(ctx, specs, threadContext)
 	if err != nil {
 		return nil, err
 	}
@@ -131,19 +155,19 @@ func BuildAndStartSessionSet(ctx context.Context, specs []SessionFactorySpec, se
 	if err != nil {
 		return nil, err
 	}
-	set.scope = ScopeSession
-	if err := set.StartSession(ctx, sessionContext); err != nil {
+	set.scope = ScopeThread
+	if err := set.StartThread(ctx, threadContext); err != nil {
 		return nil, err
 	}
 	if err := set.materializeToolCatalog(ctx, toolContext); err != nil {
-		catalogErr := fmt.Errorf("runtime modules: materialize session tool catalog: %w", err)
-		rollbackErr := set.rollbackStartedSession(nonNilContext(ctx), "catalog rollback session")
+		catalogErr := fmt.Errorf("runtime modules: materialize thread tool catalog: %w", err)
+		rollbackErr := set.rollbackStartedThread(nonNilContext(ctx), "catalog rollback thread")
 		return nil, errors.Join(catalogErr, rollbackErr)
 	}
 	return set, nil
 }
 
-func constructSessionRegistry(ctx context.Context, specs []SessionFactorySpec, sessionContext SessionContext) (*Registry, error) {
+func constructThreadRegistry(ctx context.Context, specs []ThreadFactorySpec, threadContext ThreadContext) (*Registry, error) {
 	registry := NewRegistry()
 	for _, spec := range specs {
 		if !spec.Enabled {
@@ -151,14 +175,14 @@ func constructSessionRegistry(ctx context.Context, specs []SessionFactorySpec, s
 		}
 		id := normalizeID(spec.ID)
 		if id == "" {
-			return nil, fmt.Errorf("runtime modules: session factory has empty id")
+			return nil, fmt.Errorf("runtime modules: thread factory has empty id")
 		}
 		if spec.New == nil {
-			return nil, fmt.Errorf("runtime modules: session factory %q has nil constructor", id)
+			return nil, fmt.Errorf("runtime modules: thread factory %q has nil constructor", id)
 		}
-		mod, err := spec.New(nonNilContext(ctx), sessionContext)
+		mod, err := spec.New(nonNilContext(ctx), threadContext)
 		if err != nil {
-			return nil, fmt.Errorf("runtime modules: construct session module %q: %w", id, err)
+			return nil, fmt.Errorf("runtime modules: construct thread module %q: %w", id, err)
 		}
 		if err := validateFactoryModule(id, mod); err != nil {
 			return nil, err
@@ -272,7 +296,7 @@ func (s *Set) CloseRuntime(ctx context.Context) error {
 	return result
 }
 
-func (s *Set) StartSession(ctx context.Context, sessionContext SessionContext) error {
+func (s *Set) StartThread(ctx context.Context, threadContext ThreadContext) error {
 	if s == nil {
 		return nil
 	}
@@ -280,23 +304,23 @@ func (s *Set) StartSession(ctx context.Context, sessionContext SessionContext) e
 	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.scope != ScopeSession {
-		return fmt.Errorf("runtime modules: cannot start %q set as session", s.scope)
+	if s.scope != ScopeThread {
+		return fmt.Errorf("runtime modules: cannot start %q set as thread", s.scope)
 	}
 	if s.state.closed {
-		return fmt.Errorf("runtime modules: session set is closed")
+		return fmt.Errorf("runtime modules: thread set is closed")
 	}
 	if s.state.started != nil {
 		return nil
 	}
 	for _, registered := range s.modules {
-		resource, ok := registered.module.(SessionResource)
+		resource, ok := registered.module.(ThreadResource)
 		if !ok {
 			continue
 		}
-		if err := resource.StartSession(nonNilContext(ctx), sessionContext); err != nil {
-			startErr := fmt.Errorf("runtime module %q start session: %w", registered.id, err)
-			rollbackErr := closeStartedSession(nonNilContext(ctx), s.state.started, "rollback session")
+		if err := resource.StartThread(nonNilContext(ctx), threadContext); err != nil {
+			startErr := fmt.Errorf("runtime module %q start thread: %w", registered.id, err)
+			rollbackErr := closeStartedThread(nonNilContext(ctx), s.state.started, "rollback thread")
 			s.state.closed = true
 			s.state.closeErr = rollbackErr
 			return errors.Join(startErr, rollbackErr)
@@ -309,31 +333,31 @@ func (s *Set) StartSession(ctx context.Context, sessionContext SessionContext) e
 	return nil
 }
 
-func (s *Set) QuiesceSession(ctx context.Context) error {
+func (s *Set) QuiesceThread(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
-	return s.quiesceSession(nonNilContext(ctx))
+	return s.quiesceThread(nonNilContext(ctx))
 }
 
-func (s *Set) CloseSession(ctx context.Context) error {
+func (s *Set) CloseThread(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 
-	quiesceErr := s.quiesceSession(nonNilContext(ctx))
+	quiesceErr := s.quiesceThread(nonNilContext(ctx))
 	if isDeferredLifecycleError(quiesceErr) {
 		return quiesceErr
 	}
 
 	s.mu.Lock()
-	if s.scope != ScopeSession {
+	if s.scope != ScopeThread {
 		s.mu.Unlock()
-		return fmt.Errorf("runtime modules: cannot close %q set as session", s.scope)
+		return fmt.Errorf("runtime modules: cannot close %q set as thread", s.scope)
 	}
 	if s.state.closed {
 		err := s.state.closeErr
@@ -344,7 +368,7 @@ func (s *Set) CloseSession(ctx context.Context) error {
 	started := append([]registeredModule(nil), s.state.started...)
 	s.mu.Unlock()
 
-	closeErr := closeStartedSession(nonNilContext(ctx), started, "close session")
+	closeErr := closeStartedThread(nonNilContext(ctx), started, "close thread")
 	result := errors.Join(quiesceErr, closeErr)
 	s.mu.Lock()
 	s.state.closeErr = result
@@ -383,12 +407,12 @@ func (s *Set) quiesceRuntime(ctx context.Context) error {
 	return result
 }
 
-func (s *Set) quiesceSession(ctx context.Context) error {
+func (s *Set) quiesceThread(ctx context.Context) error {
 	s.mu.RLock()
-	if s.scope != ScopeSession {
+	if s.scope != ScopeThread {
 		scope := s.scope
 		s.mu.RUnlock()
-		return fmt.Errorf("runtime modules: cannot quiesce %q set as session", scope)
+		return fmt.Errorf("runtime modules: cannot quiesce %q set as thread", scope)
 	}
 	if s.state.closed {
 		err := s.state.closeErr
@@ -403,7 +427,7 @@ func (s *Set) quiesceSession(ctx context.Context) error {
 	started := append([]registeredModule(nil), s.state.started...)
 	s.mu.RUnlock()
 
-	result := quiesceStartedSession(ctx, started)
+	result := quiesceStartedThread(ctx, started)
 	if isDeferredLifecycleError(result) {
 		return result
 	}
@@ -436,7 +460,7 @@ func (s *Set) rollbackStartedRuntime(ctx context.Context, phase string) error {
 	return err
 }
 
-func (s *Set) rollbackStartedSession(ctx context.Context, phase string) error {
+func (s *Set) rollbackStartedThread(ctx context.Context, phase string) error {
 	if s == nil {
 		return nil
 	}
@@ -451,7 +475,7 @@ func (s *Set) rollbackStartedSession(ctx context.Context, phase string) error {
 	s.state.closed = true
 	started := append([]registeredModule(nil), s.state.started...)
 	s.mu.Unlock()
-	err := closeStartedSession(ctx, started, phase)
+	err := closeStartedThread(ctx, started, phase)
 	s.mu.Lock()
 	s.state.closeErr = err
 	s.mu.Unlock()
@@ -482,24 +506,24 @@ func quiesceStartedRuntime(ctx context.Context, started []registeredModule) erro
 	return result
 }
 
-func closeStartedSession(ctx context.Context, started []registeredModule, phase string) error {
+func closeStartedThread(ctx context.Context, started []registeredModule, phase string) error {
 	var result error
 	for i := len(started) - 1; i >= 0; i-- {
 		registered := started[i]
-		if err := registered.module.(SessionResource).CloseSession(ctx); err != nil {
+		if err := registered.module.(ThreadResource).CloseThread(ctx); err != nil {
 			result = errors.Join(result, fmt.Errorf("runtime module %q %s: %w", registered.id, phase, err))
 		}
 	}
 	return result
 }
 
-func quiesceStartedSession(ctx context.Context, started []registeredModule) error {
+func quiesceStartedThread(ctx context.Context, started []registeredModule) error {
 	var result error
 	for i := len(started) - 1; i >= 0; i-- {
 		registered := started[i]
-		if quiescer, ok := registered.module.(SessionQuiescer); ok {
-			if err := quiescer.QuiesceSession(ctx); err != nil {
-				result = errors.Join(result, fmt.Errorf("runtime module %q quiesce session: %w", registered.id, err))
+		if quiescer, ok := registered.module.(ThreadQuiescer); ok {
+			if err := quiescer.QuiesceThread(ctx); err != nil {
+				result = errors.Join(result, fmt.Errorf("runtime module %q quiesce thread: %w", registered.id, err))
 			}
 		}
 	}

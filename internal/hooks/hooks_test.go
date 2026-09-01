@@ -68,13 +68,13 @@ func TestRunnerPropagatesResolvedEnvironment(t *testing.T) {
 	}
 	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
 		Name:    "environment",
-		Events:  []EventName{EventSessionStart},
+		Events:  []EventName{EventThreadStart},
 		Command: helperCommand("environment"),
 	}}}, RunnerOptions{Environment: snapshot})
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := r.Run(context.Background(), Request{EventName: EventSessionStart})
+	results, err := r.Run(context.Background(), Request{EventName: EventThreadStart})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,14 +88,14 @@ func TestRunnerResolvesRelativeCommandFromRequestCWD(t *testing.T) {
 	command := copyHookHelperExecutable(t, workDir)
 	r, err := NewRunner(Config{Commands: []CommandHook{{
 		Name:    "relative",
-		Events:  []EventName{EventSessionStart},
+		Events:  []EventName{EventThreadStart},
 		Command: []string{command, "-test.run=TestHookHelperProcess", "--", "stdout:relative"},
 	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	results, err := r.Run(context.Background(), Request{
-		EventName: EventSessionStart,
+		EventName: EventThreadStart,
 		CWD:       workDir,
 	})
 	if err != nil {
@@ -230,7 +230,7 @@ func TestRunnerRunExtensionRuntimeExpandsPathsAndPreparesData(t *testing.T) {
 	))
 	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
 		Name:     "extension",
-		Events:   []EventName{EventSessionStart},
+		Events:   []EventName{EventThreadStart},
 		Command:  []string{"${JUEX_EXT_DIR}/" + filepath.Base(helper), "-test.run=TestHookHelperProcess", "--", "extension-environment"},
 		Required: true,
 		Runtime: RuntimeContext{
@@ -246,7 +246,7 @@ func TestRunnerRunExtensionRuntimeExpandsPathsAndPreparesData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventSessionStart, CWD: t.TempDir()})
+	results, err := r.Run(context.Background(), Request{EventName: EventThreadStart, CWD: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,14 +265,14 @@ func TestRunnerRunNonExtensionStripsExtensionEnvironment(t *testing.T) {
 	))
 	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
 		Name:    "workspace",
-		Events:  []EventName{EventSessionStart},
+		Events:  []EventName{EventThreadStart},
 		Command: helperCommand("extension-environment"),
 	}}}, RunnerOptions{Environment: snapshot})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventSessionStart})
+	results, err := r.Run(context.Background(), Request{EventName: EventThreadStart})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,20 +285,20 @@ func TestRunnerRunOptionalExtensionPrepareFailureContinues(t *testing.T) {
 	observer := &recordingObserver{}
 	r, err := NewRunner(Config{Commands: []CommandHook{
 		{
-			Name: "broken-extension", Events: []EventName{EventSessionStart}, Command: helperCommand("stdout:unused"),
+			Name: "broken-extension", Events: []EventName{EventThreadStart}, Command: helperCommand("stdout:unused"),
 			Runtime: RuntimeContext{
 				ExtensionDir:            t.TempDir(),
 				ExtensionDataDir:        filepath.Join(t.TempDir(), "data"),
 				PrepareExtensionDataDir: func() error { return errors.New("prepare failed") },
 			},
 		},
-		{Name: "last", Events: []EventName{EventSessionStart}, Command: helperCommand("stdout:last")},
+		{Name: "last", Events: []EventName{EventThreadStart}, Command: helperCommand("stdout:last")},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventSessionStart, Observer: observer})
+	results, err := r.Run(context.Background(), Request{EventName: EventThreadStart, Observer: observer})
 	if err != nil {
 		t.Fatal(err)
 	}

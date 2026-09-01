@@ -13,7 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -50,7 +50,7 @@ func TestTurn_BuiltinExecCommandYieldDoesNotWaitForChildPipe(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Fatalf("turn waited for child process to exit: %s", elapsed)
 	}
-	result := eng.Session.History[2]
+	result := eng.Thread.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
 		t.Fatalf("tool result message wrong: %+v", result)
 	}
@@ -67,7 +67,7 @@ func TestTurn_BuiltinExecCommandYieldDoesNotWaitForChildPipe(t *testing.T) {
 		t.Fatalf("completed result = %#v, want tools.ShellResult", completedPayload.Result)
 	}
 	if !shellResult.Running || shellResult.SessionID <= 0 || shellResult.TimedOut || completedPayload.TimeoutSeconds != 0 {
-		t.Fatalf("completed shell result = %+v timeout=%d, want running non-timeout session", shellResult, completedPayload.TimeoutSeconds)
+		t.Fatalf("completed shell result = %+v timeout=%d, want running non-timeout thread", shellResult, completedPayload.TimeoutSeconds)
 	}
 	if _, err := eng.Tools.Call(context.Background(), "write_stdin", map[string]any{
 		"session_id":    shellResult.SessionID,
@@ -113,10 +113,10 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 	if strings.Contains(errored.Outcome.Block.Content, "remaining output truncated") {
 		t.Fatalf("errored content was truncated a second time")
 	}
-	if len(eng.Session.History) < 3 || len(eng.Session.History[2].Blocks) != 1 {
-		t.Fatalf("session history missing shell result: %+v", eng.Session.History)
+	if len(eng.Thread.History) < 3 || len(eng.Thread.History[2].Blocks) != 1 {
+		t.Fatalf("thread history missing shell result: %+v", eng.Thread.History)
 	}
-	conversation := eng.Session.History[2].Blocks[0].Content
+	conversation := eng.Thread.History[2].Blocks[0].Content
 	rawBytes := len("HEAD-FAILURE-SENTINEL\n") + 1100000 + len("\nTAIL-FAILURE-SENTINEL\n")
 	wantMarker := fmt.Sprintf("[output truncated: %d bytes omitted]\n", rawBytes-(1<<20))
 	if strings.Count(conversation, wantMarker) != 1 || strings.Count(errored.Outcome.Block.Content, wantMarker) != 1 {
@@ -164,7 +164,7 @@ func TestTurn_BuiltinShellCompletedEventUsesFinalizedHookContent(t *testing.T) {
 	if _, err := eng.Turn(context.Background(), "run shell with policy context"); err != nil {
 		t.Fatal(err)
 	}
-	conversation := eng.Session.History[2].Blocks[0].Content
+	conversation := eng.Thread.History[2].Blocks[0].Content
 	for _, want := range []string{"shell output", "redaction required"} {
 		if !strings.Contains(conversation, want) {
 			t.Fatalf("conversation content missing %q: %q", want, conversation)
@@ -203,7 +203,7 @@ func TestTurn_BuiltinShellErroredEventUsesFinalizedHookErrorContent(t *testing.T
 	if _, err := eng.Turn(context.Background(), "run shell with failing hook"); err != nil {
 		t.Fatal(err)
 	}
-	conversation := eng.Session.History[2].Blocks[0].Content
+	conversation := eng.Thread.History[2].Blocks[0].Content
 	for _, want := range []string{"shell output", "post hook failed"} {
 		if !strings.Contains(conversation, want) {
 			t.Fatalf("conversation content missing %q: %q", want, conversation)
@@ -249,7 +249,7 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 	if _, err := eng.Turn(context.Background(), "run large shell and hooks"); err != nil {
 		t.Fatal(err)
 	}
-	conversation := eng.Session.History[2].Blocks[0].Content
+	conversation := eng.Thread.History[2].Blocks[0].Content
 	if len(conversation) > (1<<20)+maxShellPolicyContent+1024 {
 		t.Fatalf("finalized shell content bytes = %d, want hard bound", len(conversation))
 	}
@@ -257,7 +257,7 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 		t.Fatalf("finalized shell content lost marker/tail: len=%d tail=%q", len(conversation), conversation[len(conversation)-64:])
 	}
 
-	journal, err := session.ReadEvents(eng.Session.Dir)
+	journal, err := thread.ReadEvents(eng.Thread.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,14 +314,14 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 	if len(errored.Error) > maxShellEventDiagnostic+64 || !strings.Contains(errored.Error, "truncated") {
 		t.Fatalf("errored diagnostic was not bounded: bytes=%d", len(errored.Error))
 	}
-	conversation := eng.Session.History[2].Blocks[0].Content
+	conversation := eng.Thread.History[2].Blocks[0].Content
 	rawBytes := len("HEAD-HOOK-ERROR-SENTINEL\n") + 1100000 + len("\nTAIL-HOOK-ERROR-SENTINEL\n")
 	wantMarker := fmt.Sprintf("[output truncated: %d bytes omitted]\n", rawBytes-(1<<20))
 	if errored.Outcome == nil || errored.Outcome.Block.Content != conversation || !strings.Contains(conversation, "HEAD-HOOK-ERROR-SENTINEL") ||
 		!strings.Contains(conversation, "TAIL-HOOK-ERROR-SENTINEL") || strings.Count(conversation, wantMarker) != 1 {
 		t.Fatalf("bounded terminal content does not match conversation: bytes=%d", len(conversation))
 	}
-	journal, err := session.ReadEvents(eng.Session.Dir)
+	journal, err := thread.ReadEvents(eng.Thread.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}

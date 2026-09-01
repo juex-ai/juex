@@ -2,28 +2,21 @@
 
 > English | [中文](README.zh.md)
 
-This directory contains the React + Vite fleet web UI served by
-`juex fleet serve`. The fleet server owns the fleet JSON API, proxies
-selected-agent JSON/SSE requests to verified resident agent endpoints, and
-embeds the production bundle from `internal/web/dist`. Resident agent servers
-expose their API only; they do not serve the SPA.
+The React + Vite application in this directory is the Fleet UI served by
+`juex fleet serve`. Fleet owns the roster API and proxies selected-Agent
+JSON/SSE requests to the resident Agent Runtime. A resident Agent exposes only
+its API; it does not serve the SPA.
 
 ## Stack
 
-- React + TypeScript
-- Vite
-- React Router
-- Tailwind CSS v4
-- shadcn/ui primitives (copied via shadcn CLI)
-- AI Elements primitives (copied via `pnpm dlx ai-elements@latest add`)
-- streamdown for markdown / KaTeX / mermaid rendering inside AI Elements
-- shiki for code highlighting inside the standalone `CodeBlock`
-- lucide-react icons
+- React, TypeScript, Vite, and React Router
+- Tailwind CSS v4 and shadcn/ui primitives
+- AI Elements and streamdown for transcript rendering
+- Shiki and lucide-react for code and icons
 
 ## Development
 
-Build the embedded bundle at least once, then run the fleet server in one
-shell:
+From the repository root, prepare the embedded bundle and run Fleet:
 
 ```bash
 make web
@@ -36,91 +29,32 @@ Run Vite in another shell:
 pnpm --dir frontend dev
 ```
 
-Vite proxies fleet `/api` requests and selected-agent `/agents/:agentId/api`
-requests to the default fleet server at `127.0.0.1:5839`.
+Vite proxies Fleet `/api` calls and selected-Agent `/agents/:agentId/api`
+calls to the default Fleet server at `127.0.0.1:5839`.
 
-## Build
-
-From the repository root:
+Use the repository verification targets rather than composing checks manually:
 
 ```bash
-make web
-make build
+make verify-focused PKGS="./internal/web ./internal/fleetweb"
+make verify-candidate WEB=1
 ```
 
-`make web` runs `pnpm install && pnpm build`, then copies `frontend/dist/`
-into `internal/web/dist/` for Go embedding.
+## Thread UI ownership
 
-## Source Map
+- `src/pages/ThreadExplorer.tsx` lists active and archived Threads from the
+  Agent index.
+- `src/pages/Thread.tsx` reads one Thread, pages older journal records from the
+  tail, subscribes from an event cursor, and sends Inputs.
+- `src/lib/thread-read-state.ts` and `thread-read-controller.ts` own the pure
+  read model and transport coordination.
+- `src/lib/live-thread-projection.ts` projects optimistic Inputs and live
+  journal-backed events until the persisted timeline refreshes.
+- `src/components/thread/` renders the composer, transcript, and status.
+- `src/api.ts` is the typed Fleet and Agent API boundary.
 
-| Path | Purpose |
-| --- | --- |
-| `src/api.ts` | typed fleet and selected-agent fetch helpers, including lifecycle/config/log operations, lightweight active-session lookup, Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and transcript/Fleet/resource SSE subscriptions |
-| `src/types.ts` | TypeScript mirror of fleet, agent, session, and message API shapes, including the tagged Command Observable/Schedule create union, transcript paging and replay-cursor metadata, and the browser event contract from `internal/web` |
-| `src/lib/agent-config.ts` | pure config-save reconciliation for distinguishing persisted updates from restart failures |
-| `src/lib/fleet-directories.ts` | pure Add agent directory validation, stale-request isolation, listing merge, keyboard, and path-tail behavior |
-| `src/lib/fleet-routes.ts` | pure route helpers for fleet and selected-agent navigation |
-| `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
-| `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options and composer-clearance sizing |
-| `src/lib/assistant-blocks.ts` | converts live `llm.responded` event payloads into ordered assistant blocks |
-| `src/lib/composer-submit.ts` | pure composer submit-state transitions |
-| `src/lib/code-theme.ts` | shared light/dark syntax themes for markdown and reasoning code blocks |
-| `src/lib/compact-ui.ts` | optimistic `/compact` UI labels and local message helpers |
-| `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
-| `src/lib/fleet-shell.ts` | pure fleet selection, visual state, lifecycle, and stage-route helpers |
-| `src/lib/history-sessions.ts` | pure history-list title, badge, and canonical session route helpers |
-| `src/lib/home-route.ts` | pure helper for choosing the web root redirect target |
-| `src/lib/light-code-highlight.ts` | lightweight synchronous JSON/log highlighting for tool payloads |
-| `src/lib/live-session-projection.ts` | pure transcript read model for SSE BrowserEvents, optimistic messages, provisional assistant deltas, pending-input presentation, compact markers, and final-response assembly; runtime status comes from each event snapshot |
-| `src/lib/live-tool-events.ts` | pure live transcript updates for tool requested/output-delta events |
-| `src/lib/loading-state.ts` | pure loading-state display text helpers |
-| `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
-| `src/lib/media-reference.ts` | stable text formatting for transcript and tool-result media references |
-| `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
-| `src/lib/message-rendering.ts` | pure message chrome, disclosure, and display-policy helpers |
-| `src/lib/observation-time.ts` | pure helpers for local Observation timestamp and window display |
-| `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
-| `src/lib/route-state.ts` | pure route matching helpers for shell state |
-| `src/lib/runtime-display.ts` | pure runtime and session-state display formatting helpers |
-| `src/lib/runtime-navigation.ts` | pure Runtime subsection parsing, labels, and canonical nested paths |
-| `src/lib/runtime-tool-catalog.ts` | pure runtime tool group labels, timeout labels, parameter projection, and defensive schema formatting |
-| `src/lib/session-messages.ts` | pure helpers for canonical message-ID creation-time decoding and merging paged transcript windows |
-| `src/lib/session-read-controller.ts` | session-detail effect interpreter for route guards, fetch/context refresh, transcript SSE dispatch, reconnect-safe status calibration/application/cleanup, and navigation effects |
-| `src/lib/session-read-state.ts` | pure session read-model transitions, effect descriptors, route-stable live-subscription cursor capture, and replay overlap suppression |
-| `src/lib/session-transcript-renderers.ts` | pure message-group renderer-key contract used by the typed transcript registry |
-| `src/lib/session-title.ts` | pure session preview display-title fallback helper |
-| `src/lib/system-notice.ts` | pure automated notice normalization and restart-title formatting |
-| `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |
-| `src/lib/tool-display.ts` | pure tool title, lifecycle label, and timeout display helpers |
-| `src/lib/tool-payload.ts` | defensive formatting for structured tool input and output payloads |
-| `src/lib/tool-result-output.ts` | bounded multiline formatting for visible tool-result text |
-| `src/lib/session-access.ts` | pure rules for writable versus read-only session views based on kind and active state |
-| `src/lib/utils.ts` | shared Tailwind class-merging helper used by UI primitives |
-| `src/lib/workspace-refresh.ts` | pure helper for refreshing workspace tree and open file preview data |
-| `src/lib/fleet-roster.ts` | pure Fleet roster reconciliation that retains current activity only for still-healthy Agents |
-| `src/pages/` | route-level views |
-| `src/components/` | app components |
-| `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet refreshed by Agent resource notifications or explicit user action |
-| `src/components/fleet/` | persistent agent rail, tabbed stage header, runtime state bar, and selected-agent context |
-| `src/components/session/SessionComposer.tsx` | session composer, attachment workflow, queued-input/read-only presentation, and overlay measurement |
-| `src/components/session/SessionStatusPanel.tsx` | context, goal, notes, and runtime-state controls shown in the composer |
-| `src/components/session/SessionTranscript.tsx` | typed transcript renderer registry and all message/process row renderers |
-| `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
-| `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
-| `src/components/AssistantMarkdown.tsx` | assistant Markdown rendering with backend-verified inline local image links |
-| `src/components/ImageBlock.tsx` | shared 80px transcript image thumbnails, failure metadata, download, and full-size lightbox |
-| `src/components/RuntimeToolCatalog.tsx` | reusable grouped builtin and MCP tool disclosures with parameter and raw-schema details |
-| `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
-| `src/pages/Fleet.tsx` | fleet settings stage with service summaries, registration, inline workspace-directory creation, condensed operational state, lifecycle, enablement, and removal controls |
-| `src/pages/AgentConfig.tsx` | workspace config editor with validation and post-save restart reconciliation |
-| `src/pages/AgentLogs.tsx` | bounded resident agent log tail with explicit refresh and line-count controls |
-| `src/pages/Extensions.tsx` | read-only selected Extension manifests, installation scopes, paths, effective resource counts, and value-free Agent environment declaration status |
-| `src/pages/Observables.tsx` | compact workspace Observable list with full-content tooltips, sticky actions, and Schedule Run plus lifecycle controls |
-| `src/pages/ObservableDetail.tsx` | Observable source details, recent Observation history, and Schedule Run plus lifecycle controls |
-| `src/pages/RuntimeLayout.tsx` | shared Runtime title, subsection selector, and nested route outlet |
-| `src/pages/Runtime.tsx` | Overview with Provider, shell, sandbox, grouped builtin/MCP tool catalog, hooks, system prompt, and skills detail |
-| `src/components/ui/` | shadcn primitives |
-| `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |
+`/new` and `/compact` stay on the current Thread. Both create a Context
+Generation; only `/compact` retains a summary. Archived Threads are readable
+but cannot accept new Inputs.
 
-When Go API response shapes change, update `src/types.ts` and the matching
-client helper in the same PR.
+Production output is copied from `frontend/dist/` to `internal/web/dist/` by
+`make web`; do not edit the embedded files directly.

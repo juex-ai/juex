@@ -113,7 +113,7 @@ export function runtimeGoalContinuationLabel(goal?: GoalStatusSnapshot): string 
   return String(goal.continuation_count ?? 0);
 }
 
-export function runtimeSessionStateBadgeLabel(
+export function runtimeThreadStateBadgeLabel(
   goal?: GoalStatusSnapshot,
   notes?: NotesSnapshot,
 ): string {
@@ -130,7 +130,7 @@ export function runtimeSessionStateBadgeLabel(
   return "goal idle";
 }
 
-export function runtimeSessionStateIsActive(
+export function runtimeThreadStateIsActive(
   goal?: GoalStatusSnapshot,
   notes?: NotesSnapshot,
 ): boolean {

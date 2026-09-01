@@ -59,9 +59,9 @@ const shellClasses = classTokenSets(
 const conversationClasses = classTokenSets(
   "../../frontend/src/components/ai-elements/conversation.tsx",
 );
-const sessionClasses = classTokenSets("../../frontend/src/pages/Session.tsx");
-const sessionComposerClasses = classTokenSets(
-  "../../frontend/src/components/session/SessionComposer.tsx",
+const threadClasses = classTokenSets("../../frontend/src/pages/Thread.tsx");
+const threadComposerClasses = classTokenSets(
+  "../../frontend/src/components/thread/ThreadComposer.tsx",
 );
 const runtimeClasses = classTokenSets("../../frontend/src/pages/Runtime.tsx");
 
@@ -72,7 +72,7 @@ test("the app shell owns an exact clipped viewport", () => {
   );
 });
 
-test("the session keeps its conversation scroller behind a bounded composer overlay", () => {
+test("the thread keeps its conversation scroller behind a bounded composer overlay", () => {
   assertHasClassTokens(
     conversationClasses,
     "relative min-h-0 flex-1 overflow-hidden",
@@ -82,15 +82,15 @@ test("the session keeps its conversation scroller behind a bounded composer over
     "h-full min-h-0 overflow-y-auto overscroll-contain",
   );
   assertHasClassTokens(
-    sessionClasses,
+    threadClasses,
     "relative flex min-h-0 flex-1 flex-col overflow-hidden",
   );
   assertHasClassTokens(
-    sessionComposerClasses,
+    threadComposerClasses,
     "pointer-events-none absolute inset-0 items-end",
   );
   assertHasClassTokens(
-    sessionComposerClasses,
+    threadComposerClasses,
     "pointer-events-auto min-h-0 overflow-visible",
   );
 });

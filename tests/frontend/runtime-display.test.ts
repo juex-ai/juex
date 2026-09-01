@@ -16,8 +16,8 @@ import {
   runtimeHooksSummaryLabel,
   runtimeMCPConnectionLabel,
   safeRuntimeExternalURL,
-  runtimeSessionStateBadgeLabel,
-  runtimeSessionStateIsActive,
+  runtimeThreadStateBadgeLabel,
+  runtimeThreadStateIsActive,
   runtimeTokenUsageDetailLabel,
 } from "../../frontend/src/lib/runtime-display.ts";
 
@@ -204,10 +204,10 @@ test("notesCheckboxProgress counts Markdown task items", () => {
   });
 });
 
-test("runtimeSessionStateBadgeLabel keeps footer label compact", () => {
-  assert.equal(runtimeSessionStateBadgeLabel(), "goal idle");
+test("runtimeThreadStateBadgeLabel keeps footer label compact", () => {
+  assert.equal(runtimeThreadStateBadgeLabel(), "goal idle");
   assert.equal(
-    runtimeSessionStateBadgeLabel({
+    runtimeThreadStateBadgeLabel({
       status: "active",
       description: "ship",
       acceptance: "",
@@ -218,7 +218,7 @@ test("runtimeSessionStateBadgeLabel keeps footer label compact", () => {
     "goal active",
   );
   assert.equal(
-    runtimeSessionStateBadgeLabel(undefined, {
+    runtimeThreadStateBadgeLabel(undefined, {
       content: "- [x] first\n- [ ] second",
       updated_at: "",
     }),
@@ -226,17 +226,17 @@ test("runtimeSessionStateBadgeLabel keeps footer label compact", () => {
   );
 });
 
-test("runtimeSessionStateIsActive merges goal and notes presence", () => {
-  assert.equal(runtimeSessionStateIsActive(undefined, undefined), false);
-  assert.equal(runtimeSessionStateIsActive({ status: "in_progress" }, undefined), true);
+test("runtimeThreadStateIsActive merges goal and notes presence", () => {
+  assert.equal(runtimeThreadStateIsActive(undefined, undefined), false);
+  assert.equal(runtimeThreadStateIsActive({ status: "in_progress" }, undefined), true);
   assert.equal(
-    runtimeSessionStateIsActive(undefined, { content: "- [ ] verify" }),
+    runtimeThreadStateIsActive(undefined, { content: "- [ ] verify" }),
     true,
   );
-  assert.equal(runtimeSessionStateIsActive(undefined, { content: "  " }), false);
-  assert.equal(runtimeSessionStateIsActive(undefined, {} as NotesSnapshot), false);
+  assert.equal(runtimeThreadStateIsActive(undefined, { content: "  " }), false);
+  assert.equal(runtimeThreadStateIsActive(undefined, {} as NotesSnapshot), false);
   assert.equal(
-    runtimeSessionStateIsActive(undefined, { content: null } as unknown as NotesSnapshot),
+    runtimeThreadStateIsActive(undefined, { content: null } as unknown as NotesSnapshot),
     false,
   );
 });

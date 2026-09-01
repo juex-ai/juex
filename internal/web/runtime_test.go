@@ -63,11 +63,12 @@ body`)
 		{ID: "skills", Scope: "runtime"},
 		{ID: "mcp", Scope: "runtime"},
 		{ID: "observables", Scope: "runtime"},
-		{ID: "side-sessions", Scope: "runtime"},
-		{ID: "session-context", Scope: "session"},
-		{ID: "goal", Scope: "session"},
-		{ID: "notes", Scope: "session"},
-		{ID: "hooks", Scope: "session"},
+		{ID: "worker-threads", Scope: "runtime"},
+		{ID: "context-control", Scope: "thread"},
+		{ID: "thread-context", Scope: "thread"},
+		{ID: "goal", Scope: "thread"},
+		{ID: "notes", Scope: "thread"},
+		{ID: "hooks", Scope: "thread"},
 	}
 	if !reflect.DeepEqual(got.Modules, wantModules) {
 		t.Fatalf("modules = %+v, want active Module descriptors %+v", got.Modules, wantModules)
@@ -75,7 +76,7 @@ body`)
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Type != "stdio" || got.MCP.Servers[0].URL != "" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
-	if got.Tools.Count != 31 || len(got.Tools.Groups) != 8 {
+	if got.Tools.Count != 34 || len(got.Tools.Groups) != 8 {
 		t.Fatalf("tools = %+v", got.Tools)
 	}
 	var observableToolNames []string
@@ -184,10 +185,10 @@ func TestRuntimeStatusReportsStableServerStartTime(t *testing.T) {
 func TestRuntimeStatusOmitsConfigDisabledModulesAndResources(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Cfg.Modules = config.ModulePolicy{
-		"mcp":           {Enabled: false},
-		"observables":   {Enabled: false},
-		"side-sessions": {Enabled: false},
-		"hooks":         {Enabled: false},
+		"mcp":            {Enabled: false},
+		"observables":    {Enabled: false},
+		"worker-threads": {Enabled: false},
+		"hooks":          {Enabled: false},
 	}
 	mustWriteWebFakeMCPConfig(t, srv.opts.Cfg.WorkDir, false)
 	got, err := srv.runtimeStatus()
@@ -195,7 +196,7 @@ func TestRuntimeStatusOmitsConfigDisabledModulesAndResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, module := range got.Modules {
-		if slices.Contains([]string{"mcp", "observables", "side-sessions", "hooks"}, module.ID) {
+		if slices.Contains([]string{"mcp", "observables", "worker-threads", "hooks"}, module.ID) {
 			t.Fatalf("disabled Module remains active: %+v", got.Modules)
 		}
 	}
@@ -203,7 +204,7 @@ func TestRuntimeStatusOmitsConfigDisabledModulesAndResources(t *testing.T) {
 		t.Fatalf("disabled status still exposes feature resources: mcp=%+v hooks=%+v", got.MCP, got.Hooks)
 	}
 	for _, group := range got.Tools.Groups {
-		if (group.Group == string(tools.ToolGroupObservable) || group.Group == string(tools.ToolGroupSideSession)) && len(group.Tools) != 0 {
+		if (group.Group == string(tools.ToolGroupObservable) || group.Group == string(tools.ToolGroupWorkerThread)) && len(group.Tools) != 0 {
 			t.Fatalf("disabled Module tools remain in group %q: %+v", group.Group, group.Tools)
 		}
 	}
@@ -238,6 +239,10 @@ func TestRuntimeAPIAlwaysRedactsConfiguredEnvironmentValues(t *testing.T) {
 	cfg.Model = secret
 
 	srv := NewServer(Options{Cfg: cfg})
+	if err := app.EnsureMainThread(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
 	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
 	recorder := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(recorder, req)
@@ -443,15 +448,15 @@ func TestRuntimeAPISerializesSafeMCPTransportMetadata(t *testing.T) {
 	}
 }
 
-func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
+func TestRuntimeStatusOmitsActiveThreadState(t *testing.T) {
 	srv := newTestServer(t)
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	as, err := srv.openThread(context.Background(), "0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	goalState, notes := runtime.SessionStateStoresFromModules(as.app.Engine.SessionRuntimeSnapshot().Modules)
+	goalState, notes := runtime.ThreadStateStoresFromModules(as.app.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalState == nil || notes == nil {
-		t.Fatal("active Session Modules did not provide Goal and Notes stores")
+		t.Fatal("active Thread Modules did not provide Goal and Notes stores")
 	}
 	if _, err := goalState.Create("ship runtime goal status", "waiting on e2e"); err != nil {
 		t.Fatal(err)
@@ -473,16 +478,16 @@ func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := fields["goal"]; ok {
-		t.Fatalf("runtime status leaked session goal: %s", encoded)
+		t.Fatalf("runtime status leaked Thread goal: %s", encoded)
 	}
 	if _, ok := fields["notes"]; ok {
-		t.Fatalf("runtime status leaked session notes: %s", encoded)
+		t.Fatalf("runtime status leaked Thread notes: %s", encoded)
 	}
 }
 
-func TestRuntimeStatusIncludesActiveSessionScratchpadPrompt(t *testing.T) {
+func TestRuntimeStatusIncludesActiveThreadScratchpadPrompt(t *testing.T) {
 	srv := newTestServer(t)
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	as, err := srv.openThread(context.Background(), "0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,15 +497,15 @@ func TestRuntimeStatusIncludesActiveSessionScratchpadPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range got.SystemPrompt.Items {
-		if item.Key == "session_scratchpad" {
-			wantPath := as.app.Session.ScratchpadDir()
+		if item.Key == "thread_scratchpad" {
+			wantPath := as.app.Thread.ScratchpadDir()
 			if item.Path != wantPath || !strings.Contains(item.Text, wantPath) {
 				t.Fatalf("scratchpad prompt = %+v, want path %q", item, wantPath)
 			}
 			return
 		}
 	}
-	t.Fatalf("runtime system prompt missing session scratchpad: %+v", got.SystemPrompt.Items)
+	t.Fatalf("runtime system prompt missing Thread scratchpad: %+v", got.SystemPrompt.Items)
 }
 
 func TestGetRuntimeStatus_IgnoresMissingMCPConfig(t *testing.T) {
@@ -594,7 +599,7 @@ func TestRuntimeStatusIncludesSandboxPolicy(t *testing.T) {
 	}
 }
 
-func TestRuntimeStatusIgnoresActiveSessionRegistryForMCPCatalog(t *testing.T) {
+func TestRuntimeStatusIgnoresActiveThreadRegistryForMCPCatalog(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), `{
   "mcpServers": {
@@ -612,11 +617,11 @@ func TestRuntimeStatusIgnoresActiveSessionRegistryForMCPCatalog(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	srv.sessions.Store("active", &activeSession{
+	srv.threads.Store("active", &activeThread{
 		app:   &app.App{Engine: &runtime.Engine{Tools: reg}},
 		bcast: newBroadcaster(),
 	})
-	srv.sessions.Store("second", &activeSession{
+	srv.threads.Store("second", &activeThread{
 		app:   &app.App{Engine: &runtime.Engine{Tools: reg}},
 		bcast: newBroadcaster(),
 	})
@@ -676,7 +681,7 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SystemPrompt.Count != 5 {
+	if got.SystemPrompt.Count != 6 {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
 	want := []struct {
@@ -688,7 +693,8 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 		{label: "Global AGENTS.md", source: "user", path: filepath.Join(homeAgents, "AGENTS.md"), text: "global runtime rule"},
 		{label: "Workspace AGENTS.md", source: "project", path: filepath.Join(work, "AGENTS.md"), text: "workspace root rule"},
 		{label: ".agents/AGENTS.md", source: "project", path: filepath.Join(work, ".agents", "AGENTS.md"), text: "workspace agents rule"},
-		{label: "Session Scratchpad", source: "runtime", path: got.SystemPrompt.Items[3].Path, text: "Session Scratchpad"},
+		{label: "Context Window", source: "runtime", path: "", text: "Context window"},
+		{label: "Thread Scratchpad", source: "runtime", path: got.SystemPrompt.Items[4].Path, text: "Thread Scratchpad"},
 		{label: "Operating Context", source: "runtime", path: "", text: "Operating Context"},
 	}
 	for i, w := range want {
@@ -862,7 +868,7 @@ body`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.SystemPrompt.Items) != 4 {
+	if len(got.SystemPrompt.Items) != 5 {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
 	if got.SystemPrompt.Items[0].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[0].Text, "global runtime rule") {
@@ -887,7 +893,7 @@ func assertBuiltinRuntimeSkills(t *testing.T, items []skillInfo) {
 	want := map[string]bool{
 		"juex-chunked-write": false,
 		"juex-observables":   false,
-		"juex-session-state": false,
+		"juex-thread-state":  false,
 	}
 	for _, skill := range items {
 		if _, ok := want[skill.Name]; !ok {
@@ -965,7 +971,7 @@ func TestRuntimeStatusReportsPartialMCPStartup(t *testing.T) {
 	}
 }
 
-func TestOpenSessionKeepsServeUsableWhenMCPStartupFails(t *testing.T) {
+func TestOpenThreadKeepsServeUsableWhenMCPStartupFails(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), `{
   "mcpServers": {
@@ -974,8 +980,8 @@ func TestOpenSessionKeepsServeUsableWhenMCPStartupFails(t *testing.T) {
 }`)
 	srv.recordMCPError(&mcp.ServerError{Server: "alpha", Op: "connect", Err: errors.New("old failure")})
 
-	if _, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary); err != nil {
-		t.Fatalf("openSession returned error: %v", err)
+	if _, err := srv.openThread(context.Background(), "0"); err != nil {
+		t.Fatalf("openThread returned error: %v", err)
 	}
 	got, err := srv.runtimeStatus()
 	if err != nil {

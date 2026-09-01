@@ -2,280 +2,123 @@
 
 > English | [中文](runtime-status.zh.md)
 
-This document defines the authoritative runtime status read model shared by
-the CLI, single-agent web API, browser UI, and Fleet.
+This document defines the authoritative runtime-status read model shared by
+the CLI, Agent API, browser UI, and Fleet.
 
 ## Ownership
 
-`internal/runtime.StatusStore` projects committed runtime events into one
-`StatusSnapshot`. It owns turn lifecycle, execution phase, tool-call state,
-pending-input state, token/context usage, and presentation errors.
-`internal/statusstream` owns the transport-neutral distribution mechanism:
-current snapshot storage, optional bounded cursor replay, replay-to-live
-sequencing, latest-value coalescing, and subscription cleanup. It does not
-interpret runtime Events.
+`internal/runtime.StatusStore` projects committed runtime Events into one
+`StatusSnapshot` per active Thread. It owns Thread execution state, Turn
+lifecycle and phase, Tool Call state, pending count, token/context usage, and
+presentation errors.
 
-Other concerns keep separate owners:
+`internal/statusstream` stores the latest snapshot and provides bounded cursor
+replay plus replay-to-live sequencing. It does not interpret Events.
+`internal/statusapi` maps the internal snapshot to the public transport DTO.
+Fleet owns process health; browser stores only replace server snapshots.
 
-- the session transcript owns conversation content;
-- Fleet owns process health and lifecycle control;
-- `internal/statusapi` maps runtime snapshots to the public transport DTO;
-- browser stores replace status snapshots but do not recompute runtime rules.
+Projection happens synchronously after a durable Thread Journal commit and
+before live Event delivery. A failed append therefore cannot advance status.
 
-Status projection runs synchronously after durable journal append and before
-live event delivery. A journal write failure therefore cannot advance the
-status cursor.
+## Snapshot And Streams
 
-## Snapshot And Stream
+Thread consumers use:
 
-General session-status consumers use this sequence:
+1. `GET /api/threads/<id>/status`;
+2. read `cursor`;
+3. subscribe to `GET /api/threads/<id>/status/events?since=<cursor>`;
+4. replace local state with each newer full snapshot.
 
-1. `GET /api/sessions/<id>/status`
-2. read the snapshot `cursor`
-3. subscribe to `GET /api/sessions/<id>/status/events?since=<cursor>`
-4. replace local state with every later full snapshot
+`Last-Event-ID` takes precedence over `since` on reconnect. Replacement is
+idempotent, and a same-cursor snapshot is legal when a presentation-only
+restart repair did not append a durable fact.
 
-The status SSE adapter resolves `Last-Event-ID` before `since` on reconnect and
-opens the runtime stream after that single cursor. The stream presents replay
-and live updates through one sequential `Next` operation. A same-cursor
-subscription may receive the current snapshot again because transient
-presentation changes and restart recovery do not advance the durable cursor.
-Replacement is idempotent. If a cursor occurs more than once in retained
-history, replay begins after its latest occurrence.
+`GET /api/threads/<id>/events` is the transcript/event stream. Each browser
+frame includes the normalized event projection and the resulting authoritative
+status snapshot. The server captures an event cursor before reading the initial
+timeline page, so commits racing that read can be replayed without loss. A
+truly empty Journal uses explicit journal-start replay; blank `since` otherwise
+means live-only.
 
-The active session uses its in-memory store. A historical session builds a
-read-only store from its journal, emits its available snapshots through a
-non-following stream, and closes without activating that session.
+Replay subscribes to live delivery first, reads a fixed durable Journal prefix,
+then hands off without duplicates. Durable event/message/tool IDs make the
+browser merge idempotent. Transient Tool output is not persisted and cannot
+roll a replayed terminal state backward.
 
-Agent startup and active-session replacement reconstruct the in-memory store by
-streaming durable events into an isolated projection. Replacement publishes
-only the final recovered snapshot to existing subscribers while retaining the
-same bounded cursor history. If decoding fails after a valid prefix, that
-prefix is installed before the error is reported and restart recovery is
-applied.
+Agent-level aliases are `GET /api/status` and `/api/status/events`. They expose
+Main Thread status for Fleet compatibility. Fleet publishes aggregate roster,
+process, and Agent activity through its own generation/sequence cursor; it does
+not reuse a Thread cursor as aggregate history.
 
-The agent-level equivalents are `GET /api/status` and
-`GET /api/status/events`. Fleet consumes these routes and publishes aggregate
-`agent.status` updates on `GET /api/fleet/events`. Agent Activity distribution
-is current-only: its SSE id remains the selected Session cursor for wire
-compatibility, but that cursor can repeat, move backwards, or become empty as
-selection changes, so it is not used for aggregate history replay.
+## Thread And Turn State
 
-Fleet's aggregate stream keeps its separate
-`stream-id:generation:sequence` cursor and per-Agent coalescing policy. Those
-semantics cover a roster of Agents and are not delegated to the single-value
-status stream.
+Thread runtime states:
 
-`GET /api/sessions/<id>/events` is the browser transcript stream. Each
-`BrowserEvent` carries both the normalized transcript event and the full
-runtime-status snapshot that results from applying that event. Durable replay
-rebuilds the status projection from the journal before filtering by `since`, so
-replayed and uninterrupted delivery produce the same snapshots. The status is
-still projected by `internal/runtime.StatusStore`; the browser event adapter
-only reads and transports that authoritative result.
+```text
+idle | failed -- turn.admitted --> turn_active
+turn_active -- pending_input.draining --> draining_pending
+draining_pending -- pending_input.drained --> turn_active
+turn_active | draining_pending -- terminal turn --> idle | failed
+```
 
-`GET /api/sessions/<id>` returns an `event_cursor` captured before its
-transcript page is read. The browser uses this cursor for the initial transcript
-subscription, so events committed between the transcript and status requests
-are replayed rather than skipped. That holds for both branches of the handler:
-the active-session branch reads its in-memory status cursor behind the durable
-commit barrier and falls back to the journal there when the status store carries
-no cursor. The barrier ensures every earlier synchronous projection, including
-browser-event publication, has finished before either cursor source is reported.
-The cursor is therefore empty only when the journal is empty. Such a browser
-has no event to resume after but still needs whatever was committed before its
-stream attached, so it subscribes with `?replay=journal-start` to replay the
-journal from the beginning. That marker is a separate parameter rather than a
-reserved cursor value, because event IDs are opaque and any caller-supplied ID
-is kept, so a reserved cursor could be committed by an extension. A blank or
-omitted `since` carries no resume position and starts with live delivery only,
-which
-keeps a cursor the client merely lost from replaying the whole transcript on
-every reconnect.
-Transcript-producing events carry the exact persisted message ID. If the
-initial transcript or current live projection already contains that ID, the
-browser applies event metadata but suppresses the duplicate transcript
-projection. Live user, assistant, hook, and queued-input state retain those
-persisted IDs. Tool replay uses the same rule with its globally unique tool-use
-ID. The replay cursor is captured once per Session route, except that a cursor
-captured while the journal was still empty is replaced by the first refresh
-carrying a real one; later transcript
-refreshes may advance their response cursor without restarting the existing
-EventSource or clearing its latest status.
-If application lifecycle state replaces that EventSource, the Session read
-controller resumes from the latest durable status cursor carried by an event it
-actually applied, rather than reusing the route's original replay cursor.
-Independent status calibration never advances this transcript resume point.
-Because the server subscribes before replay, it suppresses durable live frames
-already present in the replay tail before completing the ordered live handoff.
-An open journal descriptor and its byte boundary are captured behind the
-durable commit barrier, after all earlier synchronous projections finish, so a
-replayed event cannot still be waiting to enter the subscriber queue when the
-handoff boundary is calculated. The fixed journal prefix is read after
-releasing the barrier, so large replays do not stall new runtime commits.
-The broadcaster records private monotonic publish sequences and calculates the
-handoff boundary from durable replay events actually published after this
-subscriber joined. Transient frames at or below that boundary are dropped so an
-older streaming snapshot cannot roll back a replayed terminal state. Frames
-outside the replay snapshot pass immediately, and replay IDs from before the
-subscription do not extend the boundary.
+`working` is true only for `turn_active` or `draining_pending`.
+`can_accept_input` also considers the configured pending queue limit.
+
+Turn states are `admitted`, `active`, `completed`, `errored`, and `cancelled`.
+Active phases are `provider_iteration`, `tool_batch`, and `compacting`. The
+newest terminal Turn remains visible after the Thread returns to idle or
+failed, preserving its result/error for clients.
 
 ## Tool Calls
-
-Tool-call states are:
 
 ```text
 requested -> running -> streaming -> completed
                               \----> errored
+                              \----> outcome_unknown (restart repair)
 ```
 
-`tool_use_id` is the identity key. `tool.requested`, `tool.running`,
-`tool.output_delta`, `tool.completed`, and `tool.errored` drive the
-transitions. Timeout is an error kind, not a separate lifecycle state.
-Completed and errored are absorbing states: later events for the same Tool Call
-cannot regress or replace its terminal state. Terminal calls remain visible
-until the turn becomes terminal.
+`tool_use_id` is the identity. Terminal states are absorbing. Late output from
+a completed or superseded Turn cannot reactivate a Tool or Thread. A started
+Tool with no durable terminal result becomes `outcome_unknown`; this is visible
+as an explicit recovery error and is not silently retried.
 
-Tool events update only the current admitted or active turn. Late output from
-a completed or superseded turn cannot reactivate runtime status. Managed shell
-output that arrives after its Tool Call became terminal remains in the durable
-journal for diagnostics, but the browser transcript stream omits the delta
-because its resulting Tool Call status is no longer streaming.
+## Usage And Errors
 
-## Turns
+`token_usage` is cumulative for the Thread and includes input,
+`cached_input_tokens`, and output. `context_usage` describes the current
+Provider request projection, including model, context window, total tokens,
+and an optional per-section breakdown.
 
-Turn lifecycle states are `admitted`, `active`, `completed`, `errored`, and
-`cancelled`.
+Errors expose a stable kind (`timeout`, `cancelled`, `interrupted`,
+`runtime_restart`, `pending_input_full`, `tool_outcome_unknown`, and other
+transport/provider categories) plus user-readable text. Clients branch on the
+kind and display the text; they do not parse error strings.
 
-Active phases are `provider_iteration`, `tool_batch`, and `compacting`.
-An admitted turn has an empty phase because execution has not started.
+## Recovery
 
-```text
-turn.admitted -> admitted
-turn.phase | llm.requested -> active(provider_iteration or tool_batch)
-context.compact.started -> active(compacting)
-turn.completed -> completed
-turn.errored(cancel cause) -> cancelled
-turn.errored(other cause) -> errored
-```
+On startup, each active Thread rebuilds status from its valid Journal prefix.
+Pending Inputs, current Generation, terminal Tool outcomes, and last Turn state
+are Journal facts. Recovered snapshots are published atomically to existing
+subscribers. A decode failure after a valid prefix installs that prefix and
+reports the corruption; a stale projection is rebuilt before normal operation.
 
-`llm.requested` sets provider streaming; `llm.responded` and `llm.errored`
-clear it. `context.compact.summary_responded` and
-`context.compact.summary_errored` clear summary streaming while preserving the
-`compacting` phase for retries and final compaction persistence.
-Compaction records its previous lifecycle and phase internally so completion
-can resume an enclosing turn. Standalone compaction terminates through an
-explicit turn event.
+Fleet restart continuation is separate from status replay. It runs only after
+replacement health proves the same Thread and interrupted/failed Turn identity.
+Completed or user-cancelled work is never continued automatically.
 
-The newest terminal turn remains in the snapshot after the session returns to
-`idle` or `failed`, preserving the completion or failure cause.
+## Browser Contract
 
-## Sessions And Pending Input
-
-Session states are `idle`, `turn_active`, `draining_pending`, and `failed`.
-
-```text
-idle|failed -- turn.admitted --> turn_active
-turn_active -- pending_input.draining --> draining_pending
-draining_pending -- pending_input.drained --> turn_active
-turn_active -- turn.completed --> idle
-turn_active|draining_pending -- turn.errored --> failed
-```
-
-Input admission depends only on queue capacity:
-
-```text
-can_accept_input = pending_count < max_pending_inputs
-```
-
-The runtime accepts input during provider work, tool work, compaction, and
-pending-input draining until the queue is full.
-
-`pending_input.draining` publishes the dequeued count before callbacks may
-queue more input. A later queued event is authoritative, so
-`pending_input.drained` preserves the current projected count instead of
-overwriting it with stale drain data. `pending_input.promoted` records the
-queue decrement when compaction promotes an input into the next turn.
-
-## Agent And Fleet Status
-
-The public snapshot contains:
-
-- durable cursor and update timestamp;
-- session id, alias, state, `working`, pending count, capacity, and
-  `can_accept_input`;
-- current or most recent turn lifecycle and phase;
-- tool calls keyed by `tool_use_id`;
-- token/context usage and latest error.
-
-`working` means exactly `turn_active || draining_pending` and is computed by
-the backend.
-
-Agent status has two pending-count scopes. Top-level `pending_input_count` is
-the sum across working sessions. `selected_status.session.pending_count`
-belongs to the selected session. The selected status is the newest working
-session, or the newest session when none is working.
-
-Fleet roster polling discovers process lifecycle changes. Runtime turn
-activity arrives through shared upstream agent status streams and the
-aggregate Fleet SSE stream.
-
-## Browser Consumption
-
-The browser uses one `AgentViewModelStore` for Fleet rows and per-session
-runtime snapshots. The Session page loads the transcript and its replay cursor,
-then opens the transcript stream from the transcript-owned cursor and starts an
-independent canonical status calibration request. Every successful stream open
-calibrates again for reconnect recovery. Every `BrowserEvent` atomically
-replaces the local runtime snapshot before its transcript payload is applied.
-Status-dependent submission remains disabled until either a calibration
-snapshot or a streamed event is available. A failed status request does not
-prevent the stream from opening, and a failed stream connection does not
-prevent status loading.
-
-Native `EventSource` reconnects automatically. Each successful stream open
-also refreshes the status snapshot so an out-of-band restart recovery is
-visible even when no new transcript event exists. If a `BrowserEvent` arrives
-while that refresh is in flight, the event wins and the older refresh result is
-discarded. Native reconnects use `Last-Event-ID`; a replacement EventSource
-created after Agent health or other application state changes uses the
-controller's last applied durable cursor. A transient stream error retains the
-last usable snapshot until the connection recovers or Agent health marks the
-runtime unavailable.
-
-The composer derives send, queue, stop, and queue-full behavior only from the
-canonical snapshot. The transcript projection may optimistically render
-submitted messages and assemble transcript SSE events, but it never derives
-runtime status. Tool rendering reads the authoritative tool lifecycle from the
-same snapshot and falls back to persisted transcript results only for
-historical entries no longer present in current runtime state.
-
-Runtime `last_error` is the preferred visible failure. A local request failure
-is shown only when the runtime did not publish an error.
-
-## Restart Recovery
-
-Agent startup and historical reads stream `session.ReplayEvents` through
-`NewStatusStoreFromReplay` without materializing the complete journal. Session
-switches call `ResetFromReplayWithRestartRecovery` on the existing store so
-subscribers keep the same store identity.
-
-After replay, a dangling nonterminal turn is presented as cancelled with
-`runtime_restart`, its active tools are cleared, and the session becomes
-`failed`. This recovery changes presentation state without inventing a durable
-event cursor.
-
-Fleet submits restart continuation only after the old runtime acknowledges a
-restart intent and the replacement projects the same session and turn as
-cancelled with error kind `runtime_restart`. User cancellation is insufficient.
-Ordinary Stop never submits continuation.
+- Replace snapshots; do not derive the state machine in TypeScript.
+- Merge transcript items by durable identity.
+- Resume transcript streaming from the latest durable cursor actually applied,
+  not merely the cursor returned by an independent status request.
+- Treat process health, Thread state, and archived/read-only state separately.
+- After reconnect or invalidation, refetch authoritative metadata/timeline when
+  requested by the event contract.
 
 ## Verification
 
-- Table-driven runtime tests cover every lifecycle state and phase.
-- JSON snapshot round-trip plus later events must equal uninterrupted
-  projection.
-- Web tests cover canonical snapshot and SSE routes.
-- Fleet tests cover aggregate push and acknowledged restart continuation.
-- Frontend tests cover initial loading, active/admitted turns, pending drains,
-  terminal turns, and queue capacity without fallback status sources.
+```bash
+make verify-focused PKGS="./internal/runtime ./internal/statusapi ./internal/statusstream ./internal/web"
+make verify-candidate RACE=1 WEB=1
+```

@@ -337,7 +337,7 @@ test("messagesToGroups keeps image-only messages as image units", () => {
         {
           type: "image",
           media: {
-			artifact_path: "sessions/s/media/image.png",
+			artifact_path: "threads/s/media/image.png",
             media_type: "image/png",
             sha256: "abc",
             original_bytes: 12,
@@ -371,7 +371,7 @@ test("messagesToGroups preserves canonical mixed text and image order", () => {
         {
           type: "image",
           media: {
-			artifact_path: "sessions/s/media/image.png",
+			artifact_path: "threads/s/media/image.png",
             media_type: "image/png",
             sha256: "abc",
             original_bytes: 12,

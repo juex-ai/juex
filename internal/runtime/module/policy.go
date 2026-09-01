@@ -25,7 +25,7 @@ const (
 type PolicyPoint string
 
 const (
-	PolicyPointSessionStart     PolicyPoint = "session_start"
+	PolicyPointThreadStart      PolicyPoint = "thread_start"
 	PolicyPointTurnInput        PolicyPoint = "turn_input"
 	PolicyPointToolBefore       PolicyPoint = "tool_before"
 	PolicyPointToolAfter        PolicyPoint = "tool_after"
@@ -111,7 +111,7 @@ const (
 
 type TurnInputRequest struct {
 	Runtime  RuntimeContext
-	Session  *SessionContext
+	Thread   *ThreadContext
 	TurnID   string
 	Message  llm.Message
 	Observer PolicyObserver
@@ -141,7 +141,7 @@ type ToolPolicyResult struct {
 
 type ToolPolicyRequest struct {
 	Runtime  RuntimeContext
-	Session  *SessionContext
+	Thread   *ThreadContext
 	TurnID   string
 	Stage    ToolPolicyStage
 	ToolName string
@@ -179,7 +179,7 @@ type LiveToolOutputPolicy interface {
 
 type FinishRequest struct {
 	Runtime    RuntimeContext
-	Session    *SessionContext
+	Thread     *ThreadContext
 	TurnID     string
 	UserInput  string
 	StopReason string
@@ -218,20 +218,20 @@ type FinishPolicyContinuationObserver interface {
 	FinishContinuationCommitted(context.Context, FinishRequest, FinishDecision)
 }
 
-type SessionStartRequest struct {
+type ThreadStartRequest struct {
 	Runtime  RuntimeContext
-	Session  *SessionContext
+	Thread   *ThreadContext
 	Observer PolicyObserver
 }
 
-type SessionStartDecision struct {
+type ThreadStartDecision struct {
 	Reject  bool
 	Reason  string
 	Context []PolicyContext
 }
 
-type SessionStartPolicy interface {
-	ApplySessionStart(context.Context, SessionStartRequest) (SessionStartDecision, error)
+type ThreadStartPolicy interface {
+	ApplyThreadStart(context.Context, ThreadStartRequest) (ThreadStartDecision, error)
 }
 
 type CompactionPolicyStage string
@@ -243,7 +243,7 @@ const (
 
 type CompactionPolicyRequest struct {
 	Runtime  RuntimeContext
-	Session  *SessionContext
+	Thread   *ThreadContext
 	TurnID   string
 	Stage    CompactionPolicyStage
 	Reason   string
@@ -262,7 +262,7 @@ type CompactionPolicy interface {
 
 type PendingInputAdmission struct {
 	Runtime   RuntimeContext
-	Session   *SessionContext
+	Thread    *ThreadContext
 	TurnID    string
 	RecordIDs []string
 }
@@ -551,23 +551,23 @@ func ObserveFinishContinuation(ctx context.Context, request FinishRequest, candi
 	observer.FinishContinuationCommitted(nonNilContext(ctx), request, candidate.Decision)
 }
 
-func ApplySessionStartPolicies(ctx context.Context, request SessionStartRequest, sets ...*Set) ([]PolicyContext, error) {
+func ApplyThreadStartPolicies(ctx context.Context, request ThreadStartRequest, sets ...*Set) ([]PolicyContext, error) {
 	var contexts []PolicyContext
 	for _, set := range sets {
-		current, err := set.applySessionStartPolicies(ctx, request)
+		current, err := set.applyThreadStartPolicies(ctx, request)
 		if err != nil {
 			return nil, err
 		}
 		combinedContext := append(append([]PolicyContext(nil), contexts...), current...)
 		if err := validateDurablePolicyContext(combinedContext); err != nil {
-			return nil, fmt.Errorf("runtime modules session start policy context: %w", err)
+			return nil, fmt.Errorf("runtime modules thread start policy context: %w", err)
 		}
 		contexts = combinedContext
 	}
 	return contexts, nil
 }
 
-func (s *Set) applySessionStartPolicies(ctx context.Context, request SessionStartRequest) ([]PolicyContext, error) {
+func (s *Set) applyThreadStartPolicies(ctx context.Context, request ThreadStartRequest) ([]PolicyContext, error) {
 	if s == nil {
 		return nil, nil
 	}
@@ -578,19 +578,19 @@ func (s *Set) applySessionStartPolicies(ctx context.Context, request SessionStar
 	}
 	var contexts []PolicyContext
 	observer := request.Observer
-	for _, registered := range s.sessionStartPolicies {
-		request.Observer = ownedPolicyObserver{owner: registered.id, point: PolicyPointSessionStart, next: observer}
-		decision, err := registered.module.(SessionStartPolicy).ApplySessionStart(nonNilContext(ctx), request)
+	for _, registered := range s.threadStartPolicies {
+		request.Observer = ownedPolicyObserver{owner: registered.id, point: PolicyPointThreadStart, next: observer}
+		decision, err := registered.module.(ThreadStartPolicy).ApplyThreadStart(nonNilContext(ctx), request)
 		if err != nil {
-			return nil, fmt.Errorf("runtime module %q session start policy: %w", registered.id, err)
+			return nil, fmt.Errorf("runtime module %q thread start policy: %w", registered.id, err)
 		}
 		combinedContext := append(append([]PolicyContext(nil), contexts...), decision.Context...)
 		if err := validateDurablePolicyContext(combinedContext); err != nil {
-			return nil, fmt.Errorf("runtime module %q session start policy: %w", registered.id, err)
+			return nil, fmt.Errorf("runtime module %q thread start policy: %w", registered.id, err)
 		}
 		contexts = combinedContext
 		if decision.Reject {
-			return nil, fmt.Errorf("runtime module %q session start rejected%s", registered.id, reasonSuffix(decision.Reason))
+			return nil, fmt.Errorf("runtime module %q thread start rejected%s", registered.id, reasonSuffix(decision.Reason))
 		}
 	}
 	return contexts, nil

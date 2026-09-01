@@ -39,13 +39,13 @@ type RuntimeStatusOptions struct {
 }
 
 // RuntimeModuleSnapshot is a leased view of the active, sealed Module sets.
-// Callers obtain it through App.ReadRuntimeModuleSnapshot so Session
+// Callers obtain it through App.ReadRuntimeModuleSnapshot so Thread
 // replacement and shutdown cannot invalidate the sets during projection.
 type RuntimeModuleSnapshot struct {
 	Runtime        *runtimemodule.Set
-	Session        *runtimemodule.Set
+	Thread         *runtimemodule.Set
 	RuntimeContext runtimemodule.RuntimeContext
-	SessionContext runtimemodule.SessionContext
+	ThreadContext  runtimemodule.ThreadContext
 	Skills         []skills.Skill
 	FilteredSkills []skills.FilteredSkill
 	SkillPrompt    skills.PromptBudgetReport
@@ -221,28 +221,28 @@ type RuntimeSkillOmittedInfo struct {
 	Reason string
 }
 
-// ReadRuntimeModuleSnapshot holds the App and Session publication leases while
-// fn projects the currently active Runtime and Session Module sets.
+// ReadRuntimeModuleSnapshot holds the App and Thread publication leases while
+// fn projects the currently active Runtime and Thread Module sets.
 func (a *App) ReadRuntimeModuleSnapshot(fn func(RuntimeModuleSnapshot) error) error {
 	if a == nil || fn == nil {
 		return fmt.Errorf("runtime status: active App and snapshot reader are required")
 	}
 	a.lifecycleMu.RLock()
 	defer a.lifecycleMu.RUnlock()
-	a.sessionMu.RLock()
-	defer a.sessionMu.RUnlock()
+	a.threadMu.RLock()
+	defer a.threadMu.RUnlock()
 	if a.Engine == nil || a.runtimeModules == nil {
 		return fmt.Errorf("runtime status: active Runtime Module set is unavailable")
 	}
-	sessionRuntime := a.Engine.SessionRuntimeSnapshot()
-	if sessionRuntime.Modules == nil || sessionRuntime.Session == nil {
-		return fmt.Errorf("runtime status: active Session Module set is unavailable")
+	threadRuntime := a.Engine.ThreadRuntimeSnapshot()
+	if threadRuntime.Modules == nil || threadRuntime.Thread == nil {
+		return fmt.Errorf("runtime status: active Thread Module set is unavailable")
 	}
 	return fn(RuntimeModuleSnapshot{
 		Runtime:        a.runtimeModules,
-		Session:        sessionRuntime.Modules,
+		Thread:         threadRuntime.Modules,
 		RuntimeContext: a.runtimeModuleContext,
-		SessionContext: sessionModuleContext(sessionRuntime.Session),
+		ThreadContext:  threadModuleContext(threadRuntime.Thread),
 		Skills:         append([]skills.Skill(nil), a.skills...),
 		FilteredSkills: append([]skills.FilteredSkill(nil), a.skillFilteredItems...),
 		SkillPrompt:    cloneSkillPromptReport(a.skillPrompt),
@@ -256,8 +256,8 @@ func cloneSkillPromptReport(report skills.PromptBudgetReport) skills.PromptBudge
 
 func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
 	active := opts.ActiveModules
-	if active == nil || active.Runtime == nil || active.Session == nil {
-		return RuntimeStatus{}, fmt.Errorf("runtime status: active sealed Runtime and Session Module sets are required")
+	if active == nil || active.Runtime == nil || active.Thread == nil {
+		return RuntimeStatus{}, fmt.Errorf("runtime status: active sealed Runtime and Thread Module sets are required")
 	}
 	var agentRuntime AgentRuntimeResolution
 	if opts.AgentRuntime != nil {
@@ -381,7 +381,7 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 
 func activeToolEntries(active RuntimeModuleSnapshot) []runtimemodule.ToolEntry {
 	entries := active.Runtime.ToolCatalog().Entries()
-	entries = append(entries, active.Session.ToolCatalog().Entries()...)
+	entries = append(entries, active.Thread.ToolCatalog().Entries()...)
 	return entries
 }
 
@@ -423,8 +423,8 @@ func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defau
 		tools.ToolGroupShell,
 		tools.ToolGroupSearch,
 		tools.ToolGroupSkill,
-		tools.ToolGroupSessionState,
-		tools.ToolGroupSideSession,
+		tools.ToolGroupThreadState,
+		tools.ToolGroupWorkerThread,
 		tools.ToolGroupObservable,
 	}
 	groups := make([]RuntimeToolGroupStatus, len(groupOrder))
@@ -500,8 +500,8 @@ func systemPromptStatusFromActiveModules(active RuntimeModuleSnapshot) (RuntimeS
 	sections, err := runtimemodule.CollectContext(context.Background(), runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 		Runtime: active.RuntimeContext,
-		Session: &active.SessionContext,
-	}, active.Runtime, active.Session)
+		Thread:  &active.ThreadContext,
+	}, active.Runtime, active.Thread)
 	if err != nil {
 		return RuntimeSystemPromptStatus{}, err
 	}
@@ -571,7 +571,7 @@ func runtimeSkillsStatusFromSnapshot(active RuntimeModuleSnapshot) RuntimeSkills
 
 func runtimeModuleStatuses(active RuntimeModuleSnapshot) []RuntimeModuleStatus {
 	descriptors := active.Runtime.Descriptors()
-	descriptors = append(descriptors, active.Session.Descriptors()...)
+	descriptors = append(descriptors, active.Thread.Descriptors()...)
 	items := make([]RuntimeModuleStatus, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		items = append(items, RuntimeModuleStatus{ID: string(descriptor.ID), Scope: string(descriptor.Scope)})
@@ -585,7 +585,7 @@ func activeModuleEnabled(active RuntimeModuleSnapshot, id runtimemodule.ID) bool
 			return true
 		}
 	}
-	for _, descriptor := range active.Session.Descriptors() {
+	for _, descriptor := range active.Thread.Descriptors() {
 		if descriptor.ID == id {
 			return true
 		}

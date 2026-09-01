@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,12 +19,12 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/statusapi"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/version"
 )
 
-// Options configures a Server. Provider is optional; if unset, each session
+// Options configures a Server. Provider is optional; if unset, each Thread
 // resolves a provider profile from config and constructs a provider in app.
 type Options struct {
 	Cfg          config.Config
@@ -49,21 +48,16 @@ type ReadyInfo struct {
 type Server struct {
 	opts         Options
 	modelHealth  *llm.ModelHealth
-	sessions     sync.Map // session id (string) → *activeSession
+	threads      sync.Map // Thread id (string) → *activeThread
 	startedAt    time.Time
 	statusStream *statusapi.ActivityStore
 	resources    *resourceEventHub
 
-	// createMu serializes live Session creation and mutation. activeSelectionMu is
-	// narrower: it makes active-id reads atomic with operations that can change
-	// the selected primary Session. Always acquire createMu before activeSelectionMu
-	// when both are needed. Restoring the already-selected Session only needs
-	// createMu, so lightweight persisted reads remain available during replay.
-	createMu          sync.Mutex
-	activeSelectionMu sync.Mutex
-	closeMu           sync.Mutex
-	closed            bool
-	deferredCloseWG   sync.WaitGroup
+	// createMu serializes live Thread creation and restoration.
+	createMu        sync.Mutex
+	closeMu         sync.Mutex
+	closed          bool
+	deferredCloseWG sync.WaitGroup
 
 	runtimeMu     sync.Mutex
 	runtimeMCPErr map[string]string
@@ -83,10 +77,11 @@ type Server struct {
 	endpointShutdown chan struct{}
 }
 
-// activeSession wraps an app.App with the bookkeeping the web server
+// activeThread wraps an app.App with the bookkeeping the web server
 // needs for SSE fan-out and turn cancellation.
-type activeSession struct {
+type activeThread struct {
 	app       *app.App
+	ownsApp   bool
 	bcast     *broadcaster
 	StartedAt time.Time
 
@@ -98,11 +93,11 @@ type activeSession struct {
 	closeOnce         sync.Once
 }
 
-var errSessionInactive = errors.New("web: session is inactive")
+var errThreadInactive = errors.New("web: Thread is archived")
 
 func NewServer(opts Options) *Server {
-	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.SessionsDir())
-	resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.HistoryPath()})
+	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.ThreadsDir())
+	resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.ThreadIndexPath()})
 	return &Server{
 		opts:          opts,
 		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
@@ -128,21 +123,20 @@ func (s *Server) APIHandler() http.Handler {
 	return mux
 }
 
-// NewReadOnlyAPIHandler serves persisted session data without starting an agent
+// NewReadOnlyAPIHandler serves persisted Thread data without starting an agent
 // runtime. It intentionally exposes only the durable GET endpoints needed to
 // inspect stopped agents through the fleet UI.
 func NewReadOnlyAPIHandler(cfg config.Config) http.Handler {
 	server := NewServer(Options{Cfg: cfg})
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/sessions/active", server.handleActiveSession)
-	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/threads", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
 			return
 		}
-		server.listSessions(w, r)
+		server.listThreads(w)
 	})
-	mux.HandleFunc("/api/sessions/", server.dispatchReadOnlySession)
+	mux.HandleFunc("/api/threads/", server.dispatchReadOnlyThread)
 	mux.HandleFunc("/api/media", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or HEAD required")
@@ -160,9 +154,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/api/identity", s.handleEndpointIdentity)
 	mux.HandleFunc("/api/control/shutdown", s.handleEndpointShutdown)
-	mux.HandleFunc("/api/sessions/active", s.handleActiveSession)
-	mux.HandleFunc("/api/sessions", s.handleListSessions)
-	mux.HandleFunc("/api/sessions/", s.dispatchSession)
+	mux.HandleFunc("/api/threads", s.handleListThreads)
+	mux.HandleFunc("/api/threads/", s.dispatchThread)
 	mux.HandleFunc("/api/files/tree", s.handleFilesTree)
 	mux.HandleFunc("/api/files/content", s.handleFilesContent)
 	mux.HandleFunc("/api/files/raw", s.handleFilesRaw)
@@ -175,23 +168,23 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/observables/", s.dispatchObservable)
 }
 
-func (s *Server) dispatchReadOnlySession(w http.ResponseWriter, r *http.Request) {
+func (s *Server) dispatchReadOnlyThread(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
 		return
 	}
-	id, rest := sessionPathID(r.URL.Path)
+	id, rest := threadPathID(r.URL.Path)
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "missing session id")
+		writeErr(w, http.StatusBadRequest, "bad_request", "missing Thread id")
 		return
 	}
 	switch rest {
 	case "":
-		s.handleSessionShow(w, r, id)
+		s.handleThreadShow(w, r, id)
 	case "context":
-		s.handleSessionContext(w, r, id)
+		s.handleThreadContext(w, r, id)
 	case "scratchpad":
-		s.handleSessionScratchpad(w, r, id)
+		s.handleThreadScratchpad(w, r, id)
 	default:
 		writeErr(w, http.StatusNotFound, "not_found", "read-only API route not found")
 	}
@@ -221,38 +214,42 @@ func (s *Server) handleAgentAPIPointer(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "For a browser UI covering all registered agents, run `juex fleet serve` and open http://%s/.\n", fleetAddr)
 }
 
-// dispatchSession routes /api/sessions/<id>[/...] to the matching handler.
-func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
-	id, rest := sessionPathID(r.URL.Path)
+// dispatchThread routes /api/threads/<id>[/...] to the matching handler.
+func (s *Server) dispatchThread(w http.ResponseWriter, r *http.Request) {
+	id, rest := threadPathID(r.URL.Path)
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "missing session id")
+		writeErr(w, http.StatusBadRequest, "bad_request", "missing Thread id")
 		return
 	}
 	switch {
 	case rest == "" && r.Method == http.MethodGet:
-		s.handleSessionShow(w, r, id)
+		s.handleThreadShow(w, r, id)
 	case rest == "" && r.Method == http.MethodDelete:
-		s.handleDeleteSession(w, r, id)
-	case rest == "activate" && r.Method == http.MethodPost:
-		s.handleActivateSession(w, r, id)
-	case rest == "turns" && r.Method == http.MethodPost:
+		s.handleDeleteThread(w, r, id)
+	case rest == "archive" && r.Method == http.MethodPost:
+		s.handleArchiveThread(w, r, id)
+	case rest == "unarchive" && r.Method == http.MethodPost:
+		s.handleUnarchiveThread(w, r, id)
+	case rest == "" && r.Method == http.MethodPatch:
+		s.handleRenameThread(w, r, id)
+	case rest == "inputs" && r.Method == http.MethodPost:
 		s.handleStartTurn(w, r, id)
 	case rest == "attachments" && r.Method == http.MethodPost:
-		s.handleSessionAttachmentUpload(w, r, id)
-	case rest == "interrupt" && r.Method == http.MethodPost:
+		s.handleThreadAttachmentUpload(w, r, id)
+	case rest == "stop" && r.Method == http.MethodPost:
 		s.handleInterrupt(w, r, id)
 	case rest == "events" && r.Method == http.MethodGet:
 		s.handleEventsSSE(w, r, id)
 	case rest == "status" && r.Method == http.MethodGet:
-		s.handleSessionStatus(w, r, id)
+		s.handleThreadStatus(w, r, id)
 	case rest == "status/events" && r.Method == http.MethodGet:
-		s.handleSessionStatusEvents(w, r, id)
+		s.handleThreadStatusEvents(w, r, id)
 	case rest == "compact" && r.Method == http.MethodPost:
-		s.handleCompactSession(w, r, id)
+		s.handleCompactThread(w, r, id)
 	case rest == "context" && r.Method == http.MethodGet:
-		s.handleSessionContext(w, r, id)
+		s.handleThreadContext(w, r, id)
 	case rest == "scratchpad" && r.Method == http.MethodGet:
-		s.handleSessionScratchpad(w, r, id)
+		s.handleThreadScratchpad(w, r, id)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method or sub-path")
 	}
@@ -264,7 +261,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.opts.Addr != "" && !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex listen: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
-	if err := app.EnsureActivePrimarySessionRecord(s.opts.Cfg); err != nil {
+	if err := app.EnsureMainThread(s.opts.Cfg); err != nil {
 		return err
 	}
 
@@ -333,7 +330,7 @@ func (s *Server) Run(ctx context.Context) error {
 			startupErrCh <- err
 			return
 		}
-		if err := s.ensureActivePrimarySession(startupCtx); err != nil {
+		if err := s.ensureMainThread(startupCtx); err != nil {
 			startupErrCh <- err
 		}
 	}()
@@ -388,27 +385,27 @@ func waitForStartup(done <-chan struct{}, timeout time.Duration) {
 	}
 }
 
-func (as *activeSession) cancelWork() {
+func (as *activeThread) cancelWork() {
 	if as == nil || as.workCancel == nil {
 		return
 	}
 	as.workCancel()
 }
 
-func (as *activeSession) beginClose() {
+func (as *activeThread) beginClose() {
 	if as == nil {
 		return
 	}
 	as.cancelWork()
 	if as.turns != nil {
-		as.turns.interruptWithCause(app.ErrSessionStopped)
+		as.turns.interruptWithCause(app.ErrThreadStopped)
 	}
-	if as.app != nil {
+	if as.app != nil && as.ownsApp {
 		_ = as.app.BeginClose()
 	}
 }
 
-func (as *activeSession) close() {
+func (as *activeThread) close() {
 	if as == nil {
 		return
 	}
@@ -425,14 +422,14 @@ func (as *activeSession) close() {
 		if as.bcast != nil {
 			as.bcast.close()
 		}
-		if as.app != nil {
+		if as.app != nil && as.ownsApp {
 			_ = as.app.CloseAndWait()
 		}
 	})
 }
 
-// workContext ties server-origin work, such as MCP notifications, to session shutdown.
-func (as *activeSession) workContext(parent context.Context) (context.Context, context.CancelFunc) {
+// workContext ties server-origin work, such as MCP notifications, to Thread shutdown.
+func (as *activeThread) workContext(parent context.Context) (context.Context, context.CancelFunc) {
 	base := context.Background()
 	if as != nil && as.workCtx != nil {
 		base = as.workCtx
@@ -452,7 +449,7 @@ func (as *activeSession) workContext(parent context.Context) (context.Context, c
 	}
 }
 
-// Close cancels running turns and releases every active session.
+// Close cancels running turns and releases every active Thread.
 func (s *Server) Close() {
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
@@ -464,31 +461,31 @@ func (s *Server) Close() {
 	}
 	s.closed = true
 	s.closeMu.Unlock()
-	s.sessions.Range(func(_, v any) bool {
-		v.(*activeSession).beginClose()
+	s.threads.Range(func(_, v any) bool {
+		v.(*activeThread).beginClose()
 		return true
 	})
 	s.closeMCPManager()
 	s.resources.close()
-	s.sessions.Range(func(_, v any) bool {
-		v.(*activeSession).close()
+	s.threads.Range(func(_, v any) bool {
+		v.(*activeThread).close()
 		return true
 	})
 	s.deferredCloseWG.Wait()
 }
 
-func (s *Server) deferCloseActiveSession(id string) (*activeSession, bool) {
-	v, ok := s.sessions.LoadAndDelete(id)
+func (s *Server) deferCloseActiveThread(id string) (*activeThread, bool) {
+	v, ok := s.threads.LoadAndDelete(id)
 	if !ok {
 		return nil, false
 	}
-	as := v.(*activeSession)
-	s.deferCloseSession(as)
+	as := v.(*activeThread)
+	s.deferCloseThread(as)
 	s.statusStream.Publish(s.agentActivity())
 	return as, true
 }
 
-func (s *Server) deferCloseSession(as *activeSession) {
+func (s *Server) deferCloseThread(as *activeThread) {
 	if as == nil {
 		return
 	}
@@ -498,30 +495,6 @@ func (s *Server) deferCloseSession(as *activeSession) {
 		defer s.deferredCloseWG.Done()
 		as.close()
 	}()
-}
-
-func (s *Server) closeOtherPrimarySessions(activeID string) {
-	var stale []*activeSession
-	s.sessions.Range(func(key, value any) bool {
-		id, _ := key.(string)
-		as, _ := value.(*activeSession)
-		if id == "" || id == activeID || as == nil || as.app == nil {
-			return true
-		}
-		identity, ok := as.app.SessionIdentity()
-		if ok && session.NormalizeKind(identity.Kind) == session.KindPrimary {
-			if value, loaded := s.sessions.LoadAndDelete(id); loaded {
-				stale = append(stale, value.(*activeSession))
-			}
-		}
-		return true
-	})
-	for _, as := range stale {
-		s.deferCloseSession(as)
-	}
-	if len(stale) > 0 {
-		s.statusStream.Publish(s.agentActivity())
-	}
 }
 
 // validLoopback accepts localhost or any loopback IP with an explicit port.
@@ -539,70 +512,95 @@ func validLoopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// openSession constructs an *app.App for resumeDir (or a fresh session
-// when resumeDir == "") and stores it under its session id.
-//
-// For the resume path (resumeDir != "") we re-check the sessions map
-// under createMu so two concurrent first-touches of the same on-disk
-// session collapse to a single *app.App. The fresh-create path
-// (resumeDir == "") doesn't need the re-check: app.New allocates a new
-// id every call, so concurrent fresh creates produce distinct sessions.
-func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.SessionMode) (*activeSession, error) {
+// openThread restores one active Thread runtime. Concurrent first touches of
+// the same Thread collapse to a single App instance.
+func (s *Server) openThread(ctx context.Context, id string) (*activeThread, error) {
 	if err := s.ensureMCPStarted(ctx); err != nil {
 		return nil, err
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
-	// A general explicit resume can select a different primary. Exact restore
-	// of the already-selected primary bypasses this wrapper through
-	// getActiveSessionLocked and therefore does not take activeSelectionMu.
-	if resumeDir != "" || mode != app.SessionModeNewSide {
-		s.activeSelectionMu.Lock()
-		defer s.activeSelectionMu.Unlock()
-	}
-	return s.openSessionLocked(ctx, resumeDir, mode)
+	return s.openThreadLocked(ctx, id)
 }
 
-func (s *Server) openSessionLocked(ctx context.Context, resumeDir string, mode app.SessionMode) (*activeSession, error) {
+func (s *Server) openThreadLocked(ctx context.Context, id string) (*activeThread, error) {
 	if s.isClosed() {
 		return nil, context.Canceled
 	}
-	if resumeDir != "" {
-		id := filepath.Base(resumeDir)
-		if v, ok := s.sessions.Load(id); ok {
-			return v.(*activeSession), nil
+	if !thread.ValidID(id) {
+		return nil, os.ErrNotExist
+	}
+	if value, ok := s.threads.Load(id); ok {
+		active := value.(*activeThread)
+		if active.ownsApp || s.isManagedWorkerApp(id, active.app) {
+			return active, nil
 		}
+		s.threads.Delete(id)
+		active.close()
+	}
+	store := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir)
+	probe, err := store.OpenActive(id)
+	if os.IsNotExist(err) && id == thread.MainID {
+		probe, err = store.EnsureMain()
+	}
+	if err != nil {
+		if archived, archivedErr := store.OpenArchived(id); archivedErr == nil {
+			_ = archived.Close()
+			return nil, errThreadInactive
+		}
+		return nil, err
+	}
+	_ = probe.Close()
+	if managed := s.managedWorkerApp(id); managed != nil {
+		return s.bindThreadApp(managed, false)
 	}
 	agentRuntime, err := s.resolveAgentRuntime()
 	if err != nil {
 		return nil, err
 	}
 	a, err := app.New(app.Options{
-		Config:      s.opts.Cfg,
-		Provider:    s.opts.Provider,
-		ModelHealth: s.modelHealth,
-		Verbose:     s.opts.Verbose,
-		Debug:       s.opts.Debug,
-		LogLevel:    s.opts.LogLevel,
-		Stderr:      s.stderr(),
-		WorkDir:     s.opts.Cfg.WorkDir,
-		MCPManager:  s.mcpManagerSnapshot(),
-		DisableMCP:  true,
-		ResumeDir:   resumeDir,
-		SessionMode: mode,
-		// A fresh web session should not write transcript files until
-		// the first message; history.active is recorded immediately.
-		LazySession:  resumeDir == "",
+		Config:       s.opts.Cfg,
+		Provider:     s.opts.Provider,
+		ModelHealth:  s.modelHealth,
+		Verbose:      s.opts.Verbose,
+		Debug:        s.opts.Debug,
+		LogLevel:     s.opts.LogLevel,
+		Stderr:       s.stderr(),
+		WorkDir:      s.opts.Cfg.WorkDir,
+		MCPManager:   s.mcpManagerSnapshot(),
+		DisableMCP:   true,
+		ThreadID:     id,
 		AgentRuntime: &agentRuntime,
 	})
 	if err != nil {
 		s.recordMCPError(err)
-		s.logVerbose("juex listen: open session failed: %v", err)
+		s.logVerbose("juex listen: open Thread failed: %v", err)
 		return nil, err
 	}
+	return s.bindThreadApp(a, true)
+}
+
+func (s *Server) managedWorkerApp(id string) *app.App {
+	value, ok := s.threads.Load(thread.MainID)
+	if !ok {
+		return nil
+	}
+	worker, ok := value.(*activeThread).app.ManagedWorkerApp(id)
+	if !ok {
+		return nil
+	}
+	return worker
+}
+
+func (s *Server) isManagedWorkerApp(id string, candidate *app.App) bool {
+	return candidate != nil && s.managedWorkerApp(id) == candidate
+}
+
+func (s *Server) bindThreadApp(a *app.App, ownsApp bool) (*activeThread, error) {
 	workCtx, workCancel := context.WithCancel(context.Background())
-	as := &activeSession{
+	as := &activeThread{
 		app:        a,
+		ownsApp:    ownsApp,
 		bcast:      newBroadcaster(),
 		StartedAt:  time.Now(),
 		workCtx:    workCtx,
@@ -614,12 +612,14 @@ func (s *Server) openSessionLocked(ctx context.Context, resumeDir string, mode a
 		status: a.Status,
 		stream: as.bcast,
 	})
-	identity, ok := a.SessionIdentity()
+	identity, ok := a.ThreadIdentity()
 	if !ok {
-		_ = a.CloseAndWait()
-		return nil, app.ErrSessionUnavailable
+		if ownsApp {
+			_ = a.CloseAndWait()
+		}
+		return nil, app.ErrThreadUnavailable
 	}
-	s.sessions.Store(identity.ID, as)
+	s.threads.Store(identity.ID, as)
 	if a.Status != nil {
 		snapshot := a.Status.Snapshot()
 		stream := a.Status.OpenStream(runtime.StatusStreamOptions{
@@ -644,9 +644,6 @@ func (s *Server) openSessionLocked(ctx context.Context, resumeDir string, mode a
 		}()
 	}
 	s.statusStream.Publish(s.agentActivity())
-	if session.NormalizeKind(identity.Kind) == session.KindPrimary {
-		s.closeOtherPrimarySessions(identity.ID)
-	}
 	return as, nil
 }
 
@@ -657,18 +654,18 @@ func (s *Server) resolveAgentRuntime() (app.AgentRuntimeResolution, error) {
 	return s.agentRuntime, s.agentRuntimeErr
 }
 
-func (s *Server) ensureActivePrimarySession(ctx context.Context) error {
-	if !s.hasSessionProvider() {
+func (s *Server) ensureMainThread(ctx context.Context) error {
+	if !s.hasThreadProvider() {
 		return nil
 	}
-	_, err := s.getCurrentActiveSession(ctx)
+	_, err := s.getThread(ctx, thread.MainID)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	return err
 }
 
-func (s *Server) hasSessionProvider() bool {
+func (s *Server) hasThreadProvider() bool {
 	return s.opts.Provider != nil || s.opts.Cfg.ProviderID != "" || s.opts.Cfg.ProviderProtocol != ""
 }
 
@@ -819,9 +816,9 @@ func (s *Server) isClosed() bool {
 }
 
 func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
-	as, err := s.getCurrentActiveSession(ctx)
+	as, err := s.getThread(ctx, thread.MainID)
 	if errors.Is(err, os.ErrNotExist) {
-		s.logVerbose("juex listen: MCP notification dropped: no active primary session")
+		s.logVerbose("juex listen: MCP notification dropped: Main Thread unavailable")
 		return nil
 	}
 	if err != nil {
@@ -837,11 +834,8 @@ func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) 
 	s.createMu.Unlock()
 	defer as.workWG.Done()
 	defer cancel()
-	return as.app.HandleMCPNotification(workCtx, n)
-}
-
-func (s *Server) activePrimarySessionID() (string, bool, error) {
-	return app.ActivePrimarySessionID(s.opts.Cfg)
+	_, err = as.app.DeliverObservation(workCtx, as.app.ObservationFromMCPNotification(n))
+	return err
 }
 
 func (s *Server) stderr() io.Writer {
@@ -902,69 +896,31 @@ func (s *Server) mcpErrors() map[string]string {
 	return out
 }
 
-// getActiveSession resolves only the currently selected primary session. The
-// active-id check and any disk restore share createMu with session switches so
-// a stale live request cannot reactivate an older primary session.
-func (s *Server) getActiveSession(ctx context.Context, id string) (*activeSession, error) {
+func (s *Server) getThread(ctx context.Context, id string) (*activeThread, error) {
 	if err := s.ensureMCPStarted(ctx); err != nil {
 		return nil, err
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
-	return s.getActiveSessionLocked(ctx, id)
+	return s.openThreadLocked(ctx, id)
 }
 
-func (s *Server) getCurrentActiveSession(ctx context.Context) (*activeSession, error) {
-	if err := s.ensureMCPStarted(ctx); err != nil {
-		return nil, err
-	}
-	s.createMu.Lock()
-	defer s.createMu.Unlock()
-	id, ok, err := s.activePrimarySessionID()
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, os.ErrNotExist
-	}
-	return s.getActiveSessionLocked(ctx, id)
-}
-
-func (s *Server) getActiveSessionLocked(ctx context.Context, id string) (*activeSession, error) {
-	if id == "" || filepath.Base(id) != id {
-		return nil, os.ErrNotExist
-	}
-	activeID, ok, err := s.activePrimarySessionID()
-	if err != nil {
-		return nil, err
-	}
-	if !ok || activeID != id {
-		if v, exists := s.sessions.Load(id); exists && activeSessionMatches(v.(*activeSession), id) {
-			return nil, errSessionInactive
-		}
-		if session.HasConversation(filepath.Join(s.opts.Cfg.SessionsDir(), id)) {
-			return nil, errSessionInactive
-		}
-		return nil, os.ErrNotExist
-	}
-	if v, ok := s.sessions.Load(id); ok {
-		as := v.(*activeSession)
-		if activeSessionMatches(as, id) {
-			return as, nil
-		}
-		return nil, os.ErrNotExist
-	}
-	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
-	if !session.HasConversation(dir) {
-		return nil, os.ErrNotExist
-	}
-	return s.openSessionLocked(ctx, dir, app.SessionModeAttachActive)
-}
-
-func activeSessionMatches(as *activeSession, id string) bool {
+func activeThreadMatches(as *activeThread, id string) bool {
 	if as == nil || as.app == nil || id == "" {
 		return false
 	}
-	identity, ok := as.app.SessionIdentity()
+	identity, ok := as.app.ThreadIdentity()
 	return ok && identity.ID == id
+}
+
+func threadPathID(path string) (id, rest string) {
+	const prefix = "/api/threads/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", ""
+	}
+	tail := strings.TrimPrefix(path, prefix)
+	if i := strings.IndexByte(tail, '/'); i >= 0 {
+		return tail[:i], strings.Trim(tail[i+1:], "/")
+	}
+	return tail, ""
 }

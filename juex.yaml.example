@@ -36,8 +36,8 @@ models:
 # this workspace or run. Extension selection is controlled separately below.
 # enable_user_agents_resources: true
 
-# Runtime environment is resolved once when run, repl, listen, or manual
-# compaction starts. Juex loads exactly <WorkDir>/.env by default; it does not
+# Runtime environment is resolved once when listen starts. Juex loads exactly
+# <WorkDir>/.env by default; it does not
 # search parent directories or evaluate shell syntax. Restart the runtime after
 # changing YAML or .env.
 # environment:
@@ -79,13 +79,13 @@ models:
 
 # Compiled Modules default to enabled when omitted. Disable a Module by its
 # stable ID; disabled factories are filtered before construction. Supported
-# Runtime IDs are builtin-tools, project-guidance, skills, side-sessions,
-# observables, and mcp. Supported Session IDs are session-context, goal, notes,
-# and hooks. Unknown IDs or fields fail startup.
+# Runtime IDs include builtin-tools, project-guidance, skills, worker-threads,
+# observables, and mcp. Thread IDs include thread-context, goal, notes, and
+# hooks. Unknown IDs or fields fail startup.
 # modules:
 #   skills:
 #     enabled: false
-#   side-sessions:
+#   worker-threads:
 #     enabled: false
 
 # Optional workspace command shell. Omitted is the same as profile: auto.

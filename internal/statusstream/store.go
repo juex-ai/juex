@@ -163,7 +163,7 @@ func (s *Store[T]) Publish(next T, record bool) {
 }
 
 // Replace swaps the complete replay state while preserving existing
-// subscribers. It is used when a long-lived projection changes Sessions.
+// subscribers. It is used when a long-lived projection changes Threads.
 func (s *Store[T]) Replace(current T, history []T) {
 	if s == nil {
 		return

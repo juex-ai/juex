@@ -15,13 +15,13 @@ const (
 	ActivityWorking ActivityState = "working"
 )
 
-type SessionState string
+type ThreadState string
 
 const (
-	SessionIdle            SessionState = "idle"
-	SessionTurnActive      SessionState = "turn_active"
-	SessionDrainingPending SessionState = "draining_pending"
-	SessionFailed          SessionState = "failed"
+	ThreadIdle            ThreadState = "idle"
+	ThreadTurnActive      ThreadState = "turn_active"
+	ThreadDrainingPending ThreadState = "draining_pending"
+	ThreadFailed          ThreadState = "failed"
 )
 
 type TurnState string
@@ -101,14 +101,14 @@ type StatusError struct {
 	Cancelled bool            `json:"cancelled,omitempty"`
 }
 
-type SessionStatus struct {
-	ID               string       `json:"id"`
-	Alias            string       `json:"alias,omitempty"`
-	State            SessionState `json:"state"`
-	Working          bool         `json:"working"`
-	PendingCount     int          `json:"pending_count"`
-	MaxPendingInputs int          `json:"max_pending_inputs"`
-	CanAcceptInput   bool         `json:"can_accept_input"`
+type ThreadStatus struct {
+	ID               string      `json:"id"`
+	Alias            string      `json:"alias,omitempty"`
+	State            ThreadState `json:"state"`
+	Working          bool        `json:"working"`
+	PendingCount     int         `json:"pending_count"`
+	MaxPendingInputs int         `json:"max_pending_inputs"`
+	CanAcceptInput   bool        `json:"can_accept_input"`
 }
 
 type TurnStatus struct {
@@ -134,7 +134,7 @@ type ToolCallStatus struct {
 type Snapshot struct {
 	Cursor       string           `json:"cursor,omitempty"`
 	UpdatedAt    time.Time        `json:"updated_at,omitempty"`
-	Session      SessionStatus    `json:"session"`
+	Thread       ThreadStatus     `json:"thread"`
 	Turn         *TurnStatus      `json:"turn,omitempty"`
 	Tools        []ToolCallStatus `json:"tools"`
 	TokenUsage   Usage            `json:"token_usage"`
@@ -152,14 +152,14 @@ func FromRuntime(source runtime.StatusSnapshot) Snapshot {
 	result := Snapshot{
 		Cursor:    source.Cursor,
 		UpdatedAt: source.UpdatedAt,
-		Session: SessionStatus{
-			ID:               source.Session.ID,
-			Alias:            source.Session.Alias,
-			State:            SessionState(source.Session.State),
-			Working:          source.Session.State.IsWorking(),
-			PendingCount:     source.Session.PendingCount,
-			MaxPendingInputs: source.Session.MaxPendingInputs,
-			CanAcceptInput:   source.Session.CanAcceptInput,
+		Thread: ThreadStatus{
+			ID:               source.Thread.ID,
+			Alias:            source.Thread.Alias,
+			State:            ThreadState(source.Thread.State),
+			Working:          source.Thread.State.IsWorking(),
+			PendingCount:     source.Thread.PendingCount,
+			MaxPendingInputs: source.Thread.MaxPendingInputs,
+			CanAcceptInput:   source.Thread.CanAcceptInput,
 		},
 		Tools: make([]ToolCallStatus, len(source.Tools)),
 		TokenUsage: Usage{

@@ -24,10 +24,9 @@ func installHookRunner(t *testing.T, engine *Engine, runner hooks.PolicyRunner) 
 		t.Fatal("hook module requires an engine")
 	}
 	base := hooks.Request{CWD: engine.WorkDir, WorkspaceRoots: []string{engine.WorkDir}}
-	if engine.Session != nil {
-		base.SessionID = engine.Session.ID
-		base.ConversationPath = filepath.Join(engine.Session.Dir, "conversation.jsonl")
-		base.EventsPath = filepath.Join(engine.Session.Dir, "events.jsonl")
+	if engine.Thread != nil {
+		base.ThreadID = engine.Thread.ID
+		base.JournalPath = filepath.Join(engine.Thread.Dir, "journal.jsonl")
 	}
 	mod := hooks.NewModule(runner, hooks.ModuleOptions{BaseRequest: base})
 	installRuntimeTestModules(t, engine, mod)
@@ -59,8 +58,8 @@ func installRuntimeTestModules(t *testing.T, engine *Engine, modules ...runtimem
 	t.Cleanup(func() { _ = set.CloseRuntime(context.Background()) })
 }
 
-func (e *Engine) RunSessionStartHooks(ctx context.Context) error {
-	return e.RunSessionStartPolicies(ctx)
+func (e *Engine) RunThreadStartHooks(ctx context.Context) error {
+	return e.RunThreadStartPolicies(ctx)
 }
 
 func (e *Engine) queuePolicyRuntimeContextFromHookResults(results []hooks.Result) error {
@@ -100,7 +99,7 @@ func appendPolicyAdditionalContext(msg llm.Message, results []hooks.Result) llm.
 }
 
 func newTestPromptBuilder(workDir string, now func() time.Time) *prompt.Builder {
-	provider := &promptcontext.SessionContextModule{WorkDir: workDir, Now: now}
+	provider := &promptcontext.ThreadContextModule{WorkDir: workDir, Now: now}
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return provider.Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
 	}}
@@ -121,26 +120,26 @@ func installModuleTools(t *testing.T, registry *tools.Registry, providers ...run
 	}
 }
 
-func installSessionStateModules(t *testing.T, engine *Engine) (*workmem.GoalStateStore, *workmem.NotesStore) {
-	return installSessionStateModulesWithGoalOptions(t, engine, GoalModuleOptions{EnableContinuation: true})
+func installThreadStateModules(t *testing.T, engine *Engine) (*workmem.GoalStateStore, *workmem.NotesStore) {
+	return installThreadStateModulesWithGoalOptions(t, engine, GoalModuleOptions{EnableContinuation: true})
 }
 
-func installSessionStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions GoalModuleOptions) (*workmem.GoalStateStore, *workmem.NotesStore) {
+func installThreadStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions GoalModuleOptions) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
-	return installSessionStateModulesWithStoresAndGoalOptions(t, engine, nil, nil, goalOptions)
+	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, nil, nil, goalOptions)
 }
 
-func installSessionStateModulesWithStores(
+func installThreadStateModulesWithStores(
 	t *testing.T,
 	engine *Engine,
 	goalState *workmem.GoalStateStore,
 	notes *workmem.NotesStore,
 ) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
-	return installSessionStateModulesWithStoresAndGoalOptions(t, engine, goalState, notes, GoalModuleOptions{EnableContinuation: true})
+	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, goalState, notes, GoalModuleOptions{EnableContinuation: true})
 }
 
-func installSessionStateModulesWithStoresAndGoalOptions(
+func installThreadStateModulesWithStoresAndGoalOptions(
 	t *testing.T,
 	engine *Engine,
 	goalState *workmem.GoalStateStore,
@@ -148,14 +147,14 @@ func installSessionStateModulesWithStoresAndGoalOptions(
 	goalOptions GoalModuleOptions,
 ) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
-	if engine == nil || engine.Session == nil {
-		t.Fatal("session state modules require an attached session")
+	if engine == nil || engine.Thread == nil {
+		t.Fatal("thread state modules require an attached thread")
 	}
 	if goalState == nil {
-		goalState = workmem.NewGoalStateStore(engine.Session.Dir, workmem.GoalStateOptions{})
+		goalState = workmem.NewGoalStateStore(engine.Thread.Dir, workmem.GoalStateOptions{})
 	}
 	if notes == nil {
-		notes = workmem.NewNotesStore(engine.Session.Dir)
+		notes = workmem.NewNotesStore(engine.Thread.Dir)
 	}
 	eventSink := func(event events.Event) error {
 		if engine.Bus == nil {
@@ -166,19 +165,19 @@ func installSessionStateModulesWithStoresAndGoalOptions(
 	currentTurnID := func() string { return engine.PendingInputStatus().TurnID }
 	goalOptions.EventSink = eventSink
 	goalOptions.CurrentTurnID = currentTurnID
-	sessionContext := runtimemodule.SessionContext{
-		ID:            engine.Session.ID,
-		Dir:           engine.Session.Dir,
-		ScratchpadDir: engine.Session.ScratchpadDir(),
+	threadContext := runtimemodule.ThreadContext{
+		ID:            engine.Thread.ID,
+		Dir:           engine.Thread.Dir,
+		ScratchpadDir: engine.Thread.ScratchpadDir(),
 	}
-	set, err := runtimemodule.BuildSessionSet(context.Background(), []runtimemodule.SessionFactorySpec{
-		{ID: GoalModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+	set, err := runtimemodule.BuildThreadSet(context.Background(), []runtimemodule.ThreadFactorySpec{
+		{ID: GoalModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 			return NewGoalModuleWithOptions(goalState, goalOptions), nil
 		}},
-		{ID: NotesModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+		{ID: NotesModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 			return NewNotesModuleWithOptions(notes, NotesModuleOptions{EventSink: eventSink, CurrentTurnID: currentTurnID}), nil
 		}},
-	}, sessionContext, runtimemodule.ToolContext{Session: &sessionContext})
+	}, threadContext, runtimemodule.ToolContext{Thread: &threadContext})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,10 +186,10 @@ func installSessionStateModulesWithStoresAndGoalOptions(
 			t.Fatal(err)
 		}
 	}
-	if err := engine.ReplaceSessionRuntimeBundle(engine.Session, SessionRuntimeReplacement{Modules: set, Tools: engine.Tools}); err != nil {
+	if err := engine.ReplaceThreadRuntimeBundle(engine.Thread, ThreadRuntimeReplacement{Modules: set, Tools: engine.Tools}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = set.CloseSession(context.Background()) })
+	t.Cleanup(func() { _ = set.CloseThread(context.Background()) })
 	return goalState, notes
 }
 

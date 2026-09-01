@@ -168,29 +168,29 @@ func TestVerbose_TurnStartedMCPEventUsesEventLabel(t *testing.T) {
 	}
 }
 
-func TestVerbose_TurnStartedSideSessionUsesEventLabel(t *testing.T) {
+func TestVerbose_TurnStartedWorkerThreadUsesEventLabel(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
 		input string
 		want  string
 	}{
-		{name: "completed", input: `Side Session result:
+		{name: "completed", input: `Worker Thread result:
 {"status":"completed","output":"delegated answer"}`, want: "delegated answer"},
-		{name: "failed", input: `Side Session result:
+		{name: "failed", input: `Worker Thread result:
 {"status":"failed","error":"delegation failed"}`, want: "delegation failed"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			out := emitAll([]events.Event{
 				{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{
 					Input: tt.input,
-					Kind:  llm.MessageKindSideSession,
+					Kind:  llm.MessageKindWorkerThread,
 				}},
 			})
 			if !strings.Contains(out, "› event: "+tt.want) {
-				t.Fatalf("missing Side Session event preview in transcript:\n%s", out)
+				t.Fatalf("missing Worker Thread event preview in transcript:\n%s", out)
 			}
 			if strings.Contains(out, "› user:") {
-				t.Fatalf("Side Session result should not be printed as user input:\n%s", out)
+				t.Fatalf("Worker Thread result should not be printed as user input:\n%s", out)
 			}
 		})
 	}
@@ -365,7 +365,7 @@ func TestVerbose_PrintsImageBlocks(t *testing.T) {
 				{
 					Type: llm.BlockImage,
 					Media: &llm.MediaRef{
-						ArtifactPath:  "sessions/s/media/chart.png",
+						ArtifactPath:  "threads/123456/media/chart.png",
 						MediaType:     "image/png",
 						OriginalBytes: 2048,
 						Width:         640,

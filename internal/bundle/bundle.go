@@ -1,4 +1,4 @@
-// Package bundle creates portable debug archives for persisted JueX sessions.
+// Package bundle creates portable debug archives for persisted JueX Threads.
 package bundle
 
 import (
@@ -23,25 +23,26 @@ import (
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/version"
 )
 
 const archiveRoot = "juex-debug-bundle"
 
 var (
-	ErrSessionNotFound     = errors.New("bundle: session not found")
+	ErrThreadNotFound      = errors.New("bundle: Thread not found")
 	ErrRequiredFileMissing = errors.New("bundle: required file missing")
 	ErrOutputExists        = errors.New("bundle: output exists")
 )
 
 type Options struct {
 	WorkDir                string
-	SessionID              string
+	ThreadID               string
 	OutPath                string
 	Redact                 bool
 	Force                  bool
 	IncludeWorktreeSummary bool
-	IncludeArtifacts       bool
+	IncludeMedia           bool
 	Now                    func() time.Time
 	Config                 config.Config
 	Environment            environment.Snapshot
@@ -55,18 +56,18 @@ type ExtraFile struct {
 }
 
 type Result struct {
-	Path      string `json:"path"`
-	SessionID string `json:"session_id"`
-	Files     int    `json:"files"`
-	Bytes     int64  `json:"bytes"`
-	Redacted  bool   `json:"redacted"`
+	Path     string `json:"path"`
+	ThreadID string `json:"thread_id"`
+	Files    int    `json:"files"`
+	Bytes    int64  `json:"bytes"`
+	Redacted bool   `json:"redacted"`
 }
 
 type Manifest struct {
 	SchemaVersion int             `json:"schema_version"`
 	GeneratedAt   time.Time       `json:"generated_at"`
 	WorkDir       string          `json:"work_dir"`
-	SessionID     string          `json:"session_id"`
+	ThreadID      string          `json:"thread_id"`
 	Redacted      bool            `json:"redacted"`
 	Version       version.Info    `json:"version"`
 	Entries       []ManifestEntry `json:"entries"`
@@ -83,8 +84,8 @@ type ManifestEntry struct {
 
 type RuntimeSnapshot struct {
 	WorkDir     string                 `json:"work_dir"`
-	SessionID   string                 `json:"session_id"`
-	SessionDir  string                 `json:"session_dir"`
+	ThreadID    string                 `json:"thread_id"`
+	ThreadDir   string                 `json:"thread_dir"`
 	Provider    RuntimeProvider        `json:"provider"`
 	Version     version.Info           `json:"version"`
 	OS          string                 `json:"os"`
@@ -114,11 +115,11 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	sessionID := strings.TrimSpace(opts.SessionID)
-	if sessionID == "" || sessionID == "." || sessionID == ".." || strings.ContainsAny(sessionID, `/\`) || filepath.Clean(sessionID) != sessionID {
-		return Result{}, fmt.Errorf("%w: invalid session id format", ErrSessionNotFound)
+	threadID := strings.TrimSpace(opts.ThreadID)
+	if !thread.ValidID(threadID) {
+		return Result{}, fmt.Errorf("%w: invalid Thread id format", ErrThreadNotFound)
 	}
-	opts.SessionID = sessionID
+	opts.ThreadID = threadID
 	trimmedOut := strings.TrimSpace(opts.OutPath)
 	if trimmedOut == "" {
 		return Result{}, fmt.Errorf("bundle: output path required")
@@ -138,21 +139,20 @@ func Create(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	sessionsDir := opts.Config.SessionsDir()
-	if sessionsDir == "" {
-		sessionsDir = filepath.Join(workDir, ".juex", "sessions")
-	}
-	sessionDir := filepath.Join(sessionsDir, sessionID)
-	if st, err := os.Stat(sessionDir); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Result{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
-		}
-		return Result{}, err
+	store := thread.NewStore(opts.Config.RuntimePaths().StateDir)
+	threadDir := filepath.Join(store.ThreadsDir(), threadID)
+	if st, statErr := os.Stat(threadDir); errors.Is(statErr, os.ErrNotExist) {
+		threadDir = filepath.Join(store.ArchiveDir(), threadID)
+	} else if statErr != nil {
+		return Result{}, statErr
 	} else if !st.IsDir() {
-		return Result{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+		return Result{}, fmt.Errorf("%w: %s", ErrThreadNotFound, threadID)
+	}
+	if st, statErr := os.Stat(threadDir); statErr != nil || !st.IsDir() {
+		return Result{}, fmt.Errorf("%w: %s", ErrThreadNotFound, threadID)
 	}
 
-	entries, err := collectEntries(opts, workDir, sessionDir, now())
+	entries, err := collectEntries(opts, workDir, threadDir, now())
 	if err != nil {
 		return Result{}, err
 	}
@@ -168,7 +168,7 @@ func Create(opts Options) (Result, error) {
 		SchemaVersion: 1,
 		GeneratedAt:   now(),
 		WorkDir:       workDir,
-		SessionID:     opts.SessionID,
+		ThreadID:      opts.ThreadID,
 		Redacted:      opts.Redact || manifestPathRedacted || pathsRedacted || entriesContainRedaction(entries),
 		Version:       version.Build(),
 		Entries:       manifestEntries(entries),
@@ -190,7 +190,7 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Path: outPath, SessionID: sessionID, Files: len(entries), Bytes: st.Size(), Redacted: manifest.Redacted}, nil
+	return Result{Path: outPath, ThreadID: threadID, Files: len(entries), Bytes: st.Size(), Redacted: manifest.Redacted}, nil
 }
 
 func redactManifestMetadata(snapshot environment.Snapshot, manifest *Manifest) bool {
@@ -198,7 +198,7 @@ func redactManifestMetadata(snapshot environment.Snapshot, manifest *Manifest) b
 		return false
 	}
 	changed := redactManifestString(snapshot, &manifest.WorkDir)
-	if redactManifestString(snapshot, &manifest.SessionID) {
+	if redactManifestString(snapshot, &manifest.ThreadID) {
 		changed = true
 	}
 	for index := range manifest.Entries {
@@ -220,9 +220,9 @@ func redactManifestString(snapshot environment.Snapshot, value *string) bool {
 	return changed
 }
 
-func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]archiveEntry, error) {
+func collectEntries(opts Options, workDir, threadDir string, now time.Time) ([]archiveEntry, error) {
 	var entries []archiveEntry
-	runtimeBytes, err := json.MarshalIndent(runtimeSnapshot(opts, workDir, sessionDir), "", "  ")
+	runtimeBytes, err := json.MarshalIndent(runtimeSnapshot(opts, workDir, threadDir), "", "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -232,8 +232,8 @@ func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]
 	}
 	entries = append(entries, newEntry(pathInBundle("runtime.json"), "", runtimeBytes, opts.Redact, true))
 
-	for _, item := range sessionBundleFiles() {
-		source := filepath.Join(sessionDir, item.name)
+	for _, item := range threadBundleFiles() {
+		source := filepath.Join(threadDir, item.name)
 		data, err := os.ReadFile(source)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) && !item.required {
@@ -248,7 +248,7 @@ func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]
 		if redacted {
 			data = redactBytes(data)
 		}
-		entries = append(entries, newEntry(pathInBundle(filepath.Join("session", filepath.ToSlash(item.name))), source, data, redacted, item.required))
+		entries = append(entries, newEntry(pathInBundle(filepath.Join("thread", filepath.ToSlash(item.name))), source, data, redacted, item.required))
 	}
 	if opts.IncludeWorktreeSummary {
 		data, err := json.MarshalIndent(map[string]any{
@@ -261,8 +261,8 @@ func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]
 		}
 		entries = append(entries, newEntry(pathInBundle("worktree/summary.json"), "", append(data, '\n'), false, false))
 	}
-	if opts.IncludeArtifacts {
-		artifactEntries, err := collectArtifacts(opts.Config.ArtifactDir(), opts.Redact)
+	if opts.IncludeMedia {
+		artifactEntries, err := collectArtifacts(opts.Config.MediaDir(), opts.Redact)
 		if err != nil {
 			return nil, err
 		}
@@ -485,15 +485,15 @@ func entriesContainRedaction(entries []archiveEntry) bool {
 	return false
 }
 
-func runtimeSnapshot(opts Options, workDir, sessionDir string) RuntimeSnapshot {
+func runtimeSnapshot(opts Options, workDir, threadDir string) RuntimeSnapshot {
 	cfg := opts.Config
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = workDir
 	}
 	return RuntimeSnapshot{
-		WorkDir:    workDir,
-		SessionID:  opts.SessionID,
-		SessionDir: sessionDir,
+		WorkDir:   workDir,
+		ThreadID:  opts.ThreadID,
+		ThreadDir: threadDir,
 		Provider: RuntimeProvider{
 			ID:       cfg.ProviderID,
 			Protocol: cfg.ProviderProtocol,
@@ -515,21 +515,15 @@ func bundleEnvironment(opts Options) environment.Snapshot {
 	return opts.Config.EnvironmentSnapshot()
 }
 
-type sessionBundleFile struct {
+type threadBundleFile struct {
 	name     string
 	required bool
 }
 
-func sessionBundleFiles() []sessionBundleFile {
-	return []sessionBundleFile{
-		{name: "session.json", required: true},
-		{name: "conversation.jsonl", required: true},
-		{name: "events.jsonl", required: true},
-		{name: "pending_input.jsonl"},
-		{name: "notes.md"},
-		{name: "goal_state.json"},
-		{name: filepath.Join("logs", "juex.log")},
-		{name: filepath.Join("logs", "debug.log")},
+func threadBundleFiles() []threadBundleFile {
+	return []threadBundleFile{
+		{name: "journal.jsonl", required: true},
+		{name: "thread.json"},
 	}
 }
 

@@ -1,8 +1,8 @@
 // Package app wires process-level runtime dependencies: config -> provider ->
-// enabled Modules -> sealed catalogs -> Session -> prompt -> engine.
+// enabled Modules -> sealed catalogs -> Main Thread -> prompt -> engine.
 //
 // It also owns application policies shared by transports, such as workspace
-// session attachment, slash commands, MCP notification routing, and turn
+// Thread attachment, slash commands, MCP notification routing, and turn
 // admission. CLI and web code may still import lower-level packages for their
 // own presentation and inspection surfaces; shared runtime decisions should
 // move here instead of being duplicated across transports.
@@ -39,8 +39,8 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/sandbox"
-	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/tools"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
@@ -64,87 +64,73 @@ type Options struct {
 	Stderr               io.Writer
 	WorkDir              string // if set, overrides Config.WorkDir
 	// MCPManager, when set, provides process-scoped MCP clients owned by
-	// the caller. App registers proxy tools into its per-session registry
+	// the caller. App registers proxy tools into its per-Thread registry
 	// but does not close the manager.
 	MCPManager *mcp.Manager
 	// DisableMCP skips loading MCP configs. Used by serve when MCP startup
-	// failed at process scope but sessions should still be usable.
+	// failed at process scope but Threads should still be usable.
 	DisableMCP bool
 	// SuppressMCPWarnings keeps optional MCP startup diagnostics out of stderr.
 	// Callers that expose structured diagnostics, such as dry-run JSON, set this.
 	SuppressMCPWarnings bool
-	// ResumeDir, if non-empty, is the absolute path of an existing
-	// session directory to load instead of creating a new one. The
-	// session ID and on-disk files are reused; new messages append.
-	ResumeDir   string
-	Alias       string
-	SessionMode SessionMode
-	// LazySession delays creating the on-disk session directory until the
-	// first message or event is appended. Used by the web UI so abandoned
-	// empty chats do not leave local files behind.
-	LazySession bool
+	// ThreadID selects an existing active Thread. Empty selects Main.
+	ThreadID string
+	Alias    string
+	// parentThreadID creates a Worker and is set only by the Worker manager.
+	parentThreadID string
 	// AgentRuntime reuses a process-lifetime resource and environment
 	// resolution owned by a long-running caller such as the Web server.
 	AgentRuntime *AgentRuntimeResolution
 
-	// Internal child-runtime seams for managed Side Sessions.
-	disableSideSessionTools bool
-	disableObservables      bool
-	sharedGoalState         *workmem.GoalStateStore
-	sharedNotes             *workmem.NotesStore
-	sharedObservables       *observable.Manager
-	sideSessionFactory      sideSessionFactory
-	sessionModuleFactories  []runtimemodule.SessionFactorySpec
-	startupContext          context.Context
+	// Internal child-runtime seams for managed Worker Threads.
+	disableObservables    bool
+	sharedGoalState       *workmem.GoalStateStore
+	sharedNotes           *workmem.NotesStore
+	sharedObservables     *observable.Manager
+	workerThreadFactory   workerThreadFactory
+	threadModuleFactories []runtimemodule.ThreadFactorySpec
+	startupContext        context.Context
 }
 
-type SessionMode string
-
-const (
-	SessionModeAttachActive SessionMode = "attach_active"
-	SessionModeNewPrimary   SessionMode = "new_primary"
-	SessionModeNewSide      SessionMode = "new_side"
-)
-
 type App struct {
-	Engine                 *runtime.Engine
-	Status                 *runtime.StatusStore
-	Bus                    *events.Bus
-	Session                *session.Session
-	cleanup                []func() error
-	closeMu                sync.Mutex
-	lifecycleMu            sync.RWMutex
-	closeCancel            sync.Once
-	cleanupIndex           int
-	closeErr               error
-	closeRunning           bool
-	closeRunDone           chan struct{}
-	closeRunResult         *error
-	sessionReplaceMu       sync.Mutex
-	sessionMu              sync.RWMutex
-	sessionReleased        chan struct{}
-	sessionRelease         sync.Once
-	ctx                    context.Context
-	cancel                 context.CancelFunc
-	cfg                    config.Config
-	stderr                 io.Writer
-	skills                 []skills.Skill
-	skillPrompt            skills.PromptBudgetReport
-	skillFiltered          int
-	skillFilteredItems     []skills.FilteredSkill
-	mcp                    MCPStatus
-	obsv                   *observable.Manager
-	chunkedWrites          *tools.ChunkedWriteManager
-	shellSessions          *tools.ShellSessionManager
-	sideSessions           *sideSessionManager
-	sideFactory            sideSessionFactory
-	mcpManager             *mcp.Manager
-	agentRuntime           AgentRuntimeResolution
-	runtimeModules         *runtimemodule.Set
-	runtimeModuleContext   runtimemodule.RuntimeContext
-	sessionModuleFactories []runtimemodule.SessionFactorySpec
-	hookRunner             hooks.PolicyRunner
-	hookBaseRequest        hooks.Request
+	Engine                *runtime.Engine
+	Status                *runtime.StatusStore
+	Bus                   *events.Bus
+	Thread                *thread.Thread
+	ThreadStore           *thread.Store
+	cleanup               []func() error
+	closeMu               sync.Mutex
+	lifecycleMu           sync.RWMutex
+	closeCancel           sync.Once
+	cleanupIndex          int
+	closeErr              error
+	closeRunning          bool
+	closeRunDone          chan struct{}
+	closeRunResult        *error
+	threadMu              sync.RWMutex
+	threadReleased        chan struct{}
+	threadRelease         sync.Once
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	cfg                   config.Config
+	stderr                io.Writer
+	skills                []skills.Skill
+	skillPrompt           skills.PromptBudgetReport
+	skillFiltered         int
+	skillFilteredItems    []skills.FilteredSkill
+	mcp                   MCPStatus
+	obsv                  *observable.Manager
+	chunkedWrites         *tools.ChunkedWriteManager
+	shellSessions         *tools.ShellSessionManager
+	workers               *workerThreadManager
+	workerFactory         workerThreadFactory
+	mcpManager            *mcp.Manager
+	agentRuntime          AgentRuntimeResolution
+	runtimeModules        *runtimemodule.Set
+	runtimeModuleContext  runtimemodule.RuntimeContext
+	threadModuleFactories []runtimemodule.ThreadFactorySpec
+	hookRunner            hooks.PolicyRunner
+	hookBaseRequest       hooks.Request
 
 	turnAdmission   turnAdmission
 	pendingRecovery sync.WaitGroup
@@ -155,10 +141,9 @@ type App struct {
 	pendingHandoffs      sync.WaitGroup
 	pendingHandoffClosed bool
 	pendingHandoffIDs    map[string]struct{}
-	sessionHandoffMu     sync.RWMutex
+	threadHandoffMu      sync.RWMutex
 
-	sessionLock       *session.Lock
-	sessionResource   *session.Session
+	threadResource    *thread.Thread
 	eventSink         *events.DurableSink
 	eventCatalog      events.SchemaCatalog
 	eventUnsubscribe  func()
@@ -278,7 +263,7 @@ func New(opts Options) (*App, error) {
 		}
 		modelCandidates = make([]runtime.ModelCandidate, 0, len(resolvedChain))
 		for _, resolved := range resolvedChain {
-			resolved.Selection.ArtifactDir = runtimePaths.ArtifactDir
+			resolved.Selection.MediaDir = runtimePaths.MediaDir
 			profile, err := resolved.Selection.ProviderProfile()
 			if err != nil {
 				return nil, err
@@ -310,7 +295,7 @@ func New(opts Options) (*App, error) {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}
 		selection := resolved.Selection
-		selection.ArtifactDir = runtimePaths.ArtifactDir
+		selection.MediaDir = runtimePaths.MediaDir
 		profile, err := selection.ProviderProfile()
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
@@ -350,7 +335,7 @@ func New(opts Options) (*App, error) {
 		Policy:        cfg.SandboxPolicy(),
 		WorkDir:       runtimePaths.WorkDir,
 		AgentStateDir: runtimePaths.StateDir,
-		ReadOnlyPaths: []string{runtimePaths.ArtifactDir},
+		ReadOnlyPaths: []string{runtimePaths.MediaDir},
 	})
 	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, filePolicy)
 	runtimeEnvironment := agentRuntime.Environment()
@@ -370,29 +355,23 @@ func New(opts Options) (*App, error) {
 		}
 	}
 
-	attachment, sessLock, err := AttachAndLockWorkspaceSession(cfg, SessionAttachmentRequest{
-		ResumeDir: opts.ResumeDir,
-		Mode:      opts.SessionMode,
-		Alias:     opts.Alias,
-		Lazy:      opts.LazySession,
+	attachment, err := AttachWorkspaceThread(cfg, ThreadAttachmentRequest{
+		ThreadID:       opts.ThreadID,
+		ParentThreadID: opts.parentThreadID,
+		Alias:          opts.Alias,
 	})
 	if err != nil {
 		return nil, err
 	}
-	sess := attachment.Session
-	if err := sess.ApplyAlias(opts.Alias); err != nil {
-		_ = sessLock.Close()
-		_ = sess.Close()
-		return nil, err
-	}
-	var sessionModules *runtimemodule.Set
+	sess := attachment.Thread
+	var threadModules *runtimemodule.Set
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
 	var statusUnsubscribe func()
-	closeSessionResources := func() {
-		if sessionModules != nil {
-			_ = sessionModules.CloseSession(context.Background())
-			sessionModules = nil
+	closeThreadResources := func() {
+		if threadModules != nil {
+			_ = threadModules.CloseThread(context.Background())
+			threadModules = nil
 		}
 		if statusUnsubscribe != nil {
 			statusUnsubscribe()
@@ -406,7 +385,6 @@ func New(opts Options) (*App, error) {
 			_ = eventSink.Close()
 			eventSink = nil
 		}
-		_ = sessLock.Close()
 		_ = sess.Close()
 	}
 	eventCatalog := eventcatalog.Default()
@@ -416,9 +394,7 @@ func New(opts Options) (*App, error) {
 	eventUnsubscribe = func() { bus.SetCommitter(nil) }
 	status, statusReplayErr := runtime.NewStatusStoreFromReplay(
 		runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
-		func(visit func(events.Event)) error {
-			return session.ReplayEventsWithCatalog(sess.Dir, eventCatalog, visit)
-		},
+		func(visit func(events.Event)) error { sess.ReplayEvents(visit); return nil },
 	)
 	if statusReplayErr != nil {
 		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
@@ -430,14 +406,14 @@ func New(opts Options) (*App, error) {
 				Purpose: runtimemodule.ContextPurposeProviderIteration,
 				Runtime: runtimeModules.runtimeContext,
 			}
-			var activeSessionModules *runtimemodule.Set
+			var activeThreadModules *runtimemodule.Set
 			if eng != nil {
-				snapshot := eng.SessionRuntimeSnapshot()
-				activeSessionModules = snapshot.Modules
-				sessionContext := sessionModuleContext(snapshot.Session)
-				request.Session = &sessionContext
+				snapshot := eng.ThreadRuntimeSnapshot()
+				activeThreadModules = snapshot.Modules
+				threadContext := threadModuleContext(snapshot.Thread)
+				request.Thread = &threadContext
 			}
-			return runtimemodule.CollectContext(appCtx, request, runtimeModules.set, activeSessionModules)
+			return runtimemodule.CollectContext(appCtx, request, runtimeModules.set, activeThreadModules)
 		},
 	}
 	var hookRunner hooks.PolicyRunner
@@ -446,7 +422,7 @@ func New(opts Options) (*App, error) {
 			Environment: runtimeEnvironment,
 		})
 		if err != nil {
-			closeSessionResources()
+			closeThreadResources()
 			return nil, err
 		}
 	}
@@ -475,11 +451,11 @@ func New(opts Options) (*App, error) {
 		Tools:                   reg,
 		RuntimeContext:          runtimeModules.runtimeContext,
 		Bus:                     bus,
-		Session:                 sess,
+		Thread:                  sess,
 		Prompt:                  pb,
 		WorkDir:                 runtimePaths.WorkDir,
-		ArtifactDir:             runtimePaths.ArtifactDir,
-		PendingInputQueue:       runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
+		MediaDir:                runtimePaths.MediaDir,
+		PendingInputQueue:       runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{Thread: sess}),
 		PendingInputTTL:         pendingInputTTL,
 		ExternalEventTTL:        externalEventTTL,
 		ShowBuiltinPolicyTraces: runtimeLimits.ShowBuiltinPolicyTraces,
@@ -490,37 +466,37 @@ func New(opts Options) (*App, error) {
 		ToolOutput:              runtimeLimits.ToolOutput,
 	}
 	a := &App{
-		Engine:                 eng,
-		Status:                 status,
-		Bus:                    bus,
-		Session:                sess,
-		ctx:                    appCtx,
-		cancel:                 appCancel,
-		cfg:                    cfg,
-		stderr:                 stderr,
-		chunkedWrites:          chunkedWrites,
-		sessionLock:            sessLock,
-		sessionResource:        sess,
-		eventSink:              eventSink,
-		eventCatalog:           eventCatalog,
-		eventUnsubscribe:       eventUnsubscribe,
-		statusUnsubscribe:      statusUnsubscribe,
-		debug:                  opts.Debug,
-		logLevel:               opts.LogLevel,
-		runtimeEnvironment:     runtimeEnvironment,
-		sessionReleased:        make(chan struct{}),
-		sideFactory:            opts.sideSessionFactory,
-		mcpManager:             opts.MCPManager,
-		agentRuntime:           agentRuntime,
-		runtimeModuleContext:   runtimeModules.runtimeContext,
-		sessionModuleFactories: append([]runtimemodule.SessionFactorySpec(nil), opts.sessionModuleFactories...),
-		hookRunner:             hookRunner,
-		hookBaseRequest:        hookBaseRequest,
+		Engine:                eng,
+		Status:                status,
+		Bus:                   bus,
+		Thread:                sess,
+		ThreadStore:           attachment.Store,
+		ctx:                   appCtx,
+		cancel:                appCancel,
+		cfg:                   cfg,
+		stderr:                stderr,
+		chunkedWrites:         chunkedWrites,
+		threadResource:        sess,
+		eventSink:             eventSink,
+		eventCatalog:          eventCatalog,
+		eventUnsubscribe:      eventUnsubscribe,
+		statusUnsubscribe:     statusUnsubscribe,
+		debug:                 opts.Debug,
+		logLevel:              opts.LogLevel,
+		runtimeEnvironment:    runtimeEnvironment,
+		threadReleased:        make(chan struct{}),
+		workerFactory:         opts.workerThreadFactory,
+		mcpManager:            opts.MCPManager,
+		agentRuntime:          agentRuntime,
+		runtimeModuleContext:  runtimeModules.runtimeContext,
+		threadModuleFactories: append([]runtimemodule.ThreadFactorySpec(nil), opts.threadModuleFactories...),
+		hookRunner:            hookRunner,
+		hookBaseRequest:       hookBaseRequest,
 	}
 	statusUnsubscribe = eventSink.AddProjection(status)
 	a.statusUnsubscribe = statusUnsubscribe
 	if err := a.attachObservability(sess); err != nil {
-		closeSessionResources()
+		closeThreadResources()
 		return nil, err
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
@@ -547,7 +523,7 @@ func New(opts Options) (*App, error) {
 			return a.eventSink.Close()
 		}
 		return nil
-	}, a.closeActiveSessionResources, func() error {
+	}, a.closeActiveThreadResources, func() error {
 		if a.runtimeModules == nil {
 			return nil
 		}
@@ -560,10 +536,11 @@ func New(opts Options) (*App, error) {
 		ForwardStderr: opts.Verbose,
 		Environment:   runtimeEnvironment,
 	}
-	if sess.Kind == session.KindPrimary {
+	if sess.ID == thread.MainID {
 		connectOpts.EnableClaudeChannel = true
 		notificationGate = newMCPNotificationGate(func(n mcp.Notification) {
-			_ = a.HandleMCPNotification(a.ctx, n)
+			record := a.ObservationFromMCPNotification(n)
+			_, _ = a.DeliverObservation(a.ctx, record)
 		})
 		connectOpts.OnNotification = notificationGate.Enqueue
 	}
@@ -584,7 +561,7 @@ func New(opts Options) (*App, error) {
 		},
 		{
 			ID:      observable.ModuleID,
-			Enabled: cfg.ModuleEnabled(string(observable.ModuleID)) && (opts.sharedObservables != nil || !opts.disableObservables),
+			Enabled: cfg.ModuleEnabled(string(observable.ModuleID)) && sess.ID == thread.MainID && (opts.sharedObservables != nil || !opts.disableObservables),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				if opts.sharedObservables != nil {
 					observableRuntimeModule = observable.NewModule(opts.sharedObservables)
@@ -595,7 +572,7 @@ func New(opts Options) (*App, error) {
 						StateDir:              cfg.ObservablesStateDir(),
 						WorkDir:               runtimePaths.WorkDir,
 						AgentStateDir:         runtimePaths.StateDir,
-						ArtifactDir:           runtimePaths.ArtifactDir,
+						MediaDir:              runtimePaths.MediaDir,
 						Environment:           runtimeEnvironment,
 						Shell:                 cfg.Shell,
 						Sandbox:               cfg.SandboxPolicy(),
@@ -608,11 +585,11 @@ func New(opts Options) (*App, error) {
 			},
 		},
 		{
-			ID:      sideSessionModuleID,
-			Enabled: cfg.ModuleEnabled(string(sideSessionModuleID)) && sess.Kind == session.KindPrimary && sess.Active && !opts.disableSideSessionTools,
+			ID:      workerThreadModuleID,
+			Enabled: cfg.ModuleEnabled(string(workerThreadModuleID)),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				a.sideSessions = newSideSessionManager(a)
-				return &sideSessionModule{manager: a.sideSessions}, nil
+				a.workers = newWorkerThreadManager(a)
+				return &workerThreadModule{manager: a.workers}, nil
 			},
 		},
 	}
@@ -642,42 +619,42 @@ func New(opts Options) (*App, error) {
 		}
 		a.mcp = buildMCPStatus(mergedMCP.MCPServers, a.mcpManager.ToolCounts(), startupErrors)
 	}
-	sessionModules, err = buildSessionModules(
+	threadModules, err = buildThreadModules(
 		startupCtx,
 		cfg,
-		opts.sessionModuleFactories,
+		opts.threadModuleFactories,
 		runtimeModules.runtimeContext,
 		sess,
 		eng,
 		runtimePaths.WorkDir,
 		promptcontext.ShellProfileFromConfig(cfg.Shell),
 		a.shellSessions,
-		sessionModuleOptions{
+		threadModuleOptions{
 			hookRunner:               hookRunner,
 			hookBaseRequest:          hookBaseRequest,
 			goalState:                opts.sharedGoalState,
 			notes:                    opts.sharedNotes,
 			goalContinuation:         opts.sharedGoalState == nil,
-			goalContinuationDeferrer: a.sideSessions,
+			goalContinuationDeferrer: a.workers,
 		},
 	)
 	if err != nil {
 		_ = a.Close()
 		return nil, err
 	}
-	if err := validateSessionModuleContext(startupCtx, runtimeModules.set, sessionModules, runtimeModules.runtimeContext, sess); err != nil {
-		_ = sessionModules.CloseSession(context.Background())
+	if err := validateThreadModuleContext(startupCtx, runtimeModules.set, threadModules, runtimeModules.runtimeContext, sess); err != nil {
+		_ = threadModules.CloseThread(context.Background())
 		_ = a.Close()
 		return nil, err
 	}
-	reg, err = runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds}, runtimeModules.set, sessionModules)
+	reg, err = runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds}, runtimeModules.set, threadModules)
 	if err != nil {
-		_ = sessionModules.CloseSession(context.Background())
+		_ = threadModules.CloseThread(context.Background())
 		_ = a.Close()
 		return nil, err
 	}
-	if err := eng.ReplaceSessionRuntimeBundle(sess, runtime.SessionRuntimeReplacement{Modules: sessionModules, Tools: reg}); err != nil {
-		_ = sessionModules.CloseSession(context.Background())
+	if err := eng.ReplaceThreadRuntimeBundle(sess, runtime.ThreadRuntimeReplacement{Modules: threadModules, Tools: reg}); err != nil {
+		_ = threadModules.CloseThread(context.Background())
 		_ = a.Close()
 		return nil, err
 	}
@@ -692,7 +669,7 @@ func New(opts Options) (*App, error) {
 	}
 	status.RecoverAfterRestart()
 	chunkedWrites.RestoreActiveFromHistory(sess.History)
-	if err := eng.RunSessionStartPolicies(startupCtx); err != nil {
+	if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
@@ -702,25 +679,25 @@ func New(opts Options) (*App, error) {
 	}
 	appContextTransferred = true
 	var activateObservables func()
-	if observableRuntimeModule != nil && opts.sharedObservables == nil && sess.Kind == session.KindPrimary {
+	if observableRuntimeModule != nil && opts.sharedObservables == nil && sess.ID == thread.MainID {
 		activateObservables = func() { _ = observableRuntimeModule.StartAll(startupCtx) }
 	}
 	a.activateExternalInputAfterPendingRecovery(notificationGate, replayablePendingInput, activateObservables)
 	return a, nil
 }
 
-func goalStateStore(sess *session.Session) *workmem.GoalStateStore {
+func goalStateStore(sess *thread.Thread) *workmem.GoalStateStore {
 	if sess == nil || sess.Dir == "" {
 		return nil
 	}
-	return workmem.NewGoalStateStore(sess.Dir, workmem.GoalStateOptions{})
+	return workmem.NewThreadGoalStateStore(sess, workmem.GoalStateOptions{})
 }
 
-func notesStore(sess *session.Session) *workmem.NotesStore {
+func notesStore(sess *thread.Thread) *workmem.NotesStore {
 	if sess == nil || sess.Dir == "" {
 		return nil
 	}
-	return workmem.NewNotesStore(sess.Dir)
+	return workmem.NewThreadNotesStore(sess)
 }
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
@@ -734,91 +711,86 @@ func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 	}
 }
 
-func (a *App) SwitchToNewPrimarySession() error {
-	return a.SwitchToNewPrimarySessionContext(context.Background())
-}
-
-func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
-	result, err := a.executeActiveSessionReplacement(ctx, activeSessionReplacementOptions{})
-	if err != nil {
+func (a *App) NewContext(ctx context.Context) error {
+	if a == nil || a.Engine == nil {
+		return ErrThreadUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
 		return err
 	}
-	a.reportSessionReplacementDiagnostics(result)
-	return nil
+	a.threadHandoffMu.Lock()
+	defer a.threadHandoffMu.Unlock()
+	return a.Engine.NewContext(ctx)
 }
 
-func (a *App) reportSessionReplacementDiagnostics(result sessionReplacementResult) {
-	if result.StatusErr != nil {
-		fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", result.StatusErr)
-	}
-	if result.ObservabilityErr != nil {
-		fmt.Fprintf(a.stderr, "juex: warning: session observability after committed replacement: %v\n", result.ObservabilityErr)
-	}
-	if result.CleanupErr != nil {
-		fmt.Fprintf(a.stderr, "juex: warning: committed session replacement cleanup: %v\n", result.CleanupErr)
-	}
-}
-
-func (a *App) closeActiveSessionResources() error {
+func (a *App) closeActiveThreadResources() error {
 	if a == nil {
 		return nil
 	}
-	a.sessionMu.Lock()
-	sessLock := a.sessionLock
-	sess := a.sessionResource
-	a.sessionLock = nil
-	a.sessionResource = nil
-	a.Session = nil
-	a.sessionMu.Unlock()
+	a.threadMu.Lock()
+	sess := a.threadResource
+	a.threadResource = nil
+	a.Thread = nil
+	a.threadMu.Unlock()
 
-	var moduleErr, lockErr, sessionErr error
+	var moduleErr, threadErr error
 	if a.Engine != nil {
-		if modules := a.Engine.SessionRuntimeSnapshot().Modules; modules != nil {
-			moduleErr = modules.CloseSession(context.Background())
+		if modules := a.Engine.ThreadRuntimeSnapshot().Modules; modules != nil {
+			moduleErr = modules.CloseThread(context.Background())
 		}
-	}
-	if sessLock != nil {
-		lockErr = sessLock.Close()
 	}
 	if sess != nil {
-		sessionErr = sess.Close()
+		threadErr = sess.Close()
 	}
-	a.sessionRelease.Do(func() {
-		if a.sessionReleased != nil {
-			close(a.sessionReleased)
+	a.threadRelease.Do(func() {
+		if a.threadReleased != nil {
+			close(a.threadReleased)
 		}
 	})
-	return errors.Join(moduleErr, lockErr, sessionErr)
+	return errors.Join(moduleErr, threadErr)
 }
 
-// WaitSessionReleased waits until final App cleanup has closed the active
-// Session and its workspace lock, and until Side Session result deliveries can
+// WaitThreadReleased waits until final App cleanup has closed the active
+// Thread and its workspace lock, and until Worker Thread result deliveries can
 // no longer write its directory. Child runtimes may still be draining.
-func (a *App) WaitSessionReleased(ctx context.Context) error {
-	if a == nil || a.sessionReleased == nil {
+func (a *App) WaitThreadReleased(ctx context.Context) error {
+	if a == nil || a.threadReleased == nil {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	select {
-	case <-a.sessionReleased:
+	case <-a.threadReleased:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if a.sideSessions == nil {
+	if a.workers == nil {
 		return nil
 	}
-	return a.sideSessions.WaitDeliveryWriters(ctx)
+	return a.workers.WaitDeliveryWriters(ctx)
 }
 
-func runtimeStatusSeed(sess *session.Session, maxPendingInputs int) runtime.StatusSeed {
+func runtimeStatusSeed(sess *thread.Thread, maxPendingInputs int) runtime.StatusSeed {
 	if sess == nil {
 		return runtime.StatusSeed{MaxPendingInputs: maxPendingInputs}
 	}
+	info := sess.Info()
+	state := runtime.ThreadRuntimeIdle
+	switch info.State {
+	case thread.StateWorking:
+		state = runtime.ThreadRuntimeTurnActive
+	case thread.StateFailed:
+		state = runtime.ThreadRuntimeFailed
+	}
 	return runtime.StatusSeed{
-		SessionID:        sess.ID,
-		SessionAlias:     sess.Alias,
+		ThreadID:         sess.ID,
+		ThreadAlias:      sess.Alias,
+		ThreadState:      state,
+		PendingCount:     info.PendingInputs,
 		MaxPendingInputs: maxPendingInputs,
 		TokenUsage:       sess.TokenUsageSnapshot(),
 		ContextUsage:     sess.ContextUsageSnapshot(),
@@ -846,14 +818,14 @@ func (a *App) ReadCommittedEvents(read func() error) error {
 	return a.eventSink.ReadCommitted(read)
 }
 
-func (a *App) attachObservability(sess *session.Session) error {
+func (a *App) attachObservability(sess *thread.Thread) error {
 	if a == nil || a.Bus == nil || sess == nil {
 		return nil
 	}
 	rec, err := observability.NewRecorder(observability.Options{
-		SessionDir: sess.Dir,
-		Debug:      a.debug,
-		LogLevel:   a.logLevel,
+		ThreadDir: sess.Dir,
+		Debug:     a.debug,
+		LogLevel:  a.logLevel,
 	})
 	if err != nil {
 		return err
@@ -898,7 +870,7 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 			return "", err
 		}
 		if cmd.Name == SlashNew {
-			return a.runEngineTurnMessage(ctx, NewSessionGreetingMessage())
+			return a.runEngineTurnMessage(ctx, NewThreadGreetingMessage())
 		}
 		return result.Text, nil
 	}
@@ -906,10 +878,10 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 }
 
 // RunWithAttachments drives one synchronous text, image, or mixed-content
-// user turn. Attachment references must belong to the current session.
+// user turn. Attachment references must belong to the current Thread.
 func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments []llm.MediaRef) (string, error) {
 	if a == nil || a.Engine == nil {
-		return "", errors.New("app: attachment turn requires an initialized session and engine")
+		return "", errors.New("app: attachment turn requires an initialized Thread and engine")
 	}
 	if len(attachments) == 0 {
 		return a.Run(ctx, prompt)
@@ -923,12 +895,12 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 		}
 		return "", errors.New("slash commands cannot include attachments")
 	}
-	a.sessionMu.RLock()
-	defer a.sessionMu.RUnlock()
-	if a.Session == nil {
-		return "", errors.New("app: attachment turn requires an initialized session and engine")
+	a.threadMu.RLock()
+	defer a.threadMu.RUnlock()
+	if a.Thread == nil {
+		return "", errors.New("app: attachment turn requires an initialized Thread and engine")
 	}
-	if err := usermedia.ValidateSessionMediaRefs(a.cfg.ArtifactDir(), a.Session.ID, attachments, usermedia.Limits{}); err != nil {
+	if err := usermedia.ValidateThreadMediaRefs(a.cfg.MediaDir(), a.Thread.ID, attachments, usermedia.Limits{}); err != nil {
 		return "", err
 	}
 	return a.Engine.TurnMessage(ctx, userTurnMessage(prompt, attachments))
@@ -938,10 +910,10 @@ func (a *App) runEngineTurn(ctx context.Context, input string) (string, error) {
 	if a == nil || a.Engine == nil {
 		return "", errors.New("app: turn requires an initialized engine")
 	}
-	a.sessionMu.RLock()
-	defer a.sessionMu.RUnlock()
-	if a.Session == nil {
-		return "", ErrSessionUnavailable
+	a.threadMu.RLock()
+	defer a.threadMu.RUnlock()
+	if a.Thread == nil {
+		return "", ErrThreadUnavailable
 	}
 	return a.Engine.Turn(ctx, input)
 }
@@ -950,10 +922,10 @@ func (a *App) runEngineTurnMessage(ctx context.Context, message llm.Message) (st
 	if a == nil || a.Engine == nil {
 		return "", errors.New("app: turn requires an initialized engine")
 	}
-	a.sessionMu.RLock()
-	defer a.sessionMu.RUnlock()
-	if a.Session == nil {
-		return "", ErrSessionUnavailable
+	a.threadMu.RLock()
+	defer a.threadMu.RUnlock()
+	if a.Thread == nil {
+		return "", ErrThreadUnavailable
 	}
 	return a.Engine.TurnMessage(ctx, message)
 }
@@ -985,10 +957,10 @@ func (a *App) CompactAdmittedWithInstructions(ctx context.Context, turnID, reaso
 }
 
 func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
-	a.sessionMu.RLock()
-	defer a.sessionMu.RUnlock()
-	if a.Session == nil {
-		return runtime.CompactionResult{}, a.emitCompactionError(turnID, ErrSessionUnavailable)
+	a.threadMu.RLock()
+	defer a.threadMu.RUnlock()
+	if a.Thread == nil {
+		return runtime.CompactionResult{}, a.emitCompactionError(turnID, ErrThreadUnavailable)
 	}
 	sections, err := a.Engine.PromptSectionsWithError()
 	if err != nil {
@@ -1000,7 +972,7 @@ func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto
 		return result, a.emitCompactionError(turnID, err)
 	}
 	if err := a.Bus.Emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: runtime.TurnCompletedPayload{
-		TokenUsage: a.Session.TokenUsageSnapshot(),
+		TokenUsage: a.Thread.TokenUsageSnapshot(),
 	}}); err != nil {
 		return result, fmt.Errorf("commit compaction completion: %w", err)
 	}
@@ -1014,35 +986,49 @@ func (a *App) emitCompactionError(turnID string, err error) error {
 	return err
 }
 
-func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) error {
-	if a == nil || a.Engine == nil {
-		return nil
-	}
-	sessionLease := a.acquireExternalInputSessionLease()
-	defer sessionLease.Release()
-	a.sessionMu.RLock()
-	defer a.sessionMu.RUnlock()
-	if a.Session == nil {
-		return ErrSessionUnavailable
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
+// ObservationFromMCPNotification is the MCP protocol adapter. Delivery stays
+// on the common observable path through DeliverObservation.
+func (a *App) ObservationFromMCPNotification(n mcp.Notification) observable.ObservationRecord {
 	eventType := n.EventType
 	if eventType == "" {
 		eventType = "notification"
 	}
-	msg, err := mcpNotificationMessage(n, eventType, a.externalAttachmentOptions())
-	if err != nil {
-		return err
+	opts := a.externalAttachmentOptions()
+	refs, parseErr := eventmedia.ExtractAttachmentRefs(n.Params["attachments"])
+	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{
+		WorkDir: opts.WorkDir, AgentStateDir: opts.AgentStateDir,
+		MediaDir: opts.MediaDir, PathGuard: opts.PathGuard,
+	})
+	attachments := make([]eventmedia.AttachmentRef, 0, len(report.Valid))
+	for _, item := range report.Valid {
+		attachments = append(attachments, eventmedia.AttachmentRef{
+			Path: item.ArtifactPath, MediaType: item.MediaType,
+			SHA256: item.SHA256, Bytes: item.OriginalBytes,
+		})
 	}
-	_, err = a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
-		ID:  mcpNotificationPendingInputID(n, eventType),
-		TTL: a.Engine.ExternalEventTTL,
-	}, sessionLease, true, nil)
-	return err
+	attachmentErrors := attachmentErrorMessages(report)
+	if parseErr != nil {
+		attachmentErrors = append(attachmentErrors, parseErr.Error())
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	content := renderMCPNotificationText(n, eventType, eventmedia.ValidationReport{}, nil)
+	record := observable.ObservationRecord{
+		ObservableID:     "mcp:" + n.ServerName,
+		SourceEventID:    mcpNotificationSourceEventID(n, eventType),
+		Kind:             eventType,
+		Severity:         "info",
+		Stream:           n.Method,
+		WindowStart:      now,
+		WindowEnd:        now,
+		Content:          content,
+		Attachments:      attachments,
+		AttachmentErrors: uniqueStrings(attachmentErrors),
+		OriginalChars:    len(content),
+		State:            observable.ObservationStateRecorded,
+		CreatedAt:        now,
+	}
+	record.ID = observable.BuildObservationID(record)
+	return record
 }
 
 func (a *App) HandleObservation(ctx context.Context, record observable.ObservationRecord) error {
@@ -1054,13 +1040,13 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	if a == nil || a.Engine == nil {
 		return observable.DeliveryOutcome{}, nil
 	}
-	sessionLease := a.acquireExternalInputSessionLease()
-	defer sessionLease.Release()
-	a.sessionMu.RLock()
-	defer a.sessionMu.RUnlock()
-	targetSession := ""
-	if a.Session != nil {
-		targetSession = a.Session.ID
+	threadLease := a.acquireExternalInputThreadLease()
+	defer threadLease.Release()
+	a.threadMu.RLock()
+	defer a.threadMu.RUnlock()
+	targetThread := ""
+	if a.Thread != nil {
+		targetThread = a.Thread.ID
 	}
 	select {
 	case <-ctx.Done():
@@ -1078,19 +1064,19 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	delivery, err := a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  pendingID,
 		TTL: a.Engine.ExternalEventTTL,
-	}, sessionLease, true, nil)
+	}, threadLease, true, nil)
 	if delivery.Queued {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateQueued,
 			PendingInputID: pendingID,
-			TargetSession:  targetSession,
+			TargetThread:   targetThread,
 		}, err
 	}
 	if delivery.Delivered {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateDelivered,
 			PendingInputID: pendingID,
-			TargetSession:  targetSession,
+			TargetThread:   targetThread,
 		}, err
 	}
 	return observable.DeliveryOutcome{}, err
@@ -1099,7 +1085,7 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 type attachmentOptions struct {
 	WorkDir       string
 	AgentStateDir string
-	ArtifactDir   string
+	MediaDir      string
 	PathGuard     sandbox.PathGuard
 }
 
@@ -1108,7 +1094,7 @@ func (a *App) externalAttachmentOptions() attachmentOptions {
 	return attachmentOptions{
 		WorkDir:       paths.WorkDir,
 		AgentStateDir: paths.StateDir,
-		ArtifactDir:   paths.ArtifactDir,
+		MediaDir:      paths.MediaDir,
 		PathGuard:     sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: a.cfg.SandboxPolicy(), WorkDir: paths.WorkDir, AgentStateDir: paths.StateDir}),
 	}
 }
@@ -1119,19 +1105,12 @@ func observationMessage(record observable.ObservationRecord, opts attachmentOpti
 }
 
 func buildObservationMessage(record observable.ObservationRecord, opts attachmentOptions) (llm.Message, []string, error) {
-	report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{ArtifactDir: opts.ArtifactDir})
+	report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{MediaDir: opts.MediaDir})
 	text := renderObservationText(record, report)
 	msg := eventMessageWithAttachments(llm.MessageKindObservation, text, report)
 	errors := append([]string(nil), record.AttachmentErrors...)
 	errors = append(errors, attachmentErrorMessages(report)...)
 	return msg, uniqueStrings(errors), nil
-}
-
-func mcpNotificationMessage(n mcp.Notification, eventType string, opts attachmentOptions) (llm.Message, error) {
-	refs, err := eventmedia.ExtractAttachmentRefs(n.Params["attachments"])
-	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{WorkDir: opts.WorkDir, AgentStateDir: opts.AgentStateDir, ArtifactDir: opts.ArtifactDir, PathGuard: opts.PathGuard})
-	text := renderMCPNotificationText(n, eventType, report, err)
-	return eventMessageWithAttachments(llm.MessageKindMCPEvent, text, report), nil
 }
 
 func eventMessageWithAttachments(kind string, text string, report eventmedia.ValidationReport) llm.Message {
@@ -1361,7 +1340,7 @@ func (a *App) markObservationAttachmentError(record observable.ObservationRecord
 	}
 }
 
-func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string {
+func mcpNotificationSourceEventID(n mcp.Notification, eventType string) string {
 	body, err := json.Marshal(struct {
 		ServerName string         `json:"server_name"`
 		Method     string         `json:"method,omitempty"`
@@ -1383,7 +1362,7 @@ func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string 
 }
 
 func (a *App) TokenUsage() llm.Usage {
-	info, ok := a.SessionInfo()
+	info, ok := a.ThreadInfo()
 	if !ok {
 		return llm.Usage{}
 	}

@@ -13,7 +13,7 @@ const SourceBuiltin = "builtin"
 var builtinSkillNames = []string{
 	"juex-chunked-write",
 	"juex-observables",
-	"juex-session-state",
+	"juex-thread-state",
 }
 
 //go:embed builtin/*/SKILL.md

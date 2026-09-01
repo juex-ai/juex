@@ -1,13 +1,14 @@
 import type {
   ActiveContextSnapshot,
   BrowserEvent,
-  CompactSessionResponse,
-  CreateSessionResponse,
-  DeleteSessionResponse,
+  CompactThreadResponse,
+  CreateThreadResponse,
+  DeleteThreadResponse,
   InterruptResponse,
-  SessionShowResponse,
-  SessionsListResponse,
-  ActiveSessionResponse,
+  Message,
+  ThreadInfo,
+  ThreadShowResponse,
+  ThreadsListResponse,
   StartTurnResponse,
   MediaRef,
   FileContentResponse,
@@ -72,41 +73,60 @@ async function jsonOrThrow<T>(r: Response): Promise<T> {
   return (await r.json()) as T;
 }
 
-export async function listSessions(): Promise<SessionsListResponse> {
-  return jsonOrThrow(await fetch(agentAPIPath("/api/sessions")));
+export async function listThreads(): Promise<ThreadsListResponse> {
+  return jsonOrThrow(await fetch(agentAPIPath("/api/threads")));
 }
 
-export async function getActiveSession(): Promise<ActiveSessionResponse> {
-  return jsonOrThrow(await fetch(agentAPIPath("/api/sessions/active")));
-}
-
-export async function createSession(): Promise<CreateSessionResponse> {
-  return jsonOrThrow(
-    await fetch(agentAPIPath("/api/sessions"), { method: "POST" }),
+export async function createThread(alias?: string): Promise<CreateThreadResponse> {
+  const raw = await jsonOrThrow<RawThreadInfo>(
+    await fetch(agentAPIPath("/api/threads"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alias: alias?.trim() || undefined }),
+    }),
   );
+  return normalizeThreadInfo(raw);
 }
 
-export interface SessionMessagePageOptions {
+export interface ThreadMessagePageOptions {
   before?: string;
   limit?: number;
 }
 
-export async function getSession(
+export async function getThread(
   id: string,
-  opts: SessionMessagePageOptions = {},
-): Promise<SessionShowResponse> {
+  opts: ThreadMessagePageOptions = {},
+): Promise<ThreadShowResponse> {
   const params = new URLSearchParams();
   if (opts.before) params.set("before", opts.before);
   if (opts.limit !== undefined) params.set("limit", String(opts.limit));
   const query = params.size ? `?${params.toString()}` : "";
-  return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}${query}`)),
+  const raw = await jsonOrThrow<RawThreadShowResponse>(
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}${query}`)),
+  );
+  return normalizeThreadShow(raw);
+}
+
+export async function archiveThread(id: string): Promise<void> {
+  await jsonOrThrow(
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/archive`), {
+      method: "POST",
+    }),
   );
 }
 
-export async function deleteSession(id: string): Promise<DeleteSessionResponse> {
+export async function unarchiveThread(id: string): Promise<ThreadInfo> {
+  const raw = await jsonOrThrow<RawThreadInfo>(
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/unarchive`), {
+      method: "POST",
+    }),
+  );
+  return normalizeThreadInfo(raw);
+}
+
+export async function deleteThread(id: string): Promise<DeleteThreadResponse> {
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}`), {
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}`), {
       method: "DELETE",
     }),
   );
@@ -118,7 +138,7 @@ export async function startTurn(
   attachments: MediaRef[] = [],
 ): Promise<StartTurnResponse> {
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/turns`), {
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/inputs`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt, attachments }),
@@ -126,14 +146,14 @@ export async function startTurn(
   );
 }
 
-export async function uploadSessionAttachment(
+export async function uploadThreadAttachment(
   id: string,
   file: File,
 ): Promise<MediaRef> {
   const body = new FormData();
   body.append("file", file, file.name);
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/attachments`), {
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/attachments`), {
       method: "POST",
       body,
     }),
@@ -142,18 +162,122 @@ export async function uploadSessionAttachment(
 
 export async function interrupt(id: string): Promise<InterruptResponse> {
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/interrupt`), {
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/stop`), {
       method: "POST",
     }),
   );
 }
 
-export async function compactSession(
+interface RawThreadInfo {
+  thread_id: string;
+  alias: string;
+  parent_thread_id?: string;
+  dir: string;
+  created_at: string;
+  last_activity_at: string;
+  archived_at?: string;
+  state: string;
+  revision: number;
+  generation_id: string;
+  turn_count: number;
+  pending_input_count: number;
+  token_usage: ThreadInfo["token_usage"];
+  context_usage?: ThreadInfo["context_usage"];
+}
+
+interface RawThreadActivity {
+  type: "context.compacted" | "context.renewed" | string;
+  at: string;
+  from_generation_id?: string;
+  to_generation_id?: string;
+  summary?: Message;
+  automatic?: boolean;
+}
+
+interface RawThreadTimelineItem {
+  type: "message" | "activity";
+  seq: number;
+  at: string;
+  message?: Message;
+  activity?: RawThreadActivity;
+}
+
+interface RawThreadShowResponse extends RawThreadInfo {
+  items: RawThreadTimelineItem[];
+  event_cursor?: string;
+  has_more_before?: boolean;
+  previous_cursor?: string;
+  goal?: ThreadShowResponse["goal"];
+  notes?: ThreadShowResponse["notes"];
+}
+
+function normalizeThreadInfo(raw: RawThreadInfo): ThreadInfo {
+  return {
+    id: raw.thread_id,
+    alias: raw.alias,
+    parent_thread_id: raw.parent_thread_id,
+    dir: raw.dir,
+    active: !raw.archived_at,
+    created_at: raw.created_at,
+    last_active_at: raw.last_activity_at || raw.created_at,
+    state: raw.state,
+    revision: raw.revision,
+    generation_id: raw.generation_id,
+    turns: raw.turn_count,
+    pending_input_count: raw.pending_input_count,
+    token_usage: raw.token_usage,
+    context_usage: raw.context_usage,
+  };
+}
+
+function normalizeThreadShow(raw: RawThreadShowResponse): ThreadShowResponse {
+  return {
+    ...normalizeThreadInfo(raw),
+    messages: raw.items.flatMap((item) => timelineMessage(item)),
+    event_cursor: raw.event_cursor ?? "",
+    has_more_before: raw.has_more_before,
+    oldest_message_id: raw.previous_cursor,
+    goal: raw.goal,
+    notes: raw.notes,
+  };
+}
+
+function timelineMessage(item: RawThreadTimelineItem): Message[] {
+  if (item.type === "message" && item.message) {
+    return [{ ...item.message, created_at: item.message.created_at ?? item.at }];
+  }
+  const activity = item.activity;
+  if (!activity) return [];
+  if (activity.type === "context.compacted") {
+    const summary = activity.summary;
+    return [{
+      ...(summary ?? { role: "assistant", blocks: [] }),
+      id: `activity-${item.seq}`,
+      created_at: activity.at || item.at,
+      kind: "compact",
+    }];
+  }
+  if (activity.type === "context.renewed") {
+    return [{
+      id: `activity-${item.seq}`,
+      created_at: activity.at || item.at,
+      role: "system",
+      kind: "context_renewed",
+      blocks: [{
+        type: "text",
+        text: `Context renewed${activity.to_generation_id ? ` · ${activity.to_generation_id}` : ""}`,
+      }],
+    }];
+  }
+  return [];
+}
+
+export async function compactThread(
   id: string,
   reason = "manual",
-): Promise<CompactSessionResponse> {
+): Promise<CompactThreadResponse> {
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/compact`), {
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/compact`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason }),
@@ -161,11 +285,11 @@ export async function compactSession(
   );
 }
 
-export async function getSessionContext(
+export async function getThreadContext(
   id: string,
 ): Promise<ActiveContextSnapshot> {
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/context`)),
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/context`)),
   );
 }
 
@@ -177,7 +301,7 @@ export interface SubscribeOptions {
   onError?: (err: Event) => void;
 }
 
-// subscribeEvents opens an EventSource for the given session and invokes
+// subscribeEvents opens an EventSource for the given thread and invokes
 // onEvent for each parsed BrowserEvent. Returns a function that closes the
 // connection. EventSource reconnects automatically with the last durable SSE
 // event ID; transient frames deliberately do not advance that cursor.
@@ -198,7 +322,7 @@ export function subscribeEvents(
   } else if (opts.since === "") {
     qs = "?replay=journal-start";
   }
-  const url = agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/events${qs}`);
+  const url = agentAPIPath(`/api/threads/${encodeURIComponent(id)}/events${qs}`);
   const es = new EventSource(url);
   es.addEventListener("message", (ev) => {
     try {
@@ -217,11 +341,11 @@ export function subscribeEvents(
   return () => es.close();
 }
 
-export async function getSessionStatus(
+export async function getThreadStatus(
   id: string,
 ): Promise<AgentRuntimeStatusSnapshot> {
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/status`)),
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/status`)),
   );
 }
 
@@ -229,12 +353,12 @@ export async function getFileTree(signal?: AbortSignal): Promise<FileNode> {
   return jsonOrThrow(await fetch(agentAPIPath("/api/files/tree"), { signal }));
 }
 
-export async function getSessionScratchpad(
+export async function getThreadScratchpad(
   id: string,
   signal?: AbortSignal,
 ): Promise<FileNode> {
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/scratchpad`), { signal }),
+    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/scratchpad`), { signal }),
   );
 }
 

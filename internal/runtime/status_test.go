@@ -15,16 +15,16 @@ import (
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
-func TestSessionRuntimeStateIsWorking(t *testing.T) {
+func TestThreadRuntimeStateIsWorking(t *testing.T) {
 	tests := []struct {
-		state SessionRuntimeState
+		state ThreadRuntimeState
 		want  bool
 	}{
-		{state: SessionRuntimeIdle, want: false},
-		{state: SessionRuntimeTurnActive, want: true},
-		{state: SessionRuntimeDrainingPending, want: true},
-		{state: SessionRuntimeFailed, want: false},
-		{state: SessionRuntimeState("future"), want: false},
+		{state: ThreadRuntimeIdle, want: false},
+		{state: ThreadRuntimeTurnActive, want: true},
+		{state: ThreadRuntimeDrainingPending, want: true},
+		{state: ThreadRuntimeFailed, want: false},
+		{state: ThreadRuntimeState("future"), want: false},
 	}
 	for _, test := range tests {
 		t.Run(string(test.state), func(t *testing.T) {
@@ -32,6 +32,17 @@ func TestSessionRuntimeStateIsWorking(t *testing.T) {
 				t.Fatalf("IsWorking() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestStatusStoreUsesRecoveredThreadSeed(t *testing.T) {
+	store := NewStatusStore(StatusSeed{
+		ThreadID: "thread-1", ThreadState: ThreadRuntimeFailed,
+		PendingCount: 2, MaxPendingInputs: 4,
+	})
+	snapshot := store.Snapshot()
+	if snapshot.Thread.State != ThreadRuntimeFailed || snapshot.Thread.PendingCount != 2 || !snapshot.Thread.CanAcceptInput {
+		t.Fatalf("recovered status seed = %+v", snapshot.Thread)
 	}
 }
 
@@ -95,8 +106,8 @@ func TestStatusErrorKindVocabulary(t *testing.T) {
 
 func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 	store := NewStatusStore(StatusSeed{
-		SessionID:        "session-1",
-		SessionAlias:     "primary",
+		ThreadID:         "thread-1",
+		ThreadAlias:      "primary",
 		MaxPendingInputs: 2,
 	})
 	apply := func(id, eventType, turnID string, payload any) StatusSnapshot {
@@ -106,7 +117,7 @@ func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 	}
 
 	snapshot := apply("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{})
-	assertSessionStatus(t, snapshot, SessionRuntimeTurnActive, 0, true)
+	assertThreadStatus(t, snapshot, ThreadRuntimeTurnActive, 0, true)
 	assertTurnStatus(t, snapshot, TurnLifecycleAdmitted, "", false)
 
 	snapshot = apply("2", TurnPhaseType, "turn-1", TurnPhasePayload{Phase: TurnPhaseProviderIteration})
@@ -149,15 +160,15 @@ func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 	snapshot = apply("10", "pending_input.queued", "turn-1", PendingInputQueuedPayload{
 		PendingCount: 1, MaxPendingInputs: 2,
 	})
-	assertSessionStatus(t, snapshot, SessionRuntimeTurnActive, 1, true)
+	assertThreadStatus(t, snapshot, ThreadRuntimeTurnActive, 1, true)
 	snapshot = apply("11", PendingInputDrainingType, "turn-1", PendingInputDrainingPayload{
 		Count: 1, PendingCount: 0, MaxPendingInputs: 2,
 	})
-	assertSessionStatus(t, snapshot, SessionRuntimeDrainingPending, 0, true)
+	assertThreadStatus(t, snapshot, ThreadRuntimeDrainingPending, 0, true)
 	snapshot = apply("12", "pending_input.drained", "turn-1", PendingInputDrainedPayload{
 		Count: 1, PendingCount: 0, MaxPendingInputs: 2,
 	})
-	assertSessionStatus(t, snapshot, SessionRuntimeTurnActive, 0, true)
+	assertThreadStatus(t, snapshot, ThreadRuntimeTurnActive, 0, true)
 
 	snapshot = apply("13", "context.compact.started", "turn-1", ContextCompactStartedPayload{})
 	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseCompacting, false)
@@ -177,7 +188,7 @@ func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 	}
 
 	snapshot = apply("15", "turn.completed", "turn-1", TurnCompletedPayload{})
-	assertSessionStatus(t, snapshot, SessionRuntimeIdle, 0, true)
+	assertThreadStatus(t, snapshot, ThreadRuntimeIdle, 0, true)
 	assertTurnStatus(t, snapshot, TurnLifecycleCompleted, TurnPhaseToolBatch, false)
 	if len(snapshot.Tools) != 0 || snapshot.Cursor != "15" {
 		t.Fatalf("terminal snapshot = %+v", snapshot)
@@ -190,11 +201,11 @@ func TestStatusProjectionReachesEveryNamedState(t *testing.T) {
 	requested := statusEvent("2", toolevents.RequestedType, "turn-1", toolevents.Requested(tool))
 	running := statusEvent("3", toolevents.RunningType, "turn-1", toolevents.Running(tool))
 	tests := []struct {
-		name         string
-		events       []events.Event
-		toolState    ToolCallState
-		turnState    TurnLifecycleState
-		sessionState SessionRuntimeState
+		name        string
+		events      []events.Event
+		toolState   ToolCallState
+		turnState   TurnLifecycleState
+		threadState ThreadRuntimeState
 	}{
 		{name: "tool requested", events: []events.Event{admitted, requested}, toolState: ToolCallRequested},
 		{name: "tool running", events: []events.Event{admitted, requested, running}, toolState: ToolCallRunning},
@@ -255,29 +266,29 @@ func TestStatusProjectionReachesEveryNamedState(t *testing.T) {
 			},
 			turnState: TurnLifecycleCancelled,
 		},
-		{name: "session idle", sessionState: SessionRuntimeIdle},
-		{name: "session turn active", events: []events.Event{admitted}, sessionState: SessionRuntimeTurnActive},
+		{name: "thread idle", threadState: ThreadRuntimeIdle},
+		{name: "thread turn active", events: []events.Event{admitted}, threadState: ThreadRuntimeTurnActive},
 		{
-			name: "session draining pending",
+			name: "thread draining pending",
 			events: []events.Event{
 				admitted,
 				statusEvent("2", PendingInputDrainingType, "turn-1", PendingInputDrainingPayload{}),
 			},
-			sessionState: SessionRuntimeDrainingPending,
+			threadState: ThreadRuntimeDrainingPending,
 		},
 		{
-			name: "session failed",
+			name: "thread failed",
 			events: []events.Event{
 				admitted,
 				statusEvent("2", "turn.errored", "turn-1", TurnErroredPayload{Error: "failed"}),
 			},
-			sessionState: SessionRuntimeFailed,
+			threadState: ThreadRuntimeFailed,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+			store := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 			for _, event := range test.events {
 				store.Publish(event)
 			}
@@ -290,34 +301,34 @@ func TestStatusProjectionReachesEveryNamedState(t *testing.T) {
 					t.Fatalf("turn = %+v, want state %q", snapshot.Turn, test.turnState)
 				}
 			}
-			if test.sessionState != "" && snapshot.Session.State != test.sessionState {
-				t.Fatalf("session = %+v, want state %q", snapshot.Session, test.sessionState)
+			if test.threadState != "" && snapshot.Thread.State != test.threadState {
+				t.Fatalf("thread = %+v, want state %q", snapshot.Thread, test.threadState)
 			}
 		})
 	}
 }
 
 func TestStatusStoreDerivesQueueCapacityAndFailureRecovery(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "s", MaxPendingInputs: 1})
+	store := NewStatusStore(StatusSeed{ThreadID: "s", MaxPendingInputs: 1})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 	store.Publish(statusEvent("2", "pending_input.queued", "turn-1", PendingInputQueuedPayload{
 		PendingCount: 1, MaxPendingInputs: 1,
 	}))
 	full := store.Snapshot()
-	assertSessionStatus(t, full, SessionRuntimeTurnActive, 1, false)
+	assertThreadStatus(t, full, ThreadRuntimeTurnActive, 1, false)
 
 	store.Publish(statusEvent("3", "turn.errored", "turn-1", TurnErroredPayload{
 		Error: "provider unavailable", ErrorKind: "error",
 	}))
 	failed := store.Snapshot()
-	assertSessionStatus(t, failed, SessionRuntimeFailed, 1, false)
+	assertThreadStatus(t, failed, ThreadRuntimeFailed, 1, false)
 	if failed.LastError == nil || failed.LastError.Message != "provider unavailable" {
 		t.Fatalf("last error = %+v", failed.LastError)
 	}
 
 	store.Publish(statusEvent("4", TurnAdmittedType, "turn-2", TurnAdmittedPayload{}))
 	recovered := store.Snapshot()
-	assertSessionStatus(t, recovered, SessionRuntimeTurnActive, 1, false)
+	assertThreadStatus(t, recovered, ThreadRuntimeTurnActive, 1, false)
 	if recovered.LastError != nil {
 		t.Fatalf("last error after recovery = %+v", recovered.LastError)
 	}
@@ -339,7 +350,7 @@ func TestStatusSnapshotResumeIsDeterministic(t *testing.T) {
 		statusEvent("4", "llm.responded", "turn-1", LLMRespondedPayload{}),
 		statusEvent("5", "turn.completed", "turn-1", TurnCompletedPayload{}),
 	}
-	seed := StatusSeed{SessionID: "session-1", MaxPendingInputs: 4}
+	seed := StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 4}
 	first := NewStatusStore(seed)
 	for _, event := range all[:3] {
 		first.Publish(event)
@@ -361,7 +372,7 @@ func TestStatusSnapshotResumeIsDeterministic(t *testing.T) {
 }
 
 func TestStatusCompactionRequestPreservesCompactingPhase(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 4})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 4})
 	store.Publish(statusEvent("1", TurnAdmittedType, "compact-turn", TurnAdmittedPayload{Operation: "compact"}))
 	store.Publish(statusEvent("2", "context.compact.started", "compact-turn", ContextCompactStartedPayload{}))
 	store.Publish(statusEvent("3", "llm.requested", "compact-turn", LLMRequestedPayload{Purpose: "compaction"}))
@@ -386,7 +397,7 @@ func TestStatusCompactionRequestPreservesCompactingPhase(t *testing.T) {
 }
 
 func TestStatusStreamReturnsTransientStateAtSameDurableCursor(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 	cursor := store.Snapshot().Cursor
 
@@ -414,7 +425,7 @@ func TestStatusStreamReturnsTransientStateAtSameDurableCursor(t *testing.T) {
 }
 
 func TestStatusProjectionRetainsOpaqueCursorWithoutApplyingPayload(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 4})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 4})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 	before := store.Snapshot()
 
@@ -428,13 +439,13 @@ func TestStatusProjectionRetainsOpaqueCursorWithoutApplyingPayload(t *testing.T)
 	if after.Cursor != "2" {
 		t.Fatalf("cursor = %q, want opaque event cursor", after.Cursor)
 	}
-	if after.Session.PendingCount != before.Session.PendingCount || !reflect.DeepEqual(after.Turn, before.Turn) {
+	if after.Thread.PendingCount != before.Thread.PendingCount || !reflect.DeepEqual(after.Turn, before.Turn) {
 		t.Fatalf("opaque event changed semantic status\nbefore: %+v\nafter:  %+v", before, after)
 	}
 }
 
 func TestStatusReplayKeepsTransientStateWithEqualTimestamp(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 	admitted := statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{})
 	store.Publish(admitted)
 
@@ -466,7 +477,7 @@ func TestStatusReplayKeepsTransientStateWithEqualTimestamp(t *testing.T) {
 }
 
 func TestProjectStatusToolOutcomeUnknownIsTerminalAndVisible(t *testing.T) {
-	base := NewStatusStore(StatusSeed{SessionID: "session-1"}).Snapshot()
+	base := NewStatusStore(StatusSeed{ThreadID: "thread-1"}).Snapshot()
 	base = ProjectStatus(base, events.Event{Type: TurnAdmittedType, TurnID: "turn-1"})
 	base = ProjectStatus(base, events.Event{Type: toolevents.RequestedType, TurnID: "turn-1", Payload: toolevents.RequestedPayload{
 		Name: "mcp__remote__send", ToolUseID: "call-1", Iter: 3, MessageID: "assistant-1",
@@ -487,7 +498,7 @@ func TestProjectStatusToolOutcomeUnknownIsTerminalAndVisible(t *testing.T) {
 }
 
 func TestStatusStoreConcurrentPublishDeliversFinalSnapshotLast(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 1024})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 1024})
 	streams := make([]*StatusStream, 64)
 	for i := range streams {
 		streams[i] = store.OpenStream(StatusStreamOptions{Follow: true})
@@ -534,7 +545,7 @@ func TestStatusStoreConcurrentPublishDeliversFinalSnapshotLast(t *testing.T) {
 }
 
 func TestStatusSnapshotJSONResumeRestoresPreCompactionPhase(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 	store.Publish(statusEvent("2", TurnPhaseType, "turn-1", TurnPhasePayload{Phase: TurnPhaseToolBatch}))
 	store.Publish(statusEvent("3", "context.compact.started", "turn-1", ContextCompactStartedPayload{}))
@@ -553,7 +564,7 @@ func TestStatusSnapshotJSONResumeRestoresPreCompactionPhase(t *testing.T) {
 }
 
 func TestStatusStandaloneCompactionCompletesAdmittedTurn(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 	store.Publish(statusEvent("1", TurnAdmittedType, "compact-1", TurnAdmittedPayload{}))
 	if snapshot := store.Snapshot(); snapshot.Turn == nil || !snapshot.Turn.CanInterrupt {
 		t.Fatalf("admitted standalone compact turn = %+v, want interruptible", snapshot.Turn)
@@ -568,7 +579,7 @@ func TestStatusStandaloneCompactionCompletesAdmittedTurn(t *testing.T) {
 
 	snapshot := store.Snapshot()
 	assertTurnStatus(t, snapshot, TurnLifecycleCompleted, "", false)
-	assertSessionStatus(t, snapshot, SessionRuntimeIdle, 0, true)
+	assertThreadStatus(t, snapshot, ThreadRuntimeIdle, 0, true)
 	if snapshot.Turn.ResumePhase != "" {
 		t.Fatalf("standalone compact resume phase = %q", snapshot.Turn.ResumePhase)
 	}
@@ -576,12 +587,12 @@ func TestStatusStandaloneCompactionCompletesAdmittedTurn(t *testing.T) {
 
 func TestStatusIgnoresLateToolOutputForTerminalOrSupersededTurn(t *testing.T) {
 	tool := toolevents.ToolCallPayload{ToolUseID: "tool-1", Name: "exec_command"}
-	withoutTurn := NewStatusStore(StatusSeed{SessionID: "session-1"})
+	withoutTurn := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 	withoutTurn.Publish(statusEvent("1", toolevents.OutputDeltaType, "old-turn",
 		toolevents.Delta(tool, toolevents.OutputDelta{Text: "late"})))
 	emptySnapshot := withoutTurn.Snapshot()
 	if emptySnapshot.Turn != nil ||
-		emptySnapshot.Session.State != SessionRuntimeIdle ||
+		emptySnapshot.Thread.State != ThreadRuntimeIdle ||
 		len(emptySnapshot.Tools) != 0 {
 		t.Fatalf("orphaned tool output changed status = %+v", emptySnapshot)
 	}
@@ -613,7 +624,7 @@ func TestStatusIgnoresLateToolOutputForTerminalOrSupersededTurn(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+			store := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 			for _, event := range test.setup {
 				store.Publish(event)
 			}
@@ -624,8 +635,8 @@ func TestStatusIgnoresLateToolOutputForTerminalOrSupersededTurn(t *testing.T) {
 			if snapshot.Turn == nil || snapshot.Turn.State != test.want {
 				t.Fatalf("turn = %+v, want state %q", snapshot.Turn, test.want)
 			}
-			if snapshot.Session.State == SessionRuntimeTurnActive && test.want == TurnLifecycleCompleted {
-				t.Fatalf("terminal session reactivated = %+v", snapshot.Session)
+			if snapshot.Thread.State == ThreadRuntimeTurnActive && test.want == TurnLifecycleCompleted {
+				t.Fatalf("terminal thread reactivated = %+v", snapshot.Thread)
 			}
 			if len(snapshot.Tools) != 0 {
 				t.Fatalf("late tool output restored tools = %+v", snapshot.Tools)
@@ -670,7 +681,7 @@ func TestStatusToolTerminalStateIsAbsorbing(t *testing.T) {
 	for _, terminal := range terminalEvents {
 		for _, late := range lateEvents {
 			t.Run(terminal.name+"/late "+late.name, func(t *testing.T) {
-				store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+				store := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 				store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 				store.Publish(statusEvent("2", toolevents.RequestedType, "turn-1", toolevents.Requested(tool)))
 				store.Publish(terminal.event)
@@ -697,13 +708,13 @@ func TestStatusToolTerminalStateIsAbsorbing(t *testing.T) {
 }
 
 func TestStatusAutoCompactionRestoresAdmittedTurnUntilPhase(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1"})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 	store.Publish(statusEvent("2", "context.compact.started", "turn-1", ContextCompactStartedPayload{Auto: true}))
 	store.Publish(statusEvent("3", "context.compact.completed", "turn-1", ContextCompactCompletedPayload{Auto: true}))
 
 	snapshot := store.Snapshot()
-	assertSessionStatus(t, snapshot, SessionRuntimeTurnActive, 0, true)
+	assertThreadStatus(t, snapshot, ThreadRuntimeTurnActive, 0, true)
 	assertTurnStatus(t, snapshot, TurnLifecycleAdmitted, "", false)
 
 	store.Publish(statusEvent("4", "turn.started", "turn-1", TurnStartedPayload{Input: "next"}))
@@ -727,7 +738,7 @@ func TestStatusSnapshotJSONResumePreservesInputsQueuedDuringDrain(t *testing.T) 
 			Count: 1, PendingCount: 0, MaxPendingInputs: 2,
 		}),
 	}
-	seed := StatusSeed{SessionID: "session-1", MaxPendingInputs: 2}
+	seed := StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 2}
 	direct := NewStatusStore(seed)
 	for _, event := range append(eventsBeforeSnapshot, eventsAfterSnapshot...) {
 		direct.Publish(event)
@@ -750,15 +761,15 @@ func TestStatusSnapshotJSONResumePreservesInputsQueuedDuringDrain(t *testing.T) 
 		resumed.Publish(event)
 	}
 
-	assertSessionStatus(t, resumed.Snapshot(), SessionRuntimeTurnActive, 1, true)
+	assertThreadStatus(t, resumed.Snapshot(), ThreadRuntimeTurnActive, 1, true)
 	if !reflect.DeepEqual(resumed.Snapshot(), direct.Snapshot()) {
 		t.Fatalf("resumed = %#v\ndirect = %#v", resumed.Snapshot(), direct.Snapshot())
 	}
 }
 
 func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "old"})
-	store.Reset(StatusSeed{SessionID: "new", SessionAlias: "primary", MaxPendingInputs: 3}, []events.Event{
+	store := NewStatusStore(StatusSeed{ThreadID: "old"})
+	store.Reset(StatusSeed{ThreadID: "new", ThreadAlias: "primary", MaxPendingInputs: 3}, []events.Event{
 		statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}),
 		statusEvent("2", "llm.requested", "turn-1", LLMRequestedPayload{Iter: 0}),
 		statusEvent("3", "pending_input.queued", "turn-1", PendingInputQueuedPayload{
@@ -777,8 +788,8 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 	store.RecoverAfterRestart()
 
 	snapshot := store.Snapshot()
-	if snapshot.Session.ID != "new" || snapshot.Session.Alias != "primary" {
-		t.Fatalf("session = %+v", snapshot.Session)
+	if snapshot.Thread.ID != "new" || snapshot.Thread.Alias != "primary" {
+		t.Fatalf("thread = %+v", snapshot.Thread)
 	}
 	if snapshot.Cursor != "5" {
 		t.Fatalf("cursor = %q, want 5", snapshot.Cursor)
@@ -789,8 +800,8 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 	if snapshot.LastError == nil || snapshot.LastError.Kind != "runtime_restart" {
 		t.Fatalf("last error = %+v", snapshot.LastError)
 	}
-	if snapshot.Session.PendingCount != 0 || !snapshot.Session.CanAcceptInput {
-		t.Fatalf("recovered session queue = %+v, want empty and accepting input", snapshot.Session)
+	if snapshot.Thread.PendingCount != 0 || !snapshot.Thread.CanAcceptInput {
+		t.Fatalf("recovered thread queue = %+v, want empty and accepting input", snapshot.Thread)
 	}
 	if len(snapshot.Tools) != 0 {
 		t.Fatalf("recovered tools = %+v, want none", snapshot.Tools)
@@ -798,7 +809,7 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 }
 
 func TestStatusStoreReplayMatchesJournalSnapshotAndHistory(t *testing.T) {
-	seed := StatusSeed{SessionID: "session-1", MaxPendingInputs: 3}
+	seed := StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 3}
 	journal := []events.Event{
 		statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}),
 		statusEvent("2", "llm.responded", "turn-1", LLMRespondedPayload{
@@ -864,7 +875,7 @@ func TestStatusStoreReplayMatchesJournalSnapshotAndHistory(t *testing.T) {
 
 func TestStatusStoreReplayReturnsValidPrefixWithError(t *testing.T) {
 	replayErr := errors.New("journal failed")
-	store, err := NewStatusStoreFromReplay(StatusSeed{SessionID: "new"}, func(visit func(events.Event)) error {
+	store, err := NewStatusStoreFromReplay(StatusSeed{ThreadID: "new"}, func(visit func(events.Event)) error {
 		visit(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 		return replayErr
 	})
@@ -875,21 +886,21 @@ func TestStatusStoreReplayReturnsValidPrefixWithError(t *testing.T) {
 		t.Fatalf("recovered store = %#v, want valid-prefix cursor 1", store)
 	}
 
-	current := NewStatusStore(StatusSeed{SessionID: "old"})
-	err = current.ResetFromReplay(StatusSeed{SessionID: "new"}, func(visit func(events.Event)) error {
+	current := NewStatusStore(StatusSeed{ThreadID: "old"})
+	err = current.ResetFromReplay(StatusSeed{ThreadID: "new"}, func(visit func(events.Event)) error {
 		visit(statusEvent("2", TurnAdmittedType, "turn-2", TurnAdmittedPayload{}))
 		return replayErr
 	})
 	if !errors.Is(err, replayErr) {
 		t.Fatalf("ResetFromReplay() error = %v, want %v", err, replayErr)
 	}
-	if snapshot := current.Snapshot(); snapshot.Session.ID != "new" || snapshot.Cursor != "2" {
-		t.Fatalf("reset snapshot = %+v, want new session valid-prefix cursor 2", snapshot)
+	if snapshot := current.Snapshot(); snapshot.Thread.ID != "new" || snapshot.Cursor != "2" {
+		t.Fatalf("reset snapshot = %+v, want new thread valid-prefix cursor 2", snapshot)
 	}
 }
 
 func TestStatusStoreResetFromReplayPublishesOneReplacement(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "old"})
+	store := NewStatusStore(StatusSeed{ThreadID: "old"})
 	stream := store.OpenStream(StatusStreamOptions{Follow: true})
 	defer stream.Close()
 	if _, ok := stream.Next(context.Background()); !ok {
@@ -900,7 +911,7 @@ func TestStatusStoreResetFromReplayPublishesOneReplacement(t *testing.T) {
 		PendingCount: 1, MaxPendingInputs: 2,
 	}))
 
-	err := store.ResetFromReplay(StatusSeed{SessionID: "new"}, func(visit func(events.Event)) error {
+	err := store.ResetFromReplay(StatusSeed{ThreadID: "new"}, func(visit func(events.Event)) error {
 		visit(statusEvent("3", TurnAdmittedType, "turn-new", TurnAdmittedPayload{}))
 		visit(statusEvent("4", "llm.requested", "turn-new", LLMRequestedPayload{}))
 		return nil
@@ -909,7 +920,7 @@ func TestStatusStoreResetFromReplayPublishesOneReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	replaced, ok := stream.Next(context.Background())
-	if !ok || replaced.Session.ID != "new" || replaced.Cursor != "4" {
+	if !ok || replaced.Thread.ID != "new" || replaced.Cursor != "4" {
 		t.Fatalf("replacement snapshot = %+v, %t", replaced, ok)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -920,7 +931,7 @@ func TestStatusStoreResetFromReplayPublishesOneReplacement(t *testing.T) {
 }
 
 func TestStatusStoreRestartReplayPublishesOnlyRecoveredReplacement(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "old"})
+	store := NewStatusStore(StatusSeed{ThreadID: "old"})
 	stream := store.OpenStream(StatusStreamOptions{Follow: true})
 	defer stream.Close()
 	if _, ok := stream.Next(context.Background()); !ok {
@@ -929,7 +940,7 @@ func TestStatusStoreRestartReplayPublishesOnlyRecoveredReplacement(t *testing.T)
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-old", TurnAdmittedPayload{}))
 
 	err := store.ResetFromReplayWithRestartRecovery(
-		StatusSeed{SessionID: "new"},
+		StatusSeed{ThreadID: "new"},
 		func(visit func(events.Event)) error {
 			visit(statusEvent("2", TurnAdmittedType, "turn-new", TurnAdmittedPayload{}))
 			visit(statusEvent("3", toolevents.RunningType, "turn-new", toolevents.RunningPayload{
@@ -943,9 +954,9 @@ func TestStatusStoreRestartReplayPublishesOnlyRecoveredReplacement(t *testing.T)
 	}
 	replaced, ok := stream.Next(context.Background())
 	if !ok ||
-		replaced.Session.ID != "new" ||
+		replaced.Thread.ID != "new" ||
 		replaced.Cursor != "3" ||
-		replaced.Session.State != SessionRuntimeFailed ||
+		replaced.Thread.State != ThreadRuntimeFailed ||
 		replaced.Turn == nil ||
 		replaced.Turn.State != TurnLifecycleCancelled ||
 		len(replaced.Tools) != 0 {
@@ -959,31 +970,31 @@ func TestStatusStoreRestartReplayPublishesOnlyRecoveredReplacement(t *testing.T)
 }
 
 func TestStatusStoreNilReplayIsEmptyJournal(t *testing.T) {
-	store, err := NewStatusStoreFromReplay(StatusSeed{SessionID: "empty"}, nil)
+	store, err := NewStatusStoreFromReplay(StatusSeed{ThreadID: "empty"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := store.Snapshot(); snapshot.Session.ID != "empty" || snapshot.Cursor != "" {
+	if snapshot := store.Snapshot(); snapshot.Thread.ID != "empty" || snapshot.Cursor != "" {
 		t.Fatalf("empty replay snapshot = %+v", snapshot)
 	}
 }
 
 func TestStatusStreamSurvivesStoreReset(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "old"})
+	store := NewStatusStore(StatusSeed{ThreadID: "old"})
 	stream := store.OpenStream(StatusStreamOptions{Follow: true})
 	defer stream.Close()
 	initial, ok := stream.Next(context.Background())
-	if !ok || initial.Session.ID != "old" {
+	if !ok || initial.Thread.ID != "old" {
 		t.Fatalf("initial snapshot = %+v, %t", initial, ok)
 	}
 	store.Publish(statusEvent("5", TurnAdmittedType, "turn-old", TurnAdmittedPayload{}))
 
-	store.Reset(StatusSeed{SessionID: "new"}, []events.Event{
+	store.Reset(StatusSeed{ThreadID: "new"}, []events.Event{
 		statusEvent("6", TurnAdmittedType, "turn-new", TurnAdmittedPayload{}),
 	})
 	replaced, ok := stream.Next(context.Background())
 	if !ok ||
-		replaced.Session.ID != "new" ||
+		replaced.Thread.ID != "new" ||
 		replaced.Cursor != "6" ||
 		replaced.Turn == nil ||
 		replaced.Turn.ID != "turn-new" {
@@ -992,7 +1003,7 @@ func TestStatusStreamSurvivesStoreReset(t *testing.T) {
 }
 
 func TestStatusStoreProjectsPromotedPendingInputCount(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 2})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 2})
 	store.Publish(statusEvent("1", TurnAdmittedType, "compact-1", TurnAdmittedPayload{}))
 	store.Publish(statusEvent("2", "pending_input.queued", "compact-1", PendingInputQueuedPayload{
 		PendingCount: 2, MaxPendingInputs: 2,
@@ -1003,8 +1014,8 @@ func TestStatusStoreProjectsPromotedPendingInputCount(t *testing.T) {
 	store.Publish(statusEvent("4", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 
 	snapshot := store.Snapshot()
-	if snapshot.Session.PendingCount != 1 || !snapshot.Session.CanAcceptInput {
-		t.Fatalf("promoted queue status = %+v, want 1/2 and accepting input", snapshot.Session)
+	if snapshot.Thread.PendingCount != 1 || !snapshot.Thread.CanAcceptInput {
+		t.Fatalf("promoted queue status = %+v, want 1/2 and accepting input", snapshot.Thread)
 	}
 }
 
@@ -1019,10 +1030,10 @@ func statusEvent(id, eventType, turnID string, payload any) events.Event {
 	}
 }
 
-func assertSessionStatus(t *testing.T, snapshot StatusSnapshot, state SessionRuntimeState, pending int, canAccept bool) {
+func assertThreadStatus(t *testing.T, snapshot StatusSnapshot, state ThreadRuntimeState, pending int, canAccept bool) {
 	t.Helper()
-	if snapshot.Session.State != state || snapshot.Session.PendingCount != pending || snapshot.Session.CanAcceptInput != canAccept {
-		t.Fatalf("session = %+v, want state=%q pending=%d can_accept=%t", snapshot.Session, state, pending, canAccept)
+	if snapshot.Thread.State != state || snapshot.Thread.PendingCount != pending || snapshot.Thread.CanAcceptInput != canAccept {
+		t.Fatalf("thread = %+v, want state=%q pending=%d can_accept=%t", snapshot.Thread, state, pending, canAccept)
 	}
 }
 

@@ -238,7 +238,7 @@ export function toolState(
 
 // Kept as a thin wrapper for callers that still want per-message folding (e.g.
 // preview tooling or future single-message viewers). Prefer `messagesToGroups`
-// at the Session render layer because tool pairs cross message boundaries.
+// at the Thread render layer because tool pairs cross message boundaries.
 export function toDisplayUnits(
   blocks: Block[] | null | undefined,
 ): DisplayUnit[] {

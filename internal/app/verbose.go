@@ -217,7 +217,7 @@ func (vp *verbosePrinter) printTurnStarted(payload runtimeevents.TurnStartedPayl
 
 func verboseTurnStartIsEvent(kind string) bool {
 	switch kind {
-	case llm.MessageKindMCPEvent, llm.MessageKindObservation, llm.MessageKindSideSession:
+	case llm.MessageKindMCPEvent, llm.MessageKindObservation, llm.MessageKindWorkerThread:
 		return true
 	default:
 		return false
@@ -234,16 +234,16 @@ func verboseTurnStartInput(input, kind string) string {
 		if content := mcpEventContent(input); content != "" {
 			return content
 		}
-	case llm.MessageKindSideSession:
-		if content := sideSessionResultContent(input); content != "" {
+	case llm.MessageKindWorkerThread:
+		if content := workerThreadResultContent(input); content != "" {
 			return content
 		}
 	}
 	return input
 }
 
-func sideSessionResultContent(input string) string {
-	const prefix = "Side Session result:"
+func workerThreadResultContent(input string) string {
+	const prefix = "Worker Thread result:"
 	content := strings.TrimSpace(input)
 	if strings.HasPrefix(content, prefix) {
 		content = strings.TrimSpace(strings.TrimPrefix(content, prefix))

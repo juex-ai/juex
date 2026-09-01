@@ -21,14 +21,10 @@ func publishNewAgent(address AgentAddress, agent Agent) (err error) {
 		}
 	}()
 
-	for _, name := range []string{"sessions", "logs"} {
+	for _, name := range []string{"threads", filepath.Join("archive", "threads"), "logs"} {
 		if err := os.MkdirAll(filepath.Join(stageDir, name), 0o755); err != nil {
 			return err
 		}
-	}
-	historyPath := filepath.Join(stageDir, "history.json")
-	if err := homestore.WriteFileAtomic(historyPath, []byte("{\"sessions\":[]}\n"), 0o644, 0o755); err != nil {
-		return err
 	}
 	if err := atomicWriteJSON(filepath.Join(stageDir, agentFileName), agent, 0o644); err != nil {
 		return err

@@ -31,7 +31,7 @@ func TestMessageKindsMatchGolden(t *testing.T) {
 		llm.MessageKindToolResult,
 		llm.MessageKindMCPEvent,
 		llm.MessageKindObservation,
-		llm.MessageKindSideSession,
+		llm.MessageKindWorkerThread,
 		llm.MessageKindPolicyEvent,
 		llm.MessageKindCompact,
 		llm.MessageKindRuntimeContext,
@@ -205,7 +205,7 @@ func TestBrowserEventFromRuntimeNormalizesReplayPayload(t *testing.T) {
 
 func TestBrowserEventProjectionCapturesEachResultingStatus(t *testing.T) {
 	status := juexruntime.NewStatusStore(juexruntime.StatusSeed{
-		SessionID:        "session-1",
+		ThreadID:         "123456",
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
 	})
 	stream := newBroadcaster()
@@ -255,7 +255,7 @@ func TestBrowserEventProjectionCapturesEachResultingStatus(t *testing.T) {
 
 func TestProjectBrowserEventsReplayMatchesUninterruptedProjection(t *testing.T) {
 	seed := juexruntime.StatusSeed{
-		SessionID:        "session-1",
+		ThreadID:         "123456",
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
 	}
 	journal := browserEventFixtureEvents()
@@ -285,7 +285,7 @@ func TestProjectBrowserEventsReplayMatchesUninterruptedProjection(t *testing.T) 
 
 func TestBrowserProjectionDropsLateTransientToolOutput(t *testing.T) {
 	seed := juexruntime.StatusSeed{
-		SessionID:        "session-1",
+		ThreadID:         "123456",
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
 	}
 	tool := toolevents.ToolCallPayload{
@@ -375,7 +375,7 @@ func TestBrowserProjectionDropsLateTransientToolOutput(t *testing.T) {
 
 func TestProjectBrowserEventsReplayEndsWithAuthoritativeRestartRecovery(t *testing.T) {
 	seed := juexruntime.StatusSeed{
-		SessionID:        "session-1",
+		ThreadID:         "123456",
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
 	}
 	journal := []events.Event{
@@ -423,7 +423,7 @@ func TestProjectBrowserEventsReplayEndsWithAuthoritativeRestartRecovery(t *testi
 
 func TestProjectBrowserEventsDoesNotApplyMismatchedAuthoritativeStatus(t *testing.T) {
 	seed := juexruntime.StatusSeed{
-		SessionID:        "session-1",
+		ThreadID:         "123456",
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
 	}
 	journal := []events.Event{{
@@ -736,7 +736,7 @@ func browserEventFixtureEvents() []events.Event {
 			TurnID:    "turn-1",
 			Payload: juexruntime.NotesErroredPayload{
 				Error: "notes read: notes content must be valid UTF-8",
-				Path:  "/workspace/.juex/sessions/session-1/notes.md",
+				Path:  "/state/threads/123456/notes.md",
 			},
 		},
 		{
@@ -878,7 +878,7 @@ func browserEventFixtures() ([]BrowserEvent, error) {
 	events := browserEventFixtureEvents()
 	out := make([]BrowserEvent, 0, len(events))
 	status := juexruntime.NewStatusStore(juexruntime.StatusSeed{
-		SessionID:        "session-1",
+		ThreadID:         "123456",
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
 	})
 	for _, event := range events {

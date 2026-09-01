@@ -39,7 +39,7 @@ type ProviderSelection struct {
 	Query          map[string]string
 	Capabilities   llm.CapabilityOverrides
 	Compat         llm.CompatOptions
-	ArtifactDir    string
+	MediaDir       string
 }
 
 // ResolvedModel is one effective primary or fallback model after config and
@@ -178,7 +178,7 @@ func (s ProviderSelection) llmConfig() llm.Config {
 		Query:          s.Query,
 		Capabilities:   s.Capabilities,
 		Compat:         s.Compat,
-		ArtifactDir:    s.ArtifactDir,
+		MediaDir:       s.MediaDir,
 	}
 }
 
@@ -188,9 +188,9 @@ type RuntimePaths struct {
 	WorkDir                      string
 	JuexDir                      string
 	StateDir                     string
-	ArtifactDir                  string
-	SessionsDir                  string
-	HistoryPath                  string
+	MediaDir                     string
+	ThreadsDir                   string
+	ThreadIndexPath              string
 	RuntimeConfigPath            string
 	DefaultHomeRuntimeConfigPath string
 	HomeRuntimeConfigPath        string
@@ -206,10 +206,10 @@ func (c Config) RuntimePaths() RuntimePaths {
 			// package tests and embedding callers that do not load config.
 			paths.StateDir = paths.JuexDir
 		}
-		paths.SessionsDir = filepath.Join(paths.StateDir, "sessions")
-		paths.HistoryPath = filepath.Join(paths.StateDir, "history.json")
+		paths.ThreadsDir = filepath.Join(paths.StateDir, "threads")
+		paths.ThreadIndexPath = filepath.Join(paths.StateDir, "threads.index.json")
 		if c.AgentStateDir != "" {
-			paths.ArtifactDir = filepath.Join(c.AgentStateDir, "artifacts")
+			paths.MediaDir = filepath.Join(c.AgentStateDir, "media")
 		}
 		if filepath.Base(filepath.Clean(c.WorkDir)) == ".juex" {
 			paths.RuntimeConfigPath = filepath.Join(c.WorkDir, "juex.yaml")

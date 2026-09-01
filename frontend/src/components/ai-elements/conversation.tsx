@@ -2,8 +2,8 @@
 
 import { Button } from "@/components/ui/button";
 import {
-  sessionConversationScrollOptions,
-  type SessionConversationScrollPhase,
+  threadConversationScrollOptions,
+  type ThreadConversationScrollPhase,
 } from "@/lib/conversation-scroll";
 import { cn } from "@/lib/utils";
 import type { UIMessage, UIMessagePart } from "./_local-types";
@@ -21,8 +21,8 @@ export const Conversation = ({
   ...props
 }: ConversationProps) => {
   const [scrollPhase, setScrollPhase] =
-    useState<SessionConversationScrollPhase>("hydrate");
-  const scrollOptions = sessionConversationScrollOptions(scrollPhase);
+    useState<ThreadConversationScrollPhase>("hydrate");
+  const scrollOptions = threadConversationScrollOptions(scrollPhase);
 
   useEffect(() => {
     let firstFrame = 0;

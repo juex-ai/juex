@@ -325,7 +325,7 @@ func (m *Manager) restartEntry(
 		return result, nil
 	}
 	result.Resume.Required = true
-	result.Resume.SessionID = interrupted.SessionID
+	result.Resume.ThreadID = interrupted.ThreadID
 	prompt := restartResumePrompt
 	if interrupted.TurnState == statusapi.TurnErrored {
 		prompt = restartFailedResumePrompt
@@ -334,7 +334,7 @@ func (m *Manager) restartEntry(
 	turnID, resumeErr := m.deps.postRestartResume(
 		resumeCtx,
 		runtimeState,
-		result.Resume.SessionID,
+		result.Resume.ThreadID,
 		prompt,
 	)
 	cancel()
@@ -376,13 +376,13 @@ func (m *Manager) confirmRestartInterrupted(
 		if err != nil {
 			return false, err
 		}
-		if actual.SessionID != "" || actual.TurnID != "" || actual.State != "" {
-			if actual.SessionID != expected.SessionID || actual.TurnID != expected.TurnID {
+		if actual.ThreadID != "" || actual.TurnID != "" || actual.State != "" {
+			if actual.ThreadID != expected.ThreadID || actual.TurnID != expected.TurnID {
 				return false, fmt.Errorf(
-					"replacement selected session %q turn %q, want session %q turn %q",
-					actual.SessionID,
+					"replacement selected Thread %q turn %q, want Thread %q turn %q",
+					actual.ThreadID,
 					actual.TurnID,
-					expected.SessionID,
+					expected.ThreadID,
 					expected.TurnID,
 				)
 			}
@@ -409,8 +409,8 @@ func (m *Manager) confirmRestartInterrupted(
 		select {
 		case <-confirmCtx.Done():
 			return false, fmt.Errorf(
-				"replacement status did not restore session %q turn %q: %w",
-				expected.SessionID,
+				"replacement status did not restore Thread %q turn %q: %w",
+				expected.ThreadID,
 				expected.TurnID,
 				confirmCtx.Err(),
 			)

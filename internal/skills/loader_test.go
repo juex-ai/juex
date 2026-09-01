@@ -422,7 +422,7 @@ func TestLoader_LoadsBuiltinGuidesOutsidePromptCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{"juex-chunked-write", "juex-observables", "juex-session-state"} {
+	for _, name := range []string{"juex-chunked-write", "juex-observables", "juex-thread-state"} {
 		skill, ok := l.Get(name)
 		if !ok {
 			t.Fatalf("builtin skill %q missing from %+v", name, l.All())
@@ -486,13 +486,13 @@ func TestLoader_ObservableGuideWaitsForInspectionResult(t *testing.T) {
 func TestLoader_BuiltinGuidesIgnoreFilesystemSkillFilters(t *testing.T) {
 	for _, policy := range []Policy{
 		{Include: []string{"not-a-builtin"}},
-		{Exclude: []string{"juex-observables", "juex-session-state", "juex-chunked-write"}},
+		{Exclude: []string{"juex-observables", "juex-thread-state", "juex-chunked-write"}},
 	} {
 		l := NewLoaderFromDirsWithOptions(nil, LoaderOptions{Policy: policy})
 		if err := l.Load(); err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range []string{"juex-observables", "juex-session-state", "juex-chunked-write"} {
+		for _, name := range []string{"juex-observables", "juex-thread-state", "juex-chunked-write"} {
 			if _, ok := l.Get(name); !ok {
 				t.Fatalf("policy %+v hid required builtin %q", policy, name)
 			}
@@ -550,7 +550,7 @@ func TestBuiltinCatalogFailsLoudOnInvalidEmbeddedGuide(t *testing.T) {
 
 	t.Run("missing expected guide", func(t *testing.T) {
 		files := valid()
-		delete(files, "builtin/juex-session-state/SKILL.md")
+		delete(files, "builtin/juex-thread-state/SKILL.md")
 		if _, err := loadBuiltinSkillsFromFS(files); err == nil || !strings.Contains(err.Error(), "has 2 guides, want 3") {
 			t.Fatalf("err = %v, want catalog count failure", err)
 		}
@@ -563,7 +563,7 @@ func TestBuiltinCatalogDoesNotDependOnExpectedNameOrder(t *testing.T) {
 		files["builtin/"+name+"/SKILL.md"] = &fstest.MapFile{Data: []byte("---\nname: " + name + "\ndescription: guide\ntype: builtin-guide\n---\n# Guide\n")}
 	}
 	original := builtinSkillNames
-	builtinSkillNames = []string{"juex-session-state", "juex-chunked-write", "juex-observables"}
+	builtinSkillNames = []string{"juex-thread-state", "juex-chunked-write", "juex-observables"}
 	t.Cleanup(func() { builtinSkillNames = original })
 
 	loaded, err := loadBuiltinSkillsFromFS(files)

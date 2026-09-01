@@ -468,7 +468,7 @@ func loadMCPConfigRefsWithOptions(refs []mcpConfigRef, workDir string, runtimeEn
 }
 
 // LoadMCPConfigs prepares process-scoped MCP configs from the same
-// immutable Agent runtime resolution used by sessions and Runtime status.
+// immutable Agent runtime resolution used by Threads and Runtime status.
 func LoadMCPConfigs(runtime AgentRuntimeResolution, workDir string) ([]mcp.Config, error) {
 	configs, _, _, err := loadMCPConfigRefsForRuntime(
 		runtime.ResourceGraph().MCPConfigs(),

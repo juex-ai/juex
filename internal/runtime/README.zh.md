@@ -2,65 +2,112 @@
 
 > [English](README.md) | 中文
 
-此包负责 Juex Framework 级 Turn loop。稳定的产品语义定义在 [`DOMAIN.md`](../../DOMAIN.zh.md)；仓库边界与数据流定义在 [`ARCHITECTURE.md`](../../ARCHITECTURE.zh.md)。本文是面向实现的 checkpoint map、failure matrix 和 test index，不定义另一套生命周期。
+本 Package 负责 Framework-level Turn Loop。产品语义由
+[`DOMAIN.zh.md`](../../DOMAIN.zh.md) 定义，Repository Ownership 由
+[`ARCHITECTURE.zh.md`](../../ARCHITECTURE.zh.md) 定义。
 
-## 所有权与 Checkpoint
+## Ownership
 
-`internal/app` 对 transport input 分类，负责 startup recovery barrier 与 Session lease，执行 Runtime 发出的 start action，并负责 Active Session replacement。`internal/runtime` 暴露 source-neutral Pending-input lifecycle Interface，负责 start-versus-queue、Framework Turn identity、durable state、retry/recovery classification、Provider iteration ordering、Tool execution ordering、类型化 policy orchestration 与最终 completion check。`internal/session` 负责 transcript、Event journal 和 single-writer Session lock。`internal/events` 与 `internal/eventcatalog` 提供 commit-before-project 边界。`internal/tools` 负责 raw handler execution，`internal/toolevents` 负责稳定 Tool Event payload constructor。`internal/session` 负责 per-call recovery-state projection，以及从 transcript repair 到 recovery Event 的纯 projection；Runtime 与 Session load 通过各自的持久 Event path 提交同一 repair projection。
+- `internal/thread` 负责 Thread Identity、单一 Journal、Replay、Projection、
+  Input State、Generation、Archive/Delete 与 Timeline Paging。
+- `internal/app` 为每个 Active Thread 组装 Runtime，持有 Process-level
+  Resource，运行 Worker，并把 Transport/Observation Delivery 转换为 Runtime
+  Input。
+- `internal/runtime` 负责 Admission、Provider Iteration、Tool Batch、Policy
+  Checkpoint、Context Generation Transition、Completion、Cancellation 与权威
+  Runtime Status Projection。
+- `runtime/module` 定义已注册 Prompt、Lifecycle、Policy 与 Tool Contribution。
 
-必需顺序如下：
+Engine 属于 Thread。Main 与 Worker 实例化同一种 Engine；Main 只额外启用
+Agent-level Observation 与 Worker Management Module。
 
-1. **Turn input：** 为新的 main input 追加不可 replay 的 `accepting` intent；提交 `turn.admitted`；把记录提升为 `admitted`；修复 transcript；应用有序 Turn-input policy；投影并追加 accepted message；之后才能 checkpoint 并调用 Provider。Admission commit 失败时尝试把新 intent 标为 `dropped`；如果 compensation 也失败，残留 `accepting` intent 保持 inert，除非 restart 找到匹配的已提交 admission Event，并返回两个错误。
-2. **Pending input：** `Engine.ReceivePendingInput` 接受直接或 stable external input，返回类型化 start、queued、processed、inert 或 retry outcome，不向 App 暴露 durable state。先追加 `pending` 再加入 live queue entry；只在 Provider-iteration boundary drain；标记 `admitted`，按 queue order 投影并追加，再标记 `processed`。`pending_input.jsonl` 在 cancellation、Turn boundary 与 restart 之间始终 authoritative。
-3. **Tool batch：** 把一个 Provider response 中的一或多个 Tool Call 视为同一个有序 batch。任何 call 开始前先提交 `llm.responded` 与每个有序 `tool.requested`。首次 pre-Tool policy 或 handler action 前提交 `tool.running`。每次 transformed input 在后续 policy 能观察前先 checkpoint。Raw handler output 和 post-Tool policy 后，投影完整有序 result batch；提交一个包含各精确 Provider-visible block 的 terminal Tool outcome；下一次 Provider Call 前追加同一 batch。
-4. **Finish：** 提交 `llm.responded`；评估每个 Finish Policy；queue 所有有效 policy context；提交第一个仍有效的 continuation candidate；持久 enqueue 它的 continuation；通知仅观察 callback；让 Pending-input queue 做最终 continue-or-complete 决策；然后提交 `turn.completed`，失败则提交 `turn.errored`。
-5. **Session replacement：** `internal/app` 创建 candidate，并在尝试其 lock 前暂时更新 persisted active history。Lock failure 可能让 candidate 保持 selected，需要 history reconciliation。Lock 成功后，App 构建、验证并启动完整 candidate Module set 与 Tool registry；捕获旧 Engine checkpoint；在 App lifecycle writer 下发布 candidate；运行 Session-start policy；提交 App/status state；释放 reader；最后关闭旧 Module set、lock 与 Session。之后若拒绝 candidate，会删除它，并在 Runtime rollback 后于 active history 重申常驻旧 App Session。该写入不是对任何 concurrent history selection 的 compare-and-swap restore。
+## Commit 顺序
 
-Replacement 与 Turn work 的锁顺序是 App Session lifecycle、`Engine.mu`、`Engine.sessionRuntimeMu`、`Engine.pendingMu`，最后是 Session 或 Module 自有 store lock。绝不能反向获取。
+Durable Fact 必须先提交到所属 Thread Journal，之后才能投影到 Status、Web、
+Subscriber 或 Hook Observation。一个 Journal Commit 可以包含有序 Atomic Fact
+Batch，Consumer 不能观察到该 Batch 的前缀。
 
-Tool handler output 不会自动成为 Provider-visible result。Raw text、structured result、timeout、exit code 与 cause 属于 Tool Call 的 diagnostic observation。Before-Tool policy 可改变 effective input；after-Tool policy、corrective context、guided error normalization 与 context projection 可改变 effective Tool Result。Terminal Tool Event 的 `outcome` block 是 recovery authority。保留的 raw structured diagnostic 可以解释 outcome，但不能替代或再次转换它。
+### Input 与 Turn
 
-完成必需 checkpoint 后，Policy observation 是单向的。`PolicyObserver.Requested` 是 commit gate，可以在 policy code 运行前 fail closed。`Started`、`Completed`、`Errored`、`PendingInputObserver.PendingInputsAdmitted` 与 `FinishPolicyContinuationObserver.FinishContinuationCommitted` 没有 flow result。它们不能修改 admission、policy selection、Tool Result content 或 Turn completion。
+1. 使用稳定 Input ID 持久化 `input.accepted`。
+2. Thread 可以开始工作时，在一个有序 Transition 中持久化 Turn Admission 与
+   Input Assignment；否则 Input 保持 Pending。
+3. 把已分配 Input 恰好一次投影进 Provider Conversation。
+4. 运行 Prompt Contributor 和每次 Request Recitation，再调用 Provider。
+5. 在 Provider Iteration Boundary 按接受顺序分配 Durable Pending Input。
 
-## Failure Matrix
+Input Identity 跨 Retry 与 Restart 保留，Turn Identity 不能替代它。Accepted
+Input 根据 Journal Fact 处于 `pending`、`assigned`、`processed`、`failed` 或
+`cancelled`；Transport Success 不是恢复权威。
 
-下表每个测试都是对应行的可执行回归契约。Checkpoint 变化时，应同时更新行为、recovery assertion 与引用测试，不要重新打开无关所有权或顺序决策。
+### Tool Batch
 
-| Checkpoint | Owner | Durable write | Live projection | 失败后状态 | Recovery action | Regression test |
-| --- | --- | --- | --- | --- | --- | --- |
-| 新 main-input staging | `internal/runtime.PendingInputQueue` | `pending_input.jsonl` 中的 `accepting` record | 无；App 仍没有 started result | Open 或 marshal failure 不留记录。Write、stat 或 size-check failure 在内存 indexing 前返回，但当前 queue writer 不同步回滚 append，因此磁盘可能含部分或完整但未索引的行 | 只有 queue reload 验证 journal 后才能 retry。Admission 继续前必须把 invalid tail 修复为 valid prefix；绝不能只根据 transport error 推断 acceptance | `TestPendingInputQueue_TurnInputDoesNotExpireAndUsesOneAdmissionCheckpoint`; `TestPendingInputQueue_AppendFailureLeavesNoLiveRecordAndRequiresValidPrefixRepair`; `TestAdmitTurnMessage_IntentAppendFailureLeavesNoActiveTurn` |
-| Main Turn admission | `internal/runtime.Engine.ReceivePendingInput` 把 durable checkpoint 委托给 `AdmitTurnMessage` 与 Catalog-backed Bus | 携带 accepted message id 的 `turn.admitted`，随后 `accepting -> admitted` | Status/Web 只在 Event commit 后更新；App 只在 promotion 后返回 `started` | Event failure 清除 active reservation，并尝试 drop 新建 intent。若相同 Framework-owned message id 没有已提交 admission Event，残留 `accepting` intent 保持 inert。Event commit 后、queue promotion 前进程停止，会留下可从 cross-journal fact 恢复的 accepted record。已存在 Pending record 保持 replayable | Startup 时只有已提交 `turn.admitted` Event 指向同 message id 才提升 `accepting`；否则保持 inert。Framework Turn id 不是 recovery identity。显式 `dropped` 与 `expired` record 保持 inert。只有 Runtime outcome 要求时 retry | `TestReceivePendingInputStartsIdleTurnWithFrameworkIdentity`; `TestAdmitTurnMessage_DurableAdmissionEventFailureDropsAcceptedInput`; `TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput`; `TestAdmitTurnMessage_FailedAdmissionKeepsPersistedInputReplayable`; `TestPendingInputQueue_ReconcileRecoveryFactsDoesNotMatchReusedTurnID`; `TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts` |
-| Recovered Turn input policy 或 projection | `internal/runtime.turnLifecycle` 与 `runtime/module` Turn-input policy | 已有 `admitted` record，随后 projected transcript message 与 `turn.started` | Policy 与 projection Event 在各自 commit 后出现 | Rejection 或 preparation failure 结束 Turn；accepted input 在 `turn.errored` 前恰好 append 一次，适用时带 policy-blocked state | Append 成功则从 transcript resume；否则从仍未 processed 的 durable record retry recovery | `TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy`; `TestTurn_ProjectionFailurePersistsAcceptedInputOnce`; `TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed` |
-| Pending-input acceptance | `internal/runtime.Engine.EnqueuePendingMessageWithOptions` | 内存 queue entry 前的 `pending` record | Acceptance 后的 `pending_input.queued` 与 status 是 best-effort projection | Queue-full 拒绝但不改变已 accepted persisted record。Queue append failure 在 live publication 前返回，但 write-phase failure 与 main-input staging 一样存在 unresolved partial-or-unindexed disk boundary | 判断 producer 能否 retry 前 reload 并识别 durable record；先修复 invalid tail。已 accepted persisted input 被重新 admitted，不重复创建 | `TestEngine_PendingInputBackpressure`; `TestPendingInputQueue_StagePersistedInputKeepsItReplayableUntilCommit`; `TestPendingInputQueue_AppendFailureLeavesNoLiveRecordAndRequiresValidPrefixRepair` |
-| Pending-input drain | `internal/runtime.turnLifecycle` 与 Pending-input lifecycle Interface | `pending -> admitted`、projected transcript append、随后 `processed` | 类型化 Runtime outcome 指示 App delivery；drain/status Event 与 `PendingInputObserver` 非 authoritative | 未提交 tail prepend 到 live queue；durable unprocessed record 保持 replayable。Terminal Turn failure 在关闭前尝试 transcript repair 并 drain accepted input | 允许时在同一 Turn retry。Restart 时 Runtime reconcile journal/Event/transcript fact 并返回有序 opaque handle；App 在 barrier 后执行并遵循 Runtime retry instruction | `TestReceivePendingInputDefersAcceptedExternalInputUntilRecoveryBarrier`; `TestResolvePendingInputTreatsTranscriptAsDeliveredAfterTerminalFailure`; `TestTurn_PersistedInputsAfterCurrentTriggerRestoreInOrder`; `TestTurn_CancellationPreservesPendingInputWithoutContinuing`; `TestAppStartupReplaysDurablePendingInputWithoutNewUserTurn`; `TestAppRunWaitsForStartupPendingInputRecovery` |
-| Tool-batch declaration | `internal/runtime.recordToolBatchLocked` | `llm.responded` 后完整有序 `tool.requested` set | 只在 commit 后 Status/Web 才显示 declared call | 任一 declaration failure 在所有 Tool start 前 abort batch；此前 declaration 保持 durable declared-only fact | Transcript repair 按 Provider 顺序恰好一次发出 `TOOL_NOT_STARTED` | `TestTurn_DeclaresWholeToolBatchBeforeAnyToolStarts`; `TestTurn_DurableToolRequestFailurePreventsToolCall`; `TestToolExecutionRecoveryDistinguishesCrashBoundaries` |
-| Tool start 与 transformed input | `internal/runtime.runToolCall` 与 `runtime/module` Tool policy | `tool.running`，随后每次 effective input 变化的 `tool.input_resolved` | Policy/Tool running projection 跟随已提交 fact | Start commit failure 阻止全部 policy/handler work。Input checkpoint failure 阻止后续 policy 与 handler；recovery 把已 started 但无 terminal outcome 的 call 视为 uncertain | Repair 发出 `TOOL_OUTCOME_UNKNOWN`；任何手动 retry 前验证外部 state | `TestTurn_DurableToolStartedFailurePreventsToolCall`; `TestTurn_TransformedToolInputIsDurableBeforeLaterPolicyExecution`; `TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution` |
-| Tool terminal outcome | `internal/runtime.emitToolFinished` 与 `internal/toolevents` | 包含精确 projected Provider-visible Tool Result 与 message id 的 `tool.completed` 或 `tool.errored` | Terminal status 为吸收态；live delta 为 provisional，可被抑制 | Commit failure 阻止 transcript append 与下一 Provider Call。Handler side effect 可能已存在，因此 durable state 保持 started-without-outcome | Repair 报告 `TOOL_OUTCOME_UNKNOWN`；绝不自动重新执行 | `TestTurn_DurableToolResultFailurePreventsNextProviderCall`; `TestTurn_DurableToolErrorFailurePersistsActualResult`; `TestTurn_DurableToolProjectionFailurePersistsProjectedResult`; `TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution` |
-| Tool-result transcript append | Terminal Tool Event 后的 `internal/session.Session` | `conversation.jsonl` 中有序 projected Tool Result message | Append 成功前不发起后续 Provider request | Terminal outcome 已持久，但 transcript 缺少 result batch | Transcript repair 重建精确 outcome block 并只 append 一次 | `TestToolExecutionRecoveryPreservesProviderOrderForMixedBatch`; `TestToolExecutionRecoveryDoesNotReclassifyNormalRecordedOutcomeAsRepair`; `TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution` |
-| Candidate Session preparation 与 lock | `internal/app.activeSessionReplacementTransaction`、其私有 preparation helper 与 `internal/session` | Candidate Session file 与 lifetime lock；transaction 不改变 active history | App、Engine 与 status reader 保持 resident Session；独立显式 history selection 仍 authoritative | Lock failure 为 cleanup 保留 candidate identity，active history 不变 | 关闭 candidate resource；仅当没有独立 concurrent activation 选中该 candidate 时删除 persistence | `TestActiveSessionReplacementLockRejectionKeepsOldHistory`; `TestActivateAndCommitIfInactiveAreAtomic` |
-| Candidate Session build、validation 或 start | `internal/app.activeSessionReplacementTransaction` 与 `runtime/module` | 已锁 candidate Session；transaction 不发布 active-history 或 App/Engine | 当前 App、Engine 与 status reader 保持 resident Session；独立显式 history selection 仍 authoritative | Build 或 validation failure 关闭 candidate Module 与 Session resource。Cleanup 保留被其他 actor 选中的 candidate | 继续 resident Session。把 cleanup diagnostic 与 typed rejection 合并；仅 conditional deletion 自身失败时 reconcile | `TestActiveSessionReplacementCatalogValidationRejectsCandidate`; `TestAppRollsBackStartedSessionModulesAfterCompleteCatalogValidation`; `TestAppRollsBackStartedSessionModulesAfterCompleteContextValidation`; `internal/runtime/module/lifecycle_test.go: TestSessionStartFailureRollsBackStartedModulesInReverseOrder` |
-| Engine publication、Session-start policy 与 active-history gate | `internal/app.activeSessionReplacementTransaction`、`internal/runtime.ReplaceSessionRuntimeBundle` 与 `internal/session.CompareAndSetActive` | Candidate Engine bundle 在 policy 成功且 active history 作为最后可失败 gate 原子替换前均为 provisional | Writer lock 持有期间 App reader 保持 resident App state。Process-owned OS history lock 在 rollback 期间不会过期，并阻止显式 activation 与 replacement 后 reconciliation 交错 | Busy publication 原子拒绝。Policy failure 或 cancellation 恢复精确 Engine checkpoint 与旧 Event/observability target。Replacement 后 history error 执行 Runtime rollback，并在释放 history lock 前恢复精确 previous history。只有 Engine restore 成功后才关闭 candidate Module | 成功 rollback 后继续 resident Session。Conditional cleanup 保留 reconciliation 后显式选中的任何 candidate；合并的 rollback/cleanup error 要求诊断后才能复用 | `TestReplaceSessionRuntimeRejectsBusyRuntimeAtomically`; `TestSwitchToNewPrimarySessionStartPolicyRejectsReplacement`; `TestSwitchToNewPrimarySessionPolicyRejectionPreservesExternallyActivatedCandidate`; `TestActiveSessionReplacementHistoryCommitFailureRollsBackPublication`; `TestCompareAndSetActiveHoldsHistoryLockThroughFailedWriteRollback`; `TestSwitchToNewPrimarySessionRollbackUsesCapturedRuntime`; `TestSwitchToNewPrimarySessionCancellationStopsSessionStartPolicy` |
-| 已提交 Session replacement cleanup | `internal/app.activeSessionReplacementTransaction` | 新 App Session、Engine snapshot、active history、Event journal target 与 replayed status authoritative | Writer release 后 reader 看到一个 coherent 新 Session | 关闭旧 Module、lock 或 Session 失败仅为 diagnostic；App publication 后 rollback 不安全 | 保持新 Session active，并展示 cleanup warning | `TestSwitchToNewPrimarySessionWaitsForLifecycleReaders`; `TestSwitchToNewPrimarySessionIsAtomicForConcurrentReaders`; `TestSwitchToNewPrimarySessionKeepsCommittedReplacementWhenOldModuleCleanupFails` |
-| Finish-policy evaluation | `internal/runtime.turnLifecycle` 与 `runtime/module` | Durable Assistant response 已存在；所有 evaluation 验证后才 queue policy context | Requested checkpoint 可 gate execution；之后 observer callback 只报告 | Policy error、invalid context 或 cancellation 在选中 candidate 前结束 Turn；不 admit continuation | 之后 input 从 Session transcript 与 policy-owned durable state resume | `TestTypedPoliciesPreserveModuleOrderAndEvaluateEveryFinishPolicy`; `TestFinishContinuationAndPolicyContextAreBounded`; `TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks` |
-| Candidate commit 与 continuation admission | 选中的 `runtime/module.FinishPolicy`，随后 `internal/runtime.PendingInputQueue` | 先写 selected owner state，再写 durable continuation `pending` record | Continuation observer 只在 queue admission 后运行 | Stale candidate 不改变任何内容，evaluation 继续。Commit failure 或 queue failure 结束 Turn；已提交 owner state 不 rollback，observer 不能声称 admission | 从 durable owner state 与 transcript retry；只有真实 Pending record 授权自动 continuation | `TestFinishCandidateCanBecomeStaleWithoutCommittingFlow`; `TestTurn_GoalCompletionGateContinuesThenCompletes`; `TestTurn_ContinuationQueueFailurePreservesCommittedPolicyStateWithoutObservation` |
-| 最终 completion Event | `internal/runtime.turnLifecycle` | 在 Pending lifecycle barrier 下 append `turn.completed`，随后在同步 projection 与 live publication 前释放 admission；failure 按相同顺序 stage `turn.errored` | Status/Web/log 只消费已提交 terminal Event；同步 callback 可检查或 retry admission，而不重入 barrier | Completion commit failure 返回 terminal Turn error；durable transcript 保留，但不存在成功 completion fact；更广泛 journal failure 也可能阻止 error Event | 在之后 admitted input 中从 transcript resume；不要从 UI state 合成 `turn.completed` | `TestTurn_CompletionCommitFailureReturnsErrorAndPreservesTranscript`; `TestTerminalDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue`; `TestErrorDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue` |
+1. Provider Response 后提交完整、有序的 `tool.requested` Batch。
+2. 在任何 Policy/Handler Action 前提交 `tool.running`。
+3. 在后续执行前提交 Policy 转换后的 Effective Input。
+4. 并发执行互相独立的 Call，但保留 Provider Order。
+5. 在追加 Result Message 或再次调用 Provider 前，提交每个精确的
+   Provider-visible Terminal Outcome。
 
-## 测试索引
+恢复规则保持保守：
 
-使用以下命令运行 focused lifecycle test：
+- requested 但未 started 的 Call 变成 `TOOL_NOT_STARTED`；
+- started 但没有 Durable Outcome 的 Call 变成 `TOOL_OUTCOME_UNKNOWN`，不自动
+  Retry；
+- Durable Terminal Outcome 以原始 Provider-visible Result 精确 Replay，不再次
+  执行 Projection Logic。
+
+### Completion
+
+Finish Policy 只在 Assistant Response Durable 后执行。有效 Continuation 必须先
+持久化为新 Input，才能继续 Loop。最后提交 `turn.completed`、`turn.errored` 或
+`turn.cancelled`。Status 与 Subscriber 只报告已提交 Terminal Fact。
+
+## Context Generation
+
+`context_new` 与 `context_compact` 是 Lifecycle Request，不在 Tool Handler 内
+直接 Mutation；Runtime 在安全 Boundary 应用：
+
+- `new`：创建没有 Summary 的 Generation，清空 Goal 与 Notes，保留 Scratchpad；
+- `compact`：创建 Summary，从 Summary 开始新 Generation，并保留 Goal、Notes 与
+  Scratchpad。
+
+两者都会持久化 UI 可见 System Activity Record，但不进入 Provider Context。
+Prompt Recitation 报告当前 Context Token 与百分比，让 Agent 自行选择合适转换。
+
+## Observation Policy
+
+外部自动事件统一使用 `observable.Observation`。只有 Main Thread `0` 启用
+`DeliverObservation`；Worker 在接受 Input 前拒绝 Observation。Provider-independent
+MCP Client 可以由 Agent 持有并共享，但 Tool Invocation 与相关 Fact 仍归属具体
+Thread。
+
+## Failure Boundary
+
+- Journal Append 失败不发布任何内容。
+- Durable Append 后 Projection 写入失败返回 stale-projection error；Replay 从
+  Journal Fact 重建。
+- Invalid/Torn Tail 只截断到最后一个完整有效 Commit；Committed Prefix 损坏则
+  Fail Loud。
+- Runtime Restart 只从 Journal Fact 重建 Pending Input、Active Generation、
+  Status 与 Tool Recovery。
+- Working Thread 不能 Archive/Delete；Main 不能 Archive、Rename、Delete；
+  Parent/Child Topology 违反约束时不能移除。
+
+## 测试
+
+高信号 Suite：
+
+- `internal/thread`：Journal Atomicity、Replay、Index Rebuild、Reverse Paging、
+  Lifecycle Constraint 与 Protocol Repair；
+- `loop_test.go`：Admission、Pending Drain、Provider/Tool Order、Finish Policy、
+  Cancellation 与 Terminal Failure；
+- `context_control_test.go`：Agent 触发的 `new`/`compact`；
+- `thread_runtime_test.go`：Engine Bundle Publication 与 Recovery；
+- `internal/app/worker_threads_test.go`：Worker Lifecycle 与 Subscription；
+- `tests/e2e`：跨 Package Durable Input、Web、Restart 与 Tool Recovery。
 
 ```bash
-go test ./internal/runtime ./internal/runtime/module ./internal/app ./internal/session
-go test ./tests/e2e -run 'DurableToolOutcome|PendingInput'
+make verify-focused PKGS="./internal/thread ./internal/runtime ./internal/app"
+make verify-final RACE=1 COMPACTION=1
 ```
-
-信号最高的 suite：
-
-- `internal/runtime/loop_test.go`：admission、pending-input failure recovery、Tool checkpoint ordering、finish policy、cancellation 与 terminal failure。
-- `internal/runtime/policy_lifecycle_test.go`：跨 Turn admission、input policy、Tool policy、Finish Policy 与 completion 的紧凑 golden order。
-- `internal/runtime/module/policy_test.go`：typed policy ordering、ownership、stale candidate、checkpoint failure 与 observer non-authority。
-- `internal/runtime/session_runtime_test.go`：coherent Engine bundle publication、busy rejection、provenance recovery 与 exact checkpoint restoration。
-- `internal/app/session_runtime_test.go`：candidate validation、rollback、reader atomicity、Session-start policy 与 post-commit cleanup。
-- `internal/runtime/pending_lifecycle_test.go`：source-neutral receive outcome、Framework Turn identity、stable source deduplication、barrier deferral 与 terminal delivery classification。Fallback-terminal Turn fixture 在 Session cleanup 前 release 并 join 其 Turn；readiness failure 保留 last commit phase 与有界 goroutine snapshot。
-- `internal/runtime/pending_queue_test.go`：durable record state、replay order、stable identity、expiry 与 processed deduplication。
-- `internal/session/tool_execution_recovery_external_test.go` 与 `tests/e2e/tool_execution_recovery_test.go`：Tool crash-boundary repair 与 restart 后不重复执行。

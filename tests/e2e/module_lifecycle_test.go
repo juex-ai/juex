@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,7 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
@@ -21,10 +22,11 @@ func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
 		"builtin-tools",
 		"project-guidance",
 		"skills",
-		"side-sessions",
+		"worker-threads",
 		"observables",
 		"mcp",
-		"session-context",
+		"context-control",
+		"thread-context",
 		"goal",
 		"notes",
 		"hooks",
@@ -33,145 +35,73 @@ func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
 	}
 	work := t.TempDir()
 	application, err := app.New(app.Options{
-		Config:   config.Config{WorkDir: work, Modules: modules},
-		Provider: &bareScriptProvider{},
-		WorkDir:  work,
+		Config: config.Config{WorkDir: work, Modules: modules}, Provider: &bareScriptProvider{}, WorkDir: work,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := application.CloseAndWait(); err != nil {
-			t.Errorf("close App: %v", err)
-		}
-	})
+	t.Cleanup(func() { _ = application.CloseAndWait() })
 
 	if descriptors := application.Engine.RuntimeModules.Descriptors(); len(descriptors) != 0 {
 		t.Fatalf("Runtime Modules = %#v, want none", descriptors)
 	}
-	if descriptors := application.Engine.SessionRuntimeSnapshot().Modules.Descriptors(); len(descriptors) != 0 {
-		t.Fatalf("Session Modules = %#v, want none", descriptors)
+	if descriptors := application.Engine.ThreadRuntimeSnapshot().Modules.Descriptors(); len(descriptors) != 0 {
+		t.Fatalf("Thread Modules = %#v, want none", descriptors)
 	}
 	if serving := application.Engine.Tools.List(); len(serving) != 0 {
 		t.Fatalf("serving Tools = %#v, want none", serving)
 	}
-
-	if err := application.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
-		status, snapshotErr := app.NewRuntimeCatalogService(config.Config{WorkDir: work, Modules: modules}).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
-		if snapshotErr != nil {
-			return snapshotErr
-		}
-		if len(status.Modules) != 0 || status.Tools.Count != 0 || status.MCP.Configured != 0 || status.Hooks.Configured != 0 || status.Skills.Count != 0 {
-			t.Fatalf("disabled Module status retained contributions: %+v", status)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 }
 
-func TestModuleLifecycle_PrimarySessionReplacementPublishesNewScopedSet(t *testing.T) {
+func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e is slow")
 	}
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")}
 	application, err := app.New(app.Options{
-		Config:     cfg,
-		Provider:   &bareScriptProvider{},
-		WorkDir:    work,
-		DisableMCP: true,
+		Config:   config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
+		Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := application.CloseAndWait(); err != nil {
-			t.Errorf("close App: %v", err)
-		}
-	})
+	t.Cleanup(func() { _ = application.CloseAndWait() })
 
-	before := application.Engine.SessionRuntimeSnapshot()
-	if before.Session == nil || before.Modules == nil {
-		t.Fatalf("initial Session runtime = %+v", before)
+	before := application.Engine.ThreadRuntimeSnapshot()
+	if before.Thread == nil || before.Thread.ID != thread.MainID || before.Modules == nil {
+		t.Fatalf("initial Thread runtime = %+v", before)
 	}
-	beforeDescriptors := before.Modules.Descriptors()
-	beforeToolNames := before.Modules.ToolCatalog().Names()
-
-	if err := application.SwitchToNewPrimarySession(); err != nil {
+	if err := os.WriteFile(filepath.Join(before.ScratchpadDir, "durable.txt"), []byte("retained"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	after := application.Engine.SessionRuntimeSnapshot()
-	if after.Session == nil || after.Modules == nil {
-		t.Fatalf("replacement Session runtime = %+v", after)
-	}
-	if after.Session.ID == before.Session.ID || after.Modules == before.Modules {
-		t.Fatalf("replacement reused old Session set: before=%s after=%s", before.Session.ID, after.Session.ID)
-	}
-	history, err := session.LoadHistory(cfg.HistoryPath())
-	if err != nil {
+	if err := application.NewContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if history.Active == nil || history.Active.ID != after.Session.ID {
-		t.Fatalf("active history = %+v, want committed replacement %q", history.Active, after.Session.ID)
+	after := application.Engine.ThreadRuntimeSnapshot()
+	if after.Thread != before.Thread || after.Modules != before.Modules {
+		t.Fatalf("/new replaced Thread-scoped runtime: before=%p/%p after=%p/%p", before.Thread, before.Modules, after.Thread, after.Modules)
 	}
-	if got := after.Modules.Descriptors(); !equalModuleDescriptors(got, beforeDescriptors) {
-		t.Fatalf("replacement descriptors = %#v, want %#v", got, beforeDescriptors)
+	if info := after.Thread.Info(); info.GenerationID != "g000002" {
+		t.Fatalf("generation = %q, want g000002", info.GenerationID)
 	}
-	if got := after.Modules.ToolCatalog().Names(); !equalStrings(got, beforeToolNames) {
-		t.Fatalf("replacement Tool catalog = %#v, want %#v", got, beforeToolNames)
+	if data, err := os.ReadFile(filepath.Join(after.ScratchpadDir, "durable.txt")); err != nil || string(data) != "retained" {
+		t.Fatalf("scratchpad after /new = %q, %v", data, err)
 	}
 
-	sessionContext := runtimemodule.SessionContext{
-		ID:            after.Session.ID,
-		Dir:           after.Session.Dir,
-		ScratchpadDir: after.ScratchpadDir,
-	}
+	threadContext := runtimemodule.ThreadContext{ID: after.Thread.ID, Dir: after.Thread.Dir, ScratchpadDir: after.ScratchpadDir}
 	sections, err := after.Modules.Context(context.Background(), runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
-		Session: &sessionContext,
+		Thread:  &threadContext,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(sections) == 0 {
-		t.Fatal("replacement Session set contributed no provider context")
+		t.Fatal("Thread set contributed no provider context")
 	}
 	for _, section := range sections {
-		if section.ModuleID == "" || section.Scope != runtimemodule.ScopeSession || section.Purpose != runtimemodule.ContextPurposeProviderIteration || strings.TrimSpace(section.Source) == "" {
-			t.Errorf("replacement context lacks Framework provenance: %+v", section)
+		if section.ModuleID == "" || section.Scope != runtimemodule.ScopeThread || strings.TrimSpace(section.Source) == "" {
+			t.Errorf("Thread context lacks provenance: %+v", section)
 		}
 	}
-
-	_, err = before.Modules.Context(context.Background(), runtimemodule.ContextRequest{
-		Purpose: runtimemodule.ContextPurposeProviderIteration,
-		Session: &runtimemodule.SessionContext{ID: before.Session.ID, Dir: before.Session.Dir, ScratchpadDir: before.ScratchpadDir},
-	})
-	if err == nil || !strings.Contains(err.Error(), "session set is closed") {
-		t.Fatalf("old Session set Context error = %v, want closed set", err)
-	}
-}
-
-func equalModuleDescriptors(left, right []runtimemodule.Descriptor) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
 }

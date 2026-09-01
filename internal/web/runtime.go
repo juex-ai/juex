@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/sandbox"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 type runtimeStatusResponse struct {
@@ -258,10 +258,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err := s.ensureMCPStarted(context.Background()); err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	active, err := s.getCurrentActiveSession(context.Background())
-	if errors.Is(err, os.ErrNotExist) {
-		active, err = s.openSession(context.Background(), "", app.SessionModeNewPrimary)
-	}
+	active, err := s.getThread(context.Background(), thread.MainID)
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}

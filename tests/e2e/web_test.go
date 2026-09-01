@@ -27,7 +27,7 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/web"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -91,14 +91,14 @@ func (p *interruptibleCompactWebProvider) Complete(ctx context.Context, sys stri
 	}
 }
 
-func TestWeb_TranscriptPageKeepsToolPairAtBoundary(t *testing.T) {
+func TestWeb_TranscriptPageReadsLatestItemsFromEOF(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
-	sess, err := session.New(cfg.SessionsDir())
+	sess, err := thread.New(cfg.ThreadsDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionID := sess.ID
+	threadID := sess.ID
 	messages := []llm.Message{
 		{ID: "m1", Role: llm.RoleUser, Kind: llm.MessageKindCompact, Blocks: []llm.Block{{Type: llm.BlockText, Text: "summary"}}},
 		{ID: "m2", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "read", Input: map[string]any{"path": "a.txt"}}}},
@@ -119,35 +119,36 @@ func TestWeb_TranscriptPageKeepsToolPairAtBoundary(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID + "?limit=3")
+	resp, err := http.Get(ts.URL + "/api/threads/" + threadID + "?limit=3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("session status = %d body=%s", resp.StatusCode, body)
+		t.Fatalf("Thread status = %d body=%s", resp.StatusCode, body)
 	}
 	var got struct {
-		Messages      []llm.Message `json:"messages"`
-		HasMoreBefore bool          `json:"has_more_before"`
-		OldestID      string        `json:"oldest_message_id"`
+		Items []struct {
+			Message *llm.Message `json:"message"`
+		} `json:"items"`
+		HasMoreBefore bool `json:"has_more_before"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Messages) != 4 ||
-		got.Messages[0].ID != "m2" ||
-		got.Messages[0].Blocks[0].ToolUseID != "call-1" ||
-		got.Messages[1].Kind != llm.MessageKindPolicyEvent ||
-		got.Messages[2].Blocks[0].ToolUseID != "call-1" ||
-		got.OldestID != "m2" ||
+	// One append batch is one atomic Journal commit. Pagination may exceed the
+	// requested item limit rather than split that commit.
+	if len(got.Items) != 5 || got.Items[0].Message == nil || got.Items[0].Message.ID != "m1" ||
+		got.Items[2].Message == nil || got.Items[2].Message.Kind != llm.MessageKindPolicyEvent ||
+		got.Items[3].Message == nil || got.Items[3].Message.Blocks[0].ToolUseID != "call-1" ||
+		got.Items[4].Message == nil || got.Items[4].Message.ID != "m5" ||
 		!got.HasMoreBefore {
 		t.Fatalf("coherent transcript page = %+v", got)
 	}
 }
 
-func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutSession(t *testing.T) {
+func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutOpeningThread(t *testing.T) {
 	work := t.TempDir()
 	projectAgents := filepath.Join(work, ".agents")
 	if err := os.MkdirAll(projectAgents, 0o755); err != nil {
@@ -210,7 +211,7 @@ func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutSession(t *testing.T
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Tools.Count != 31 || len(got.Tools.Groups) != 8 {
+	if got.Tools.Count != 34 || len(got.Tools.Groups) != 8 {
 		t.Fatalf("builtin catalog = %+v", got.Tools)
 	}
 	var observableToolNames []string
@@ -271,9 +272,9 @@ func TestWeb_RemoteMCPToolRoundTrip(t *testing.T) {
 	httpServer := httptest.NewServer(srv.Handler())
 	defer httpServer.Close()
 
-	sessionID := createWebSession(t, httpServer.URL)
+	threadID := createWebMainThread(t, httpServer.URL)
 	response, err := http.Post(
-		httpServer.URL+"/api/sessions/"+sessionID+"/turns",
+		httpServer.URL+"/api/threads/"+threadID+"/inputs",
 		"application/json",
 		strings.NewReader(`{"prompt":"use the remote tool"}`),
 	)
@@ -289,7 +290,7 @@ func TestWeb_RemoteMCPToolRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&turn); err != nil {
 		t.Fatal(err)
 	}
-	waitForWebTranscript(t, httpServer.URL, sessionID, turn.TurnID, 30*time.Second, "remote MCP result", func(messages []webTranscriptMessage) bool {
+	waitForWebTranscript(t, httpServer.URL, threadID, turn.TurnID, 30*time.Second, "remote MCP result", func(messages []webTranscriptMessage) bool {
 		for _, message := range messages {
 			for _, block := range message.Blocks {
 				if block.Type == "text" && block.Text == "remote tool complete" {
@@ -359,22 +360,24 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	// 1. Create session.
-	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	// 1. Create thread.
+	created, err := http.Post(ts.URL+"/api/threads", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var c struct{ ID string }
+	var c struct {
+		ID string `json:"thread_id"`
+	}
 	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
 		t.Fatal(err)
 	}
 	created.Body.Close()
 	if c.ID == "" {
-		t.Fatal("no session id")
+		t.Fatal("no Thread id")
 	}
 
 	// 2. Submit a turn.
-	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+	resp, err := http.Post(ts.URL+"/api/threads/"+c.ID+"/inputs", "application/json",
 		strings.NewReader(`{"prompt":"hi"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -430,9 +433,9 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 	defer ts.Close()
 	defer close(prov.release)
 
-	sessionID := createWebSession(t, ts.URL)
+	threadID := createWebMainThread(t, ts.URL)
 	seed, err := http.Post(
-		ts.URL+"/api/sessions/"+sessionID+"/turns",
+		ts.URL+"/api/threads/"+threadID+"/inputs",
 		"application/json",
 		strings.NewReader(`{"prompt":"`+strings.Repeat("old context ", 200)+`"}`),
 	)
@@ -445,7 +448,7 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	seed.Body.Close()
-	waitForWebTranscript(t, ts.URL, sessionID, seededTurn.TurnID, 10*time.Second, "seed turn", func(messages []webTranscriptMessage) bool {
+	waitForWebTranscript(t, ts.URL, threadID, seededTurn.TurnID, 10*time.Second, "seed turn", func(messages []webTranscriptMessage) bool {
 		for _, message := range messages {
 			for _, block := range message.Blocks {
 				if block.Type == "text" && block.Text == "seeded" {
@@ -463,7 +466,7 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 	compactDone := make(chan compactResult, 1)
 	go func() {
 		response, requestErr := http.Post(
-			ts.URL+"/api/sessions/"+sessionID+"/turns",
+			ts.URL+"/api/threads/"+threadID+"/inputs",
 			"application/json",
 			strings.NewReader(`{"prompt":"/compact"}`),
 		)
@@ -476,7 +479,7 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 	}
 
 	waitForCondition(t, 5*time.Second, func() bool {
-		response, requestErr := http.Get(ts.URL + "/api/sessions/" + sessionID + "/status")
+		response, requestErr := http.Get(ts.URL + "/api/threads/" + threadID + "/status")
 		if requestErr != nil {
 			return false
 		}
@@ -489,7 +492,7 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 			status.Turn.CanInterrupt
 	})
 
-	interrupt, err := http.Post(ts.URL+"/api/sessions/"+sessionID+"/interrupt", "application/json", nil)
+	interrupt, err := http.Post(ts.URL+"/api/threads/"+threadID+"/stop", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +529,7 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 	}
 
 	waitForCondition(t, 5*time.Second, func() bool {
-		response, requestErr := http.Get(ts.URL + "/api/sessions/" + sessionID + "/status")
+		response, requestErr := http.Get(ts.URL + "/api/threads/" + threadID + "/status")
 		if requestErr != nil {
 			return false
 		}
@@ -539,7 +542,7 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 			status.LastError != nil &&
 			status.LastError.Message == "Compaction canceled"
 	})
-	messages, err := fetchWebTranscript(http.DefaultClient, ts.URL, sessionID)
+	messages, err := fetchWebTranscript(http.DefaultClient, ts.URL, threadID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,8 +567,8 @@ func TestWeb_ComposerImageUpload(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	sessionID := createWebSession(t, ts.URL)
-	media := uploadWebSessionImage(t, ts.URL, sessionID)
+	threadID := createWebMainThread(t, ts.URL)
+	media := uploadWebThreadImage(t, ts.URL, threadID)
 	body, err := json.Marshal(struct {
 		Prompt      string         `json:"prompt"`
 		Attachments []llm.MediaRef `json:"attachments"`
@@ -573,7 +576,7 @@ func TestWeb_ComposerImageUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.Post(ts.URL+"/api/sessions/"+sessionID+"/turns", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(ts.URL+"/api/threads/"+threadID+"/inputs", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +594,7 @@ func TestWeb_ComposerImageUpload(t *testing.T) {
 		t.Fatal("turn response missing turn id")
 	}
 
-	waitForWebTranscript(t, ts.URL, sessionID, turn.TurnID, 30*time.Second, "image upload turn", func(messages []webTranscriptMessage) bool {
+	waitForWebTranscript(t, ts.URL, threadID, turn.TurnID, 30*time.Second, "image upload turn", func(messages []webTranscriptMessage) bool {
 		hasAssistant := false
 		for _, msg := range messages {
 			if msg.Role != "assistant" {
@@ -631,7 +634,13 @@ func TestWeb_ComposerImageUpload(t *testing.T) {
 	if len(history) == 0 {
 		t.Fatal("provider history missing")
 	}
-	user := history[len(history)-1]
+	var user llm.Message
+	for _, message := range history {
+		if message.Role == llm.RoleUser && message.FirstText() == "describe this" {
+			user = message
+			break
+		}
+	}
 	if len(user.Blocks) != 2 || user.Blocks[0].Type != llm.BlockText || user.Blocks[1].Type != llm.BlockImage ||
 		user.Blocks[1].Media == nil || user.Blocks[1].Media.ArtifactPath != media.ArtifactPath {
 		t.Fatalf("provider user message = %+v", user)
@@ -695,17 +704,19 @@ func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	created, err := http.Post(ts.URL+"/api/threads", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var c struct{ ID string }
+	var c struct {
+		ID string `json:"thread_id"`
+	}
 	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
 		t.Fatal(err)
 	}
 	created.Body.Close()
 
-	start, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+	start, err := http.Post(ts.URL+"/api/threads/"+c.ID+"/inputs", "application/json",
 		strings.NewReader(`{"prompt":"hi"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -732,7 +743,7 @@ func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 		t.Fatal("provider did not start")
 	}
 
-	queued, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+	queued, err := http.Post(ts.URL+"/api/threads/"+c.ID+"/inputs", "application/json",
 		strings.NewReader(`{"prompt":"steer now"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -753,19 +764,13 @@ func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 	if !queuedBody.Queued || queuedBody.PendingCount != 1 {
 		t.Fatalf("queued body = %+v", queuedBody)
 	}
-	queue := juexruntime.NewPendingInputQueue(filepath.Join(cfg.SessionsDir(), c.ID), juexruntime.PendingInputQueueOptions{})
-	assertPendingInputStates(t, queue, map[string]juexruntime.PendingInputState{
-		"hi":        juexruntime.PendingInputStateProcessed,
-		"steer now": juexruntime.PendingInputStatePending,
-	})
-
 	close(prov.release)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		history := prov.secondHistory()
 		if len(history) > 0 {
-			if got := history[len(history)-1].FirstText(); got != "steer now" {
-				t.Fatalf("second provider call last message = %q", got)
+			if !historyContainsUserText(history, "steer now") {
+				t.Fatalf("second provider call missing queued input: %+v", history)
 			}
 			break
 		}
@@ -773,7 +778,7 @@ func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 	}
 	if len(prov.secondHistory()) == 0 {
 		t.Fatalf("pending input never reached second provider call\n%s",
-			pendingInputFailureContext(filepath.Join(cfg.SessionsDir(), c.ID)))
+			pendingInputFailureContext(filepath.Join(cfg.ThreadsDir(), c.ID)))
 	}
 	waitForWebTranscript(t, ts.URL, c.ID, startedBody.TurnID, 2*time.Second, "second assistant reply", func(messages []webTranscriptMessage) bool {
 		for _, message := range messages {
@@ -785,31 +790,10 @@ func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 		}
 		return false
 	})
-	assertPendingInputStates(t, queue, map[string]juexruntime.PendingInputState{
-		"hi":        juexruntime.PendingInputStateProcessed,
-		"steer now": juexruntime.PendingInputStateProcessed,
-	})
 }
 
-func assertPendingInputStates(t *testing.T, queue *juexruntime.PendingInputQueue, want map[string]juexruntime.PendingInputState) {
-	t.Helper()
-	records, err := queue.Records()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := make(map[string]juexruntime.PendingInputState, len(records))
-	for _, record := range records {
-		got[record.Message.FirstText()] = record.State
-	}
-	for input, state := range want {
-		if got[input] != state {
-			t.Fatalf("pending input %q state = %q, want %q; all states=%v", input, got[input], state, got)
-		}
-	}
-}
-
-func pendingInputFailureContext(sessionDir string) string {
-	journalPath := filepath.Join(sessionDir, "events.jsonl")
+func pendingInputFailureContext(threadDir string) string {
+	journalPath := filepath.Join(threadDir, "journal.jsonl")
 	var tail []byte
 	file, err := os.Open(journalPath)
 	if err == nil {
@@ -831,13 +815,13 @@ func pendingInputFailureContext(sessionDir string) string {
 }
 
 func TestPendingInputFailureContextIncludesJournalTail(t *testing.T) {
-	sessionDir := t.TempDir()
+	threadDir := t.TempDir()
 	terminal := `{"type":"turn.errored","payload":{"message":"injected durable write failure"}}`
 	body := strings.Repeat("old diagnostic padding\n", 2048) + terminal + "\n"
-	if err := os.WriteFile(filepath.Join(sessionDir, "events.jsonl"), []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(threadDir, "journal.jsonl"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	diagnostic := pendingInputFailureContext(sessionDir)
+	diagnostic := pendingInputFailureContext(threadDir)
 	if !strings.Contains(diagnostic, terminal) || !strings.Contains(diagnostic, "goroutine ") {
 		t.Fatalf("missing terminal event or goroutine context: %s", diagnostic)
 	}
@@ -865,7 +849,15 @@ func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	sessionID := createWebSession(t, ts.URL)
+	threadID := createWebMainThread(t, ts.URL)
+	observables, err := http.Get(ts.URL + "/api/observables")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observables.Body.Close()
+	if observables.StatusCode != http.StatusOK {
+		t.Fatalf("observable warmup status = %d", observables.StatusCode)
+	}
 	select {
 	case <-prov.started:
 	case <-time.After(10 * time.Second):
@@ -873,7 +865,7 @@ func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 	}
 
 	queued, err := http.Post(
-		ts.URL+"/api/sessions/"+sessionID+"/turns",
+		ts.URL+"/api/threads/"+threadID+"/inputs",
 		"application/json",
 		strings.NewReader(`{"prompt":"steer observable work"}`),
 	)
@@ -886,7 +878,7 @@ func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 		t.Fatalf("queued status = %d body=%s", queued.StatusCode, body)
 	}
 	var queuedBody struct {
-		TurnID       string `json:"turn_id"`
+		InputID      string `json:"input_id"`
 		Queued       bool   `json:"queued"`
 		PendingCount int    `json:"pending_count"`
 	}
@@ -895,39 +887,35 @@ func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	queued.Body.Close()
-	if queuedBody.TurnID == "" || !queuedBody.Queued || queuedBody.PendingCount != 1 {
+	if queuedBody.InputID == "" || !queuedBody.Queued || queuedBody.PendingCount != 1 {
 		t.Fatalf("queued body = %+v", queuedBody)
 	}
 
 	close(prov.release)
-	waitForWebTranscript(
-		t,
-		ts.URL,
-		sessionID,
-		queuedBody.TurnID,
-		30*time.Second,
-		"observable turn queued input",
-		func(messages []webTranscriptMessage) bool {
-			inputCount := 0
-			hasAssistant := false
-			for _, message := range messages {
-				for _, block := range message.Blocks {
-					if block.Type != "text" {
-						continue
-					}
-					if block.Text == "steer observable work" {
-						inputCount++
-					}
-					if message.Role == "assistant" && block.Text == "second" {
-						hasAssistant = true
-					}
+	waitForCondition(t, 30*time.Second, func() bool {
+		messages, err := fetchWebTranscript(&http.Client{Timeout: 2 * time.Second}, ts.URL, threadID)
+		if err != nil {
+			return false
+		}
+		inputCount := 0
+		hasAssistant := false
+		for _, message := range messages {
+			for _, block := range message.Blocks {
+				if block.Type != "text" {
+					continue
+				}
+				if block.Text == "steer observable work" {
+					inputCount++
+				}
+				if message.Role == "assistant" && block.Text == "second" {
+					hasAssistant = true
 				}
 			}
-			return inputCount == 1 && hasAssistant
-		},
-	)
+		}
+		return inputCount == 1 && hasAssistant
+	})
 	history := prov.secondHistory()
-	if len(history) == 0 || history[len(history)-1].FirstText() != "steer observable work" {
+	if len(history) == 0 || !historyContainsUserText(history, "steer observable work") {
 		t.Fatalf("second provider history = %+v", history)
 	}
 }
@@ -947,18 +935,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var c struct{ ID string }
-	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
-		t.Fatal(err)
-	}
-	created.Body.Close()
-	if c.ID == "" {
-		t.Fatal("no session id")
-	}
+	c := struct{ ID string }{ID: createWebMainThread(t, ts.URL)}
 
 	var snapshot struct {
 		Observables []observable.ObservableStatus `json:"observables"`
@@ -998,7 +975,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	if got.ID != "observable-e2e" {
 		t.Fatalf("observable id = %q", got.ID)
 	}
-	eventsData, err := os.ReadFile(filepath.Join(stateDir, "sessions", c.ID, "events.jsonl"))
+	eventsData, err := os.ReadFile(filepath.Join(stateDir, "threads", c.ID, "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1026,7 +1003,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	if err := os.Remove(filepath.Join(work, ".juex", "inbox", "observable-e2e.png")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "artifacts", filepath.FromSlash(eventArtifactPath))); err != nil {
+	if _, err := os.Stat(filepath.Join(stateDir, "media", filepath.FromSlash(eventArtifactPath))); err != nil {
 		t.Fatalf("stored observable event artifact unavailable after source removal: %v", err)
 	}
 	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/observable-e2e", nil)
@@ -1057,18 +1034,7 @@ func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var c struct{ ID string }
-	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
-		t.Fatal(err)
-	}
-	created.Body.Close()
-	if c.ID == "" {
-		t.Fatal("no session id")
-	}
+	_ = createWebMainThread(t, ts.URL)
 
 	scheduledAt := time.Now().UTC().Add(time.Hour)
 	body, err := json.Marshal(map[string]any{
@@ -1219,19 +1185,7 @@ func TestWeb_ScheduleCatchUpAutomaticallySurfacesObservation(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var sessionInfo struct{ ID string }
-	if err := json.NewDecoder(created.Body).Decode(&sessionInfo); err != nil {
-		created.Body.Close()
-		t.Fatal(err)
-	}
-	created.Body.Close()
-	if sessionInfo.ID == "" {
-		t.Fatal("no session id")
-	}
+	threadInfo := struct{ ID string }{ID: createWebMainThread(t, ts.URL)}
 
 	var status *observable.ObservableStatus
 	var records []observable.ObservationRecord
@@ -1258,7 +1212,7 @@ func TestWeb_ScheduleCatchUpAutomaticallySurfacesObservation(t *testing.T) {
 		}
 		// Delivered store snapshots alone do not prove journal publication or
 		// Provider execution.
-		eventsData, err = os.ReadFile(filepath.Join(stateDir, "sessions", sessionInfo.ID, "events.jsonl"))
+		eventsData, err = os.ReadFile(filepath.Join(stateDir, "threads", threadInfo.ID, "journal.jsonl"))
 		return err == nil && strings.Contains(string(eventsData), `"type":"observation.delivered"`) &&
 			strings.Contains(messagesText(prov.history(0)), "automatic schedule e2e payload")
 	})
@@ -1314,14 +1268,14 @@ func TestWeb_RunMonthlyScheduleObservableOnce(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	created, err := http.Post(ts.URL+"/api/threads", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if created.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(created.Body)
 		created.Body.Close()
-		t.Fatalf("create session status=%d body=%s", created.StatusCode, body)
+		t.Fatalf("create Thread status=%d body=%s", created.StatusCode, body)
 	}
 	created.Body.Close()
 
@@ -1562,7 +1516,7 @@ type webTranscriptMessage struct {
 	} `json:"blocks"`
 }
 
-func waitForWebTranscript(t *testing.T, baseURL, sessionID, turnID string, timeout time.Duration, label string, match func([]webTranscriptMessage) bool) {
+func waitForWebTranscript(t *testing.T, baseURL, threadID, turnID string, timeout time.Duration, label string, match func([]webTranscriptMessage) bool) {
 	t.Helper()
 	client := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(timeout)
@@ -1570,14 +1524,14 @@ func waitForWebTranscript(t *testing.T, baseURL, sessionID, turnID string, timeo
 	var lastMessages []webTranscriptMessage
 	for time.Now().Before(deadline) {
 		matched := false
-		messages, err := fetchWebTranscript(client, baseURL, sessionID)
+		messages, err := fetchWebTranscript(client, baseURL, threadID)
 		if err != nil {
 			lastErr = err.Error()
 		} else {
 			lastMessages = messages
 			matched = match(messages)
 		}
-		state, turnErr, err := fetchWebTurnState(client, baseURL, sessionID, turnID)
+		state, turnErr, err := fetchWebTurnState(client, baseURL, threadID, turnID)
 		if err != nil {
 			lastState = err.Error()
 		} else {
@@ -1606,51 +1560,59 @@ func waitForCondition(t *testing.T, timeout time.Duration, match func() bool) {
 	t.Fatalf("condition not met within %s", timeout)
 }
 
-func fetchWebTranscript(client *http.Client, baseURL, sessionID string) ([]webTranscriptMessage, error) {
-	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID)
+func fetchWebTranscript(client *http.Client, baseURL, threadID string) ([]webTranscriptMessage, error) {
+	resp, err := client.Get(baseURL + "/api/threads/" + threadID)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("session status=%d body=%s", resp.StatusCode, body)
+		return nil, fmt.Errorf("Thread status=%d body=%s", resp.StatusCode, body)
 	}
 	var parsed struct {
-		Messages []webTranscriptMessage `json:"messages"`
+		Items []struct {
+			Message *webTranscriptMessage `json:"message"`
+		} `json:"items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return nil, err
 	}
-	return parsed.Messages, nil
+	messages := make([]webTranscriptMessage, 0, len(parsed.Items))
+	for _, item := range parsed.Items {
+		if item.Message != nil {
+			messages = append(messages, *item.Message)
+		}
+	}
+	return messages, nil
 }
 
-func createWebSession(t *testing.T, baseURL string) string {
+func createWebMainThread(t *testing.T, baseURL string) string {
 	t.Helper()
-	created, err := http.Post(baseURL+"/api/sessions", "application/json", nil)
+	created, err := http.Get(baseURL + "/api/threads")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer created.Body.Close()
-	if created.StatusCode != http.StatusCreated {
+	if created.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(created.Body)
-		t.Fatalf("create session status = %d body=%s", created.StatusCode, body)
+		t.Fatalf("create Thread status = %d body=%s", created.StatusCode, body)
 	}
-	var c struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
-		t.Fatal(err)
-	}
-	if c.ID == "" {
-		t.Fatal("no session id")
-	}
-	return c.ID
+	return "0"
 }
 
-func uploadWebSessionImage(t *testing.T, baseURL, sessionID string) llm.MediaRef {
+func historyContainsUserText(history []llm.Message, text string) bool {
+	for _, message := range history {
+		if message.Role == llm.RoleUser && message.FirstText() == text {
+			return true
+		}
+	}
+	return false
+}
+
+func uploadWebThreadImage(t *testing.T, baseURL, threadID string) llm.MediaRef {
 	t.Helper()
-	resp := postWebSessionAttachment(t, baseURL, sessionID, "screen.png", webUploadPNG(t))
+	resp := postWebThreadAttachment(t, baseURL, threadID, "screen.png", webUploadPNG(t))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -1663,7 +1625,7 @@ func uploadWebSessionImage(t *testing.T, baseURL, sessionID string) llm.MediaRef
 	return ref
 }
 
-func postWebSessionAttachment(t *testing.T, baseURL, sessionID, filename string, data []byte) *http.Response {
+func postWebThreadAttachment(t *testing.T, baseURL, threadID, filename string, data []byte) *http.Response {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -1677,7 +1639,7 @@ func postWebSessionAttachment(t *testing.T, baseURL, sessionID, filename string,
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/sessions/"+sessionID+"/attachments", &body)
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/threads/"+threadID+"/attachments", &body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1794,8 +1756,8 @@ func writeE2ETestPNG(t *testing.T, path string) {
 	}
 }
 
-func fetchWebTurnState(client *http.Client, baseURL, sessionID, turnID string) (string, string, error) {
-	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/status")
+func fetchWebTurnState(client *http.Client, baseURL, threadID, turnID string) (string, string, error) {
+	resp, err := client.Get(baseURL + "/api/threads/" + threadID + "/status")
 	if err != nil {
 		return "", "", err
 	}

@@ -75,7 +75,7 @@ func TestContextErrorReturnsRuntimeRestartCause(t *testing.T) {
 
 func TestContextErrorReturnsExplicitNonUserCancellationCause(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
-	stopped := errors.New("side session stopped")
+	stopped := errors.New("Worker Thread stopped")
 	cancel(stopped)
 	if got := ContextError(ctx); !errors.Is(got, stopped) {
 		t.Fatalf("ContextError = %v, want explicit stop cause", got)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -24,6 +25,17 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 )
+
+func processExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
+}
 
 func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 	if testing.Short() {
@@ -88,14 +100,14 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 				t.Fatalf("fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 			}
 			oldRuntime := waitFleetRuntimeVersion(t, agentAddress, "", "0.0.1-old")
-			sessionID, originalTurnID := startFleetBlockingTurn(t, oldRuntime)
+			threadID, originalTurnID := startFleetBlockingTurn(t, oldRuntime)
 			select {
 			case <-firstRequestStarted:
 			case err := <-providerErrors:
 				t.Fatalf("provider request: %v", err)
 			case <-time.After(5 * time.Second):
 				eventsBody, _ := os.ReadFile(
-					filepath.Join(agentAddress.StateDir(), "sessions", sessionID, "events.jsonl"),
+					filepath.Join(agentAddress.StateDir(), "threads", threadID, "journal.jsonl"),
 				)
 				logBody, _ := os.ReadFile(filepath.Join(agentAddress.StateDir(), "logs", "fleet.log"))
 				t.Fatalf(
@@ -167,7 +179,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 			}
 			waitFleetInterruptedAndContinuationEvents(
 				t,
-				filepath.Join(agentAddress.StateDir(), "sessions", sessionID, "events.jsonl"),
+				filepath.Join(agentAddress.StateDir(), "threads", threadID, "journal.jsonl"),
 				originalTurnID,
 			)
 		})
@@ -389,8 +401,8 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 
 	stdout, stderr, err := runFleetE2E(binary, environment, "", "logs", agentID)
 
-	if exitCode(err) != 3 {
-		t.Fatalf("fleet logs exit = %d, want 3\nstdout:\n%s\nstderr:\n%s", exitCode(err), stdout, stderr)
+	if processExitCode(err) != 3 {
+		t.Fatalf("fleet logs exit = %d, want 3\nstdout:\n%s\nstderr:\n%s", processExitCode(err), stdout, stderr)
 	}
 	for _, want := range []string{
 		"no fleet-owned log is available",
@@ -1048,40 +1060,34 @@ providers:
 func startFleetBlockingTurn(
 	t *testing.T,
 	runtimeState endpoint.Runtime,
-) (sessionID string, turnID string) {
+) (threadID string, turnID string) {
 	t.Helper()
 	target, err := endpoint.Parse(runtimeState.Endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
 	client := target.NewClient()
-	createRequest, err := http.NewRequest(
-		http.MethodPost,
-		target.URL("/api/sessions"),
-		nil,
+	listRequest, err := http.NewRequest(
+		http.MethodGet,
+		target.URL("/api/threads"),
+		http.NoBody,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	createResponse, err := client.Do(createRequest)
+	listResponse, err := client.Do(listRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer createResponse.Body.Close()
-	if createResponse.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(createResponse.Body)
-		t.Fatalf("create session status = %d body=%s", createResponse.StatusCode, body)
-	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(createResponse.Body).Decode(&created); err != nil {
-		t.Fatal(err)
+	defer listResponse.Body.Close()
+	if listResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(listResponse.Body)
+		t.Fatalf("list Threads status = %d body=%s", listResponse.StatusCode, body)
 	}
 
 	turnRequest, err := http.NewRequest(
 		http.MethodPost,
-		target.URL("/api/sessions/"+created.ID+"/turns"),
+		target.URL("/api/threads/0/inputs"),
 		strings.NewReader(`{"prompt":"work until restarted"}`),
 	)
 	if err != nil {
@@ -1103,10 +1109,10 @@ func startFleetBlockingTurn(
 	if err := json.NewDecoder(turnResponse.Body).Decode(&started); err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || started.TurnID == "" {
-		t.Fatalf("created session/turn = %q/%q", created.ID, started.TurnID)
+	if started.TurnID == "" {
+		t.Fatal("Main Thread input response omitted Turn id")
 	}
-	return created.ID, started.TurnID
+	return "0", started.TurnID
 }
 
 func waitFleetInterruptedAndContinuationEvents(

@@ -37,7 +37,7 @@ func TestTurnMultiLevelFallbackUsesRealTransitionsAndFinalServingNotice(t *testi
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	previous := llm.TextMessage(llm.RoleAssistant, "from a")
 	previous.Model = "a:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 	var sequence []string
@@ -56,7 +56,7 @@ func TestTurnMultiLevelFallbackUsesRealTransitionsAndFinalServingNotice(t *testi
 	if got := strings.Join(sequence, ","); got != wantSequence {
 		t.Fatalf("sequence = %q, want %q", got, wantSequence)
 	}
-	history := eng.Session.History
+	history := eng.Thread.History
 	notices := 0
 	for _, message := range history {
 		if message.Kind == llm.MessageKindModelChange {
@@ -121,14 +121,14 @@ func TestTurnRecoversHigherPriorityModelWithPersistedNotice(t *testing.T) {
 	eng.ModelHealth = health
 	previous := llm.TextMessage(llm.RoleAssistant, "backup response")
 	previous.Model = "backup:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := eng.Turn(context.Background(), "try again"); err != nil {
 		t.Fatal(err)
 	}
-	history := eng.Session.History
+	history := eng.Thread.History
 	notice := history[len(history)-2]
 	if notice.Kind != llm.MessageKindModelChange || !strings.Contains(notice.FirstText(), "healthy again") {
 		t.Fatalf("recovery notice = %+v", notice)
@@ -162,7 +162,7 @@ func TestTurnRecoveryDoesNotNotifyModelChangesByDefault(t *testing.T) {
 	eng.ModelHealth = health
 	previous := llm.TextMessage(llm.RoleAssistant, "backup response")
 	previous.Model = "backup:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 
@@ -174,13 +174,13 @@ func TestTurnRecoveryDoesNotNotifyModelChangesByDefault(t *testing.T) {
 			t.Fatalf("provider-visible recovery notice = %+v", message)
 		}
 	}
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindModelChange {
 			t.Fatalf("persisted recovery notice = %+v", message)
 		}
 	}
-	if backup.calls != 0 || eng.Session.History[len(eng.Session.History)-1].Model != "primary:model" {
-		t.Fatalf("backup calls=%d tail=%+v", backup.calls, eng.Session.History[len(eng.Session.History)-1])
+	if backup.calls != 0 || eng.Thread.History[len(eng.Thread.History)-1].Model != "primary:model" {
+		t.Fatalf("backup calls=%d tail=%+v", backup.calls, eng.Thread.History[len(eng.Thread.History)-1])
 	}
 }
 
@@ -206,7 +206,7 @@ func TestTurnFailedRecoveryProbeDoesNotPersistFalseNotice(t *testing.T) {
 	eng.ModelHealth = health
 	previous := llm.TextMessage(llm.RoleAssistant, "backup response")
 	previous.Model = "backup:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 	var fallbackEvent LLMFallbackPayload
@@ -215,7 +215,7 @@ func TestTurnFailedRecoveryProbeDoesNotPersistFalseNotice(t *testing.T) {
 	if _, err := eng.Turn(context.Background(), "continue"); err != nil {
 		t.Fatal(err)
 	}
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindModelChange {
 			t.Fatalf("false recovery notice persisted: %+v", message)
 		}
@@ -243,7 +243,7 @@ func TestTurnFallbackBatchFailureLeavesNoNoticeUsageOrRespondedEvent(t *testing.
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	previous := llm.TextMessage(llm.RoleAssistant, "primary response")
 	previous.Model = "primary:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 	responded := 0
@@ -252,13 +252,13 @@ func TestTurnFallbackBatchFailureLeavesNoNoticeUsageOrRespondedEvent(t *testing.
 	if _, err := eng.Turn(context.Background(), "continue"); err == nil {
 		t.Fatal("Turn err = nil, want batch marshal failure")
 	}
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindModelChange {
 			t.Fatalf("orphan notice = %+v", message)
 		}
 	}
-	if responded != 0 || !eng.Session.TokenUsage.IsZero() {
-		t.Fatalf("responded=%d usage=%+v", responded, eng.Session.TokenUsage)
+	if responded != 0 || !eng.Thread.TokenUsage.IsZero() {
+		t.Fatalf("responded=%d usage=%+v", responded, eng.Thread.TokenUsage)
 	}
 }
 
@@ -296,7 +296,7 @@ func TestSharedModelHealthSkipsOpenPrimaryAcrossEngines(t *testing.T) {
 		{Ref: "backup:model", Provider: backup1, ContextWindow: 128000},
 	}
 	eng1.ModelHealth = health
-	if _, err := eng1.Turn(context.Background(), "first session"); err != nil {
+	if _, err := eng1.Turn(context.Background(), "first thread"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -314,7 +314,7 @@ func TestSharedModelHealthSkipsOpenPrimaryAcrossEngines(t *testing.T) {
 	var got []LLMFallbackPayload
 	bus2.Subscribe("llm.fallback", func(event events.Event) { got = append(got, event.Payload.(LLMFallbackPayload)) })
 
-	if out, err := eng2.Turn(context.Background(), "second session"); err != nil || out != "second fallback" {
+	if out, err := eng2.Turn(context.Background(), "second thread"); err != nil || out != "second fallback" {
 		t.Fatalf("Turn() = %q, %v", out, err)
 	}
 	if primary2.calls != 0 || backup2.calls != 1 {
@@ -349,7 +349,7 @@ func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
 	eng.ModelHealth = health
 	previous := llm.TextMessage(llm.RoleAssistant, "from a")
 	previous.Model = "a:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 	var got []string
@@ -368,7 +368,7 @@ func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
 		t.Fatalf("calls a=%d b=%d c=%d", a.calls, b.calls, c.calls)
 	}
 	var notices []llm.Message
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindModelChange {
 			notices = append(notices, message)
 		}
@@ -477,12 +477,12 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Use the refreshed fallback context now."}},
 	}})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 200))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 200))); err != nil {
 		t.Fatal(err)
 	}
 	previous := llm.TextMessage(llm.RoleAssistant, "primary before failure")
 	previous.Model = "primary:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 
@@ -496,13 +496,13 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 		t.Fatalf("backup compaction options = %+v, want 0.5%% of 2000-token context", backup.opts)
 	}
 	foundCompact := false
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindCompact {
 			foundCompact = true
 		}
 	}
 	if !foundCompact {
-		t.Fatalf("history missing fallback preflight compaction: %+v", eng.Session.History)
+		t.Fatalf("history missing fallback preflight compaction: %+v", eng.Thread.History)
 	}
 	if strings.Contains(messagesText(backup.histories[1]), strings.Repeat("large history ", 20)) {
 		t.Fatal("backup received unbounded pre-compaction history")
@@ -539,7 +539,7 @@ func TestTurnPreflightFailureNeutrallyReleasesHalfOpenCandidate(t *testing.T) {
 		{Ref: "backup:model", Provider: backup, ContextWindow: 120},
 	}
 	eng.ModelHealth = health
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 300))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 300))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -597,12 +597,12 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "fallback"}, Stdout: "one-shot fallback context"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "earlier")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, "earlier")); err != nil {
 		t.Fatal(err)
 	}
 	previous := llm.TextMessage(llm.RoleAssistant, "primary response")
 	previous.Model = "primary:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 	var fallbackEvents []LLMFallbackPayload
@@ -653,7 +653,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 	if ephemeral.Kind != llm.MessageKindModelChange || !strings.Contains(ephemeral.FirstText(), "primary:model") || !strings.Contains(ephemeral.FirstText(), "backup:model") {
 		t.Fatalf("ephemeral notice = %+v", ephemeral)
 	}
-	history := eng.Session.History
+	history := eng.Thread.History
 	if len(history) < 2 {
 		t.Fatalf("history = %+v", history)
 	}
@@ -680,7 +680,7 @@ func TestTurnFallbackDoesNotNotifyModelChangesByDefault(t *testing.T) {
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	previous := llm.TextMessage(llm.RoleAssistant, "primary response")
 	previous.Model = "primary:model"
-	if err := eng.Session.Append(previous); err != nil {
+	if err := eng.Thread.Append(previous); err != nil {
 		t.Fatal(err)
 	}
 	var fallbackEvents []LLMFallbackPayload
@@ -696,7 +696,7 @@ func TestTurnFallbackDoesNotNotifyModelChangesByDefault(t *testing.T) {
 			t.Fatalf("provider-visible fallback notice = %+v", message)
 		}
 	}
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindModelChange {
 			t.Fatalf("persisted fallback notice = %+v", message)
 		}
@@ -704,8 +704,8 @@ func TestTurnFallbackDoesNotNotifyModelChangesByDefault(t *testing.T) {
 	if len(fallbackEvents) != 1 || fallbackEvents[0].From != "primary:model" || fallbackEvents[0].To != "backup:model" {
 		t.Fatalf("fallback events = %+v", fallbackEvents)
 	}
-	if eng.Session.History[len(eng.Session.History)-1].Model != "backup:model" {
-		t.Fatalf("serving model attribution = %+v", eng.Session.History[len(eng.Session.History)-1])
+	if eng.Thread.History[len(eng.Thread.History)-1].Model != "backup:model" {
+		t.Fatalf("serving model attribution = %+v", eng.Thread.History[len(eng.Thread.History)-1])
 	}
 }
 
@@ -743,9 +743,9 @@ func TestTurnFallsBackAfterStreamedDelta(t *testing.T) {
 	if !slices.Equal(modelEvents, wantEvents) {
 		t.Fatalf("model events = %v, want %v", modelEvents, wantEvents)
 	}
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if strings.Contains(message.FirstText(), "partial") {
-			t.Fatalf("abandoned provisional output persisted: %+v", eng.Session.History)
+			t.Fatalf("abandoned provisional output persisted: %+v", eng.Thread.History)
 		}
 	}
 }
@@ -762,7 +762,7 @@ func TestTurnDoesNotFallbackWhenErrorOutcomeCannotCommit(t *testing.T) {
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	want := errors.New("outcome sync failed")
-	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "llm.errored", err: want})
+	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: "llm.errored", err: want})
 
 	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
 		t.Fatalf("Turn() error = %v, want %v", err, want)
@@ -815,9 +815,9 @@ func TestTurnFallbackAfterStreamedDeltaExecutesRecoveredToolOnce(t *testing.T) {
 		t.Fatalf("calls primary=%d backup=%d tool=%d, want 1, 2, 1", primary.calls, backup.calls, toolCalls)
 	}
 	toolUses, toolResults := 0, 0
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if strings.Contains(message.FirstText(), "partial") {
-			t.Fatalf("abandoned provisional output persisted: %+v", eng.Session.History)
+			t.Fatalf("abandoned provisional output persisted: %+v", eng.Thread.History)
 		}
 		for _, block := range message.Blocks {
 			switch block.Type {

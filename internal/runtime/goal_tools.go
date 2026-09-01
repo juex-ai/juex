@@ -17,7 +17,7 @@ const (
 	GoalToolGet    = "get_goal"
 	GoalToolCreate = "create_goal"
 	GoalToolUpdate = "update_goal"
-	goalGuide      = `Guide available via skill_load("juex-session-state").`
+	goalGuide      = `Guide available via skill_load("juex-thread-state").`
 )
 
 const GoalModuleID runtimemodule.ID = "goal"
@@ -72,7 +72,7 @@ func (m *GoalModule) Context(_ context.Context, request runtimemodule.ContextReq
 		return nil, nil
 	}
 	return []runtimemodule.ContextSection{{
-		Key:        "session_goal",
+		Key:        "thread_goal",
 		Source:     "runtime",
 		Text:       text,
 		Projection: runtimemodule.ContextProjectionRuntimeMessage,
@@ -187,8 +187,8 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{
 		{
 			Name:        GoalToolGet,
-			Group:       tools.ToolGroupSessionState,
-			Description: "Read the current session goal before changing it. " + goalGuide,
+			Group:       tools.ToolGroupThreadState,
+			Description: "Read the current thread goal before changing it. " + goalGuide,
 			Schema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -196,8 +196,8 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:        GoalToolCreate,
-			Group:       tools.ToolGroupSessionState,
-			Description: "Create or replace this session's in-progress goal contract. " + goalGuide,
+			Group:       tools.ToolGroupThreadState,
+			Description: "Create or replace this thread's in-progress goal contract. " + goalGuide,
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -210,7 +210,7 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:        GoalToolUpdate,
-			Group:       tools.ToolGroupSessionState,
+			Group:       tools.ToolGroupThreadState,
 			Description: "Update goal fields or status (in_progress, wait_for_user, success, or failure). Use wait_for_user only when progress requires new external input; success requires acceptance. " + goalGuide,
 			Schema: map[string]any{
 				"type": "object",

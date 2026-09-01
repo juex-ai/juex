@@ -22,7 +22,7 @@ type BuiltinOptions struct {
 	Providers          []BuiltinProvider
 	ChunkedWrites      *ChunkedWriteManager
 	AgentStateDir      string
-	ArtifactDir        string
+	MediaDir           string
 }
 
 type ShellProfile struct {
@@ -59,7 +59,7 @@ type BuiltinProviderContext struct {
 	Options            BuiltinOptions
 	ChunkedWrites      *ChunkedWriteManager
 	AgentStateDir      string
-	ArtifactDir        string
+	MediaDir           string
 	FilePolicy         sandbox.FilePolicy
 }
 
@@ -140,7 +140,7 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		Policy:        opts.Sandbox,
 		WorkDir:       workDir,
 		AgentStateDir: opts.AgentStateDir,
-		ReadOnlyPaths: []string{opts.ArtifactDir},
+		ReadOnlyPaths: []string{opts.MediaDir},
 	})
 	return BuiltinProviderContext{
 		WorkDir:            workDir,
@@ -154,7 +154,7 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		Options:            opts,
 		ChunkedWrites:      opts.ChunkedWrites,
 		AgentStateDir:      opts.AgentStateDir,
-		ArtifactDir:        opts.ArtifactDir,
+		MediaDir:           opts.MediaDir,
 		FilePolicy:         filePolicy,
 	}
 }

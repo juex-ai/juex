@@ -130,7 +130,7 @@ test("formatToolProcessResult leaves image-only tool result media to the rendere
     formatToolProcessResult({
       content: "",
       media: {
-		artifact_path: "sessions/s/media/image.png",
+		artifact_path: "threads/s/media/image.png",
         media_type: "image/png",
         sha256: "abc",
         original_bytes: 12,
@@ -147,7 +147,7 @@ test("formatToolProcessResult keeps text separate from tool result media", () =>
     formatToolProcessResult({
       content: "chart rendered",
       media: {
-		artifact_path: "sessions/s/media/chart.png",
+		artifact_path: "threads/s/media/chart.png",
         media_type: "image/png",
       },
     }),

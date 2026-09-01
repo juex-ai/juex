@@ -40,20 +40,15 @@ type TurnAdmissionErrorInfo struct {
 	Retryable  bool
 }
 
-type TurnAdmissionSessionChange struct {
-	OldID string
-	NewID string
-}
-
 type TurnAdmissionResult struct {
 	Kind             TurnAdmissionKind
+	InputID          string
 	TurnID           string
 	Start            *AdmittedTurn
 	Queued           bool
 	PendingCount     int
 	MaxPendingInputs int
 	Command          *SlashCommandResult
-	SessionChanged   *TurnAdmissionSessionChange
 	Warnings         []TurnWarning
 	Error            TurnAdmissionErrorInfo
 	Err              error
@@ -76,10 +71,10 @@ type turnAdmission struct {
 
 func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmissionResult {
 	if a == nil || a.Engine == nil {
-		return errorResult(fmt.Errorf("turn admission: app, engine, or session is not initialized"), nil)
+		return errorResult(fmt.Errorf("turn admission: app, engine, or Thread is not initialized"), nil)
 	}
-	if _, ok := a.SessionIdentity(); !ok {
-		return errorResult(fmt.Errorf("turn admission: app, engine, or session is not initialized"), nil)
+	if _, ok := a.ThreadIdentity(); !ok {
+		return errorResult(fmt.Errorf("turn admission: app, engine, or Thread is not initialized"), nil)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -175,46 +170,20 @@ func userTurnMessageWithKind(prompt string, attachments []llm.MediaRef, kind str
 
 func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand) TurnAdmissionResult {
 	if !a.beginExclusiveCommand() {
-		return conflictResult("session busy", errTurnAdmissionBusy, runtime.PendingInputStatus{})
+		return conflictResult("Thread busy", errTurnAdmissionBusy, runtime.PendingInputStatus{})
 	}
-	oldIdentity, ok := a.SessionIdentity()
-	if !ok {
-		a.finishExclusiveCommand()
-		return errorResult(ErrSessionUnavailable, nil)
-	}
-	oldID := oldIdentity.ID
+	defer a.finishExclusiveCommand()
 	result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
 	if err != nil {
-		a.finishExclusiveCommand()
 		return errorResult(err, nil)
 	}
-
-	admission := a.admitNewSlashGreeting(ctx, result, oldID)
-	a.finishExclusiveCommand()
-	return admission
-}
-
-func (a *App) admitNewSlashGreeting(ctx context.Context, result SlashCommandResult, oldID string) TurnAdmissionResult {
-	var change *TurnAdmissionSessionChange
-	if current, ok := a.SessionIdentity(); ok && current.ID != oldID {
-		change = &TurnAdmissionSessionChange{OldID: oldID, NewID: current.ID}
-	}
-	admission := admissionResultFromPendingInput(a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{Message: NewSessionGreetingMessage()}))
-	if admission.Kind != TurnAdmissionStarted || admission.Start == nil {
-		admission.SessionChanged = change
-		return admission
-	}
-	start := admission.Start
-
-	admitted := commandResult(result, start)
-	admitted.SessionChanged = change
-	return admitted
+	return commandResult(result, nil)
 }
 
 func (a *App) admitCompactSlash(ctx context.Context, cmd SlashCommand) TurnAdmissionResult {
 	compactTurnID, err := a.beginCompactAdmission()
 	if err != nil {
-		return conflictResult("session busy", err, runtime.PendingInputStatus{})
+		return conflictResult("Thread busy", err, runtime.PendingInputStatus{})
 	}
 	result, err := a.executeCompactSlashCommand(ctx, cmd, compactTurnID)
 	start, promotionErr := a.finishCompactAdmission(compactTurnID)
@@ -240,10 +209,10 @@ func (a *App) finishExclusiveCommand() {
 	a.admissionQueue().finishExclusiveCommand()
 }
 
-func queuedResult(status runtime.PendingInputStatus) TurnAdmissionResult {
+func queuedResult(inputID string, status runtime.PendingInputStatus) TurnAdmissionResult {
 	return TurnAdmissionResult{
 		Kind:             TurnAdmissionQueued,
-		TurnID:           status.TurnID,
+		InputID:          inputID,
 		Queued:           true,
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,

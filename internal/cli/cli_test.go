@@ -12,14 +12,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/providerreadiness"
@@ -115,74 +112,6 @@ func TestVersionCmd_VerboseForm(t *testing.T) {
 	}
 }
 
-func TestRunCmd_RequiresPrompt(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"run"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error when prompt missing")
-	}
-	if _, ok := err.(*usageError); !ok {
-		t.Fatalf("expected *usageError, got %T: %v", err, err)
-	}
-}
-
-func TestRunCmd_HelpIncludesRepeatableAttachFlag(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"run", "--help"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "--attach") {
-		t.Fatalf("run help missing --attach:\n%s", out.String())
-	}
-}
-
-func TestWriteTurnWarningsIsBestEffort(t *testing.T) {
-	w := &warningFailingWriter{}
-	writeTurnWarnings(w, []app.TurnWarning{
-		{Message: "cannot view image", Suggestion: "use a vision model"},
-		{Message: "second warning", Suggestion: "second suggestion"},
-	})
-	if w.calls != 1 {
-		t.Fatalf("warning write calls = %d, want 1", w.calls)
-	}
-}
-
-func TestEmitRunErrorJSONClassifiesTimeout(t *testing.T) {
-	var stderr bytes.Buffer
-	err := emitRunError(true, &stderr, context.DeadlineExceeded, nil, "/tmp/work")
-	if err == nil {
-		t.Fatal("expected emitted error")
-	}
-
-	var body errorJSON
-	if unmarshalErr := json.Unmarshal(stderr.Bytes(), &body); unmarshalErr != nil {
-		t.Fatalf("unmarshal stderr %q: %v", stderr.String(), unmarshalErr)
-	}
-	if body.Error != "timeout" {
-		t.Fatalf("error = %q, want timeout", body.Error)
-	}
-	if !body.Retryable {
-		t.Fatal("timeout should remain retryable")
-	}
-	if !strings.Contains(body.Message, "timed out") {
-		t.Fatalf("message = %q, want timed out", body.Message)
-	}
-	if strings.Contains(body.Message, "context deadline exceeded") {
-		t.Fatalf("message = %q, should not expose context deadline", body.Message)
-	}
-	if body.WorkDir != "/tmp/work" {
-		t.Fatalf("work_dir = %q, want /tmp/work", body.WorkDir)
-	}
-}
-
 func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
@@ -200,9 +129,8 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 		"About this CLI",
 		"Create a user or workspace juex.yaml config (user by default)",
 		"listen",
-		"run",
-		"repl",
-		"sessions",
+		"send",
+		"threads",
 		"bundle",
 		"version",
 	} {
@@ -238,9 +166,8 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 		"help":       "cli",
 		"init":       "workspace",
 		"listen":     "workspace",
-		"repl":       "workspace",
-		"run":        "workspace",
-		"sessions":   "workspace",
+		"send":       "workspace",
+		"threads":    "workspace",
 		"version":    "cli",
 	}
 	commands := root.Commands()
@@ -279,31 +206,6 @@ func TestUnknownSubcommandIsError(t *testing.T) {
 	root.SetArgs([]string{"totally-bogus"})
 	if err := root.Execute(); err == nil {
 		t.Fatal("expected error for unknown command")
-	}
-}
-
-func TestRemovedSessionSelectorFlagsAreUnknown(t *testing.T) {
-	removedNames := []string{"re" + "sume", "ses" + "sion"}
-	for _, commandName := range []string{"run", "repl"} {
-		command, _, err := newRootCmd().Find([]string{commandName})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if command.Flags().Lookup("alias") == nil {
-			t.Fatalf("%s command lost --alias", commandName)
-		}
-		for _, name := range removedNames {
-			if command.Flags().Lookup(name) != nil {
-				t.Errorf("%s command still exposes removed flag --%s", commandName, name)
-			}
-
-			root := newRootCmd()
-			root.SetArgs([]string{commandName, "--" + name, "value", "prompt"})
-			err := root.Execute()
-			if err == nil || !strings.Contains(err.Error(), "unknown flag: --"+name) {
-				t.Errorf("%s --%s error = %v, want Cobra unknown flag", commandName, name, err)
-			}
-		}
 	}
 }
 
@@ -541,7 +443,7 @@ func TestDoctorAgentCheckExplainsStatefulRebind(t *testing.T) {
 	if !strings.Contains(check.Message, resolution.Agent.ID) {
 		t.Fatalf("message = %q, want agent id %q", check.Message, resolution.Agent.ID)
 	}
-	const want = "run juex run, repl, or listen once to automatically rebind the workspace agent"
+	const want = "run juex send or listen once to automatically rebind the workspace agent"
 	if check.Suggestion != want {
 		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
 	}
@@ -643,19 +545,6 @@ func TestLoadConfig_ModelsFlagRejectsMalformedOrDuplicateRefsAsUsageError(t *tes
 	}
 }
 
-func TestRunCmd_ModelsFlagRejectsEmptyValue(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"--models", "", "run", "--dry-run", "--json", "hello"})
-	err := root.Execute()
-	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--models:") {
-		t.Fatalf("err = %T %v, want usage error for empty --models", err, err)
-	}
-}
-
 func TestRoot_LogLevelRejectsInvalidValue(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
@@ -740,449 +629,24 @@ func TestLoadRuntimeConfigForCommandActivatesAndRestoresEnvironment(t *testing.T
 	})
 
 	root := newRootCmd()
-	runCmd, _, err := root.Find([]string{"run"})
+	sendCmd, _, err := root.Find([]string{"send"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, lifecycle, err := loadRuntimeConfigForCommand(runCmd, &persistentFlags{cwd: work}, false)
+	_, lifecycle, err := loadRuntimeConfigForCommand(sendCmd, &persistentFlags{cwd: work})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := os.Getenv("JUEX_RUNTIME_ACTIVATION_TEST"); got != "configured" {
 		t.Fatalf("activated environment = %q", got)
 	}
-	if err := lifecycle.finish(runCmd, nil); err != nil {
+	if err := lifecycle.finish(sendCmd, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := os.LookupEnv("JUEX_RUNTIME_ACTIVATION_TEST"); ok {
 		t.Fatal("runtime environment was not restored")
 	}
 }
-func TestRunCmd_EnableUserAgentsResourcesBareFlagMeansTrue(t *testing.T) {
-	home := setHomeForCLITest(t)
-	work := t.TempDir()
-	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	if err := writeJuexConfigFile(configPath, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendTextFile(configPath, "enable_user_agents_resources: false\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeTextFile(filepath.Join(home, ".agents", "skills", "global", "SKILL.md"), `---
-name: global
-description: global skill
----
-body`); err != nil {
-		t.Fatal(err)
-	}
-
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"-C", work, "--enable-user-agents-resources", "run", "--dry-run", "--json", "hello"})
-	err := root.Execute()
-	if _, ok := err.(*dryRunOK); !ok {
-		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
-	}
-	body := out.String()
-	if !strings.Contains(body, `"skill_count": 4`) || !strings.Contains(body, `"name": "global"`) ||
-		!strings.Contains(body, `"name": "juex-observables"`) {
-		t.Fatalf("dry-run should include user-global skill after bare enable flag:\n%s", body)
-	}
-}
-
-func TestRunCmd_DryRunModelsFlagOverridesCompleteChain(t *testing.T) {
-	setHomeForCLITest(t)
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	body := `models: [openai:gpt-default]
-providers:
-  - id: openai
-    base_url: https://openai.example
-    api_key: sk-openai
-    models:
-      - id: gpt-default
-  - id: anthropic
-    base_url: https://anthropic.example
-    api_key: sk-anthropic
-    models:
-      - id: claude-sonnet
-`
-	if err := writeTextFile(configFile, body); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "--models", "anthropic:claude-sonnet,openai:gpt-default", "run", "--dry-run", "--json", "hello"})
-	err := root.Execute()
-	if _, ok := err.(*dryRunOK); !ok {
-		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
-	}
-	var plan dryRunPlan
-	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
-		t.Fatal(err)
-	}
-	if plan.ProviderID != "anthropic" || plan.Model != "claude-sonnet" || plan.BaseURL != "https://anthropic.example" {
-		t.Fatalf("plan = %+v", plan)
-	}
-}
-
-func TestRunCmd_DryRunReturnsDryRunOK(t *testing.T) {
-	// run --dry-run requires no API key; should produce a *dryRunOK so
-	// Execute() picks exit code 10.
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "hello"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected *dryRunOK")
-	}
-	if _, ok := err.(*dryRunOK); !ok {
-		t.Fatalf("got %T: %v", err, err)
-	}
-	body := out.String()
-	for _, want := range []string{`"provider_id": "openai"`, `"protocol": "openai/responses"`, `"prompt": "hello"`, `"tools":`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("plan missing %q in:\n%s", want, body)
-		}
-	}
-}
-
-func TestRunCmdDryRunNeverEmitsConfiguredEnvironmentValues(t *testing.T) {
-	const secret = "dry-run-environment-secret"
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	path := filepath.Join(work, ".juex", "juex.yaml")
-	if err := writeJuexConfigFile(path, "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendTextFile(path, "environment:\n  variables:\n    DRY_RUN_SECRET: "+secret+"\n"); err != nil {
-		t.Fatal(err)
-	}
-	root := newRootCmd()
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"-C", work, "run", "--dry-run", "--json", secret})
-	err := root.Execute()
-	var dry *dryRunOK
-	if !errors.As(err, &dry) {
-		t.Fatalf("execute = %T %v\nstdout=%s\nstderr=%s", err, err, stdout.String(), stderr.String())
-	}
-	combined := stdout.String() + stderr.String()
-	if strings.Contains(combined, secret) {
-		t.Fatalf("dry-run leaked configured environment value:\n%s", combined)
-	}
-	if !strings.Contains(stdout.String(), "[REDACTED_ENV]") {
-		t.Fatalf("dry-run did not mark redacted value:\n%s", stdout.String())
-	}
-}
-
-func TestRunCmd_DryRunValidatesImageOnlyAttachmentsWithoutStoring(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "juex.yaml")
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	writeCLITestPNG(t, filepath.Join(dir, "screen.png"))
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--attach", "screen.png", "--attach", "screen.png"})
-	err := root.Execute()
-	if _, ok := err.(*dryRunOK); !ok {
-		t.Fatalf("expected *dryRunOK, got %T: %v\n%s", err, err, out.String())
-	}
-	var plan dryRunPlan
-	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
-		t.Fatal(err)
-	}
-	if plan.Prompt != "" || plan.AttachmentCount != 2 || len(plan.Attachments) != 2 {
-		t.Fatalf("attachment plan = %+v", plan)
-	}
-	if len(plan.Warnings) != 1 || plan.Warnings[0].Code != "attachment_vision_unavailable" {
-		t.Fatalf("attachment warnings = %+v", plan.Warnings)
-	}
-	attachment := plan.Attachments[0]
-	if attachment.MediaType != "image/png" || attachment.Bytes != 68 || attachment.Width != 1 || attachment.Height != 1 {
-		t.Fatalf("attachment metadata = %+v", attachment)
-	}
-}
-
-func TestRunCmd_DryRunVisionCapabilitySuppressesAttachmentWarning(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "juex.yaml")
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendTextFile(configFile, "        capabilities:\n          vision: true\n"); err != nil {
-		t.Fatal(err)
-	}
-	writeCLITestPNG(t, filepath.Join(dir, "screen.png"))
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--attach", "screen.png"})
-	err := root.Execute()
-	if _, ok := err.(*dryRunOK); !ok {
-		t.Fatalf("expected *dryRunOK, got %T: %v\n%s", err, err, out.String())
-	}
-	var plan dryRunPlan
-	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Warnings) != 0 {
-		t.Fatalf("attachment warnings = %+v, want none", plan.Warnings)
-	}
-}
-
-func TestRunCmd_DryRunInvalidAttachmentReturnsUsageError(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "juex.yaml")
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not an image"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--attach", "notes.txt"})
-	err := root.Execute()
-	var emitted *emittedError
-	if !errors.As(err, &emitted) {
-		t.Fatalf("expected emitted error, got %T: %v", err, err)
-	}
-	var usage *usageError
-	if !errors.As(err, &usage) {
-		t.Fatalf("expected usageError, got %T: %v", err, err)
-	}
-	if !strings.Contains(out.String(), `"error": "usage_error"`) || !strings.Contains(out.String(), "unsupported image type") {
-		t.Fatalf("error output = %s", out.String())
-	}
-}
-
-func TestRunCmd_DryRunAttachmentMissingReturnsNotFound(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "juex.yaml")
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--attach", "missing.png"})
-	err := root.Execute()
-	var emitted *emittedError
-	if !errors.As(err, &emitted) {
-		t.Fatalf("expected emitted error, got %T: %v", err, err)
-	}
-	var notFound *notFoundError
-	if !errors.As(err, &notFound) {
-		t.Fatalf("expected notFoundError, got %T: %v", err, err)
-	}
-	if !strings.Contains(out.String(), `"error": "not_found"`) || !strings.Contains(out.String(), "missing.png") {
-		t.Fatalf("error output = %s", out.String())
-	}
-}
-
-func TestRunCmd_InvalidAttachmentDoesNotCreateSession(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "juex.yaml")
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not an image"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--new", "--json", "--attach", "notes.txt"})
-	err := root.Execute()
-	var usage *usageError
-	if !errors.As(err, &usage) {
-		t.Fatalf("expected usageError, got %T: %v", err, err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".juex", "sessions")); !os.IsNotExist(err) {
-		t.Fatalf("invalid attachment created a session: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".juex", "history.json")); !os.IsNotExist(err) {
-		t.Fatalf("invalid attachment created session history: %v", err)
-	}
-}
-
-func TestRunCmd_AttachedSlashDoesNotCreateSessionOrArtifact(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "juex.yaml")
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	writeCLITestPNG(t, filepath.Join(dir, "screen.png"))
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--new", "--json", "--attach", "screen.png", "/status"})
-	err := root.Execute()
-	var usage *usageError
-	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "slash commands cannot include attachments") {
-		t.Fatalf("attached slash error = %T: %v", err, err)
-	}
-	for _, path := range []string{
-		filepath.Join(dir, ".juex", "sessions"),
-		filepath.Join(dir, ".juex", "history.json"),
-	} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("attached slash created %s: %v", path, err)
-		}
-	}
-}
-
-func TestRunCmd_DryRunJSONShape(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
-	err := root.Execute()
-	if _, ok := err.(*dryRunOK); !ok {
-		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
-	}
-	body := out.String()
-	// In --json mode the "DRY RUN — would execute:" header is suppressed.
-	if strings.Contains(body, "DRY RUN") {
-		t.Fatalf("--json should not include human header: %s", body)
-	}
-	if !strings.HasPrefix(strings.TrimSpace(body), "{") {
-		t.Fatalf("expected JSON, got:\n%s", body)
-	}
-	var plan dryRunPlan
-	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
-		t.Fatal(err)
-	}
-	if plan.Shell.Profile == "" || plan.Shell.Family == "" || plan.Shell.Binary == "" {
-		t.Fatalf("shell profile missing from dry-run plan: %+v", plan.Shell)
-	}
-	haveExecCommand := false
-	haveWriteStdin := false
-	haveSkillLoad := false
-	haveSkillSearch := false
-	for _, name := range plan.Tools {
-		if name == "exec_command" {
-			haveExecCommand = true
-		}
-		if name == "write_stdin" {
-			haveWriteStdin = true
-		}
-		if name == "skill_load" {
-			haveSkillLoad = true
-		}
-		if name == "skill_search" {
-			haveSkillSearch = true
-		}
-		if name == "bash" {
-			t.Fatalf("dry-run tools should not include bash: %+v", plan.Tools)
-		}
-	}
-	if !haveExecCommand || !haveWriteStdin {
-		t.Fatalf("dry-run tools missing exec_command/write_stdin: %+v", plan.Tools)
-	}
-	if !haveSkillLoad || !haveSkillSearch {
-		t.Fatalf("dry-run tools missing skill_load/skill_search: %+v", plan.Tools)
-	}
-	if plan.Resources == "" || !strings.Contains(plan.Resources, "resources:") {
-		t.Fatalf("dry-run resources missing: %+v", plan.Resources)
-	}
-	if len(plan.Sections) == 0 {
-		t.Fatalf("dry-run sections missing")
-	}
-}
-
-func TestRunCmd_DryRunRejectsUnknownRuntimeKey(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendTextFile(configFile, "runtime:\n  max_iters: 3\n  max_duration: 10s\n"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
-	err := root.Execute()
-	var emitted *emittedError
-	if !errors.As(err, &emitted) {
-		t.Fatalf("expected emitted error, got %T: %v", err, err)
-	}
-	if !strings.Contains(out.String(), "runtime.max_iters") {
-		t.Fatalf("error output = %s, want runtime.max_iters", out.String())
-	}
-}
-
-func TestRunCmd_HelpOmitsRuntimeBudgetFlags(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"run", "--help"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	body := out.String()
-	for _, removed := range []string{"--max-iters", "--max-duration"} {
-		if strings.Contains(body, removed) {
-			t.Fatalf("run help still contains %s:\n%s", removed, body)
-		}
-	}
-}
-
-func TestRunCmd_DryRunLoadsDefaultJuexYAML(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configPath := dir + "/.juex/juex.yaml"
-	if err := writeJuexConfigFile(configPath, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "run", "--dry-run", "--json", "hello"})
-	err := root.Execute()
-	if _, ok := err.(*dryRunOK); !ok {
-		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
-	}
-	body := out.String()
-	if !strings.Contains(body, `"provider_id": "openai"`) || !strings.Contains(body, `"protocol": "openai/responses"`) || strings.Contains(body, `"config_file"`) {
-		t.Fatalf("unexpected dry-run body:\n%s", body)
-	}
-}
-
 func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 	setHomeForCLITest(t)
 	root := newRootCmd()
@@ -1222,7 +686,7 @@ func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 	if cfg.ProviderID != "openai" || cfg.Model != "gpt-4.1" || cfg.APIKey != "sk-test" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
-	if !strings.Contains(out.String(), `juex run "say hello"`) {
+	if !strings.Contains(out.String(), `juex send --wait "say hello"`) {
 		t.Fatalf("quickstart missing from output:\n%s", out.String())
 	}
 }
@@ -1980,193 +1444,6 @@ func TestDoctorCmd_JSONOfflineEmptyConfigFailsWithInitSuggestion(t *testing.T) {
 	}
 }
 
-func TestRunCmd_EmptyConfigSuggestsInit(t *testing.T) {
-	setHomeForCLITest(t)
-	root := newRootCmd()
-	var out bytes.Buffer
-	work := t.TempDir()
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"-C", work, "run", "--dry-run", "hello"})
-	err := root.Execute()
-	var usageErr *usageError
-	if !errors.As(err, &usageErr) {
-		t.Fatalf("err = %T %v, want usageError", err, err)
-	}
-	if !strings.Contains(err.Error(), "juex init") {
-		t.Fatalf("error should suggest init, got %q", err.Error())
-	}
-}
-
-func TestRunCmd_StatusSlashJSON(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&stderr)
-	dir := t.TempDir()
-	configPath := dir + "/.juex/juex.yaml"
-	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "run", "--json", "/status"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute err = %v stderr=%s", err, stderr.String())
-	}
-	body := out.String()
-	for _, want := range []string{`"text": "`, `observables: 0/0 running, 0 errors`, `"token_total": 0`, `"session_id":`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("status json missing %q in:\n%s", want, body)
-		}
-	}
-	if strings.Contains(body, "Juex status") {
-		t.Fatalf("status json should not include heading:\n%s", body)
-	}
-}
-
-func TestRunCmd_StatusSlashJSONIncludesActivePrimary(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&stderr)
-	dir := t.TempDir()
-	configPath := dir + "/.juex/juex.yaml"
-	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-
-	root.SetArgs([]string{"-C", dir, "run", "--json", "/status"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute err = %v stderr=%s", err, stderr.String())
-	}
-	body := out.String()
-	for _, want := range []string{`"session_kind": "primary"`, `"active": true`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("status json missing %q in:\n%s", want, body)
-		}
-	}
-}
-
-func TestRunCmd_SideStatusDoesNotChangeActive(t *testing.T) {
-	dir := t.TempDir()
-	configPath := dir + "/.juex/juex.yaml"
-	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-
-	root := newRootCmd()
-	var primaryOut bytes.Buffer
-	root.SetOut(&primaryOut)
-	root.SetErr(&primaryOut)
-	root.SetArgs([]string{"-C", dir, "run", "--json", "/status"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-
-	root2 := newRootCmd()
-	var sideOut bytes.Buffer
-	root2.SetOut(&sideOut)
-	root2.SetErr(&sideOut)
-	root2.SetArgs([]string{"-C", dir, "run", "--json", "--side", "/status"})
-	if err := root2.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	body := sideOut.String()
-	for _, want := range []string{`"session_kind": "side"`, `"active": false`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("side status json missing %q in:\n%s", want, body)
-		}
-	}
-
-	root3 := newRootCmd()
-	var resumedOut bytes.Buffer
-	root3.SetOut(&resumedOut)
-	root3.SetErr(&resumedOut)
-	root3.SetArgs([]string{"-C", dir, "run", "--json", "/status"})
-	if err := root3.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(resumedOut.String(), `"active": true`) ||
-		!strings.Contains(resumedOut.String(), `"session_kind": "primary"`) {
-		t.Fatalf("default run should still attach active primary:\n%s", resumedOut.String())
-	}
-}
-
-func TestRunCmd_NewAndSideAreMutuallyExclusive(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--new", "--side", "x"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if _, ok := err.(*usageError); !ok {
-		t.Fatalf("got %T", err)
-	}
-}
-
-func TestRunCmd_MissingConfigFileExits3(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"--config", "/no/such/file", "run", "x"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if _, ok := err.(*notFoundError); !ok {
-		t.Fatalf("expected *notFoundError, got %T: %v", err, err)
-	}
-}
-
-func TestRunCmd_MissingCwdExits3(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"--cwd", "/no/such/dir/__juex__", "run", "x"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if _, ok := err.(*notFoundError); !ok {
-		t.Fatalf("expected *notFoundError, got %T: %v", err, err)
-	}
-}
-
-func TestRunCmd_JSONErrorShape(t *testing.T) {
-	root := newRootCmd()
-	var stderr bytes.Buffer
-	var stdout bytes.Buffer
-	root.SetOut(&stdout)
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"--config", "/no/such/file", "run", "--json", "x"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	body := stderr.String()
-	for _, want := range []string{
-		`"error": "not_found"`,
-		`"message":`,
-		`"suggestion":`,
-		`"retryable": false`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("json error missing %q in:\n%s", want, body)
-		}
-	}
-}
-
 func TestExitCodes_DistinctTypes(t *testing.T) {
 	// Quick sanity that each error type maps to its dedicated exit code via
 	// the type switch in Execute(). We can't call Execute() directly because
@@ -2192,97 +1469,6 @@ func TestExitCodes_DistinctTypes(t *testing.T) {
 	}
 }
 
-func TestEmitRunError_CancelledJSON(t *testing.T) {
-	var stderr bytes.Buffer
-	err := emitRunError(true, &stderr, context.Canceled, nil, "/work")
-	if err == nil {
-		t.Fatal("expected emitted error")
-	}
-	var body errorJSON
-	if jsonErr := json.Unmarshal(stderr.Bytes(), &body); jsonErr != nil {
-		t.Fatalf("stderr is not error JSON: %v\n%s", jsonErr, stderr.String())
-	}
-	if body.Error != "cancelled" {
-		t.Fatalf("error = %q, want cancelled", body.Error)
-	}
-	if body.Message != "cancelled by user" {
-		t.Fatalf("message = %q, want cancelled by user", body.Message)
-	}
-	if body.Retryable {
-		t.Fatalf("retryable = true, want false")
-	}
-	if body.WorkDir != "/work" {
-		t.Fatalf("work_dir = %q, want /work", body.WorkDir)
-	}
-}
-
-func TestEmitRunError_SignalJSON(t *testing.T) {
-	tests := []struct {
-		name          string
-		err           error
-		wantError     string
-		wantMessage   string
-		wantSignal    string
-		wantSignalNum float64
-	}{
-		{
-			name:          "sigterm",
-			err:           cancellation.NewSignalError(syscall.SIGTERM),
-			wantError:     "terminated",
-			wantMessage:   "run terminated by signal SIGTERM (15)",
-			wantSignal:    "SIGTERM",
-			wantSignalNum: 15,
-		},
-		{
-			name:          "sigint",
-			err:           cancellation.NewSignalError(syscall.SIGINT),
-			wantError:     "interrupted",
-			wantMessage:   "run interrupted by signal SIGINT (2)",
-			wantSignal:    "SIGINT",
-			wantSignalNum: 2,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var stderr bytes.Buffer
-			err := emitRunError(true, &stderr, tt.err, nil, "/work")
-			if err == nil {
-				t.Fatal("expected emitted error")
-			}
-			var body errorJSON
-			if jsonErr := json.Unmarshal(stderr.Bytes(), &body); jsonErr != nil {
-				t.Fatalf("stderr is not error JSON: %v\n%s", jsonErr, stderr.String())
-			}
-			if body.Error != tt.wantError {
-				t.Fatalf("error = %q, want %q; stderr=%s", body.Error, tt.wantError, stderr.String())
-			}
-			if body.Message != tt.wantMessage {
-				t.Fatalf("message = %q, want %q", body.Message, tt.wantMessage)
-			}
-			if strings.Contains(body.Message, "by user") {
-				t.Fatalf("message should not blame user: %q", body.Message)
-			}
-			if body.Suggestion != externalStopSuggestion {
-				t.Fatalf("suggestion = %q, want external stop suggestion", body.Suggestion)
-			}
-			if body.Retryable {
-				t.Fatal("retryable = true, want false")
-			}
-			if body.Details["signal"] != tt.wantSignal {
-				t.Fatalf("details.signal = %#v, want %s", body.Details["signal"], tt.wantSignal)
-			}
-			if body.Details["signal_number"] != tt.wantSignalNum {
-				t.Fatalf("details.signal_number = %#v, want %v", body.Details["signal_number"], tt.wantSignalNum)
-			}
-			if body.Details["interrupted"] != true {
-				t.Fatalf("details.interrupted = %#v, want true", body.Details["interrupted"])
-			}
-		})
-	}
-}
-
-// strErr is a tiny error type used only by TestExitCodes_DistinctTypes
-// to represent an unknown error variant.
 type strErr struct{ s string }
 
 func (e *strErr) Error() string { return e.s }

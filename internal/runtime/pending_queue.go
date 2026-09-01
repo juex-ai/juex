@@ -1,25 +1,18 @@
 package runtime
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
-const (
-	pendingInputFile          = "pending_input.jsonl"
-	pendingInputSummaryLength = 200
-)
+const pendingInputSummaryLength = 200
 
 type PendingInputState string
 
@@ -45,7 +38,8 @@ type PendingInputOptions struct {
 }
 
 type PendingInputQueueOptions struct {
-	Now func() time.Time
+	Now    func() time.Time
+	Thread *thread.Thread
 }
 
 // PendingInputRecoveryFacts are durable facts that can close a journal update
@@ -55,10 +49,6 @@ type PendingInputQueueOptions struct {
 type PendingInputRecoveryFacts struct {
 	AdmittedMessageIDs   map[string]struct{}
 	TranscriptMessageIDs map[string]struct{}
-}
-
-type pendingInputFileOps struct {
-	write func(*os.File, []byte) (int, error)
 }
 
 type PendingInputRecord struct {
@@ -80,7 +70,7 @@ func (r PendingInputRecord) Expired(now time.Time) bool {
 }
 
 type PendingInputQueue struct {
-	path              string
+	thread            *thread.Thread
 	now               func() time.Time
 	mu                sync.Mutex
 	loaded            bool
@@ -90,21 +80,16 @@ type PendingInputQueue struct {
 	admittedTurnIndex map[string]string
 	acceptanceOrder   map[string]uint64
 	nextAcceptance    uint64
-	journalExists     bool
-	journalSize       int64
-	journalInfo       os.FileInfo
-	fileOps           pendingInputFileOps
 }
 
-func NewPendingInputQueue(sessionDir string, opts PendingInputQueueOptions) *PendingInputQueue {
+func NewPendingInputQueue(_ string, opts PendingInputQueueOptions) *PendingInputQueue {
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &PendingInputQueue{
-		path:    filepath.Join(sessionDir, pendingInputFile),
-		now:     now,
-		fileOps: pendingInputFileOps{write: func(file *os.File, body []byte) (int, error) { return file.Write(body) }},
+		thread: opts.Thread,
+		now:    now,
 	}
 }
 
@@ -126,7 +111,7 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 	} else {
 		id = nextUniquePendingInputID(q.records, newPendingInputID)
 	}
-	now := q.now().UTC()
+	now := q.nowMillis()
 	ttl := opts.TTL
 	if ttl <= 0 {
 		ttl = DefaultPendingInputTTL
@@ -195,7 +180,7 @@ func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuse
 	}
 
 	id := nextUniquePendingInputID(q.records, newPendingInputID)
-	now := q.now().UTC()
+	now := q.nowMillis()
 	msg.ID = pendingInputMessageID(id, now)
 	if msg.Blocks == nil {
 		msg.Blocks = []llm.Block{}
@@ -281,7 +266,7 @@ func (q *PendingInputQueue) Replayable(turnID string, limit int) ([]PendingInput
 	if err := q.ensureLoadedLocked(); err != nil {
 		return nil, err
 	}
-	now := q.now().UTC()
+	now := q.nowMillis()
 	ordered := q.orderedReplayableLocked()
 	out := make([]PendingInputRecord, 0, len(ordered))
 	var expiredRecords []PendingInputRecord
@@ -366,7 +351,7 @@ func (q *PendingInputQueue) MarkMessageProcessed(messageID string) error {
 	if !isReplayablePendingState(record.State) {
 		return nil
 	}
-	now := q.now().UTC()
+	now := q.nowMillis()
 	record.State = PendingInputStateProcessed
 	record.ProcessedAt = &now
 	if err := q.appendLocked(record); err != nil {
@@ -421,7 +406,7 @@ func (q *PendingInputQueue) ReconcileRecoveryFacts(facts PendingInputRecoveryFac
 		return err
 	}
 
-	now := q.now().UTC()
+	now := q.nowMillis()
 	ordered := make([]PendingInputRecord, 0, len(q.records))
 	for _, record := range q.records {
 		ordered = append(ordered, record)
@@ -474,7 +459,7 @@ func (q *PendingInputQueue) updateStates(ids []string, update func(PendingInputR
 	if err := q.ensureLoadedLocked(); err != nil {
 		return err
 	}
-	now := q.now().UTC()
+	now := q.nowMillis()
 	var updatedRecords []PendingInputRecord
 	for _, id := range ids {
 		record, ok := q.records[id]
@@ -498,7 +483,10 @@ func (q *PendingInputQueue) updateStates(ids []string, update func(PendingInputR
 
 func (q *PendingInputQueue) ensureLoadedLocked() error {
 	if q.loaded {
-		return q.validateJournalLocked()
+		return nil
+	}
+	if q.thread == nil {
+		return fmt.Errorf("pending input queue: Thread journal is required")
 	}
 	q.acceptanceOrder = map[string]uint64{}
 	q.nextAcceptance = 0
@@ -514,71 +502,6 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 		q.indexRecordLocked(record)
 	}
 	q.loaded = true
-	return nil
-}
-
-func (q *PendingInputQueue) validateJournalLocked() error {
-	info, err := os.Stat(q.path)
-	if err != nil {
-		if os.IsNotExist(err) && !q.journalExists {
-			return nil
-		}
-		return err
-	}
-	if info.IsDir() {
-		return fmt.Errorf("pending input queue: journal path is a directory: %s", q.path)
-	}
-	if q.journalExists && q.journalInfo != nil && !os.SameFile(q.journalInfo, info) {
-		return fmt.Errorf("pending input queue: journal replaced outside active runtime: %s", q.path)
-	}
-	if info.Size() < q.journalSize {
-		return fmt.Errorf("pending input queue: journal changed outside active runtime: %s", q.path)
-	}
-	if info.Size() == q.journalSize && q.journalInfo != nil && !info.ModTime().Equal(q.journalInfo.ModTime()) {
-		return fmt.Errorf("pending input queue: journal modified outside active runtime: %s", q.path)
-	}
-	if !q.journalExists || info.Size() > q.journalSize {
-		return q.loadAppendedLocked()
-	}
-	return nil
-}
-
-func (q *PendingInputQueue) loadAppendedLocked() error {
-	file, err := os.Open(q.path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	if _, err := file.Seek(q.journalSize, io.SeekStart); err != nil {
-		return err
-	}
-	reader := bufio.NewReader(file)
-	for {
-		text, readErr := reader.ReadString('\n')
-		if readErr != nil && readErr != io.EOF {
-			return readErr
-		}
-		text = strings.TrimSpace(text)
-		if text != "" {
-			var record PendingInputRecord
-			if err := json.Unmarshal([]byte(text), &record); err != nil {
-				return fmt.Errorf("pending input queue: parse appended %s: %w", q.path, err)
-			}
-			if record.ID != "" {
-				q.indexRecordLocked(record)
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-	}
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	q.journalExists = true
-	q.journalSize = info.Size()
-	q.journalInfo = info
 	return nil
 }
 
@@ -668,54 +591,25 @@ func newPendingInputID() string {
 
 func (q *PendingInputQueue) loadLatestLocked() (map[string]PendingInputRecord, error) {
 	records := map[string]PendingInputRecord{}
-	file, err := os.Open(q.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			q.journalExists = false
-			q.journalSize = 0
-			q.journalInfo = nil
-			return records, nil
-		}
-		return nil, err
-	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-	for line := 1; ; line++ {
-		text, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return nil, err
-		}
-		text = strings.TrimSpace(text)
-		if text == "" {
-			if err == io.EOF {
-				break
-			}
-			continue
+	replay := q.thread.ReplaySnapshot()
+	for _, id := range replay.InputOrder {
+		raw, ok := replay.InputRecords[id]
+		if !ok {
+			return nil, fmt.Errorf("pending input queue: Thread journal order references missing record %q", id)
 		}
 		var record PendingInputRecord
-		if decodeErr := json.Unmarshal([]byte(text), &record); decodeErr != nil {
-			return nil, fmt.Errorf("pending input queue: parse %s:%d: %w", q.path, line, decodeErr)
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return nil, fmt.Errorf("pending input queue: decode Thread journal record %q: %w", id, err)
 		}
-		if record.ID == "" {
-			if err == io.EOF {
-				break
-			}
-			continue
+		if record.ID != id {
+			return nil, fmt.Errorf("pending input queue: Thread journal record id mismatch %q", id)
 		}
-		q.trackAcceptanceLocked(record.ID)
-		records[record.ID] = record
-		if err == io.EOF {
-			break
-		}
+		q.trackAcceptanceLocked(id)
+		records[id] = record
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
+	if len(records) != len(replay.InputRecords) {
+		return nil, fmt.Errorf("pending input queue: Thread journal input order is incomplete")
 	}
-	q.journalExists = true
-	q.journalSize = info.Size()
-	q.journalInfo = info
 	return records, nil
 }
 
@@ -727,40 +621,85 @@ func (q *PendingInputQueue) appendManyLocked(records []PendingInputRecord) error
 	if len(records) == 0 {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(q.path), 0o755); err != nil {
-		return err
+	facts := make([]thread.Fact, 0, 64)
+	flush := func() error {
+		if len(facts) == 0 {
+			return nil
+		}
+		if _, err := q.thread.AppendFacts(facts...); err != nil {
+			q.loaded = false
+			return err
+		}
+		facts = facts[:0]
+		return nil
 	}
-	file, err := os.OpenFile(q.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	var written int64
 	for _, record := range records {
 		body, err := json.Marshal(record)
 		if err != nil {
 			return err
 		}
-		body = append(body, '\n')
-		n, err := q.fileOps.write(file, body)
-		written += int64(n)
-		if err != nil {
-			return err
+		recordFacts := append(q.inputLifecycleFacts(record), thread.Fact{
+			Type: thread.FactInputRecorded, InputID: record.ID, InputRecord: body,
+		})
+		if len(facts)+len(recordFacts) > 64 {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		facts = append(facts, recordFacts...)
+	}
+	return flush()
+}
+
+func (q *PendingInputQueue) nowMillis() time.Time {
+	return q.now().UTC().Truncate(time.Millisecond)
+}
+
+func (q *PendingInputQueue) inputLifecycleFacts(record PendingInputRecord) []thread.Fact {
+	if q == nil || q.thread == nil || record.ID == "" {
+		return nil
+	}
+	previous, existed := q.records[record.ID]
+	attemptID := fmt.Sprintf("ia_%s_%d", record.ID, max(record.Attempts, 1))
+	generationID := q.thread.Projection().CurrentGeneration.ID
+	var facts []thread.Fact
+	if !existed && record.State == PendingInputStatePending {
+		facts = append(facts, thread.Fact{Type: thread.FactInputAccepted, InputID: record.ID, Message: &record.Message})
+	}
+	starting := record.State == PendingInputStateAdmitted &&
+		(!existed || previous.State == PendingInputStateAccepting || previous.State == PendingInputStatePending)
+	if starting {
+		if !existed || previous.State == PendingInputStateAccepting {
+			facts = append(facts, thread.Fact{Type: thread.FactInputAccepted, InputID: record.ID, Message: &record.Message})
+		}
+		facts = append(facts, thread.Fact{
+			Type: thread.FactInputAttemptStart, InputID: record.ID, AttemptID: attemptID,
+			GenerationID: generationID, TurnID: record.TurnID,
+		})
+	}
+	if !existed {
+		return facts
+	}
+	if previous.State == PendingInputStateAdmitted {
+		switch record.State {
+		case PendingInputStateDropped:
+			previousAttemptID := fmt.Sprintf("ia_%s_%d", record.ID, max(previous.Attempts, 1))
+			facts = append(facts,
+				thread.Fact{Type: thread.FactInputAttemptCancel, InputID: record.ID, AttemptID: previousAttemptID},
+				thread.Fact{Type: thread.FactInputCancelled, InputID: record.ID},
+			)
+		}
+	} else if previous.State == PendingInputStatePending {
+		switch record.State {
+		case PendingInputStateDropped:
+			facts = append(facts, thread.Fact{Type: thread.FactInputCancelled, InputID: record.ID})
+		case PendingInputStateExpired:
+			facts = append(facts, thread.Fact{Type: thread.FactInputExpired, InputID: record.ID})
 		}
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	if info.Size() != q.journalSize+written {
-		return fmt.Errorf("pending input queue: concurrent journal append: %s", q.path)
-	}
-	q.journalExists = true
-	q.journalSize = info.Size()
-	q.journalInfo = info
-	return nil
+	return facts
 }
 
 func pendingInputMessageID(id string, createdAt time.Time) string {
-	return session.StableMessageID(createdAt, id)
+	return thread.StableMessageID(createdAt, id)
 }

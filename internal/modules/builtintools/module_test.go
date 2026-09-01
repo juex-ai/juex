@@ -12,9 +12,9 @@ import (
 
 func TestModuleContributesDefaultBuiltinTools(t *testing.T) {
 	mod := New(context.Background(), tools.BuiltinOptions{
-		WorkDir:     t.TempDir(),
-		Shell:       tools.DefaultShellProfile(),
-		ArtifactDir: t.TempDir(),
+		WorkDir:  t.TempDir(),
+		Shell:    tools.DefaultShellProfile(),
+		MediaDir: t.TempDir(),
 	})
 	if mod.ID() != ModuleID {
 		t.Fatalf("ID() = %q, want %q", mod.ID(), ModuleID)
@@ -49,8 +49,8 @@ func TestModuleStartCreatesArtifactRootBeforeShellSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	mod := New(context.Background(), tools.BuiltinOptions{
-		ArtifactDir: artifactDir,
-		Shell:       tools.DefaultShellProfile(),
+		MediaDir: artifactDir,
+		Shell:    tools.DefaultShellProfile(),
 	})
 	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
 		t.Fatal(err)

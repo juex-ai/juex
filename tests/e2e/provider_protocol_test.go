@@ -10,16 +10,130 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/thread"
 )
+
+type liveSendResult struct {
+	AgentID   string
+	ThreadID  string
+	ThreadDir string
+	Stdout    string
+	Stderr    string
+}
+
+func sendAndWait(t *testing.T, bin, home, work string, args ...string) liveSendResult {
+	t.Helper()
+	commandArgs := append([]string{"send", "--wait", "--json"}, args...)
+	stdout, stderr, err := runAgentStateCommand(bin, home, work, commandArgs...)
+	if err != nil {
+		t.Fatalf("juex %s: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(commandArgs, " "), err, stdout, stderr)
+	}
+	result := liveSendResult{Stdout: stdout, Stderr: stderr}
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var receipt struct {
+			AgentID  string `json:"agent_id"`
+			ThreadID string `json:"thread_id"`
+			InputID  string `json:"input_id"`
+		}
+		if json.Unmarshal([]byte(line), &receipt) == nil && receipt.InputID != "" {
+			result.AgentID = receipt.AgentID
+			result.ThreadID = receipt.ThreadID
+			break
+		}
+	}
+	if result.AgentID == "" || result.ThreadID == "" {
+		t.Fatalf("send receipt missing Agent or Thread identity:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, `"type":"input.terminal"`) || !strings.Contains(stdout, `"state":"succeeded"`) {
+		t.Fatalf("send did not reach terminal success:\n%s", stdout)
+	}
+	result.ThreadDir = filepath.Join(home, "agents", result.AgentID, "threads", result.ThreadID)
+	return result
+}
+
+func sendAndWaitFailure(t *testing.T, bin, home, work string, args ...string) liveSendResult {
+	t.Helper()
+	commandArgs := append([]string{"send", "--wait", "--json"}, args...)
+	stdout, stderr, err := runAgentStateCommand(bin, home, work, commandArgs...)
+	if err == nil {
+		t.Fatalf("juex %s unexpectedly succeeded:\n%s", strings.Join(commandArgs, " "), stdout)
+	}
+	result := liveSendResult{Stdout: stdout, Stderr: stderr}
+	for _, line := range strings.Split(stdout, "\n") {
+		var receipt struct {
+			AgentID  string `json:"agent_id"`
+			ThreadID string `json:"thread_id"`
+			InputID  string `json:"input_id"`
+		}
+		if json.Unmarshal([]byte(line), &receipt) == nil && receipt.InputID != "" {
+			result.AgentID = receipt.AgentID
+			result.ThreadID = receipt.ThreadID
+			break
+		}
+	}
+	if result.AgentID == "" || result.ThreadID == "" {
+		t.Fatalf("failed send omitted durable receipt:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	result.ThreadDir = filepath.Join(home, "agents", result.AgentID, "threads", result.ThreadID)
+	return result
+}
+
+func stopLiveAgent(t *testing.T, bin, home, work string) {
+	t.Helper()
+	markerBytes, err := os.ReadFile(filepath.Join(work, ".juex", "juex.local.json"))
+	if err != nil {
+		return
+	}
+	var marker struct {
+		AgentID string `json:"agent_id"`
+	}
+	if json.Unmarshal(markerBytes, &marker) == nil && marker.AgentID != "" {
+		_, _, _ = runAgentStateCommand(bin, home, work, "fleet", "stop", marker.AgentID)
+	}
+}
+
+func readThreadFacts(t *testing.T, threadDir string) []thread.Fact {
+	t.Helper()
+	var facts []thread.Fact
+	for index, line := range readLines(t, filepath.Join(threadDir, "journal.jsonl")) {
+		var commit thread.Commit
+		if err := json.Unmarshal([]byte(line), &commit); err != nil {
+			t.Fatalf("decode Thread journal line %d: %v", index, err)
+		}
+		facts = append(facts, commit.Facts...)
+	}
+	return facts
+}
+
+func readThreadMessages(t *testing.T, threadDir string) []llm.Message {
+	t.Helper()
+	var messages []llm.Message
+	for _, fact := range readThreadFacts(t, threadDir) {
+		if fact.Type == thread.FactMessageAppended && fact.Message != nil {
+			messages = append(messages, *fact.Message)
+		}
+	}
+	return messages
+}
+
+func threadJournalText(t *testing.T, threadDir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(threadDir, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
 
 func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 	bin := buildJuex(t)
@@ -154,20 +268,9 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cmd := exec.Command(bin, "-C", work, "run", "--json", "hello")
 			home := t.TempDir()
-			env := isolatedJuexBinaryEnv(home)
-			cmd.Env = env
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("juex run: %v\n%s", err, out)
-			}
-			var runResult struct {
-				SessionID string `json:"session_id"`
-			}
-			if err := json.Unmarshal(out, &runResult); err != nil {
-				t.Fatalf("decode run result: %v\n%s", err, out)
-			}
+			t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+			result := sendAndWait(t, bin, home, work, "hello")
 			var captured capturedProviderRequest
 			select {
 			case captured = <-requests:
@@ -198,14 +301,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 				t.Fatalf("reasoning_effort = %v, want %q; body=%+v", got, tc.wantReasoningEffort, captured.body)
 			}
 			if tc.wantReasoningBlocks > 0 {
-				assertLiveResponsesReasoningHistory(
-					t,
-					bin,
-					work,
-					env,
-					runResult.SessionID,
-					tc.wantReasoningBlocks,
-				)
+				assertLiveResponsesReasoningHistory(t, result.ThreadDir, tc.wantReasoningBlocks)
 			}
 		})
 	}
@@ -213,50 +309,12 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 
 func assertLiveResponsesReasoningHistory(
 	t *testing.T,
-	bin, work string,
-	env []string,
-	sessionID string,
+	threadDir string,
 	want int,
 ) {
 	t.Helper()
-	if sessionID == "" {
-		t.Fatal("run result omitted session id")
-	}
-
-	listen := exec.Command(bin, "-C", work, "listen", "--addr", "127.0.0.1:0")
-	listen.Env = env
-	stdout := &lockedBuffer{}
-	stderr := &lockedBuffer{}
-	listen.Stdout = stdout
-	listen.Stderr = stderr
-	if err := listen.Start(); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- listen.Wait() }()
-	defer func() {
-		_ = listen.Process.Kill()
-		<-done
-	}()
-
-	address := waitForListenTCPAddress(t, stdout)
-	response, err := http.Get("http://" + address + "/api/sessions/" + sessionID)
-	if err != nil {
-		t.Fatalf("get session API: %v\nlisten stderr:\n%s", err, stderr.String())
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("get session API status = %d", response.StatusCode)
-	}
-	var payload struct {
-		Messages []llm.Message `json:"messages"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		t.Fatal(err)
-	}
-
 	var reasoning []llm.Block
-	for _, message := range payload.Messages {
+	for _, message := range readThreadMessages(t, threadDir) {
 		if message.Role != llm.RoleAssistant {
 			continue
 		}
@@ -267,13 +325,13 @@ func assertLiveResponsesReasoningHistory(
 		}
 	}
 	if len(reasoning) != want {
-		t.Fatalf("session API reasoning blocks = %+v, want %d independent blocks", reasoning, want)
+		t.Fatalf("Thread journal reasoning blocks = %+v, want %d independent blocks", reasoning, want)
 	}
 	if reasoning[0].Signature != "rs_e2e_1" || reasoning[0].Content != "encrypted-e2e-1" || reasoning[0].Text != "first summary" || !reasoning[0].Redacted {
-		t.Fatalf("first session API reasoning block = %+v", reasoning[0])
+		t.Fatalf("first Thread journal reasoning block = %+v", reasoning[0])
 	}
 	if reasoning[1].Signature != "rs_e2e_2" || reasoning[1].Content != "encrypted-e2e-2" || reasoning[1].Text != "second summary" || !reasoning[1].Redacted {
-		t.Fatalf("second session API reasoning block = %+v", reasoning[1])
+		t.Fatalf("second Thread journal reasoning block = %+v", reasoning[1])
 	}
 }
 
@@ -307,20 +365,11 @@ func TestLiveBinary_OpenAIChatStreamsByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "hello")
-	cmd.Env = isolatedJuexBinaryEnv(t.TempDir())
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("juex run: %v\n%s", err, out)
-	}
-	var result struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("stdout is not run JSON: %v\n%s", err, out)
-	}
-	if result.Text != "stream-ok" {
-		t.Fatalf("run text = %q, want stream-ok", result.Text)
+	home := t.TempDir()
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWait(t, bin, home, work, "hello")
+	if !strings.Contains(threadJournalText(t, result.ThreadDir), "stream-ok") {
+		t.Fatalf("Thread journal does not contain streamed assistant output")
 	}
 	request := <-requests
 	if request.path != "/chat/completions" || request.body["stream"] != true {
@@ -332,11 +381,11 @@ func TestLiveBinary_OpenAIChatStreamsByDefault(t *testing.T) {
 	}
 }
 
-func TestLiveBinary_SessionOwnedTimeCacheAndActiveSelection(t *testing.T) {
+func TestLiveBinary_ThreadProjectionIndexAndMainSelection(t *testing.T) {
 	bin := buildJuex(t)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(chatCompletionResponse("session-ok")))
+		_, _ = w.Write([]byte(chatCompletionResponse("thread-ok")))
 	}))
 	defer provider.Close()
 
@@ -355,126 +404,37 @@ providers:
 	if err := writeText(filepath.Join(work, ".juex", "juex.yaml"), configBody); err != nil {
 		t.Fatal(err)
 	}
-	env := isolatedJuexBinaryEnv(t.TempDir())
-
-	firstCmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "first turn")
-	firstCmd.Env = env
-	firstOut, err := firstCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("first run: %v\n%s", err, firstOut)
+	home := t.TempDir()
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	first := sendAndWait(t, bin, home, work, "first turn")
+	second := sendAndWait(t, bin, home, work, "second turn")
+	if first.ThreadID != thread.MainID || second.ThreadID != first.ThreadID || second.ThreadDir != first.ThreadDir {
+		t.Fatalf("default sends did not target stable Main Thread: first=%+v second=%+v", first, second)
 	}
-	var first struct {
-		Text       string `json:"text"`
-		SessionID  string `json:"session_id"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(firstOut, &first); err != nil {
-		t.Fatalf("decode first run: %v\n%s", err, firstOut)
-	}
-	if first.Text != "session-ok" || first.SessionID == "" || first.SessionDir == "" {
-		t.Fatalf("first run = %+v", first)
-	}
-
-	var metadata struct {
-		StartedAtMS    int64 `json:"started_at_ms"`
-		LastActiveAtMS int64 `json:"last_active_at_ms"`
-	}
-	metadataBytes, err := os.ReadFile(filepath.Join(first.SessionDir, "session.json"))
+	projectionBytes, err := os.ReadFile(filepath.Join(first.ThreadDir, "thread.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+	var projection thread.Projection
+	if err := json.Unmarshal(projectionBytes, &projection); err != nil {
 		t.Fatal(err)
 	}
-	if metadata.StartedAtMS <= 0 || metadata.LastActiveAtMS < metadata.StartedAtMS {
-		t.Fatalf("session metadata = %+v", metadata)
+	if projection.ThreadID != thread.MainID || projection.Alias != thread.MainAlias ||
+		projection.CreatedAt.Time.IsZero() || projection.LastActivityAt.Time.Before(projection.CreatedAt.Time) ||
+		projection.Counts.TurnCount != 2 || projection.Revision == 0 {
+		t.Fatalf("Main Thread projection = %+v", projection)
 	}
-
-	agentHome := filepath.Dir(filepath.Dir(first.SessionDir))
-	historyBytes, err := os.ReadFile(filepath.Join(agentHome, "history.json"))
+	indexBytes, err := os.ReadFile(filepath.Join(home, "agents", first.AgentID, "threads.index.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var history struct {
-		ActiveID string `json:"active_id"`
-		Sessions []struct {
-			ID         string `json:"id"`
-			Turns      int    `json:"turns"`
-			Transcript struct {
-				Size     int64  `json:"size"`
-				MtimeNS  int64  `json:"mtime_ns"`
-				ChangeID string `json:"change_id"`
-			} `json:"transcript"`
-		} `json:"sessions"`
-	}
-	if err := json.Unmarshal(historyBytes, &history); err != nil {
+	var index thread.Index
+	if err := json.Unmarshal(indexBytes, &index); err != nil {
 		t.Fatal(err)
 	}
-	if history.ActiveID != first.SessionID ||
-		len(history.Sessions) != 1 ||
-		history.Sessions[0].ID != first.SessionID ||
-		history.Sessions[0].Turns == 0 ||
-		history.Sessions[0].Transcript.Size == 0 ||
-		history.Sessions[0].Transcript.MtimeNS == 0 ||
-		history.Sessions[0].Transcript.ChangeID == "" {
-		t.Fatalf("history = %+v", history)
-	}
-	for _, forbidden := range [][]byte{
-		[]byte(`"started_at"`),
-		[]byte(`"last_active_at"`),
-		[]byte(`"token_usage"`),
-		[]byte(`"context_usage"`),
-	} {
-		if bytes.Contains(historyBytes, forbidden) {
-			t.Fatalf("history contains canonical field %s: %s", forbidden, historyBytes)
-		}
-	}
-
-	conversationPath := filepath.Join(first.SessionDir, "conversation.jsonl")
-	conversation, err := os.ReadFile(conversationPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conversationInfo, err := os.Stat(conversationPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corruptConversation := bytes.Repeat([]byte("!"), len(conversation))
-	corruptConversation[len(corruptConversation)-1] = '\n'
-	if err := os.WriteFile(conversationPath, corruptConversation, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(conversationPath, conversationInfo.ModTime(), conversationInfo.ModTime()); err != nil {
-		t.Fatal(err)
-	}
-
-	listCmd := exec.Command(bin, "-C", work, "sessions", "list", "--format", "json")
-	listCmd.Env = env
-	listOut, err := listCmd.CombinedOutput()
-	if err == nil || !bytes.Contains(listOut, []byte("parse")) {
-		t.Fatalf("changed transcript list error = %v; output = %s", err, listOut)
-	}
-
-	if err := os.WriteFile(conversationPath, conversation, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(conversationPath, conversationInfo.ModTime(), conversationInfo.ModTime()); err != nil {
-		t.Fatal(err)
-	}
-	secondCmd := exec.Command(bin, "-C", work, "run", "--json", "second turn")
-	secondCmd.Env = env
-	secondOut, err := secondCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("second run: %v\n%s", err, secondOut)
-	}
-	var second struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal(secondOut, &second); err != nil {
-		t.Fatalf("decode second run: %v\n%s", err, secondOut)
-	}
-	if second.SessionID != first.SessionID {
-		t.Fatalf("second session = %q, want active %q", second.SessionID, first.SessionID)
+	if len(index.Threads) != 1 || index.Threads[0].ThreadID != thread.MainID ||
+		index.Threads[0].TurnCount != 2 || index.Threads[0].ThreadRevision != projection.Revision {
+		t.Fatalf("Thread index = %+v; projection=%+v", index, projection)
 	}
 }
 
@@ -528,58 +488,21 @@ providers:
 		t.Fatal(err)
 	}
 	home := t.TempDir()
-	env := isolatedJuexBinaryEnv(home)
-
-	firstCmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "first turn")
-	firstCmd.Env = env
-	firstOut, err := firstCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("first run: %v\n%s", err, firstOut)
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	first := sendAndWait(t, bin, home, work, "first turn")
+	second := sendAndWait(t, bin, home, work, "second turn")
+	if first.ThreadID != thread.MainID || second.ThreadID != first.ThreadID {
+		t.Fatalf("fallback sends changed Main Thread: first=%+v second=%+v", first, second)
 	}
-	var first struct {
-		Text       string `json:"text"`
-		SessionID  string `json:"session_id"`
-		SessionDir string `json:"session_dir"`
+	messages := readThreadMessages(t, second.ThreadDir)
+	if len(messages) < 2 {
+		t.Fatalf("Thread messages = %d", len(messages))
 	}
-	if err := json.Unmarshal(firstOut, &first); err != nil {
-		t.Fatalf("decode first run: %v\n%s", err, firstOut)
-	}
-	if first.Text != "primary-ok" || first.SessionID == "" {
-		t.Fatalf("first run = %+v", first)
-	}
-
-	secondCmd := exec.Command(bin, "-C", work, "run", "--json", "second turn")
-	secondCmd.Env = env
-	secondOut, err := secondCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("second run: %v\n%s", err, secondOut)
-	}
-	var second struct {
-		Text       string `json:"text"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(secondOut, &second); err != nil {
-		t.Fatalf("decode second run: %v\n%s", err, secondOut)
-	}
-	if second.Text != "backup-ok" || filepath.Base(second.SessionDir) != first.SessionID {
-		t.Fatalf("second run = %+v", second)
-	}
-
-	lines := readLines(t, filepath.Join(second.SessionDir, "conversation.jsonl"))
-	if len(lines) < 2 {
-		t.Fatalf("conversation lines = %d", len(lines))
-	}
-	var notice, assistant llm.Message
-	if err := json.Unmarshal([]byte(lines[len(lines)-2]), &notice); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &assistant); err != nil {
-		t.Fatal(err)
-	}
+	notice, assistant := messages[len(messages)-2], messages[len(messages)-1]
 	if notice.Kind != llm.MessageKindModelChange || assistant.Model != "backup:backup-model" {
 		t.Fatalf("fallback tail = %+v / %+v", notice, assistant)
 	}
-	eventsText := strings.Join(readLines(t, filepath.Join(second.SessionDir, "events.jsonl")), "\n")
+	eventsText := threadJournalText(t, second.ThreadDir)
 	if !strings.Contains(eventsText, `"type":"llm.fallback"`) || backupCalls.Load() != 1 {
 		t.Fatalf("fallback event/requests missing: backup=%d events=%s", backupCalls.Load(), eventsText)
 	}
@@ -630,46 +553,16 @@ providers:
 	if err := writeText(filepath.Join(work, ".juex", "juex.yaml"), configBody); err != nil {
 		t.Fatal(err)
 	}
-	env := isolatedJuexBinaryEnv(t.TempDir())
-
-	firstCmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "first turn")
-	firstCmd.Env = env
-	firstOut, err := firstCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("first run: %v\n%s", err, firstOut)
+	home := t.TempDir()
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	first := sendAndWait(t, bin, home, work, "first turn")
+	second := sendAndWait(t, bin, home, work, "second turn")
+	if second.ThreadID != first.ThreadID {
+		t.Fatalf("fallback sends changed Main Thread: first=%+v second=%+v", first, second)
 	}
-	var first struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal(firstOut, &first); err != nil {
-		t.Fatalf("decode first run: %v\n%s", err, firstOut)
-	}
-
-	secondCmd := exec.Command(bin, "-C", work, "run", "--json", "second turn")
-	secondCmd.Env = env
-	secondOut, err := secondCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("second run: %v\n%s", err, secondOut)
-	}
-	var second struct {
-		Text       string `json:"text"`
-		SessionID  string `json:"session_id"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(secondOut, &second); err != nil {
-		t.Fatalf("decode second run: %v\n%s", err, secondOut)
-	}
-	if second.Text != "backup-ok" || second.SessionID != first.SessionID {
-		t.Fatalf("second run = %+v, first session = %q", second, first.SessionID)
-	}
-
-	lines := readLines(t, filepath.Join(second.SessionDir, "conversation.jsonl"))
+	messages := readThreadMessages(t, second.ThreadDir)
 	var tail llm.Message
-	for i, line := range lines {
-		var message llm.Message
-		if err := json.Unmarshal([]byte(line), &message); err != nil {
-			t.Fatalf("decode conversation line %d: %v", i, err)
-		}
+	for _, message := range messages {
 		if message.Kind == llm.MessageKindModelChange {
 			t.Fatalf("default configuration persisted model-change notice: %+v", message)
 		}
@@ -678,7 +571,7 @@ providers:
 	if tail.Role != llm.RoleAssistant || tail.Model != "backup:backup-model" {
 		t.Fatalf("fallback tail = %+v", tail)
 	}
-	eventsText := strings.Join(readLines(t, filepath.Join(second.SessionDir, "events.jsonl")), "\n")
+	eventsText := threadJournalText(t, second.ThreadDir)
 	if !strings.Contains(eventsText, `"type":"llm.fallback"`) {
 		t.Fatalf("fallback event missing: %s", eventsText)
 	}
@@ -713,28 +606,17 @@ providers:
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "recover the turn")
-	cmd.Env = isolatedJuexBinaryEnv(t.TempDir())
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("juex run: %v\n%s", err, out)
+	home := t.TempDir()
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWait(t, bin, home, work, "recover the turn")
+	if requests.Load() != 2 {
+		t.Fatalf("provider requests=%d, want 2", requests.Load())
 	}
-	var result struct {
-		Text       string `json:"text"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("decode run: %v\n%s", err, out)
-	}
-	if result.Text != "recovered" || result.SessionDir == "" || requests.Load() != 2 {
-		t.Fatalf("run = %+v, requests=%d", result, requests.Load())
-	}
-
-	conversation := strings.Join(readLines(t, filepath.Join(result.SessionDir, "conversation.jsonl")), "\n")
+	conversation := threadJournalText(t, result.ThreadDir)
 	if strings.Contains(conversation, "partial") || !strings.Contains(conversation, "recovered") {
 		t.Fatalf("conversation retained provisional output or lost recovery:\n%s", conversation)
 	}
-	eventLog := strings.Join(readLines(t, filepath.Join(result.SessionDir, "events.jsonl")), "\n")
+	eventLog := conversation
 	if !strings.Contains(eventLog, `"type":"llm.retry"`) ||
 		!strings.Contains(eventLog, `"type":"llm.responded"`) ||
 		strings.Contains(eventLog, `"type":"turn.errored"`) {
@@ -742,7 +624,7 @@ providers:
 	}
 }
 
-func TestLiveBinary_SessionsContinueResumesSideWithoutActivatingIt(t *testing.T) {
+func TestLiveBinary_SendResumesWorkerWithoutChangingMain(t *testing.T) {
 	bin := buildJuex(t)
 	var requestCount atomic.Int32
 	var mu sync.Mutex
@@ -783,54 +665,23 @@ providers:
 	if err := writeText(filepath.Join(work, ".juex", "juex.yaml"), configBody); err != nil {
 		t.Fatal(err)
 	}
-	env := isolatedJuexBinaryEnv(t.TempDir())
-
-	runJSON := func(args ...string) struct {
-		Text        string `json:"text"`
-		SessionID   string `json:"session_id"`
-		SessionDir  string `json:"session_dir"`
-		SessionKind string `json:"session_kind"`
-		Active      bool   `json:"active"`
-	} {
-		t.Helper()
-		cmd := exec.Command(bin, append([]string{"-C", work}, args...)...)
-		cmd.Env = env
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("juex %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-		var result struct {
-			Text        string `json:"text"`
-			SessionID   string `json:"session_id"`
-			SessionDir  string `json:"session_dir"`
-			SessionKind string `json:"session_kind"`
-			Active      bool   `json:"active"`
-		}
-		if err := json.Unmarshal(out, &result); err != nil {
-			t.Fatalf("decode juex %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-		return result
+	home := t.TempDir()
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	createdOut, createdErr, err := runAgentStateCommand(bin, home, work, "threads", "create", "--alias", "reviewer")
+	if err != nil {
+		t.Fatalf("create Worker Thread: %v\nstdout:\n%s\nstderr:\n%s", err, createdOut, createdErr)
 	}
-
-	primary := runJSON("run", "--json", "/status")
-	side := runJSON("run", "--side", "--json", "first side turn")
-	if side.Text != "side-first-ok" || side.SessionKind != "side" || side.Active {
-		t.Fatalf("side run = %+v", side)
+	var created thread.Info
+	if err := json.Unmarshal([]byte(strings.TrimSpace(createdOut)), &created); err != nil {
+		t.Fatalf("decode created Worker: %v\n%s", err, createdOut)
 	}
-	continued := runJSON("sessions", "continue", side.SessionID, "--json", "second side turn")
-	if continued.Text != "side-continued-ok" || continued.SessionID != side.SessionID ||
-		continued.SessionDir != side.SessionDir || continued.SessionKind != "side" || continued.Active {
-		t.Fatalf("continued side = %+v, original = %+v", continued, side)
+	if !thread.ValidWorkerID(created.ID) || created.ParentThreadID != thread.MainID || created.Alias != "reviewer" {
+		t.Fatalf("created Worker = %+v", created)
 	}
-	blockedNew := exec.Command(bin, "-C", work, "sessions", "continue", primary.SessionID, "/new")
-	blockedNew.Env = env
-	blockedOut, err := blockedNew.CombinedOutput()
-	if err == nil || !strings.Contains(string(blockedOut), "/new cannot change sessions") {
-		t.Fatalf("continue /new err = %v, output = %s", err, blockedOut)
-	}
-	active := runJSON("run", "--json", "/status")
-	if active.SessionID != primary.SessionID || !active.Active {
-		t.Fatalf("default run = %+v, want active primary %s", active, primary.SessionID)
+	first := sendAndWait(t, bin, home, work, "--thread", created.ID, "first worker turn")
+	continued := sendAndWait(t, bin, home, work, "--thread", created.ID, "second worker turn")
+	if continued.ThreadID != first.ThreadID || continued.ThreadDir != first.ThreadDir {
+		t.Fatalf("continued Worker changed identity: first=%+v continued=%+v", first, continued)
 	}
 
 	if got := requestCount.Load(); got != 2 {
@@ -842,19 +693,20 @@ providers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"first side turn", "side-first-ok", "second side turn"} {
+	for _, want := range []string{"first worker turn", "side-first-ok", "second worker turn"} {
 		if !bytes.Contains(secondRequest, []byte(want)) {
 			t.Fatalf("continued provider request missing %q: %s", want, secondRequest)
 		}
 	}
-	conversation, err := os.ReadFile(filepath.Join(side.SessionDir, "conversation.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"first side turn", "side-first-ok", "second side turn", "side-continued-ok"} {
+	conversation := []byte(threadJournalText(t, continued.ThreadDir))
+	for _, want := range []string{"first worker turn", "side-first-ok", "second worker turn", "side-continued-ok"} {
 		if !bytes.Contains(conversation, []byte(want)) {
-			t.Fatalf("continued transcript missing %q:\n%s", want, conversation)
+			t.Fatalf("continued Worker journal missing %q:\n%s", want, conversation)
 		}
+	}
+	mainJournal := threadJournalText(t, filepath.Join(home, "agents", first.AgentID, "threads", thread.MainID))
+	if strings.Contains(mainJournal, "first worker turn") || strings.Contains(mainJournal, "second worker turn") {
+		t.Fatalf("Worker inputs leaked into Main Thread journal:\n%s", mainJournal)
 	}
 }
 
@@ -863,7 +715,7 @@ type capturedProviderRequest struct {
 	body map[string]any
 }
 
-func TestLiveBinary_CLIRunAttachmentSendsImageAndPersistsArtifact(t *testing.T) {
+func TestLiveBinary_CLISendAttachmentSendsImageAndPersistsMedia(t *testing.T) {
 	bin := buildJuex(t)
 	requests := make(chan capturedProviderRequest, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -899,22 +751,11 @@ providers:
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "--attach", sourcePath, "describe this image")
-	cmd.Env = isolatedJuexBinaryEnv(t.TempDir())
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("juex run --attach: %v\n%s", err, out)
-	}
-	var result struct {
-		Text       string `json:"text"`
-		SessionID  string `json:"session_id"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("decode run result: %v\n%s", err, out)
-	}
-	if result.Text != "attachment-ok" || result.SessionID == "" || result.SessionDir == "" {
-		t.Fatalf("run result = %+v", result)
+	home := t.TempDir()
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWait(t, bin, home, work, "--attach", sourcePath, "describe this image")
+	if !strings.Contains(threadJournalText(t, result.ThreadDir), "attachment-ok") {
+		t.Fatalf("Thread journal missing attachment response")
 	}
 
 	var captured capturedProviderRequest
@@ -930,29 +771,24 @@ providers:
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatal(err)
 	}
-	conversationPath := filepath.Join(result.SessionDir, "conversation.jsonl")
 	var storedRef *llm.MediaRef
-	for _, line := range readLines(t, conversationPath) {
-		var message llm.Message
-		if err := json.Unmarshal([]byte(line), &message); err != nil {
-			t.Fatal(err)
-		}
+	for _, message := range readThreadMessages(t, result.ThreadDir) {
 		for _, block := range message.Blocks {
 			if block.Type == llm.BlockImage && block.Media != nil {
 				storedRef = block.Media
 			}
 		}
 	}
-	if storedRef == nil || !strings.Contains(storedRef.ArtifactPath, "/"+result.SessionID+"/") {
+	if storedRef == nil || !strings.Contains(storedRef.ArtifactPath, "/"+result.ThreadID+"/") {
 		t.Fatalf("stored media ref = %+v", storedRef)
 	}
-	agentStateDir := filepath.Dir(filepath.Dir(result.SessionDir))
-	if _, err := os.Stat(filepath.Join(agentStateDir, "artifacts", filepath.FromSlash(storedRef.ArtifactPath))); err != nil {
-		t.Fatalf("persisted artifact unavailable after source removal: %v", err)
+	agentStateDir := filepath.Join(home, "agents", result.AgentID)
+	if _, err := os.Stat(filepath.Join(agentStateDir, "media", filepath.FromSlash(storedRef.ArtifactPath))); err != nil {
+		t.Fatalf("persisted media unavailable after source removal: %v", err)
 	}
 }
 
-func TestLiveBinary_CLIRunNonVisionAttachmentWarnsAndProjectsUnavailableText(t *testing.T) {
+func TestLiveBinary_CLISendNonVisionAttachmentWarnsAndProjectsUnavailableText(t *testing.T) {
 	bin := buildJuex(t)
 	requests := make(chan capturedProviderRequest, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -987,21 +823,15 @@ providers:
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "run", "--new", "--attach", sourcePath, "what color is this image?")
-	cmd.Env = isolatedJuexBinaryEnv(t.TempDir())
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("juex run --attach: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	home := t.TempDir()
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWait(t, bin, home, work, "--attach", sourcePath, "what color is this image?")
+	if !strings.Contains(result.Stdout, "local-chat:text-test") ||
+		!strings.Contains(result.Stdout, "providers[].models[].capabilities.vision") {
+		t.Fatalf("send receipt warning missing:\n%s", result.Stdout)
 	}
-	if !strings.Contains(stderr.String(), "juex: warning:") ||
-		!strings.Contains(stderr.String(), "local-chat:text-test") ||
-		!strings.Contains(stderr.String(), "providers[].models[].capabilities.vision") {
-		t.Fatalf("stderr warning missing:\n%s", stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "I cannot view the attached image.") {
-		t.Fatalf("stdout = %q", stdout.String())
+	if !strings.Contains(threadJournalText(t, result.ThreadDir), "I cannot view the attached image.") {
+		t.Fatalf("Thread journal missing non-vision response")
 	}
 
 	captured := <-requests
@@ -1018,7 +848,7 @@ providers:
 	}
 }
 
-func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
+func TestLiveBinary_CLISendExecCommandTool(t *testing.T) {
 	bin := buildJuex(t)
 
 	const (
@@ -1086,27 +916,14 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "--debug", "run", "--new", "--json", "run the exec command e2e marker")
 	home := t.TempDir()
-	cmd.Env = isolatedJuexBinaryEnv(home)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("juex run: %v\n%s", err, out)
-	}
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWait(t, bin, home, work, "run the exec command e2e marker")
 	if got := requestCount.Load(); got != 2 {
 		t.Fatalf("provider requests = %d, want 2", got)
 	}
-
-	var result struct {
-		Text       string `json:"text"`
-		SessionID  string `json:"session_id"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("stdout is not run JSON: %v\n%s", err, out)
-	}
-	if result.Text != "cli exec command complete" || result.SessionID == "" || result.SessionDir == "" {
-		t.Fatalf("run result = %+v", result)
+	if !strings.Contains(threadJournalText(t, result.ThreadDir), "cli exec command complete") {
+		t.Fatalf("Thread journal missing final tool response")
 	}
 
 	mu.Lock()
@@ -1116,26 +933,17 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	if !requestHasTool(first, "exec_command") || !requestHasTool(first, "write_stdin") || !requestHasTool(first, "list_shell_sessions") {
 		t.Fatalf("first provider request missing shell tool family: %+v", first["tools"])
 	}
-	wantExtensionDataDir := filepath.Join(filepath.Dir(filepath.Dir(result.SessionDir)), "extensions", extensionName)
-	wantToolResult := marker + ":" + wantExtensionDataDir
-	if !requestHasToolResult(second, "call_exec_cli", wantToolResult) {
-		t.Fatalf("second provider request missing Extension-backed exec_command result %q: %+v", wantToolResult, second["messages"])
+	wantToolResultSuffix := filepath.ToSlash(filepath.Join("agents", result.AgentID, "extensions", extensionName))
+	toolResult, ok := providerToolResultContent(second, "call_exec_cli")
+	if !ok || !strings.Contains(toolResult, marker+":") || !strings.Contains(filepath.ToSlash(toolResult), wantToolResultSuffix) {
+		t.Fatalf("second provider request missing Extension-backed exec_command result ending in %q: %+v", wantToolResultSuffix, second["messages"])
 	}
 
-	conversationPath := filepath.Join(result.SessionDir, "conversation.jsonl")
-	assertConversationExecCommandToolRoundTrip(t, conversationPath, "call_exec_cli", marker)
-	for _, rel := range []string{"logs/juex.log", "logs/debug.log"} {
-		if _, err := os.Stat(filepath.Join(result.SessionDir, rel)); err != nil {
-			t.Fatalf("debug artifact %s missing: %v", rel, err)
-		}
-	}
-	if got := rootJSONLFiles(t, result.SessionDir); !slices.Equal(got, []string{"conversation.jsonl", "events.jsonl", "pending_input.jsonl"}) {
-		t.Fatalf("session JSONL files = %v, want canonical journals", got)
-	}
-	journal := readJSONLObjects(t, filepath.Join(result.SessionDir, "events.jsonl"))
-	for _, want := range []string{"tool.completed", "finish.attempted"} {
-		if !jsonlHasString(journal, "type", want) {
-			t.Fatalf("event journal missing %q: %+v", want, journal)
+	assertThreadExecCommandToolRoundTrip(t, readThreadMessages(t, result.ThreadDir), "call_exec_cli", marker)
+	journal := threadJournalText(t, result.ThreadDir)
+	for _, want := range []string{`"type":"tool.completed"`, `"type":"finish.attempted"`} {
+		if !strings.Contains(journal, want) {
+			t.Fatalf("Thread journal missing %q: %s", want, journal)
 		}
 	}
 }
@@ -1186,31 +994,18 @@ func TestLiveBinary_CLIVerboseCompactsToolBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "--verbose", "run", "--new", "read both files")
 	home := t.TempDir()
-	cmd.Env = isolatedJuexBinaryEnv(home)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("juex verbose run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWait(t, bin, home, work, "read both files")
+	journal := threadJournalText(t, result.ThreadDir)
+	if !strings.Contains(journal, "verbose compact complete") ||
+		!strings.Contains(journal, `"type":"tool.completed"`) {
+		t.Fatalf("Thread journal missing batched tool completion:\n%s", journal)
 	}
-	if !strings.Contains(stdout.String(), "verbose compact complete") {
-		t.Fatalf("stdout missing final assistant text:\n%s", stdout.String())
-	}
-	errText := stderr.String()
-	for _, want := range []string{"… 2 read", "● 2 read"} {
-		if !strings.Contains(errText, want) {
-			t.Fatalf("stderr missing compact batch line %q:\n%s", want, errText)
+	for _, unwanted := range []string{"\x1b[", "\r"} {
+		if strings.Contains(result.Stdout, unwanted) || strings.Contains(result.Stderr, unwanted) {
+			t.Fatalf("non-TTY send output contains terminal control artifact %q", unwanted)
 		}
-	}
-	for _, unwanted := range []string{`"path":"a.txt"`, `"path":"b.txt"`, "call_read_a", "call_read_b"} {
-		if strings.Contains(errText, unwanted) {
-			t.Fatalf("stderr leaked per-tool detail %q:\n%s", unwanted, errText)
-		}
-	}
-	if strings.Contains(errText, "\x1b[") || strings.Contains(errText, "\r") {
-		t.Fatalf("non-TTY verbose stderr contains terminal control artifacts:\n%q", errText)
 	}
 }
 
@@ -1276,27 +1071,14 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "--debug", "run", "--new", "--json", "run the shell yield timeout e2e")
 	home := t.TempDir()
-	cmd.Env = isolatedJuexBinaryEnv(home)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("juex run: %v\n%s", err, out)
-	}
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWait(t, bin, home, work, "run the shell yield timeout e2e")
 	if got := requestCount.Load(); got != 3 {
 		t.Fatalf("provider requests = %d, want 3", got)
 	}
-
-	var result struct {
-		Text       string `json:"text"`
-		SessionID  string `json:"session_id"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("stdout is not run JSON: %v\n%s", err, out)
-	}
-	if result.Text != "yield semantics complete" || result.SessionDir == "" {
-		t.Fatalf("run result = %+v", result)
+	if !strings.Contains(threadJournalText(t, result.ThreadDir), "yield semantics complete") {
+		t.Fatalf("Thread journal missing final shell-yield response")
 	}
 
 	mu.Lock()
@@ -1397,27 +1179,14 @@ func main() {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "--debug", "run", "--new", "--json", "run the binary output command")
 	home := t.TempDir()
-	cmd.Env = isolatedJuexBinaryEnv(home)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("juex run: %v\n%s", err, out)
-	}
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWait(t, bin, home, work, "run the binary output command")
 	if got := requestCount.Load(); got != 2 {
 		t.Fatalf("provider requests = %d, want 2", got)
 	}
-
-	var result struct {
-		Text       string `json:"text"`
-		SessionID  string `json:"session_id"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("stdout is not run JSON: %v\n%s", err, out)
-	}
-	if result.Text != "binary output handled" || result.SessionDir == "" {
-		t.Fatalf("run result = %+v", result)
+	if !strings.Contains(threadJournalText(t, result.ThreadDir), "binary output handled") {
+		t.Fatalf("Thread journal missing final binary-output response")
 	}
 
 	mu.Lock()
@@ -1429,9 +1198,9 @@ func main() {
 		t.Fatalf("second provider request missing sanitized binary tool result: %+v", second["messages"])
 	}
 
-	conversationText := strings.Join(readLines(t, filepath.Join(result.SessionDir, "conversation.jsonl")), "\n")
+	conversationText := threadJournalText(t, result.ThreadDir)
 	assertBinaryOutputSanitized(t, conversationText)
-	eventsText := strings.Join(readLines(t, filepath.Join(result.SessionDir, "events.jsonl")), "\n")
+	eventsText := conversationText
 	assertBinaryOutputSanitized(t, eventsText)
 	if strings.Contains(eventsText, `"type":"tool.output_delta"`) {
 		t.Fatalf("events persisted transient tool output delta:\n%s", eventsText)
@@ -1446,119 +1215,7 @@ func main() {
 	}
 }
 
-func TestLiveBinary_CtrlCCancelsExecCommandTool(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("os.Interrupt process signalling is platform-specific in this e2e")
-	}
-	bin := buildJuex(t)
-
-	work := t.TempDir()
-	startedPath := filepath.Join(work, "exec-started.txt")
-	cmdText := "printf started > " + shQuote(startedPath) + "; sleep 30"
-	var requestCount atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch requestCount.Add(1) {
-		case 1:
-			writeJSON(t, w, chatToolCallResponse("call_exec_cancel", "exec_command", map[string]any{
-				"cmd": cmdText,
-			}))
-		default:
-			t.Errorf("unexpected provider request %d: %+v", requestCount.Load(), body)
-			writeJSON(t, w, chatCompletionResponseMap("unexpected"))
-		}
-	}))
-	defer srv.Close()
-
-	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "models: [local-chat:chat-test]\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
-    protocol: openai/chat
-    base_url: BASE_URL
-    api_key: k
-    capabilities:
-      streaming: false
-    models:
-      - id: chat-test
-`, "BASE_URL", srv.URL)
-	if err := writeText(configPath, body); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command(bin, "-C", work, "--debug", "run", "--new", "--json", "start cancellable exec")
-	home := t.TempDir()
-	cmd.Env = isolatedJuexBinaryEnv(home)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	waitForFile(t, startedPath, 5*time.Second)
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
-		_ = cmd.Process.Kill()
-		t.Fatalf("send interrupt: %v", err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	var err error
-	select {
-	case err = <-done:
-	case <-time.After(10 * time.Second):
-		_ = cmd.Process.Kill()
-		t.Fatal("juex run did not exit after interrupt")
-	}
-	if err == nil {
-		t.Fatal("expected interrupted run to exit non-zero")
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty on JSON error", stdout.String())
-	}
-
-	var got struct {
-		Error      string         `json:"error"`
-		Message    string         `json:"message"`
-		Suggestion string         `json:"suggestion"`
-		Retryable  bool           `json:"retryable"`
-		SessionDir string         `json:"session_dir"`
-		Details    map[string]any `json:"details"`
-	}
-	if jsonErr := json.Unmarshal(stderr.Bytes(), &got); jsonErr != nil {
-		t.Fatalf("stderr is not JSON: %v\n%s", jsonErr, stderr.String())
-	}
-	if got.Error != "interrupted" || got.Message != "run interrupted by signal SIGINT (2)" || got.Retryable {
-		t.Fatalf("interrupt JSON = %+v; stderr=%s", got, stderr.String())
-	}
-	if strings.Contains(got.Message, "by user") {
-		t.Fatalf("message should not blame user: %q", got.Message)
-	}
-	if got.Suggestion == "" || !strings.Contains(got.Suggestion, "stopped externally") {
-		t.Fatalf("suggestion = %q, want external stop guidance", got.Suggestion)
-	}
-	if got.Details["signal"] != "SIGINT" || got.Details["signal_number"] != float64(2) || got.Details["interrupted"] != true {
-		t.Fatalf("details = %+v, want SIGINT metadata", got.Details)
-	}
-	if got.SessionDir == "" {
-		t.Fatalf("stderr missing session_dir: %s", stderr.String())
-	}
-	if requestCount.Load() != 1 {
-		t.Fatalf("provider requests = %d, want only initial tool-use request", requestCount.Load())
-	}
-
-	assertConversationToolError(t, filepath.Join(got.SessionDir, "conversation.jsonl"), "call_exec_cancel", "run interrupted by signal SIGINT (2)")
-	eventsText := strings.Join(readLines(t, filepath.Join(got.SessionDir, "events.jsonl")), "\n")
-	for _, want := range []string{`"type":"tool.errored"`, `"type":"turn.errored"`, `"error_kind":"interrupted"`, `"signal":"SIGINT"`, `"signal_number":2`} {
-		if !strings.Contains(eventsText, want) {
-			t.Fatalf("events missing %q:\n%s", want, eventsText)
-		}
-	}
-}
-
-func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {
+func TestLiveBinary_ProviderErrorPersistsThreadFailure(t *testing.T) {
 	bin := buildJuex(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"message":"provider unavailable"}}`, http.StatusInternalServerError)
@@ -1578,36 +1235,14 @@ func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "run", "--json", "hello")
 	home := t.TempDir()
-	cmd.Env = isolatedJuexBinaryEnv(home)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil {
-		t.Fatal("expected provider failure")
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
-	}
-	var got struct {
-		Error      string         `json:"error"`
-		SessionID  string         `json:"session_id"`
-		SessionDir string         `json:"session_dir"`
-		WorkDir    string         `json:"work_dir"`
-		Details    map[string]any `json:"details"`
-	}
-	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
-		t.Fatalf("stderr is not JSON: %v\n%s", err, stderr.String())
-	}
-	if got.Error != "general_error" {
-		t.Fatalf("error = %q, want general_error; stderr=%s", got.Error, stderr.String())
-	}
-	if got.SessionID == "" || got.SessionDir == "" || got.WorkDir != work {
-		t.Fatalf("metadata = %+v, want session id/dir and work dir %s", got, work)
-	}
-	if got.Details != nil {
-		t.Fatalf("details = %+v", got.Details)
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWaitFailure(t, bin, home, work, "hello")
+	journal := threadJournalText(t, result.ThreadDir)
+	for _, want := range []string{`"type":"turn.errored"`, `"type":"input.attempt.failed"`, `"type":"input.dead_lettered"`} {
+		if !strings.Contains(journal, want) {
+			t.Fatalf("Thread journal missing %q after provider failure:\n%s", want, journal)
+		}
 	}
 }
 
@@ -1631,41 +1266,10 @@ func TestLiveBinary_ProviderDeadlineErrorJSONIsTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "run", "--json", "hello")
 	home := t.TempDir()
-	cmd.Env = isolatedJuexBinaryEnv(home)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil {
-		t.Fatal("expected provider timeout failure")
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
-	}
-	var got struct {
-		Error      string `json:"error"`
-		Message    string `json:"message"`
-		Retryable  bool   `json:"retryable"`
-		SessionDir string `json:"session_dir"`
-	}
-	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
-		t.Fatalf("stderr is not JSON: %v\n%s", err, stderr.String())
-	}
-	if got.Error != "timeout" || !got.Retryable {
-		t.Fatalf("error JSON = %+v, want retryable timeout; stderr=%s", got, stderr.String())
-	}
-	if !strings.Contains(got.Message, "timed out") {
-		t.Fatalf("message = %q, want timed out", got.Message)
-	}
-	if strings.Contains(got.Message, "deadline_exceeded") || strings.Contains(got.Message, "context deadline exceeded") {
-		t.Fatalf("message = %q, should not expose raw deadline", got.Message)
-	}
-	if got.SessionDir == "" {
-		t.Fatalf("stderr missing session_dir: %s", stderr.String())
-	}
-
-	eventsText := strings.Join(readLines(t, filepath.Join(got.SessionDir, "events.jsonl")), "\n")
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+	result := sendAndWaitFailure(t, bin, home, work, "hello")
+	eventsText := threadJournalText(t, result.ThreadDir)
 	for _, want := range []string{`"type":"turn.errored"`, `"error_kind":"timeout"`, `"timed_out":true`, `"raw_cause":`} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
@@ -1872,17 +1476,12 @@ func sessionIDFromProviderToolResult(body map[string]any, toolCallID string) (in
 	return 0, false
 }
 
-func assertConversationExecCommandToolRoundTrip(t *testing.T, path string, toolUseID string, wantOutput string) {
+func assertThreadExecCommandToolRoundTrip(t *testing.T, messages []llm.Message, toolUseID string, wantOutput string) {
 	t.Helper()
 
-	lines := readLines(t, path)
 	var sawToolUse bool
 	var sawToolResult bool
-	for i, line := range lines {
-		var message llm.Message
-		if err := json.Unmarshal([]byte(line), &message); err != nil {
-			t.Fatalf("conversation line %d is not a message: %v\n%s", i, err, line)
-		}
+	for _, message := range messages {
 		for _, block := range message.Blocks {
 			switch block.Type {
 			case llm.BlockToolUse:
@@ -1897,42 +1496,10 @@ func assertConversationExecCommandToolRoundTrip(t *testing.T, path string, toolU
 		}
 	}
 	if !sawToolUse {
-		t.Fatalf("conversation missing exec_command tool_use with id %q in %s", toolUseID, path)
+		t.Fatalf("Thread journal missing exec_command tool_use with id %q", toolUseID)
 	}
 	if !sawToolResult {
-		t.Fatalf("conversation missing tool_result for %q containing command output %q in %s", toolUseID, wantOutput, path)
-	}
-}
-
-func assertConversationToolError(t *testing.T, path string, toolUseID string, wantError string) {
-	t.Helper()
-
-	lines := readLines(t, path)
-	var sawToolUse bool
-	var sawToolResult bool
-	for i, line := range lines {
-		var message llm.Message
-		if err := json.Unmarshal([]byte(line), &message); err != nil {
-			t.Fatalf("conversation line %d is not a message: %v\n%s", i, err, line)
-		}
-		for _, block := range message.Blocks {
-			switch block.Type {
-			case llm.BlockToolUse:
-				if block.ToolUseID == toolUseID {
-					sawToolUse = true
-				}
-			case llm.BlockToolResult:
-				if block.ToolUseID == toolUseID && block.IsError && strings.Contains(block.Content, wantError) {
-					sawToolResult = true
-				}
-			}
-		}
-	}
-	if !sawToolUse {
-		t.Fatalf("conversation missing tool_use with id %q in %s", toolUseID, path)
-	}
-	if !sawToolResult {
-		t.Fatalf("conversation missing error tool_result for %q containing %q in %s", toolUseID, wantError, path)
+		t.Fatalf("Thread journal missing tool_result for %q containing command output %q", toolUseID, wantOutput)
 	}
 }
 
@@ -1948,18 +1515,6 @@ func assertBinaryOutputSanitized(t *testing.T, text string) {
 			t.Fatalf("text contains raw binary marker %q:\n%s", forbidden, text)
 		}
 	}
-}
-
-func waitForFile(t *testing.T, path string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", path)
 }
 
 func shQuote(s string) string {
@@ -1979,23 +1534,6 @@ func cloneMap(in map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-func isolatedJuexBinaryEnv(home string) []string {
-	env := append([]string{}, os.Environ()...)
-	env = append(env,
-		"HOME="+home,
-		"USERPROFILE="+home,
-		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
-		"PROVIDER_API_ID=",
-		"PROVIDER_API_PROTOCOL=",
-		"PROVIDER_API_BASE=",
-		"PROVIDER_API_KEY=",
-		"PROVIDER_API_MODEL=",
-		"PROVIDER_THINKING_EFFORT=",
-		"PROVIDER_CONTEXT_WINDOW=",
-	)
-	return env
 }
 
 func writeText(path, body string) error {

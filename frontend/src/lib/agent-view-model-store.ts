@@ -7,7 +7,7 @@ import type {
 
 export class AgentViewModelStore {
   private readonly activities = new Map<string, AgentActivity>();
-  private readonly sessionStatuses = new Map<
+  private readonly threadStatuses = new Map<
     string,
     Map<string, AgentRuntimeStatusSnapshot>
   >();
@@ -29,9 +29,9 @@ export class AgentViewModelStore {
         changed = this.activities.delete(agentID) || changed;
       }
     }
-    for (const agentID of this.sessionStatuses.keys()) {
+    for (const agentID of this.threadStatuses.keys()) {
       if (!rosterIDs.has(agentID)) {
-        changed = this.sessionStatuses.delete(agentID) || changed;
+        changed = this.threadStatuses.delete(agentID) || changed;
       }
     }
     for (const agent of agents) {
@@ -47,15 +47,15 @@ export class AgentViewModelStore {
   }
 
   setStatus(agentID: string, status: AgentRuntimeStatusSnapshot): void {
-    if (this.setSessionStatusInternal(agentID, status)) {
+    if (this.setThreadStatusInternal(agentID, status)) {
       this.emit();
     }
   }
 
-  clearStatus(agentID: string, sessionID: string): void {
-    const statuses = this.sessionStatuses.get(agentID);
-    if (!statuses?.delete(sessionID)) return;
-    if (statuses.size === 0) this.sessionStatuses.delete(agentID);
+  clearStatus(agentID: string, threadID: string): void {
+    const statuses = this.threadStatuses.get(agentID);
+    if (!statuses?.delete(threadID)) return;
+    if (statuses.size === 0) this.threadStatuses.delete(agentID);
     this.emit();
   }
 
@@ -65,9 +65,9 @@ export class AgentViewModelStore {
 
   status(
     agentID: string,
-    sessionID: string,
+    threadID: string,
   ): AgentRuntimeStatusSnapshot | undefined {
-    return this.sessionStatuses.get(agentID)?.get(sessionID);
+    return this.threadStatuses.get(agentID)?.get(threadID);
   }
 
   projectAgents(agents: readonly AgentStatus[]): AgentStatus[] {
@@ -89,18 +89,18 @@ export class AgentViewModelStore {
     return true;
   }
 
-  private setSessionStatusInternal(
+  private setThreadStatusInternal(
     agentID: string,
     status: AgentRuntimeStatusSnapshot,
   ): boolean {
-    let statuses = this.sessionStatuses.get(agentID);
+    let statuses = this.threadStatuses.get(agentID);
     if (!statuses) {
       statuses = new Map();
-      this.sessionStatuses.set(agentID, statuses);
+      this.threadStatuses.set(agentID, statuses);
     }
-    const current = statuses.get(status.session.id);
+    const current = statuses.get(status.thread.id);
     if (sameStatus(current, status)) return false;
-    statuses.set(status.session.id, status);
+    statuses.set(status.thread.id, status);
     return true;
   }
 

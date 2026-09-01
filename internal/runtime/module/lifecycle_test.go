@@ -88,17 +88,28 @@ func (m *lifecycleModule) CloseRuntime(context.Context) error {
 	return m.closeErr
 }
 
-type sessionLifecycleModule struct{ lifecycleModule }
+type threadLifecycleModule struct{ lifecycleModule }
 
-type leasedContextSessionModule struct {
+type contextRenewalModule struct {
+	id  ID
+	log *[]string
+}
+
+func (m *contextRenewalModule) ID() ID { return m.id }
+
+func (m *contextRenewalModule) ContextRenewed(context.Context) {
+	*m.log = append(*m.log, "renew:"+string(m.id))
+}
+
+type leasedContextThreadModule struct {
 	contextEntered chan struct{}
 	releaseContext chan struct{}
 	closeEntered   chan struct{}
 }
 
-func (*leasedContextSessionModule) ID() ID { return "leased-context" }
+func (*leasedContextThreadModule) ID() ID { return "leased-context" }
 
-func (m *leasedContextSessionModule) Context(context.Context, ContextRequest) ([]ContextSection, error) {
+func (m *leasedContextThreadModule) Context(context.Context, ContextRequest) ([]ContextSection, error) {
 	close(m.contextEntered)
 	<-m.releaseContext
 	return []ContextSection{{
@@ -110,45 +121,45 @@ func (m *leasedContextSessionModule) Context(context.Context, ContextRequest) ([
 	}}, nil
 }
 
-func (*leasedContextSessionModule) StartSession(context.Context, SessionContext) error { return nil }
+func (*leasedContextThreadModule) StartThread(context.Context, ThreadContext) error { return nil }
 
-func (m *leasedContextSessionModule) CloseSession(context.Context) error {
+func (m *leasedContextThreadModule) CloseThread(context.Context) error {
 	close(m.closeEntered)
 	return nil
 }
 
-func (m *sessionLifecycleModule) StartSession(context.Context, SessionContext) error {
+func (m *threadLifecycleModule) StartThread(context.Context, ThreadContext) error {
 	*m.log = append(*m.log, "start:"+string(m.id))
 	return m.startErr
 }
 
-func (m *sessionLifecycleModule) QuiesceSession(context.Context) error {
+func (m *threadLifecycleModule) QuiesceThread(context.Context) error {
 	*m.log = append(*m.log, "quiesce:"+string(m.id))
 	return m.quiesceErr
 }
 
-func (m *sessionLifecycleModule) CloseSession(context.Context) error {
+func (m *threadLifecycleModule) CloseThread(context.Context) error {
 	*m.log = append(*m.log, "close:"+string(m.id))
 	return m.closeErr
 }
 
-func TestSessionCloseWaitsForContextLease(t *testing.T) {
-	mod := &leasedContextSessionModule{
+func TestThreadCloseWaitsForContextLease(t *testing.T) {
+	mod := &leasedContextThreadModule{
 		contextEntered: make(chan struct{}),
 		releaseContext: make(chan struct{}),
 		closeEntered:   make(chan struct{}),
 	}
-	set, err := BuildSessionSet(context.Background(), []SessionFactorySpec{{
+	set, err := BuildThreadSet(context.Background(), []ThreadFactorySpec{{
 		ID:      mod.ID(),
 		Enabled: true,
-		New: func(context.Context, SessionContext) (Module, error) {
+		New: func(context.Context, ThreadContext) (Module, error) {
 			return mod, nil
 		},
-	}}, SessionContext{}, ToolContext{})
+	}}, ThreadContext{}, ToolContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := set.StartSession(context.Background(), SessionContext{}); err != nil {
+	if err := set.StartThread(context.Background(), ThreadContext{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,12 +171,12 @@ func TestSessionCloseWaitsForContextLease(t *testing.T) {
 	<-mod.contextEntered
 	closeDone := make(chan error, 1)
 	go func() {
-		closeDone <- set.CloseSession(context.Background())
+		closeDone <- set.CloseThread(context.Background())
 	}()
 
 	select {
 	case <-mod.closeEntered:
-		t.Error("Session Module closed while its Context call was active")
+		t.Error("Thread Module closed while its Context call was active")
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(mod.releaseContext)
@@ -175,8 +186,8 @@ func TestSessionCloseWaitsForContextLease(t *testing.T) {
 	if err := <-closeDone; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := set.Context(context.Background(), ContextRequest{}); err == nil || !strings.Contains(err.Error(), "session set is closed") {
-		t.Fatalf("Context() after close error = %v, want closed Session set", err)
+	if _, err := set.Context(context.Background(), ContextRequest{}); err == nil || !strings.Contains(err.Error(), "thread set is closed") {
+		t.Fatalf("Context() after close error = %v, want closed Thread set", err)
 	}
 }
 
@@ -331,69 +342,87 @@ func TestRuntimeQuiesceIsExplicitIdempotentAndDeferredCleanupCanRetry(t *testing
 	}
 }
 
-func TestSessionLifecycleUsesSessionScopeAndReverseCleanup(t *testing.T) {
+func TestThreadLifecycleUsesThreadScopeAndReverseCleanup(t *testing.T) {
 	var log []string
-	set, err := BuildSessionSet(context.Background(), []SessionFactorySpec{
+	set, err := BuildThreadSet(context.Background(), []ThreadFactorySpec{
 		{
 			ID:      "first",
 			Enabled: true,
-			New: func(context.Context, SessionContext) (Module, error) {
-				return &sessionLifecycleModule{lifecycleModule: lifecycleModule{id: "first", log: &log}}, nil
+			New: func(context.Context, ThreadContext) (Module, error) {
+				return &threadLifecycleModule{lifecycleModule: lifecycleModule{id: "first", log: &log}}, nil
 			},
 		},
 		{
 			ID:      "second",
 			Enabled: true,
-			New: func(context.Context, SessionContext) (Module, error) {
-				return &sessionLifecycleModule{lifecycleModule: lifecycleModule{id: "second", log: &log}}, nil
+			New: func(context.Context, ThreadContext) (Module, error) {
+				return &threadLifecycleModule{lifecycleModule: lifecycleModule{id: "second", log: &log}}, nil
 			},
 		},
-	}, SessionContext{ID: "session-1"}, ToolContext{})
+	}, ThreadContext{ID: "thread-1"}, ToolContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := set.StartSession(context.Background(), SessionContext{ID: "session-1"}); err != nil {
+	if err := set.StartThread(context.Background(), ThreadContext{ID: "thread-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := set.CloseSession(context.Background()); err != nil {
+	if err := set.CloseThread(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"start:first", "start:second", "quiesce:second", "quiesce:first", "close:second", "close:first"}
 	if !reflect.DeepEqual(log, want) {
-		t.Fatalf("session lifecycle log = %#v, want %#v", log, want)
+		t.Fatalf("thread lifecycle log = %#v, want %#v", log, want)
 	}
 }
 
-func TestSessionStartFailureRollsBackStartedModulesInReverseOrder(t *testing.T) {
+func TestThreadStartFailureRollsBackStartedModulesInReverseOrder(t *testing.T) {
 	var log []string
-	rollbackErr := errors.New("session rollback failed")
-	startErr := errors.New("session start failed")
-	set, err := BuildSessionSet(context.Background(), []SessionFactorySpec{
+	rollbackErr := errors.New("thread rollback failed")
+	startErr := errors.New("thread start failed")
+	set, err := BuildThreadSet(context.Background(), []ThreadFactorySpec{
 		{
 			ID:      "first",
 			Enabled: true,
-			New: func(context.Context, SessionContext) (Module, error) {
-				return &sessionLifecycleModule{lifecycleModule: lifecycleModule{id: "first", log: &log, closeErr: rollbackErr}}, nil
+			New: func(context.Context, ThreadContext) (Module, error) {
+				return &threadLifecycleModule{lifecycleModule: lifecycleModule{id: "first", log: &log, closeErr: rollbackErr}}, nil
 			},
 		},
 		{
 			ID:      "second",
 			Enabled: true,
-			New: func(context.Context, SessionContext) (Module, error) {
-				return &sessionLifecycleModule{lifecycleModule: lifecycleModule{id: "second", log: &log, startErr: startErr}}, nil
+			New: func(context.Context, ThreadContext) (Module, error) {
+				return &threadLifecycleModule{lifecycleModule: lifecycleModule{id: "second", log: &log, startErr: startErr}}, nil
 			},
 		},
-	}, SessionContext{ID: "session-1"}, ToolContext{})
+	}, ThreadContext{ID: "thread-1"}, ToolContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = set.StartSession(context.Background(), SessionContext{ID: "session-1"})
+	err = set.StartThread(context.Background(), ThreadContext{ID: "thread-1"})
 	if !errors.Is(err, startErr) || !errors.Is(err, rollbackErr) {
-		t.Fatalf("StartSession() error = %v, want joined start and rollback errors", err)
+		t.Fatalf("StartThread() error = %v, want joined start and rollback errors", err)
 	}
 	want := []string{"start:first", "start:second", "close:first"}
 	if !reflect.DeepEqual(log, want) {
-		t.Fatalf("session rollback log = %#v, want %#v", log, want)
+		t.Fatalf("thread rollback log = %#v, want %#v", log, want)
+	}
+}
+
+func TestNotifyContextRenewedUsesSetAndRegistrationOrder(t *testing.T) {
+	var log []string
+	first := buildRuntimeLifecycleSet(t,
+		&contextRenewalModule{id: "first-a", log: &log},
+		&contextRenewalModule{id: "first-b", log: &log},
+	)
+	second := buildRuntimeLifecycleSet(t,
+		&contextRenewalModule{id: "second", log: &log},
+	)
+
+	NotifyContextRenewed(context.Background(), first, nil, second)
+
+	want := []string{"renew:first-a", "renew:first-b", "renew:second"}
+	if !reflect.DeepEqual(log, want) {
+		t.Fatalf("renewal log = %#v, want %#v", log, want)
 	}
 }
 

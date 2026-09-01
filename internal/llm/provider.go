@@ -75,7 +75,7 @@ type Config struct {
 	Query          map[string]string
 	Capabilities   CapabilityOverrides
 	Compat         CompatOptions
-	ArtifactDir    string
+	MediaDir       string
 }
 
 // New constructs the appropriate Provider for the resolved provider profile.

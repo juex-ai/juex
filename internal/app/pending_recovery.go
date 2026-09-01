@@ -20,49 +20,49 @@ type externalInputDelivery struct {
 
 const maxExternalInputStorageAttempts = 8
 
-type externalInputSessionLease struct {
+type externalInputThreadLease struct {
 	app  *App
 	refs atomic.Int32
 }
 
-func (a *App) acquireExternalInputSessionLease() *externalInputSessionLease {
-	a.sessionHandoffMu.RLock()
-	lease := &externalInputSessionLease{app: a}
+func (a *App) acquireExternalInputThreadLease() *externalInputThreadLease {
+	a.threadHandoffMu.RLock()
+	lease := &externalInputThreadLease{app: a}
 	lease.refs.Store(1)
 	return lease
 }
 
-func (l *externalInputSessionLease) Retain() {
+func (l *externalInputThreadLease) Retain() {
 	if l != nil {
 		l.refs.Add(1)
 	}
 }
 
-func (l *externalInputSessionLease) Release() {
+func (l *externalInputThreadLease) Release() {
 	if l != nil && l.refs.Add(-1) == 0 {
-		l.app.sessionHandoffMu.RUnlock()
+		l.app.threadHandoffMu.RUnlock()
 	}
 }
 
 // deliverExternalInputLocked durably accepts transport input before asking the
 // runtime lifecycle whether to attach it or start an idle Turn.
-// The caller holds sessionMu.RLock for the complete attached-session lifetime.
+// The caller holds threadMu.RLock for the complete attached-Thread lifetime.
 func (a *App) deliverExternalInputLocked(
 	ctx context.Context,
 	message llm.Message,
 	opts runtime.PendingInputOptions,
-	sessionLease *externalInputSessionLease,
+	threadLease *externalInputThreadLease,
 	handoff bool,
 	valid func() error,
 ) (externalInputDelivery, error) {
-	return a.deliverExternalInputLockedWithStart(ctx, message, opts, sessionLease, handoff, valid, nil)
+	return a.deliverExternalInputLockedWithStart(ctx, message, opts, threadLease, handoff, valid, nil)
 }
 
 func (a *App) deliverExternalInputLockedWithStart(
 	ctx context.Context,
 	message llm.Message,
 	opts runtime.PendingInputOptions,
-	sessionLease *externalInputSessionLease,
+	threadLease *externalInputThreadLease,
 	handoff bool,
 	valid func() error,
 	onStarted func(),
@@ -83,7 +83,7 @@ func (a *App) deliverExternalInputLockedWithStart(
 	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
 		if handoff {
-			a.handoffPersistedInputAfterRecovery(recordID, sessionLease)
+			a.handoffPersistedInputAfterRecovery(recordID, threadLease)
 		}
 		return externalInputDelivery{RecordID: recordID, Queued: true, Retry: runtime.PendingInputRetryAfterRecovery}, err
 	}
@@ -92,14 +92,14 @@ func (a *App) deliverExternalInputLockedWithStart(
 		delivery.RecordID = recordID
 	}
 	if handoff && shouldStartPersistedInputHandoff(delivery, err) {
-		a.handoffPersistedInputAfterRecovery(recordID, sessionLease)
+		a.handoffPersistedInputAfterRecovery(recordID, threadLease)
 		delivery.Queued = true
 	}
 	return delivery, err
 }
 
 // resumePersistedInputLocked follows the Framework-owned lifecycle outcome;
-// App owns only the Session lease and execution of a returned start action.
+// App owns only the Thread lease and execution of a returned start action.
 func (a *App) resumePersistedInputLocked(ctx context.Context, recordID string) (externalInputDelivery, error) {
 	return a.resumePersistedInputLockedWithStart(ctx, recordID, nil)
 }
@@ -146,7 +146,7 @@ func (a *App) deliverExternalInputUntilSettled(
 	valid func() error,
 	onStarted func(),
 ) (externalInputDelivery, error) {
-	lease := a.acquireExternalInputSessionLease()
+	lease := a.acquireExternalInputThreadLease()
 	defer lease.Release()
 	backoff := 50 * time.Millisecond
 	storageAttempts := 0
@@ -156,9 +156,9 @@ func (a *App) deliverExternalInputUntilSettled(
 		if err := ctx.Err(); err != nil {
 			return last, errors.Join(err, a.discardExternalInput(last.RecordID))
 		}
-		a.sessionMu.RLock()
+		a.threadMu.RLock()
 		delivery, err := a.deliverExternalInputLockedWithStart(ctx, message, opts, lease, false, valid, onStarted)
-		a.sessionMu.RUnlock()
+		a.threadMu.RUnlock()
 		last = delivery
 		if err == nil {
 			return delivery, err
@@ -258,7 +258,7 @@ func (a *App) startPendingInputRecovery(records []runtime.PendingInputRecovery) 
 	}()
 }
 
-// resumePersistedInputDuringRecovery keeps the startup barrier and its Session
+// resumePersistedInputDuringRecovery keeps the startup barrier and its Thread
 // ownership until a replayable admission either attaches or becomes inert.
 // A generic handoff cannot own this retry because handoffs wait for the startup
 // barrier and would release newer inputs before they finish.
@@ -268,9 +268,9 @@ func (a *App) resumePersistedInputDuringRecovery(recordID string) (externalInput
 		if err := a.ctx.Err(); err != nil {
 			return externalInputDelivery{}, err
 		}
-		a.sessionMu.RLock()
+		a.threadMu.RLock()
 		delivery, err := a.resumePersistedInputLocked(a.ctx, recordID)
-		a.sessionMu.RUnlock()
+		a.threadMu.RUnlock()
 		if !shouldRetryPersistedInputHandoff(delivery, err) {
 			return delivery, err
 		}
@@ -353,7 +353,7 @@ func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {
 // is already closing, and duplicate callers share one handoff by record ID.
 func (a *App) handoffPersistedInputAfterRecovery(
 	recordID string,
-	sessionLease *externalInputSessionLease,
+	threadLease *externalInputThreadLease,
 ) bool {
 	if a == nil || a.Engine == nil || recordID == "" || a.ctx == nil {
 		return false
@@ -372,7 +372,7 @@ func (a *App) handoffPersistedInputAfterRecovery(
 	}
 	a.pendingHandoffIDs[recordID] = struct{}{}
 	a.pendingHandoffs.Add(1)
-	sessionLease.Retain()
+	threadLease.Retain()
 	a.pendingHandoffMu.Unlock()
 
 	go func() {
@@ -381,16 +381,16 @@ func (a *App) handoffPersistedInputAfterRecovery(
 			delete(a.pendingHandoffIDs, recordID)
 			a.pendingHandoffMu.Unlock()
 			a.pendingHandoffs.Done()
-			sessionLease.Release()
+			threadLease.Release()
 		}()
 		delay := 25 * time.Millisecond
 		for {
 			if err := a.waitPendingInputRecoveryContext(a.ctx); err != nil {
 				return
 			}
-			a.sessionMu.RLock()
+			a.threadMu.RLock()
 			delivery, err := a.resumePersistedInputLocked(a.ctx, recordID)
-			a.sessionMu.RUnlock()
+			a.threadMu.RUnlock()
 			if !shouldRetryPersistedInputHandoff(delivery, err) {
 				if err != nil && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
 					fmt.Fprintf(a.stderr, "juex: warning: resume handed-off pending input %q: %v\n", recordID, err)

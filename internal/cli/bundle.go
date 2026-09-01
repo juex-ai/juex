@@ -12,21 +12,21 @@ import (
 
 func newBundleCmd(flags *persistentFlags) *cobra.Command {
 	var (
-		sessionID              string
+		threadID               string
 		outPath                string
 		format                 string
 		redact                 bool
 		force                  bool
-		includeArtifacts       bool
+		includeMedia           bool
 		includeWorktreeSummary bool
 	)
 	cmd := &cobra.Command{
-		Use:   "bundle --session <id> --out <file.tar.gz>",
-		Short: "Create a portable debug bundle for one session",
+		Use:   "bundle --thread <id> --out <file.tar.gz>",
+		Short: "Create a portable debug bundle for one thread",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if sessionID == "" {
-				return &usageError{msg: "juex bundle: --session required"}
+			if threadID == "" {
+				return &usageError{msg: "juex bundle: --thread required"}
 			}
 			if outPath == "" {
 				return &usageError{msg: "juex bundle: --out required"}
@@ -41,18 +41,18 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 			}
 			result, err := bundle.Create(bundle.Options{
 				WorkDir:                cfg.WorkDir,
-				SessionID:              sessionID,
+				ThreadID:               threadID,
 				OutPath:                outPath,
 				Redact:                 redact,
 				Force:                  force,
-				IncludeArtifacts:       includeArtifacts,
+				IncludeMedia:           includeMedia,
 				IncludeWorktreeSummary: includeWorktreeSummary,
 				Config:                 cfg,
 				Environment:            agentRuntime.Environment(),
 			})
 			if err != nil {
 				switch {
-				case errors.Is(err, bundle.ErrSessionNotFound):
+				case errors.Is(err, bundle.ErrThreadNotFound):
 					return &notFoundError{msg: err.Error()}
 				case errors.Is(err, bundle.ErrOutputExists):
 					return &conflictError{msg: err.Error()}
@@ -64,19 +64,19 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 			case "json", "":
 				cmdPrintln(cmd, mustJSON(result))
 			case "text":
-				fmt.Fprintf(cmd.OutOrStdout(), "bundle: %s\nsession: %s\nfiles: %d\nbytes: %d\nredacted: %t\n", result.Path, result.SessionID, result.Files, result.Bytes, result.Redacted)
+				fmt.Fprintf(cmd.OutOrStdout(), "bundle: %s\nthread: %s\nfiles: %d\nbytes: %d\nredacted: %t\n", result.Path, result.ThreadID, result.Files, result.Bytes, result.Redacted)
 			default:
 				return &usageError{msg: "unknown --format value: " + format}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&sessionID, "session", "", "session id to bundle")
+	cmd.Flags().StringVar(&threadID, "thread", "", "thread id to bundle")
 	cmd.Flags().StringVar(&outPath, "out", "", "output .tar.gz path")
 	cmd.Flags().StringVar(&format, "format", "json", "json|text")
 	cmd.Flags().BoolVar(&redact, "redact", true, "redact secret-like values from bundled text files")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing output path")
-	cmd.Flags().BoolVar(&includeArtifacts, "include-artifacts", false, "include Agent-managed Artifact files")
+	cmd.Flags().BoolVar(&includeMedia, "include-media", false, "include Agent-managed media files")
 	cmd.Flags().BoolVar(&includeWorktreeSummary, "include-worktree-summary", false, "include a worktree summary without file contents")
 	declareAgentStatePolicy(cmd, agentStateExisting)
 	return cmd

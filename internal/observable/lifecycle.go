@@ -10,7 +10,7 @@ type DeliveryFunc func(context.Context, ObservationRecord) (DeliveryOutcome, err
 
 type DeliveryOutcome struct {
 	State          string
-	TargetSession  string
+	TargetThread   string
 	PendingInputID string
 	DeliveredAt    time.Time
 	Error          string
@@ -48,8 +48,8 @@ func (o DeliveryOutcome) apply(record ObservationRecord) ObservationRecord {
 	if o.State != "" {
 		record.State = o.State
 	}
-	if o.TargetSession != "" {
-		record.TargetSession = o.TargetSession
+	if o.TargetThread != "" {
+		record.TargetThread = o.TargetThread
 	}
 	if o.PendingInputID != "" {
 		record.PendingInputID = o.PendingInputID

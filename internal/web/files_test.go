@@ -17,6 +17,8 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
 
@@ -94,19 +96,19 @@ func TestFilesTreeLimitsDepth(t *testing.T) {
 	}
 }
 
-func TestSessionScratchpadTreeReturnsScopedFiles(t *testing.T) {
+func TestThreadScratchpadTreeReturnsScopedFiles(t *testing.T) {
 	srv := newTestServer(t)
-	id := "20260507T101010-pad001"
-	seedSession(t, srv.opts.Cfg.WorkDir, id,
+	id := thread.MainID
+	seedScratchpadThread(t, srv.opts.Cfg.WorkDir, id,
 		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
-	root := filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad")
+	root := filepath.Join(srv.opts.Cfg.ThreadsDir(), id, "scratchpad")
 	mustWriteFile(t, filepath.Join(root, "draft.md"), "draft")
 	mustWriteFile(t, filepath.Join(root, "dist", "result.txt"), "kept")
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +121,7 @@ func TestSessionScratchpadTreeReturnsScopedFiles(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.ToSlash(filepath.Join(".juex", "sessions", id, "scratchpad"))
+	wantPath := filepath.ToSlash(filepath.Join(".juex", "threads", id, "scratchpad"))
 	if tree.Name != "scratchpad" || tree.Path != wantPath || !tree.IsDir {
 		t.Fatalf("root = %+v, want scoped scratchpad %q", tree, wantPath)
 	}
@@ -131,19 +133,20 @@ func TestSessionScratchpadTreeReturnsScopedFiles(t *testing.T) {
 	}
 }
 
-func TestSessionScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
+func TestThreadScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Cfg.AgentStateDir = filepath.Join(t.TempDir(), "agent")
-	id := "20260717T131800-agenthome"
-	sessionDir := filepath.Join(srv.opts.Cfg.SessionsDir(), id)
-	mustWriteFile(t, filepath.Join(sessionDir, "conversation.jsonl"),
-		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
-	mustWriteFile(t, filepath.Join(sessionDir, "scratchpad", "draft.md"), "agent-home draft")
+	id := thread.MainID
+	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+		t.Fatal(err)
+	}
+	threadDir := filepath.Join(srv.opts.Cfg.ThreadsDir(), id)
+	mustWriteFile(t, filepath.Join(threadDir, "scratchpad", "draft.md"), "agent-home draft")
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +159,7 @@ func TestSessionScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.ToSlash(filepath.Join(".juex", "sessions", id, "scratchpad"))
+	wantPath := filepath.ToSlash(filepath.Join(".juex", "threads", id, "scratchpad"))
 	if tree.Path != wantPath || len(tree.Children) != 1 || tree.Children[0].Path != wantPath+"/draft.md" {
 		t.Fatalf("tree = %+v, want logical path %q with draft.md", tree, wantPath)
 	}
@@ -179,22 +182,19 @@ func TestSessionScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
 	}
 }
 
-func TestSessionScratchpadTreeDoesNotPersistLazySession(t *testing.T) {
+func TestThreadScratchpadReadKeepsEmptyDirectory(t *testing.T) {
 	srv := newTestServer(t)
-	as, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	as, err := srv.openThread(t.Context(), thread.MainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(as.app.Session.Dir, "conversation.jsonl")); !os.IsNotExist(err) {
-		t.Fatalf("lazy conversation stat err = %v, want not exist", err)
-	}
-	if _, err := os.Stat(filepath.Join(as.app.Session.Dir, "scratchpad")); !os.IsNotExist(err) {
-		t.Fatalf("lazy scratchpad stat err = %v, want not exist", err)
+	if _, err := os.Stat(filepath.Join(as.app.Thread.Dir, "scratchpad")); err != nil {
+		t.Fatalf("scratchpad stat: %v", err)
 	}
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/sessions/" + as.app.Session.ID + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + as.app.Thread.ID + "/scratchpad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,22 +208,20 @@ func TestSessionScratchpadTreeDoesNotPersistLazySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	if tree.Name != "scratchpad" || !tree.IsDir || len(tree.Children) != 0 {
-		t.Fatalf("lazy scratchpad tree = %+v", tree)
+		t.Fatalf("empty scratchpad tree = %+v", tree)
 	}
-	if _, err := os.Stat(filepath.Join(as.app.Session.Dir, "conversation.jsonl")); !os.IsNotExist(err) {
-		t.Fatalf("scratchpad read persisted lazy conversation: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(as.app.Session.Dir, "scratchpad")); !os.IsNotExist(err) {
-		t.Fatalf("scratchpad read created lazy directory: %v", err)
+	entries, err := os.ReadDir(filepath.Join(as.app.Thread.Dir, "scratchpad"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("scratchpad changed after read: entries=%v err=%v", entries, err)
 	}
 }
 
-func TestSessionScratchpadTreeRejectsUnknownSession(t *testing.T) {
+func TestThreadScratchpadTreeRejectsUnknownThread(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/sessions/missing/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/missing/scratchpad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +232,7 @@ func TestSessionScratchpadTreeRejectsUnknownSession(t *testing.T) {
 	}
 }
 
-func TestSessionScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
+func TestThreadScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
 	realWork := t.TempDir()
 	linkedWork := filepath.Join(t.TempDir(), "work")
 	if err := os.Symlink(realWork, linkedWork); err != nil {
@@ -251,15 +249,18 @@ func TestSessionScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
 		Provider: stubProvider{},
 	})
 	t.Cleanup(srv.Close)
+	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+		t.Fatal(err)
+	}
 
-	id := "20260507T101010-linked"
-	seedSession(t, linkedWork, id,
+	id := thread.MainID
+	seedScratchpadThread(t, linkedWork, id,
 		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
-	mustWriteFile(t, filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad", "draft.md"), "draft")
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.ThreadsDir(), id, "scratchpad", "draft.md"), "draft")
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,42 +273,29 @@ func TestSessionScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.ToSlash(filepath.Join(".juex", "sessions", id, "scratchpad"))
+	wantPath := filepath.ToSlash(filepath.Join(".juex", "threads", id, "scratchpad"))
 	if tree.Path != wantPath || len(tree.Children) != 1 || tree.Children[0].Name != "draft.md" {
 		t.Fatalf("tree = %+v, want path %q with draft.md", tree, wantPath)
 	}
 
-	as, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lazyResp, err := http.Get(ts.URL + "/api/sessions/" + as.app.Session.ID + "/scratchpad")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lazyResp.Body.Close()
-	if lazyResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(lazyResp.Body)
-		t.Fatalf("lazy status = %d body = %s", lazyResp.StatusCode, body)
-	}
-	if _, err := os.Stat(as.app.Session.ScratchpadDir()); !os.IsNotExist(err) {
-		t.Fatalf("scratchpad read created lazy directory: %v", err)
-	}
 }
 
-func TestSessionScratchpadTreeRejectsOutsideSymlink(t *testing.T) {
+func TestThreadScratchpadTreeRejectsOutsideSymlink(t *testing.T) {
 	srv := newTestServer(t)
-	id := "20260507T101010-linked-out"
-	seedSession(t, srv.opts.Cfg.WorkDir, id,
+	id := thread.MainID
+	seedScratchpadThread(t, srv.opts.Cfg.WorkDir, id,
 		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
 	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad")); err != nil {
+	if err := os.Remove(filepath.Join(srv.opts.Cfg.ThreadsDir(), id, "scratchpad")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(srv.opts.Cfg.ThreadsDir(), id, "scratchpad")); err != nil {
 		t.Fatal(err)
 	}
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,18 +306,21 @@ func TestSessionScratchpadTreeRejectsOutsideSymlink(t *testing.T) {
 	}
 }
 
-func TestSessionScratchpadTreeRejectsInsideSymlink(t *testing.T) {
+func TestThreadScratchpadTreeRejectsInsideSymlink(t *testing.T) {
 	srv := newTestServer(t)
-	id := "20260507T101010-linked-in"
-	seedSession(t, srv.opts.Cfg.WorkDir, id,
+	id := thread.MainID
+	seedScratchpadThread(t, srv.opts.Cfg.WorkDir, id,
 		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
-	if err := os.Symlink(srv.opts.Cfg.WorkDir, filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad")); err != nil {
+	if err := os.Remove(filepath.Join(srv.opts.Cfg.ThreadsDir(), id, "scratchpad")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(srv.opts.Cfg.WorkDir, filepath.Join(srv.opts.Cfg.ThreadsDir(), id, "scratchpad")); err != nil {
 		t.Fatal(err)
 	}
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,8 +543,8 @@ func TestMediaHeadReturnsImageMetadataWithoutBody(t *testing.T) {
 func TestMediaServesArtifactImage(t *testing.T) {
 	srv := newTestServer(t)
 	digest := "1b56b50ac4e976f488f128cabdcdffb2fc9331d6974bb9968131a415d14ade24"
-	artifactPath := filepath.Join("sessions", "session", "media", digest+".png")
-	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.ArtifactDir(), artifactPath), tinyPNG)
+	artifactPath := filepath.Join("threads", "123456", "media", digest+".png")
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.MediaDir(), artifactPath), tinyPNG)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -592,12 +583,15 @@ func TestMediaRequiresExplicitRoot(t *testing.T) {
 	}
 }
 
-func TestWorkspaceMediaResolvesSessionScratchpadAliases(t *testing.T) {
+func TestWorkspaceMediaResolvesThreadScratchpadAliases(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Cfg.AgentStateDir = filepath.Join(t.TempDir(), "agent")
-	id := "20260812T120000-scratch"
-	logical := filepath.ToSlash(filepath.Join(".juex", "sessions", id, "scratchpad", "image.png"))
-	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad", "image.png"), tinyPNG)
+	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+		t.Fatal(err)
+	}
+	id := thread.MainID
+	logical := filepath.ToSlash(filepath.Join(".juex", "threads", id, "scratchpad", "image.png"))
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.ThreadsDir(), id, "scratchpad", "image.png"), tinyPNG)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -617,8 +611,8 @@ func TestWorkspaceMediaResolvesSessionScratchpadAliases(t *testing.T) {
 func TestArtifactMediaRejectsCorruptedContentAddressedBytes(t *testing.T) {
 	srv := newTestServer(t)
 	digest := "1b56b50ac4e976f488f128cabdcdffb2fc9331d6974bb9968131a415d14ade24"
-	artifactPath := filepath.Join("sessions", "session", "media", digest+".png")
-	mustWriteFile(t, filepath.Join(srv.opts.Cfg.ArtifactDir(), artifactPath), "corrupted")
+	artifactPath := filepath.Join("threads", "123456", "media", digest+".png")
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.MediaDir(), artifactPath), "corrupted")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -637,11 +631,11 @@ func TestArtifactMediaRejectsCorruptedContentAddressedBytes(t *testing.T) {
 
 func TestArtifactMediaRejectsOversizedContentAddressedBytes(t *testing.T) {
 	srv := newTestServer(t)
-	store, err := artifact.NewStore(srv.opts.Cfg.ArtifactDir())
+	store, err := artifact.NewStore(srv.opts.Cfg.MediaDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.PutContentAddressed("sessions/session/media", ".png", bytes.Repeat([]byte("x"), usermedia.DefaultMaxBytes+1))
+	ref, err := store.PutContentAddressed("threads/123456/media", ".png", bytes.Repeat([]byte("x"), usermedia.DefaultMaxBytes+1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -826,4 +820,20 @@ func childNames(nodes []*FileNode) []string {
 		names = append(names, n.Name)
 	}
 	return names
+}
+
+func seedScratchpadThread(t *testing.T, workDir, id, _ string) {
+	t.Helper()
+	store := thread.NewStore(filepath.Join(workDir, ".juex"))
+	target, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if id != thread.MainID {
+		t.Fatalf("scratchpad fixture id = %q, want Main", id)
+	}
+	if err := target.Append(llm.TextMessage(llm.RoleUser, "hi")); err != nil {
+		t.Fatal(err)
+	}
 }

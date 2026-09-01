@@ -14,12 +14,12 @@ depend on several hand-maintained paths. A Feature could be hidden from one
 surface while its constructor, process, subscription, or cleanup still ran.
 Replacing a Feature also required changing Framework code.
 
-The Agent, Session, Turn, Provider iteration, Tool call, compaction, and
+The Agent, Thread, Turn, Provider iteration, Tool call, compaction, and
 shutdown lifecycles contain durable ordering rules. A replacement mechanism
 must not let Feature code bypass admission, Tool declaration and outcome,
 pending-input, Request Epoch, cancellation, compaction, or completion commits.
 At the same time, product capabilities such as Goal, Notes, Skills, Hooks,
-MCP, Observables, and Side Sessions should not be hard-coded into those
+MCP, Observables, and Worker Threads should not be hard-coded into those
 lifecycles.
 
 External Extensions are a separate trust and deployment boundary. They are
@@ -33,8 +33,8 @@ Module architecture must preserve that distinction.
 Juex uses three responsibility layers:
 
 - **Foundation** owns business-agnostic primitives such as Provider adapters,
-  Tool values and execution, Events and durable sinks, Session persistence,
-  sandboxing, Artifacts, environment handling, and process management.
+  Tool values and execution, Events and durable sinks, Thread persistence,
+  sandboxing, spool/media storage, environment handling, and process management.
 - **Framework** owns the stable Agent and runtime lifecycles, durable ordering,
   Module contracts, capability indexing, validation, and scoped lifecycle
   orchestration.
@@ -61,12 +61,11 @@ deterministic. Framework validates identities, contributions, provenance, and
 cross-scope Tool catalogs before publication, then seals the set so serving
 code cannot mutate it.
 
-Runtime and Session resources have distinct typed lifecycles. They start in
-registration order, roll back or close in reverse order, attempt every cleanup,
-and join failures with Module and phase identity. Disabled factories are
-filtered before construction. A Session replacement builds and validates the
-complete candidate set before atomically publishing it; the previous set
-remains authoritative if candidate publication fails.
+Agent Runtime and Thread resources have distinct typed lifecycles. They start
+in registration order, roll back or close in reverse order, attempt every
+cleanup, and join failures with Module and phase identity. Disabled factories
+are filtered before construction. A Context Generation change rebuilds prompt
+projection inside the same Thread; it does not replace the Thread resource set.
 
 Feature dependencies use constructor injection at the composition root. When
 one Feature optionally consumes another, the consumer defines the smallest
@@ -171,9 +170,10 @@ cannot be expressed safely with these mechanisms.
 
 Dynamic discovery and hot replacement would require new compatibility,
 quiescence, dependency, and rollback contracts at arbitrary execution points.
-Juex currently needs deterministic construction and atomic Runtime or Session
-boundaries, not arbitrary in-place mutation. Restart and validated Session-set
-replacement are the supported reconfiguration boundaries.
+Juex currently needs deterministic construction and explicit Runtime or Thread
+boundaries, not arbitrary in-place mutation. Agent restart and validated
+Thread creation/closure are the supported resource reconfiguration boundaries;
+`/new` and `/compact` rebuild context inside an existing Thread.
 
 ## Implementation Evidence
 
@@ -191,7 +191,7 @@ evidence:
 
 ## References
 
-- [Architecture: Module Sets And Lifecycle](../../ARCHITECTURE.md#22-module-sets-and-lifecycle)
-- [Domain lifecycles](../../DOMAIN.md#lifecycles)
+- [Architecture: Package Ownership](../../ARCHITECTURE.md#package-ownership)
+- [Domain: Input, Attempt, Turn, And Subscription](../../DOMAIN.md#input-attempt-turn-and-subscription)
 - [Philosophy: Prefer Explicit Surfaces](../../PHILOSOPHY.md#prefer-explicit-surfaces)
 - [`internal/runtime/module`](../../internal/runtime/module/)

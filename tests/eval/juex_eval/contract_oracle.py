@@ -30,26 +30,18 @@ def validate_agent_smoke_contract(conversation: pathlib.Path, events: pathlib.Pa
 
 def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[bool, str]:
     if not path.is_file():
-        return False, "missing conversation log"
+        return False, "missing Thread Journal"
     tool_uses: dict[str, str] = {}
     seen_tools: set[str] = set()
     legacy_uses: list[str] = []
     saw_tty_exec = False
     saw_write_stdin = False
     saw_exec_result = False
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError as exc:
-        return False, f"read conversation: {exc}"
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError as exc:
-            return False, f"conversation line {line_number} is invalid JSON: {exc}"
-        if not isinstance(message, dict):
-            continue
+    issues: list[str] = []
+    messages = load_thread_journal_records(path, "message", issues)
+    if issues:
+        return False, issues[0]
+    for line_number, message in enumerate(messages, start=1):
         blocks = message.get("blocks")
         if not isinstance(blocks, list):
             continue
@@ -77,7 +69,7 @@ def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[
                 if tool_uses.get(tool_use_id) == "exec_command" and token in content and "Process exited with code 0" in content:
                     saw_exec_result = True
     if legacy_uses:
-        return False, "conversation contains legacy shell tool_use: " + ", ".join(legacy_uses)
+        return False, "Thread Journal contains legacy shell tool_use: " + ", ".join(legacy_uses)
     required = {"read", "write", "edit", "grep", "exec_command", "write_stdin"}
     missing = sorted(required - seen_tools)
     if missing:
@@ -93,7 +85,7 @@ def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[
 
 def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> tuple[bool, str]:
     if not path.is_file():
-        return False, "missing events log"
+        return False, "missing Thread Journal"
     delta_count = 0
     saw_install = False
     saw_prompt = False
@@ -102,19 +94,11 @@ def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> 
     saw_write_stdin_completed = False
     saw_structured_exec_running = False
     saw_structured_write_stdin_result = False
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError as exc:
-        return False, f"read events: {exc}"
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError as exc:
-            return False, f"events line {line_number} is invalid JSON: {exc}"
-        if not isinstance(event, dict):
-            continue
+    issues: list[str] = []
+    events = load_thread_journal_records(path, "event", issues)
+    if issues:
+        return False, issues[0]
+    for event in events:
         payload = event.get("payload")
         if not isinstance(payload, dict):
             continue
@@ -162,6 +146,49 @@ def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> 
     if missing:
         return False, "terminal events missing " + ", ".join(missing)
     return True, ""
+
+
+def load_thread_journal_records(
+    path: pathlib.Path,
+    field: str,
+    issues: list[str],
+) -> list[dict[str, Any]]:
+    """Read messages or events from the canonical Thread Journal.
+
+    Direct JSONL records remain accepted for the deterministic eval harness,
+    which builds in-memory oracle views rather than runtime persistence.
+    """
+    if not path.is_file():
+        issues.append(f"missing Thread Journal: {path}")
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        issues.append(f"read Thread Journal: {exc}")
+        return []
+    records: list[dict[str, Any]] = []
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            issues.append(f"Thread Journal line {line_number} is invalid JSON: {exc}")
+            continue
+        if not isinstance(value, dict):
+            issues.append(f"Thread Journal line {line_number} must be a JSON object")
+            continue
+        facts = value.get("facts")
+        if not isinstance(facts, list):
+            records.append(value)
+            continue
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            record = fact.get(field)
+            if isinstance(record, dict):
+                records.append(record)
+    return records
 
 
 def _terminal_content(payload: dict[str, Any]) -> str:

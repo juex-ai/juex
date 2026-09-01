@@ -19,27 +19,27 @@ func TestActivityStoreStartsIdle(t *testing.T) {
 	}
 }
 
-func TestActivityStoreIgnoresSelectedSessionCursorCollisions(t *testing.T) {
+func TestActivityStoreIgnoresSelectedThreadCursorCollisions(t *testing.T) {
 	store := NewActivityStore()
 	store.Publish(AgentActivity{
 		State: ActivityWorking,
 		SelectedStatus: &Snapshot{
-			Cursor:  "same",
-			Session: SessionStatus{ID: "session-one"},
+			Cursor: "same",
+			Thread: ThreadStatus{ID: "thread-one"},
 		},
 	})
 	store.Publish(AgentActivity{
 		State: ActivityWorking,
 		SelectedStatus: &Snapshot{
-			Cursor:  "different",
-			Session: SessionStatus{ID: "session-two"},
+			Cursor: "different",
+			Thread: ThreadStatus{ID: "thread-two"},
 		},
 	})
 	store.Publish(AgentActivity{
 		State: ActivityIdle,
 		SelectedStatus: &Snapshot{
-			Cursor:  "same",
-			Session: SessionStatus{ID: "session-three"},
+			Cursor: "same",
+			Thread: ThreadStatus{ID: "thread-three"},
 		},
 	})
 
@@ -47,7 +47,7 @@ func TestActivityStoreIgnoresSelectedSessionCursorCollisions(t *testing.T) {
 	defer stream.Close()
 	activity, ok := stream.Next(context.Background())
 	if !ok || activity.SelectedStatus == nil ||
-		activity.SelectedStatus.Session.ID != "session-three" {
+		activity.SelectedStatus.Thread.ID != "thread-three" {
 		t.Fatalf("current activity = %+v, %t", activity, ok)
 	}
 	if _, ok := stream.Next(context.Background()); ok {
@@ -71,7 +71,7 @@ func TestActivityStoreClonesNestedStatusForSubscribers(t *testing.T) {
 	store.Publish(AgentActivity{
 		State: ActivityWorking,
 		SelectedStatus: &Snapshot{
-			Session: SessionStatus{ID: "session-one"},
+			Thread: ThreadStatus{ID: "thread-one"},
 			Tools: []ToolCallStatus{{
 				ToolUseID: "tool-one",
 				Error:     &StatusError{Message: "original"},

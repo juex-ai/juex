@@ -15,8 +15,8 @@ func (e *Engine) policySets() []*runtimemodule.Set {
 	if e == nil {
 		return nil
 	}
-	sessionModules := e.SessionRuntimeSnapshot().Modules
-	return []*runtimemodule.Set{sessionModules, e.RuntimeModules}
+	threadModules := e.ThreadRuntimeSnapshot().Modules
+	return []*runtimemodule.Set{threadModules, e.RuntimeModules}
 }
 
 func (e *Engine) policyRuntimeContext() runtimemodule.RuntimeContext {
@@ -27,21 +27,21 @@ func (e *Engine) policyRuntimeContext() runtimemodule.RuntimeContext {
 	if ctx.WorkDir == "" {
 		ctx.WorkDir = e.WorkDir
 	}
-	if ctx.ArtifactDir == "" {
-		ctx.ArtifactDir = e.ArtifactDir
+	if ctx.MediaDir == "" {
+		ctx.MediaDir = e.MediaDir
 	}
 	return ctx
 }
 
-func (e *Engine) policySessionContext() *runtimemodule.SessionContext {
+func (e *Engine) policyThreadContext() *runtimemodule.ThreadContext {
 	if e == nil {
 		return nil
 	}
-	sess := e.currentSession()
+	sess := e.currentThread()
 	if sess == nil {
 		return nil
 	}
-	return &runtimemodule.SessionContext{
+	return &runtimemodule.ThreadContext{
 		ID:            sess.ID,
 		Dir:           sess.Dir,
 		ScratchpadDir: sess.ScratchpadDir(),
@@ -161,10 +161,10 @@ func (e *Engine) queuePolicyRuntimeContext(contexts []runtimemodule.PolicyContex
 	return nil
 }
 
-func (e *Engine) RunSessionStartPolicies(ctx context.Context) error {
-	contexts, err := runtimemodule.ApplySessionStartPolicies(ctx, runtimemodule.SessionStartRequest{
+func (e *Engine) RunThreadStartPolicies(ctx context.Context) error {
+	contexts, err := runtimemodule.ApplyThreadStartPolicies(ctx, runtimemodule.ThreadStartRequest{
 		Runtime:  e.policyRuntimeContext(),
-		Session:  e.policySessionContext(),
+		Thread:   e.policyThreadContext(),
 		Observer: e.policyObserver(""),
 	}, e.policySets()...)
 	if err != nil {

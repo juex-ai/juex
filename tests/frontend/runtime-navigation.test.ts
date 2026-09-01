@@ -29,5 +29,5 @@ test("runtime section selection follows nested paths and browser navigation", ()
   assert.equal(runtimeSectionFromPath("/agents/a/runtime/observables/item"), "observables");
   assert.equal(runtimeSectionFromPath("/agents/a/runtime/logs"), "logs");
   assert.equal(runtimeSectionFromPath("/agents/a/runtime/config"), "config");
-  assert.equal(runtimeSectionFromPath("/agents/a/sessions/one"), "overview");
+  assert.equal(runtimeSectionFromPath("/agents/a/threads/one"), "overview");
 });

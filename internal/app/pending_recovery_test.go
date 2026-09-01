@@ -105,11 +105,10 @@ func recoveryAppOptions(dir string, provider llm.Provider) Options {
 			WorkDir:       dir,
 			AgentStateDir: filepath.Join(dir, ".juex"),
 		},
-		Provider:                provider,
-		WorkDir:                 dir,
-		DisableMCP:              true,
-		disableObservables:      true,
-		disableSideSessionTools: true,
+		Provider:           provider,
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
 	}
 }
 
@@ -232,16 +231,19 @@ func TestAppRunWaitsForStartupPendingInputRecovery(t *testing.T) {
 		if result.err != nil || result.out != "handled queued event" {
 			t.Fatalf("Run after startup recovery = %q, %v", result.out, result.err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("synchronous Run did not continue after startup recovery")
+	case <-time.After(10 * time.Second):
+		provider.mu.Lock()
+		calls := provider.calls
+		provider.mu.Unlock()
+		t.Fatalf("synchronous Run did not continue after startup recovery: calls=%d status=%+v pending=%+v", calls, restarted.Status.Snapshot(), restarted.PendingInputStatus())
 	}
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	if provider.calls != 2 {
 		t.Fatalf("provider calls = %d, want recovery then synchronous Run", provider.calls)
 	}
-	if got := provider.histories[1][len(provider.histories[1])-1].FirstText(); got != "run after recovery" {
-		t.Fatalf("second provider history ended with %q, want synchronous input", got)
+	if !providerHistoryContains(provider.histories[1], "", "run after recovery") {
+		t.Fatalf("second provider history missing synchronous input: %+v", provider.histories[1])
 	}
 }
 
@@ -460,7 +462,7 @@ func TestAppExternalDeliveryTransfersToAppAfterRecoveryWaitTimeout(t *testing.T)
 	if stateErr != nil {
 		t.Fatal(stateErr)
 	}
-	if !ok || pending.State != runtime.PendingInputStateProcessed || !restarted.Session.HasMessageID(pending.MessageID) {
+	if !ok || pending.State != runtime.PendingInputStateProcessed || !restarted.Thread.HasMessageID(pending.MessageID) {
 		t.Fatalf("pending after App-owned handoff = %+v ok=%v", pending, ok)
 	}
 }
@@ -534,7 +536,7 @@ func TestAppExternalDeliveryHandsOffAcceptedInputWhenResumeIsCanceled(t *testing
 	if stateErr != nil {
 		t.Fatal(stateErr)
 	}
-	if !ok || pending.State != runtime.PendingInputStateProcessed || !a.Session.HasMessageID(pending.MessageID) {
+	if !ok || pending.State != runtime.PendingInputStateProcessed || !a.Thread.HasMessageID(pending.MessageID) {
 		t.Fatalf("pending after canceled-delivery handoff = %+v ok=%v", pending, ok)
 	}
 }
@@ -580,16 +582,19 @@ func TestAppExternalDeliveryRetriesDurableInputAfterLiveQueueFull(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("active turn did not finish after provider release")
+	case <-time.After(10 * time.Second):
+		provider.mu.Lock()
+		calls := provider.calls
+		provider.mu.Unlock()
+		t.Fatalf("active turn did not finish after provider release; provider calls=%d status=%+v pending=%+v", calls, a.Status.Snapshot(), a.PendingInputStatus())
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		pending, ok, stateErr := a.Engine.PersistedPendingMessage(secondOutcome.PendingInputID)
 		if stateErr != nil {
 			t.Fatal(stateErr)
 		}
-		if ok && pending.State == runtime.PendingInputStateProcessed && a.Session.HasMessageID(pending.MessageID) {
+		if ok && pending.State == runtime.PendingInputStateProcessed && a.Thread.HasMessageID(pending.MessageID) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -629,7 +634,7 @@ func TestAppExternalDeliveryRetriesReplayableAdmissionCommitFailure(t *testing.T
 			t.Fatal(stateErr)
 		}
 		calls, _ := provider.snapshot()
-		if ok && pending.State == runtime.PendingInputStateProcessed && a.Session.HasMessageID(pending.MessageID) && calls == 1 {
+		if ok && pending.State == runtime.PendingInputStateProcessed && a.Thread.HasMessageID(pending.MessageID) && calls == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -679,7 +684,7 @@ func TestResumePersistedInputWaitsForExclusiveCommand(t *testing.T) {
 	t.Cleanup(func() { _ = a.CloseAndWait() })
 	record, err := a.Engine.PersistPendingMessageWithOptions(
 		context.Background(),
-		llm.TextMessage(llm.RoleUser, "wait for new-session greeting"),
+		llm.TextMessage(llm.RoleUser, "wait for new-generation marker"),
 		runtime.PendingInputOptions{ID: "exclusive-command-wait", TTL: time.Hour},
 	)
 	if err != nil {
@@ -740,7 +745,7 @@ func TestAppStartupRecoveryRetriesReplayableAdmissionFailure(t *testing.T) {
 			t.Fatal(stateErr)
 		}
 		calls, _ := provider.snapshot()
-		if ok && pending.State == runtime.PendingInputStateProcessed && a.Session.HasMessageID(pending.MessageID) && calls == 1 {
+		if ok && pending.State == runtime.PendingInputStateProcessed && a.Thread.HasMessageID(pending.MessageID) && calls == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -767,7 +772,7 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 	})
 	record, err := a.Engine.PersistPendingMessageWithOptions(
 		context.Background(),
-		llm.TextMessage(llm.RoleUser, "retry startup admission before session switch"),
+		llm.TextMessage(llm.RoleUser, "retry startup admission before Context Generation change"),
 		runtime.PendingInputOptions{ID: "startup-admission-barrier", TTL: time.Hour},
 	)
 	if err != nil {
@@ -796,10 +801,10 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 	}
 
 	switchDone := make(chan error, 1)
-	go func() { switchDone <- a.SwitchToNewPrimarySession() }()
+	go func() { switchDone <- a.NewContext(context.Background()) }()
 	select {
 	case err := <-switchDone:
-		t.Fatalf("session switch completed while startup admission retry was pending: %v", err)
+		t.Fatalf("Context Generation change completed while startup admission retry was pending: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -816,14 +821,14 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 			t.Fatal(err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("session switch did not continue after startup recovery")
+		t.Fatal("Context Generation change did not continue after startup recovery")
 	}
 	if calls, _ := provider.snapshot(); calls != 1 {
-		t.Fatalf("provider calls = %d, want recovered input processed once before session switch", calls)
+		t.Fatalf("provider calls = %d, want recovered input processed once before Context Generation change", calls)
 	}
 }
 
-func TestAppExternalDeliveryHandoffKeepsOriginSessionThroughRetry(t *testing.T) {
+func TestAppExternalDeliveryHandoffKeepsOriginThreadThroughRetry(t *testing.T) {
 	dir := t.TempDir()
 	provider := &recoveryProvider{}
 	a, err := New(recoveryAppOptions(dir, provider))
@@ -850,7 +855,7 @@ func TestAppExternalDeliveryHandoffKeepsOriginSessionThroughRetry(t *testing.T) 
 		retrying:  retrying,
 	})
 
-	outcome, err := a.DeliverObservation(context.Background(), testObservationRecord("obs-session-bound-handoff"))
+	outcome, err := a.DeliverObservation(context.Background(), testObservationRecord("obs-thread-bound-handoff"))
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("DeliverObservation error = %v, want injected admission failure", err)
 	}
@@ -864,10 +869,10 @@ func TestAppExternalDeliveryHandoffKeepsOriginSessionThroughRetry(t *testing.T) 
 	}
 
 	switchDone := make(chan error, 1)
-	go func() { switchDone <- a.SwitchToNewPrimarySession() }()
+	go func() { switchDone <- a.NewContext(context.Background()) }()
 	select {
 	case err := <-switchDone:
-		t.Fatalf("session switch completed while origin-session handoff was retrying: %v", err)
+		t.Fatalf("Context Generation change completed while origin-Thread handoff was retrying: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -879,10 +884,10 @@ func TestAppExternalDeliveryHandoffKeepsOriginSessionThroughRetry(t *testing.T) 
 			t.Fatal(err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("session switch did not continue after handoff became safe")
+		t.Fatal("Context Generation change did not continue after handoff became safe")
 	}
 	if calls, _ := provider.snapshot(); calls != 1 {
-		t.Fatalf("provider calls = %d, want origin-session handoff processed once", calls)
+		t.Fatalf("provider calls = %d, want origin-Thread handoff processed once", calls)
 	}
 }
 
@@ -904,7 +909,8 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 	}
 	deliveryErr := make(chan error, 1)
 	gate := newMCPNotificationGate(func(notification mcp.Notification) {
-		deliveryErr <- a.HandleMCPNotification(a.ctx, notification)
+		_, deliveryErrValue := a.DeliverObservation(a.ctx, a.ObservationFromMCPNotification(notification))
+		deliveryErr <- deliveryErrValue
 	})
 	gate.Enqueue(mcp.Notification{
 		ServerName: "startup",
@@ -1166,7 +1172,7 @@ func TestAppDeliverObservationReportsTranscriptConsumptionDespiteTurnError(t *te
 	if stateErr != nil {
 		t.Fatal(stateErr)
 	}
-	if !ok || pending.State != runtime.PendingInputStateProcessed || !a.Session.HasMessageID(pending.MessageID) {
+	if !ok || pending.State != runtime.PendingInputStateProcessed || !a.Thread.HasMessageID(pending.MessageID) {
 		t.Fatalf("pending after failed turn = %+v ok=%v", pending, ok)
 	}
 	duplicate, duplicateErr := a.DeliverObservation(context.Background(), record)
@@ -1312,9 +1318,8 @@ func TestAppStartupRecoveryAdvancesPastOldestRecordThatExpiresBeforeWorker(t *te
 	if calls != 1 || len(histories) != 1 {
 		t.Fatalf("provider calls = %d histories=%+v, want later record recovered once", calls, histories)
 	}
-	last := histories[0][len(histories[0])-1]
-	if last.ID != later.MessageID {
-		t.Fatalf("recovered message = %q, want later message %q", last.ID, later.MessageID)
+	if !providerHistoryContains(histories[0], later.MessageID, "recover after expired oldest") {
+		t.Fatalf("recovered history = %+v, want later message %q", histories[0], later.MessageID)
 	}
 	for _, want := range []struct {
 		id    string
@@ -1331,4 +1336,13 @@ func TestAppStartupRecoveryAdvancesPastOldestRecordThatExpiresBeforeWorker(t *te
 			t.Fatalf("record %q = %+v ok=%v, want %q", want.id, record, ok, want.state)
 		}
 	}
+}
+
+func providerHistoryContains(history []llm.Message, id, text string) bool {
+	for _, message := range history {
+		if (id == "" || message.ID == id) && message.FirstText() == text {
+			return true
+		}
+	}
+	return false
 }

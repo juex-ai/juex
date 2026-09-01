@@ -414,7 +414,7 @@ test("applyToolResultToMessages preserves completed media references", () => {
     toolName: "render_chart",
     content: "chart rendered",
     media: {
-		artifact_path: "sessions/s/media/chart.png",
+		artifact_path: "threads/s/media/chart.png",
       media_type: "image/png",
       sha256: "abc",
       original_bytes: 2048,
@@ -428,7 +428,7 @@ test("applyToolResultToMessages preserves completed media references", () => {
     tool_use_id: "tool-1",
     content: "chart rendered",
     media: {
-		artifact_path: "sessions/s/media/chart.png",
+		artifact_path: "threads/s/media/chart.png",
       media_type: "image/png",
       sha256: "abc",
       original_bytes: 2048,

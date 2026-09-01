@@ -9,24 +9,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-type artifactReadURIProvider struct {
+type spoolReadProvider struct {
 	t       *testing.T
 	calls   int
 	readURI string
 }
 
-func (p *artifactReadURIProvider) Name() string { return "artifact-read-uri" }
+func (p *spoolReadProvider) Name() string { return "spool-read" }
 
-func (p *artifactReadURIProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+func (p *spoolReadProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	switch p.calls {
 	case 0:
 		p.calls++
@@ -35,9 +34,9 @@ func (p *artifactReadURIProvider) Complete(_ context.Context, _ string, history 
 		}}}, StopReason: llm.StopToolUse}, nil
 	case 1:
 		p.calls++
-		p.readURI = providerArtifactPath(messagesText(history))
-		if relativePath, recognized, err := artifact.ParseReadURI(p.readURI); err != nil || !recognized || relativePath == "" {
-			p.t.Fatalf("provider Artifact path = %q, parsed as (%q, %t, %v)", p.readURI, relativePath, recognized, err)
+		p.readURI = providerSpoolPath(messagesText(history))
+		if !filepath.IsAbs(p.readURI) {
+			p.t.Fatalf("provider spool path = %q, want an absolute read path", p.readURI)
 		}
 		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 			Type: llm.BlockToolUse, ToolUseID: "read-result", ToolName: "read",
@@ -54,17 +53,17 @@ func (p *artifactReadURIProvider) Complete(_ context.Context, _ string, history 
 	}
 }
 
-func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinArtifactURI(t *testing.T) {
+func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinSpoolPath(t *testing.T) {
 	root := t.TempDir()
 	workDir := filepath.Join(root, "work")
 	agentStateDir := filepath.Join(root, "agent")
-	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	mediaDir := filepath.Join(agentStateDir, "media")
 	for _, dir := range []string{workDir, agentStateDir} {
 		if err := os.Mkdir(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sess, err := session.New(filepath.Join(agentStateDir, "sessions"))
+	sess, err := thread.New(filepath.Join(agentStateDir, "threads"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +72,8 @@ func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinArtifactURI(t *testing.T
 	sess.SubscribeBus(bus)
 	registry := tools.NewRegistry()
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{
-		WorkDir: workDir, AgentStateDir: agentStateDir, ArtifactDir: artifactDir, Shell: tools.DefaultShellProfile(),
+		WorkDir: workDir, AgentStateDir: agentStateDir, MediaDir: sess.SpoolDir(),
+		Shell: tools.DefaultShellProfile(),
 	})
 	original := "artifact-read-success\n" + strings.Repeat("externalized detail\n", 20)
 	registry.MustRegister(tools.Tool{
@@ -82,17 +82,17 @@ func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinArtifactURI(t *testing.T
 			return original, nil
 		},
 	})
-	provider := &artifactReadURIProvider{t: t}
+	provider := &spoolReadProvider{t: t}
 	engine := &runtime.Engine{
 		Provider: provider,
 		Tools:    registry,
 		Bus:      bus,
-		Session:  sess,
+		Thread:   sess,
 		Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 24, 11, 0, 0, 0, time.UTC)
 		}, sess),
-		WorkDir:     workDir,
-		ArtifactDir: artifactDir,
+		WorkDir:  workDir,
+		MediaDir: mediaDir,
 		ToolOutput: runtime.ToolOutputPolicy{
 			InlineMaxBytes: 32, PreviewHeadBytes: 8, PreviewTailBytes: 8,
 		},
@@ -105,26 +105,18 @@ func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinArtifactURI(t *testing.T
 	if out != "TASK COMPLETE: projected Artifact read" || provider.calls != 3 {
 		t.Fatalf("out=%q provider calls=%d", out, provider.calls)
 	}
-	relativePath, _, err := artifact.ParseReadURI(provider.readURI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := artifact.NewStore(artifactDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := store.Read(artifact.Ref{Path: relativePath})
+	data, err := os.ReadFile(provider.readURI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != original {
-		t.Fatalf("stored Artifact changed: got %d bytes, want %d", len(data), len(original))
+		t.Fatalf("stored spool payload changed: got %d bytes, want %d", len(data), len(original))
 	}
 }
 
-func providerArtifactPath(text string) string {
+func providerSpoolPath(text string) string {
 	for _, line := range strings.Split(text, "\n") {
-		if value, ok := strings.CutPrefix(line, "path: "); ok && strings.HasPrefix(value, "artifact://") {
+		if value, ok := strings.CutPrefix(line, "path: "); ok && filepath.IsAbs(value) {
 			return value
 		}
 	}

@@ -1,158 +1,55 @@
-# Context Compaction Evaluation
+# Context Generation Evaluation
 
 > English | [中文](evaluation.zh.md)
 
-Date: 2026-07-13
+The live evaluation checks that a long-running Main Thread can compact under
+context pressure and continue without losing explicitly protected facts or
+Thread working state.
 
-## Purpose
-
-The evaluation checks whether compaction lets a Juex session continue after
-context pressure while preserving task-critical information. It is intentionally
-small enough to run during development, but structured enough to compare
-providers.
-
-## Models
-
-The command derives model refs from the resolved provider config. It excludes
-models whose declared `context_window` is below the requested evaluation
-window; omitted declarations use Juex's default 256k window. A recorded seed
-selects one stable-sorted eligible ref by default, `--only provider:model`
-selects an exact eligible ref, and `--all-models` runs the full eligible set.
-
-## Window Size
-
-Use `PROVIDER_CONTEXT_WINDOW=32000` for the live smoke. This is one eighth of
-the default 256k Juex window, which stays inside the requested one tenth to one
-quarter range while keeping the test cheap enough to repeat.
-
-## Case: Gold-Fact Retention After Auto Compact
-
-The case has three turns and a sidecar-state seed between the first two:
-
-1. Seed the session with old task state and enough irrelevant noise to exceed
-   the compact trigger on the following turn.
-2. Persist a three-field goal contract and exact Notes, then add a small amount
-   of noise. The existing history triggers one auto-compaction while the small
-   new turn keeps a second compact from obscuring the state-fidelity case.
-3. Ask the model, with no tools, to answer objective questions about the old
-   facts and recited authoritative state.
-
-Gold facts:
-
-| ID | Expected fact |
-| --- | --- |
-| GF1 | Task ID is `CMP-2417`. |
-| GF2 | Branch is `high/context-projection`. |
-| GF3 | Do not modify `/workspace/project/.juex/sessions/20260525T043307-7f5f9f85/session.lock` unless the user explicitly approves. |
-| GF4 | The failing error string is `compact context: openai codex responses: codex SSE read: context deadline exceeded`. |
-| GF5 | The selected design is sidecar externalization plus frozen provider-visible replacement. |
-| GF6 | The next command is `go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1`. |
-
-Scoring:
-
-| Metric | Points |
-| --- | ---: |
-| Each exact gold fact present | 6 |
-| Correctly states no tools were needed | 4 |
-| Does not invent a merge/PR result | 6 |
-| Mentions compacted context or summary as the source of old facts | 6 |
-| Legacy subtotal | 52 |
-| Goal description, acceptance, and status present in compact `Goal` | 6 each |
-| Notes remain byte-identical, unfinished item appears in compact `Next Steps`, and Notes are recited after compaction | 4 each |
-| Total | 82 |
-
-Pass thresholds:
-
-- The legacy subtotal must remain `>= 36`.
-- All six authoritative-state checks must pass, regardless of total score.
-- A fully passing run therefore scores at least `66/82`; higher legacy fact
-  retention remains useful for provider comparison.
-
-## Cache Metrics
-
-When provider usage exposes cached tokens, record:
-
-```text
-cached_input_ratio = cached_input_tokens / input_tokens
-```
-
-Target:
-
-- First turn may be low because the prefix is warming.
-- Third turn should show a higher cached ratio than the second turn for providers
-  that expose prompt-cache metrics.
-
-Juex records provider-reported cached input tokens in `Usage.CachedInputTokens`
-and `ContextUsage.CachedInputTokens` when the provider exposes them. The live
-script reports the latest cached/input ratio from `events.jsonl`; older runs
-that predate this plumbing remain marked as `not captured`.
-
-## Running The Evaluation
-
-Build the current binary:
+Run it through the final verification tier:
 
 ```bash
-make build
+make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
-Run one seeded model from the resolved provider config:
+For a focused local run:
 
 ```bash
-tests/eval/compaction_eval.sh
+tests/eval/compaction_eval.sh --only provider:model
 ```
 
-Run every eligible configured model:
+## Scenario
 
-```bash
-tests/eval/compaction_eval.sh --all-models
-```
+The harness uses one isolated Agent and its Main Thread `0` for three Inputs:
 
-Run one provider:
+1. seed six recall facts and enough noise to approach the configured window;
+2. add more pressure and require automatic compaction;
+3. ask the model to reproduce the protected facts and authoritative state.
 
-```bash
-tests/eval/compaction_eval.sh --only openai-codex:gpt-5.5
-```
+The protected path fact is
+`/workspace/project/.juex/threads/0/journal.jsonl`. After the first Input, the
+scenario appends valid `goal.updated` and `notes.updated` facts while the
+resident Runtime is stopped.
 
-The script resolves `--config`, `JUEX_PROVIDER_CONFIG`, or the original user's
-`~/.juex/juex.yaml`. Pass `--selection-seed value` to reproduce default
-selection or `--only provider:model` for a focused run. For each
-selected model it writes a temporary work-local config containing only that
-provider:model, disables tool calling, enables compaction, and deletes the
-temporary config after the run unless `KEEP_WORKDIR=1` is set.
-Set `JUEX_EVAL_TURN_TIMEOUT` to override the per-turn timeout (default 600s).
+## Pass contract
 
-The root `summary.json` and `summary.md` record the selected refs, seed,
-eligible candidates, resolved config path, redacted config hash, and exact
-reproduction command without copying credentials.
+A passing result requires:
 
-The script writes redacted run artifacts under:
+- at least one `context.compacted` fact in the Thread Journal;
+- the six protected facts remain recallable;
+- the compact summary contains Goal description, acceptance, and status;
+- unfinished Notes appear in the summary's next steps;
+- the projected Notes remain byte-identical and both completed/open Notes are recited;
+- no Tool use or invented merge claim appears;
+- every `juex send --wait` command settles successfully;
+- the resident Runtime started by `send` is stopped after each Input;
+- cached/input token ratio is reported from journal `usage.recorded` facts when
+  the Provider supplies it.
 
-```text
-.tmp/reports/compaction-eval/<timestamp>/
-```
+The selected Provider/model, selection seed, redacted config hash, command
+logs, `journal.jsonl`, `thread.json`, scorecard, and normalized
+outcome are copied to `.tmp/reports/compaction-eval/<run-id>/`.
 
-Each provider directory contains:
-
-- `turn1.txt`
-- `turn2.txt`
-- `turn3.txt`
-- `events.jsonl` copies, when available
-- `conversation.jsonl` copies, when available
-- `goal_state.json` and `notes.md`
-- `scorecard.md`
-
-## Automated Regression
-
-Normal `make test` covers the non-live regression shape with fake providers:
-
-- Small-context auto-compaction and compact-marker active context.
-- Bounded compaction summary requests.
-- Authoritative goal/Notes preservation while transcript input is omitted.
-- Stable configured, per-request, and hook instruction ordering.
-- Oversized user-input and tool-result externalization before provider
-  requests.
-- Context-usage accounting for compact summaries and artifact references.
-
-Keep adding non-live tests here for deterministic runtime behavior. Live model
-scoring remains an operator-triggered evaluation because it uses credentials
-and has variable cost.
+Provider unavailability and environment failures are reported separately from
+product-quality failures. The gate never silently switches to an unselected
+model.

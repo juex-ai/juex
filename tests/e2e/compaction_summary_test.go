@@ -110,7 +110,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 		t.Fatal(err)
 	}
 	defer a.Close()
-	goals, notes := runtime.SessionStateStoresFromModules(a.Engine.SessionRuntimeSnapshot().Modules)
+	goals, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goals == nil || notes == nil {
 		t.Fatal("missing authoritative Session state stores")
 	}
@@ -129,7 +129,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 			llm.TextMessage(llm.RoleUser, "Branch: high/context-projection. "+strings.Repeat("old context ", 50)),
 			llm.TextMessage(llm.RoleAssistant, "stored"),
 		} {
-			if err := a.Session.Append(message); err != nil {
+			if err := a.Thread.Append(message); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -146,7 +146,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 		t.Fatalf("summary output budgets = %v, want [160 2048]", gotBudgets)
 	}
 	markers := 0
-	for _, message := range a.Session.History {
+	for _, message := range a.Thread.History {
 		if message.Kind == llm.MessageKindCompact {
 			markers++
 			if message.Compaction == nil || message.Compaction.SummaryChars != len(summary) || !strings.Contains(message.FirstText(), "Summary of earlier conversation:\n"+summary) || strings.Contains(message.FirstText(), "prepare the summary") {
@@ -157,10 +157,10 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 	if markers != 1 {
 		t.Fatalf("compact markers = %d, want 1", markers)
 	}
-	if usage := a.Session.TokenUsageSnapshot(); usage.OutputTokens != 1718 {
+	if usage := a.Thread.TokenUsageSnapshot(); usage.OutputTokens != 1718 {
 		t.Fatalf("summary usage = %+v, want both attempts counted", usage)
 	}
-	eventText := strings.Join(readLines(t, filepath.Join(a.Session.Dir, "events.jsonl")), "\n")
+	eventText := strings.Join(readLines(t, filepath.Join(a.Thread.Dir, "journal.jsonl")), "\n")
 	if strings.Count(eventText, `"type":"context.compact.summary_retry"`) != 1 || !strings.Contains(eventText, `"reasoning_only":true`) {
 		t.Fatalf("missing single reasoning-only retry: %s", eventText)
 	}

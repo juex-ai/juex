@@ -55,7 +55,7 @@ func newRunner(opts runnerOptions) *runner {
 		filePolicy: filePolicy,
 		pipe:       pipe,
 		batcher: newCommandBatcher(opts.spec, opts.store, BatcherOptions{
-			RunID: opts.runID, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir, ArtifactDir: opts.artifactDir,
+			RunID: opts.runID, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir, MediaDir: opts.artifactDir,
 			PathGuard: filePolicy,
 		}),
 	}

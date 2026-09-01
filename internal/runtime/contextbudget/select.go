@@ -181,7 +181,7 @@ func isRealInput(msg llm.Message) bool {
 		return false
 	}
 	switch msg.Kind {
-	case llm.MessageKindDirect, llm.MessageKindMCPEvent, llm.MessageKindObservation, llm.MessageKindSideSession:
+	case llm.MessageKindDirect, llm.MessageKindMCPEvent, llm.MessageKindObservation, llm.MessageKindWorkerThread:
 		return true
 	case "":
 		return llm.ClassifyUserMessage(msg).Kind == llm.MessageKindDirect

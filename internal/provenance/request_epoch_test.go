@@ -399,6 +399,32 @@ func TestTrackerRecoversQueuedMinusCheckpointedPolicyContextAndDeduplicatesSnaps
 	}
 }
 
+func TestTrackerTerminalTurnStartsSelfContainedSnapshotBoundary(t *testing.T) {
+	epoch, err := BuildRequestEpoch(RequestInput{
+		Provider:     SafeProvider{ID: "test", Model: "model"},
+		SystemPrompt: "system",
+		History:      []llm.Message{message("user-1", llm.MessageKindDirect, "hello")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := NewTracker()
+	tracker.CommitEpoch(epoch)
+	reused := epoch
+	tracker.PrepareEpoch(&reused)
+	if !reused.SystemPromptSnapshot.Reused {
+		t.Fatal("snapshot was not reused within a Turn")
+	}
+	if err := tracker.ReplayEvent(events.Event{Type: "turn.completed", TurnID: "turn-1"}); err != nil {
+		t.Fatal(err)
+	}
+	nextTurn := epoch
+	tracker.PrepareEpoch(&nextTurn)
+	if nextTurn.SystemPromptSnapshot.Reused || len(nextTurn.SystemPromptSnapshot.Content) == 0 {
+		t.Fatalf("next Turn snapshot was not self-contained: %+v", nextTurn.SystemPromptSnapshot)
+	}
+}
+
 func TestBuildRequestEpochRejectsHistoryWithoutStableID(t *testing.T) {
 	_, err := BuildRequestEpoch(RequestInput{
 		Provider: SafeProvider{ID: "test", Model: "model"},

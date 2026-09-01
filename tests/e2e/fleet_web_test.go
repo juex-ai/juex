@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -401,8 +400,8 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	for _, path := range []string{
 		"/",
 		"/agents/" + agentID,
-		"/agents/" + agentID + "/sessions/arbitrary-session",
-		"/agents/" + agentID + "/history",
+		"/agents/" + agentID + "/threads/0",
+		"/agents/" + agentID + "/threads",
 		"/agents/" + agentID + "/runtime",
 		"/agents/" + agentID + "/observables",
 		"/agents/" + agentID + "/logs",
@@ -461,26 +460,26 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 		t.Fatalf("fleet config response was not redacted:\n%s", visibleConfig.Content)
 	}
 
-	var sessions struct {
-		Sessions []struct {
-			ID string `json:"id"`
-		} `json:"sessions"`
+	var threads struct {
+		Active []struct {
+			ThreadID string `json:"thread_id"`
+		} `json:"active_threads"`
 	}
 	fleetWebJSON(
 		t,
 		client,
 		http.MethodGet,
-		baseURL+"/agents/"+agentID+"/api/sessions",
+		baseURL+"/agents/"+agentID+"/api/threads",
 		"",
 		http.StatusOK,
-		&sessions,
+		&threads,
 	)
-	if len(sessions.Sessions) == 0 || sessions.Sessions[0].ID == "" {
-		t.Fatalf("proxied sessions = %+v", sessions)
+	if len(threads.Active) == 0 || threads.Active[0].ThreadID == "" {
+		t.Fatalf("proxied Threads = %+v", threads)
 	}
 	assertFleetSSEHeaders(
 		t,
-		baseURL+"/agents/"+agentID+"/api/sessions/"+sessions.Sessions[0].ID+"/events",
+		baseURL+"/agents/"+agentID+"/api/threads/"+threads.Active[0].ThreadID+"/events",
 	)
 
 	invalid := `{"content":"models: [invalid"}`
@@ -668,7 +667,7 @@ func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {
 		t.Fatalf("started agent = %+v", started)
 	}
 	oldRuntime := waitFleetRuntime(t, agentAddress)
-	sessionID, originalTurnID := startFleetBlockingTurn(t, oldRuntime)
+	threadID, originalTurnID := startFleetBlockingTurn(t, oldRuntime)
 	select {
 	case <-firstRequestStarted:
 	case err := <-providerErrors:
@@ -703,7 +702,7 @@ func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {
 	if updated.Config.Content != updatedContent ||
 		!updated.Agent.Resume.Required ||
 		!updated.Agent.Resume.Sent ||
-		updated.Agent.Resume.SessionID != sessionID {
+		updated.Agent.Resume.ThreadID != threadID {
 		t.Fatalf("config restart response = %+v", updated)
 	}
 	newRuntime := waitFleetRuntimeVersion(
@@ -728,182 +727,9 @@ func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {
 	}
 	waitFleetInterruptedAndContinuationEvents(
 		t,
-		filepath.Join(agentAddress.StateDir(), "sessions", sessionID, "events.jsonl"),
+		filepath.Join(agentAddress.StateDir(), "threads", threadID, "journal.jsonl"),
 		originalTurnID,
 	)
-}
-
-func TestFleetWebNewSessionRejectsStaleEventReconnect(t *testing.T) {
-	if testing.Short() {
-		t.Skip("compiled-binary fleet web session test is slow")
-	}
-	binary := buildJuex(t)
-	newGreetingStarted := make(chan struct{})
-	newGreetingRelease := make(chan struct{})
-	var releaseOnce sync.Once
-	var providerCalls atomic.Int32
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := providerCalls.Add(1)
-		if call == 2 {
-			close(newGreetingStarted)
-			select {
-			case <-newGreetingRelease:
-			case <-r.Context().Done():
-				return
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		message := "old session complete"
-		if call == 2 {
-			message = "new session complete"
-		}
-		_, _ = io.WriteString(w, chatCompletionResponse(message))
-	}))
-	t.Cleanup(provider.Close)
-	t.Cleanup(func() { releaseOnce.Do(func() { close(newGreetingRelease) }) })
-
-	home, err := os.MkdirTemp("", "jns-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(home) })
-	workspace := t.TempDir()
-	agentID := "aaaaaa"
-	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
-	writeFleetProviderConfig(t, workspace, provider.URL)
-	environment := fleetWebEnvironment(home)
-	t.Cleanup(func() { shutdownFleetAgent(t, agentAddress) })
-
-	if stdout, stderr, err := runFleetE2E(binary, environment, "", "start", agentID); err != nil {
-		t.Fatalf("fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
-	}
-	probeFleetRuntime(t, waitFleetRuntime(t, agentAddress))
-	supervisor := startFleetSupervisor(t, binary, environment)
-	t.Cleanup(func() {
-		if supervisor.cmd.ProcessState == nil {
-			_ = supervisor.cmd.Process.Kill()
-			_ = supervisor.cmd.Wait()
-		}
-	})
-	fleetURL := "http://" + waitFleetWebReady(t, supervisor)
-	agentURL := fleetURL + "/agents/" + agentID
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	var oldSession struct {
-		ID string `json:"id"`
-	}
-	fleetWebJSON(t, client, http.MethodPost, agentURL+"/api/sessions", "", http.StatusCreated, &oldSession)
-	if oldSession.ID == "" {
-		t.Fatal("created old session without id")
-	}
-	var oldTurn webStartTurnResponse
-	fleetWebJSON(
-		t,
-		client,
-		http.MethodPost,
-		agentURL+"/api/sessions/"+oldSession.ID+"/turns",
-		`{"prompt":"persist the old session"}`,
-		http.StatusAccepted,
-		&oldTurn,
-	)
-	hasAssistantText := func(messages []webTranscriptMessage, want string) bool {
-		for _, message := range messages {
-			if message.Role != "assistant" {
-				continue
-			}
-			for _, block := range message.Blocks {
-				if block.Type == "text" && strings.Contains(block.Text, want) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	waitForWebTranscript(t, agentURL, oldSession.ID, oldTurn.TurnID, 30*time.Second, "old Fleet session", func(messages []webTranscriptMessage) bool {
-		return hasAssistantText(messages, "old session complete")
-	})
-
-	var newTurn struct {
-		TurnID  string `json:"turn_id"`
-		Command struct {
-			Status struct {
-				SessionID string `json:"session_id"`
-			} `json:"status"`
-		} `json:"command"`
-	}
-	fleetWebJSON(
-		t,
-		client,
-		http.MethodPost,
-		agentURL+"/api/sessions/"+oldSession.ID+"/turns",
-		`{"prompt":"/new"}`,
-		http.StatusOK,
-		&newTurn,
-	)
-	newSessionID := newTurn.Command.Status.SessionID
-	if newSessionID == "" || newSessionID == oldSession.ID || newTurn.TurnID == "" {
-		t.Fatalf("new session response = %+v, old id = %s", newTurn, oldSession.ID)
-	}
-	select {
-	case <-newGreetingStarted:
-	case <-time.After(10 * time.Second):
-		t.Fatal("new session greeting did not reach provider")
-	}
-
-	staleCtx, cancelStale := context.WithTimeout(context.Background(), 5*time.Second)
-	staleRequest, err := http.NewRequestWithContext(
-		staleCtx,
-		http.MethodGet,
-		agentURL+"/api/sessions/"+oldSession.ID+"/events",
-		http.NoBody,
-	)
-	if err != nil {
-		cancelStale()
-		t.Fatal(err)
-	}
-	staleResponse, err := client.Do(staleRequest)
-	if err != nil {
-		cancelStale()
-		t.Fatal(err)
-	}
-	staleResponse.Body.Close()
-	cancelStale()
-	if staleResponse.StatusCode != http.StatusConflict {
-		t.Fatalf("stale event reconnect status = %d, want %d", staleResponse.StatusCode, http.StatusConflict)
-	}
-
-	var sessions struct {
-		Sessions []struct {
-			ID     string `json:"id"`
-			Active bool   `json:"active"`
-		} `json:"sessions"`
-	}
-	fleetWebJSON(t, client, http.MethodGet, agentURL+"/api/sessions", "", http.StatusOK, &sessions)
-	var oldFound, newFound bool
-	for _, info := range sessions.Sessions {
-		switch info.ID {
-		case oldSession.ID:
-			oldFound = true
-			if info.Active {
-				t.Fatalf("old session %s remained active: %+v", oldSession.ID, sessions.Sessions)
-			}
-		case newSessionID:
-			newFound = true
-			if !info.Active {
-				t.Fatalf("new session %s is inactive: %+v", newSessionID, sessions.Sessions)
-			}
-		}
-	}
-	if !oldFound || !newFound {
-		t.Fatalf("session history missing old or new session: %+v", sessions.Sessions)
-	}
-	fleetWebJSON(t, client, http.MethodGet, agentURL+"/api/sessions/"+oldSession.ID, "", http.StatusOK, nil)
-
-	releaseOnce.Do(func() { close(newGreetingRelease) })
-	waitForWebTranscript(t, agentURL, newSessionID, newTurn.TurnID, 30*time.Second, "new Fleet session greeting", func(messages []webTranscriptMessage) bool {
-		return hasAssistantText(messages, "new session complete")
-	})
-	assertFleetSSEHeaders(t, agentURL+"/api/sessions/"+newSessionID+"/events")
 }
 
 func assertProcessMetrics(

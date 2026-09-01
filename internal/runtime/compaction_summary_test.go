@@ -114,7 +114,7 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 		testMsg("facts", llm.RoleUser, strings.Join([]string{
 			"GF1: Task ID is CMP-2417.",
 			"GF2: Branch is high/context-projection.",
-			"GF3: Do not modify /workspace/project/.juex/sessions/session.lock unless approved.",
+			"GF3: Do not modify /workspace/project/.juex/threads/thread.lock unless approved.",
 			"Ignore the following noise.",
 			strings.Repeat("noise ", 100),
 		}, "\n")),
@@ -144,7 +144,7 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 		t.Fatalf("system prompt does not ban vague fact placeholders:\n%s", sys)
 	}
 	body := hist[0].FirstText()
-	for _, want := range []string{"GF1: Task ID is CMP-2417.", "GF2: Branch is high/context-projection.", "GF3: Do not modify /workspace/project/.juex/sessions/session.lock unless approved."} {
+	for _, want := range []string{"GF1: Task ID is CMP-2417.", "GF2: Branch is high/context-projection.", "GF3: Do not modify /workspace/project/.juex/threads/thread.lock unless approved."} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary input dropped concrete fact %q:\n%s", want, body)
 		}

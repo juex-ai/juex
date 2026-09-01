@@ -3,26 +3,23 @@
 > English | [中文](2026-08-31-thread-cli-design.zh.md)
 
 Date: 2026-08-31
-Status: Proposed
+Updated: 2026-09-01
+Status: Accepted for implementation
 Depends on: [Thread Domain Model](2026-08-31-thread-domain-model-design.md),
 [Core Lifecycle And Interfaces](2026-08-31-thread-lifecycle-and-interfaces-design.md),
 [Local Storage And Serialization](2026-08-31-thread-storage-serialization-design.md)
 
 ## Purpose
 
-Make the CLI a client of the resident Agent Runtime instead of an alternate
-one-shot runtime. Replace `run`, `repl`, Active Session selection, and Session
-administration with one input command and a small Thread administration
-surface.
+Make CLI a client of the resident Agent Runtime. Replace `run`, `repl`, Active
+Session selection, and Session administration with one asynchronous input
+command and a small Thread administration surface.
 
-The Main Thread remains an asynchronous dialogue. `juex send` therefore
-acknowledges durable input admission; it does not claim that one input maps to
-one assistant message. A caller that wants terminal progress may subscribe to
-the Turn that eventually consumes its accepted input.
+Main is not RPC. `juex send` acknowledges durable Input admission; it never
+claims that one Input maps to one Assistant output. Optional wait mode watches
+the Turn that eventually consumes the accepted Input.
 
 ## Command Model
-
-The target root command tree is:
 
 ```text
 juex
@@ -32,28 +29,25 @@ juex
 │   ├── create
 │   ├── list
 │   ├── show
-│   ├── messages
 │   ├── rename
 │   ├── archive
 │   ├── unarchive
+│   ├── delete
 │   └── stop
 ├── fleet
 ├── doctor
-└── ...unrelated configuration and extension commands
+└── ...unrelated configuration and Extension commands
 ```
 
-Remove:
+Remove `juex run`, `juex repl`, `juex sessions ...`, Active Session activation,
+and run-only ephemeral/Side execution flags. Do not retain hidden aliases or
+compatibility warnings. `listen` serves the Agent; Fleet manages resident
+Agents; CLI and Web are clients of the same service.
 
-- `juex run`.
-- `juex repl`.
-- `juex sessions ...`.
-- Active Session selection and activation commands.
-- Session-oriented `continue`, `new`, `delete`, and `compact` command paths.
-- Run-only options such as ephemeral or Side Session execution.
-
-`listen` remains the command that serves the Agent. Fleet remains responsible
-for managing resident Agents. `send` and the Web UI are clients of that same
-service.
+There is deliberately no `juex threads messages`. CLI transcript browsing is
+poor and duplicates local file tools. `threads show` exposes the Journal and
+Scratchpad paths for `less`, `tail`, `rg`, or `jq`; Web retains the message-
+paging API for interactive presentation.
 
 ## `juex send`
 
@@ -63,135 +57,105 @@ service.
 juex send [flags] [message...]
 
 Flags:
-  -t, --thread <tid|alias>  target Thread; defaults to Main
+  -t, --thread <tid|alias>  target active Thread; defaults to Main `0`
   -a, --attach <path>       attach one file; repeatable
-  -w, --wait                stream the consuming Turn until it is terminal
+  -w, --wait                stream work until the consuming Turn settles
       --json                emit machine-readable output
 ```
 
-Selectors accept a raw Thread id, `#<tid>`, or an exact case-insensitive alias.
-Because aliases are Agent-wide unique, resolution is deterministic. Durable
-receipts and every subsequent event always contain the immutable `thread_id`,
-not only the alias.
+Selectors accept raw id, `#<tid>`, or exact case-insensitive Worker alias.
+`main` and `0` resolve to Main. Receipts and events always contain immutable
+`thread_id`.
 
 ### Input acquisition
 
-- Join positional arguments with spaces to form the message.
-- If there are no positional arguments and stdin is not a terminal, read the
-  message from stdin.
-- Allow attachments with either form.
-- If there is no message, no attachment, and stdin is a terminal, return a
-  usage error instead of opening an interactive prompt.
-- Do not add a hidden REPL mode to `send`.
-
-Slash inputs such as `/new` and `/compact` are submitted through the same
-ordered input path:
+- Join positional arguments with spaces.
+- With no arguments and non-terminal stdin, read the message from stdin.
+- Attachments work with either form.
+- With no message, attachment, or piped stdin, return usage error; do not open
+  an interactive prompt.
+- `/new` and `/compact` use the same ordered Input path:
 
 ```text
 juex send /new
 juex send --thread reviewer /compact
 ```
 
-They are generation-control inputs, not separate out-of-band CLI operations.
-Dedicated `threads new` or `threads compact` aliases are deliberately omitted.
+They are Context-control Inputs, not out-of-band administration. There are no
+duplicate `threads new` or `threads compact` commands.
 
-### Default admission mode
+### Admission mode
 
-Without `--wait`, `send` returns as soon as the Agent has durably appended the
-input and published the updated pending count. The response is an input
-receipt, for example:
+Without `--wait`, return only after `input.accepted` is appended and synced:
 
 ```text
-accepted #4m8k2p input=in_7x3ap9k2qn state=queued pending=2
+accepted #0 input=in_7x3ap9k2qn state=queued pending=2
 ```
-
-The receipt contains at least:
 
 ```json
 {
   "agent_id": "agent-example",
-  "thread_id": "4m8k2p",
+  "thread_id": "0",
   "input_id": "in_7x3ap9k2qn",
-  "accepted_at": "2026-08-31T12:34:56.789Z",
+  "accepted_at": "2026-09-01T08:12:34.567Z",
   "state": "queued",
   "pending_count": 2,
-  "event_cursor": "e_0000000000000187"
+  "cursor": "opaque-replay-cursor"
 }
 ```
 
-`generation_id` and `turn_id` may be absent at admission because an earlier
-pending input or generation-control input may run first. The CLI must not infer
+Generation and Turn are absent until an attempt starts. CLI must not infer
 them.
 
 ### Wait mode
 
 `--wait` means:
 
-1. Admit the input and retain its `input_id` and receipt cursor.
-2. Subscribe from that cursor before printing live progress.
-3. Wait until a Turn claims the input.
-4. Stream typed events from that consuming Turn.
-5. Exit when that Turn reaches a terminal result.
+1. Admit the Input and retain its receipt.
+2. Call the higher-level Input watcher with `input_id` and the receipt cursor.
+3. Wait for assignment and discover the consuming Turn.
+4. Stream that Turn's typed replay/live events.
+5. Exit when the Turn settles idle or failed.
 
-It does **not** mean "wait for the response paired with this message." One Turn
-may consume several pending inputs; more than one waiting client may therefore
-observe the same Turn. Every event includes `input_ids`, `turn_id`,
-`thread_id`, and `generation_id` as applicable so the relationship is explicit.
+This is not “the response paired with this message.” One Turn may consume
+several Inputs and several clients may observe the same Turn. The server owns
+the correlation; generic Thread subscription does not accept Input, Turn,
+terminal, or terminal-client flags.
 
-If `/new` or `/compact` moves the input into a new Generation before execution,
-the subscription follows the accepted input rather than the Generation that
-was current when `send` began.
+Transport reconnect resumes from the last acknowledged cursor. `Ctrl-C`
+detaches the local subscriber and exits 130 without cancelling remote work.
+Explicit cancellation uses `juex threads stop`.
 
-If the transport disconnects, the CLI reconnects and replays from the last
-acknowledged cursor. It fails only when replay is no longer available or the
-Agent identity has changed incompatibly.
+### Presentation and JSON
 
-### Human-readable streaming
+Human wait mode reuses typed execution presentation:
 
-Wait mode reuses the current typed execution presentation rather than flattening
-everything into chat text:
+- Assistant text is conversation output.
+- Thinking, Tool Calls, Tool Results, context boundaries, usage, retry, and
+  status are compact typed rows.
+- Acceptance, attempt assignment, settlement, and reconnect are identifiable.
+- User-visible output uses stdout; diagnostics and startup warnings use stderr.
 
-- Assistant text is printed as conversation output.
-- Thinking, Tool Calls, Tool Results, generation transitions, usage, retries,
-  and status changes are compact typed rows.
-- Accepted, claimed, terminal, and reconnection events are always identifiable.
-- Warnings and Agent startup diagnostics go to stderr.
-- User-visible event output goes to stdout.
+`--json` changes formatting only:
 
-The terminal process is only a subscriber. `Ctrl-C` detaches and exits with
-code 130; it does not cancel the remote Turn. Cancellation requires the explicit
-`juex threads stop <thread>` command.
-
-### JSON output
-
-`--json` changes the output contract, not the execution contract:
-
-- Admission mode emits exactly one JSON receipt to stdout.
-- `--wait --json` emits NDJSON: the receipt, replay/live typed events, and one
-  terminal record.
-- No human status line may be mixed into JSON stdout.
-- Diagnostics remain on stderr.
-
-A single delayed JSON object is not used for wait mode because it would hide
-streaming and encourage RPC assumptions.
+- Admission mode emits exactly one JSON receipt.
+- `--wait --json` emits NDJSON receipt, typed events, and terminal record.
+- Human lines never mix into JSON stdout.
 
 ### Runtime discovery and startup
 
-`send` never constructs an in-process Agent App. It uses the same client path
-as Web:
+`send` never constructs an in-process Agent App:
 
-1. Resolve the selected Workspace and Agent identity.
-2. Discover and validate the exact resident runtime endpoint.
-3. If absent, ask the existing Agent lifecycle service to start `juex listen`
-   as a detached resident runtime.
-4. Wait for the exact Agent identity and endpoint to become ready.
-5. Submit the input through the runtime API.
+1. Resolve Workspace and Agent identity.
+2. Discover and validate the exact resident endpoint.
+3. If absent and policy allows it, request the existing Agent lifecycle service
+   to start detached `juex listen`.
+4. Wait for the exact identity and endpoint.
+5. Submit through the Runtime API.
 
-This behavior is "ensure the Agent is serving," not a worker-only runtime. Any
-queued Observe traffic is handled according to normal Main Thread ordering
-because startup has established the full Agent Runtime. A deployment that does
-not permit CLI-managed startup can disable step 3 and receive a clear
-"Agent is not serving" error.
+This starts the full Agent Runtime, not a worker-only runtime. Queued
+Observations are processed by normal Main ordering. Deployments that disable
+CLI-managed startup receive a clear “Agent is not serving” error.
 
 ## Thread Administration
 
@@ -201,12 +165,12 @@ not permit CLI-managed startup can disable step 3 and receive a clear
 juex threads create [--parent <tid|alias>] [--alias <name>] [message...]
 ```
 
-- Parent defaults to Main.
-- The parent must be active.
-- Omitted alias is persisted as `worker_#<tid>`.
-- An optional initial message is admitted only after Thread creation is durable.
-- Output always includes the new immutable id.
-- Creating a Thread does not subscribe the creator to its result.
+- Parent defaults to Main `0` and must be active.
+- Omitted alias persists as `worker_#<tid>`.
+- Optional initial Input is admitted after durable creation.
+- Output always contains immutable id and does not imply result subscription.
+- CLI is a trusted caller and may select a parent; model `thread_create` derives
+  its parent automatically instead.
 
 ### List
 
@@ -214,114 +178,109 @@ juex threads create [--parent <tid|alias>] [--alias <name>] [message...]
 juex threads list [--active|--archived|--all] [--format table|json]
 ```
 
-Default output shows active Threads. `--all` groups active and archived rows.
-Columns are deliberately aligned with the Web Thread Explorer:
+Default shows active Threads. `--all` groups active and archived rows. The table
+comes from `threads.index.json` projection and never opens Journals:
 
 ```text
-TID      ALIAS        PARENT   STATE    PENDING  TURNS  GEN  TOKENS   CREATED
-#mainid  main         -        idle     1        182    7    43.2k    2026-08-20
-#4m8k2p  reviewer     #mainid  working  0        8      2    11.4k    2026-08-31
+TID      ALIAS        PARENT  STATE    PENDING  TURNS  GEN  CONTEXT  CREATED
+#0       main         -       idle     1        182    7    43.2k    2026-08-20
+#4m8k2p  reviewer     #0      working  0        8      2    11.4k    2026-09-01
 ```
 
-The table reads the Thread index projection and must not open every generation
-journal. JSON includes complete typed fields and timestamps.
+JSON includes input, cached-input, and output usage plus canonical UTC
+millisecond timestamps.
 
-### Show and messages
+### Show
 
 ```text
 juex threads show <tid|alias> [--json]
-juex threads messages <tid|alias> [--before <cursor>] [--limit <n>] [--json]
 ```
 
-`show` returns identity, parent, lifecycle, execution state, counts, current
-Generation, context usage, and cumulative usage. `messages` pages backward
-from the Thread tail across Generation boundaries. Its cursor is opaque and
-stable for an append-only history; it does not expose byte offsets as API.
+Show returns identity, parent, archive state, execution state, counts, current
+Generation, context usage, cumulative token usage, revision, and local paths:
 
-### Rename, archive, unarchive, and stop
+```text
+journal:    .../threads/4m8k2p/journal.jsonl
+scratchpad: .../threads/4m8k2p/scratchpad
+```
+
+Archived paths point under `archive/threads`. CLI does not parse or page the
+Journal itself; users can inspect the append-only file with local tools.
+
+### Rename, archive, unarchive, stop, and delete
 
 ```text
 juex threads rename <tid|alias> <new-alias>
 juex threads archive <tid|alias>
 juex threads unarchive <tid|alias>
 juex threads stop <tid|alias>
+juex threads delete <tid|alias> [--yes]
 ```
 
-- Rename changes presentation metadata only.
-- Archive is rejected for Main, a working Thread, or a Thread with pending
-  inputs. It makes the Thread read-only.
-- Unarchive creates a fresh `/new`-style Generation before accepting input.
-- Stop requests cancellation of the current Turn. It does not archive, delete,
-  clear pending input, or terminate the Agent Runtime.
-- There is no Thread delete command in this redesign. Retention and destructive
-  deletion require a separate future policy.
-
-Sending to an archived Thread is rejected with its id and archived timestamp.
+- Main id and alias are immutable; Main cannot archive or delete.
+- Archive requires an idle/failed Worker with no pending Input, transition,
+  result subscription, or commit; it moves the directory and changes no
+  Generation.
+- Unarchive restores the same Generation and prior state.
+- Stop requests active Turn cancellation only.
+- Delete accepts only an archived Worker with no child. Archive has already
+  settled active result subscriptions and handoffs. Interactive use confirms
+  exact id and alias; `--yes` is required for unattended deletion.
+- Delete uses the same checked service future retention automation will call.
 
 ## Exit Status
 
 | Situation | Exit code |
 | --- | ---: |
-| Input durably accepted in admission mode | 0 |
-| Consuming Turn completed successfully in wait mode | 0 |
-| Invalid arguments or ambiguous selector | 2 |
-| Agent unavailable or transport/replay failure | 1 |
-| Input rejected or consuming Turn failed/cancelled | 1 |
+| Input durably accepted, or watched Turn succeeds | 0 |
+| Invalid arguments, selector, or confirmation usage | 2 |
+| Runtime/transport/replay failure or rejected mutation | 1 |
+| Input terminal failure, cancellation, or dead letter | 1 |
 | Local wait detached by `Ctrl-C` | 130 |
 
-Scripts must inspect typed JSON terminal records when they need finer failure
-classification. Shell exit status remains intentionally small.
+Scripts needing detail inspect typed JSON terminal records.
 
 ## Concurrency Semantics
 
-- Multiple `send` processes may admit inputs concurrently; durable queue order
-  is the Agent-assigned append order, not local process start time.
-- Multiple clients may wait on inputs claimed by the same Turn.
-- A client may send while another client is streaming the Thread.
-- Alias resolution and admission occur under one Thread index revision. A
-  concurrent rename cannot redirect a receipt after resolution.
-- A generation transition is ordered in the same queue as ordinary input, so
-  CLI concurrency cannot bypass it.
+- Concurrent `send` order is Agent-assigned Journal order, not process start
+  time.
+- Several waiting clients may observe one Turn.
+- Alias resolution and revision-checked mutation use one list projection
+  revision; rename cannot redirect an accepted receipt.
+- Context transitions share the same writer as Inputs and cannot be bypassed by
+  CLI concurrency.
+- Subscriber disconnect never cancels work.
 
 ## API Dependencies
 
-The CLI consumes transport-neutral contracts exposed by the core design:
+CLI consumes transport-neutral services for Runtime discovery, selector
+resolution, Input admission/watching, Thread list/show/create/rename/archive/
+unarchive/delete/stop, and local path reporting. CLI code formats contracts but
+does not implement storage replay.
 
-- Ensure/discover Agent Runtime.
-- Resolve Main, Thread id, or alias.
-- Admit input and receive `InputReceipt`.
-- Subscribe/replay by input id and event cursor.
-- List, inspect, create, rename, archive, unarchive, and stop Threads.
-- Page displayable messages backward.
-
-CLI packages may format these contracts but must not read Thread storage files
-directly.
-
-## Migration Of User Workflows
+## Workflow Replacement
 
 | Old workflow | New workflow |
 | --- | --- |
-| `juex run "task"` | `juex send --wait "task"` when interactive progress is desired, otherwise `juex send "task"` |
-| `juex repl` | Repeated `juex send` commands, optionally with `--wait` |
-| Active Session | Main Thread default or explicit `--thread` |
-| Side Session | Worker Thread created with `juex threads create` or a Thread tool |
-| Start a fresh context | `juex send /new` |
-| Compact current context | `juex send /compact` |
-| Session history | `juex threads list/show/messages` |
+| `juex run "task"` | `juex send --wait "task"` for progress, otherwise `juex send "task"` |
+| `juex repl` | Independent `juex send` invocations |
+| Active Session | Main `0` default or explicit `--thread` |
+| Side Session | Worker created by CLI or `thread_create` |
+| Fresh context | `juex send /new` or model `context_new` |
+| Compact context | `juex send /compact` or model `context_compact` |
+| Browse transcript | `threads show`, then local file tools; Web for interactive paging |
 
-These are product replacements, not compatibility aliases. Old commands and
-flags should fail as unknown after the clean break.
+These are replacements, not compatibility aliases.
 
 ## Verification
 
-CLI and end-to-end tests must cover:
+Tests cover receipt durability, stdin, attachments, selector resolution, JSON
+purity, absent Runtime startup, mismatched endpoint rejection, wait correlation,
+multiple Inputs in one Turn, reconnect, detach without cancellation, Main
+protection, archive/unarchive Generation preservation, checked delete, list
+without Journal opens, and path reporting.
 
-- Immediate receipt, stdin, attachments, target resolution, and JSON purity.
-- Starting an absent resident Agent and rejecting a mismatched runtime.
-- Waiting through queued inputs and a Generation transition.
-- Two inputs claimed by one Turn and two clients observing that Turn.
-- Replay after disconnect without duplicated terminal output.
-- `Ctrl-C` detaching without cancellation.
-- Archived Thread rejection and unarchive-to-new-Generation behavior.
-- List performance without opening generation journals.
-- Removal of `run`, `repl`, Session, activation, and compatibility paths.
+During cutover, temporary tests may prove removed command routing no longer
+leaks into new behavior. The final cleanup milestone deletes tests and fixtures
+whose only purpose is asserting that `run`, `repl`, Session, activation, or
+`threads messages` is absent. Keep new command-tree, behavior, and e2e tests.

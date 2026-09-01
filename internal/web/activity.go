@@ -59,17 +59,17 @@ func (s *Server) handleAgentStatusEvents(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) agentActivity() agentActivityResponse {
 	response := agentActivityResponse{State: agentActivityIdle}
-	var latest *activeSession
-	var latestWorking *activeSession
-	s.sessions.Range(func(_, value any) bool {
-		active, ok := value.(*activeSession)
+	var latest *activeThread
+	var latestWorking *activeThread
+	s.threads.Range(func(_, value any) bool {
+		active, ok := value.(*activeThread)
 		if !ok || active == nil || active.app == nil || active.app.Status == nil {
 			return true
 		}
 		snapshot := active.app.Status.Snapshot()
-		if snapshot.Session.State.IsWorking() {
+		if snapshot.Thread.State.IsWorking() {
 			response.State = agentActivityWorking
-			response.PendingInputCount += snapshot.Session.PendingCount
+			response.PendingInputCount += snapshot.Thread.PendingCount
 			if latestWorking == nil || active.StartedAt.After(latestWorking.StartedAt) {
 				latestWorking = active
 			}

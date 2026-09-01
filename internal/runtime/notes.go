@@ -62,7 +62,7 @@ func (m *NotesModule) recordNotesContextError(store *workmem.NotesStore, err err
 	if m == nil || store == nil || err == nil {
 		return
 	}
-	notesPath := filepath.Join(store.SessionDir, workmem.NotesFileName)
+	notesPath := filepath.Join(store.ThreadDir, workmem.NotesFileName)
 	errorText := err.Error()
 	errorKey := notesPath + "\x00" + errorText
 	m.notesContextErrorMu.Lock()
@@ -78,8 +78,8 @@ func (m *NotesModule) recordNotesContextError(store *workmem.NotesStore, err err
 }
 
 func notesProviderPath(store *workmem.NotesStore) string {
-	sessionID := filepath.Base(filepath.Clean(store.SessionDir))
-	return filepath.ToSlash(filepath.Join(".juex", "sessions", sessionID, workmem.NotesFileName))
+	threadID := filepath.Base(filepath.Clean(store.ThreadDir))
+	return filepath.ToSlash(filepath.Join(".juex", "threads", threadID, workmem.NotesFileName))
 }
 
 func (m *NotesModule) clearNotesContextError() {

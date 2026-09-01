@@ -74,8 +74,8 @@ func (s *Server) handleEndpointShutdown(w http.ResponseWriter, r *http.Request) 
 	}
 	response := endpoint.ShutdownResponse{Status: "stopping"}
 	if request.Reason == endpoint.ShutdownReasonRuntimeRestart {
-		s.sessions.Range(func(_, value any) bool {
-			active, _ := value.(*activeSession)
+		s.threads.Range(func(_, value any) bool {
+			active, _ := value.(*activeThread)
 			if active != nil && active.turns != nil {
 				active.turns.interruptWithCause(cancellation.ErrRuntimeRestart)
 			}

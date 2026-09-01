@@ -28,7 +28,7 @@ const (
 type EventName string
 
 const (
-	EventSessionStart     EventName = "SessionStart"
+	EventThreadStart      EventName = "ThreadStart"
 	EventUserPromptSubmit EventName = "UserPromptSubmit"
 	EventPreToolUse       EventName = "PreToolUse"
 	EventPostToolUse      EventName = "PostToolUse"
@@ -92,23 +92,22 @@ func (h CommandHook) Matches(event EventName, toolName string) bool {
 }
 
 type Request struct {
-	EventName        EventName       `json:"event_name"`
-	SessionID        string          `json:"session_id,omitempty"`
-	TurnID           string          `json:"turn_id,omitempty"`
-	CWD              string          `json:"cwd,omitempty"`
-	WorkspaceRoots   []string        `json:"workspace_roots,omitempty"`
-	PermissionMode   string          `json:"permission_mode,omitempty"`
-	SandboxMode      string          `json:"sandbox_mode,omitempty"`
-	ConversationPath string          `json:"conversation_path,omitempty"`
-	EventsPath       string          `json:"events_path,omitempty"`
-	ToolName         string          `json:"tool_name,omitempty"`
-	ToolInput        map[string]any  `json:"tool_input,omitempty"`
-	ToolResult       string          `json:"tool_result,omitempty"`
-	UserInput        string          `json:"user_input,omitempty"`
-	CompactReason    string          `json:"compact_reason,omitempty"`
-	CompactAuto      bool            `json:"compact_auto,omitempty"`
-	GoalState        json.RawMessage `json:"goal_state,omitempty"`
-	Observer         Observer        `json:"-"`
+	EventName      EventName       `json:"event_name"`
+	ThreadID       string          `json:"thread_id,omitempty"`
+	TurnID         string          `json:"turn_id,omitempty"`
+	CWD            string          `json:"cwd,omitempty"`
+	WorkspaceRoots []string        `json:"workspace_roots,omitempty"`
+	PermissionMode string          `json:"permission_mode,omitempty"`
+	SandboxMode    string          `json:"sandbox_mode,omitempty"`
+	JournalPath    string          `json:"journal_path,omitempty"`
+	ToolName       string          `json:"tool_name,omitempty"`
+	ToolInput      map[string]any  `json:"tool_input,omitempty"`
+	ToolResult     string          `json:"tool_result,omitempty"`
+	UserInput      string          `json:"user_input,omitempty"`
+	CompactReason  string          `json:"compact_reason,omitempty"`
+	CompactAuto    bool            `json:"compact_auto,omitempty"`
+	GoalState      json.RawMessage `json:"goal_state,omitempty"`
+	Observer       Observer        `json:"-"`
 }
 
 type Result struct {
@@ -429,7 +428,7 @@ func validateHook(h CommandHook) error {
 
 func validEvent(event EventName) bool {
 	switch event {
-	case EventSessionStart, EventUserPromptSubmit, EventPreToolUse, EventPostToolUse, EventPreCompact, EventPostCompact, EventStop:
+	case EventThreadStart, EventUserPromptSubmit, EventPreToolUse, EventPostToolUse, EventPreCompact, EventPostCompact, EventStop:
 		return true
 	default:
 		return false

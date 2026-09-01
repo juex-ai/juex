@@ -1678,8 +1678,8 @@ func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
 		cfg.AgentAddress.EndpointLockPath() != filepath.Join(canonicalHome, ".locks", "endpoints", cfg.AgentID+".lock") {
 		t.Fatalf("agent address = id %q state %q endpoint lock %q", cfg.AgentAddress.ID(), cfg.AgentAddress.StateDir(), cfg.AgentAddress.EndpointLockPath())
 	}
-	if cfg.SessionsDir() != filepath.Join(cfg.AgentStateDir, "sessions") ||
-		cfg.HistoryPath() != filepath.Join(cfg.AgentStateDir, "history.json") ||
+	if cfg.ThreadsDir() != filepath.Join(cfg.AgentStateDir, "threads") ||
+		cfg.ThreadIndexPath() != filepath.Join(cfg.AgentStateDir, "threads.index.json") ||
 		cfg.ObservablesStateDir() != filepath.Join(cfg.AgentStateDir, "observables") {
 		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
 	}
@@ -1780,11 +1780,11 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 	if len(skills) != 2 || skills[0] != wantUserSkills || skills[1] != wantProjSkills {
 		t.Fatalf("skills = %v", skills)
 	}
-	if want := filepath.Join("/proj", ".juex", "sessions"); cfg.SessionsDir() != want {
-		t.Fatalf("sessions dir = %q, want %q", cfg.SessionsDir(), want)
+	if want := filepath.Join("/proj", ".juex", "threads"); cfg.ThreadsDir() != want {
+		t.Fatalf("threads dir = %q, want %q", cfg.ThreadsDir(), want)
 	}
-	if want := filepath.Join("/proj", ".juex", "history.json"); cfg.HistoryPath() != want {
-		t.Fatalf("history path = %q, want %q", cfg.HistoryPath(), want)
+	if want := filepath.Join("/proj", ".juex", "threads.index.json"); cfg.ThreadIndexPath() != want {
+		t.Fatalf("history path = %q, want %q", cfg.ThreadIndexPath(), want)
 	}
 	if want := filepath.Join("/proj", ".juex", "juex.yaml"); cfg.RuntimeConfigPath() != want {
 		t.Fatalf("runtime config = %q, want %q", cfg.RuntimeConfigPath(), want)
@@ -1810,7 +1810,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 		t.Fatalf("extension dirs = home %q project %q", cfg.HomeExtensionsDir(), cfg.ProjectExtensionsDir())
 	}
 	runtimePaths := cfg.RuntimePaths()
-	if runtimePaths.WorkDir != filepath.Join("/proj") || runtimePaths.HistoryPath != cfg.HistoryPath() {
+	if runtimePaths.WorkDir != filepath.Join("/proj") || runtimePaths.ThreadIndexPath != cfg.ThreadIndexPath() {
 		t.Fatalf("runtime paths = %+v", runtimePaths)
 	}
 	resourcePaths := cfg.ResourcePaths()
@@ -1821,7 +1821,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserAgentsResources: true}
-	if cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
+	if cfg.ThreadsDir() != "" || cfg.ThreadIndexPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
 	if cfg.ProjectExtensionsDir() != "" {
@@ -1848,16 +1848,16 @@ func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestRuntimePathsArtifactDirRequiresExplicitAgentStateDir(t *testing.T) {
+func TestRuntimePathsMediaDirRequiresExplicitAgentStateDir(t *testing.T) {
 	workDir := filepath.Join("/proj")
 	manual := Config{WorkDir: workDir}
-	if got := manual.RuntimePaths().ArtifactDir; got != "" {
-		t.Fatalf("manual ArtifactDir = %q, want empty", got)
+	if got := manual.RuntimePaths().MediaDir; got != "" {
+		t.Fatalf("manual MediaDir = %q, want empty", got)
 	}
 	stateDir := filepath.Join("/state", "agents", "abcdef")
 	resident := Config{WorkDir: workDir, AgentStateDir: stateDir}
-	if got, want := resident.RuntimePaths().ArtifactDir, filepath.Join(stateDir, "artifacts"); got != want {
-		t.Fatalf("resident ArtifactDir = %q, want %q", got, want)
+	if got, want := resident.RuntimePaths().MediaDir, filepath.Join(stateDir, "media"); got != want {
+		t.Fatalf("resident MediaDir = %q, want %q", got, want)
 	}
 }
 

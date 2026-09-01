@@ -18,9 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 func TestMain(m *testing.M) {
@@ -31,27 +30,27 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestServeMCPNotificationTargetsLastWrittenSession(t *testing.T) {
+func TestServeMCPNotificationTargetsMainAndNeverWorker(t *testing.T) {
 	srv := newTestServer(t)
 	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
 	work := srv.opts.Cfg.WorkDir
 	mustWriteWebFakeMCPConfig(t, work, true)
 
-	older := seedWebSession(t, srv, "older")
-	last := seedWebSession(t, srv, "last")
+	worker := seedWebWorker(t, srv, "worker")
+	main := waitForMainThread(t, srv)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(ctx) }()
 	defer stopRunServer(t, cancel, errCh)
 
-	waitForMCPEventInSession(t, last.Dir, "content:\nhello from mcp")
-	waitForSessionTextInSession(t, last.Dir, llm.RoleAssistant, "ack")
-	assertNoMCPEventInSession(t, older.Dir)
+	waitForObservationInThread(t, main.Dir, "content:\nhello from mcp")
+	waitForThreadText(t, main.Dir, llm.RoleAssistant, "ack")
+	assertNoObservationInThread(t, worker.Dir)
 }
 
-func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
+func TestServeMCPNotificationUsesStableMainThread(t *testing.T) {
 	srv := newTestServer(t)
 	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
@@ -63,9 +62,9 @@ func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 	defer stopRunServer(t, cancel, errCh)
 
-	active := waitForActivePrimary(t, srv)
-	waitForMCPEventInSession(t, active.Dir, "content:\nhello from mcp")
-	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
+	main := waitForMainThread(t, srv)
+	waitForObservationInThread(t, main.Dir, "content:\nhello from mcp")
+	waitForThreadText(t, main.Dir, llm.RoleAssistant, "ack")
 }
 
 func TestServeMCPNotificationPreservesAttachmentImageBlock(t *testing.T) {
@@ -84,13 +83,13 @@ func TestServeMCPNotificationPreservesAttachmentImageBlock(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 	defer stopRunServer(t, cancel, errCh)
 
-	active := waitForActivePrimary(t, srv)
-	artifactPath := waitForMCPImageBlockInSession(t, active.Dir, relPath)
-	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
+	main := waitForMainThread(t, srv)
+	artifactPath := waitForMCPImageBlockInThread(t, main.Dir, relPath)
+	waitForThreadText(t, main.Dir, llm.RoleAssistant, "ack")
 	if err := os.Remove(filepath.Join(work, filepath.FromSlash(relPath))); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.ArtifactDir(), filepath.FromSlash(artifactPath))); err != nil {
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.MediaDir(), filepath.FromSlash(artifactPath))); err != nil {
 		t.Fatalf("stored MCP event artifact unavailable after source removal: %v", err)
 	}
 }
@@ -120,7 +119,7 @@ func TestRunServesHTTPBeforeDrainingStartupMCPNotifications(t *testing.T) {
 	}
 }
 
-func TestOpenSessionWaitsForInFlightMCPStartup(t *testing.T) {
+func TestOpenThreadWaitsForInFlightMCPStartup(t *testing.T) {
 	srv := newTestServer(t)
 	work := srv.opts.Cfg.WorkDir
 	marker := filepath.Join(t.TempDir(), "tools-list-started")
@@ -133,12 +132,12 @@ func TestOpenSessionWaitsForInFlightMCPStartup(t *testing.T) {
 	go func() { startErrCh <- srv.ensureMCPStarted(context.Background()) }()
 	waitForFile(t, marker)
 
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	as, err := srv.openThread(context.Background(), thread.MainID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := as.app.Engine.Tools.Get("mcp__alpha__echo"); !ok {
-		t.Fatalf("session tools missing mcp__alpha__echo: %+v", as.app.Engine.Tools.List())
+		t.Fatalf("Thread tools missing mcp__alpha__echo: %+v", as.app.Engine.Tools.List())
 	}
 	if err := <-startErrCh; err != nil {
 		t.Fatal(err)
@@ -585,27 +584,29 @@ func waitForFile(t *testing.T, path string) {
 	}
 }
 
-func seedWebSession(t *testing.T, srv *Server, text string) *session.Session {
+func seedWebWorker(t *testing.T, srv *Server, text string) thread.Info {
 	t.Helper()
-	sess, err := session.NewWithOptions(srv.opts.Cfg.SessionsDir(), session.Options{
-		HistoryPath: srv.opts.Cfg.HistoryPath(),
-	})
+	store := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir)
+	main, err := store.EnsureMain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(llm.TextMessage(llm.RoleUser, text)); err != nil {
+	_ = main.Close()
+	target, err := store.CreateWorker(thread.MainID, "notification-isolation")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), sess.Info()); err != nil {
+	if err := target.Append(llm.TextMessage(llm.RoleUser, text)); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Close(); err != nil {
+	info := target.Info()
+	if err := target.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return sess
+	return info
 }
 
-func waitForActivePrimary(t *testing.T, srv *Server) session.Info {
+func waitForMainThread(t *testing.T, srv *Server) thread.Info {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
@@ -613,34 +614,31 @@ func waitForActivePrimary(t *testing.T, srv *Server) session.Info {
 	for {
 		select {
 		case <-deadline:
-			t.Fatal("timed out waiting for active primary session")
+			t.Fatal("timed out waiting for Main Thread")
 		case <-tick.C:
-			h, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
-			if err != nil || h.Active == nil || h.Active.Kind != session.KindPrimary {
+			target, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).OpenActive(thread.MainID)
+			if err != nil {
 				continue
 			}
-			return session.Info{
-				ID:     h.Active.ID,
-				Dir:    filepath.Join(srv.opts.Cfg.SessionsDir(), h.Active.ID),
-				Kind:   session.KindPrimary,
-				Active: true,
-			}
+			info := target.Info()
+			_ = target.Close()
+			return info
 		}
 	}
 }
 
-func waitForMCPEventInSession(t *testing.T, dir, want string) {
+func waitForObservationInThread(t *testing.T, dir, want string) {
 	t.Helper()
-	waitForSessionMessage(t, dir, func(msg llm.Message) bool {
-		return msg.Kind == llm.MessageKindMCPEvent && strings.Contains(msg.FirstText(), want)
+	waitForThreadMessage(t, dir, func(msg llm.Message) bool {
+		return msg.Kind == llm.MessageKindObservation && strings.Contains(msg.FirstText(), want)
 	}, "MCP event "+want)
 }
 
-func waitForMCPImageBlockInSession(t *testing.T, dir, relPath string) string {
+func waitForMCPImageBlockInThread(t *testing.T, dir, relPath string) string {
 	t.Helper()
 	var artifactPath string
-	waitForSessionMessage(t, dir, func(msg llm.Message) bool {
-		if msg.Kind != llm.MessageKindMCPEvent || !strings.Contains(msg.FirstText(), relPath) {
+	waitForThreadMessage(t, dir, func(msg llm.Message) bool {
+		if msg.Kind != llm.MessageKindObservation {
 			return false
 		}
 		for _, block := range msg.Blocks {
@@ -654,14 +652,14 @@ func waitForMCPImageBlockInSession(t *testing.T, dir, relPath string) string {
 	return artifactPath
 }
 
-func waitForSessionTextInSession(t *testing.T, dir string, role llm.Role, want string) {
+func waitForThreadText(t *testing.T, dir string, role llm.Role, want string) {
 	t.Helper()
-	waitForSessionMessage(t, dir, func(msg llm.Message) bool {
+	waitForThreadMessage(t, dir, func(msg llm.Message) bool {
 		return msg.Role == role && strings.Contains(msg.FirstText(), want)
 	}, string(role)+" message "+want)
 }
 
-func waitForSessionMessage(t *testing.T, dir string, match func(llm.Message) bool, label string) {
+func waitForThreadMessage(t *testing.T, dir string, match func(llm.Message) bool, label string) {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
@@ -671,7 +669,7 @@ func waitForSessionMessage(t *testing.T, dir string, match func(llm.Message) boo
 		case <-deadline:
 			t.Fatalf("timed out waiting for %s in %s", label, dir)
 		case <-tick.C:
-			_, msgs, err := session.LoadInfo(dir)
+			_, msgs, err := thread.LoadInfo(dir)
 			if err != nil {
 				continue
 			}
@@ -684,14 +682,14 @@ func waitForSessionMessage(t *testing.T, dir string, match func(llm.Message) boo
 	}
 }
 
-func assertNoMCPEventInSession(t *testing.T, dir string) {
+func assertNoObservationInThread(t *testing.T, dir string) {
 	t.Helper()
-	_, msgs, err := session.LoadInfo(dir)
+	_, msgs, err := thread.LoadInfo(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, msg := range msgs {
-		if msg.Kind == llm.MessageKindMCPEvent {
+		if msg.Kind == llm.MessageKindObservation {
 			t.Fatalf("unexpected MCP event in %s: %+v", dir, msg)
 		}
 	}

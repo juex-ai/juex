@@ -1,0 +1,47 @@
+---
+name: juex-thread-state
+description: Guide for JueX Thread goals and working notes.
+type: builtin-guide
+---
+# JueX Thread State
+
+> English | [中文](SKILL.zh.md)
+
+Load this guide when you need detailed goal or working-note workflows,
+constraints, or examples. Correct tool calls do not require a prior guide load.
+
+## Goals
+
+- Use `get_goal` before deciding whether a Thread already has a goal.
+- Use `create_goal` only when the user explicitly asks for a tracked goal, or
+  when the runtime policy that invoked you explicitly requires one. It creates
+  or replaces this Thread's goal with status `in_progress`.
+- `description` states the concrete objective. `acceptance` records completion
+  criteria, required artifacts, constraints, and verification. Use
+  `status_reason` for concise evidence about the current state.
+- Use `update_goal` to change contract fields or status. Allowed statuses are
+  `in_progress`, `wait_for_user`, `success`, and `failure`.
+- Use `wait_for_user` only when the unfinished goal cannot make useful progress
+  until new external input arrives. Include a concise `status_reason` that says
+  what input is needed. This status allows the current turn to finish without a
+  forced continuation. When new input arrives, evaluate it and explicitly
+  change the status to `in_progress`, `success`, or `failure`, or leave it as
+  `wait_for_user` when the required input is still missing.
+- Mark `success` only after every acceptance condition is verified. Mark
+  `failure` only when the goal truly cannot be completed, and include an
+  evidence-backed `status_reason`. Difficulty, delay, or incomplete work is
+  not success or failure by itself.
+
+Example:
+
+```json
+{"description":"Ship the runtime fix","acceptance":"Focused and full tests pass; PR is merged","status_reason":"Implementation in progress"}
+```
+
+## Working notes
+
+`update_notes` replaces the complete model-owned Thread note; it does not
+append. Keep the content under 2048 characters and use concise Markdown for
+the current plan, verified progress, and unresolved issues. Checkbox items
+(`- [ ]` and `- [x]`) are useful for work that changes state. Put long-lived or
+large material in scratchpad files instead of notes.

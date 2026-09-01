@@ -12,7 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
-// BrowserEvent is the stable event DTO sent over the session SSE stream.
+// BrowserEvent is the stable event DTO sent over the Thread SSE stream.
 // Runtime may persist more event facts than the browser consumes; this DTO is
 // the web transport contract for browser-visible read-model updates.
 type BrowserEvent struct {

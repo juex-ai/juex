@@ -178,7 +178,7 @@ func testImageMedia(t *testing.T) (*MediaRef, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session/media/image.png", data)
+	ref, err := store.Put("threads/123456/media/image.png", data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestBlockImageJSONRoundTripStoresMediaReference(t *testing.T) {
 		Blocks: []Block{{
 			Type: BlockImage,
 			Media: &MediaRef{
-				ArtifactPath:  "sessions/s/media/sha.png",
+				ArtifactPath:  "threads/123456/media/sha.png",
 				MediaType:     "image/png",
 				SHA256:        "sha",
 				OriginalBytes: 123,
@@ -352,7 +352,7 @@ func TestReadImageBase64RejectsUnsafePathsAndMediaTypes(t *testing.T) {
 func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 	workDir := t.TempDir()
 	otherDir := t.TempDir()
-	artifactPath := "sessions/session/media/image.png"
+	artifactPath := "threads/123456/media/image.png"
 	filePath := filepath.Join(workDir, filepath.FromSlash(artifactPath))
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		t.Fatal(err)
@@ -385,7 +385,7 @@ func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.
 	report := eventmedia.ValidateAttachments([]eventmedia.AttachmentRef{{
 		Path:      ".juex/inbox/event.png",
 		MediaType: "image/png",
-	}}, eventmedia.ValidationOptions{WorkDir: workDir, ArtifactDir: artifactDir})
+	}}, eventmedia.ValidationOptions{WorkDir: workDir, MediaDir: artifactDir})
 	if len(report.Valid) != 1 || len(report.Errors) != 0 {
 		t.Fatalf("event attachment report = %+v", report)
 	}
@@ -410,7 +410,7 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session/media/image.png", []byte("fake image bytes"))
+	ref, err := store.Put("threads/123456/media/image.png", []byte("fake image bytes"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 	artifactDir := t.TempDir()
 	if encoded, mediaType, ok := readImageBase64(artifactDir, &MediaRef{
-		ArtifactPath:  "sessions/session/media/too-large.png",
+		ArtifactPath:  "threads/123456/media/too-large.png",
 		MediaType:     "image/png",
 		OriginalBytes: maxProviderImageArtifactBytes + 1,
 	}); ok || encoded != "" || mediaType != "" {
@@ -437,7 +437,7 @@ func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session/media/large.png", bytes.Repeat([]byte("x"), maxProviderImageArtifactBytes+1))
+	ref, err := store.Put("threads/123456/media/large.png", bytes.Repeat([]byte("x"), maxProviderImageArtifactBytes+1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
 		BaseURL:      srv.URL,
 		APIKey:       "test-key",
 		Model:        "claude-test",
-		ArtifactDir:  artifactDir,
+		MediaDir:     artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}), nil)
 
@@ -1784,7 +1784,7 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "m",
-		ArtifactDir:  artifactDir,
+		MediaDir:     artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}), nil)
 	hist := []Message{
@@ -2481,7 +2481,7 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "gpt-test",
-		ArtifactDir:  artifactDir,
+		MediaDir:     artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}))
 	if err != nil {

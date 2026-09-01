@@ -42,12 +42,11 @@ func snapshotRuntimeStatus(t *testing.T, cfg config.Config, opts RuntimeStatusOp
 		return RuntimeStatus{}, err
 	}
 	a, err := New(Options{
-		Config:      cfg,
-		Provider:    &stubProvider{},
-		WorkDir:     cfg.WorkDir,
-		MCPManager:  manager,
-		DisableMCP:  true,
-		LazySession: true,
+		Config:     cfg,
+		Provider:   &stubProvider{},
+		WorkDir:    cfg.WorkDir,
+		MCPManager: manager,
+		DisableMCP: true,
 	})
 	if err != nil {
 		_ = manager.Close()
@@ -90,11 +89,11 @@ func mcpRuntimeStatusSnapshot(t *testing.T, serverTools map[string][]mcp.ToolDes
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionSet, err := runtimemodule.BuildSessionSet(context.Background(), nil, runtimemodule.SessionContext{}, runtimemodule.ToolContext{})
+	threadSet, err := runtimemodule.BuildThreadSet(context.Background(), nil, runtimemodule.ThreadContext{}, runtimemodule.ToolContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return RuntimeModuleSnapshot{Runtime: runtimeSet, Session: sessionSet}
+	return RuntimeModuleSnapshot{Runtime: runtimeSet, Thread: threadSet}
 }
 
 func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
@@ -111,8 +110,8 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		tools.ToolGroupShell,
 		tools.ToolGroupSearch,
 		tools.ToolGroupSkill,
-		tools.ToolGroupSessionState,
-		tools.ToolGroupSideSession,
+		tools.ToolGroupThreadState,
+		tools.ToolGroupWorkerThread,
 		tools.ToolGroupObservable,
 	}
 	if len(status.Tools.Groups) != len(wantGroups) {
@@ -138,8 +137,8 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		}
 		count += len(group.Tools)
 	}
-	if status.Tools.Count != count || count != 31 {
-		t.Fatalf("tool count = %d, grouped=%d, want 31", status.Tools.Count, count)
+	if status.Tools.Count != count || count != 34 {
+		t.Fatalf("tool count = %d, grouped=%d, want 34", status.Tools.Count, count)
 	}
 }
 
@@ -151,7 +150,7 @@ func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 
 	guides := map[string]string{
 		string(tools.ToolGroupChunkedWrite): "juex-chunked-write",
-		string(tools.ToolGroupSessionState): "juex-session-state",
+		string(tools.ToolGroupThreadState):  "juex-thread-state",
 		string(tools.ToolGroupObservable):   "juex-observables",
 	}
 	var specs []llm.ToolSpec
@@ -176,11 +175,11 @@ func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 			specs = append(specs, llm.ToolSpec{Name: tool.Name, Description: tool.Description, Schema: tool.Schema})
 		}
 	}
-	if len(specs) != 15 {
-		t.Fatalf("Tier 2 tool count = %d, want 15", len(specs))
+	if len(specs) != 17 {
+		t.Fatalf("Tier 2 tool count = %d, want 17", len(specs))
 	}
-	if got := contextbudget.EstimateToolTokens(specs); got > 1700 {
-		t.Fatalf("Tier 2 tool estimate = %d tokens, want <= 1700", got)
+	if got := contextbudget.EstimateToolTokens(specs); got > 1900 {
+		t.Fatalf("Tier 2 tool estimate = %d tokens, want <= 1900", got)
 	}
 }
 
@@ -253,7 +252,7 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wantModules []RuntimeModuleStatus
-	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.SessionRuntimeSnapshot().Modules} {
+	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.ThreadRuntimeSnapshot().Modules} {
 		for _, descriptor := range set.Descriptors() {
 			wantModules = append(wantModules, RuntimeModuleStatus{ID: string(descriptor.ID), Scope: string(descriptor.Scope)})
 		}
@@ -315,7 +314,7 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 	t.Cleanup(func() { _ = a.Close() })
 
 	owners := make(map[string]runtimemodule.ID)
-	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.SessionRuntimeSnapshot().Modules} {
+	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.ThreadRuntimeSnapshot().Modules} {
 		for _, entry := range set.ToolCatalog().Entries() {
 			if first, exists := owners[entry.Tool.Name]; exists {
 				t.Fatalf("tool %q has duplicate catalog owners %q and %q", entry.Tool.Name, first, entry.ModuleID)
@@ -335,12 +334,12 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 	}
 
 	for tool, wantOwner := range map[string]runtimemodule.ID{
-		"read":                builtintools.ModuleID,
-		"skill_search":        skillsmodule.ModuleID,
-		"get_goal":            juexruntime.GoalModuleID,
-		"update_notes":        juexruntime.NotesModuleID,
-		"side_session_create": sideSessionModuleID,
-		"observable_list":     observable.ModuleID,
+		"read":            builtintools.ModuleID,
+		"skill_search":    skillsmodule.ModuleID,
+		"get_goal":        juexruntime.GoalModuleID,
+		"update_notes":    juexruntime.NotesModuleID,
+		"thread_create":   workerThreadModuleID,
+		"observable_list": observable.ModuleID,
 	} {
 		if got := owners[tool]; got != wantOwner {
 			t.Errorf("tool %q owner = %q, want %q", tool, got, wantOwner)
@@ -351,12 +350,13 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 	work := t.TempDir()
 	a, err := New(Options{
-		Config:                  config.Config{WorkDir: work},
-		Provider:                &stubProvider{},
-		WorkDir:                 work,
-		DisableMCP:              true,
-		disableSideSessionTools: true,
-		disableObservables:      true,
+		Config: config.Config{WorkDir: work, Modules: config.ModulePolicy{
+			string(workerThreadModuleID): {Enabled: false},
+			string(observable.ModuleID):  {Enabled: false},
+		}},
+		Provider:   &stubProvider{},
+		WorkDir:    work,
+		DisableMCP: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -364,15 +364,15 @@ func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 	t.Cleanup(func() { _ = a.Close() })
 
 	owners := make(map[string]runtimemodule.ID)
-	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.SessionRuntimeSnapshot().Modules} {
+	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.ThreadRuntimeSnapshot().Modules} {
 		for _, entry := range set.ToolCatalog().Entries() {
 			owners[entry.Tool.Name] = entry.ModuleID
-			if entry.ModuleID == sideSessionModuleID || entry.ModuleID == observable.ModuleID {
+			if entry.ModuleID == workerThreadModuleID || entry.ModuleID == observable.ModuleID {
 				t.Errorf("disabled module %q contributed tool %q", entry.ModuleID, entry.Tool.Name)
 			}
 		}
 	}
-	for _, name := range []string{"side_session_create", "observable_list"} {
+	for _, name := range []string{"thread_create", "observable_list"} {
 		if _, ok := a.Engine.Tools.Get(name); ok {
 			t.Errorf("disabled module tool %q is still serving", name)
 		}
@@ -401,14 +401,14 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	if descriptors := a.runtimeModules.Descriptors(); len(descriptors) != 0 {
 		t.Fatalf("Runtime Modules = %#v, want none", descriptors)
 	}
-	if descriptors := a.Engine.SessionRuntimeSnapshot().Modules.Descriptors(); len(descriptors) != 0 {
-		t.Fatalf("Session Modules = %#v, want none", descriptors)
+	if descriptors := a.Engine.ThreadRuntimeSnapshot().Modules.Descriptors(); len(descriptors) != 0 {
+		t.Fatalf("Thread Modules = %#v, want none", descriptors)
 	}
 	if tools := a.Engine.Tools.List(); len(tools) != 0 {
 		t.Fatalf("serving Tools = %#v, want none", tools)
 	}
-	if a.shellSessions != nil || a.sideSessions != nil || a.obsv != nil || a.mcpManager != nil {
-		t.Fatalf("disabled resources were constructed: shell=%p side=%p observable=%p mcp=%p", a.shellSessions, a.sideSessions, a.obsv, a.mcpManager)
+	if a.shellSessions != nil || a.workers != nil || a.obsv != nil || a.mcpManager != nil {
+		t.Fatalf("disabled resources were constructed: shell=%p side=%p observable=%p mcp=%p", a.shellSessions, a.workers, a.obsv, a.mcpManager)
 	}
 	if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
 		status, statusErr := NewRuntimeCatalogService(a.cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})
@@ -424,7 +424,7 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	}
 }
 
-func TestAppRejectsUnknownModuleConfigBeforeSessionSideEffects(t *testing.T) {
+func TestAppRejectsUnknownModuleConfigBeforeThreadSideEffects(t *testing.T) {
 	work := t.TempDir()
 	_, err := New(Options{
 		Config: config.Config{
@@ -439,8 +439,8 @@ func TestAppRejectsUnknownModuleConfigBeforeSessionSideEffects(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `unsupported module "typo-module"`) {
 		t.Fatalf("New() error = %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(work, ".juex", "sessions")); !os.IsNotExist(statErr) {
-		t.Fatalf("unknown Module config created Session state: %v", statErr)
+	if _, statErr := os.Stat(filepath.Join(work, ".juex", "threads")); !os.IsNotExist(statErr) {
+		t.Fatalf("unknown Module config created Thread state: %v", statErr)
 	}
 }
 
@@ -560,7 +560,7 @@ body`)
 			}
 		}
 	}
-	for _, name := range []string{"juex-observables", "juex-session-state", "juex-chunked-write"} {
+	for _, name := range []string{"juex-observables", "juex-thread-state", "juex-chunked-write"} {
 		if !builtinNames[name] {
 			t.Fatalf("runtime skills missing builtin %q: %+v", name, status.Skills.Items)
 		}
@@ -589,7 +589,7 @@ body`)
 	}
 }
 
-func TestRuntimeCatalogServiceIncludesSessionScratchpadPrompt(t *testing.T) {
+func TestRuntimeCatalogServiceIncludesThreadScratchpadPrompt(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{WorkDir: work}
 	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
@@ -597,14 +597,14 @@ func TestRuntimeCatalogServiceIncludesSessionScratchpadPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range status.SystemPrompt.Items {
-		if item.Key == "session_scratchpad" {
+		if item.Key == "thread_scratchpad" {
 			if item.Path == "" || !strings.Contains(item.Text, item.Path) {
-				t.Fatalf("scratchpad prompt = %+v, want active Session scratchpad path", item)
+				t.Fatalf("scratchpad prompt = %+v, want active Thread scratchpad path", item)
 			}
 			return
 		}
 	}
-	t.Fatalf("system prompt missing session scratchpad: %+v", status.SystemPrompt.Items)
+	t.Fatalf("system prompt missing Thread scratchpad: %+v", status.SystemPrompt.Items)
 }
 
 func TestRuntimeCatalogServiceMCPStatusSourcesAndOverrides(t *testing.T) {
@@ -866,7 +866,7 @@ body`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := New(Options{Config: cfg, Provider: &stubProvider{}, WorkDir: work, MCPManager: manager, DisableMCP: true, LazySession: true})
+	a, err := New(Options{Config: cfg, Provider: &stubProvider{}, WorkDir: work, MCPManager: manager, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}

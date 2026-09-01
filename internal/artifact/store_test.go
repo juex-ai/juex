@@ -19,11 +19,11 @@ func TestStorePutAndRead(t *testing.T) {
 	}
 	data := []byte("full projected content")
 
-	ref, err := store.Put("sessions/session-1/user-inputs/message-1.txt", data)
+	ref, err := store.Put("threads/123456/spool/message-1.txt", data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Path != "sessions/session-1/user-inputs/message-1.txt" {
+	if ref.Path != "threads/123456/spool/message-1.txt" {
 		t.Fatalf("path = %q", ref.Path)
 	}
 	if ref.Bytes != len(data) || len(ref.SHA256) != 64 {
@@ -40,7 +40,7 @@ func TestStorePutAndRead(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Fatalf("data = %q, want %q", got, data)
 	}
-	entries, err := os.ReadDir(filepath.Join(artifactDir, "sessions", "session-1", "user-inputs"))
+	entries, err := os.ReadDir(filepath.Join(artifactDir, "threads", "123456", "spool"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestStoreRootIsLazyUntilFirstWrite(t *testing.T) {
 	if files, err := store.Files(); err != nil || len(files) != 0 {
 		t.Fatalf("Files() = %+v, %v, want empty", files, err)
 	}
-	if exists, err := store.HasNamespace("sessions/session-1"); err != nil || exists {
+	if exists, err := store.HasNamespace("threads/123456"); err != nil || exists {
 		t.Fatalf("HasNamespace() = %t, %v, want false", exists, err)
 	}
 	if _, err := os.Stat(artifactDir); !errors.Is(err, os.ErrNotExist) {
@@ -174,7 +174,7 @@ func TestStoreFilesAndRemoveNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Put("sessions/session-1/media/image.png", []byte("image")); err != nil {
+	if _, err := store.Put("threads/123456/media/image.png", []byte("image")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Put("event-media/event.txt", []byte("event")); err != nil {
@@ -184,13 +184,13 @@ func TestStoreFilesAndRemoveNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 || files[0].Path != "event-media/event.txt" || files[1].Path != "sessions/session-1/media/image.png" {
+	if len(files) != 2 || files[0].Path != "event-media/event.txt" || files[1].Path != "threads/123456/media/image.png" {
 		t.Fatalf("files = %+v", files)
 	}
-	if err := store.RemoveNamespace("sessions/session-1"); err != nil {
+	if err := store.RemoveNamespace("threads/123456"); err != nil {
 		t.Fatal(err)
 	}
-	if exists, err := store.HasNamespace("sessions/session-1"); err != nil || exists {
+	if exists, err := store.HasNamespace("threads/123456"); err != nil || exists {
 		t.Fatalf("session namespace after removal = %t, %v", exists, err)
 	}
 	if exists, err := store.HasNamespace("event-media"); err != nil || !exists {
@@ -353,7 +353,7 @@ func TestStoreReadVerifiesIntegrity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session-1/tool-results/call-1.txt", []byte("result"))
+	ref, err := store.Put("threads/123456/spool/call-1.txt", []byte("result"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestStoreReadLimitRejectsOversizedArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session/media/image.png", []byte("image bytes"))
+	ref, err := store.Put("threads/123456/media/image.png", []byte("image bytes"))
 	if err != nil {
 		t.Fatal(err)
 	}

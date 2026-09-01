@@ -84,15 +84,15 @@ func TestGuidanceModuleDeduplicatesGlobalWorkspaceFile(t *testing.T) {
 	}
 }
 
-func TestSessionContextModuleIncludesScratchpadAndOperatingContext(t *testing.T) {
+func TestThreadContextModuleIncludesScratchpadAndOperatingContext(t *testing.T) {
 	workDir := t.TempDir()
-	scratchpadDir := filepath.Join(workDir, ".juex", "sessions", "session-1", "scratchpad")
+	scratchpadDir := filepath.Join(workDir, ".juex", "threads", "123456", "scratchpad")
 	now := time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC)
-	sections, err := (&SessionContextModule{WorkDir: workDir, Now: func() time.Time { return now }}).Context(
+	sections, err := (&ThreadContextModule{WorkDir: workDir, Now: func() time.Time { return now }}).Context(
 		context.Background(),
 		runtimemodule.ContextRequest{
 			Purpose: runtimemodule.ContextPurposeProviderIteration,
-			Session: &runtimemodule.SessionContext{ScratchpadDir: scratchpadDir},
+			Thread:  &runtimemodule.ThreadContext{ScratchpadDir: scratchpadDir},
 		},
 	)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestSessionContextModuleIncludesScratchpadAndOperatingContext(t *testing.T)
 		t.Fatalf("sections = %+v, want scratchpad and operating context", sections)
 	}
 	scratchpad := sections[0]
-	if scratchpad.Key != "session_scratchpad" || scratchpad.Path != scratchpadDir || !strings.Contains(scratchpad.Text, "workspace-relative path for `write_begin`: .juex/sessions/session-1/scratchpad") {
+	if scratchpad.Key != "thread_scratchpad" || scratchpad.Path != scratchpadDir || !strings.Contains(scratchpad.Text, "workspace-relative path for `write_begin`: .juex/threads/123456/scratchpad") {
 		t.Fatalf("scratchpad section = %+v", scratchpad)
 	}
 	for _, want := range []string{"not automatically added to context", "use `read` or `grep`", "before compaction"} {
@@ -118,8 +118,8 @@ func TestSessionContextModuleIncludesScratchpadAndOperatingContext(t *testing.T)
 	}
 }
 
-func TestSessionContextModuleIncludesShellProfile(t *testing.T) {
-	sections, err := (&SessionContextModule{
+func TestThreadContextModuleIncludesShellProfile(t *testing.T) {
+	sections, err := (&ThreadContextModule{
 		Shell: ShellProfile{
 			Profile:   "powershell",
 			Family:    "powershell",
@@ -170,8 +170,8 @@ func TestShellProfileFromConfigCopiesArgs(t *testing.T) {
 }
 
 func TestContextModulesIgnoreOtherPurposes(t *testing.T) {
-	request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeSessionStart}
-	for _, provider := range []runtimemodule.ContextProvider{&GuidanceModule{}, &SessionContextModule{}} {
+	request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeThreadStart}
+	for _, provider := range []runtimemodule.ContextProvider{&GuidanceModule{}, &ThreadContextModule{}} {
 		sections, err := provider.Context(context.Background(), request)
 		if err != nil {
 			t.Fatal(err)

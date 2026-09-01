@@ -1,444 +1,78 @@
-# Context Compaction V2 Design
+# Context Generation and Compaction
 
 > English | [中文](design.zh.md)
 
-Date: 2026-06-04
+This document narrows the Thread architecture to context rebuilding. The
+canonical domain and storage contracts remain in [`DOMAIN.md`](../../DOMAIN.md)
+and [`ARCHITECTURE.md`](../../ARCHITECTURE.md).
 
-## Goal
+## One operation, two policies
 
-Juex should support very long local agent sessions without letting context grow
-unbounded, without wasting prompt-cache locality, and without losing important
-task state after repeated compaction.
+Both `/new` and `/compact [instructions]` advance the current Thread from
+`gNNNNNN` to the next Context Generation. They do not create or select another
+Thread.
 
-The V2 design keeps the V1 append-only transcript model, but adds a
-cache-aware projection layer before provider calls.
+- `/new` records `context.renewed`, starts with an empty Provider projection,
+  clears Goal and Notes, and preserves Thread Scratchpad files.
+- `/compact` obtains a bounded summary, records `context.compacted`, rebuilds
+  the Provider projection from the summary plus explicitly retained messages,
+  and preserves Goal, Notes, and Scratchpad.
 
-## Current Implementation Status
+The lifecycle marker is a system activity record for UI/history. A
+`context.renewed` marker never enters Provider context. A compact summary is
+available to Provider projection and can be copied from the historical marker
+in the UI.
 
-Implemented:
+## Persistence
 
-- Oversized user inputs and tool results are materialized to the Agent Artifact root
-  and replaced by stable provider-visible previews before provider requests.
-- Restored legacy history is projected before provider calls, even when the
-  original `conversation.jsonl` row predates artifact metadata.
-- `/compact [instructions]`, `juex sessions compact --instructions`, and the
-  Web compact API can pass focus instructions into the summary prompt.
-- OpenAI-compatible providers send a stable per-session prompt cache key where
-  the adapter supports it; Anthropic providers set ephemeral `cache_control`
-  breakpoints on stable prompt sections. Provider-reported cached input tokens
-  are recorded in usage/context events.
-- Automatic compaction has a consecutive-failure circuit breaker.
-- Summary generation traverses the optional dedicated summary model, effective
-  primary, and ordered fallback models. It deduplicates refs, honors shared
-  model-health cooldown and half-open reservations, and refits each request to
-  the selected candidate's context window. Candidate-specific fitting removes
-  only the oldest complete Tool Call/Tool Result batches and preserves all
-  user-authored messages; an irreducible oversized request skips that candidate
-  before Provider dispatch.
+The operation commits one or more facts to the chronological append-only
+`threads/<thread-id>/journal.jsonl`. `thread.json` and Agent `threads.json` are
+rebuildable projections. There is no generation directory, conversation file,
+or separate event journal.
 
-Still future work:
-
-- Provider-native Responses compaction items.
-- Deferred MCP tool definition loading.
-- Live scorecard refresh against the full provider matrix after each major
-  context-management change.
-
-## Non-Goals
-
-- Do not delete or rewrite original transcript rows.
-- Do not require one provider-specific feature for all providers.
-- Do not hide compaction state in an opaque local database.
-- Do not build a large multi-agent memory system as part of this change.
-
-The compaction marker remains an ordinary canonical transcript row. Session
-metadata may cache bounded byte locations for the latest marker and its
-explicitly retained messages, but that derived checkpoint must be fingerprinted,
-discardable, and rebuildable from `conversation.jsonl`. A repair-safe marker in
-the checkpoint is valid only for the matching transcript fingerprint; unresolved
-Tool Calls or unverified hidden prefixes force canonical repair scanning.
-
-## Architecture
-
-V2 is a four-stage context pipeline:
+Thread-scoped working state lives beside the journal:
 
 ```text
-raw transcript
-  -> entry budgeter
-  -> stable active-context projection
-  -> provider-specific cache/compact adapter
-  -> provider request
+threads/<thread-id>/
+  journal.jsonl
+  thread.json
+  scratchpad/
+  spool/
 ```
 
-The raw transcript remains the source of truth. The active context is allowed
-to replace old large blocks with stable references, retain recent raw tail
-messages, and insert compact markers.
-
-## Stage 1: Entry Budgeter
-
-Large user inputs and tool results should be controlled before they become part
-of every future provider request. V1 can compact old history before a turn, but
-it cannot shrink the incoming user message itself. A pasted log or generated
-prompt can therefore produce a provider request much larger than the configured
-Juex context window even when compaction runs successfully.
-
-The runtime-owned materialization layer records artifact metadata directly on
-the affected block:
-
-```go
-type ContextArtifactProjection struct {
-    SourceKind    string // "user_input", "tool_result"
-    MessageID     string
-    ToolUseID     string
-    ToolName      string
-    OriginalBytes int
-    StoredPath    string // Agent Artifact root-relative reference
-    SHA256        string
-    HeadBytes     int
-    TailBytes     int
-    Truncated     bool
-}
-```
-
-When a tool output exceeds `tool_output.inline_max_bytes`, Juex writes the full
-output independently of whether compaction is enabled:
-
-```text
-sessions/<session-id>/tool-results/<tool-use-id>-<block-index>.txt
-```
-
-When a user input exceeds `compaction.user_input_inline_max_bytes`, Juex writes
-the full input to:
-
-```text
-sessions/<session-id>/user-inputs/<message-id>-<block-index>.txt
-```
-
-The provider-visible tool result becomes a stable text block:
-
-```text
-Tool output stored outside context.
-tool_use_id: <id>
-tool_name: <name>
-bytes: <n>
-sha256: <hash>
-path: <Agent Artifact root-relative path>
-
-Preview:
-<head>
-...
-<tail>
-```
-
-The replacement decision is frozen by the original `tool_use_id`. If the same
-historical result is projected again in later turns, the text must be identical
-byte-for-byte. This protects prefix-cache hits.
-
-Default policy:
-
-```yaml
-compaction:
-  user_input_inline_max_bytes: 65536
-  user_input_preview_head_bytes: 8192
-  user_input_preview_tail_bytes: 8192
-```
-
-The context-window-derived defaults are a 70% automatic-compaction trigger, an
-80% complete summary request envelope, 0.5% each for initial summary output,
-summary Tool Result serialization, and ordinary Tool Result projection, plus
-5/64 for the retained recent tail. Positive absolute values are stricter ceilings, while
-`reserve_tokens` may only move the trigger earlier. The single incomplete-summary
-retry requests at least 2,048 output tokens or twice the initial budget,
-whichever is larger. Twice an explicit positive `summary_max_tokens` remains a
-ceiling, and the complete request must still fit the 80% envelope.
-
-Rationale:
-
-- Full evidence remains recoverable by path.
-- The model keeps enough head/tail signal to decide whether to read the file.
-- Old prefix text does not keep changing as the context window fills.
-
-## Stage 2: Stable Active-Context Projection
-
-V1 active context is:
-
-```text
-latest compact summary + retained tail + messages after compact + incoming
-```
-
-V2 extends this with a projection pass:
-
-```go
-// internal/runtime/compaction_policy.go and tool_output_policy.go
-type compactionPolicy struct {
-    Enabled                   bool
-    ContextWindow             int
-    ReserveTokens             int
-    KeepRecentTokens          int
-    SummaryRequestTokens      int
-    SummaryMaxTokens          int
-    ToolResultMaxChars        int
-    UserInputInlineMaxBytes   int
-    UserInputPreviewHeadBytes int
-    UserInputPreviewTailBytes int
-    MaxAutoFailures           int
-    TriggerTokens             int
-}
-
-type ToolOutputPolicy struct {
-    InlineMaxBytes   int
-    PreviewHeadBytes int
-    PreviewTailBytes int
-}
-```
-
-Projection rules:
-
-1. Never change old projected text except at a compact boundary.
-2. Always preserve provider protocol validity: tool outputs must keep matching
-   tool calls.
-3. Keep recent inputs verbatim only while they fit the configured token budget;
-   at a compact boundary, externalize an input that is itself larger than that
-   budget and keep its bounded head/tail artifact reference with the summary.
-   All text blocks in one input share that reference preview budget.
-   Image-only inputs keep their durable media path, type, digest, byte size, and
-   dimensions in the same retained-reference section.
-4. Persist retained input references in compaction metadata and inherit them
-   deterministically across later compactions; model summaries are not the
-   authority for artifact paths or digests. Keep the newest complete reference
-   suffix that fits the shared retention budget so metadata and compact text do
-   not grow without bound. Feed only the previous model-generated summary back
-   into later summarization; deterministic reference sections travel through
-   metadata instead of being re-summarized.
-5. Keep compact summaries short and structured; do not ask them to carry system
-   instructions, AGENTS.md, tool schemas, or cwd. Those are rebuilt.
-6. Assistant text/reasoning projection is future work. Today, reasoning replay
-   is controlled by provider capabilities and existing block metadata.
-
-This remains a runtime responsibility, not a provider responsibility.
-
-## Stage 3: Cache-Aware Prompt Layout
-
-Juex should make prompt stability explicit. Prompt sections already have keys in
-`internal/prompt`; provider adapters should receive a cache plan derived from
-those keys.
-
-The current request options are:
-
-```go
-type CachePolicy struct {
-    StablePrefixKey string
-    Retention       string
-}
-
-type CompleteOptions struct {
-    Purpose         string
-    MaxOutputTokens int
-    CachePolicy     CachePolicy
-}
-```
-
-Provider mapping:
-
-- `openai/chat`, `openai/responses`, and `openai-codex/responses`: set
-  `prompt_cache_key` when supported and record provider cached-token details.
-- `anthropic/messages`: place `cache_control` breakpoints at stable section
-  boundaries. The current adapter marks the system prompt and the last tool
-  definition when a cache policy is present, and records
-  `usage.cache_read_input_tokens`.
-- Unknown compatible providers: no-op until the provider exposes equivalent
-  fields, but keep the same runtime metrics shape.
-
-Recommended prompt order:
-
-```text
-tool schemas
-global and project instructions
-stable workspace context
-selected Extension guidance
-latest compact summary
-retained recent tail
-volatile incoming message
-```
-
-The volatile tail is deliberately last.
-
-## Stage 4: Compaction Strategy Interface
-
-Compaction is provider-specific enough that it should become an optional
-provider capability.
-
-```go
-type CompactionRequest struct {
-    SystemPrompt string
-    History      []Message
-    Tools        []ToolSpec
-    Policy       compactionPolicy
-    Reason       string
-}
-
-type CompactionArtifact struct {
-    Message          Message
-    Opaque           bool
-    Replacement      []Message
-    InputTokens      int
-    CachedInputTokens int
-    OutputTokens     int
-}
-
-type ProviderCompactor interface {
-    CompactContext(ctx context.Context, req CompactionRequest) (CompactionArtifact, error)
-}
-```
-
-Strategy order:
-
-1. Native provider compaction, for providers that can produce a provider-native
-   compact item or replacement history.
-2. Local structured summary, using the current Juex summary prompt and bounded
-   serialized transcript.
-3. Last-resort deterministic trim, only when the summary request cannot fit.
-
-OpenAI/Codex providers should eventually prefer native Responses compaction.
-Generic `openai/chat`, Ark, DeepSeek, and local proxies should start with the
-local structured summary unless they explicitly advertise native support.
-
-## Trigger Policy
-
-V1 triggers on estimated total context. V2 should support both total and growth
-after baseline:
-
-```go
-type CompactWindow struct {
-    BaselineInputTokens int
-    BaselineMessageID   string
-    LastCompactID       string
-}
-```
-
-Trigger points:
-
-- Pre-turn: projected active context plus incoming message would exceed
-  70% of the selected candidate's configured context window, or the earlier
-  threshold implied by an explicit `reserve_tokens` value.
-- Mid-turn: before each provider call, after draining pending input and tool
-  results, if growth after baseline exceeds the trigger.
-- Overflow retry: if the provider returns a context overflow error.
-- Manual: `/compact` and `juex sessions compact`.
-
-Failure handling:
-
-- Compact retry happens at most once per provider call.
-- Automatic compact has a circuit breaker after three consecutive failures in
-  one session.
-- Manual compact always reports the underlying error.
-- MCP notification turns can continue after proactive compact failure, matching
-  current behavior for external notifications.
-
-## Summary Contract
-
-The local summary should continue using fixed headings:
-
-- Goal
-- Constraints & Preferences
-- Progress
-- Key Decisions
-- Next Steps
-- Critical Context
-- Relevant Files
-- Tool Failures
-
-V2 adds two rules:
-
-- Include `Evidence References` when a tool result was externalized.
-- Include `Confidence / Missing Context` when earlier transcript was omitted to
-  fit the compaction request.
-- Copy the concrete values of labeled facts, task IDs, paths, commands, error
-  strings, constraints, and safety guards. Do not replace them with vague
-  placeholders such as "facts were stored" or "available in context".
-
-The summary should never restate AGENTS.md, tool schemas, provider settings, or
-current cwd unless they were directly part of the task decision. Those are
-rebuilt from source.
-
-## Observability
-
-Currently emitted events:
-
-- `context.projection.applied`
-  - `user_inputs_externalized`
-  - `tool_results_externalized`
-  - `bytes_externalized`
-- `context.compact.started`
-  - `reason`, `auto`, `estimated_tokens`, `tokens_before`
-  - `context_window`, `reserve_tokens`, `keep_recent_tokens`
-- `context.compact.completed`
-  - `message_id`, `reason`, `auto`
-  - `estimated_tokens`, `tokens_before`, `tokens_after`, `summary_chars`,
-    `summary_model`
-  - `tail_start_message_id`, `context_window`, `reserve_tokens`,
-    `keep_recent_tokens`
-- `context.compact.summary_retry`
-  - the first incomplete candidate anywhere in the summary chain receives the
-    one bounded semantic retry; the event records empty-summary reason, stop
-    reason, reasoning-only classification, previous and retry output-token
-    budgets, and the failed attempt's Request Epoch link
-- `context.compact.summary_model_fallback`
-  - one event per attempted-candidate transition, recording the failed model,
-    next selected model (or empty when exhausted), candidate error, and failed
-    attempt's Request Epoch link
-- `llm.fallback`
-  - shared-health cooldown and `probe_in_flight` skips encountered while
-    selecting a compaction summary candidate; these diagnostics do not create a
-    conversation `model_change` message
-- `context.compact.errored` and `context.compact.skipped`
-  - compact errors and automatic failure-circuit-breaker state
-- `llm.responded`
-  - response usage, cumulative token usage, model, blocks, and optional
-    `context_usage`
-
-Provider cached-token metrics are carried in `Usage.CachedInputTokens`,
-`ContextUsage.CachedInputTokens`, and `llm.responded` usage payloads when the
-provider exposes them.
-
-Planned event extensions:
-
-- `projected_tokens` on `context.projection.applied`
-- `trigger_scope` and `growth_tokens` on `context.compact.started`
-- `strategy` and direct `cached_input_tokens` on `context.compact.completed`
-
-Session `ContextUsage` records:
-
-- `system_prompt`
-- `system_tools`
-- `mcp_tools`
-- `skills`
-- `compact_summary`
-- `context_artifacts`
-- `messages`
-- `response`
-- `cached_input_tokens`
-
-## Evaluation Requirements
-
-Every compaction change should be evaluated on:
-
-- Recall of facts from old conversation head, middle, and tail.
-- Ability to continue an implementation plan after compact.
-- Preservation of file paths, commands, errors, and task IDs.
-- Prompt-cache behavior: cached-token ratio after the second post-compact turn.
-- Context growth slope across repeated tool outputs.
-- Recovery behavior when compaction request is itself oversized.
-
-The quick automated test should run with a context window between one tenth and
-one quarter of a normal 256k window. Live evaluation derives eligible model
-refs from the resolved provider config and records the selection seed.
-
-## Rollout Plan
-
-1. Land docs and repeatable evaluation assets.
-2. Implement input and tool-result externalization first. It gives the largest
-   growth reduction without provider-specific risk.
-3. Add cache-policy fields and provider metrics plumbing.
-4. Add growth-after-baseline trigger scope.
-5. Add provider-native compaction behind a capability gate.
-6. Expand live evals and only promote defaults after the scorecard improves.
+Generation boundaries, Goal, and Notes are logical journal facts. They keep
+timeline ordering, Input recovery, and EOF-first pagination in one source of
+truth. Goal and Notes are projected through `thread.json`; Scratchpad remains
+the model-writable file tree.
+
+## Prompt reconstruction
+
+Each Provider request is assembled from registered prompt contributors:
+
+1. stable system and project guidance;
+2. hook-provided prompt sections;
+3. current Thread Goal, Notes, and Scratchpad guidance;
+4. per-request recitation, including current context-window tokens and percent;
+5. the current Generation's Provider projection.
+
+The built-in context tools let the Agent request `context_compact` or
+`context_new`. The recitation gives it enough context pressure information to
+choose: compact while unfinished work must continue, or new after durable work
+and memory have been completed.
+
+## Safety rules
+
+- Context change waits for the current Turn/Input handoff boundary.
+- Compact summary generation is interruptible; no boundary is committed when
+  it fails or is cancelled.
+- Protocol repair runs before Provider replay and persists exact known Tool
+  outcomes; unknown and not-started calls remain distinct.
+- Compaction is bounded by configured context thresholds and retry policy.
+- Provider `cached_input_tokens` are accumulated in both Generation-facing
+  context usage and Thread token usage.
+
+## Interfaces
+
+The user-facing interfaces are `/new`, `/compact`, and the corresponding
+built-in context tools. CLI users send either command with `juex send`; Web
+users enter it in the active Thread composer.

@@ -41,11 +41,11 @@ uv run --project . python -m tests.eval.juex_eval --help
 
 `verify candidate` 在计划或准备 gate 前捕获完整 `HEAD` SHA、branch 和 porcelain status，随后要求 gate 后 worktree 仍位于该 clean SHA。它只运行一个完整 deterministic Go suite，再运行一个 executable build。Go suite 前使用共享且不覆盖的 `web-stub` target，使 fresh checkout 在不构建 frontend 时满足 Go embed contract。Planned race/web flag 自动应用；`RACE=1` 与 `WEB=1` 是 additive override。`WEB=1` 运行 `web-check`，同步 frontend asset 到 `internal/web/dist`，并调用 Go-only `build-go`，不重复构建 frontend。
 
-`verify final` 应用同一 commit-bound clean-worktree contract。它先查找相同 SHA、record schema、candidate-plan fingerprint 与稳定 toolchain/environment fingerprint 的 passing candidate record。存在时，final 复用成功的 deterministic、build、web 与 race step，然后始终运行不重试的 build-tagged deterministic integration contract，再运行允许 retry 的 live integration 与 Provider smoke。Plan 加入可选 compaction gate，且绝不复用 final-only result。缺失或不兼容 candidate 会使 final 执行完整 plan，并记录精确 invalidation reason。只有 compaction、context projection、Provider replay 或 long-session 行为需要 live compaction quality gate 时，才设置 `COMPACTION=1` 作为 additive override。所有 tier 在首个失败步骤停止。底层 final CLI 支持 `--config`、`--selection-seed` 与 `--provider-timeout`，用于精确 live rerun。Candidate/final 也接受 `--run-id`；其 `--report-dir` override 是 report root，不是单个 run directory。Run ID 必须是仅含字母、数字、`_`、`-`、`.` 的安全 basename，且不能以 `.` 开头。
+`verify final` 应用同一 commit-bound clean-worktree contract。它先查找相同 SHA、record schema、candidate-plan fingerprint 与稳定 toolchain/environment fingerprint 的 passing candidate record。存在时，final 复用成功的 deterministic、build、web 与 race step，然后始终运行不重试的 build-tagged deterministic integration contract，再运行允许 retry 的 live integration 与 Provider smoke。Plan 加入可选 compaction gate，且绝不复用 final-only result。缺失或不兼容 candidate 会使 final 执行完整 plan，并记录精确 invalidation reason。只有 compaction、context projection、Provider replay 或 long-Thread 行为需要 live compaction quality gate 时，才设置 `COMPACTION=1` 作为 additive override。所有 tier 在首个失败步骤停止。底层 final CLI 支持 `--config`、`--selection-seed` 与 `--provider-timeout`，用于精确 live rerun。Candidate/final 也接受 `--run-id`；其 `--report-dir` override 是 report root，不是单个 run directory。Run ID 必须是仅含字母、数字、`_`、`-`、`.` 的安全 basename，且不能以 `.` 开头。
 
 ## Deterministic Capability Harness
 
-`capability_harness.go` 为核心 Agent capability 提供 CI-safe scripted-provider eval，不调用真实 Provider。每个 `CapabilityCase` 创建隔离 workdir、注册真实 Builtin Tool、可选加入 eval-only Tool 与 Command Hook、运行 `runtime.Engine.Turn`，再从 `conversation.jsonl` 和 `events.jsonl` 计算稳定 report。
+`capability_harness.go` 为核心 Agent capability 提供 CI-safe scripted-provider eval，不调用真实 Provider。每个 `CapabilityCase` 创建隔离 workdir、注册真实 Builtin Tool、可选加入 eval-only Tool 与 Command Hook、运行 `runtime.Engine.Turn`，再从 Thread 的内存 replay 生成临时 Message/Event oracle view 并计算稳定 report；这些 view 不是 Runtime 持久化格式。
 
 `contract_oracle.go` 负责 Go harness 的 deterministic artifact contract check。它解析 conversation/Event JSONL artifact，为必需 Tool use、TTY exec use、Tool output delta 与 structured shell result Event 报告稳定 pass/fail issue。Capability harness 是提供 artifact path 与 case-specific expectation 的 Adapter；oracle 不改变 production Runtime 行为。
 
@@ -76,10 +76,10 @@ go test ./tests/eval -run 'Capability' -count=1
 - `success`：final text 含 `TASK COMPLETE`
 - `provider_calls`：完成所需 scripted Provider Turn 数
 - `tool_calls` 与 `error_tool_calls`：来自 transcript 的 Model-requested Tool usage
-- `context_bytes`：持久 conversation JSONL byte，作为低成本 context-pollution proxy
-- `tool_bytes`：持久化到 conversation history 的 Tool-result byte
+- `context_bytes`：replay Message byte，作为低成本 context-pollution proxy
+- `tool_bytes`：replay history 中的 Tool-result byte
 - `elapsed_ms`：deterministic case 的墙上时钟耗时
-- `events`：`events.jsonl` 中的 Event type count
+- `events`：replay Event type count
 - `tool_names`：per-Tool Call count
 - `contract`：eval contract oracle 的 pass/fail detail
 
@@ -120,12 +120,12 @@ bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
 
 命令解析 `--config`、`JUEX_PROVIDER_CONFIG` 或原用户的 `~/.juex/juex.yaml`，用记录 seed 选择一个 eligible ref，并把该 `provider:model` 复制到隔离临时 workdir。随后用真实 compiled `juex` binary 运行两个 live Agent workflow。Capability workflow 要求模型对 case-local file 和 deterministic interactive installer command 使用 `read`、`write`、`edit`、`grep`、`exec_command` 与 `write_stdin`。独立 Schedule routing workflow 在不点名 creation Tool 的情况下请求每六小时循环执行 timed work。Run id 的 SHA-256 parity 为该运行中每个 Provider/Model row 确定性选择 empty 或 seeded-equivalent variant；选中 variant 记录到 JSONL 与 summary artifact。
 
-该 smoke 有意比简单 Provider connectivity check 更严格。它解析 persisted `conversation.jsonl`、检查 filesystem side effect，并解析 `events.jsonl`。Python Adapter 调用 `juex_eval.contract_oracle` 完成 conversation/Event contract check。Passing run 要求：
+该 smoke 有意比简单 Provider connectivity check 更严格。它解析持久 Main Thread Journal 并检查 filesystem side effect。Python Adapter 调用 `juex_eval.contract_oracle` 完成 Message/Event fact contract check。Passing run 要求：
 
 - 所有必需 Tool-use block 均存在；
 - 不使用 legacy `shell` 或 `shell_input` Tool；
 - 存在 `tty:true` 的 `exec_command` call；
-- `events.jsonl` 中没有 transient `tool.output_delta` record；
+- Thread Journal 中没有 transient `tool.output_delta` record；
 - `tool.completed` 上的 authoritative terminal content 有界，且包含 carriage-return progress、interactive prompt 与 completion token；
 - 运行中的 `exec_command` 与完成它的 `write_stdin` 都在 `tool.completed.payload.result` 上有 structured shell result；
 - 执行中途的 `write_stdin` interaction 能恢复运行进程；
@@ -141,7 +141,7 @@ Schedule routing subscenario 始终避开 Command-Observable route 与竞争 sch
 
 Shell loop、detached interval sleep、`watch`、`crontab` 与 `systemd-run` 仍被拒绝，因为它们产生竞争 recurring side effect。允许额外 `observable_list`，包括 create 后验证。Empty variant 中每次 create attempt 前至少有一个 successful list result。若模型根据 failure hint 恢复，允许失败的 `schedule_create` attempt；最终必须恰好一个 create call 成功。Seeded-equivalent variant 不受 batching 影响：completion token 必须在 successful list result 后出现；mutation 与 final-state check 拒绝盲目 duplicate creation。Seeded variant 中允许失败 speculative `schedule_create`，条件是模型从 successful list result 恢复，并保持 seeded config 不变。
 
-每次 Schedule retry 使用新 Workspace 与 Session。Transcript、Event、stdout、stderr、prompt、final `observables.json` 和 contract report 保留在 `cases/<provider_model>/schedule-routing/attempt-N/`。Seeded attempt 还保留 `seed-observables.json`，避免把 initial fixture 与 final state 混淆。只有 allowlist 中 transient Turn failure 可在 fresh attempt 消耗一次 `--retries 1` budget。Schedule contract failure 是 product failure，绝不 retry。Persistent failure 仍使选中 `provider:model` 失败；命令不会静默切换目标。Contract report 将 failure 分类为 Model capability failure 或 hard Runtime failure，任何 failure 都使 strict live gate 失败。
+每次 Schedule retry 使用新 Workspace、Agent 与 Main Thread。Journal、stdout、stderr、prompt、final `observables.json` 和 contract report 保留在 `cases/<provider_model>/schedule-routing/attempt-N/`。Seeded attempt 还保留 `seed-observables.json`，避免把 initial fixture 与 final state 混淆。只有 allowlist 中 transient Turn failure 可在 fresh attempt 消耗一次 `--retries 1` budget。Schedule contract failure 是 product failure，绝不 retry。Persistent failure 仍使选中 `provider:model` 失败；命令不会静默切换目标。Contract report 将 failure 分类为 Model capability failure 或 hard Runtime failure，任何 failure 都使 strict live gate 失败。
 
 失败 `provider:model` 不是 skip。显式选择不存在的 Model、empty eligible default rotation、不可达 endpoint 与 Provider 显式报告 unavailable，都以 `provider_unavailable` 失败，而不是 product regression。保留 report，并说明问题属于配置、Provider capability、prompt-following 还是 Juex regression。
 
@@ -170,4 +170,4 @@ bash tests/eval/development_eval.sh
 
 Deterministic phase 复用 candidate planner，因此一次 `go test ./...` 已包含 `tests/e2e`，无需重复 standalone E2E。已有 live selection evidence 保留；JSON/Markdown record 还包含 outcome、rule、reason、retry attempt、`blocks_merge` 与 recommended action。
 
-Compaction、context projection、Provider replay 或 long-session 变更使用 `--compaction-eval`。Record 链接 command log、`provider:model` smoke summary、Schedule routing coverage 与 scorecard，使后续 worker 能判断行为改善、持平或回归。
+Compaction、context projection、Provider replay 或 long-Thread 变更使用 `--compaction-eval`。Record 链接 command log、`provider:model` smoke summary、Schedule routing coverage 与 scorecard，使后续 worker 能判断行为改善、持平或回归。

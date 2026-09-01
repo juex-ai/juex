@@ -11,7 +11,7 @@ Start with the documents that match the task instead of loading everything:
 | File | Read when |
 | --- | --- |
 | `README.md` | You need the project map, common commands, or document roles. |
-| `DOMAIN.md` | You touch product language, Agent/Session/Turn lifecycles, or domain invariants. |
+| `DOMAIN.md` | You touch product language, Agent/Thread/Turn lifecycles, or domain invariants. |
 | `PHILOSOPHY.md` | You touch product direction, scope, or trade-offs. |
 | `ARCHITECTURE.md` | You touch module ownership, interfaces, dependencies, data flow, storage, CLI, or API routes. |
 | `docs/adr/` | You need the rationale, rejected alternatives, or consequences behind a durable architecture decision. |
@@ -27,7 +27,7 @@ them only when they explain the feature you are changing.
 Juex is a Go agent runtime. Published releases are managed packages containing
 the Juex binary plus a pinned ripgrep executable. It currently includes:
 
-- a CLI (`juex run`, `juex repl`, `juex sessions ...`)
+- a CLI (`juex listen`, `juex send`, `juex threads ...`)
 - a React web UI served by `juex fleet serve`
 - Anthropic and OpenAI-compatible providers through official SDKs
 - builtin tools: `read`, `write`, `edit`, `apply_patch`, `grep`,
@@ -36,10 +36,10 @@ the Juex binary plus a pinned ripgrep executable. It currently includes:
 - optional external Extensions, including first-party Memory tools and lifecycle
   hooks installed from `juex-extensions`
 - skills loaded from `.agents/skills/<name>/SKILL.md`
-- Agent-owned runtime state under `$JUEX_HOME/agents/<id>`
+- Agent-owned Thread runtime state under `$JUEX_HOME/agents/<id>`
 - work-local identity, configuration, extensions, Observable definitions, and
   artifacts under `.juex/`
-- an in-process event bus and JSONL conversation/event history
+- an in-process event bus and one append-only Journal per Thread
 
 ## Project Guidance
 
@@ -80,7 +80,7 @@ cannot be explained by updating the canonical docs alone. Put new ADRs under
 ## Verification
 
 - Every new behavior ships with a unit test.
-- Cross-cutting runtime, session, CLI, or web changes also update `tests/e2e` when the behavior crosses package boundaries.
+- Cross-cutting runtime, Thread, CLI, or web changes also update `tests/e2e` when the behavior crosses package boundaries.
 - Backend/API work: add or update handler or CLI tests and run the affected Go packages.
 - Web work: use `WEB=1` on the candidate/final tier and verify the UI in a browser when behavior is visible.
 - Documentation-only work: check filenames, headings, links, and stale references.
@@ -102,7 +102,7 @@ Candidate and final verification require a clean worktree before and after
 their steps; use `RACE=1` for
 concurrency-sensitive changes, `WEB=1` for frontend changes, and
 `COMPACTION=1` on final when compaction, context projection, provider replay,
-or long-session behavior changes. Every tier prepares a lightweight embed stub
+or long-Thread behavior changes. Every tier prepares a lightweight embed stub
 before Go-only checks, so focused web packages and full suites also work in a
 fresh checkout. `make
 verify-final` includes live integration

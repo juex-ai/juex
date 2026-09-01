@@ -28,7 +28,7 @@ Builtin Tool 和 MCP Tool 暴露小型 schema 与确定性名称。Runtime 应�
 
 ### 让 Web UI 成为控制界面
 
-Web UI 用于检查 Session、运行 Turn、中断工作及管理 Session history。它应紧贴 JSON/SSE API，而不是形成独立的应用模型。React state 镜像 server state；server 始终是事实来源。
+Web UI 用于检查 Thread、提交 Input、中断工作及管理活跃或归档历史。它应紧贴 JSON/SSE API，而不是形成独立的应用模型。React state 镜像 server state；server 始终是事实来源。
 
 ### 等到真正痛时再做
 
@@ -40,4 +40,4 @@ Web UI 用于检查 Session、运行 Turn、中断工作及管理 Session histor
 - Go 标准库优先：依赖漂移更少，但需要自行编写小型协议适配器。
 - Marker 绑定的 AgentStateDir：状态能在 Workspace 移动后保留并支持中央 Fleet registry，代价是显式身份绑定和迁移步骤。
 - 同步 Turn loop 配合并行 Tool Call：顺序和测试简单，同时仍允许一个模型 response 内的独立 Tool Call 并发执行。
-- JSONL history：持久且便于追加；经过验证的 metadata checkpoint 和反向分页让常见读取保持有界，而完整审计读取仍与 transcript 大小成正比。
+- 单一 Chronological Thread Journal：持久且便于追加；可重建 projection 和反向分页让常见读取保持有界，而完整审计读取仍与 history 大小成正比。

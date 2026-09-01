@@ -57,7 +57,7 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 		if preserveErr := l.engine.preservePendingInputAfterFailureLocked(l.turnID); preserveErr != nil {
 			err = errors.Join(err, fmt.Errorf("preserve accepted input order after pending-input restore failure: %w", preserveErr))
 		}
-		if !sessionHasMessageID(l.engine.currentSession(), l.userMsg.ID) {
+		if !threadHasMessageID(l.engine.currentThread(), l.userMsg.ID) {
 			if persistErr := l.engine.recordTurnStartLocked(l.turnID, l.userMsg); persistErr != nil {
 				return turnLifecycleResult{}, errors.Join(err, fmt.Errorf("persist accepted user input after pending-input restore failure: %w", persistErr))
 			}
@@ -139,7 +139,22 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		return err
 	}
 	if len(recorded.toolCalls) > 0 {
-		return l.engine.recordToolBatchLocked(ctx, l.turnID, recorded)
+		if err := l.engine.recordToolBatchLocked(ctx, l.turnID, recorded); err != nil {
+			return err
+		}
+		transition, err := l.engine.applyRequestedContextTransitionLocked(ctx, l.turnID, l.prepared)
+		if err != nil {
+			return err
+		}
+		if transition == contextTransitionNew {
+			outcome, err := l.finishOrContinueLocked("Context renewed.")
+			if err != nil {
+				return err
+			}
+			l.lastText = outcome.output
+			l.activeClosed = outcome.activeClosed
+		}
+		return nil
 	}
 	outcome, err := l.applyFinishPolicyLocked(ctx, recorded)
 	if err != nil {
@@ -163,7 +178,7 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 
 	request := runtimemodule.FinishRequest{
 		Runtime:    e.policyRuntimeContext(),
-		Session:    e.policySessionContext(),
+		Thread:     e.policyThreadContext(),
 		TurnID:     l.turnID,
 		UserInput:  l.prepared.userMessage.FirstText(),
 		StopReason: string(recorded.stopReason),

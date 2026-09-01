@@ -1,4 +1,4 @@
-// Package promptcontext provides the concrete project-guidance and Session
+// Package promptcontext provides the concrete project-guidance and Thread
 // context Modules used to assemble provider system prompts.
 package promptcontext
 
@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	GuidanceModuleID       runtimemodule.ID = "project-guidance"
-	SessionContextModuleID runtimemodule.ID = "session-context"
+	GuidanceModuleID      runtimemodule.ID = "project-guidance"
+	ThreadContextModuleID runtimemodule.ID = "thread-context"
 )
 
 type GuidanceModule struct {
@@ -78,23 +78,23 @@ func ShellProfileFromConfig(profile config.ShellProfile) ShellProfile {
 	}
 }
 
-type SessionContextModule struct {
+type ThreadContextModule struct {
 	WorkDir       string
 	Shell         ShellProfile
 	ShellSessions *tools.ShellSessionManager
 	Now           func() time.Time
 }
 
-func (*SessionContextModule) ID() runtimemodule.ID { return SessionContextModuleID }
+func (*ThreadContextModule) ID() runtimemodule.ID { return ThreadContextModuleID }
 
-func (m *SessionContextModule) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
+func (m *ThreadContextModule) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
 	if m == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
 		return nil, nil
 	}
 	var sections []runtimemodule.ContextSection
 	scratchpadDir := ""
-	if request.Session != nil {
-		scratchpadDir = request.Session.ScratchpadDir
+	if request.Thread != nil {
+		scratchpadDir = request.Thread.ScratchpadDir
 	}
 	if section, ok := scratchpadSection(m.WorkDir, scratchpadDir); ok {
 		section.Projection = runtimemodule.ContextProjectionSystemPrompt
@@ -166,7 +166,7 @@ func scratchpadSection(workDir, scratchpadDir string) (runtimemodule.ContextSect
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	lines := []string{"## Session Scratchpad", fmt.Sprintf("- path: %s", dir)}
+	lines := []string{"## Thread Scratchpad", fmt.Sprintf("- path: %s", dir)}
 	if rel, ok := scratchpadRelativePath(workDir, dir); ok {
 		lines = append(lines, fmt.Sprintf("- workspace-relative path for `write_begin`: %s", rel))
 	}
@@ -177,7 +177,7 @@ func scratchpadSection(workDir, scratchpadDir string) (runtimemodule.ContextSect
 		"- Save important intermediate conclusions here before compaction so a later turn can read them back.",
 	)
 	return runtimemodule.ContextSection{
-		Key: "session_scratchpad", Label: "Session Scratchpad", Source: "runtime", Path: dir, Text: strings.Join(lines, "\n"),
+		Key: "thread_scratchpad", Label: "Thread Scratchpad", Source: "runtime", Path: dir, Text: strings.Join(lines, "\n"),
 	}, true
 }
 

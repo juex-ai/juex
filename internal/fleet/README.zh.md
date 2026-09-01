@@ -10,7 +10,7 @@
 - `Remove` 要求 transport confirmation，停止并锁住 endpoint，然后把有意的 registry 与匹配 marker 删除委托给 agentstate。
 - `Start` 启动 detached 的 `juex -C <workspace> listen` 子进程，并等待精确的 PID 和 endpoint 身份。Supervisor 只传递继承的启动环境和 `JUEX_HOME`；子进程自行解析 Workspace YAML 与 `.env`，避免 Agent 间环境泄漏。
 - `Stop` 请求绑定到实例的自关闭；绝不向记录中的 PID 发信号或强制终止。
-- `Restart` 在 graceful shutdown 前检测活跃、pending-drain 或已失败的 Session 工作，协商绑定身份的 `runtime_restart` intent，并且只有 replacement 确认相同 Session 和 Turn 后才提交一个 `system_notice` continuation Turn：活跃工作需要类型化 restart cause；此前失败的工作必须仍处于 errored 且 error kind 相同。已完成、用户取消或被取代的 Turn，以及工作正常的 replacement，都不会收到 continuation。已有 history 保留，先前 Tool Call 不会重放。缺少 acknowledgement、status 读取失败和 continuation 提交失败会被报告，但不改变进程重启成功；`Stop` 绝不发送 restart intent 或恢复工作。
+- `Restart` 在 graceful shutdown 前检测活跃、pending-drain 或已失败的 Thread 工作，协商绑定身份的 `runtime_restart` intent，并且只有 replacement 确认相同 Thread 和 Turn 后才提交一个 `system_notice` continuation Turn：活跃工作需要类型化 restart cause；此前失败的工作必须仍处于 errored 且 error kind 相同。已完成、用户取消或被取代的 Turn，以及工作正常的 replacement，都不会收到 continuation。已有 history 保留，先前 Tool Call 不会重放。缺少 acknowledgement、status 读取失败和 continuation 提交失败会被报告，但不改变进程重启成功；`Stop` 绝不发送 restart intent 或恢复工作。
 - `RestartRunningAgents` 从一个 status snapshot 中顺序重启已启用、已绑定且健康的 entry，报告 skip 与 failure，并在单个重启出错后继续。
 - `Serve` 执行一次 reconciliation，接管已验证 runtime，启动启用 autostart 的 Agent，并保持常驻但不拥有 child lifetime。Reconciliation 只有在获取 endpoint maintenance guard、精确重读 runtime、再次发现 process-start mismatch，且 endpoint probe 不是 exact 后才删除 reused-PID runtime record；它绝不向当前占用该 PID 的进程发信号。
 - `Logs` 只 tail `Start` 创建的 Fleet 自有输出；外部启动后被接管的进程保留原来的 terminal、service 或重定向目标。

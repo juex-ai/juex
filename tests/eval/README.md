@@ -83,7 +83,7 @@ results. A missing or
 incompatible candidate makes final execute the complete plan and records the
 exact invalidation reason. Set
 `COMPACTION=1` only when compaction, context projection, provider replay, or
-long-session behavior needs the live compaction quality gate as an additive
+long-Thread behavior needs the live compaction quality gate as an additive
 override. All tiers stop after the first failing step. `--config`,
 `--selection-seed`, and
 `--provider-timeout` are available on the underlying final CLI when an exact
@@ -98,10 +98,11 @@ cannot begin with `.`.
 agent capabilities. It does not call real providers. Each `CapabilityCase`
 creates an isolated workdir, registers the real builtin tools, optionally adds
 eval-only tools and command hooks, runs `runtime.Engine.Turn`, then computes a
-stable report from `conversation.jsonl` and `events.jsonl`.
+stable report from replayed Message and Event oracle views. These temporary
+views are derived from the Thread in memory; they are not runtime persistence.
 
 `contract_oracle.go` owns deterministic artifact contract checks for the Go
-harness. It parses conversation and event JSONL artifacts and reports stable
+harness. It parses the derived Message and Event views and reports stable
 pass/fail issues for required tool use, TTY exec usage, tool output deltas, and
 structured shell result events. The capability harness is an adapter that
 supplies artifact paths and case-specific expectations; the oracle does not
@@ -134,10 +135,10 @@ Each `CapabilityResult` exposes:
 - `success`: final text contained `TASK COMPLETE`
 - `provider_calls`: scripted provider turns required to finish
 - `tool_calls` and `error_tool_calls`: model-requested tool usage from the transcript
-- `context_bytes`: persisted conversation JSONL bytes, a cheap context-pollution proxy
-- `tool_bytes`: tool-result bytes persisted into conversation history
+- `context_bytes`: replayed Message bytes, a cheap context-pollution proxy
+- `tool_bytes`: Tool-result bytes present in replayed history
 - `elapsed_ms`: wall-clock duration for the deterministic case
-- `events`: event type counts from `events.jsonl`
+- `events`: replayed Event type counts
 - `tool_names`: per-tool call counts
 - `contract`: pass/fail details from the eval contract oracle
 
@@ -237,15 +238,15 @@ every provider/model row in that run; the selected variant is recorded in
 JSONL and summary artifacts.
 
 The smoke is intentionally stricter than a simple provider connectivity check.
-It parses the persisted `conversation.jsonl`, checks filesystem side effects,
-and parses `events.jsonl`. Its Python adapter calls
-`juex_eval.contract_oracle` for the conversation and event contract checks. A
+It parses the persisted Main Thread Journal and checks filesystem side effects.
+Its Python adapter calls `juex_eval.contract_oracle` for Message and Event fact
+contract checks. A
 passing run requires:
 
 - all required tool-use blocks to be present;
 - no legacy `shell` or `shell_input` tool use;
 - an `exec_command` call with `tty:true`;
-- no transient `tool.output_delta` records in `events.jsonl`;
+- no transient `tool.output_delta` records in the Thread Journal;
 - bounded authoritative terminal content on `tool.completed`, including the
   carriage-return progress, interactive prompt, and completion token;
 - structured shell results on `tool.completed.payload.result` for both the
@@ -290,7 +291,7 @@ final-state checks reject blind duplicate creation. A failed speculative
 `schedule_create` is tolerated in the seeded variant when the model recovers
 from the successful list result and leaves the seeded config unchanged.
 
-Each Schedule retry uses a new workspace and session. Its transcript, events,
+Each Schedule retry uses a new Workspace, Agent, and Main Thread. Its journal,
 stdout, stderr, prompt, final `observables.json`, and contract report are
 retained under `cases/<provider_model>/schedule-routing/attempt-N/`. Seeded
 attempts also retain `seed-observables.json` so the initial fixture cannot be
@@ -366,6 +367,6 @@ live selection evidence remains, and the JSON/Markdown record also includes the
 outcome, rule, reason, retry attempts, `blocks_merge`, and recommended action.
 
 Use `--compaction-eval` for compaction, context projection, provider replay,
-or long-session changes. The record links command logs, provider:model smoke
+or long-Thread changes. The record links command logs, provider:model smoke
 summary, Schedule routing coverage, and any scorecards so a later worker can
 tell whether behavior got better, stayed flat, or regressed.

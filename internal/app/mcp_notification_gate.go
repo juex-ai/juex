@@ -7,7 +7,7 @@ import (
 )
 
 // mcpNotificationGate preserves startup notifications until the App has
-// published its complete Runtime and Session Module bundle.
+// published its complete Runtime and Thread Module bundle.
 type mcpNotificationGate struct {
 	mu       sync.Mutex
 	active   bool

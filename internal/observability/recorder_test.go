@@ -37,7 +37,7 @@ func TestParseLevel(t *testing.T) {
 
 func TestRecorderCreatesOnlyTextLogsAndFiltersDebug(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(Options{SessionDir: dir, LogLevel: "info"})
+	rec, err := NewRecorder(Options{ThreadDir: dir, LogLevel: "info"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestRecorderCreatesOnlyTextLogsAndFiltersDebug(t *testing.T) {
 
 func TestRecorderSkipsTransientEventsEvenInDebug(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(Options{SessionDir: dir, Debug: true})
+	rec, err := NewRecorder(Options{ThreadDir: dir, Debug: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestRecorderSkipsTransientEventsEvenInDebug(t *testing.T) {
 
 func TestRecorderRecordsLLMRetryDiagnostics(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(Options{SessionDir: dir, Debug: true})
+	rec, err := NewRecorder(Options{ThreadDir: dir, Debug: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestRecorderRecordsLLMRetryDiagnostics(t *testing.T) {
 
 func TestRecorderCloseIsIdempotentAndPreventsReopen(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(Options{SessionDir: dir, Debug: true})
+	rec, err := NewRecorder(Options{ThreadDir: dir, Debug: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestRecorderCloseIsIdempotentAndPreventsReopen(t *testing.T) {
 
 func TestRecorderRedactsSecretsAndKeepsDiagnosticFields(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(Options{SessionDir: dir, Debug: true})
+	rec, err := NewRecorder(Options{ThreadDir: dir, Debug: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestRecorderRedactsSecretsAndKeepsDiagnosticFields(t *testing.T) {
 
 func TestRecorderPreservesSignalAndFailureLedgerMetadata(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(Options{SessionDir: dir, Debug: true})
+	rec, err := NewRecorder(Options{ThreadDir: dir, Debug: true})
 	if err != nil {
 		t.Fatal(err)
 	}

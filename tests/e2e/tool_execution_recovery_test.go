@@ -13,16 +13,14 @@ import (
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.NewWithOptions(filepath.Join(root, "sessions"), session.Options{
-		EventCatalog: eventcatalog.Default(),
-	})
+	sess, err := thread.New(filepath.Join(root, "threads"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +72,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		t.Fatal(err)
 	}
 
-	recovered, err := session.LoadWithOptions(sessionDir, session.Options{EventCatalog: eventcatalog.Default()})
+	recovered, err := thread.Load(sessionDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,12 +100,12 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Provider: provider,
 		Tools:    registry,
 		Bus:      bus,
-		Session:  recovered,
+		Thread:   recovered,
 		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 		}, recovered),
 		WorkDir:     root,
-		ArtifactDir: filepath.Join(root, "artifacts"),
+		MediaDir: filepath.Join(root, "artifacts"),
 	}
 
 	out, err := engine.Turn(context.Background(), "continue after restart")
@@ -129,9 +127,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 
 func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.NewWithOptions(filepath.Join(root, "sessions"), session.Options{
-		EventCatalog: eventcatalog.Default(),
-	})
+	sess, err := thread.New(filepath.Join(root, "threads"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +188,7 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 		t.Fatal(err)
 	}
 
-	recovered, err := session.LoadWithOptions(sessionDir, session.Options{EventCatalog: eventcatalog.Default()})
+	recovered, err := thread.Load(sessionDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,11 +210,11 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 	bus.SetCommitter(sink)
 	defer func() { _ = sink.Close() }()
 	engine := &runtime.Engine{
-		Provider: provider, Tools: registry, Bus: bus, Session: recovered,
+		Provider: provider, Tools: registry, Bus: bus, Thread: recovered,
 		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 		}, recovered),
-		WorkDir: root, ArtifactDir: filepath.Join(root, "artifacts"),
+		WorkDir: root, MediaDir: filepath.Join(root, "artifacts"),
 	}
 
 	out, err := engine.Turn(context.Background(), "continue after mixed recovery")
@@ -266,7 +262,7 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 	}
 }
 
-func appendCatalogEvent(t *testing.T, sess *session.Session, event events.Event) {
+func appendCatalogEvent(t *testing.T, sess *thread.Thread, event events.Event) {
 	t.Helper()
 	prepared, err := eventcatalog.Default().Prepare(events.Normalize(event))
 	if err != nil {

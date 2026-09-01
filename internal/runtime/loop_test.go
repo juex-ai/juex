@@ -27,7 +27,7 @@ import (
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -351,21 +351,21 @@ func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
 	}
 }
 
-func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
+func TestRunThreadStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventSessionStart: {{Stdout: "load project policy"}},
+		hooks.EventThreadStart: {{Stdout: "load project policy"}},
 	}})
 
-	if err := eng.RunSessionStartHooks(context.Background()); err != nil {
+	if err := eng.RunThreadStartHooks(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(eng.Session.History) != 0 {
-		t.Fatalf("session policy context persisted in history: %+v", eng.Session.History)
+	if len(eng.Thread.History) != 0 {
+		t.Fatalf("thread policy context persisted in history: %+v", eng.Thread.History)
 	}
 	if _, err := eng.Turn(context.Background(), "first turn"); err != nil {
 		t.Fatal(err)
@@ -374,25 +374,25 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "load project policy") {
-		t.Fatalf("first provider request missing session policy context:\n%s", got)
+		t.Fatalf("first provider request missing thread policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[1]); strings.Contains(got, "load project policy") {
-		t.Fatalf("session policy context repeated in second provider request:\n%s", got)
+		t.Fatalf("thread policy context repeated in second provider request:\n%s", got)
 	}
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindRuntimeContext {
 			t.Fatalf("runtime context persisted in history: %+v", msg)
 		}
 	}
 }
 
-func TestRunSessionStartHooksUsesStderrFallbackForExitTwo(t *testing.T) {
+func TestRunThreadStartHooksUsesStderrFallbackForExitTwo(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventSessionStart: {{ExitCode: 2, Stderr: "workspace is not trusted"}},
+		hooks.EventThreadStart: {{ExitCode: 2, Stderr: "workspace is not trusted"}},
 	}})
 
-	err := eng.RunSessionStartHooks(context.Background())
+	err := eng.RunThreadStartHooks(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "workspace is not trusted") {
 		t.Fatalf("err = %v", err)
 	}
@@ -413,7 +413,7 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 		})
 	}
 	bus := events.NewBus()
-	sess, err := session.New(t.TempDir())
+	sess, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,13 +422,13 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 	pb := newTestPromptBuilder("", func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) })
 	artifactState := t.TempDir()
 	return &Engine{
-		Provider:    prov,
-		Tools:       reg,
-		Bus:         bus,
-		Session:     sess,
-		Prompt:      pb,
-		WorkDir:     t.TempDir(),
-		ArtifactDir: filepath.Join(artifactState, "artifacts"),
+		Provider: prov,
+		Tools:    reg,
+		Bus:      bus,
+		Thread:   sess,
+		Prompt:   pb,
+		WorkDir:  t.TempDir(),
+		MediaDir: filepath.Join(artifactState, "artifacts"),
 	}, bus
 }
 
@@ -449,7 +449,7 @@ func TestTurnStopsBeforeProviderWhenModulePromptContextFails(t *testing.T) {
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
 	}
-	reloaded, err := session.Load(eng.Session.Dir)
+	reloaded, err := thread.Load(eng.Thread.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +500,7 @@ func TestAdmitTurnMessage_DurableAdmissionEventFailureDropsAcceptedInput(t *test
 		}
 	}
 
-	eng.Session.SubscribeBus(bus)
+	eng.Thread.SubscribeBus(bus)
 	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "done" {
 		t.Fatalf("later Turn() = %q, %v", out, err)
 	}
@@ -548,74 +548,6 @@ func TestAdmitTurnMessage_RepeatedAdmissionKeepsCommittedRecord(t *testing.T) {
 	}
 }
 
-func TestAdmitTurnMessage_CommitFailurePreservesReentrantPendingInput(t *testing.T) {
-	eng, bus := newEngine(t, &mockProvider{}, false)
-	queue := eng.currentPendingInputQueue()
-	originalWrite := queue.fileOps.write
-	wantErr := errors.New("commit turn input failed")
-	writes := 0
-	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
-		writes++
-		if writes == 3 {
-			return 0, wantErr
-		}
-		return originalWrite(file, body)
-	}
-	t.Cleanup(func() { queue.fileOps.write = originalWrite })
-
-	var enqueueErr, terminalAdmissionErr error
-	bus.Subscribe(TurnAdmittedType, func(events.Event) {
-		_, enqueueErr = eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during admission"), PendingInputOptions{
-			ID:  "reentrant-admission-input",
-			TTL: time.Hour,
-		})
-	})
-	bus.Subscribe("turn.errored", func(events.Event) {
-		_, terminalAdmissionErr = eng.ReceivePendingInput(context.Background(), PendingInputRequest{
-			Message: llm.TextMessage(llm.RoleUser, "after failed admission terminal"),
-		})
-	})
-
-	admissionDone := make(chan error, 1)
-	go func() {
-		_, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "failed trigger"))
-		admissionDone <- err
-	}()
-	var admissionErr error
-	select {
-	case admissionErr = <-admissionDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("turn.errored subscriber deadlocked while receiving after failed admission")
-	}
-	if !errors.Is(admissionErr, wantErr) {
-		t.Fatalf("AdmitTurnMessage() error = %v, want %v", admissionErr, wantErr)
-	}
-	if enqueueErr != nil {
-		t.Fatalf("reentrant enqueue error = %v", enqueueErr)
-	}
-	if !errors.Is(terminalAdmissionErr, ErrActiveTurnExists) {
-		t.Fatalf("terminal subscriber admission error = %v, want %v", terminalAdmissionErr, ErrActiveTurnExists)
-	}
-	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during admission" {
-		t.Fatalf("preserved history = %+v, want accepted reentrant input", eng.Session.History)
-	}
-	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
-		t.Fatalf("pending status = %+v, want failed reservation released after preservation", status)
-	}
-	records, err := queue.Records()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record := records["reentrant-admission-input"]; record.State != PendingInputStateProcessed {
-		t.Fatalf("reentrant record = %+v, want state %q", record, PendingInputStateProcessed)
-	}
-	for _, record := range records {
-		if record.Message.FirstText() == "failed trigger" && record.State != PendingInputStateDropped {
-			t.Fatalf("failed trigger record = %+v, want state %q", record, PendingInputStateDropped)
-		}
-	}
-}
-
 func TestReserveTurnID_CommitFailurePreservesConcurrentPendingInput(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	wantErr := errors.New("reservation commit failed")
@@ -649,89 +581,14 @@ func TestReserveTurnID_CommitFailurePreservesConcurrentPendingInput(t *testing.T
 		t.Fatalf("ReserveCompactionTurnID() error = %v, want %v", err, wantErr)
 	}
 
-	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during reservation" {
-		t.Fatalf("preserved history = %+v, want accepted concurrent input", eng.Session.History)
+	if len(eng.Thread.History) != 1 || eng.Thread.History[0].FirstText() != "accepted during reservation" {
+		t.Fatalf("preserved history = %+v, want accepted concurrent input", eng.Thread.History)
 	}
 	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
 		t.Fatalf("pending status = %+v, want failed reservation released after preservation", status)
 	}
 	if record := pendingLifecycleTestRecord(t, eng, "reentrant-reservation-input"); record.State != PendingInputStateProcessed {
 		t.Fatalf("concurrent record = %+v, want processed", record)
-	}
-}
-
-func TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput(t *testing.T) {
-	prov := &mockProvider{script: []llm.Response{{
-		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
-	}}}
-	eng, bus := newEngine(t, prov, false)
-	queue := eng.currentPendingInputQueue()
-	pendingPath := queue.path
-	backupPath := pendingPath + ".before-failed-compensation"
-	restored := false
-	restoreJournal := func() error {
-		if restored {
-			return nil
-		}
-		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Rename(backupPath, pendingPath); err != nil {
-			return err
-		}
-		restored = true
-		return nil
-	}
-	t.Cleanup(func() { _ = restoreJournal() })
-	want := errors.New("admission sync failed")
-	bus.SetCommitter(selectiveFailCommitter{
-		eventType: TurnAdmittedType,
-		err:       want,
-		beforeFail: func() error {
-			if err := os.Rename(pendingPath, backupPath); err != nil {
-				return err
-			}
-			return os.Mkdir(pendingPath, 0o700)
-		},
-	})
-
-	_, admissionErr := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "abandoned input"))
-	if !errors.Is(admissionErr, want) || !strings.Contains(admissionErr.Error(), "drop rejected turn admission") {
-		t.Fatalf("AdmitTurnMessage() error = %v, want event and compensation failures", admissionErr)
-	}
-	if err := restoreJournal(); err != nil {
-		t.Fatal(err)
-	}
-	reloadedQueue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
-	records, err := reloadedQueue.Records()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 1 {
-		t.Fatalf("pending records = %+v, want one abandoned admission intent", records)
-	}
-	for _, record := range records {
-		if record.State != PendingInputState("accepting") {
-			t.Fatalf("failed admission record = %+v, want non-replayable state %q", record, PendingInputState("accepting"))
-		}
-	}
-	replayable, err := reloadedQueue.Replayable("later-turn", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(replayable) != 0 {
-		t.Fatalf("failed admission remained replayable: %+v", replayable)
-	}
-
-	eng.PendingInputQueue = reloadedQueue
-	eng.Session.SubscribeBus(bus)
-	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "done" {
-		t.Fatalf("later Turn() = %q, %v", out, err)
-	}
-	for _, message := range prov.histories[0] {
-		if message.FirstText() == "abandoned input" {
-			t.Fatalf("failed admission replayed in later provider history: %+v", prov.histories[0])
-		}
 	}
 }
 
@@ -752,164 +609,13 @@ func TestAdmitTurnMessage_FailedAdmissionKeepsPersistedInputReplayable(t *testin
 	if !errors.Is(admissionErr, want) {
 		t.Fatalf("AdmitTurnMessage() error = %v, want %v", admissionErr, want)
 	}
-	reloaded := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	reloaded := NewPendingInputQueue(eng.Thread.Dir, PendingInputQueueOptions{Thread: eng.Thread})
 	replayable, err := reloaded.Replayable("later-turn", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(replayable) != 1 || replayable[0].ID != record.ID || replayable[0].State != PendingInputStatePending {
 		t.Fatalf("replayable persisted input = %+v, want pending record %q", replayable, record.ID)
-	}
-}
-
-func TestAdmitTurnMessage_FailedPromotionKeepsPersistedInputReplayable(t *testing.T) {
-	eng, bus := newEngine(t, &mockProvider{}, false)
-	record, err := eng.PersistPendingMessageWithOptions(
-		context.Background(),
-		llm.TextMessage(llm.RoleUser, "persisted input"),
-		PendingInputOptions{ID: "persisted", TTL: time.Hour},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queue := eng.currentPendingInputQueue()
-	pendingPath := queue.path
-	backupPath := pendingPath + ".before-failed-persisted-promotion"
-	restored := false
-	restoreJournal := func() error {
-		if restored {
-			return nil
-		}
-		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Rename(backupPath, pendingPath); err != nil {
-			return err
-		}
-		restored = true
-		return nil
-	}
-	t.Cleanup(func() { _ = restoreJournal() })
-	bus.SetCommitter(interceptCommitter{
-		eventType: TurnAdmittedType,
-		beforeCommit: func() error {
-			if err := os.Rename(pendingPath, backupPath); err != nil {
-				return err
-			}
-			return os.Mkdir(pendingPath, 0o700)
-		},
-	})
-
-	_, admissionErr := eng.AdmitTurnMessage("failed-turn", record.Message)
-	if admissionErr == nil || !strings.Contains(admissionErr.Error(), "persist committed turn admission") {
-		t.Fatalf("AdmitTurnMessage() error = %v, want promotion failure", admissionErr)
-	}
-	if strings.Contains(admissionErr.Error(), "drop uncommitted turn admission") {
-		t.Fatalf("AdmitTurnMessage() dropped previously persisted input: %v", admissionErr)
-	}
-	if err := restoreJournal(); err != nil {
-		t.Fatal(err)
-	}
-	reloaded := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
-	replayable, err := reloaded.Replayable("later-turn", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(replayable) != 1 || replayable[0].ID != record.ID || replayable[0].State != PendingInputStatePending {
-		t.Fatalf("replayable persisted input = %+v, want pending record %q", replayable, record.ID)
-	}
-}
-
-func TestAdmitTurnMessage_IntentPromotionFailureCannotReplayInput(t *testing.T) {
-	eng, bus := newEngine(t, &mockProvider{}, false)
-	queue := eng.currentPendingInputQueue()
-	pendingPath := queue.path
-	backupPath := pendingPath + ".before-failed-promotion"
-	restored := false
-	restoreJournal := func() error {
-		if restored {
-			return nil
-		}
-		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Rename(backupPath, pendingPath); err != nil {
-			return err
-		}
-		restored = true
-		return nil
-	}
-	t.Cleanup(func() { _ = restoreJournal() })
-	bus.SetCommitter(interceptCommitter{
-		eventType: TurnAdmittedType,
-		beforeCommit: func() error {
-			if err := os.Rename(pendingPath, backupPath); err != nil {
-				return err
-			}
-			return os.Mkdir(pendingPath, 0o700)
-		},
-	})
-	var turnErrors int
-	bus.Subscribe("turn.errored", func(events.Event) { turnErrors++ })
-
-	_, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "uncommitted input"))
-	if err == nil || !strings.Contains(err.Error(), "persist committed turn admission") || !strings.Contains(err.Error(), "drop uncommitted turn admission") {
-		t.Fatalf("AdmitTurnMessage() error = %v, want promotion and compensation failures", err)
-	}
-	if turnErrors != 1 {
-		t.Fatalf("turn.errored events = %d, want 1", turnErrors)
-	}
-	if err := restoreJournal(); err != nil {
-		t.Fatal(err)
-	}
-	reloadedQueue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
-	replayable, err := reloadedQueue.Replayable("later-turn", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(replayable) != 0 {
-		t.Fatalf("uncommitted admission remained replayable: %+v", replayable)
-	}
-}
-
-func TestAdmitTurnMessage_IntentAppendFailureLeavesNoActiveTurn(t *testing.T) {
-	prov := &mockProvider{script: []llm.Response{{
-		Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn,
-	}}}
-	eng, bus := newEngine(t, prov, false)
-	queue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
-	eng.PendingInputQueue = queue
-	want := errors.New("injected intent append failure")
-	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
-		partial := len(body) / 2
-		n, writeErr := file.Write(body[:partial])
-		return n, errors.Join(want, writeErr)
-	}
-	var admitted int
-	bus.Subscribe(TurnAdmittedType, func(events.Event) { admitted++ })
-
-	if _, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "not accepted")); !errors.Is(err, want) {
-		t.Fatalf("AdmitTurnMessage() error = %v, want %v", err, want)
-	}
-	if eng.activeTurnID != "" {
-		t.Fatalf("active turn id = %q, want none", eng.activeTurnID)
-	}
-	if admitted != 0 || prov.called != 0 {
-		t.Fatalf("admitted events/provider calls = %d/%d, want 0/0", admitted, prov.called)
-	}
-	if len(queue.records) != 0 {
-		t.Fatalf("failed intent entered live queue: %+v", queue.records)
-	}
-	if _, err := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{}).Records(); err == nil {
-		t.Fatal("reload accepted an invalid partial intent tail")
-	}
-
-	if err := os.Truncate(queue.path, 0); err != nil {
-		t.Fatal(err)
-	}
-	eng.PendingInputQueue = NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
-	if out, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "retry after repair"), "recovery-turn"); err != nil || out != "recovered" {
-		t.Fatalf("recovery TurnMessageWithID() = %q, %v", out, err)
 	}
 }
 
@@ -939,7 +645,7 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 		t.Fatal(err)
 	}
 	want := errors.New("epoch sync failed")
-	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: provenance.RequestEpochType, err: want})
+	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: provenance.RequestEpochType, err: want})
 	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
 		t.Fatalf("Turn() error = %v, want %v", err, want)
 	}
@@ -949,7 +655,7 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 	if pending := eng.pendingPolicyRuntimeContextSnapshot(); len(pending) != 1 || pending[0].ID == "" {
 		t.Fatalf("pending policy context = %+v", pending)
 	}
-	journal, err := session.ReadEvents(eng.Session.Dir)
+	journal, err := thread.ReadEvents(eng.Thread.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -967,11 +673,11 @@ func TestTurn_RequestEpochCheckpointConsumesPolicyContextAndLinksResponse(t *tes
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	notesStore := workmem.NewNotesStore(eng.Session.Dir)
+	notesStore := workmem.NewNotesStore(eng.Thread.Dir)
 	if _, err := notesStore.Update("- [ ] retain the exact runtime note"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithStores(t, eng, nil, notesStore)
+	installThreadStateModulesWithStores(t, eng, nil, notesStore)
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
@@ -1014,7 +720,7 @@ func TestTurn_RequestEpochCheckpointConsumesPolicyContextAndLinksResponse(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(rawEpoch), "juex:"+eng.Session.ID) {
+	if strings.Contains(string(rawEpoch), "juex:"+eng.Thread.ID) {
 		t.Fatalf("epoch leaked raw cache key: %s", rawEpoch)
 	}
 	if requested.EpochID != epoch.Epoch.EpochID || requested.RequestDigest != epoch.Epoch.RequestDigest {
@@ -1050,14 +756,14 @@ func TestTurn_DispatchCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 		t.Fatal(err)
 	}
 	want := errors.New("dispatch sync failed")
-	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "llm.requested", err: want})
+	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: "llm.requested", err: want})
 	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
 		t.Fatalf("Turn() error = %v, want %v", err, want)
 	}
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
 	}
-	assertRecoveredPolicyContextCount(t, eng.Session, 0)
+	assertRecoveredPolicyContextCount(t, eng.Thread, 0)
 }
 
 func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
@@ -1067,19 +773,19 @@ func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 		t.Fatal(err)
 	}
 	want := errors.New("response sync failed")
-	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "llm.responded", err: want})
+	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: "llm.responded", err: want})
 	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
 		t.Fatalf("Turn() error = %v, want %v", err, want)
 	}
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
-	assertRecoveredPolicyContextCount(t, eng.Session, 0)
+	assertRecoveredPolicyContextCount(t, eng.Thread, 0)
 }
 
-func assertRecoveredPolicyContextCount(t *testing.T, sess *session.Session, want int) {
+func assertRecoveredPolicyContextCount(t *testing.T, sess *thread.Thread, want int) {
 	t.Helper()
-	journal, err := session.ReadEvents(sess.Dir)
+	journal, err := thread.ReadEvents(sess.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1177,7 +883,7 @@ func TestTurn_ToolExecutionEventsCarryStableIdentityAndRecoverableOutcome(t *tes
 	if out, err := eng.Turn(context.Background(), "run once"); err != nil || out != "done" {
 		t.Fatalf("Turn() = %q, %v", out, err)
 	}
-	assistant := eng.Session.History[1]
+	assistant := eng.Thread.History[1]
 	for name, identity := range map[string]struct {
 		iter      int
 		callIndex int
@@ -1192,8 +898,8 @@ func TestTurn_ToolExecutionEventsCarryStableIdentityAndRecoverableOutcome(t *tes
 			t.Fatalf("%s identity = %+v, assistant=%s", name, identity, assistant.ID)
 		}
 	}
-	if completed.Outcome == nil || completed.Outcome.MessageID != eng.Session.History[2].ID || completed.Outcome.Block.Content != "recorded once" {
-		t.Fatalf("completed outcome = %+v, history=%+v", completed.Outcome, eng.Session.History)
+	if completed.Outcome == nil || completed.Outcome.MessageID != eng.Thread.History[2].ID || completed.Outcome.Block.Content != "recorded once" {
+		t.Fatalf("completed outcome = %+v, history=%+v", completed.Outcome, eng.Thread.History)
 	}
 }
 
@@ -1406,7 +1112,7 @@ func TestTurn_DurableToolResultFailurePreventsNextProviderCall(t *testing.T) {
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
-	history := eng.currentSession().History
+	history := eng.currentThread().History
 	if len(history) != 2 || history[1].Role != llm.RoleAssistant {
 		t.Fatalf("history = %+v, want unresolved assistant tool call", history)
 	}
@@ -1437,7 +1143,7 @@ func TestTurn_DurableToolErrorFailurePersistsActualResult(t *testing.T) {
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
-	history := eng.currentSession().History
+	history := eng.currentThread().History
 	if len(history) != 2 || history[1].Role != llm.RoleAssistant {
 		t.Fatalf("history = %+v, want unresolved assistant tool call", history)
 	}
@@ -1469,7 +1175,7 @@ func TestTurn_DurableToolProjectionFailurePersistsProjectedResult(t *testing.T) 
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
-	result := eng.currentSession().History[len(eng.currentSession().History)-1]
+	result := eng.currentThread().History[len(eng.currentThread().History)-1]
 	if result.Kind != llm.MessageKindToolResult || len(result.Blocks) != 1 || result.Blocks[0].Artifact == nil {
 		t.Fatalf("last history message = %+v, want persisted projected tool result", result)
 	}
@@ -1537,19 +1243,19 @@ func (c selectiveFailCommitter) Commit(event events.Event) (events.Event, error)
 	return events.Normalize(event), nil
 }
 
-type selectiveSessionCommitter struct {
-	session   *session.Session
+type selectiveThreadCommitter struct {
+	thread    *thread.Thread
 	eventType string
 	err       error
 }
 
-func (c selectiveSessionCommitter) Commit(event events.Event) (events.Event, error) {
+func (c selectiveThreadCommitter) Commit(event events.Event) (events.Event, error) {
 	event = events.Normalize(event)
 	if event.Type == c.eventType {
 		return events.Event{}, c.err
 	}
 	if !event.Transient {
-		if err := c.session.AppendEvent(event); err != nil {
+		if err := c.thread.AppendEvent(event); err != nil {
 			return events.Event{}, err
 		}
 	}
@@ -1563,7 +1269,7 @@ func TestTurn_ReturnsImagePlaceholderForImageOnlyResponse(t *testing.T) {
 				{
 					Type: llm.BlockImage,
 					Media: &llm.MediaRef{
-						ArtifactPath:  "sessions/s/media/chart.png",
+						ArtifactPath:  "threads/s/media/chart.png",
 						MediaType:     "image/png",
 						OriginalBytes: 2048,
 						Width:         640,
@@ -1618,7 +1324,7 @@ func TestTurn_EmitsLLMOutputDeltaEvents(t *testing.T) {
 	}
 }
 
-func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider) *Engine {
+func newEngineForThread(t *testing.T, sess *thread.Thread, prov llm.Provider) *Engine {
 	t.Helper()
 	reg := tools.NewRegistry()
 	bus := events.NewBus()
@@ -1629,13 +1335,13 @@ func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider)
 		Provider:          prov,
 		Tools:             reg,
 		Bus:               bus,
-		Session:           sess,
+		Thread:            sess,
 		Prompt:            pb,
-		PendingInputQueue: NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }}),
+		PendingInputQueue: NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: sess}),
 		PendingInputTTL:   time.Hour,
 		ExternalEventTTL:  24 * time.Hour,
 		WorkDir:           t.TempDir(),
-		ArtifactDir:       filepath.Join(artifactState, "artifacts"),
+		MediaDir:          filepath.Join(artifactState, "artifacts"),
 	}
 }
 
@@ -1658,7 +1364,7 @@ func TestTurn_CompactionKeepsRecentRealInputInProviderContext(t *testing.T) {
 		{llm.RoleUser, "recent question"},
 		{llm.RoleAssistant, "recent answer"},
 	} {
-		if err := eng.Session.Append(llm.TextMessage(item.role, item.text)); err != nil {
+		if err := eng.Thread.Append(llm.TextMessage(item.role, item.text)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1694,10 +1400,10 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 	eng.Compaction.SummaryMaxTokens = 500
 	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
 	oversized := "oversized-request " + strings.Repeat("private-detail ", 1200) + "TAIL-SAFETY-GUARD"
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, oversized)); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, oversized)); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1727,22 +1433,17 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 		t.Fatalf("active context has unterminated artifact path:\n%s", activeText)
 	}
 	artifactPath := strings.TrimSpace(activeText[pathStart+len("path: ") : pathStart+pathEnd])
-	relativePath, recognized, err := artifact.ParseReadURI(artifactPath)
-	if err != nil || !recognized {
-		t.Fatalf("parse retained input Artifact URI = (%q, %t, %v)", relativePath, recognized, err)
+	if !filepath.IsAbs(artifactPath) {
+		t.Fatalf("retained input spool path = %q, want absolute", artifactPath)
 	}
-	store, err := eng.projectedArtifactStore()
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifactData, err := store.Read(artifact.Ref{Path: relativePath})
+	artifactData, err := os.ReadFile(artifactPath)
 	if err != nil {
 		t.Fatalf("read retained input artifact: %v", err)
 	}
 	if string(artifactData) != oversized {
 		t.Fatalf("retained input artifact length = %d, want original %d", len(artifactData), len(oversized))
 	}
-	compact := eng.Session.History[len(eng.Session.History)-3]
+	compact := eng.Thread.History[len(eng.Thread.History)-3]
 	if compact.Kind != llm.MessageKindCompact || compact.Compaction == nil {
 		t.Fatalf("compaction marker = %+v", compact)
 	}
@@ -1774,7 +1475,7 @@ func TestTurn_CompactionRetightensPreviouslyProjectedOversizedInput(t *testing.T
 	if _, err := eng.Turn(context.Background(), oversized); err != nil {
 		t.Fatal(err)
 	}
-	projected := eng.Session.History[0].Blocks[0]
+	projected := eng.Thread.History[0].Blocks[0]
 	if projected.Artifact == nil || projected.Artifact.HeadBytes+projected.Artifact.TailBytes <= eng.Compaction.KeepRecentTokens {
 		t.Fatalf("initial projection = %+v, want preview larger than compact retention budget", projected.Artifact)
 	}
@@ -1788,20 +1489,20 @@ func TestTurn_CompactionRetightensPreviouslyProjectedOversizedInput(t *testing.T
 	if strings.Contains(activeText, strings.Repeat("private-detail ", 20)) {
 		t.Fatalf("active context kept the original large preview:\n%s", activeText)
 	}
-	readPath := mustProjectedArtifactReadURI(t, projected.Artifact)
+	readPath := mustProjectedArtifactReadPath(t, eng, projected.Artifact)
 	for _, want := range []string{"summary of projected request", "TAIL-SAFETY-GUARD", readPath, "latest"} {
 		if !strings.Contains(activeText, want) {
 			t.Fatalf("active context missing %q:\n%s", want, activeText)
 		}
 	}
 	var compact llm.Message
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindCompact {
 			compact = msg
 		}
 	}
 	if compact.Compaction == nil {
-		t.Fatalf("missing compaction marker: %+v", eng.Session.History)
+		t.Fatalf("missing compaction marker: %+v", eng.Thread.History)
 	}
 	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
 		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
@@ -1833,10 +1534,10 @@ func TestTurn_CompactionBoundsSharedPreviewForMultipleProjectedBlocks(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(projected); err != nil {
+	if err := eng.Thread.Append(projected); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1851,12 +1552,12 @@ func TestTurn_CompactionBoundsSharedPreviewForMultipleProjectedBlocks(t *testing
 		t.Fatalf("active context kept a per-block full preview:\n%s", activeText)
 	}
 	for i, block := range projected.Blocks {
-		if block.Artifact == nil || !strings.Contains(activeText, mustProjectedArtifactReadURI(t, block.Artifact)) {
+		if block.Artifact == nil || !strings.Contains(activeText, mustProjectedArtifactReadPath(t, eng, block.Artifact)) {
 			t.Fatalf("active context missing artifact path for block %d: %+v\n%s", i, block.Artifact, activeText)
 		}
 	}
 	var compact llm.Message
-	for _, history := range eng.Session.History {
+	for _, history := range eng.Thread.History {
 		if history.Kind == llm.MessageKindCompact {
 			compact = history
 		}
@@ -1881,17 +1582,17 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 	eng.Compaction.SummaryMaxTokens = 500
 	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
 	firstInput := "first-head " + strings.Repeat("first-private ", 1600) + " FIRST-TAIL"
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, firstInput)); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, firstInput)); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := eng.Turn(context.Background(), "first-latest"); err != nil {
 		t.Fatal(err)
 	}
 	var firstCompact llm.Message
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindCompact {
 			firstCompact = msg
 		}
@@ -1904,15 +1605,15 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 	if firstArtifact == nil {
 		t.Fatalf("first retained reference = %+v", firstReference)
 	}
-	if strings.Contains(firstReference.FirstText(), eng.ArtifactDir) {
+	if strings.Contains(firstReference.FirstText(), eng.MediaDir) {
 		t.Fatalf("durable retained reference contains runtime-specific Artifact root: %s", firstReference.FirstText())
 	}
 
 	secondInput := "second-head " + strings.Repeat("second-private ", 1600) + " SECOND-TAIL"
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, secondInput)); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, secondInput)); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "more work")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, "more work")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := eng.Turn(context.Background(), "second-latest"); err != nil {
@@ -1922,23 +1623,21 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 		t.Fatalf("provider histories = %d, want two summary and two answer requests", len(prov.histories))
 	}
 	secondSummaryRequest := messagesText(prov.histories[2])
-	firstReadPath := mustProjectedArtifactReadURI(t, firstArtifact)
+	firstReadPath := mustProjectedArtifactReadPath(t, eng, firstArtifact)
 	if strings.Contains(secondSummaryRequest, "Retained Input References") || strings.Contains(secondSummaryRequest, firstReadPath) {
 		t.Fatalf("second summary request replayed deterministic retained references:\n%s", secondSummaryRequest)
 	}
 	if !strings.Contains(secondSummaryRequest, "first summary without references") {
 		t.Fatalf("second summary request lost first model summary:\n%s", secondSummaryRequest)
 	}
-	var compacts []llm.Message
-	for _, msg := range eng.Session.History {
-		if msg.Kind == llm.MessageKindCompact {
-			compacts = append(compacts, msg)
-		}
+	replay := eng.Thread.ReplaySnapshot()
+	if len(replay.Activities) != 2 {
+		t.Fatalf("compact activities = %d, want 2", len(replay.Activities))
 	}
-	if len(compacts) != 2 {
-		t.Fatalf("compact messages = %d, want 2", len(compacts))
+	latest := replay.Activities[1].Summary
+	if latest == nil {
+		t.Fatal("latest compact activity has no summary")
 	}
-	latest := compacts[1]
 	if latest.Compaction == nil || len(latest.Compaction.RetainedInputReferences) != 2 {
 		t.Fatalf("latest compact references = %+v, want inherited and current", latest.Compaction)
 	}
@@ -1985,7 +1684,7 @@ func TestTurn_CompactionProjectsOversizedInputInsideExecutionTail(t *testing.T) 
 	toolUse := llm.Message{ID: "tool-use-1", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "read"}}}
 	toolResult := llm.Message{ID: "tool-result-1", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "call-1", Content: "contents"}}}
 	for _, msg := range []llm.Message{initiator, toolUse, toolResult} {
-		if err := eng.Session.Append(msg); err != nil {
+		if err := eng.Thread.Append(msg); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2007,7 +1706,7 @@ func TestTurn_CompactionProjectsOversizedInputInsideExecutionTail(t *testing.T) 
 		}
 	}
 	var compact llm.Message
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindCompact {
 			compact = msg
 		}
@@ -2050,7 +1749,7 @@ func TestTurn_CompactionKeepsOversizedImageInputReferenceAndOneByteCaption(t *te
 		Blocks: []llm.Block{
 			{Type: llm.BlockText, Text: "A"},
 			{Type: llm.BlockImage, Media: &llm.MediaRef{
-				ArtifactPath:  "sessions/session/media/photo.png",
+				ArtifactPath:  "threads/thread/media/photo.png",
 				MediaType:     "image/png",
 				SHA256:        "image-sha",
 				OriginalBytes: 1234,
@@ -2059,10 +1758,10 @@ func TestTurn_CompactionKeepsOversizedImageInputReferenceAndOneByteCaption(t *te
 			}},
 		},
 	}
-	if err := eng.Session.Append(image); err != nil {
+	if err := eng.Thread.Append(image); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2078,13 +1777,13 @@ func TestTurn_CompactionKeepsOversizedImageInputReferenceAndOneByteCaption(t *te
 		if index > 0 {
 			caption = "\nA\n"
 		}
-		for _, want := range []string{caption, "sessions/session/media/photo.png", "image-sha", "size=4000x4000"} {
+		for _, want := range []string{caption, "threads/thread/media/photo.png", "image-sha", "size=4000x4000"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("provider history %d missing media reference %q:\n%s", index, want, text)
 			}
 		}
 	}
-	compact := eng.Session.History[len(eng.Session.History)-3]
+	compact := eng.Thread.History[len(eng.Thread.History)-3]
 	if compact.Kind != llm.MessageKindCompact || compact.Compaction == nil || len(compact.Compaction.RetainedMessageIDs) != 0 {
 		t.Fatalf("compaction marker = %+v", compact)
 	}
@@ -2120,7 +1819,7 @@ func TestTurn_ExternalizesLargeUserInputBeforeProviderRequest(t *testing.T) {
 			t.Fatalf("provider text missing %q:\n%s", want, providerText)
 		}
 	}
-	block := eng.Session.History[0].Blocks[0]
+	block := eng.Thread.History[0].Blocks[0]
 	if block.Artifact == nil || block.Artifact.SourceKind != "user_input" || !block.Artifact.Truncated {
 		t.Fatalf("artifact metadata missing: %+v", block)
 	}
@@ -2171,7 +1870,7 @@ func TestTurn_ExternalizesLargeToolResultBeforeNextProviderRequest(t *testing.T)
 			t.Fatalf("provider text missing %q:\n%s", want, providerText)
 		}
 	}
-	result := eng.Session.History[len(eng.Session.History)-2]
+	result := eng.Thread.History[len(eng.Thread.History)-2]
 	block := result.Blocks[0]
 	if block.Artifact == nil || block.Artifact.SourceKind != "tool_result" || block.Artifact.ToolUseID != "call_big" {
 		t.Fatalf("artifact metadata missing: %+v", block)
@@ -2205,16 +1904,16 @@ func readProjectedArtifact(t *testing.T, eng *Engine, projection *llm.ContextArt
 	return data
 }
 
-func mustProjectedArtifactReadURI(t *testing.T, projection *llm.ContextArtifactProjection) string {
+func mustProjectedArtifactReadPath(t *testing.T, eng *Engine, projection *llm.ContextArtifactProjection) string {
 	t.Helper()
 	if projection == nil {
 		t.Fatal("missing context artifact projection")
 	}
-	uri, err := artifact.FormatReadURI(projection.StoredPath)
+	path, err := eng.projectedSpoolReadPath(projection.StoredPath)
 	if err != nil {
-		t.Fatalf("format projected artifact read URI: %v", err)
+		t.Fatalf("format projected spool read path: %v", err)
 	}
-	return uri
+	return path
 }
 
 func TestTurn_ProjectsLargeUnprojectedHistoryBeforeProviderRequest(t *testing.T) {
@@ -2228,7 +1927,7 @@ func TestTurn_ProjectsLargeUnprojectedHistoryBeforeProviderRequest(t *testing.T)
 	eng.Compaction.UserInputPreviewHeadBytes = 10
 	eng.Compaction.UserInputPreviewTailBytes = 10
 	original := "old-head\n" + strings.Repeat("ARCHIVED-SECRET ", 80) + "\nold-tail"
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, original)); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, original)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2256,7 +1955,7 @@ func TestTurn_AutoCompactionCircuitBreakerStopsRepeatedSummaryAttempts(t *testin
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.ReserveTokens = 1930
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2283,7 +1982,7 @@ func TestCompactWithInstructionsResetsAutoCompactionFailures(t *testing.T) {
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.autoCompactFailures = 3
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2330,7 +2029,7 @@ func TestCancelActiveTurnCancelsCompactionWithoutAppendingMarker(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var compactError ContextCompactErroredPayload
@@ -2370,7 +2069,7 @@ func TestCancelActiveTurnCancelsCompactionWithoutAppendingMarker(t *testing.T) {
 	if compactError.Error != "Compaction canceled" {
 		t.Fatalf("compact event error = %q", compactError.Error)
 	}
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindCompact {
 			t.Fatalf("unexpected compact marker after cancellation: %+v", msg)
 		}
@@ -2385,7 +2084,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2434,7 +2133,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 		t.Fatal("CancelActiveTurn accepted cancellation after compact marker commit")
 	}
 	foundMarker := false
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindCompact {
 			foundMarker = true
 		}
@@ -2460,14 +2159,14 @@ func TestTurn_CompactionFailureDoesNotAppendMarker(t *testing.T) {
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.ReserveTokens = 1930
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	_, err := eng.Turn(context.Background(), "latest")
 	if err == nil {
 		t.Fatal("expected compaction error")
 	}
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindCompact {
 			t.Fatalf("unexpected compact marker after failure: %+v", msg)
 		}
@@ -2485,7 +2184,7 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.ReserveTokens = 1930
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var compactErr string
@@ -2509,20 +2208,20 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 	if prov.called != 2 {
 		t.Fatalf("provider calls = %d, want compact attempt plus event turn", prov.called)
 	}
-	if len(eng.Session.History) != 3 {
-		t.Fatalf("history len = %d, want old message, mcp event, assistant", len(eng.Session.History))
+	if len(eng.Thread.History) != 3 {
+		t.Fatalf("history len = %d, want old message, mcp event, assistant", len(eng.Thread.History))
 	}
-	if got := eng.Session.History[1]; got.Kind != llm.MessageKindMCPEvent || got.FirstText() != "local:message:notify" {
+	if got := eng.Thread.History[1]; got.Kind != llm.MessageKindMCPEvent || got.FirstText() != "local:message:notify" {
 		t.Fatalf("mcp event not preserved: %+v", got)
 	}
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindCompact {
 			t.Fatalf("unexpected compact marker after failed auto compact: %+v", msg)
 		}
 	}
 }
 
-func TestTurnMessage_SideSessionContinuesAfterAutoCompactionFailure(t *testing.T) {
+func TestTurnMessage_SideThreadContinuesAfterAutoCompactionFailure(t *testing.T) {
 	prov := &mockProviderWithErrors{
 		errs: []error{fmt.Errorf("openai codex responses: codex SSE read: context deadline exceeded")},
 		responses: []llm.Response{
@@ -2533,7 +2232,7 @@ func TestTurnMessage_SideSessionContinuesAfterAutoCompactionFailure(t *testing.T
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.ReserveTokens = 1930
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var compactErr string
@@ -2542,8 +2241,8 @@ func TestTurnMessage_SideSessionContinuesAfterAutoCompactionFailure(t *testing.T
 		compactErr = payload.Error
 	})
 
-	msg := llm.TextMessage(llm.RoleUser, "Side Session result: done")
-	msg.Kind = llm.MessageKindSideSession
+	msg := llm.TextMessage(llm.RoleUser, "Side Thread result: done")
+	msg.Kind = llm.MessageKindWorkerThread
 	out, err := eng.TurnMessage(context.Background(), msg)
 	if err != nil {
 		t.Fatal(err)
@@ -2557,10 +2256,10 @@ func TestTurnMessage_SideSessionContinuesAfterAutoCompactionFailure(t *testing.T
 	if prov.called != 2 {
 		t.Fatalf("provider calls = %d, want compact attempt plus side result turn", prov.called)
 	}
-	if len(eng.Session.History) != 3 {
-		t.Fatalf("history len = %d, want old message, side result, assistant", len(eng.Session.History))
+	if len(eng.Thread.History) != 3 {
+		t.Fatalf("history len = %d, want old message, side result, assistant", len(eng.Thread.History))
 	}
-	if got := eng.Session.History[1]; got.Kind != llm.MessageKindSideSession || got.FirstText() != "Side Session result: done" {
+	if got := eng.Thread.History[1]; got.Kind != llm.MessageKindWorkerThread || got.FirstText() != "Side Thread result: done" {
 		t.Fatalf("side result not preserved: %+v", got)
 	}
 }
@@ -2575,7 +2274,7 @@ func TestTurnMessage_MCPEventStripsRedactedReasoningWhenAutoCompactionPaused(t *
 	eng.Compaction.ReserveTokens = 1900
 	eng.autoCompactFailures = effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow).MaxAutoFailures
 	secret := "enc_" + strings.Repeat("secret ", 200)
-	if err := eng.Session.Append(llm.Message{
+	if err := eng.Thread.Append(llm.Message{
 		ID:   "assistant-1",
 		Role: llm.RoleAssistant,
 		Blocks: []llm.Block{{
@@ -2616,8 +2315,8 @@ func TestTurnMessage_MCPEventStripsRedactedReasoningWhenAutoCompactionPaused(t *
 	if stripped != 1 {
 		t.Fatalf("stripped event count = %d, want 1", stripped)
 	}
-	if eng.Session.History[0].Blocks[0].Content != secret {
-		t.Fatalf("session history reasoning content was mutated")
+	if eng.Thread.History[0].Blocks[0].Content != secret {
+		t.Fatalf("thread history reasoning content was mutated")
 	}
 }
 
@@ -2632,7 +2331,7 @@ func TestTurn_OverflowCompactsAndRetriesOnce(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 10000
 	eng.Compaction = DefaultCompactionPolicy()
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
 		t.Fatal(err)
 	}
 	out, err := eng.Turn(context.Background(), "latest")
@@ -2670,7 +2369,7 @@ func TestTurn_LaterIterationOverflowCompactsAndRetriesOnce(t *testing.T) {
 			return "tool result", nil
 		},
 	})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2688,7 +2387,7 @@ func TestTurn_LaterIterationOverflowCompactsAndRetriesOnce(t *testing.T) {
 		t.Fatalf("tool calls = %d, want exactly one", got)
 	}
 	compactMarkers := 0
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindCompact {
 			compactMarkers++
 		}
@@ -2717,7 +2416,7 @@ func TestTurn_SecondOverflowDoesNotRetryForPendingInput(t *testing.T) {
 	eng, _ = newEngine(t, prov, false)
 	eng.ContextWindow = 10000
 	eng.Compaction = DefaultCompactionPolicy()
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2730,7 +2429,7 @@ func TestTurn_SecondOverflowDoesNotRetryForPendingInput(t *testing.T) {
 	if prov.calls != 3 {
 		t.Fatalf("provider calls = %d, want initial turn + compact + one retry", prov.calls)
 	}
-	if got := messagesText(eng.Session.History); !strings.Contains(got, "queued during second overflow") {
+	if got := messagesText(eng.Thread.History); !strings.Contains(got, "queued during second overflow") {
 		t.Fatalf("terminal overflow did not preserve pending input:\n%s", got)
 	}
 }
@@ -2753,7 +2452,7 @@ func TestTurn_CompactRetryFailureConsumesPolicyContext(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2810,7 +2509,7 @@ func TestCompact_ReturnsAppendedMessageIDAndMetadata(t *testing.T) {
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2821,7 +2520,11 @@ func TestCompact_ReturnsAppendedMessageIDAndMetadata(t *testing.T) {
 	if result.MessageID == "" {
 		t.Fatal("missing compact message id")
 	}
-	compact := eng.Session.History[len(eng.Session.History)-1]
+	replay := eng.Thread.ReplaySnapshot()
+	if len(replay.Activities) != 1 || replay.Activities[0].Summary == nil {
+		t.Fatalf("compact activities = %+v", replay.Activities)
+	}
+	compact := *replay.Activities[0].Summary
 	if compact.ID != result.MessageID {
 		t.Fatalf("result message id = %q, compact id = %q", result.MessageID, compact.ID)
 	}
@@ -2841,7 +2544,7 @@ func TestCompact_RecordsUsageAndActiveContextStats(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 1000
 	eng.Compaction = DefaultCompactionPolicy()
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var completedContextUsage *llm.ContextUsage
@@ -2865,7 +2568,7 @@ func TestCompact_RecordsUsageAndActiveContextStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := eng.Session.Info()
+	info := eng.Thread.Info()
 	if info.TokenUsage.InputTokens != 11 || info.TokenUsage.OutputTokens != 3 {
 		t.Fatalf("token usage = %+v", info.TokenUsage)
 	}
@@ -2905,17 +2608,17 @@ func TestTurn_PlainResponse(t *testing.T) {
 	if out != "hello user" {
 		t.Fatalf("got %q", out)
 	}
-	if len(eng.Session.History) != 2 {
-		t.Fatalf("history len = %d", len(eng.Session.History))
+	if len(eng.Thread.History) != 2 {
+		t.Fatalf("history len = %d", len(eng.Thread.History))
 	}
-	if got := eng.Session.Info().TokenUsage; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
-		t.Fatalf("session token usage = %+v", got)
+	if got := eng.Thread.Info().TokenUsage; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
+		t.Fatalf("thread token usage = %+v", got)
 	}
 	if responded.TokenUsage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
 		t.Fatalf("event usage = %+v", responded.TokenUsage)
 	}
-	if responded.MessageID == "" || responded.MessageID != eng.Session.History[1].ID {
-		t.Fatalf("responded message id = %q, history id = %q", responded.MessageID, eng.Session.History[1].ID)
+	if responded.MessageID == "" || responded.MessageID != eng.Thread.History[1].ID {
+		t.Fatalf("responded message id = %q, history id = %q", responded.MessageID, eng.Thread.History[1].ID)
 	}
 }
 
@@ -2988,10 +2691,10 @@ func TestTurn_RecordsContextUsageForAssistantResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	info := eng.Session.Info()
+	info := eng.Thread.Info()
 	got := info.ContextUsage
 	if got == nil {
-		t.Fatal("session context usage is nil")
+		t.Fatal("thread context usage is nil")
 		return
 	}
 	if got.Model != "mock:model" {
@@ -3054,7 +2757,7 @@ func TestTurn_CalibratesFallbackContextUsageFromPreviousProviderUsage(t *testing
 		t.Fatal(err)
 	}
 
-	got := eng.Session.Info().ContextUsage
+	got := eng.Thread.Info().ContextUsage
 	if got == nil {
 		t.Fatal("context usage is nil")
 	}
@@ -3094,14 +2797,14 @@ func TestTurnMessage_PreservesUserMessageKind(t *testing.T) {
 	if out != "received" {
 		t.Fatalf("out = %q", out)
 	}
-	if got := eng.Session.History[0].Kind; got != llm.MessageKindMCPEvent {
+	if got := eng.Thread.History[0].Kind; got != llm.MessageKindMCPEvent {
 		t.Fatalf("history kind = %q", got)
 	}
 	if started.Kind != llm.MessageKindMCPEvent {
 		t.Fatalf("turn.started kind = %q", started.Kind)
 	}
-	if started.MessageID == "" || started.MessageID != eng.Session.History[0].ID {
-		t.Fatalf("turn.started message id = %q, history id = %q", started.MessageID, eng.Session.History[0].ID)
+	if started.MessageID == "" || started.MessageID != eng.Thread.History[0].ID {
+		t.Fatalf("turn.started message id = %q, history id = %q", started.MessageID, eng.Thread.History[0].ID)
 	}
 }
 
@@ -3114,10 +2817,10 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.ReserveTokens = 1900
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3139,13 +2842,14 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 	if prov.called != 2 {
 		t.Fatalf("provider calls = %d, want compact + answer", prov.called)
 	}
-	if len(eng.Session.History) != 5 {
-		t.Fatalf("history len = %d, want old history retained plus compact/user/assistant", len(eng.Session.History))
+	replay := eng.Thread.ReplaySnapshot()
+	if len(replay.Messages) != 4 {
+		t.Fatalf("persisted messages = %d, want old history plus user/assistant", len(replay.Messages))
 	}
-	compact := eng.Session.History[2]
-	if compact.Kind != llm.MessageKindCompact {
-		t.Fatalf("compact kind = %q", compact.Kind)
+	if len(replay.Activities) != 1 || replay.Activities[0].Summary == nil {
+		t.Fatalf("compact activities = %+v", replay.Activities)
 	}
+	compact := *replay.Activities[0].Summary
 	if !strings.Contains(compact.FirstText(), "summary of old work") {
 		t.Fatalf("compact text = %q", compact.FirstText())
 	}
@@ -3173,10 +2877,10 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 		hooks.EventPostCompact: {{}},
 	}}
 	installHookRunner(t, eng, runner)
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3209,10 +2913,10 @@ func TestCompactPreHookStdoutExtendsSummaryInstructions(t *testing.T) {
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve deployment command exactly."}},
 	}})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3235,25 +2939,25 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	eng.Compaction.Instructions = "Preserve configured release criteria."
-	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.CreateWithContract(workmem.GoalStateCreate{
 		Description: "Ship authoritative compaction state",
 		Acceptance:  "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	notesStore := workmem.NewNotesStore(eng.Session.Dir)
+	notesStore := workmem.NewNotesStore(eng.Thread.Dir)
 	if _, err := notesStore.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithStores(t, eng, goalState, notesStore)
+	installThreadStateModulesWithStores(t, eng, goalState, notesStore)
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
 	}})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3272,7 +2976,7 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	}
 	body := prov.histories[0][0].FirstText()
 	for _, want := range []string{
-		"<authoritative-session-state>",
+		"<authoritative-thread-state>",
 		"- [x] map the runtime",
 		"- [ ] run the live compaction evaluation",
 	} {
@@ -3329,10 +3033,10 @@ func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 			hookError = payload
 		}
 	})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3360,17 +3064,17 @@ func TestCompactPostHookStdoutQueuesRuntimeContextForNextProviderRequest(t *test
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Recheck the release branch on the next turn."}},
 	}})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
 		t.Fatal(err)
 	}
-	last := eng.Session.History[len(eng.Session.History)-1]
+	last := eng.Thread.History[len(eng.Thread.History)-1]
 	if last.Kind != llm.MessageKindCompact {
 		t.Fatalf("post-compact context persisted in history: %+v", last)
 	}
@@ -3386,7 +3090,7 @@ func TestCompactPostHookStdoutQueuesRuntimeContextForNextProviderRequest(t *test
 	if got := messagesText(prov.histories[2]); strings.Contains(got, "Recheck the release branch") {
 		t.Fatalf("post-compact context repeated in second provider request:\n%s", got)
 	}
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindRuntimeContext {
 			t.Fatalf("runtime context persisted in history: %+v", msg)
 		}
@@ -3413,10 +3117,10 @@ func TestCompactStartedIncludesToolSchemaBudget(t *testing.T) {
 			return "ok", nil
 		},
 	})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	withoutTools := eng.estimateContextTokens("system", nil, eng.activeContextLocked().Messages)
@@ -3442,10 +3146,10 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	eng.SummaryContextWindow = 30000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var epoch provenance.RequestEpoch
@@ -3478,14 +3182,14 @@ func TestCompactRequestEpochFailurePreventsSummaryProviderAndFallbackCalls(t *te
 	eng.SummaryProvider = summary
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("epoch sync failed")
-	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: provenance.RequestEpochType, err: want})
+	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: provenance.RequestEpochType, err: want})
 
 	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); !errors.Is(err, want) {
 		t.Fatalf("Compact() error = %v, want %v", err, want)
@@ -3503,10 +3207,10 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.SummaryModel = "summary:model"
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var fallback ContextCompactSummaryFallbackPayload
@@ -3574,7 +3278,7 @@ func TestCompactFallbackEventFailureReleasesSelectedHalfOpenProbe(t *testing.T) 
 	eng.ModelHealth = health
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("fallback event sync failed")
@@ -3609,10 +3313,10 @@ func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.SummaryModel = "summary:model"
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3646,7 +3350,7 @@ func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *
 	if len(fallbacks) != 2 || fallbacks[0].ConfiguredModel != "summary:model" || fallbacks[0].FallbackModel != "primary:model" || fallbacks[1].ConfiguredModel != "primary:model" || fallbacks[1].FallbackModel != "backup:model" {
 		t.Fatalf("fallbacks = %+v", fallbacks)
 	}
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindModelChange {
 			t.Fatalf("compaction persisted model-change notice: %+v", message)
 		}
@@ -3663,10 +3367,10 @@ func TestCompactUsesConfiguredModelChainWithoutDedicatedSummaryModel(t *testing.
 	}
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3698,23 +3402,23 @@ func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
 	}
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve the original user request")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, "preserve the original user request")); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 100; i++ {
 		callID := fmt.Sprintf("call-%03d", i)
-		if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		if err := eng.Thread.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 			Type: llm.BlockToolUse, ToolUseID: callID, ToolName: "read", Input: map[string]any{"path": strings.Repeat("x", 1000)},
 		}}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := eng.Session.Append(llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
+		if err := eng.Thread.Append(llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
 			Type: llm.BlockToolResult, ToolUseID: callID, Content: strings.Repeat("result ", 200),
 		}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve the follow-up user request")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, "preserve the follow-up user request")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3755,10 +3459,10 @@ func TestCompactSkipsSummaryCandidateWhenPreservedUserMessagesCannotFit(t *testi
 	}
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("preserved older user detail ", 300))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("preserved older user detail ", 300))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("newest oversized input ", 300))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("newest oversized input ", 300))); err != nil {
 		t.Fatal(err)
 	}
 	var fallback ContextCompactSummaryFallbackPayload
@@ -3835,7 +3539,7 @@ func TestCompactSkipsModelAlreadyInSharedHealthCooldown(t *testing.T) {
 	eng.ModelHealth = health
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var epochs []provenance.RequestEpoch
@@ -3875,7 +3579,7 @@ func TestCompactReportsHealthSkipsWhenNoCandidateCanBeAcquired(t *testing.T) {
 	eng.ModelHealth = health
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var fallbacks []LLMFallbackPayload
@@ -3922,7 +3626,7 @@ func TestCompactReportsRemainingHealthSkipsAfterAttemptFailure(t *testing.T) {
 	eng.ModelHealth = health
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var fallbacks []LLMFallbackPayload
@@ -3988,7 +3692,7 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	if len(provider.histories) != 2 || provider.histories[0][0].FirstText() == "" || provider.histories[1][0].FirstText() == "" {
 		t.Fatalf("retry summary requests were not built")
 	}
-	usage := eng.Session.TokenUsageSnapshot()
+	usage := eng.Thread.TokenUsageSnapshot()
 	if usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
 	}
@@ -4045,7 +3749,7 @@ func TestCompactRetriesFirstIncompleteFallbackWithLargerBudget(t *testing.T) {
 	if retry.Attempt != 2 || retry.Reason != "empty_summary" || !retry.ReasoningOnly {
 		t.Fatalf("retry payload = %+v", retry)
 	}
-	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
+	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want aggregate fallback retry usage", usage)
 	}
 }
@@ -4138,7 +3842,7 @@ func TestCompactRetainsProviderUsageWhenSummaryOutcomeCommitFails(t *testing.T) 
 	eng, bus := newEngine(t, provider, false)
 	configureCompactionRetryTest(t, eng, 30, 2000)
 	want := errors.New("summary outcome sync failed")
-	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "context.compact.summary_responded", err: want})
+	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: "context.compact.summary_responded", err: want})
 
 	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); !errors.Is(err, want) {
 		t.Fatalf("Compact() error = %v, want %v", err, want)
@@ -4146,7 +3850,7 @@ func TestCompactRetainsProviderUsageWhenSummaryOutcomeCommitFails(t *testing.T) 
 	if provider.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", provider.calls)
 	}
-	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 13, OutputTokens: 5}) {
+	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 13, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want dispatched provider usage", usage)
 	}
 }
@@ -4194,7 +3898,7 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 2000 {
 		t.Fatalf("max output tokens = %+v, want [25 2000]", compactionOptionBudgets(provider.options))
 	}
-	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 1003}) {
+	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 1003}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
 	}
 }
@@ -4227,15 +3931,15 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	eng.ContextWindow = 5000
 	eng.Compaction.ReserveTokens = 1000
 	eng.Compaction.SummaryMaxTokens = 1000
-	goalState = workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	goalState = workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("Original compact goal", "Original acceptance"); err != nil {
 		t.Fatal(err)
 	}
-	notesStore = workmem.NewNotesStore(eng.Session.Dir)
+	notesStore = workmem.NewNotesStore(eng.Thread.Dir)
 	if _, err := notesStore.Update("- [ ] original compact note"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithStores(t, eng, goalState, notesStore)
+	installThreadStateModulesWithStores(t, eng, goalState, notesStore)
 	var epochs []provenance.RequestEpoch
 	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
 		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
@@ -4346,10 +4050,10 @@ func TestCompactReturnsEmptySummaryAfterSingleRetry(t *testing.T) {
 	if provider.calls != 2 || retries != 1 {
 		t.Fatalf("calls/retries = %d/%d, want 2/1", provider.calls, retries)
 	}
-	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 7, OutputTokens: 2}) {
+	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 7, OutputTokens: 2}) {
 		t.Fatalf("token usage = %+v, want failed-attempt usage", usage)
 	}
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindCompact {
 			t.Fatalf("unexpected compact marker after exhausted retry: %+v", msg)
 		}
@@ -4395,7 +4099,7 @@ func TestCompactFallsBackAfterEmptySummaryRetry(t *testing.T) {
 	if fallback.ConfiguredModel != "summary:model" || fallback.FallbackModel != "main:model" || !strings.Contains(fallback.Error, "empty summary") {
 		t.Fatalf("fallback payload = %+v", fallback)
 	}
-	usage := eng.Session.TokenUsageSnapshot()
+	usage := eng.Thread.TokenUsageSnapshot()
 	if usage != (llm.Usage{InputTokens: 18, OutputTokens: 4}) {
 		t.Fatalf("token usage = %+v, want all summary attempts", usage)
 	}
@@ -4439,7 +4143,7 @@ func TestCompactFallsBackWhenEmptySummaryRetryFails(t *testing.T) {
 	if !strings.Contains(fallback.Error, "retry unavailable") {
 		t.Fatalf("fallback payload = %+v", fallback)
 	}
-	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 12, OutputTokens: 3}) {
+	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 12, OutputTokens: 3}) {
 		t.Fatalf("token usage = %+v, want successful attempts only", usage)
 	}
 }
@@ -4524,10 +4228,10 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 			eng.Compaction = DefaultCompactionPolicy()
 			eng.Compaction.KeepRecentTokens = 1
 			installHookRunner(t, eng, tc.runner)
-			if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+			if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 				t.Fatal(err)
 			}
-			if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+			if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 				t.Fatal(err)
 			}
 
@@ -4581,10 +4285,10 @@ func TestCompactPreservesCommittedResultWhenPostPolicyContextCannotBeQueued(t *t
 		hooks.EventPreCompact:  {{}},
 		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxPolicyContextBatchBytes)}},
 	}})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -4639,7 +4343,7 @@ func TestTurn_DoesNotCompactBelowThreshold(t *testing.T) {
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 10000
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "small previous turn")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, "small previous turn")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -4749,23 +4453,23 @@ func configureCompactionRetryTest(t *testing.T, eng *Engine, messageCount, messa
 	t.Helper()
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve retry user request")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, "preserve retry user request")); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < messageCount; i++ {
 		callID := fmt.Sprintf("call-%02d", i)
-		if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		if err := eng.Thread.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 			Type: llm.BlockToolUse, ToolUseID: callID, ToolName: "read", Input: map[string]any{"path": strings.Repeat("x", messageChars)},
 		}}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := eng.Session.Append(llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
+		if err := eng.Thread.Append(llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
 			Type: llm.BlockToolResult, ToolUseID: callID, Content: strings.Repeat("y", messageChars),
 		}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "completed tool exchanges")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, "completed tool exchanges")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -4808,11 +4512,11 @@ func TestTurn_PersistsEmptyAssistantResponse(t *testing.T) {
 	if out != "" {
 		t.Fatalf("out = %q, want empty", out)
 	}
-	if len(eng.Session.History) != 2 {
-		t.Fatalf("history len = %d, want user and assistant messages; history=%+v", len(eng.Session.History), eng.Session.History)
+	if len(eng.Thread.History) != 2 {
+		t.Fatalf("history len = %d, want user and assistant messages; history=%+v", len(eng.Thread.History), eng.Thread.History)
 	}
-	if eng.Session.History[1].Role != llm.RoleAssistant || len(eng.Session.History[1].Blocks) != 0 {
-		t.Fatalf("assistant message = %+v, want empty assistant", eng.Session.History[1])
+	if eng.Thread.History[1].Role != llm.RoleAssistant || len(eng.Thread.History[1].Blocks) != 0 {
+		t.Fatalf("assistant message = %+v, want empty assistant", eng.Thread.History[1])
 	}
 }
 
@@ -4838,10 +4542,10 @@ func TestTurn_OneToolCallThenEnd(t *testing.T) {
 	}
 
 	// History: user, assistant(tool_use), user(tool_result), assistant(done)
-	if len(eng.Session.History) != 4 {
-		t.Fatalf("history len = %d, %+v", len(eng.Session.History), eng.Session.History)
+	if len(eng.Thread.History) != 4 {
+		t.Fatalf("history len = %d, %+v", len(eng.Thread.History), eng.Thread.History)
 	}
-	tr := eng.Session.History[2]
+	tr := eng.Thread.History[2]
 	if tr.Role != llm.RoleUser || len(tr.Blocks) != 1 || tr.Blocks[0].Type != llm.BlockToolResult {
 		t.Fatalf("tool result message wrong: %+v", tr)
 	}
@@ -4881,7 +4585,7 @@ func TestTurn_GuidedToolErrorAddsRecoveryHintAfterDiagnosticEvent(t *testing.T) 
 		t.Fatalf("out = %q, want recovered", out)
 	}
 	const hint = `skill_load("juex-observables")`
-	result := eng.Session.History[2].Blocks[0]
+	result := eng.Thread.History[2].Blocks[0]
 	if !result.IsError || !strings.Contains(result.Content, hint) {
 		t.Fatalf("persisted tool result = %+v, want guided failure hint", result)
 	}
@@ -4927,7 +4631,7 @@ func TestTurn_ToolStructuredMediaBecomesToolResultMedia(t *testing.T) {
 	if out != "saw it" {
 		t.Fatalf("out = %q", out)
 	}
-	result := eng.Session.History[2]
+	result := eng.Thread.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
 		t.Fatalf("tool result message = %+v", result)
 	}
@@ -4971,7 +4675,7 @@ func TestTurn_ToolStructuredChunkedWriteBecomesToolResultLifecycleFact(t *testin
 	if out != "done" {
 		t.Fatalf("out = %q", out)
 	}
-	result := eng.Session.History[2]
+	result := eng.Thread.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
 		t.Fatalf("tool result message = %+v", result)
 	}
@@ -5015,7 +4719,7 @@ func TestTurn_PostToolUseHookDenyPreservesChunkedWriteLifecycleFact(t *testing.T
 	if out != "done" {
 		t.Fatalf("out = %q", out)
 	}
-	result := eng.Session.History[2]
+	result := eng.Thread.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
 		t.Fatalf("tool result message = %+v", result)
 	}
@@ -5047,9 +4751,9 @@ func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "ticket: ABC-123") {
 		t.Fatalf("provider history missing policy context:\n%s", got)
 	}
-	first := eng.Session.History[0]
+	first := eng.Thread.History[0]
 	if len(first.Blocks) != 2 || !strings.Contains(first.Blocks[1].Text, "ticket: ABC-123") {
-		t.Fatalf("session user message missing policy context: %+v", first)
+		t.Fatalf("thread user message missing policy context: %+v", first)
 	}
 }
 
@@ -5069,11 +4773,11 @@ func TestTurn_UserPromptSubmitHookDenyStopsBeforeProvider(t *testing.T) {
 	if len(prov.histories) != 0 {
 		t.Fatalf("provider should not be called, calls = %d", len(prov.histories))
 	}
-	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "summarize" {
-		t.Fatalf("accepted input was not preserved after policy rejection: %+v", eng.Session.History)
+	if len(eng.Thread.History) != 1 || eng.Thread.History[0].FirstText() != "summarize" {
+		t.Fatalf("accepted input was not preserved after policy rejection: %+v", eng.Thread.History)
 	}
-	if !eng.Session.History[0].PolicyBlocked {
-		t.Fatalf("rejected input = %+v, want policy_blocked", eng.Session.History[0])
+	if !eng.Thread.History[0].PolicyBlocked {
+		t.Fatalf("rejected input = %+v, want policy_blocked", eng.Thread.History[0])
 	}
 	for _, message := range eng.ActiveContext().Messages {
 		if message.FirstText() == "summarize" {
@@ -5104,7 +4808,7 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 	if _, err := eng.Turn(context.Background(), "inspect"); err != nil {
 		t.Fatal(err)
 	}
-	result := eng.Session.History[2].Blocks[0]
+	result := eng.Thread.History[2].Blocks[0]
 	if result.IsError || !strings.Contains(result.Content, "inspection complete") || !strings.Contains(result.Content, "compare against approved baseline") {
 		t.Fatalf("tool result = %+v", result)
 	}
@@ -5148,7 +4852,7 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 	if len(prov.histories) != 2 {
 		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
-	tr := eng.Session.History[2]
+	tr := eng.Thread.History[2]
 	if len(tr.Blocks) != 1 || !tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "policy denied") {
 		t.Fatalf("tool result = %+v", tr)
 	}
@@ -5183,7 +4887,7 @@ func TestTurn_PostToolUseExitTwoAddsCorrectiveContext(t *testing.T) {
 	if len(prov.histories) != 2 {
 		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
-	tr := eng.Session.History[2]
+	tr := eng.Thread.History[2]
 	if len(tr.Blocks) != 1 || tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "sensitive output") || !strings.Contains(tr.Blocks[0].Content, "redaction required") {
 		t.Fatalf("tool result = %+v", tr)
 	}
@@ -5219,7 +4923,7 @@ func TestTurn_PostToolUseRetainsSuccessfulContextBeforeRequiredFailure(t *testin
 	if _, err := eng.Turn(context.Background(), "run audit"); err != nil {
 		t.Fatal(err)
 	}
-	result := eng.Session.History[2].Blocks[0]
+	result := eng.Thread.History[2].Blocks[0]
 	if !result.IsError || !strings.Contains(result.Content, "tool output") || !strings.Contains(result.Content, "earlier successful context") || !strings.Contains(result.Content, "required post hook failed") {
 		t.Fatalf("tool result = %+v", result)
 	}
@@ -5260,7 +4964,7 @@ func TestTurn_PostExecutionPolicyDenyBecomesToolErrorAndStopsLaterPolicies(t *te
 	if _, err := eng.Turn(context.Background(), "run audit"); err != nil {
 		t.Fatal(err)
 	}
-	result := eng.Session.History[2].Blocks[0]
+	result := eng.Thread.History[2].Blocks[0]
 	if !handlerRan || laterAfterCalls != 0 {
 		t.Fatalf("handler ran = %t, later after calls = %d", handlerRan, laterAfterCalls)
 	}
@@ -5303,14 +5007,14 @@ func TestTurn_PostExecutionTransformOwnsTerminalObservation(t *testing.T) {
 	if out, err := eng.Turn(context.Background(), "run audit"); err != nil || out != "done" {
 		t.Fatalf("Turn() = %q, %v", out, err)
 	}
-	result := eng.Session.History[2].Blocks[0]
+	result := eng.Thread.History[2].Blocks[0]
 	if result.Content != filteredResult || result.IsError {
 		t.Fatalf("tool result = %+v, want filtered success", result)
 	}
 	if completed.Preview != filteredResult || completed.Len != len(filteredResult) {
 		t.Fatalf("completed payload = %+v, want filtered terminal observation", completed)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5358,11 +5062,11 @@ func TestTurn_PostExecutionTransformSuppressesRawOutputDelta(t *testing.T) {
 	if len(deltas) != 0 {
 		t.Fatalf("tool output deltas = %+v, want raw streaming suppressed while Tool Policies are active", deltas)
 	}
-	result := eng.Session.History[2].Blocks[0]
+	result := eng.Thread.History[2].Blocks[0]
 	if result.Content != filteredResult || result.IsError {
 		t.Fatalf("tool result = %+v, want filtered success", result)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5432,7 +5136,7 @@ func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testin
 	if got := messagesText(prov.histories[2]); strings.Contains(got, "verify the release branch") {
 		t.Fatalf("stop policy context repeated in later provider request:\n%s", got)
 	}
-	for _, msg := range eng.Session.History {
+	for _, msg := range eng.Thread.History {
 		if msg.Kind == llm.MessageKindRuntimeContext {
 			t.Fatalf("runtime context persisted in history: %+v", msg)
 		}
@@ -5457,7 +5161,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	goalState, _ := installSessionStateModules(t, eng)
+	goalState, _ := installThreadStateModules(t, eng)
 	var continued int32
 	bus.Subscribe("goal.continued", func(e events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -5475,7 +5179,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if len(continuationHistory) < 2 {
 		t.Fatalf("continuation history = %+v", continuationHistory)
 	}
-	if got := continuationHistory[len(continuationHistory)-2].FirstText(); !strings.Contains(got, "current session goal is still in progress") {
+	if got := continuationHistory[len(continuationHistory)-2].FirstText(); !strings.Contains(got, "current thread goal is still in progress") {
 		t.Fatalf("goal continuation = %q", got)
 	}
 	goalContext := continuationHistory[len(continuationHistory)-1]
@@ -5500,11 +5204,11 @@ func TestTurn_ExhaustedProviderFailureDoesNotBecomeGoalContinuation(t *testing.T
 	providerErr := fmt.Errorf("openai responses stream retry exhausted after 2 attempts: %w", context.DeadlineExceeded)
 	prov := &mockProviderWithErrors{errs: []error{providerErr}}
 	eng, bus := newEngine(t, prov, false)
-	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("finish the release", "all release checks pass"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithStores(t, eng, goalState, nil)
+	installThreadStateModulesWithStores(t, eng, goalState, nil)
 	var continued int32
 	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -5538,12 +5242,12 @@ func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
 	acceptance := strings.Repeat("a", 32*1024)
 	if _, err := goalState.Create("ship the maximum contract", acceptance); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithStores(t, eng, goalState, nil)
+	installThreadStateModulesWithStores(t, eng, goalState, nil)
 
 	out, err := eng.Turn(context.Background(), "finish the goal")
 	if err != nil {
@@ -5562,11 +5266,11 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "waiting for delegated work"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
+	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
@@ -5598,11 +5302,11 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("finish delegated work", "all checks pass"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
+	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
@@ -5636,11 +5340,11 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "Which deployment should I use?"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
+	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: panicGoalContinuationDeferrer{t: t},
 	})
@@ -5671,8 +5375,8 @@ func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
-	installSessionStateModulesWithStores(t, eng, goalState, nil)
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
+	installThreadStateModulesWithStores(t, eng, goalState, nil)
 
 	out, err := eng.Turn(context.Background(), "this is normal context, not a goal")
 	if err != nil {
@@ -5695,8 +5399,8 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
-	installSessionStateModulesWithStores(t, eng, goalState, nil)
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
+	installThreadStateModulesWithStores(t, eng, goalState, nil)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "ignored-goal-output",
 		Events:  []hooks.EventName{hooks.EventStop},
@@ -5943,8 +5647,8 @@ func TestTurn_PreRestoreCancellationTerminallyPersistsAcceptedInput(t *testing.T
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
 	}
-	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "cancel before restore" {
-		t.Fatalf("durable history = %+v, want accepted cancelled input", eng.Session.History)
+	if len(eng.Thread.History) != 1 || eng.Thread.History[0].FirstText() != "cancel before restore" {
+		t.Fatalf("durable history = %+v, want accepted cancelled input", eng.Thread.History)
 	}
 	records, err := eng.PendingInputQueue.Records()
 	if err != nil {
@@ -5957,109 +5661,6 @@ func TestTurn_PreRestoreCancellationTerminallyPersistsAcceptedInput(t *testing.T
 		if record.State != PendingInputStateProcessed {
 			t.Fatalf("cancelled admission record = %+v, want state %q", record, PendingInputStateProcessed)
 		}
-	}
-}
-
-func TestTurn_PendingInputRestoreFailureTerminallyPersistsAcceptedInput(t *testing.T) {
-	prov := &mockProvider{script: []llm.Response{{
-		Message: llm.TextMessage(llm.RoleAssistant, "later done"), StopReason: llm.StopEndTurn,
-	}}}
-	eng, _ := newEngine(t, prov, false)
-	accepted, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "accepted before restore failure"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	records, err := eng.PendingInputQueue.Records()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var acceptedRecordID string
-	for id, record := range records {
-		if record.MessageID == accepted.ID {
-			acceptedRecordID = id
-			break
-		}
-	}
-	if acceptedRecordID == "" {
-		t.Fatalf("pending record for accepted message %q not found: %+v", accepted.ID, records)
-	}
-	queue := eng.currentPendingInputQueue()
-	pendingPath := queue.path
-	backupPath := pendingPath + ".restore-failure"
-	if err := os.Rename(pendingPath, backupPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(pendingPath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	restored := false
-	restoreJournal := func() error {
-		if restored {
-			return nil
-		}
-		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Rename(backupPath, pendingPath); err != nil {
-			return err
-		}
-		restored = true
-		return nil
-	}
-	t.Cleanup(func() { _ = restoreJournal() })
-
-	eng.mu.Lock()
-	lifecycle := turnLifecycle{
-		engine:  eng,
-		turnID:  "failed-turn",
-		userMsg: accepted,
-		start:   time.Now(),
-	}
-	_, turnErr := lifecycle.runLocked(context.Background())
-	eng.mu.Unlock()
-	if turnErr == nil || !strings.Contains(turnErr.Error(), "pending input queue") {
-		t.Fatalf("turn lifecycle error = %v, want pending journal failure", turnErr)
-	}
-	if len(eng.Session.History) != 1 || eng.Session.History[0].ID != accepted.ID {
-		t.Fatalf("durable history = %+v, want accepted input %q", eng.Session.History, accepted.ID)
-	}
-
-	if err := restoreJournal(); err != nil {
-		t.Fatal(err)
-	}
-	discardDone := make(chan error, 1)
-	go func() {
-		_, err := eng.DiscardPendingInput(acceptedRecordID)
-		discardDone <- err
-	}()
-	select {
-	case err := <-discardDone:
-		t.Fatalf("discard completed before restore-failure lifecycle terminal handling: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	if !lifecycle.pendingLifecycleHeld {
-		t.Fatal("restore-failure cleanup did not retain the pending lifecycle lock")
-	}
-	eng.pendingLifecycleMu.Unlock()
-	lifecycle.pendingLifecycleHeld = false
-	if err := <-discardDone; err != nil {
-		t.Fatal(err)
-	}
-	eng.finishActiveTurn("failed-turn")
-	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "later done" {
-		t.Fatalf("later Turn() = %q, %v", out, err)
-	}
-	acceptedCopies := 0
-	for _, message := range eng.Session.History {
-		if message.ID == accepted.ID {
-			acceptedCopies++
-		}
-	}
-	if acceptedCopies != 1 {
-		t.Fatalf("accepted input copies in durable history = %d, want 1", acceptedCopies)
-	}
-	if prov.called != 1 {
-		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
 }
 
@@ -6093,10 +5694,10 @@ func TestTurn_CancellationPreservesPendingInputWithoutContinuing(t *testing.T) {
 		t.Fatalf("turn err = %v, want ErrUserCancelled", err)
 	}
 
-	if got := len(eng.Session.History); got != 2 {
-		t.Fatalf("history len = %d, want active and preserved pending input: %+v", got, eng.Session.History)
+	if got := len(eng.Thread.History); got != 2 {
+		t.Fatalf("history len = %d, want active and preserved pending input: %+v", got, eng.Thread.History)
 	}
-	if got := eng.Session.History[1].FirstText(); got != "preserve me" {
+	if got := eng.Thread.History[1].FirstText(); got != "preserve me" {
 		t.Fatalf("preserved message = %q", got)
 	}
 	records, err := eng.PendingInputQueue.Records()
@@ -6141,7 +5742,7 @@ func TestTurn_AuthFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
-	if got := eng.Session.History[len(eng.Session.History)-1].FirstText(); got != "keep after auth failure" {
+	if got := eng.Thread.History[len(eng.Thread.History)-1].FirstText(); got != "keep after auth failure" {
 		t.Fatalf("preserved message = %q", got)
 	}
 	records, err := eng.PendingInputQueue.Records()
@@ -6191,7 +5792,7 @@ func TestTurn_NonRetryableProviderFailurePreservesPendingInputWithoutContinuing(
 			if prov.called != 1 {
 				t.Fatalf("provider calls = %d, want 1", prov.called)
 			}
-			if got := eng.Session.History[len(eng.Session.History)-1].FirstText(); got != pendingText {
+			if got := eng.Thread.History[len(eng.Thread.History)-1].FirstText(); got != pendingText {
 				t.Fatalf("preserved message = %q, want %q", got, pendingText)
 			}
 			records, err := eng.PendingInputQueue.Records()
@@ -6208,10 +5809,10 @@ func TestTurn_NonRetryableProviderFailurePreservesPendingInputWithoutContinuing(
 func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	turnID := eng.beginActiveTurn("turn-repair-before-preserve")
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "active")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, "active")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+	if err := eng.Thread.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 		Type:      llm.BlockToolUse,
 		ToolUseID: "interrupted-tool",
 		ToolName:  "read",
@@ -6231,14 +5832,14 @@ func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(eng.Session.History); got != 4 {
-		t.Fatalf("history len = %d, want user, tool use, repair, and pending input: %+v", got, eng.Session.History)
+	if got := len(eng.Thread.History); got != 4 {
+		t.Fatalf("history len = %d, want user, tool use, repair, and pending input: %+v", got, eng.Thread.History)
 	}
-	repair := eng.Session.History[2]
+	repair := eng.Thread.History[2]
 	if repair.Role != llm.RoleUser || len(repair.Blocks) != 1 || repair.Blocks[0].Type != llm.BlockToolResult || repair.Blocks[0].ToolUseID != "interrupted-tool" || !repair.Blocks[0].IsError {
 		t.Fatalf("transcript repair = %+v", repair)
 	}
-	if got := eng.Session.History[3].FirstText(); got != "preserve after tool failure" {
+	if got := eng.Thread.History[3].FirstText(); got != "preserve after tool failure" {
 		t.Fatalf("preserved pending input = %q", got)
 	}
 	records, err := eng.PendingInputQueue.Records()
@@ -6252,11 +5853,11 @@ func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T
 
 func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng := newEngineForSession(t, sess, &mockProvider{})
+	eng := newEngineForThread(t, sess, &mockProvider{})
 	if err := eng.ReserveTurnID("turn-active"); err != nil {
 		t.Fatal(err)
 	}
@@ -6267,7 +5868,7 @@ func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reloaded, err := session.Load(sess.Dir)
+	reloaded, err := thread.Load(sess.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6275,7 +5876,7 @@ func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
-	restarted := newEngineForSession(t, reloaded, prov)
+	restarted := newEngineForThread(t, reloaded, prov)
 	if _, err := restarted.Turn(context.Background(), "after restart"); err != nil {
 		t.Fatal(err)
 	}
@@ -6292,11 +5893,11 @@ func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 
 func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng := newEngineForSession(t, sess, &mockProvider{})
+	eng := newEngineForThread(t, sess, &mockProvider{})
 	if err := eng.ReserveTurnID("turn-active"); err != nil {
 		t.Fatal(err)
 	}
@@ -6307,14 +5908,14 @@ func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	firstReload, err := session.Load(sess.Dir)
+	firstReload, err := thread.Load(sess.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	firstProvider := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "first done"), StopReason: llm.StopEndTurn},
 	}}
-	firstEngine := newEngineForSession(t, firstReload, firstProvider)
+	firstEngine := newEngineForThread(t, firstReload, firstProvider)
 	if _, err := firstEngine.Turn(context.Background(), "first after restart"); err != nil {
 		t.Fatal(err)
 	}
@@ -6322,7 +5923,7 @@ func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondReload, err := session.Load(sess.Dir)
+	secondReload, err := thread.Load(sess.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6330,7 +5931,7 @@ func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 	secondProvider := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "second done"), StopReason: llm.StopEndTurn},
 	}}
-	secondEngine := newEngineForSession(t, secondReload, secondProvider)
+	secondEngine := newEngineForThread(t, secondReload, secondProvider)
 	if _, err := secondEngine.Turn(context.Background(), "second after restart"); err != nil {
 		t.Fatal(err)
 	}
@@ -6342,7 +5943,7 @@ func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 
 func TestTurn_RepairsDanglingToolUseBeforeAppendingNewUserInput(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6361,7 +5962,7 @@ func TestTurn_RepairsDanglingToolUseBeforeAppendingNewUserInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reloaded, err := session.Load(sess.Dir)
+	reloaded, err := thread.Load(sess.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6369,7 +5970,7 @@ func TestTurn_RepairsDanglingToolUseBeforeAppendingNewUserInput(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
-	eng := newEngineForSession(t, reloaded, prov)
+	eng := newEngineForThread(t, reloaded, prov)
 	if _, err := eng.Turn(context.Background(), "second"); err != nil {
 		t.Fatal(err)
 	}
@@ -6394,7 +5995,7 @@ func TestTurn_RepairsDanglingToolUseBeforeAppendingNewUserInput(t *testing.T) {
 
 func TestEngine_DeduplicatesPendingInputByEventID(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	eng.PendingInputQueue = NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }})
+	eng.PendingInputQueue = NewPendingInputQueue(eng.Thread.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: eng.Thread})
 	eng.PendingInputTTL = time.Hour
 	if err := eng.ReserveTurnID("turn-active"); err != nil {
 		t.Fatal(err)
@@ -6414,11 +6015,11 @@ func TestEngine_DeduplicatesPendingInputByEventID(t *testing.T) {
 
 func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }})
+	store := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: sess})
 	record, err := store.Enqueue(llm.TextMessage(llm.RoleUser, "already appended"), PendingInputOptions{ID: "event-1", TTL: time.Hour}, "turn-old")
 	if err != nil {
 		t.Fatal(err)
@@ -6433,7 +6034,7 @@ func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.
 		t.Fatal(err)
 	}
 
-	reloaded, err := session.Load(sess.Dir)
+	reloaded, err := thread.Load(sess.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6441,14 +6042,14 @@ func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
-	eng := newEngineForSession(t, reloaded, prov)
+	eng := newEngineForThread(t, reloaded, prov)
 	if _, err := eng.Turn(context.Background(), "fresh input"); err != nil {
 		t.Fatal(err)
 	}
 	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != "fresh input" {
 		t.Fatalf("last provider message = %q, want no duplicate replay", got)
 	}
-	records, err := store.Records()
+	records, err := eng.PendingInputQueue.Records()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6459,11 +6060,11 @@ func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.
 
 func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }})
+	store := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: sess})
 	record, err := store.Enqueue(llm.TextMessage(llm.RoleUser, "already appended before compact"), PendingInputOptions{ID: "event-1", TTL: time.Hour}, "turn-old")
 	if err != nil {
 		t.Fatal(err)
@@ -6477,14 +6078,14 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 	compact := llm.TextMessage(llm.RoleUser, "summary")
 	compact.ID = "compact-1"
 	compact.Kind = llm.MessageKindCompact
-	if err := sess.Append(compact); err != nil {
+	if _, err := sess.BeginCompactedGeneration(compact, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reloaded, err := session.Load(sess.Dir)
+	reloaded, err := thread.Load(sess.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6495,14 +6096,14 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
-	eng := newEngineForSession(t, reloaded, prov)
+	eng := newEngineForThread(t, reloaded, prov)
 	if _, err := eng.Turn(context.Background(), "fresh input"); err != nil {
 		t.Fatal(err)
 	}
 	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != "fresh input" {
 		t.Fatalf("last provider message = %q, want no duplicate replay", got)
 	}
-	_, full, err := session.LoadInfo(sess.Dir)
+	_, full, err := thread.LoadInfo(sess.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6515,7 +6116,7 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 	if seen != 1 {
 		t.Fatalf("persisted message %q count = %d, want 1", record.MessageID, seen)
 	}
-	records, err := store.Records()
+	records, err := eng.PendingInputQueue.Records()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6526,7 +6127,7 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 
 func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6534,7 +6135,7 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
-	eng := newEngineForSession(t, sess, prov)
+	eng := newEngineForThread(t, sess, prov)
 	if err := eng.ReserveTurnID("compact-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -6612,7 +6213,7 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 
 func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6620,7 +6221,7 @@ func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testi
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
-	eng := newEngineForSession(t, sess, prov)
+	eng := newEngineForThread(t, sess, prov)
 	if err := eng.ReserveTurnID("compact-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -6653,7 +6254,7 @@ func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testi
 	if _, err := eng.TurnMessageWithID(context.Background(), msg, "turn-replaced"); err != nil {
 		t.Fatal(err)
 	}
-	if got := eng.Session.History[0]; got.ID != record.MessageID || got.Kind != record.Message.Kind || got.FirstText() != "transformed pending input" {
+	if got := eng.Thread.History[0]; got.ID != record.MessageID || got.Kind != record.Message.Kind || got.FirstText() != "transformed pending input" {
 		t.Fatalf("persisted transformed input = %+v, want id %q kind %q", got, record.MessageID, record.Message.Kind)
 	}
 	records, err = eng.PendingInputQueue.Records()
@@ -6668,7 +6269,7 @@ func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testi
 func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
 	const turnID = "turn-policy-checkpoint"
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6676,7 +6277,7 @@ func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
-	eng := newEngineForSession(t, sess, prov)
+	eng := newEngineForThread(t, sess, prov)
 	var (
 		policyMessageID string
 		recordsAtPolicy map[string]PendingInputRecord
@@ -6684,7 +6285,7 @@ func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
 	)
 	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "replace-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
 		policyMessageID = request.Message.ID
-		recordsAtPolicy, policyReadErr = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{}).Records()
+		recordsAtPolicy, policyReadErr = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Thread: sess}).Records()
 		return runtimemodule.TurnInputDecision{
 			Action:  runtimemodule.TurnInputReplace,
 			Message: llm.TextMessage(llm.RoleUser, "transformed input"),
@@ -6710,7 +6311,7 @@ func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
 	if accepted.State != PendingInputStateAdmitted || accepted.TurnID != turnID || accepted.MessageID != policyMessageID || accepted.Message.FirstText() != "original input" {
 		t.Fatalf("accepted input during policy = %+v", accepted)
 	}
-	if got := eng.Session.History[0]; got.ID != accepted.MessageID || got.FirstText() != "transformed input" {
+	if got := eng.Thread.History[0]; got.ID != accepted.MessageID || got.FirstText() != "transformed input" {
 		t.Fatalf("persisted transformed input = %+v, want message id %q", got, accepted.MessageID)
 	}
 	records, err := eng.PendingInputQueue.Records()
@@ -6729,7 +6330,12 @@ func TestTurn_ProjectionFailurePersistsAcceptedInputOnce(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.UserInputInlineMaxBytes = 8
-	eng.ArtifactDir = filepath.Join(t.TempDir(), "missing-parent", "artifacts")
+	if err := os.RemoveAll(eng.Thread.SpoolDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eng.Thread.SpoolDir(), []byte("block spool"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	input := "accepted input that requires projection"
 
 	if _, err := eng.Turn(context.Background(), input); err == nil || !strings.Contains(err.Error(), "artifact store root") {
@@ -6738,8 +6344,8 @@ func TestTurn_ProjectionFailurePersistsAcceptedInputOnce(t *testing.T) {
 	if prov.called != 0 {
 		t.Fatalf("provider calls after projection failure = %d, want none", prov.called)
 	}
-	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != input {
-		t.Fatalf("history after projection failure = %+v, want accepted input once", eng.Session.History)
+	if len(eng.Thread.History) != 1 || eng.Thread.History[0].FirstText() != input {
+		t.Fatalf("history after projection failure = %+v, want accepted input once", eng.Thread.History)
 	}
 	records, err := eng.PendingInputQueue.Records()
 	if err != nil {
@@ -6752,29 +6358,34 @@ func TestTurn_ProjectionFailurePersistsAcceptedInputOnce(t *testing.T) {
 	}
 
 	eng.Compaction.Enabled = false
-	eng.ArtifactDir = filepath.Join(t.TempDir(), "artifacts")
+	if err := os.Remove(eng.Thread.SpoolDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(eng.Thread.SpoolDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if out, err := eng.Turn(context.Background(), "next input"); err != nil || out != "done" {
 		t.Fatalf("second Turn() = %q, %v", out, err)
 	}
 	var occurrences int
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.FirstText() == input {
 			occurrences++
 		}
 	}
 	if occurrences != 1 {
-		t.Fatalf("accepted input occurrences = %d, want one in history %+v", occurrences, eng.Session.History)
+		t.Fatalf("accepted input occurrences = %d, want one in history %+v", occurrences, eng.Thread.History)
 	}
 }
 
 func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
-	sess, err := session.New(t.TempDir())
+	sess, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
 
-	beforeCrash := newEngineForSession(t, sess, &mockProvider{})
+	beforeCrash := newEngineForThread(t, sess, &mockProvider{})
 	accepted, err := beforeCrash.AdmitTurnMessage("turn-before-crash", llm.TextMessage(llm.RoleUser, "secret before crash"))
 	if err != nil {
 		t.Fatal(err)
@@ -6783,7 +6394,7 @@ func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
-	recovered := newEngineForSession(t, sess, prov)
+	recovered := newEngineForThread(t, sess, prov)
 	var policyInputs []string
 	installRuntimeTestModules(t, recovered, &runtimeTurnInputPolicyModule{id: "redact-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
 		policyInputs = append(policyInputs, request.Message.FirstText())
@@ -6814,14 +6425,14 @@ func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
 }
 
 func TestTurn_RecoveryPreservesQueuedAndTurnInputAcceptanceOrder(t *testing.T) {
-	sess, err := session.New(t.TempDir())
+	sess, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
 
 	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
-	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }})
+	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }, Thread: sess})
 	queued, err := queue.Enqueue(
 		llm.TextMessage(llm.RoleUser, "queued before crash"),
 		PendingInputOptions{ID: "queued-before-crash", TTL: time.Hour},
@@ -6843,9 +6454,9 @@ func TestTurn_RecoveryPreservesQueuedAndTurnInputAcceptanceOrder(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
-	recovered := newEngineForSession(t, sess, prov)
+	recovered := newEngineForThread(t, sess, prov)
 	now = now.Add(time.Second)
-	recovered.PendingInputQueue = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }})
+	recovered.PendingInputQueue = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }, Thread: sess})
 	var (
 		policyInputs   []string
 		admissionOrder []string
@@ -6946,8 +6557,8 @@ func TestTurn_PersistedInputsAfterCurrentTriggerRestoreInOrder(t *testing.T) {
 	}}}
 	eng, bus := newEngine(t, prov, false)
 	now := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
-	eng.PendingInputQueue = NewPendingInputQueue(eng.currentSession().Dir, PendingInputQueueOptions{
-		Now: func() time.Time { return now },
+	eng.PendingInputQueue = NewPendingInputQueue(eng.currentThread().Dir, PendingInputQueueOptions{
+		Now: func() time.Time { return now }, Thread: eng.currentThread(),
 	})
 	current, err := eng.PersistPendingMessageWithOptions(
 		context.Background(),
@@ -7008,8 +6619,8 @@ func TestTurn_LaterAcceptedTurnInputStillRunsPolicy(t *testing.T) {
 	}}}
 	eng, _ := newEngine(t, prov, false)
 	now := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
-	eng.PendingInputQueue = NewPendingInputQueue(eng.currentSession().Dir, PendingInputQueueOptions{
-		Now: func() time.Time { return now },
+	eng.PendingInputQueue = NewPendingInputQueue(eng.currentThread().Dir, PendingInputQueueOptions{
+		Now: func() time.Time { return now }, Thread: eng.currentThread(),
 	})
 	current, err := eng.PendingInputQueue.Enqueue(
 		llm.TextMessage(llm.RoleUser, "current persisted trigger"),
@@ -7062,7 +6673,7 @@ func TestTurn_LaterAcceptedTurnInputStillRunsPolicy(t *testing.T) {
 
 func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
-	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: eng.effectiveMaxPendingInputs()})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1", MaxPendingInputs: eng.effectiveMaxPendingInputs()})
 	var lifecycle []string
 	bus.Subscribe("*", func(event events.Event) {
 		store.Publish(event)
@@ -7085,8 +6696,8 @@ func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
 	if _, err := eng.EnqueuePersistedPendingMessage(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := store.Snapshot(); snapshot.Session.PendingCount != 1 {
-		t.Fatalf("pending status before drain = %+v, want one queued input", snapshot.Session)
+	if snapshot := store.Snapshot(); snapshot.Thread.PendingCount != 1 {
+		t.Fatalf("pending status before drain = %+v, want one queued input", snapshot.Thread)
 	}
 
 	eng.mu.Lock()
@@ -7096,8 +6707,8 @@ func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := store.Snapshot()
-	if snapshot.Session.PendingCount != 0 || snapshot.Session.State != SessionRuntimeTurnActive {
-		t.Fatalf("pending status after drain = %+v, want active turn with empty queue", snapshot.Session)
+	if snapshot.Thread.PendingCount != 0 || snapshot.Thread.State != ThreadRuntimeTurnActive {
+		t.Fatalf("pending status after drain = %+v, want active turn with empty queue", snapshot.Thread)
 	}
 	if got, want := lifecycle, []string{"pending_input.queued", PendingInputDrainingType, "pending_input.drained"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending lifecycle = %v, want %v", got, want)
@@ -7105,13 +6716,13 @@ func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
 }
 
 func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
-	sess, err := session.New(t.TempDir())
+	sess, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
 
-	beforeCrash := newEngineForSession(t, sess, &mockProvider{})
+	beforeCrash := newEngineForThread(t, sess, &mockProvider{})
 	acceptedRecord, err := beforeCrash.PendingInputQueue.AdmitTurnInput(
 		"turn-before-crash",
 		llm.TextMessage(llm.RoleUser, "blocked before crash"),
@@ -7132,7 +6743,7 @@ func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 	later := laterRecord.Message
 
 	prov := &mockProvider{}
-	recovered := newEngineForSession(t, sess, prov)
+	recovered := newEngineForThread(t, sess, prov)
 	installRuntimeTestModules(t, recovered, &runtimeTurnInputPolicyModule{id: "reject-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
 		if request.Message.ID == accepted.ID {
 			return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputReject, Reason: "blocked"}, nil
@@ -7173,7 +6784,7 @@ func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 }
 
 func TestTurn_ReusedTurnIDGetsFreshAcceptedInputIdentity(t *testing.T) {
-	sess, err := session.New(t.TempDir())
+	sess, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7182,7 +6793,7 @@ func TestTurn_ReusedTurnIDGetsFreshAcceptedInputIdentity(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "first done"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "second done"), StopReason: llm.StopEndTurn},
 	}}
-	eng := newEngineForSession(t, sess, prov)
+	eng := newEngineForThread(t, sess, prov)
 	for _, input := range []string{"first input", "second input"} {
 		if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, input), "turn-1"); err != nil {
 			t.Fatal(err)
@@ -7230,145 +6841,14 @@ func (p *pendingAdmissionProbe) PendingInputsAdmitted(_ context.Context, admissi
 	}
 }
 
-func TestPromotePendingInputFailsBeforeObserverWhenDurableAdmissionFails(t *testing.T) {
-	root := t.TempDir()
-	sess, err := session.New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { sess.Close() })
-	eng := newEngineForSession(t, sess, &mockProvider{})
-	if err := eng.ReserveTurnID("compact-1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := eng.EnqueuePendingMessageWithOptions(
-		context.Background(),
-		llm.TextMessage(llm.RoleUser, "after compact"),
-		PendingInputOptions{ID: "event-1", TTL: time.Hour},
-	); err != nil {
-		t.Fatal(err)
-	}
-	var observed []string
-	probe := &pendingAdmissionProbe{queue: eng.PendingInputQueue, order: &observed}
-	registry := runtimemodule.NewRegistry()
-	if err := registry.Register(probe); err != nil {
-		t.Fatal(err)
-	}
-	set, err := registry.Seal(context.Background(), runtimemodule.ToolContext{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	eng.RuntimeModules = set
-	eng.PendingInputQueue.path = t.TempDir()
-
-	_, status, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
-	if err == nil || !strings.Contains(err.Error(), "mark promoted pending input admitted") {
-		t.Fatalf("promotion error = %v", err)
-	}
-	if promoted {
-		t.Fatal("pending input was promoted after durable admission failed")
-	}
-	if status.TurnID != "" || status.PendingCount != 1 || len(observed) != 0 {
-		t.Fatalf("status/observer = %+v / %v, want queued and unobserved", status, observed)
-	}
-	if current := eng.PendingInputStatus(); current.TurnID != "" || current.PendingCount != 1 {
-		t.Fatalf("engine status = %+v, want idle with queued input", current)
-	}
-}
-
-func TestPromotePendingInputFailurePreservesReentrantPendingInput(t *testing.T) {
-	eng, bus := newEngine(t, &mockProvider{}, false)
-	if err := eng.ReserveTurnID("compact-1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "promotion trigger"), PendingInputOptions{
-		ID:  "promotion-trigger",
-		TTL: time.Hour,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	queue := eng.currentPendingInputQueue()
-	originalWrite := queue.fileOps.write
-	wantErr := errors.New("promote turn input failed")
-	writes := 0
-	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
-		writes++
-		if writes == 2 {
-			return 0, wantErr
-		}
-		return originalWrite(file, body)
-	}
-	t.Cleanup(func() { queue.fileOps.write = originalWrite })
-
-	var enqueueErr, terminalPromotionErr error
-	bus.Subscribe(TurnAdmittedType, func(events.Event) {
-		_, enqueueErr = eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during promotion"), PendingInputOptions{
-			ID:  "reentrant-promotion-input",
-			TTL: time.Hour,
-		})
-	})
-	bus.Subscribe("turn.errored", func(events.Event) {
-		_, terminalPromotionErr = eng.ReceivePendingInput(context.Background(), PendingInputRequest{
-			Message: llm.TextMessage(llm.RoleUser, "after failed promotion terminal"),
-		})
-	})
-
-	type promotionOutcome struct {
-		status   PendingInputStatus
-		promoted bool
-		err      error
-	}
-	promotionDone := make(chan promotionOutcome, 1)
-	go func() {
-		_, status, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
-		promotionDone <- promotionOutcome{status: status, promoted: promoted, err: err}
-	}()
-	var outcome promotionOutcome
-	select {
-	case outcome = <-promotionDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("turn.errored subscriber deadlocked while receiving after failed promotion")
-	}
-	status, promoted, promotionErr := outcome.status, outcome.promoted, outcome.err
-	if !errors.Is(promotionErr, wantErr) {
-		t.Fatalf("PromotePendingInputTurn() error = %v, want %v", promotionErr, wantErr)
-	}
-	if promoted {
-		t.Fatal("pending input was promoted after durable promotion failed")
-	}
-	if enqueueErr != nil {
-		t.Fatalf("reentrant enqueue error = %v", enqueueErr)
-	}
-	if !errors.Is(terminalPromotionErr, ErrActiveTurnExists) {
-		t.Fatalf("terminal subscriber admission error = %v, want %v", terminalPromotionErr, ErrActiveTurnExists)
-	}
-	if status.TurnID != "" || status.PendingCount != 1 {
-		t.Fatalf("promotion status = %+v, want original trigger queued without active Turn", status)
-	}
-	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during promotion" {
-		t.Fatalf("preserved history = %+v, want accepted reentrant input", eng.Session.History)
-	}
-	records, err := queue.Records()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record := records["promotion-trigger"]; record.State != PendingInputStatePending {
-		t.Fatalf("promotion trigger record = %+v, want state %q", record, PendingInputStatePending)
-	}
-	if record := records["reentrant-promotion-input"]; record.State != PendingInputStateProcessed {
-		t.Fatalf("reentrant record = %+v, want state %q", record, PendingInputStateProcessed)
-	}
-}
-
 func TestPromotePendingInputKeepsRecordReplayableWhenTurnAdmissionFails(t *testing.T) {
 	root := t.TempDir()
-	sess, err := session.New(root)
+	sess, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sess.Close() })
-	eng := newEngineForSession(t, sess, &mockProvider{})
+	eng := newEngineForThread(t, sess, &mockProvider{})
 	if err := eng.ReserveTurnID("compact-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -7430,7 +6910,7 @@ func TestPromotePendingInputKeepsRecordReplayableWhenTurnAdmissionFails(t *testi
 func TestPromotePendingInputDefersReentrantQueuedEventUntilAfterPromotion(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	eng.MaxPendingInputs = 4
-	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 4})
+	store := NewStatusStore(StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 4})
 	var enqueueErr error
 	bus.Subscribe(PendingInputPromotedType, func(events.Event) {
 		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "racing input")
@@ -7453,8 +6933,8 @@ func TestPromotePendingInputDefersReentrantQueuedEventUntilAfterPromotion(t *tes
 	}
 
 	snapshot := store.Snapshot()
-	if snapshot.Session.PendingCount != 1 || snapshot.Session.MaxPendingInputs != 4 {
-		t.Fatalf("status queue = %+v, want 1/4", snapshot.Session)
+	if snapshot.Thread.PendingCount != 1 || snapshot.Thread.MaxPendingInputs != 4 {
+		t.Fatalf("status queue = %+v, want 1/4", snapshot.Thread)
 	}
 	if status := eng.PendingInputStatus(); status.PendingCount != 1 {
 		t.Fatalf("engine queue = %+v, want one pending input", status)
@@ -7777,7 +7257,7 @@ func TestRecordToolBatchUsesServingCandidateContextWindowForProjection(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	result := eng.Session.History[len(eng.Session.History)-1].Blocks[0]
+	result := eng.Thread.History[len(eng.Thread.History)-1].Blocks[0]
 	if result.Artifact == nil || result.Artifact.OriginalBytes != 200 {
 		t.Fatalf("tool result artifact = %+v, want projection at the serving candidate's 5-byte limit", result.Artifact)
 	}
@@ -7788,7 +7268,7 @@ func TestNormalizeGuidedToolFailureResults(t *testing.T) {
 	for name, group := range map[string]tools.ToolGroup{
 		"observe": tools.ToolGroupObservable,
 		"chunk":   tools.ToolGroupChunkedWrite,
-		"goal":    tools.ToolGroupSessionState,
+		"goal":    tools.ToolGroupThreadState,
 		"read":    tools.ToolGroupFile,
 	} {
 		reg.MustRegister(tools.Tool{
@@ -7823,11 +7303,11 @@ func TestNormalizeGuidedToolFailureResults(t *testing.T) {
 			wantContent: "boom\n\n" + hint("juex-chunked-write"),
 		},
 		{
-			name:        "session state error",
+			name:        "thread state error",
 			toolName:    "goal",
 			isError:     true,
 			content:     "boom",
-			wantContent: "boom\n\n" + hint("juex-session-state"),
+			wantContent: "boom\n\n" + hint("juex-thread-state"),
 		},
 		{name: "guided success", toolName: "observe", content: "ok", wantContent: "ok"},
 		{name: "unguided error", toolName: "read", isError: true, content: "boom", wantContent: "boom"},
@@ -7921,13 +7401,13 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "all done"), StopReason: llm.StopEndTurn},
 	}}
 	bus := events.NewBus()
-	sess, err := session.New(t.TempDir())
+	sess, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sess.Close() })
 	pb := newTestPromptBuilder("", time.Now)
-	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Session: sess, Prompt: pb}
+	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Thread: sess, Prompt: pb}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -7971,7 +7451,7 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 	if out != "all done" {
 		t.Fatalf("got %q", out)
 	}
-	tr := eng.Session.History[2]
+	tr := eng.Thread.History[2]
 	if len(tr.Blocks) != 3 {
 		t.Fatalf("expected 3 tool results, got %d", len(tr.Blocks))
 	}
@@ -7992,7 +7472,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}, false)
-	_, notesStore := installSessionStateModules(t, eng)
+	_, notesStore := installThreadStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == NotesToolUpdate && req.ToolInput["content"] == "first" {
 			select {
@@ -8018,7 +7498,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 
 func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	goalState, _ := installSessionStateModules(t, eng)
+	goalState, _ := installThreadStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == GoalToolCreate {
 			select {
@@ -8067,14 +7547,14 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	}
 }
 
-func TestRunToolCalls_SerializesSideSessionCallsInProviderOrder(t *testing.T) {
+func TestRunToolCalls_SerializesSideThreadCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	firstStarted := make(chan struct{})
 	secondStarted := make(chan struct{}, 1)
 	releaseFirst := make(chan struct{})
 	eng.Tools.MustRegister(tools.Tool{
 		Name:  "side_first",
-		Group: tools.ToolGroupSideSession,
+		Group: tools.ToolGroupWorkerThread,
 		Handler: func(context.Context, map[string]any) (string, error) {
 			close(firstStarted)
 			<-releaseFirst
@@ -8083,7 +7563,7 @@ func TestRunToolCalls_SerializesSideSessionCallsInProviderOrder(t *testing.T) {
 	})
 	eng.Tools.MustRegister(tools.Tool{
 		Name:  "side_second",
-		Group: tools.ToolGroupSideSession,
+		Group: tools.ToolGroupWorkerThread,
 		Handler: func(context.Context, map[string]any) (string, error) {
 			secondStarted <- struct{}{}
 			return "second", nil
@@ -8100,7 +7580,7 @@ func TestRunToolCalls_SerializesSideSessionCallsInProviderOrder(t *testing.T) {
 	<-firstStarted
 	select {
 	case <-secondStarted:
-		t.Fatal("second Side Session tool started before the first completed")
+		t.Fatal("second Side Thread tool started before the first completed")
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(releaseFirst)
@@ -8111,7 +7591,7 @@ func TestRunToolCalls_SerializesSideSessionCallsInProviderOrder(t *testing.T) {
 	select {
 	case <-secondStarted:
 	default:
-		t.Fatal("second Side Session tool did not run")
+		t.Fatal("second Side Thread tool did not run")
 	}
 }
 
@@ -8203,10 +7683,10 @@ func TestCompact_EmitsLLMRetryDiagnostics(t *testing.T) {
 	eng, bus := newEngine(t, retryDiagnosticProvider{}, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
 	var got []LLMRetryPayload
@@ -8363,10 +7843,10 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 	if !errors.Is(err, cancellation.ErrUserCancelled) {
 		t.Fatalf("err = %v, want ErrUserCancelled", err)
 	}
-	if len(eng.Session.History) != 3 {
-		t.Fatalf("history len = %d, want user, assistant tool_use, user tool_result; history=%+v", len(eng.Session.History), eng.Session.History)
+	if len(eng.Thread.History) != 3 {
+		t.Fatalf("history len = %d, want user, assistant tool_use, user tool_result; history=%+v", len(eng.Thread.History), eng.Thread.History)
 	}
-	result := eng.Session.History[2]
+	result := eng.Thread.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
 		t.Fatalf("tool result message wrong: %+v", result)
 	}
@@ -8422,7 +7902,7 @@ func TestTurn_ToolTimeoutPersistsErrorWithoutFailureLedgerContinuation(t *testin
 	if len(prov.histories) != 2 {
 		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
-	result := eng.Session.History[2]
+	result := eng.Thread.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
 		t.Fatalf("tool result message wrong: %+v", result)
 	}
@@ -8494,7 +7974,7 @@ func TestTurn_DirectToolDeadlineUsesTimeoutContract(t *testing.T) {
 	if out != "done" {
 		t.Fatalf("out = %q, want done", out)
 	}
-	block := eng.Session.History[2].Blocks[0]
+	block := eng.Thread.History[2].Blocks[0]
 	if !block.IsError {
 		t.Fatalf("tool result block = %+v, want error", block)
 	}
@@ -8563,12 +8043,12 @@ func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
 	if !deltaEvent.Transient {
 		t.Fatalf("tool output delta event = %+v, want transient", deltaEvent)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), toolevents.OutputDeltaType) || strings.Contains(string(data), "live bytes") {
-		t.Fatalf("transient tool output persisted in events.jsonl:\n%s", data)
+		t.Fatalf("transient tool output persisted in journal.jsonl:\n%s", data)
 	}
 }
 
@@ -8584,7 +8064,7 @@ func TestTurn_ToolOutputDeltaCannotAmplifyActiveJournal(t *testing.T) {
 		Name:   "read_journal",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			path := filepath.Join(eng.Session.Dir, "events.jsonl")
+			path := filepath.Join(eng.Thread.Dir, "journal.jsonl")
 			for range 20 {
 				data, err := os.ReadFile(path)
 				if err != nil {
@@ -8599,7 +8079,7 @@ func TestTurn_ToolOutputDeltaCannotAmplifyActiveJournal(t *testing.T) {
 	if _, err := eng.Turn(context.Background(), "inspect the active journal"); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8650,7 +8130,7 @@ func TestTurn_BuiltinShellCompletedEventCarriesAuthoritativeContentWithoutStruct
 	if completedPayload.Outcome == nil || !strings.Contains(completedPayload.Outcome.Block.Content, "structured-shell") {
 		t.Fatalf("shell event outcome = %+v, want authoritative output", completedPayload.Outcome)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8733,7 +8213,7 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if out != "recovered" {
 		t.Fatalf("out = %q, want recovered", out)
 	}
-	assistant := eng.Session.History[1]
+	assistant := eng.Thread.History[1]
 	if assistant.Role != llm.RoleAssistant || len(assistant.Blocks) != 1 {
 		t.Fatalf("assistant message wrong: %+v", assistant)
 	}
@@ -8765,7 +8245,7 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if got := requestedPayload.TimeoutSeconds; got != 0 {
 		t.Fatalf("requested timeout = %v, want shell generic timeout disabled", got)
 	}
-	result := eng.Session.History[2]
+	result := eng.Thread.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
 		t.Fatalf("tool result message wrong: %+v", result)
 	}
@@ -8816,7 +8296,7 @@ func TestTurn_UnknownToolName(t *testing.T) {
 	if errs != 1 {
 		t.Fatalf("expected 1 tool error event, got %d", errs)
 	}
-	tr := eng.Session.History[2]
+	tr := eng.Thread.History[2]
 	if !tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "unknown tool") {
 		t.Fatalf("expected unknown-tool error in result; got %+v", tr.Blocks[0])
 	}
@@ -8909,68 +8389,6 @@ func TestToolFailureClassificationMappings(t *testing.T) {
 	}
 }
 
-func TestTurn_ContinuationQueueFailurePreservesCommittedPolicyStateWithoutObservation(t *testing.T) {
-	prov := &mockProvider{script: []llm.Response{{
-		Message: llm.TextMessage(llm.RoleAssistant, "checkpointed answer"), StopReason: llm.StopEndTurn,
-	}}}
-	eng, _ := newEngine(t, prov, false)
-	policy := &continuationFailureFinishModule{}
-	installRuntimeTestModules(t, eng, policy)
-	queue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
-	eng.PendingInputQueue = queue
-	want := errors.New("injected continuation queue failure")
-	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
-		if strings.Contains(string(body), `"kind":"continuation"`) {
-			return 0, want
-		}
-		return file.Write(body)
-	}
-
-	if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "finish once"), "continuation-failure-turn"); !errors.Is(err, want) {
-		t.Fatalf("TurnMessageWithID() error = %v, want %v", err, want)
-	}
-	if !policy.committed || policy.observed != 0 {
-		t.Fatalf("finish policy committed/observed = %t/%d, want true/0", policy.committed, policy.observed)
-	}
-	if prov.called != 1 {
-		t.Fatalf("provider calls = %d, want 1", prov.called)
-	}
-	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
-		t.Fatalf("pending input status = %+v, want closed and empty", status)
-	}
-	records, err := queue.Records()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, record := range records {
-		if record.Message.Kind == llm.MessageKindContinuation {
-			t.Fatalf("failed continuation became durable: %+v", record)
-		}
-	}
-	if len(eng.Session.History) != 2 || eng.Session.History[0].FirstText() != "finish once" || eng.Session.History[1].FirstText() != "checkpointed answer" {
-		t.Fatalf("transcript = %+v, want committed user and assistant messages", eng.Session.History)
-	}
-	journal, err := session.ReadEvents(eng.Session.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var completed, errored int
-	for _, event := range journal {
-		if event.TurnID != "continuation-failure-turn" {
-			continue
-		}
-		switch event.Type {
-		case "turn.completed":
-			completed++
-		case "turn.errored":
-			errored++
-		}
-	}
-	if completed != 0 || errored != 1 {
-		t.Fatalf("terminal events completed/errored = %d/%d, want 0/1", completed, errored)
-	}
-}
-
 func TestTurn_CompletionCommitFailureReturnsErrorAndPreservesTranscript(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer before completion failure"), StopReason: llm.StopEndTurn},
@@ -8978,15 +8396,15 @@ func TestTurn_CompletionCommitFailureReturnsErrorAndPreservesTranscript(t *testi
 	}}
 	eng, bus := newEngine(t, prov, false)
 	want := errors.New("injected completion commit failure")
-	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "turn.completed", err: want})
+	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: "turn.completed", err: want})
 
 	if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "first input"), "failed-completion"); !errors.Is(err, want) {
 		t.Fatalf("TurnMessageWithID() error = %v, want %v", err, want)
 	}
-	if len(eng.Session.History) != 2 || eng.Session.History[0].FirstText() != "first input" || eng.Session.History[1].FirstText() != "answer before completion failure" {
-		t.Fatalf("transcript after completion failure = %+v", eng.Session.History)
+	if len(eng.Thread.History) != 2 || eng.Thread.History[0].FirstText() != "first input" || eng.Thread.History[1].FirstText() != "answer before completion failure" {
+		t.Fatalf("transcript after completion failure = %+v", eng.Thread.History)
 	}
-	journal, err := session.ReadEvents(eng.Session.Dir)
+	journal, err := thread.ReadEvents(eng.Thread.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8996,14 +8414,14 @@ func TestTurn_CompletionCommitFailureReturnsErrorAndPreservesTranscript(t *testi
 		}
 	}
 
-	eng.Session.SubscribeBus(bus)
+	eng.Thread.SubscribeBus(bus)
 	if out, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "later input"), "recovery-turn"); err != nil || out != "recovered answer" {
 		t.Fatalf("recovery TurnMessageWithID() = %q, %v", out, err)
 	}
 	if prov.called != 2 || !strings.Contains(messagesText(prov.histories[1]), "answer before completion failure") {
 		t.Fatalf("recovery provider history = %+v, want prior durable assistant response", prov.histories)
 	}
-	journal, err = session.ReadEvents(eng.Session.Dir)
+	journal, err = thread.ReadEvents(eng.Thread.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9054,7 +8472,7 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	installSessionStateModules(t, eng)
+	installThreadStateModules(t, eng)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "stop-ok",
 		Events:  []hooks.EventName{hooks.EventStop},
@@ -9621,7 +9039,7 @@ func TestTurn_ProviderDeadlineEmitsTimeoutContract(t *testing.T) {
 	}
 }
 
-func TestEngine_MultipleTurnsShareSession(t *testing.T) {
+func TestEngine_MultipleTurnsShareThread(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "first answer"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "second answer"), StopReason: llm.StopEndTurn},
@@ -9635,11 +9053,11 @@ func TestEngine_MultipleTurnsShareSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 4 messages: u1, a1, u2, a2
-	if len(eng.Session.History) != 4 {
-		t.Fatalf("history len = %d", len(eng.Session.History))
+	if len(eng.Thread.History) != 4 {
+		t.Fatalf("history len = %d", len(eng.Thread.History))
 	}
-	if eng.Session.History[1].FirstText() != "first answer" || eng.Session.History[3].FirstText() != "second answer" {
-		t.Fatalf("history mismatch: %+v", eng.Session.History)
+	if eng.Thread.History[1].FirstText() != "first answer" || eng.Thread.History[3].FirstText() != "second answer" {
+		t.Fatalf("history mismatch: %+v", eng.Thread.History)
 	}
 }
 

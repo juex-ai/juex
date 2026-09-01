@@ -96,7 +96,7 @@ func TestNonHookPolicyFactsUseOwnedNeutralVocabulary(t *testing.T) {
 
 	_, err = runtimemodule.ApplyTurnInputPolicies(context.Background(), runtimemodule.TurnInputRequest{
 		Runtime:  eng.policyRuntimeContext(),
-		Session:  eng.policySessionContext(),
+		Thread:   eng.policyThreadContext(),
 		TurnID:   "turn-policy",
 		Message:  llm.TextMessage(llm.RoleUser, "hello"),
 		Observer: eng.policyObserver("turn-policy"),
@@ -201,10 +201,10 @@ func TestTypedPolicyLifecycleGoldenOrder(t *testing.T) {
 		order.add("turn.phase." + string(payload.Phase))
 	})
 
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "unfinished earlier request")); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, "unfinished earlier request")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+	if err := eng.Thread.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 		Type: llm.BlockToolUse, ToolUseID: "orphan", ToolName: "ordered_tool", Input: map[string]any{},
 	}}}); err != nil {
 		t.Fatal(err)
