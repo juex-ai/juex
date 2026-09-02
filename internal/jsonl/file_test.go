@@ -446,8 +446,15 @@ func TestReadersRejectCompleteMalformedRecordWithoutRepairingIt(t *testing.T) {
 	}
 	defer func() { _ = file.Close() }()
 
-	_, err = file.ReadForward(0, func(Record) error { return nil })
+	visits := 0
+	_, err = file.ReadForward(0, func(Record) error {
+		visits++
+		return nil
+	})
 	assertCorruptionOffset(t, err, int64(len(first)))
+	if visits != 1 {
+		t.Fatalf("visitor calls = %d, want one complete batch before malformed record", visits)
+	}
 	_, err = file.ReadReverse(file.Size(), 2)
 	assertCorruptionOffset(t, err, int64(len(first)))
 	got, err := os.ReadFile(path)
@@ -485,8 +492,15 @@ func TestReadersRejectBatchPositionGapAcrossPageBoundary(t *testing.T) {
 	}
 	defer func() { _ = file.Close() }()
 
-	_, err = file.ReadForward(0, func(Record) error { return nil })
+	visits := 0
+	_, err = file.ReadForward(0, func(Record) error {
+		visits++
+		return nil
+	})
 	assertCorruptionOffset(t, err, int64(len(first)))
+	if visits != 0 {
+		t.Fatalf("visitor calls = %d, want 0 before malformed batch is rejected", visits)
+	}
 	_, err = file.ReadForward(int64(len(first)), func(Record) error { return nil })
 	assertCorruptionOffset(t, err, int64(len(first)))
 	_, err = file.ReadReverse(file.Size(), 2)

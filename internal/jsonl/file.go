@@ -231,9 +231,10 @@ func (f *File) Append(records ...json.RawMessage) (Batch, error) {
 	return Batch{Start: start, End: f.size, Count: len(records)}, nil
 }
 
-// ReadForward visits validated records from start through the committed file
-// boundary. It returns the byte boundary after the last record accepted by the
-// visitor. The visitor must not call methods on f.
+// ReadForward visits records from start through the committed file boundary.
+// Each complete batch is validated before any of its records are visited. It
+// returns the byte boundary after the last record accepted by the visitor. The
+// visitor must not call methods on f.
 func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error) {
 	if visit == nil {
 		return start, errors.New("jsonl: visitor is required")
@@ -253,19 +254,7 @@ func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error)
 	committed := start
 	offset := start
 	var previous *diskRecord
-	if start > 0 && start < f.size {
-		line, previousStart, err := f.previousLineLocked(start)
-		if err != nil {
-			return committed, err
-		}
-		value, err := decodeDiskRecord(line, previousStart)
-		if err != nil {
-			return committed, err
-		}
-		previous = &value
-	}
-	visited := false
-	lastOffset := start
+	var pending []Record
 	for offset < f.size {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
@@ -276,27 +265,30 @@ func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error)
 		if err != nil {
 			return committed, err
 		}
-		if previous == nil {
-			if err := validateBatchStart(disk, offset); err != nil {
+		if offset == start {
+			if err := f.validateForwardStartLocked(start, disk); err != nil {
 				return committed, err
 			}
 		} else if err := validateBatchAdjacent(*previous, disk, offset); err != nil {
 			return committed, err
 		}
 		record := Record{Start: offset, End: end, Data: append(json.RawMessage(nil), disk.Data...)}
-		if err := visit(record); err != nil {
-			return committed, err
-		}
-		committed = end
+		pending = append(pending, record)
 		offset = end
 		previous = &disk
-		visited = true
-		lastOffset = record.Start
-	}
-	if visited {
-		if err := validateBatchEnd(*previous, lastOffset); err != nil {
-			return committed, err
+		if disk.Index != disk.Count-1 {
+			continue
 		}
+		for _, pendingRecord := range pending {
+			if err := visit(pendingRecord); err != nil {
+				return committed, err
+			}
+			committed = pendingRecord.End
+		}
+		pending = nil
+	}
+	if len(pending) > 0 {
+		return committed, validateBatchEnd(*previous, pending[len(pending)-1].Start)
 	}
 	return committed, nil
 }
@@ -763,6 +755,43 @@ func (f *File) validatePageBoundariesLocked(records []decodedRecord, start, end 
 		return err
 	}
 	return validateBatchAdjacent(last.Disk, next, end)
+}
+
+func (f *File) validateForwardStartLocked(start int64, current diskRecord) error {
+	currentStart := start
+	for current.Index > 0 {
+		if currentStart == 0 {
+			return &CorruptionError{
+				Offset: currentStart,
+				Err:    fmt.Errorf("batch starts at position %d of %d", current.Index, current.Count),
+			}
+		}
+		line, candidateStart, err := f.previousLineLocked(currentStart)
+		if err != nil {
+			return err
+		}
+		candidate, err := decodeDiskRecord(line, candidateStart)
+		if err != nil {
+			return err
+		}
+		if err := validateBatchAdjacent(candidate, current, currentStart); err != nil {
+			return err
+		}
+		current = candidate
+		currentStart = candidateStart
+	}
+	if currentStart == 0 {
+		return validateBatchStart(current, currentStart)
+	}
+	line, candidateStart, err := f.previousLineLocked(currentStart)
+	if err != nil {
+		return err
+	}
+	candidate, err := decodeDiskRecord(line, candidateStart)
+	if err != nil {
+		return err
+	}
+	return validateBatchAdjacent(candidate, current, currentStart)
 }
 
 func (f *File) previousLineLocked(end int64) ([]byte, int64, error) {
