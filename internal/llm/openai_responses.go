@@ -290,7 +290,7 @@ func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) respo
 					imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
 					contentParts = append(contentParts, imagePart)
 				} else {
-					textParts = append(textParts, mediaReferenceText("image", b.Media))
+					textParts = append(textParts, unavailableMediaReferenceText("image", b.Media))
 				}
 			case BlockToolUse:
 				flushMessage()
@@ -298,19 +298,24 @@ func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) respo
 			case BlockToolResult:
 				flushMessage()
 				content := b.Content
+				var dataURL string
+				var mediaAvailable bool
 				if b.Media != nil {
-					content = toolResultContentWithMediaReference(b)
+					dataURL, mediaAvailable = imageDataURL(profile.MediaDir, b.Media)
+					if mediaAvailable {
+						content = toolResultContentWithMediaReference(b)
+					} else {
+						content = toolResultContentWithUnavailableMediaReference(b)
+					}
 				}
 				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(boundedOpenAIResponsesToolCallID(b.ToolUseID), content))
-				if b.Media != nil {
-					if dataURL, ok := imageDataURL(profile.MediaDir, b.Media); ok {
-						imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
-						imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
-						out = appendResponseMessage(out, RoleUser, nil, responses.ResponseInputMessageContentListParam{
-							responses.ResponseInputContentParamOfInputText(openAIToolResultImageAttribution(b)),
-							imagePart,
-						})
-					}
+				if mediaAvailable {
+					imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
+					imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
+					out = appendResponseMessage(out, RoleUser, nil, responses.ResponseInputMessageContentListParam{
+						responses.ResponseInputContentParamOfInputText(openAIToolResultImageAttribution(b)),
+						imagePart,
+					})
 				}
 			case BlockReasoning:
 				if b.Signature == "" {

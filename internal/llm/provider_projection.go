@@ -69,7 +69,7 @@ func projectProviderBlock(b Block, profile ProviderProfile) Block {
 		}
 	case BlockToolResult:
 		if b.Media != nil && !profile.Capabilities.Vision {
-			b.Content = toolResultContentWithMediaReference(b)
+			b.Content = toolResultContentWithUnavailableMediaReference(b)
 			b.Media = nil
 		}
 	}

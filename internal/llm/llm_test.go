@@ -497,6 +497,9 @@ func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
 	if len(toolInner) != 2 || toolInner[1].(map[string]any)["type"] != "image" {
 		t.Fatalf("tool result image content = %+v", toolInner)
 	}
+	if strings.Contains(fmt.Sprint(messages), "cannot view image content") {
+		t.Fatalf("vision-capable anthropic request contains unavailable-image guidance: %+v", messages)
+	}
 }
 
 func TestAnthropic_MalformedStreamChunkReturnsDiagnosticError(t *testing.T) {
@@ -1821,6 +1824,44 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 	if len(syntheticParts) != 2 || syntheticParts[0].(map[string]any)["text"] != "Tool result image from render_chart (call_1)." || syntheticParts[1].(map[string]any)["type"] != "image_url" {
 		t.Fatalf("synthetic user image message = %+v", captured.Messages[4])
 	}
+	if strings.Contains(fmt.Sprint(captured.Messages), "cannot view image content") {
+		t.Fatalf("vision-capable chat request contains unavailable-image guidance: %+v", captured.Messages)
+	}
+}
+
+func TestOpenAI_VisionCapableToolResultWarnsWhenImageUnavailable(t *testing.T) {
+	_, artifactDir := testImageMedia(t)
+	var captured struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(testBlockingProfile(t, Config{
+		Protocol:     string(ProtocolOpenAIChat),
+		BaseURL:      srv.URL,
+		APIKey:       "k",
+		Model:        "m",
+		MediaDir:     artifactDir,
+		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
+	}), nil)
+	missing := &MediaRef{ArtifactPath: "missing.png", MediaType: "image/png", SHA256: strings.Repeat("0", 64), OriginalBytes: 10}
+	hist := []Message{
+		TextMessage(RoleUser, "look"),
+		{Role: RoleAssistant, Blocks: []Block{{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "read", Input: map[string]any{"path": "missing.png"}}}},
+		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", ToolName: "read", Content: "image", Media: missing}}},
+	}
+	if _, err := p.Complete(context.Background(), "", hist, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if !strings.Contains(fmt.Sprint(captured.Messages), "cannot view image content") {
+		t.Fatalf("unavailable tool result image missing guidance: %+v", captured.Messages)
+	}
 }
 
 func TestNewProvider_Errors(t *testing.T) {
@@ -2510,6 +2551,9 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 	if input[2].(map[string]any)["type"] != "function_call_output" || !strings.Contains(fmt.Sprint(input[2].(map[string]any)["output"]), "tool_result_image") {
 		t.Fatalf("responses tool result output = %+v", input[2])
 	}
+	if strings.Contains(fmt.Sprint(input[2].(map[string]any)["output"]), "cannot view image content") {
+		t.Fatalf("vision-capable responses tool result contains unavailable-image guidance: %+v", input[2])
+	}
 	toolImageMessage, _ := input[3].(map[string]any)
 	if toolImageMessage["role"] != "user" {
 		t.Fatalf("responses tool result image message = %+v", toolImageMessage)
@@ -2523,6 +2567,58 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 	}
 	if !strings.HasPrefix(fmt.Sprint(toolImageContent[1].(map[string]any)["image_url"]), "data:image/png;base64,") {
 		t.Fatalf("responses tool result input_image = %+v", toolImageContent[1])
+	}
+	if strings.Contains(fmt.Sprint(input), "cannot view image content") {
+		t.Fatalf("vision-capable responses request contains unavailable-image guidance: %+v", input)
+	}
+}
+
+func TestOpenAICodexResponses_ProjectsUserAndToolResultImages(t *testing.T) {
+	media, artifactDir := testImageMedia(t)
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICodexResponses(testProfile(t, Config{
+		ID:           "openai-codex",
+		Protocol:     string(ProtocolOpenAICodexResponses),
+		BaseURL:      srv.URL,
+		APIKey:       "codex-token",
+		Model:        "gpt-test",
+		MediaDir:     artifactDir,
+		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
+	}), nil)
+	hist := []Message{
+		{Role: RoleUser, Blocks: []Block{{Type: BlockText, Text: "look"}, {Type: BlockImage, Media: media}}},
+		{Role: RoleAssistant, Blocks: []Block{{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "read", Input: map[string]any{"path": "image.png"}}}},
+		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", ToolName: "read", Content: "image", Media: media}}},
+	}
+	if _, err := p.Complete(context.Background(), "", hist, []ToolSpec{{Name: "read", Schema: map[string]any{"type": "object"}}}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	input, _ := capturedBody["input"].([]any)
+	if len(input) != 4 {
+		t.Fatalf("input = %+v", input)
+	}
+	attachmentContent, _ := input[0].(map[string]any)["content"].([]any)
+	if len(attachmentContent) != 2 || attachmentContent[1].(map[string]any)["type"] != "input_image" {
+		t.Fatalf("codex attachment content = %+v", attachmentContent)
+	}
+	if input[2].(map[string]any)["type"] != "function_call_output" || !strings.Contains(fmt.Sprint(input[2].(map[string]any)["output"]), "tool_result_image") {
+		t.Fatalf("codex tool result output = %+v", input[2])
+	}
+	toolImageContent, _ := input[3].(map[string]any)["content"].([]any)
+	if len(toolImageContent) != 2 || toolImageContent[1].(map[string]any)["type"] != "input_image" {
+		t.Fatalf("codex tool result image content = %+v", toolImageContent)
+	}
+	if strings.Contains(fmt.Sprint(input), "cannot view image content") {
+		t.Fatalf("vision-capable codex request contains unavailable-image guidance: %+v", input)
 	}
 }
 

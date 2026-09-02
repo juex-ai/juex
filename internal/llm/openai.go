@@ -226,21 +226,26 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					if userText.Len() > 0 {
 						userText.WriteString("\n")
 					}
-					userText.WriteString(mediaReferenceText("image", b.Media))
+					userText.WriteString(unavailableMediaReferenceText("image", b.Media))
 				case BlockToolResult:
 					flushUser()
 					content := b.Content
+					var dataURL string
+					var mediaAvailable bool
 					if b.Media != nil {
-						content = toolResultContentWithMediaReference(b)
+						dataURL, mediaAvailable = imageDataURL(profile.MediaDir, b.Media)
+						if mediaAvailable {
+							content = toolResultContentWithMediaReference(b)
+						} else {
+							content = toolResultContentWithUnavailableMediaReference(b)
+						}
 					}
 					out = append(out, openai.ToolMessage(content, b.ToolUseID))
-					if b.Media != nil {
-						if dataURL, ok := imageDataURL(profile.MediaDir, b.Media); ok {
-							deferredUserMessages = append(deferredUserMessages, openAIUserContentPartsMessage([]openai.ChatCompletionContentPartUnionParam{
-								openai.TextContentPart(openAIToolResultImageAttribution(b)),
-								openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
-							}))
-						}
+					if mediaAvailable {
+						deferredUserMessages = append(deferredUserMessages, openAIUserContentPartsMessage([]openai.ChatCompletionContentPartUnionParam{
+							openai.TextContentPart(openAIToolResultImageAttribution(b)),
+							openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
+						}))
 					}
 				}
 			}

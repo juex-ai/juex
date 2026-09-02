@@ -14,21 +14,29 @@ import (
 const maxProviderImageArtifactBytes = 10 * 1024 * 1024
 
 func imagePlaceholderBlock(b Block) Block {
-	return Block{Type: BlockText, Text: mediaReferenceText("image", b.Media)}
+	return Block{Type: BlockText, Text: unavailableMediaReferenceText("image", b.Media)}
 }
 
 func toolResultContentWithMediaReference(b Block) string {
 	ref := mediaReferenceText("tool_result_image", b.Media)
-	if strings.TrimSpace(b.Content) == "" {
+	return appendMediaReference(b.Content, ref)
+}
+
+func toolResultContentWithUnavailableMediaReference(b Block) string {
+	ref := unavailableMediaReferenceText("tool_result_image", b.Media)
+	return appendMediaReference(b.Content, ref)
+}
+
+func appendMediaReference(content, ref string) string {
+	if strings.TrimSpace(content) == "" {
 		return ref
 	}
-	return b.Content + "\n" + ref
+	return content + "\n" + ref
 }
 
 func mediaReferenceText(label string, media *MediaRef) string {
-	const unavailable = "the current model cannot view image content; state that you cannot see the image instead of guessing"
 	if media == nil {
-		return "[" + label + ": missing media reference; " + unavailable + "]"
+		return "[" + label + ": missing media reference]"
 	}
 	parts := make([]string, 0, 6)
 	if media.ArtifactPath != "" {
@@ -47,9 +55,14 @@ func mediaReferenceText(label string, media *MediaRef) string {
 		parts = append(parts, fmt.Sprintf("size=%dx%d", media.Width, media.Height))
 	}
 	if len(parts) == 0 {
-		return "[" + label + ": empty media reference; " + unavailable + "]"
+		return "[" + label + ": empty media reference]"
 	}
-	return "[" + label + ": " + strings.Join(parts, " ") + "; " + unavailable + "]"
+	return "[" + label + ": " + strings.Join(parts, " ") + "]"
+}
+
+func unavailableMediaReferenceText(label string, media *MediaRef) string {
+	const guidance = "the current model cannot view image content; state that you cannot see the image instead of guessing"
+	return strings.TrimSuffix(mediaReferenceText(label, media), "]") + "; " + guidance + "]"
 }
 
 func imageDataURL(mediaDir string, media *MediaRef) (string, bool) {
