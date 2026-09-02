@@ -725,36 +725,11 @@ func (f *File) validatePageBoundariesLocked(records []decodedRecord, start, end 
 		}
 	}
 	first := records[0]
-	if start == 0 {
-		if err := validateBatchStart(first.Disk, first.Record.Start); err != nil {
-			return err
-		}
-	} else {
-		line, previousStart, err := f.previousLineLocked(start)
-		if err != nil {
-			return err
-		}
-		previous, err := decodeDiskRecord(line, previousStart)
-		if err != nil {
-			return err
-		}
-		if err := validateBatchAdjacent(previous, first.Disk, first.Record.Start); err != nil {
-			return err
-		}
+	if err := f.validateForwardStartLocked(start, first.Disk); err != nil {
+		return err
 	}
 	last := records[len(records)-1]
-	if end == f.size {
-		return validateBatchEnd(last.Disk, last.Record.Start)
-	}
-	line, err := f.nextLineLocked(end)
-	if err != nil {
-		return err
-	}
-	next, err := decodeDiskRecord(line, end)
-	if err != nil {
-		return err
-	}
-	return validateBatchAdjacent(last.Disk, next, end)
+	return f.validateReverseEndLocked(last.Record.Start, end, last.Disk)
 }
 
 func (f *File) validateForwardStartLocked(start int64, current diskRecord) error {
@@ -792,6 +767,42 @@ func (f *File) validateForwardStartLocked(start int64, current diskRecord) error
 		return err
 	}
 	return validateBatchAdjacent(candidate, current, currentStart)
+}
+
+func (f *File) validateReverseEndLocked(start, end int64, current diskRecord) error {
+	currentStart := start
+	currentEnd := end
+	for current.Index < current.Count-1 {
+		if currentEnd == f.size {
+			return validateBatchEnd(current, currentStart)
+		}
+		line, err := f.nextLineLocked(currentEnd)
+		if err != nil {
+			return err
+		}
+		next, err := decodeDiskRecord(line, currentEnd)
+		if err != nil {
+			return err
+		}
+		if err := validateBatchAdjacent(current, next, currentEnd); err != nil {
+			return err
+		}
+		current = next
+		currentStart = currentEnd
+		currentEnd += int64(len(line)) + 1
+	}
+	if currentEnd == f.size {
+		return validateBatchEnd(current, currentStart)
+	}
+	line, err := f.nextLineLocked(currentEnd)
+	if err != nil {
+		return err
+	}
+	next, err := decodeDiskRecord(line, currentEnd)
+	if err != nil {
+		return err
+	}
+	return validateBatchAdjacent(current, next, currentEnd)
 }
 
 func (f *File) previousLineLocked(end int64) ([]byte, int64, error) {

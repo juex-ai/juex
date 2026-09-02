@@ -514,6 +514,87 @@ func TestReadersRejectBatchPositionGapAcrossPageBoundary(t *testing.T) {
 	}
 }
 
+func TestReadReverseRejectsMalformedBatchAcrossPageBoundaries(t *testing.T) {
+	t.Parallel()
+	t.Run("page starts at batch end", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "events.jsonl")
+		first := mustEncodeDiskRecord(t, diskRecord{
+			Version: diskVersion,
+			Index:   0,
+			Count:   4,
+			Data:    json.RawMessage(`{"id":1}`),
+		})
+		third := mustEncodeDiskRecord(t, diskRecord{
+			Version: diskVersion,
+			Index:   2,
+			Count:   4,
+			Data:    json.RawMessage(`{"id":3}`),
+		})
+		fourth := mustEncodeDiskRecord(t, diskRecord{
+			Version: diskVersion,
+			Index:   3,
+			Count:   4,
+			Data:    json.RawMessage(`{"id":4}`),
+		})
+		tail := mustEncodeBatch(t, json.RawMessage(`{"id":5}`))
+		body := bytes.Join([][]byte{first, third, fourth, tail}, nil)
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		file, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = file.Close() }()
+
+		page, err := file.ReadReverse(file.Size(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertRecordData(t, page.Records, `{"id":5}`)
+		if !page.HasPrevious {
+			t.Fatal("tail page has no previous page")
+		}
+		_, err = file.ReadReverse(page.PreviousEnd, 1)
+		assertCorruptionOffset(t, err, int64(len(first)))
+	})
+
+	t.Run("page ends at batch start", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "events.jsonl")
+		first := mustEncodeDiskRecord(t, diskRecord{
+			Version: diskVersion,
+			Index:   0,
+			Count:   4,
+			Data:    json.RawMessage(`{"id":1}`),
+		})
+		second := mustEncodeDiskRecord(t, diskRecord{
+			Version: diskVersion,
+			Index:   1,
+			Count:   4,
+			Data:    json.RawMessage(`{"id":2}`),
+		})
+		fourth := mustEncodeDiskRecord(t, diskRecord{
+			Version: diskVersion,
+			Index:   3,
+			Count:   4,
+			Data:    json.RawMessage(`{"id":4}`),
+		})
+		tail := mustEncodeBatch(t, json.RawMessage(`{"id":5}`))
+		body := bytes.Join([][]byte{first, second, fourth, tail}, nil)
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		file, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = file.Close() }()
+
+		_, err = file.ReadReverse(int64(len(first)), 1)
+		assertCorruptionOffset(t, err, int64(len(first)+len(second)))
+	})
+}
+
 func TestReadersRejectBatchThatStartsMidSequence(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "events.jsonl")
