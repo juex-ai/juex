@@ -1,7 +1,6 @@
-// Local replacements for type-only imports that AI Elements pulls from
-// the "ai" package. The juex spec §6 explains why we don't depend on
-// the ai-sdk runtime package:
-// docs/superpowers/specs/2026-05-12-web-ui-framework-design.md
+// Local replacements for the type-only "ai" imports used by copied AI
+// Elements components. Juex does not otherwise use that runtime package, so
+// keep these narrow structural types instead of adding an unused dependency.
 
 export type UIMessageRole = "user" | "assistant" | "system";
 
