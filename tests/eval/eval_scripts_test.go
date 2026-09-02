@@ -3467,6 +3467,50 @@ func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestCompactionEvalSeedsMetadataWithJournalCommit(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    marker = work / '.juex' / 'juex.local.json'",
+		"    marker.parent.mkdir(parents=True)",
+		"    marker.write_text(json.dumps({'agent_id': 'abcd23'}), encoding='utf-8')",
+		"    thread = work / 'home' / '.juex' / 'agents' / 'abcd23' / 'threads' / '0'",
+		"    thread.mkdir(parents=True)",
+		"    commit = {'v': 1, 'seq': 1, 'at': '2026-09-01T00:00:00.000Z', 'facts': [{'type': 'thread.created'}]}",
+		"    journal_line = json.dumps(commit, separators=(',', ':')) + '\\n'",
+		"    journal = thread / 'journal.jsonl'",
+		"    journal.write_text(journal_line, encoding='utf-8')",
+		"    metadata = {'updated_at': '2026-09-01T00:00:00.000Z', 'last_activity_at': '2026-09-01T00:00:00.000Z', 'revision': 3, 'journal': {'projected_seq': 1, 'projected_offset': len(journal_line.encode('utf-8'))}}",
+		"    metadata_path = thread / 'thread.json'",
+		"    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')",
+		"    compaction.seed_authoritative_state(work)",
+		"    commits = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines()]",
+		"    seeded = json.loads(metadata_path.read_text(encoding='utf-8'))",
+		"    assert len(commits) == 2 and commits[-1]['seq'] == 2, commits",
+		"    assert [fact['type'] for fact in commits[-1]['facts']] == ['goal.updated', 'notes.updated'], commits[-1]",
+		"    assert seeded['goal'] == compaction.AUTHORITATIVE_GOAL, seeded",
+		"    assert seeded['notes'] == compaction.AUTHORITATIVE_NOTES, seeded",
+		"    assert seeded['notes_updated_at'] == commits[-1]['at'], seeded",
+		"    assert seeded['updated_at'] == commits[-1]['at'] and seeded['last_activity_at'] == commits[-1]['at'], seeded",
+		"    assert seeded['revision'] == 4, seeded",
+		"    assert seeded['journal']['projected_seq'] == 2, seeded",
+		"    assert seeded['journal']['projected_offset'] == journal.stat().st_size, seeded",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestEvalWriteSelectedConfigUsesColonModelRef(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")

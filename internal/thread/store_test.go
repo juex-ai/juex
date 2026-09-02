@@ -125,6 +125,34 @@ func TestInputLifecycleAndGenerationProjection(t *testing.T) {
 	}
 }
 
+func TestStoreReopensSemanticallyEquivalentGoalMetadata(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal := json.RawMessage(`{"version":1,"description":"preserve semantic JSON"}`)
+	if _, err := main.AppendFacts(Fact{Type: FactGoalUpdated, Goal: goal}); err != nil {
+		t.Fatal(err)
+	}
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(store.ThreadsDir(), MainID, projectionFile)
+	metadata := mustReadProjection(t, metadataPath)
+	metadata.Goal = json.RawMessage(`{"description":"preserve semantic JSON","version":1}`)
+	mustWriteJSON(t, metadataPath, metadata)
+
+	reopened, err := NewStore(store.AgentStateDir()).OpenActive(MainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if !json.Valid(reopened.Projection().Goal) {
+		t.Fatalf("reopened Goal is invalid: %s", reopened.Projection().Goal)
+	}
+}
+
 func TestInvalidInputTransitionIsRejectedBeforeJournalCommit(t *testing.T) {
 	t.Parallel()
 	store := NewStore(t.TempDir())

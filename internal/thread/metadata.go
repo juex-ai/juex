@@ -118,7 +118,7 @@ func applyAuthoritativeProjection(state *ReplayState, metadata Projection) error
 		!reflect.DeepEqual(replayed.Generations, metadata.Generations) ||
 		replayed.CurrentGeneration != metadata.CurrentGeneration ||
 		replayed.Counts != metadata.Counts ||
-		!bytes.Equal(replayed.Goal, metadata.Goal) ||
+		!rawJSONEqual(replayed.Goal, metadata.Goal) ||
 		replayed.Notes != metadata.Notes ||
 		!timestampsEqual(replayed.NotesUpdatedAt, metadata.NotesUpdatedAt) ||
 		replayed.TokenUsage != metadata.TokenUsage ||
@@ -128,6 +128,17 @@ func applyAuthoritativeProjection(state *ReplayState, metadata Projection) error
 	}
 	state.Projection = cloneProjection(metadata)
 	return nil
+}
+
+func rawJSONEqual(left, right json.RawMessage) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return len(left) == 0 && len(right) == 0
+	}
+	var leftValue, rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
 }
 
 func timestampsEqual(left, right *Timestamp) bool {
