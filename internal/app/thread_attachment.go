@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/thread"
@@ -32,6 +33,7 @@ func AttachWorkspaceThread(cfg config.Config, request ThreadAttachmentRequest) (
 	if err := store.RecoverLayout(); err != nil {
 		return ThreadAttachment{}, err
 	}
+	request.Alias = strings.TrimSpace(request.Alias)
 
 	var target *thread.Thread
 	created := false
