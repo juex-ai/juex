@@ -155,7 +155,11 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	httpServer := httptest.NewServer(server.Handler())
 
 	var created thread.Info
-	e2eThreadJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{"alias":"before"}`, http.StatusCreated, &created)
+	e2eThreadJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{"alias":" before "}`, http.StatusCreated, &created)
+	if created.Alias != "before" {
+		t.Fatalf("canonical created alias = %q", created.Alias)
+	}
+	e2eThreadJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{"alias":"#reserved"}`, http.StatusBadRequest, nil)
 	store := thread.NewStore(cfg.RuntimePaths().StateDir)
 	target, err := store.OpenActive(created.ID)
 	if err != nil {
@@ -182,10 +186,11 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	}
 
 	var renamed thread.Info
-	e2eThreadJSON(t, http.MethodPatch, httpServer.URL+"/api/threads/"+created.ID, `{"alias":"after"}`, http.StatusOK, &renamed)
+	e2eThreadJSON(t, http.MethodPatch, httpServer.URL+"/api/threads/"+created.ID, `{"alias":" after "}`, http.StatusOK, &renamed)
 	if renamed.Alias != "after" {
 		t.Fatalf("renamed Thread = %+v", renamed)
 	}
+	e2eThreadJSON(t, http.MethodPatch, httpServer.URL+"/api/threads/"+created.ID, `{"alias":"#reserved"}`, http.StatusConflict, nil)
 	e2eThreadJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/archive", "", http.StatusOK, nil)
 	httpServer.Close()
 	server.Close()

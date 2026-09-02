@@ -27,6 +27,7 @@ type Store struct {
 	writeIndex      func(string, []byte) error
 	writeProjection func(string, []byte) error
 	syncDir         func(string) error
+	openPublished   func(string, string) (*Thread, error)
 }
 
 var storeLocks sync.Map
@@ -173,11 +174,6 @@ func (s *Store) OpenArchived(id string) (*Thread, error) {
 
 func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 	threadsDir := s.ThreadsDir()
-	_, statErr := os.Stat(threadsDir)
-	threadsDirCreated := errors.Is(statErr, os.ErrNotExist)
-	if statErr != nil && !threadsDirCreated {
-		return nil, statErr
-	}
 	if err := os.MkdirAll(threadsDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -243,15 +239,25 @@ func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 	if err := s.syncDirectory(threadsDir); err != nil {
 		return nil, s.rollbackPublishedThread(destination, threadsDir, err)
 	}
-	if threadsDirCreated {
-		if err := s.syncDirectory(filepath.Dir(threadsDir)); err != nil {
-			return nil, s.rollbackPublishedThread(destination, threadsDir, err)
-		}
+	if err := s.syncDirectory(filepath.Dir(threadsDir)); err != nil {
+		return nil, s.rollbackPublishedThread(destination, threadsDir, err)
+	}
+	created, err := s.openPublishedThreadLocked(destination, id)
+	if err != nil {
+		return nil, s.rollbackPublishedThread(destination, threadsDir, err)
 	}
 	if err := s.updateProjectionLocked(); err != nil {
+		_ = created.Close()
 		return nil, err
 	}
-	return s.openLocked(destination, id)
+	return created, nil
+}
+
+func (s *Store) openPublishedThreadLocked(dir, id string) (*Thread, error) {
+	if s.openPublished != nil {
+		return s.openPublished(dir, id)
+	}
+	return s.openThreadLocked(dir, id)
 }
 
 func (s *Store) syncDirectory(path string) error {
@@ -283,6 +289,18 @@ func (s *Store) persistInitialProjectionLocked(thread *Thread) error {
 }
 
 func (s *Store) openLocked(dir, id string) (*Thread, error) {
+	thread, err := s.openThreadLocked(dir, id)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.loadOrRebuildIndexLocked(); err != nil {
+		_ = thread.Close()
+		return nil, err
+	}
+	return thread, nil
+}
+
+func (s *Store) openThreadLocked(dir, id string) (*Thread, error) {
 	if !ValidID(id) || filepath.Base(dir) != id {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidID, id)
 	}
@@ -307,10 +325,6 @@ func (s *Store) openLocked(dir, id string) (*Thread, error) {
 	}
 	thread := &Thread{ID: id, Dir: dir, journal: journal, state: state, store: s}
 	thread.refreshPublicLocked()
-	if _, err := s.loadOrRebuildIndexLocked(); err != nil {
-		_ = thread.Close()
-		return nil, err
-	}
 	return thread, nil
 }
 

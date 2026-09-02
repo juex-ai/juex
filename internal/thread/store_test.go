@@ -547,11 +547,21 @@ func TestStoreCreationFailureDoesNotPublishIncompleteThread(t *testing.T) {
 		}
 
 		store.writeProjection = nil
+		parentSynced := false
+		store.syncDir = func(path string) error {
+			if path == store.AgentStateDir() {
+				parentSynced = true
+			}
+			return nil
+		}
 		main, err := store.EnsureMain()
 		if err != nil {
 			t.Fatalf("retry EnsureMain: %v", err)
 		}
 		defer func() { _ = main.Close() }()
+		if !parentSynced {
+			t.Fatal("retry did not sync the Agent state directory")
+		}
 	})
 
 	t.Run("Worker", func(t *testing.T) {
@@ -579,6 +589,35 @@ func TestStoreCreationFailureDoesNotPublishIncompleteThread(t *testing.T) {
 		}
 		defer func() { _ = worker.Close() }()
 	})
+}
+
+func TestStoreReopenFailureRollsBackPublishedWorker(t *testing.T) {
+	store := NewStore(t.TempDir())
+	store.random = zeroReader{}
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+
+	injected := errors.New("injected reopen failure")
+	store.openPublished = func(string, string) (*Thread, error) { return nil, injected }
+	if _, err := store.CreateWorker(MainID, "retry-worker"); !errors.Is(err, injected) {
+		t.Fatalf("CreateWorker error = %v, want injected failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.ThreadsDir(), "000000")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("published Worker after failed reopen: %v", err)
+	}
+
+	store.openPublished = nil
+	worker, err := store.CreateWorker(MainID, "retry-worker")
+	if err != nil {
+		t.Fatalf("retry CreateWorker: %v", err)
+	}
+	defer func() { _ = worker.Close() }()
+	if worker.ID != "000000" || worker.Alias != "retry-worker" {
+		t.Fatalf("retry Worker = %+v", worker.Info())
+	}
 }
 
 func TestStorePublicationSyncFailureRollsBackThread(t *testing.T) {
