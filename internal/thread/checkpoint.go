@@ -11,9 +11,15 @@ import (
 const checkpointInterval = uint64(256)
 
 func checkpointFromState(state ReplayState) ReplayCheckpoint {
+	projection := cloneProjection(state.Projection)
+	// The complete Generation registry is authoritative in thread.json. A
+	// checkpoint needs only the current Generation and aggregate count to replay
+	// its suffix; retaining every historical entry would make boundary-triggered
+	// checkpoints grow quadratically.
+	projection.Generations = nil
 	checkpoint := ReplayCheckpoint{
 		Version:          ProjectionVersion,
-		Projection:       cloneProjection(state.Projection),
+		Projection:       projection,
 		ProviderMessages: append([]llm.Message(nil), state.ProviderMessages...),
 		Inputs:           map[string]InputProjection{},
 		InputRecords:     map[string]json.RawMessage{},
@@ -55,8 +61,7 @@ func replayStateFromCheckpoint(threadID string, scanned scannedCommit, checkpoin
 		return ReplayState{}, fmt.Errorf("%w: unsupported checkpoint version", ErrCorruptJournal)
 	}
 	projection := checkpoint.Projection
-	if projection.ThreadID != threadID || projection.Revision+1 != scanned.Seq ||
-		projection.Journal.ProjectedSeq != projection.Revision ||
+	if projection.ThreadID != threadID || projection.Journal.ProjectedSeq+1 != scanned.Seq ||
 		projection.Journal.ProjectedOffset != scanned.StartOffset {
 		return ReplayState{}, fmt.Errorf("%w: checkpoint sequence or Thread identity mismatch", ErrCorruptJournal)
 	}
@@ -121,8 +126,7 @@ func factsRequireCheckpoint(facts []Fact) bool {
 	for _, fact := range facts {
 		switch fact.Type {
 		case FactTurnCompleted, FactTurnFailed, FactTurnCancelled,
-			FactContextRenewed, FactContextCompacted,
-			FactThreadArchived, FactThreadUnarchived:
+			FactContextRenewed, FactContextCompacted:
 			return true
 		}
 	}

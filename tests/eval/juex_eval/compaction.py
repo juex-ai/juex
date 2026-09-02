@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import pathlib
@@ -573,7 +574,19 @@ def seed_authoritative_state(work: pathlib.Path) -> None:
     ]
     if not commits or not isinstance(commits[-1].get("seq"), int):
         raise ValueError("Thread Journal has no valid commit sequence")
-    now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    metadata_path = journal.with_name("thread.json")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Thread metadata is unavailable for authoritative state seed") from exc
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("journal"), dict):
+        raise ValueError("Thread metadata has no Journal cursor")
+    projected = metadata["journal"]
+    journal_size = journal.stat().st_size
+    if projected.get("projected_seq") != commits[-1]["seq"] or projected.get("projected_offset") != journal_size:
+        raise ValueError("Thread metadata Journal cursor is stale before authoritative state seed")
+
+    now = metadata_timestamp_after(metadata.get("updated_at"), metadata.get("last_activity_at"))
     commit = {
         "v": 1,
         "seq": commits[-1]["seq"] + 1,
@@ -587,8 +600,52 @@ def seed_authoritative_state(work: pathlib.Path) -> None:
             },
         ],
     }
-    with journal.open("a", encoding="utf-8") as output:
-        output.write(json.dumps(commit, ensure_ascii=False, separators=(",", ":")) + "\n")
+    line = (json.dumps(commit, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    with journal.open("ab") as output:
+        output.write(line)
+        output.flush()
+        os.fsync(output.fileno())
+
+    metadata["goal"] = AUTHORITATIVE_GOAL
+    metadata["notes"] = AUTHORITATIVE_NOTES
+    metadata["notes_updated_at"] = now
+    metadata["updated_at"] = now
+    metadata["last_activity_at"] = now
+    metadata["revision"] = int(metadata.get("revision") or 0) + 1
+    projected["projected_seq"] = commit["seq"]
+    projected["projected_offset"] = journal_size + len(line)
+    write_json_atomic(metadata_path, metadata)
+
+
+def metadata_timestamp_after(*values: object) -> str:
+    candidates = [datetime.datetime.now(datetime.timezone.utc)]
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("Thread metadata timestamp is missing")
+        try:
+            parsed = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=datetime.timezone.utc)
+        except ValueError as exc:
+            raise ValueError(f"invalid Thread metadata timestamp {value!r}") from exc
+        candidates.append(parsed + datetime.timedelta(milliseconds=1))
+    selected = max(candidates)
+    selected = selected.replace(microsecond=(selected.microsecond // 1000) * 1000)
+    return selected.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def write_json_atomic(path: pathlib.Path, value: object) -> None:
+    payload = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    temp_path: pathlib.Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=f".{path.name}.", delete=False) as output:
+            temp_path = pathlib.Path(output.name)
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def score_authoritative_state(work: pathlib.Path, answer: str) -> dict:

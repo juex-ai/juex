@@ -13,14 +13,12 @@ import (
 const (
 	JournalVersion    = 1
 	ProjectionVersion = 1
+	IndexVersion      = 1
 	InitialGeneration = "g000001"
 )
 
 const (
 	FactThreadCreated      = "thread.created"
-	FactThreadRenamed      = "thread.renamed"
-	FactThreadArchived     = "thread.archived"
-	FactThreadUnarchived   = "thread.unarchived"
 	FactMessageAppended    = "message.appended"
 	FactEventRecorded      = "event.recorded"
 	FactInputAccepted      = "input.accepted"
@@ -70,6 +68,7 @@ var (
 	ErrInvalidFact       = errors.New("thread: invalid fact")
 	ErrInvalidTransition = errors.New("thread: invalid transition")
 	ErrProjectionStale   = errors.New("thread: projection persistence failed after journal commit")
+	ErrStaleHandle       = errors.New("thread: stale Thread handle")
 )
 
 type Commit struct {
@@ -148,24 +147,26 @@ type JournalProjection struct {
 }
 
 type Projection struct {
-	Version           int                  `json:"v"`
-	ThreadID          string               `json:"thread_id"`
-	Alias             string               `json:"alias"`
-	ParentThreadID    string               `json:"parent_thread_id,omitempty"`
-	CreatedAt         Timestamp            `json:"created_at"`
-	ArchivedAt        *Timestamp           `json:"archived_at,omitempty"`
-	RetentionState    RetentionState       `json:"retention_state"`
-	ExecutionState    ExecutionState       `json:"execution_state,omitempty"`
-	Revision          uint64               `json:"revision"`
-	CurrentGeneration GenerationProjection `json:"current_generation"`
-	Counts            Counts               `json:"counts"`
-	Goal              json.RawMessage      `json:"goal,omitempty"`
-	Notes             string               `json:"notes,omitempty"`
-	NotesUpdatedAt    *Timestamp           `json:"notes_updated_at,omitempty"`
-	TokenUsage        llm.Usage            `json:"token_usage"`
-	ContextUsage      *ContextProjection   `json:"context_usage,omitempty"`
-	LastActivityAt    Timestamp            `json:"last_activity_at"`
-	Journal           JournalProjection    `json:"journal"`
+	Version           int                    `json:"v"`
+	ThreadID          string                 `json:"thread_id"`
+	Alias             string                 `json:"alias"`
+	ParentThreadID    string                 `json:"parent_thread_id,omitempty"`
+	CreatedAt         Timestamp              `json:"created_at"`
+	UpdatedAt         Timestamp              `json:"updated_at"`
+	ArchivedAt        *Timestamp             `json:"archived_at,omitempty"`
+	RetentionState    RetentionState         `json:"retention_state"`
+	ExecutionState    ExecutionState         `json:"execution_state,omitempty"`
+	Revision          uint64                 `json:"revision"`
+	CurrentGeneration GenerationProjection   `json:"current_generation"`
+	Generations       []GenerationProjection `json:"generations"`
+	Counts            Counts                 `json:"counts"`
+	Goal              json.RawMessage        `json:"goal,omitempty"`
+	Notes             string                 `json:"notes,omitempty"`
+	NotesUpdatedAt    *Timestamp             `json:"notes_updated_at,omitempty"`
+	TokenUsage        llm.Usage              `json:"token_usage"`
+	ContextUsage      *ContextProjection     `json:"context_usage,omitempty"`
+	LastActivityAt    Timestamp              `json:"last_activity_at"`
+	Journal           JournalProjection      `json:"journal"`
 }
 
 type IndexEntry struct {

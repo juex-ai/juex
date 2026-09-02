@@ -29,19 +29,25 @@ func (s *Store) Archive(target *Thread) error {
 			return fmt.Errorf("thread: archive %s: active child %s still references it", target.ID, entry.ThreadID)
 		}
 	}
-	if _, err := target.appendFactsStoreLocked(Fact{Type: FactThreadArchived}); err != nil {
+	if err := target.mutateProjectionLocked(func(projection *Projection, at Timestamp) {
+		projection.RetentionState = RetentionArchived
+		projection.ExecutionState = ""
+		projection.ArchivedAt = &at
+	}); err != nil {
 		return err
 	}
-	if err := target.Close(); err != nil {
-		return err
-	}
+	closeErr := target.Close()
 	source := filepath.Join(s.ThreadsDir(), target.ID)
 	destination := filepath.Join(s.ArchiveDir(), target.ID)
 	if err := durableRename(source, destination); err != nil {
-		return fmt.Errorf("thread: archive %s: %w", target.ID, err)
+		return errors.Join(closeErr, fmt.Errorf("thread: archive %s: %w", target.ID, err))
 	}
 	target.Dir = destination
-	return nil
+	indexErr := s.updateProjectionLocked()
+	if indexErr != nil {
+		indexErr = fmt.Errorf("thread: metadata committed but index refresh failed: %w", indexErr)
+	}
+	return errors.Join(indexErr, closeErr)
 }
 
 func (s *Store) Unarchive(id string) (*Thread, error) {
@@ -54,19 +60,32 @@ func (s *Store) Unarchive(id string) (*Thread, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := target.appendFactsStoreLocked(Fact{Type: FactThreadUnarchived}); err != nil {
+	if err := target.mutateProjectionLocked(func(projection *Projection, _ Timestamp) {
+		projection.RetentionState = RetentionActive
+		projection.ExecutionState = ExecutionIdle
+		projection.ArchivedAt = nil
+	}); err != nil {
 		_ = target.Close()
 		return nil, err
 	}
-	if err := target.Close(); err != nil {
-		return nil, err
-	}
+	closeErr := target.Close()
 	source := filepath.Join(s.ArchiveDir(), id)
 	destination := filepath.Join(s.ThreadsDir(), id)
 	if err := durableRename(source, destination); err != nil {
-		return nil, fmt.Errorf("thread: unarchive %s: %w", id, err)
+		return nil, errors.Join(closeErr, fmt.Errorf("thread: unarchive %s: %w", id, err))
 	}
-	return s.openLocked(destination, id)
+	indexErr := s.updateProjectionLocked()
+	reopened, openErr := s.openLocked(destination, id)
+	if indexErr != nil {
+		indexErr = fmt.Errorf("thread: metadata committed but index refresh failed: %w", indexErr)
+	}
+	if err := errors.Join(indexErr, closeErr, openErr); err != nil {
+		if reopened != nil {
+			_ = reopened.Close()
+		}
+		return nil, err
+	}
+	return reopened, nil
 }
 
 func (s *Store) DeleteArchived(id string) error {
@@ -106,7 +125,7 @@ func (s *Store) DeleteArchived(id string) error {
 		}
 	}
 	index.Threads = filtered
-	if err := s.writeIndexLocked(index); err != nil {
+	if err := s.writeIndexLocked(&index); err != nil {
 		rollbackErr := durableRename(trash, source)
 		return errors.Join(err, rollbackErr)
 	}
@@ -155,7 +174,7 @@ func (s *Store) RollbackWorkerCreation(id string) error {
 		}
 	}
 	index.Threads = filtered
-	if err := s.writeIndexLocked(index); err != nil {
+	if err := s.writeIndexLocked(&index); err != nil {
 		rollbackErr := durableRename(trash, source)
 		return errors.Join(err, rollbackErr)
 	}
@@ -181,9 +200,9 @@ func (s *Store) RecoverLayout() error {
 				continue
 			}
 			path := filepath.Join(root, entry.Name())
-			projection, err := s.rebuildProjectionLocked(path, entry.Name())
+			projection, err := readProjectionFile(path, entry.Name())
 			if err != nil {
-				return fmt.Errorf("thread: recover projection %s: %w", entry.Name(), err)
+				return fmt.Errorf("thread: recover metadata %s: %w", entry.Name(), err)
 			}
 			archivedNamespace := root == s.ArchiveDir()
 			shouldArchive := projection.RetentionState == RetentionArchived

@@ -130,9 +130,19 @@ func (t *Thread) appendFactsStoreLocked(facts ...Fact) (Commit, error) {
 	if t.closed || t.journal == nil {
 		return Commit{}, fmt.Errorf("thread: closed")
 	}
+	if err := t.ensureProjectionCurrentLocked(); err != nil {
+		return Commit{}, err
+	}
+	if t.state.Projection.RetentionState != RetentionActive {
+		return Commit{}, fmt.Errorf("%w: archived Thread is read-only", ErrInvalidTransition)
+	}
 	candidate := cloneReplayState(t.state)
 	commit, _, _, err := t.journal.appendValidated(facts, func(scanned scannedCommit) error {
-		return applyCommit(t.ID, &candidate, scanned)
+		if err := applyCommit(t.ID, &candidate, scanned); err != nil {
+			return err
+		}
+		advanceProjectionRevision(&candidate.Projection, scanned.At)
+		return validateProjectionMetadata(candidate.Projection, t.ID)
 	})
 	if err != nil {
 		return Commit{}, err
@@ -143,7 +153,7 @@ func (t *Thread) appendFactsStoreLocked(facts ...Fact) (Commit, error) {
 		return commit, &ProjectionPersistError{Commit: commit, Err: err}
 	}
 	if t.store != nil {
-		if err := t.store.updateProjectionLocked(t.state.Projection); err != nil {
+		if err := t.store.updateProjectionLocked(); err != nil {
 			return commit, &ProjectionPersistError{Commit: commit, Err: err}
 		}
 	}
@@ -152,7 +162,13 @@ func (t *Thread) appendFactsStoreLocked(facts ...Fact) (Commit, error) {
 		candidate := cloneReplayState(t.state)
 		checkpointCommit, _, _, checkpointErr := t.journal.appendValidated(
 			[]Fact{{Type: FactProjectionCheck, Checkpoint: &checkpoint}},
-			func(scanned scannedCommit) error { return applyCommit(t.ID, &candidate, scanned) },
+			func(scanned scannedCommit) error {
+				if err := applyCommit(t.ID, &candidate, scanned); err != nil {
+					return err
+				}
+				advanceProjectionRevision(&candidate.Projection, scanned.At)
+				return validateProjectionMetadata(candidate.Projection, t.ID)
+			},
 		)
 		if checkpointErr != nil {
 			return commit, fmt.Errorf("thread: primary sequence %d committed but checkpoint failed: %w", commit.Seq, checkpointErr)
@@ -163,7 +179,7 @@ func (t *Thread) appendFactsStoreLocked(facts ...Fact) (Commit, error) {
 			return checkpointCommit, &ProjectionPersistError{Commit: checkpointCommit, Err: err}
 		}
 		if t.store != nil {
-			if err := t.store.updateProjectionLocked(t.state.Projection); err != nil {
+			if err := t.store.updateProjectionLocked(); err != nil {
 				return checkpointCommit, &ProjectionPersistError{Commit: checkpointCommit, Err: err}
 			}
 		}
@@ -310,8 +326,9 @@ func (t *Thread) ApplyAlias(alias string) error {
 		return fmt.Errorf("thread: alias is required")
 	}
 	if t.store == nil {
-		_, err := t.AppendFacts(Fact{Type: FactThreadRenamed, Alias: alias})
-		return err
+		return t.mutateProjectionLocked(func(projection *Projection, _ Timestamp) {
+			projection.Alias = alias
+		})
 	}
 	t.store.mu.Lock()
 	defer t.store.mu.Unlock()
@@ -322,8 +339,15 @@ func (t *Thread) ApplyAlias(alias string) error {
 	if err := validateAliasAvailable(index, alias, t.ID); err != nil {
 		return err
 	}
-	_, err = t.appendFactsStoreLocked(Fact{Type: FactThreadRenamed, Alias: alias})
-	return err
+	if err := t.mutateProjectionLocked(func(projection *Projection, _ Timestamp) {
+		projection.Alias = alias
+	}); err != nil {
+		return err
+	}
+	if err := t.store.updateProjectionLocked(); err != nil {
+		return fmt.Errorf("thread: metadata committed but index refresh failed: %w", err)
+	}
+	return nil
 }
 
 func (t *Thread) RecordResponseUsage(usage llm.Usage, contextUsage *llm.ContextUsage) llm.Usage {
@@ -417,12 +441,69 @@ func (t *Thread) Close() error {
 }
 
 func (t *Thread) persistProjectionLocked() error {
+	if err := validateProjectionMetadata(t.state.Projection, t.ID); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(t.state.Projection, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
 	return homestore.WriteFileAtomic(filepath.Join(t.Dir, projectionFile), data, 0o600, 0o755)
+}
+
+func (t *Thread) mutateProjectionLocked(mutate func(*Projection, Timestamp)) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed || t.journal == nil {
+		return fmt.Errorf("thread: closed")
+	}
+	if err := t.ensureProjectionCurrentLocked(); err != nil {
+		return err
+	}
+	candidate := cloneProjection(t.state.Projection)
+	at := NewTimestamp(t.journal.now())
+	mutate(&candidate, at)
+	advanceProjectionRevision(&candidate, at)
+	if err := validateProjectionMetadata(candidate, t.ID); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(candidate, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := homestore.WriteFileAtomic(filepath.Join(t.Dir, projectionFile), data, 0o600, 0o755); err != nil {
+		return err
+	}
+	t.state.Projection = candidate
+	t.refreshPublicLocked()
+	return nil
+}
+
+func (t *Thread) ensureProjectionCurrentLocked() error {
+	metadata, err := readProjectionFile(t.Dir, t.ID)
+	if err != nil {
+		return err
+	}
+	current := t.state.Projection
+	if metadata.Revision != current.Revision || metadata.Journal != current.Journal {
+		return fmt.Errorf(
+			"%w for %s: metadata revision/cursor changed from %d/%d to %d/%d",
+			ErrStaleHandle,
+			t.ID,
+			current.Revision,
+			current.Journal.ProjectedSeq,
+			metadata.Revision,
+			metadata.Journal.ProjectedSeq,
+		)
+	}
+	return nil
+}
+
+func advanceProjectionRevision(projection *Projection, at Timestamp) {
+	projection.Revision++
+	projection.UpdatedAt = at
 }
 
 func (t *Thread) infoLocked() Info {
@@ -480,6 +561,7 @@ func cloneReplayState(source ReplayState) ReplayState {
 
 func cloneProjection(source Projection) Projection {
 	clone := source
+	clone.Generations = append([]GenerationProjection(nil), source.Generations...)
 	clone.Goal = append(json.RawMessage(nil), source.Goal...)
 	if source.ArchivedAt != nil {
 		archivedAt := *source.ArchivedAt

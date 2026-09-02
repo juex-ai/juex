@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ type Store struct {
 	agentStateDir string
 	random        io.Reader
 	now           func() time.Time
+	writeIndex    func(string, []byte) error
 }
 
 var storeLocks sync.Map
@@ -43,8 +45,13 @@ func (s *Store) EnsureMain() (*Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dir := filepath.Join(s.ThreadsDir(), MainID)
-	if _, err := os.Stat(filepath.Join(dir, journalFile)); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, projectionFile)); err == nil {
 		return s.openLocked(dir, MainID)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if _, err := os.Stat(dir); err == nil {
+		return nil, fmt.Errorf("%w for %s: metadata is missing", ErrInvalidMetadata, MainID)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -186,13 +193,14 @@ func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 		_ = journal.Close()
 		return nil, err
 	}
+	state.Projection.Revision = 1
 	thread := &Thread{ID: id, Dir: dir, journal: journal, state: state, store: s}
 	thread.refreshPublicLocked()
 	if err := thread.persistProjectionLocked(); err != nil {
 		_ = thread.Close()
 		return nil, err
 	}
-	if err := s.updateProjectionLocked(state.Projection); err != nil {
+	if err := s.updateProjectionLocked(); err != nil {
 		_ = thread.Close()
 		return nil, err
 	}
@@ -203,9 +211,14 @@ func (s *Store) openLocked(dir, id string) (*Thread, error) {
 	if !ValidID(id) || filepath.Base(dir) != id {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidID, id)
 	}
-	// openJournal creates its file because creation paths use the same journal
-	// primitive. A lookup must prove the durable Thread exists first; otherwise
-	// a miss leaves an empty journal that blocks EnsureMain or unarchive.
+	metadata, err := readProjectionFile(dir, id)
+	if err != nil {
+		return nil, err
+	}
+	archivedNamespace := filepath.Clean(filepath.Dir(dir)) == filepath.Clean(s.ArchiveDir())
+	if (metadata.RetentionState == RetentionArchived) != archivedNamespace {
+		return nil, fmt.Errorf("%w for %s: retention state does not match directory namespace", ErrInvalidMetadata, id)
+	}
 	if _, err := os.Stat(filepath.Join(dir, journalFile)); err != nil {
 		return nil, err
 	}
@@ -213,13 +226,13 @@ func (s *Store) openLocked(dir, id string) (*Thread, error) {
 	if err != nil {
 		return nil, err
 	}
-	thread := &Thread{ID: id, Dir: dir, journal: journal, state: state, store: s}
-	thread.refreshPublicLocked()
-	if err := thread.persistProjectionLocked(); err != nil {
-		_ = thread.Close()
+	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
+		_ = journal.Close()
 		return nil, err
 	}
-	if err := s.updateProjectionLocked(state.Projection); err != nil {
+	thread := &Thread{ID: id, Dir: dir, journal: journal, state: state, store: s}
+	thread.refreshPublicLocked()
+	if _, err := s.loadOrRebuildIndexLocked(); err != nil {
 		_ = thread.Close()
 		return nil, err
 	}
@@ -236,42 +249,84 @@ func (s *Store) List() ([]IndexEntry, error) {
 	return append([]IndexEntry(nil), index.Threads...), nil
 }
 
-func (s *Store) updateProjectionLocked(projection Projection) error {
-	index, err := s.loadOrRebuildIndexLocked()
+func (s *Store) updateProjectionLocked() error {
+	revision := uint64(0)
+	if index, err := readIndexFile(s.IndexPath()); err == nil && index.Version == IndexVersion {
+		revision = index.Revision
+	}
+	projections, err := s.scanProjectionFilesLocked()
 	if err != nil {
 		return err
 	}
-	entry := indexEntryFromProjection(projection)
-	replaced := false
-	for i := range index.Threads {
-		if index.Threads[i].ThreadID == projection.ThreadID {
-			index.Threads[i] = entry
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		index.Threads = append(index.Threads, entry)
-	}
-	return s.writeIndexLocked(index)
+	_, err = s.writeProjectionIndexLocked(projections, revision)
+	return err
 }
 
 func (s *Store) loadOrRebuildIndexLocked() (Index, error) {
-	data, err := os.ReadFile(s.IndexPath())
+	projections, err := s.scanProjectionFilesLocked()
+	if err != nil {
+		return Index{}, err
+	}
+	index, err := readIndexFile(s.IndexPath())
 	if err == nil {
-		var index Index
-		if decodeErr := json.Unmarshal(data, &index); decodeErr == nil && index.Version == ProjectionVersion && validIndexLifecycle(index) {
+		if index.Version == IndexVersion && validIndexLifecycle(index) && indexMatchesProjections(index, projections) {
 			return index, nil
 		}
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			return Index{}, err
+		}
+	}
+	revision := uint64(0)
+	if err == nil && index.Version == IndexVersion {
+		revision = index.Revision
+	}
+	return s.writeProjectionIndexLocked(projections, revision)
+}
+
+func readIndexFile(path string) (Index, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return Index{}, err
 	}
-	return s.rebuildIndexLocked()
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	var index Index
+	if err := decoder.Decode(&index); err != nil {
+		return Index{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return Index{}, err
+	}
+	return index, nil
+}
+
+func indexMatchesProjections(index Index, projections []Projection) bool {
+	if len(index.Threads) != len(projections) {
+		return false
+	}
+	want := make([]IndexEntry, len(projections))
+	for i := range projections {
+		want[i] = indexEntryFromProjection(projections[i])
+	}
+	sortIndexEntries(want)
+	return reflect.DeepEqual(index.Threads, want)
 }
 
 func validIndexLifecycle(index Index) bool {
+	if index.Revision == 0 || index.UpdatedAt.IsZero() {
+		return false
+	}
 	for _, entry := range index.Threads {
+		if !ValidID(entry.ThreadID) || entry.Alias == "" || entry.ThreadRevision == 0 || entry.CurrentGenerationID == "" {
+			return false
+		}
 		switch entry.RetentionState {
 		case RetentionActive:
 			if entry.ArchivedAt != nil || (entry.ExecutionState != ExecutionIdle && entry.ExecutionState != ExecutionWorking && entry.ExecutionState != ExecutionFailed) {
@@ -289,62 +344,125 @@ func validIndexLifecycle(index Index) bool {
 }
 
 func (s *Store) rebuildIndexLocked() (Index, error) {
-	index := Index{Version: ProjectionVersion, UpdatedAt: NewTimestamp(s.now())}
+	projections, err := s.scanProjectionFilesLocked()
+	if err != nil {
+		return Index{}, err
+	}
+	return s.writeProjectionIndexLocked(projections, 0)
+}
+
+func (s *Store) scanProjectionFilesLocked() ([]Projection, error) {
+	var projections []Projection
+	seen := map[string]struct{}{}
 	for _, root := range []string{s.ThreadsDir(), s.ArchiveDir()} {
 		entries, err := os.ReadDir(root)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return Index{}, err
+			return nil, err
 		}
 		for _, entry := range entries {
 			if !entry.IsDir() || !ValidID(entry.Name()) {
 				continue
 			}
-			projection, err := s.rebuildProjectionLocked(filepath.Join(root, entry.Name()), entry.Name())
-			if err != nil {
-				return Index{}, fmt.Errorf("thread: rebuild projection %s: %w", entry.Name(), err)
+			if _, exists := seen[entry.Name()]; exists {
+				return nil, fmt.Errorf("%w: duplicate Thread directory %s", ErrInvalidMetadata, entry.Name())
 			}
-			index.Threads = append(index.Threads, indexEntryFromProjection(projection))
+			projection, err := readProjectionFile(filepath.Join(root, entry.Name()), entry.Name())
+			if err != nil {
+				return nil, err
+			}
+			archivedNamespace := root == s.ArchiveDir()
+			if (projection.RetentionState == RetentionArchived) != archivedNamespace {
+				return nil, fmt.Errorf("%w for %s: retention state does not match directory namespace", ErrInvalidMetadata, entry.Name())
+			}
+			seen[entry.Name()] = struct{}{}
+			projections = append(projections, projection)
 		}
 	}
-	if err := s.writeIndexLocked(index); err != nil {
+	if err := validateProjectionSet(projections); err != nil {
+		return nil, err
+	}
+	return projections, nil
+}
+
+func validateProjectionSet(projections []Projection) error {
+	ids := make(map[string]string, len(projections))
+	parents := make(map[string]string, len(projections))
+	for _, projection := range projections {
+		ids[strings.ToLower(projection.ThreadID)] = projection.ThreadID
+		parents[projection.ThreadID] = projection.ParentThreadID
+	}
+	_, hasMain := ids[MainID]
+
+	for index, projection := range projections {
+		for _, candidate := range projections {
+			if strings.EqualFold(projection.Alias, candidate.ThreadID) {
+				return fmt.Errorf("%w: alias %q conflicts with Thread ID %s", ErrInvalidMetadata, projection.Alias, candidate.ThreadID)
+			}
+		}
+		for previous := 0; previous < index; previous++ {
+			if strings.EqualFold(projection.Alias, projections[previous].Alias) {
+				return fmt.Errorf("%w: alias %q is shared by Threads %s and %s", ErrInvalidMetadata, projection.Alias, projections[previous].ThreadID, projection.ThreadID)
+			}
+		}
+		if projection.ThreadID != MainID && hasMain {
+			if _, exists := ids[strings.ToLower(projection.ParentThreadID)]; !exists {
+				return fmt.Errorf("%w: Thread %s has missing parent %s", ErrInvalidMetadata, projection.ThreadID, projection.ParentThreadID)
+			}
+		}
+	}
+
+	for id := range parents {
+		seen := map[string]struct{}{}
+		for current := id; current != MainID; {
+			if _, exists := seen[current]; exists {
+				return fmt.Errorf("%w: parent cycle includes Thread %s", ErrInvalidMetadata, current)
+			}
+			seen[current] = struct{}{}
+			parent, exists := parents[current]
+			if !exists {
+				break
+			}
+			current = parent
+		}
+	}
+	return nil
+}
+
+func (s *Store) writeProjectionIndexLocked(projections []Projection, revision uint64) (Index, error) {
+	index := Index{Version: IndexVersion, Revision: revision, UpdatedAt: NewTimestamp(s.now())}
+	for _, projection := range projections {
+		index.Threads = append(index.Threads, indexEntryFromProjection(projection))
+	}
+	if err := s.writeIndexLocked(&index); err != nil {
 		return Index{}, err
 	}
 	return index, nil
 }
 
-func (s *Store) rebuildProjectionLocked(dir, id string) (projection Projection, resultErr error) {
-	journal, state, err := openJournalForReplay(filepath.Join(dir, journalFile), id, s.now)
-	if err != nil {
-		return Projection{}, err
-	}
-	target := &Thread{ID: id, Dir: dir, journal: journal, state: state}
-	target.refreshPublicLocked()
-	if err := target.persistProjectionLocked(); err != nil {
-		resultErr = err
-	}
-	if err := journal.Close(); err != nil {
-		resultErr = errors.Join(resultErr, err)
-	}
-	if resultErr != nil {
-		return Projection{}, resultErr
-	}
-	return cloneProjection(state.Projection), nil
-}
-
-func (s *Store) writeIndexLocked(index Index) error {
-	index.Version = ProjectionVersion
+func (s *Store) writeIndexLocked(index *Index) error {
+	index.Version = IndexVersion
 	index.Revision++
 	index.UpdatedAt = NewTimestamp(s.now())
-	sort.Slice(index.Threads, func(i, j int) bool {
-		left, right := index.Threads[i], index.Threads[j]
-		if left.ThreadID == MainID {
-			return true
-		}
-		if right.ThreadID == MainID {
-			return false
+	sortIndexEntries(index.Threads)
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if s.writeIndex != nil {
+		return s.writeIndex(s.IndexPath(), data)
+	}
+	return homestore.WriteFileAtomic(s.IndexPath(), data, 0o600, 0o755)
+}
+
+func sortIndexEntries(entries []IndexEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		left, right := entries[i], entries[j]
+		if (left.ThreadID == MainID) != (right.ThreadID == MainID) {
+			return left.ThreadID == MainID
 		}
 		if (left.RetentionState == RetentionActive) != (right.RetentionState == RetentionActive) {
 			return left.RetentionState == RetentionActive
@@ -354,12 +472,6 @@ func (s *Store) writeIndexLocked(index Index) error {
 		}
 		return left.ThreadID < right.ThreadID
 	})
-	data, err := json.MarshalIndent(index, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return homestore.WriteFileAtomic(s.IndexPath(), data, 0o600, 0o755)
 }
 
 func indexEntryFromProjection(projection Projection) IndexEntry {
