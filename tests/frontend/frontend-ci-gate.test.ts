@@ -26,7 +26,7 @@ test("the frontend gate has one local entry point for all required checks", () =
 test("CI runs the frontend gate separately without slowing Go jobs", () => {
   assert.match(
     ciSource,
-    /frontend:\n\s+if: github\.event_name != 'workflow_dispatch'\n\s+runs-on: ubuntu-latest[\s\S]*uses: pnpm\/action-setup@v4[\s\S]*version: 11\.6\.0[\s\S]*uses: actions\/setup-node@v4[\s\S]*node-version: 24[\s\S]*cache: pnpm[\s\S]*cache-dependency-path: frontend\/pnpm-lock\.yaml[\s\S]*run: make web-check/,
+    /frontend:\n\s+runs-on: ubuntu-latest[\s\S]*uses: pnpm\/action-setup@v4[\s\S]*version: 11\.6\.0[\s\S]*uses: actions\/setup-node@v4[\s\S]*node-version: 24[\s\S]*cache: pnpm[\s\S]*cache-dependency-path: frontend\/pnpm-lock\.yaml[\s\S]*run: make web-check/,
   );
   assert.equal(
     ciSource.match(/Prepare embedded web dist/g)?.length,

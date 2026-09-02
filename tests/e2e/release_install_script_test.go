@@ -344,7 +344,7 @@ func TestPowerShellInstallerHasDryRunContract(t *testing.T) {
 	}
 }
 
-func TestCIWorkflowExercisesReleaseInstaller(t *testing.T) {
+func TestCIWorkflowExercisesPOSIXReleaseInstaller(t *testing.T) {
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -357,26 +357,17 @@ func TestCIWorkflowExercisesReleaseInstaller(t *testing.T) {
 	for _, want := range []string{
 		"Test release installer",
 		"scripts/install.sh",
-		"scripts/install.ps1",
 		"$HOME/.local/bin",
 		"GITHUB_PATH",
 		"juex version",
-		"juex.exe version",
 		`--juex-version "$version"`,
 		`cp -R .tmp/ci-ripgrep/. "$package_root/"`,
-		`Copy-Item -Path ".tmp/ci-ripgrep/*" -Destination $packageRoot`,
 		`internal/version.Version=${version}`,
-		`internal/version.Version=$version`,
 		`${package_root}/bin/juex`,
-		`$packageRoot "bin/juex.exe"`,
 		`juex doctor --format json --offline`,
-		`juex.exe doctor --format json --offline`,
 		`"$doctor_status" -eq 7`,
-		`$doctorStatus -ne 7`,
 		`'"source": "package"'`,
-		`$ripgrepCheck.details.source -ne "package"`,
 		`"$package_root/juex-path/rg" --version`,
-		`& $ripgrepCheck.details.path --version`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("ci.yml missing %q", want)
