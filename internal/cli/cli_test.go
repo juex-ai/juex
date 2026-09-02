@@ -199,19 +199,6 @@ func TestUnknownSubcommandIsError(t *testing.T) {
 	}
 }
 
-func TestRemovedUserGlobalResourcesFlagIsUnknown(t *testing.T) {
-	name := "enable-user-global-" + "resources"
-	root := newRootCmd()
-	if root.PersistentFlags().Lookup(name) != nil {
-		t.Fatalf("root still exposes removed flag --%s", name)
-	}
-	root.SetArgs([]string{"--" + name + "=false", "version"})
-	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "unknown flag: --"+name) {
-		t.Fatalf("error = %v, want Cobra unknown flag", err)
-	}
-}
-
 func TestPersistentFlagsParsedAtRoot(t *testing.T) {
 	// `juex --verbose run` should propagate verbose to the run command.
 	// We can't easily run `run` end-to-end here (no stub provider), but we
@@ -1369,7 +1356,7 @@ func TestDoctorWorkdirCheckMissingJuexIsHealthy(t *testing.T) {
 }
 
 func TestDoctorSandboxCheckReportsDisabledAndUnavailable(t *testing.T) {
-	disabled := doctorSandboxCheck(context.Background(), sandbox.LegacyDefaultPolicy(), "windows", nil)
+	disabled := doctorSandboxCheck(context.Background(), sandbox.DisabledPolicy(), "windows", nil)
 	if disabled.Status != doctorStatusOK || disabled.Details["enabled"] != false {
 		t.Fatalf("disabled check = %+v", disabled)
 	}

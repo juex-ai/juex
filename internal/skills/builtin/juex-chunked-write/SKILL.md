@@ -25,7 +25,7 @@ workflow for longer files.
 3. Call `write_commit` with the same `write_id`. Optional
    `expected_chunks` validates the count and optional `sha256` validates the
    assembled file. Commit writes a temporary file and renames it atomically.
-4. Call `write_abort` when abandoning an unfinished session.
+4. Call `write_abort` when abandoning an unfinished write.
 
 Never send summary fields such as `content_omitted`, `content_bytes`,
 `content_chars`, or `content_sha256` instead of `content`. Tool results are

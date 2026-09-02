@@ -75,7 +75,7 @@ func TestValidateOutsideWorkspaceAccessRejectsDenied(t *testing.T) {
 func TestDefaultRunnerReturnsOriginalSpecWhenDisabled(t *testing.T) {
 	spec := ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}, Dir: "/work"}
 	got, err := (DefaultRunner{RuntimeOS: "windows"}).Prepare(context.Background(), Request{
-		Policy: LegacyDefaultPolicy(),
+		Policy: DisabledPolicy(),
 		Spec:   spec,
 	})
 	if err != nil {
@@ -152,7 +152,7 @@ func environmentValueForTest(env []string, key string) string {
 }
 
 func TestDefaultRunnerWindowsEnabledFailsClosed(t *testing.T) {
-	policy := LegacyDefaultPolicy()
+	policy := DisabledPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	policy.Network.Enabled = false
@@ -178,7 +178,7 @@ func TestDefaultRunnerLinuxMissingBubblewrapFailsClosed(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("linux backend lookup is only compiled in linux builds")
 	}
-	policy := LegacyDefaultPolicy()
+	policy := DisabledPolicy()
 	policy.Enabled = true
 	_, err := (DefaultRunner{
 		RuntimeOS: "linux",

@@ -52,19 +52,19 @@ func mediaReferenceText(label string, media *MediaRef) string {
 	return "[" + label + ": " + strings.Join(parts, " ") + "; " + unavailable + "]"
 }
 
-func imageDataURL(artifactDir string, media *MediaRef) (string, bool) {
-	encoded, mediaType, ok := readImageBase64(artifactDir, media)
+func imageDataURL(mediaDir string, media *MediaRef) (string, bool) {
+	encoded, mediaType, ok := readImageBase64(mediaDir, media)
 	if !ok {
 		return "", false
 	}
 	return "data:" + mediaType + ";base64," + encoded, true
 }
 
-func readImageBase64(artifactDir string, media *MediaRef) (string, string, bool) {
+func readImageBase64(mediaDir string, media *MediaRef) (string, string, bool) {
 	if media == nil || media.ArtifactPath == "" {
 		return "", "", false
 	}
-	store, err := artifact.NewStore(artifactDir)
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		return "", "", false
 	}

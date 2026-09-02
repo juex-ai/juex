@@ -20,7 +20,7 @@ type runnerOptions struct {
 	runID         string
 	workDir       string
 	agentStateDir string
-	artifactDir   string
+	mediaDir      string
 	environment   environment.Snapshot
 	sandboxPolicy sandbox.Policy
 	sandboxRunner sandbox.Runner
@@ -48,14 +48,14 @@ func newRunner(opts runnerOptions) *runner {
 		Policy:        opts.sandboxPolicy,
 		WorkDir:       opts.workDir,
 		AgentStateDir: opts.agentStateDir,
-		ReadOnlyPaths: []string{opts.artifactDir},
+		ReadOnlyPaths: []string{opts.mediaDir},
 	})
 	return &runner{
 		opts:       opts,
 		filePolicy: filePolicy,
 		pipe:       pipe,
 		batcher: newCommandBatcher(opts.spec, opts.store, BatcherOptions{
-			RunID: opts.runID, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir, MediaDir: opts.artifactDir,
+			RunID: opts.runID, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir, MediaDir: opts.mediaDir,
 			PathGuard: filePolicy,
 		}),
 	}

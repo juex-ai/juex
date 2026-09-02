@@ -43,20 +43,20 @@ func TestModuleContributesDefaultBuiltinTools(t *testing.T) {
 	}
 }
 
-func TestModuleStartCreatesArtifactRootBeforeShellSessions(t *testing.T) {
-	artifactDir := filepath.Join(t.TempDir(), "agent", "artifacts")
-	if err := os.MkdirAll(filepath.Dir(artifactDir), 0o700); err != nil {
+func TestModuleStartCreatesMediaRootBeforeShellSessions(t *testing.T) {
+	mediaDir := filepath.Join(t.TempDir(), "agent", "media")
+	if err := os.MkdirAll(filepath.Dir(mediaDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	mod := New(context.Background(), tools.BuiltinOptions{
-		MediaDir: artifactDir,
+		MediaDir: mediaDir,
 		Shell:    tools.DefaultShellProfile(),
 	})
 	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = mod.CloseRuntime(context.Background()) }()
-	if info, err := os.Stat(artifactDir); err != nil || !info.IsDir() {
+	if info, err := os.Stat(mediaDir); err != nil || !info.IsDir() {
 		t.Fatalf("Artifact root stat = %+v, %v", info, err)
 	}
 }

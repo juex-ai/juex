@@ -399,7 +399,7 @@ func TestRipgrepRunnerSearchesHiddenIgnoredFilesAndCapsGlobally(t *testing.T) {
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
 		RipgrepPath: rg,
 		WorkDir:     root,
-		Sandbox:     sandbox.LegacyDefaultPolicy(),
+		Sandbox:     sandbox.DisabledPolicy(),
 	})
 	result, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: root})
 	if err != nil {
@@ -547,7 +547,7 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	if err := os.WriteFile(filepath.Join(blocked, "secret.txt"), []byte("needle secret\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	policy := sandbox.LegacyDefaultPolicy()
+	policy := sandbox.DisabledPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{"private["}
 	sandboxRunner := &fakeSandboxRunner{}

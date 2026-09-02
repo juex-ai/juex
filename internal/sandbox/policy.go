@@ -45,7 +45,7 @@ func DefaultPolicy() Policy {
 	return DefaultPolicyForOS(runtime.GOOS)
 }
 
-func LegacyDefaultPolicy() Policy {
+func DisabledPolicy() Policy {
 	return Policy{
 		Enabled: false,
 		FileSystem: FileSystemPolicy{
@@ -58,7 +58,7 @@ func LegacyDefaultPolicy() Policy {
 }
 
 func DefaultPolicyForOS(runtimeOS string) Policy {
-	policy := LegacyDefaultPolicy()
+	policy := DisabledPolicy()
 	switch runtimeOS {
 	case "darwin", "linux":
 		policy.Enabled = true

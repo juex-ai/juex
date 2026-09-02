@@ -109,7 +109,7 @@ func (f *fakeBackend) Restart(context.Context, string) (fleet.RestartResult, err
 		Resume: fleet.RestartResume{
 			Required: true,
 			Sent:     true,
-			ThreadID: "session-one",
+			ThreadID: "234567",
 			TurnID:   "turn-resume",
 		},
 	}, f.actionErr
@@ -339,7 +339,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 			Resume: fleet.RestartResume{
 				Required: true,
 				Sent:     true,
-				ThreadID: "session-one",
+				ThreadID: "234567",
 				TurnID:   "turn-resume",
 			},
 		},

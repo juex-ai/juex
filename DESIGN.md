@@ -3,172 +3,113 @@
 > English | [中文](DESIGN.zh.md)
 
 This document defines the stable interaction and visual contract for the Fleet
-Web UI served by `juex fleet serve`. The detailed Thread Explorer transition is
-specified in the
-[Web interaction design](docs/superpowers/specs/2026-08-31-thread-web-interaction-design.md).
+Web UI. Component structure and exact API shapes belong to frontend and server
+code.
 
 ## Product Model
 
-The Web UI is a client of the Agent JSON/SSE service. It does not own a second
-conversation model and does not infer durable state from browser memory.
+Web is a client of Agent JSON/SSE services. It does not own a second
+conversation model or infer durable truth from browser memory.
 
-- Fleet selects an Agent.
-- Thread Explorer lists active and archived Threads.
-- Thread detail renders one chronological Thread across Context Generations.
-- Runtime pages expose resources, Observables, logs, configuration, and health.
+- Fleet selects and manages an Agent.
+- Thread Explorer shows active and archived Threads.
+- Thread detail shows one chronological transcript across Context Generations.
+- Runtime views expose health, configuration, logs, Extensions, and Observables.
 
-The server is the source of truth. Commands use HTTP; changes arrive through
-snapshot plus SSE invalidation/event streams. Reconnect always recalibrates
-from an authoritative snapshot.
+Commands use HTTP. Snapshots and event streams provide state. Reconnection
+recalibrates from an authoritative snapshot.
 
-## Routes
+## Navigation
 
-| Route | Purpose |
-| --- | --- |
-| `/` | Resolve the selected Agent or show Fleet empty/error state. |
-| `/settings` | Fleet registration and process controls. |
-| `/agents/:agentId/threads` | Active and archived Thread Explorer. |
-| `/agents/:agentId/threads/:id` | Thread transcript, status, context, and composer. |
-| `/agents/:agentId/runtime` | Runtime overview. |
-| `/agents/:agentId/runtime/extensions` | Selected Extensions. |
-| `/agents/:agentId/runtime/observables` | Observable definitions and lifecycle. |
-| `/agents/:agentId/runtime/logs` | Agent logs. |
-| `/agents/:agentId/runtime/config` | Effective configuration view. |
+The stable route hierarchy is Fleet, selected Agent, Thread list, Thread
+detail, and Runtime views. Main Thread is the default Agent destination.
+Thread Explorer owns both current work and archived history.
 
-The Agent index redirects to Main Thread `0`. Thread Explorer owns both active
-work and archived history.
+Route names and parameter syntax are implementation details owned by the
+router.
 
 ## Thread Explorer
 
-The page has two explicit sections: Active and Archived. Each row shows:
+Active and Archived are separate sections. A row should make identity and
+operability understandable without opening the Thread:
 
-- Thread ID and alias;
-- retention state (`active` or `archived`) and, for active Threads, execution
-  state (`idle`, `working`, or `failed`);
-- creation/last activity time;
-- Turn count and Context Generation count;
-- pending Input count;
-- current Context token count;
-- cumulative input, cached-input, and output token usage.
+- id and alias;
+- retention state and, when active, execution state;
+- created and last-active time;
+- Turn and Context Generation counts;
+- pending Input count and current context usage.
 
-Main is visually normal but cannot be archived, renamed, or deleted. An idle
-Worker can be archived. An archived Worker can be restored or permanently
-deleted after confirmation. Create asks only for an optional alias; parent
-identity is runtime-derived.
+Main appears like a normal Thread but cannot be renamed, archived, or deleted.
+An idle Worker can be archived. An archived Worker can be restored or
+permanently deleted after explicit confirmation.
 
-Thread-list data comes from the rebuildable Agent index. List rendering must
-not scan every Journal.
+List data comes from the Agent index. Rendering the list must not scan every
+Thread Journal.
 
 ## Thread Detail
 
-Thread detail presents one continuous transcript. Context Generation
-boundaries are system activity rows inside that timeline:
+The transcript is one continuous chronological history. Context transitions
+appear as system activity rows:
 
-- `context.compacted` is visible and allows copying its compact summary;
-- `context.renewed` is visible but has no Provider content and no copy action.
+- `context.compacted` exposes its compact summary for copying;
+- `context.renewed` marks the boundary without Provider content or copy action.
 
-Neither row is projected into Provider context. The default load is the latest
-complete page from the Thread Journal. “Load older messages” pages backward
-from EOF without splitting an atomic Journal commit. Crossing a Generation
-boundary needs no route change.
+The first load shows the latest complete Journal page. “Load older messages”
+pages backward while preserving chronological display order and atomic commit
+boundaries.
 
-Active Threads expose the composer. Archived Threads are read-only. Runtime
-health can also disable mutation while preserving the latest readable
-transcript and status.
+Active Threads expose the composer. Archived Threads are read-only. Agent or
+Runtime unavailability may disable mutation while preserving readable
+last-known content with an explicit stale/error state.
 
-Composer behavior:
+## Input And Transcript Behavior
 
-- accepts text, pasted/dropped/selected attachments, or attachment-only Input;
-- uploads attachments before durable Input submission;
-- never assumes the next Assistant message is the response to this Input;
-- shows durable acceptance and pending state separately from Turn execution;
-- clears only after successful durable acceptance;
-- exposes Stop only while a Turn is active.
+The composer accepts text, attachments, or attachment-only Input. It clears
+only after durable acceptance and distinguishes accepted/pending state from
+Turn execution. Stop is available only for active work.
 
-## Transcript Rendering
+The UI never assumes that the next Assistant message is the response to the
+latest Input. Input, message, Tool, and Turn identities come from durable
+records.
 
-Assistant prose is plain conversation content. Operational work uses compact,
-progressive-disclosure rows:
+Assistant prose is ordinary conversation content. Operational work uses
+compact progressive-disclosure rows:
 
-- reasoning is collapsed by default after completion;
-- Tool Calls pair request, streaming output, and terminal outcome by
-  `tool_use_id`;
-- provisional streamed content is replaced by the canonical durable terminal
-  result;
-- failed Provider attempts do not remain as duplicate Assistant output;
-- policy/system activity is visibly distinct from Provider messages;
-- image media renders only through validated Agent resource routes.
-
-Message and Tool identity comes from durable IDs. Replayed and live frames with
-the same identity are idempotently merged rather than duplicated.
+- reasoning collapses after completion;
+- Tool request, streaming output, and terminal outcome join by identity;
+- durable terminal content replaces provisional streaming content;
+- system/policy activity is distinct from Provider dialogue;
+- replayed and live records merge idempotently.
 
 ## Status And Live Updates
 
-The Thread page initially requests:
+Thread detail starts from metadata, the latest transcript page, and an
+authoritative status snapshot, then follows the event stream from its captured
+cursor. The client replaces server status rather than reimplementing the
+runtime state machine.
 
-1. Thread metadata and latest transcript page;
-2. Thread status snapshot;
-3. active Provider context when its panel is open;
-4. Thread event stream from the captured cursor.
+Agent process health, Thread retention state, and Thread execution state are
+separate signals. Disconnection and reconciliation failures are visible, not
+represented by blank or silently frozen panels.
 
-Each event carries the normalized transcript projection and resulting
-authoritative status snapshot. The client replaces status; it does not
-recompute the runtime state machine. Event reconnect resumes from the latest
-durable cursor actually applied by the page, then recalibrates.
+## Layout And Visual Language
 
-Thread retention state, Thread execution state, and Agent process health are
-distinct. The Fleet shell may show an Agent as unavailable while retaining
-last-known Thread data and an explicit reconciliation error.
+- Desktop uses a Fleet/Agent navigation shell and readable centered content.
+- Mobile collapses navigation while keeping the composer reachable.
+- Operational JSON scrolls inside its disclosure panel, not the whole page.
+- Sticky controls leave enough bottom and safe-area space for the final message.
+- Loading, empty, read-only, working, failed, and disconnected states are explicit.
 
-## Layout
-
-- Desktop uses a Fleet/Agent navigation shell and a centered content column.
-- Transcript width prioritizes readable prose; operational JSON may scroll
-  inside its own disclosure panel, never the whole page.
-- Mobile collapses navigation and preserves composer reachability.
-- Sticky controls must not cover the final message; bottom padding accounts
-  for the composer height and safe area.
-- All loading, empty, read-only, working, failed, and disconnected states are
-  explicit rather than represented by blank panels.
-
-## Visual Language
-
-The north star is direct, clear, and calm. Production tokens live in
-`frontend/src/index.css`.
-
-- Forest is the primary brand and action color (`#064032` family).
-- Gold (`#f6d78e` family) is a restrained accent, not a general background.
-- Neutral surfaces carry operational density; status colors are semantic.
-- The radius scale is compact (`2px`, `4px`, `6px`, `8px`).
-- System font stacks are intentional; no downloaded Web font.
-- Lucide icons use `currentColor` and remain paired with accessible labels or
-  tooltips where meaning is not obvious.
-- Dark mode follows the OS and uses the same semantic tokens.
-
-Avoid decorative gradients, oversized marketing typography, large rounded
-cards, and animation unrelated to state change.
+The visual language is direct, calm, and compact. Production tokens live in
+`frontend/src/index.css`. Forest is the primary action color, gold is a
+restrained accent, and neutral surfaces carry operational density. Status
+colors are semantic. Avoid decorative gradients, oversized marketing
+typography, and animation unrelated to state change.
 
 ## Accessibility
 
-- Keyboard focus is always visible.
-- Icon-only actions have an accessible name.
+- Keyboard focus is always visible and tab order follows the interaction.
+- Icon-only actions have accessible names.
 - Status is not communicated by color alone.
-- Composer, disclosure rows, and pagination follow logical tab order.
 - Motion respects `prefers-reduced-motion`.
-- Destructive delete requires explicit confirmation and names the Thread.
-
-## Implementation
-
-The frontend is React + TypeScript + Vite, styled with Tailwind CSS and local
-shadcn/AI Elements components. `streamdown` renders Markdown and Shiki renders
-code/JSON. `internal/fleetweb` serves the embedded SPA and proxies selected
-Agent API routes; `internal/web` owns the Agent JSON/SSE handlers.
-
-```bash
-make web
-make verify-candidate WEB=1
-```
-
-Every visible interaction change requires focused frontend tests, the Web
-verification tier, and a real browser check. Keep the gzipped bundle below the
-project budget reported by `pnpm build`.
+- Destructive confirmation names the affected Thread.

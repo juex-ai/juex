@@ -63,8 +63,8 @@ type PreparedFiles struct {
 	files []inspectedFile
 }
 
-func StoreUpload(artifactDir, threadID, filename string, r io.Reader, limits Limits) (MediaRef, error) {
-	if strings.TrimSpace(artifactDir) == "" {
+func StoreUpload(mediaDir, threadID, filename string, r io.Reader, limits Limits) (MediaRef, error) {
+	if strings.TrimSpace(mediaDir) == "" {
 		return MediaRef{}, errors.New("user media: missing media directory")
 	}
 	if !safeThreadID(threadID) {
@@ -82,10 +82,10 @@ func StoreUpload(artifactDir, threadID, filename string, r io.Reader, limits Lim
 	if err != nil {
 		return MediaRef{}, err
 	}
-	return storeImageData(artifactDir, threadID, info, ext, data)
+	return storeImageData(mediaDir, threadID, info, ext, data)
 }
 
-// InspectFiles validates local image paths without persisting artifacts.
+// InspectFiles validates local image paths without persisting media.
 func InspectFiles(workDir string, inputPaths []string, limits Limits) ([]FileInfo, error) {
 	prepared, err := PrepareFiles(workDir, inputPaths, limits)
 	if err != nil {
@@ -94,7 +94,7 @@ func InspectFiles(workDir string, inputPaths []string, limits Limits) ([]FileInf
 	return prepared.Infos(), nil
 }
 
-// PrepareFiles validates and reads all local images without writing artifacts.
+// PrepareFiles validates and reads all local images without writing media.
 func PrepareFiles(workDir string, inputPaths []string, limits Limits) (PreparedFiles, error) {
 	limits = effectiveLimits(limits)
 	if err := validateInputCount(inputPaths, limits.MaxCount); err != nil {
@@ -120,17 +120,17 @@ func (p PreparedFiles) Infos() []FileInfo {
 	return infos
 }
 
-// StoreFiles validates local image paths and persists Thread-scoped artifacts.
-func StoreFiles(workDir, artifactDir, threadID string, inputPaths []string, limits Limits) ([]MediaRef, error) {
+// StoreFiles validates local image paths and persists Thread-scoped media.
+func StoreFiles(workDir, mediaDir, threadID string, inputPaths []string, limits Limits) ([]MediaRef, error) {
 	prepared, err := PrepareFiles(workDir, inputPaths, limits)
 	if err != nil {
 		return nil, err
 	}
-	return prepared.Store(artifactDir, threadID)
+	return prepared.Store(mediaDir, threadID)
 }
 
-// Store persists a prepared batch in one Thread artifact namespace.
-func (p PreparedFiles) Store(artifactDir, threadID string) ([]MediaRef, error) {
+// Store persists a prepared batch in one Thread media namespace.
+func (p PreparedFiles) Store(mediaDir, threadID string) ([]MediaRef, error) {
 	if len(p.files) == 0 {
 		return []MediaRef{}, nil
 	}
@@ -139,7 +139,7 @@ func (p PreparedFiles) Store(artifactDir, threadID string) ([]MediaRef, error) {
 	}
 	refs := make([]MediaRef, 0, len(p.files))
 	for _, file := range p.files {
-		ref, err := storeImageData(artifactDir, threadID, file.info, file.ext, file.data)
+		ref, err := storeImageData(mediaDir, threadID, file.info, file.ext, file.data)
 		if err != nil {
 			return nil, err
 		}
@@ -150,11 +150,11 @@ func (p PreparedFiles) Store(artifactDir, threadID string) ([]MediaRef, error) {
 
 // StoreFile validates one local image path and persists Agent-owned media with
 // a reference constrained to the target Thread.
-func StoreFile(workDir, artifactDir, threadID, inputPath string, limits Limits) (MediaRef, error) {
-	return storeFile(workDir, artifactDir, threadID, inputPath, effectiveLimits(limits))
+func StoreFile(workDir, mediaDir, threadID, inputPath string, limits Limits) (MediaRef, error) {
+	return storeFile(workDir, mediaDir, threadID, inputPath, effectiveLimits(limits))
 }
 
-func storeFile(workDir, artifactDir, threadID, inputPath string, limits Limits) (MediaRef, error) {
+func storeFile(workDir, mediaDir, threadID, inputPath string, limits Limits) (MediaRef, error) {
 	if !safeThreadID(threadID) {
 		return MediaRef{}, fmt.Errorf("user media: unsafe Thread id %q", threadID)
 	}
@@ -162,7 +162,7 @@ func storeFile(workDir, artifactDir, threadID, inputPath string, limits Limits) 
 	if err != nil {
 		return MediaRef{}, err
 	}
-	return storeImageData(artifactDir, threadID, info, ext, data)
+	return storeImageData(mediaDir, threadID, info, ext, data)
 }
 
 func inspectFile(workDir, inputPath string, limits Limits) (FileInfo, string, []byte, error) {
@@ -244,8 +244,8 @@ func inspectImageData(resolvedPath, filename string, data []byte) (FileInfo, str
 	}, ext, nil
 }
 
-func storeImageData(artifactDir, threadID string, info FileInfo, ext string, data []byte) (MediaRef, error) {
-	store, err := artifact.NewStore(artifactDir)
+func storeImageData(mediaDir, threadID string, info FileInfo, ext string, data []byte) (MediaRef, error) {
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		return MediaRef{}, fmt.Errorf("user media: artifact store: %w", err)
 	}
@@ -270,11 +270,11 @@ func validateInputCount(inputPaths []string, maxCount int) error {
 	return nil
 }
 
-func ValidateThreadMediaRefs(artifactDir, threadID string, refs []MediaRef, limits Limits) error {
+func ValidateThreadMediaRefs(mediaDir, threadID string, refs []MediaRef, limits Limits) error {
 	if len(refs) == 0 {
 		return nil
 	}
-	if strings.TrimSpace(artifactDir) == "" {
+	if strings.TrimSpace(mediaDir) == "" {
 		return errors.New("user media: missing Artifact directory")
 	}
 	if !safeThreadID(threadID) {
@@ -284,7 +284,7 @@ func ValidateThreadMediaRefs(artifactDir, threadID string, refs []MediaRef, limi
 	if limits.MaxCount > 0 && len(refs) > limits.MaxCount {
 		return fmt.Errorf("user media: too many images (%d/%d)", len(refs), limits.MaxCount)
 	}
-	store, err := artifact.NewStore(artifactDir)
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		return fmt.Errorf("user media: artifact store: %w", err)
 	}

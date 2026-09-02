@@ -2,29 +2,13 @@
 
 > English | [中文](README.zh.md)
 
-This package owns the portable filesystem substrate used for durable JueX
-state:
+This package owns portable filesystem mechanics for durable Juex state:
+advisory locks, the `$JUEX_HOME/.locks` layout, atomic replacement, and
+best-effort durability sync across supported filesystems.
 
-- advisory file locks with explicit blocking or try-lock behavior;
-- the `$JUEX_HOME/.locks/<scope>/<id>.lock` layout;
-- same-directory temporary-file publication with durable Windows replacement;
-- parent-chain sync when atomic publication creates new directories; and
-- parent-directory sync that tolerates filesystems where directory fsync is
-  unsupported.
+Replacement retries only transient platform conflicts and never reports
+success before the destination is published. Errors expose enough outcome
+information for transactional callers to roll back only paths they own.
 
-Windows replacement tolerates access-denied and sharing-violation errors with
-at most seven attempts on the same temporary file and unchanged durable flags.
-Six exponential delays request 315ms of sleep in total; OS calls and scheduling
-may take additional time. Other errors return immediately, and persistent
-conflicts fail without deleting the destination or reporting replacement.
-
-`agentstate`, `endpoint`, and `fleet` retain their identity and lifecycle
-policies. `fleetservice` retains transactional publication of multiple native
-service files. Atomic-write errors expose whether replacement occurred so that
-transactional callers roll back only paths they own. They delegate only
-filesystem mechanics to this package.
-
-Workspace identity and global Git-exclude locks remain in the OS temporary
-directory. The supervisor lock remains at `$JUEX_HOME/fleet.lock` for
-mixed-version compatibility; both use the same portable lock primitive without
-adopting the home lock layout.
+Identity, lifecycle, and multi-file transaction policy remain with callers
+such as `agentstate`, `endpoint`, `fleet`, and `fleetservice`.

@@ -215,126 +215,6 @@ func TestReceivePendingInputPersistsDeferredExternalInputDuringTerminalPublicati
 	}
 }
 
-func TestLegacyPendingEnqueueRejectsDuringTerminalPublication(t *testing.T) {
-	provider := &mockProvider{script: []llm.Response{{
-		Message:    llm.TextMessage(llm.RoleAssistant, "first complete"),
-		StopReason: llm.StopEndTurn,
-	}}}
-	eng, bus := newEngine(t, provider, false)
-	completionStarted := make(chan struct{})
-	releaseCompletion := make(chan struct{})
-	var completionOnce sync.Once
-	unsubscribe := bus.Subscribe("turn.completed", func(events.Event) {
-		completionOnce.Do(func() { close(completionStarted) })
-		<-releaseCompletion
-	})
-	defer unsubscribe()
-
-	turnDone := make(chan error, 1)
-	go func() {
-		_, err := eng.Turn(context.Background(), "first")
-		turnDone <- err
-	}()
-	select {
-	case <-completionStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("first turn did not begin its terminal commit")
-	}
-
-	enqueueDone := make(chan error, 1)
-	go func() {
-		_, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "late legacy input"), PendingInputOptions{
-			ID:  "late-legacy-input",
-			TTL: time.Hour,
-		})
-		enqueueDone <- err
-	}()
-	select {
-	case err := <-enqueueDone:
-		if !errors.Is(err, ErrNoActiveTurn) {
-			close(releaseCompletion)
-			t.Fatalf("legacy enqueue error = %v, want %v", err, ErrNoActiveTurn)
-		}
-	case <-time.After(time.Second):
-		close(releaseCompletion)
-		t.Fatal("legacy enqueue blocked during terminal publication")
-	}
-
-	close(releaseCompletion)
-	if err := <-turnDone; err != nil {
-		t.Fatal(err)
-	}
-	if _, ok, err := eng.PersistedPendingMessage("late-legacy-input"); err != nil {
-		t.Fatal(err)
-	} else if ok {
-		t.Fatal("legacy enqueue persisted input against a completed Turn")
-	}
-	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
-		t.Fatalf("pending status = %+v, want no stranded input", status)
-	}
-}
-
-func TestTerminalSubscriberCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
-	provider := &mockProvider{script: []llm.Response{{
-		Message:    llm.TextMessage(llm.RoleAssistant, "complete"),
-		StopReason: llm.StopEndTurn,
-	}}}
-	eng, bus := newEngine(t, provider, false)
-	enqueueResult := make(chan error, 1)
-	unsubscribe := bus.Subscribe("turn.completed", func(events.Event) {
-		_, err := eng.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "subscriber input"))
-		enqueueResult <- err
-	})
-	defer unsubscribe()
-
-	turnDone := make(chan error, 1)
-	go func() {
-		_, err := eng.Turn(context.Background(), "first")
-		turnDone <- err
-	}()
-	select {
-	case err := <-turnDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Turn deadlocked while terminal subscriber used legacy enqueue")
-	}
-	if err := <-enqueueResult; !errors.Is(err, ErrNoActiveTurn) {
-		t.Fatalf("terminal subscriber enqueue error = %v, want %v", err, ErrNoActiveTurn)
-	}
-	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
-		t.Fatalf("pending status = %+v, want no input attached after completion", status)
-	}
-}
-
-func TestErrorSubscriberCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
-	eng, bus := newEngine(t, errorProvider{}, false)
-	enqueueResult := make(chan error, 1)
-	unsubscribe := bus.Subscribe("turn.errored", func(events.Event) {
-		_, err := eng.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "subscriber input"))
-		enqueueResult <- err
-	})
-	defer unsubscribe()
-
-	turnDone := make(chan error, 1)
-	go func() {
-		_, err := eng.Turn(context.Background(), "first")
-		turnDone <- err
-	}()
-	select {
-	case err := <-turnDone:
-		if err == nil || !strings.Contains(err.Error(), "boom") {
-			t.Fatalf("Turn() error = %v, want provider failure", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Turn deadlocked while error subscriber used legacy enqueue")
-	}
-	if err := <-enqueueResult; !errors.Is(err, ErrNoActiveTurn) {
-		t.Fatalf("error subscriber enqueue error = %v, want %v", err, ErrNoActiveTurn)
-	}
-}
-
 func TestTerminalSubscriberCanSynchronouslyReadPendingLifecycleStatus(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "complete"),
@@ -362,82 +242,6 @@ func TestTerminalSubscriberCanSynchronouslyReadPendingLifecycleStatus(t *testing
 	}
 	if status := <-statusResult; status.TurnID == "" {
 		t.Fatalf("terminal publication status = %+v, want publishing Turn", status)
-	}
-}
-
-func TestTerminalDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
-	provider := &mockProvider{script: []llm.Response{{
-		Message:    llm.TextMessage(llm.RoleAssistant, "complete"),
-		StopReason: llm.StopEndTurn,
-	}}}
-	eng, bus := newEngine(t, provider, false)
-	sink := events.NewDurableSink(eng.Thread)
-	bus.SetCommitter(sink)
-	defer func() {
-		bus.SetCommitter(nil)
-		_ = sink.Close()
-	}()
-
-	projectionResult := make(chan error, 1)
-	sink.AddProjection(events.DeliveryFunc(func(event events.Event) {
-		if event.Type != "turn.completed" {
-			return
-		}
-		_, err := eng.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "projection input"))
-		projectionResult <- err
-	}))
-
-	turnDone := make(chan error, 1)
-	go func() {
-		_, err := eng.Turn(context.Background(), "first")
-		turnDone <- err
-	}()
-	select {
-	case err := <-turnDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Turn deadlocked while terminal durable projection used legacy enqueue")
-	}
-	if err := <-projectionResult; !errors.Is(err, ErrNoActiveTurn) {
-		t.Fatalf("projection enqueue error = %v, want %v", err, ErrNoActiveTurn)
-	}
-}
-
-func TestErrorDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
-	eng, bus := newEngine(t, errorProvider{}, false)
-	sink := events.NewDurableSink(eng.Thread)
-	bus.SetCommitter(sink)
-	defer func() {
-		bus.SetCommitter(nil)
-		_ = sink.Close()
-	}()
-
-	projectionResult := make(chan error, 1)
-	sink.AddProjection(events.DeliveryFunc(func(event events.Event) {
-		if event.Type != "turn.errored" {
-			return
-		}
-		_, err := eng.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "projection input"))
-		projectionResult <- err
-	}))
-
-	turnDone := make(chan error, 1)
-	go func() {
-		_, err := eng.Turn(context.Background(), "first")
-		turnDone <- err
-	}()
-	select {
-	case err := <-turnDone:
-		if err == nil || !strings.Contains(err.Error(), "boom") {
-			t.Fatalf("Turn() error = %v, want provider failure", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Turn deadlocked while error durable projection used legacy enqueue")
-	}
-	if err := <-projectionResult; !errors.Is(err, ErrNoActiveTurn) {
-		t.Fatalf("projection enqueue error = %v, want %v", err, ErrNoActiveTurn)
 	}
 }
 
@@ -935,7 +739,9 @@ func TestPendingDroppedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 
 	var nestedErr error
 	bus.Subscribe("pending_input.dropped", func(events.Event) {
-		_, nestedErr = eng.EnqueuePendingInput(context.Background(), "replacement")
+		_, nestedErr = eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "replacement"),
+		})
 	})
 	done := make(chan error, 1)
 	go func() {

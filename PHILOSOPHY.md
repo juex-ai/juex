@@ -3,9 +3,8 @@
 > English | [中文](PHILOSOPHY.zh.md)
 
 Juex is an agent runtime for local, inspectable work. Its design bias is to
-make the agent loop understandable: inputs are plain files, tools are explicit
-contracts, events are observable, and state is stored where the user can read
-or delete it.
+make the agent loop understandable: Tools are explicit contracts, Events are
+observable, and durable state is stored where the user can inspect or delete it.
 
 ## Principles
 
@@ -27,9 +26,8 @@ state visible.
 
 The canonical ownership split is defined in [DOMAIN.md](DOMAIN.md). Its
 purpose is to let identity-owned state survive a Workspace move without hiding
-which Workspace owns it: generated Agent state follows the Agent, while
-user-authored configuration/resources and Workspace-rooted artifacts stay near
-the work.
+which Workspace owns it: generated state follows the Agent, while user-authored
+configuration, resources, and project files stay with the Workspace.
 
 ### Use Providers Behind One Model
 
@@ -54,9 +52,9 @@ remains the source of truth.
 
 ### Defer Until It Hurts
 
-Search, collaboration, attachments, richer permissions, and hosted deployment
-are all plausible, but not default. Add them when a concrete workflow requires
-them and when the implementation can stay small enough to test and explain.
+New abstractions and deployment modes are not default scope. Add them when a
+concrete workflow requires them and the implementation can stay small enough
+to test and explain.
 
 ## Trade-Offs
 

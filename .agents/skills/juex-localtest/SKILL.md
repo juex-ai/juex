@@ -49,7 +49,7 @@ Run commands directly from the repository root.
    web-dependent package selections valid in a fresh checkout.
 2. **PR candidate** - after committing the implementation, run `make
    verify-candidate`. Add `RACE=1` for concurrency, shutdown, runtime turn,
-   MCP, tool, event, session, web request, or shared-state changes. Add
+   MCP, tool, event, Thread, web request, or shared-state changes. Add
    `WEB=1` for frontend changes. Race replaces the ordinary suite; web-check
    feeds the Go-only binary build without a second frontend build. A
    non-overwriting lightweight web stub makes Go checks work in fresh checkouts.
@@ -57,7 +57,7 @@ Run commands directly from the repository root.
 3. **Final candidate** - run `make verify-final` before delivery. It repeats
    the candidate plan, then runs live integration and one dynamically selected
    provider smoke. Add `COMPACTION=1` for compaction, context projection,
-   reasoning replay, or long-session changes. Candidate and final require a
+   reasoning replay, or long-Thread changes. Candidate and final require a
    clean worktree and stop on the first failing step.
 
 Do not manually compose `make test`, `make race`, `make integration`,
@@ -147,7 +147,7 @@ examples where live providers are irrelevant.
 
 Use `--only provider:model` to bound provider smoke. Use `--compaction-eval`
 when a change touches compaction, context projection, provider reasoning replay,
-or long-session behavior. The compaction evaluator selects one eligible ref
+or long-Thread behavior. The compaction evaluator selects one eligible ref
 from the resolved provider config by the recorded seed and writes scorecards
 under the development record. Models with an explicitly insufficient context
 window are excluded. Use

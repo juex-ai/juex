@@ -37,14 +37,14 @@ func (e *Engine) policyThreadContext() *runtimemodule.ThreadContext {
 	if e == nil {
 		return nil
 	}
-	sess := e.currentThread()
-	if sess == nil {
+	threadState := e.currentThread()
+	if threadState == nil {
 		return nil
 	}
 	return &runtimemodule.ThreadContext{
-		ID:            sess.ID,
-		Dir:           sess.Dir,
-		ScratchpadDir: sess.ScratchpadDir(),
+		ID:            threadState.ID,
+		Dir:           threadState.Dir,
+		ScratchpadDir: threadState.ScratchpadDir(),
 	}
 }
 

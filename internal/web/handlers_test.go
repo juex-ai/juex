@@ -190,9 +190,6 @@ func TestThreadAPIEmptyWorkerTimelineSerializesAsArray(t *testing.T) {
 	if string(response["retention_state"]) != `"active"` || string(response["execution_state"]) != `"idle"` {
 		t.Fatalf("Thread lifecycle fields = retention:%s execution:%s", response["retention_state"], response["execution_state"])
 	}
-	if _, exists := response["state"]; exists {
-		t.Fatalf("legacy state field remains in Thread response: %s", recorder.Body.String())
-	}
 }
 
 func TestThreadAPICreatesNestedWorkerWithExplicitParent(t *testing.T) {

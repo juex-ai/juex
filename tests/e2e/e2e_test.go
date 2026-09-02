@@ -219,12 +219,12 @@ func TestEndToEnd_FullStack(t *testing.T) {
 
 	// -- Build runtime --
 	bus := events.NewBus()
-	sess, err := thread.New(filepath.Join(root, ".juex", "threads"))
+	threadState, err := thread.New(filepath.Join(root, ".juex", "threads"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = sess.Close() }()
-	sess.SubscribeBus(bus)
+	defer func() { _ = threadState.Close() }()
+	threadState.SubscribeBus(bus)
 
 	pb := e2ePromptBuilder(
 		t,
@@ -233,8 +233,8 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		root,
 		e2ePromptShellProfile(),
 		func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
-		sess,
-		skillsmodule.NewWithLoader(skillLoader, root, sandbox.LegacyDefaultPolicy()),
+		threadState,
+		skillsmodule.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
 	)
 
 	// -- Script the model --
@@ -292,7 +292,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		Tools:          reg,
 		RuntimeModules: runtimeSet,
 		Bus:            bus,
-		Thread:         sess,
+		Thread:         threadState,
 		Prompt:         pb,
 	}
 
@@ -318,7 +318,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		t.Fatalf("demo.txt: data=%q err=%v", demoData, err)
 	}
 	// -- Thread Journal assertions --
-	replay := sess.ReplaySnapshot()
+	replay := threadState.ReplaySnapshot()
 	// History layout for 4 scripted assistant responses (3 with tool calls + 1 text-only):
 	//   u(prompt) + [a + u(tool_results)] x3 + a(final) = 8 messages.
 	if len(replay.Messages) != 8 {
@@ -363,13 +363,13 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 
 	root := t.TempDir()
 	target := filepath.Join(root, "artifact.txt")
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	bus := events.NewBus()
-	sess.SubscribeBus(bus)
+	threadState.SubscribeBus(bus)
 
 	reg := tools.NewRegistry()
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: tools.DefaultShellProfile()})
@@ -425,10 +425,10 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 		Provider: prov,
 		Tools:    reg,
 		Bus:      bus,
-		Thread:   sess,
+		Thread:   threadState,
 		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC)
-		}, sess),
+		}, threadState),
 	}
 
 	out, err := eng.Turn(context.Background(), "make the artifact ready")
@@ -448,12 +448,12 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 		t.Fatalf("provider should not receive failure-ledger continuation observation:\n%s", observation)
 	}
 
-	convText := messagesText(sess.ReplaySnapshot().Messages)
+	convText := messagesText(threadState.ReplaySnapshot().Messages)
 	if strings.Contains(convText, "Runtime observation") {
 		t.Fatalf("conversation should not include runtime failure continuation:\n%s", convText)
 	}
 
-	eventLines := sess.ReplaySnapshot().Events
+	eventLines := threadState.ReplaySnapshot().Events
 	seen := map[string]bool{}
 	var payloadText strings.Builder
 	for _, ev := range eventLines {
@@ -485,13 +485,13 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 	if err := os.WriteFile(target, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	bus := events.NewBus()
-	sess.SubscribeBus(bus)
+	threadState.SubscribeBus(bus)
 	reg := tools.NewRegistry()
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: work, Shell: tools.DefaultShellProfile()})
 
@@ -525,10 +525,10 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 		Provider: prov,
 		Tools:    reg,
 		Bus:      bus,
-		Thread:   sess,
+		Thread:   threadState,
 		Prompt: e2ePromptBuilder(t, "", []string{work}, work, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
-		}, sess),
+		}, threadState),
 	}
 
 	out, err := eng.Turn(context.Background(), "apply the patch")
@@ -545,17 +545,17 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 		t.Fatalf("notes/result.txt data=%q err=%v", data, err)
 	}
 
-	convText := messagesText(sess.ReplaySnapshot().Messages)
+	convText := messagesText(threadState.ReplaySnapshot().Messages)
 	for _, want := range []string{"applied patch", "add=1", "update=1"} {
 		if !strings.Contains(convText, want) {
 			t.Fatalf("conversation missing %q:\n%s", want, convText)
 		}
 	}
-	if journal := strings.Join(readLines(t, filepath.Join(sess.Dir, "journal.jsonl")), "\n"); !strings.Contains(journal, "apply_patch") {
+	if journal := strings.Join(readLines(t, filepath.Join(threadState.Dir, "journal.jsonl")), "\n"); !strings.Contains(journal, "apply_patch") {
 		t.Fatalf("Thread Journal missing apply_patch call:\n%s", journal)
 	}
 	var toolResultText string
-	for _, msg := range sess.ReplaySnapshot().Messages {
+	for _, msg := range threadState.ReplaySnapshot().Messages {
 		for _, block := range msg.Blocks {
 			if block.Type == llm.BlockToolResult && block.ToolUseID == "patch_1" {
 				toolResultText = block.Content
@@ -568,7 +568,7 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 	if strings.Contains(toolResultText, "patch flow complete") || strings.Contains(toolResultText, "*** Begin Patch") {
 		t.Fatalf("tool result should not echo full patch text:\n%s", toolResultText)
 	}
-	eventsText := strings.Join(readLines(t, filepath.Join(sess.Dir, "journal.jsonl")), "\n")
+	eventsText := strings.Join(readLines(t, filepath.Join(threadState.Dir, "journal.jsonl")), "\n")
 	for _, want := range []string{"tool.requested", "tool.completed", "apply_patch"} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
@@ -578,13 +578,13 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 
 func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 	work := t.TempDir()
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	bus := events.NewBus()
-	sess.SubscribeBus(bus)
+	threadState.SubscribeBus(bus)
 	reg := tools.NewRegistry()
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: work, Shell: tools.DefaultShellProfile()})
 
@@ -596,10 +596,10 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 		Provider: prov,
 		Tools:    reg,
 		Bus:      bus,
-		Thread:   sess,
+		Thread:   threadState,
 		Prompt: e2ePromptBuilder(t, "", []string{work}, work, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC)
-		}, sess),
+		}, threadState),
 	}
 
 	out, err := eng.Turn(context.Background(), "write a long report")
@@ -645,18 +645,18 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 			}
 		}
 	}
-	convText := messagesText(sess.ReplaySnapshot().Messages)
+	convText := messagesText(threadState.ReplaySnapshot().Messages)
 	for _, want := range []string{"write_begin", "write_chunk", "write_commit", "chunks=2"} {
 		if !strings.Contains(convText, want) {
 			t.Fatalf("conversation missing %q:\n%s", want, convText)
 		}
 	}
 	for _, forbidden := range []string{contentA, contentB} {
-		if strings.Contains(toolResultText(sess.ReplaySnapshot().Messages), forbidden) {
+		if strings.Contains(toolResultText(threadState.ReplaySnapshot().Messages), forbidden) {
 			t.Fatalf("tool results echoed chunk content")
 		}
 	}
-	eventsText := strings.Join(readLines(t, filepath.Join(sess.Dir, "journal.jsonl")), "\n")
+	eventsText := strings.Join(readLines(t, filepath.Join(threadState.Dir, "journal.jsonl")), "\n")
 	for _, want := range []string{"tool.requested", "tool.completed", "write_chunk"} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
@@ -924,12 +924,12 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	runtimeSet, reg := e2eServingToolCatalog(t, ctx, root, mcpConfig)
 
 	bus := events.NewBus()
-	sess, err := thread.New(filepath.Join(root, ".juex", "threads"))
+	threadState, err := thread.New(filepath.Join(root, ".juex", "threads"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = sess.Close() }()
-	sess.SubscribeBus(bus)
+	defer func() { _ = threadState.Close() }()
+	threadState.SubscribeBus(bus)
 
 	pb := e2ePromptBuilder(
 		t,
@@ -938,8 +938,8 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		root,
 		e2ePromptShellProfile(),
 		func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
-		sess,
-		skillsmodule.NewWithLoader(skillLoader, root, sandbox.LegacyDefaultPolicy()),
+		threadState,
+		skillsmodule.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
 	)
 
 	prov := &scriptProvider{
@@ -987,7 +987,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		Tools:          reg,
 		RuntimeModules: runtimeSet,
 		Bus:            bus,
-		Thread:         sess,
+		Thread:         threadState,
 		Prompt:         pb,
 	}
 
@@ -1008,7 +1008,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	if err != nil || !strings.Contains(string(demoData), "PORTABLE") || strings.Contains(string(demoData), "placeholder") {
 		t.Fatalf("demo.txt: data=%q err=%v", demoData, err)
 	}
-	replay := sess.ReplaySnapshot()
+	replay := threadState.ReplaySnapshot()
 	if len(replay.Messages) != 8 {
 		t.Errorf("Thread Journal message count = %d; want 8", len(replay.Messages))
 	}
@@ -1060,7 +1060,7 @@ func e2ePromptBuilder(
 	workDir string,
 	shell promptcontext.ShellProfile,
 	now func() time.Time,
-	sess *thread.Thread,
+	threadState *thread.Thread,
 	runtimeModules ...runtimemodule.Module,
 ) *prompt.Builder {
 	t.Helper()
@@ -1094,16 +1094,16 @@ func e2ePromptBuilder(
 	}
 	t.Cleanup(func() { _ = runtimeSet.CloseRuntime(context.Background()) })
 
-	sessionContext := runtimemodule.ThreadContext{}
-	if sess != nil {
-		sessionContext = runtimemodule.ThreadContext{
-			ID:            sess.ID,
-			Dir:           sess.Dir,
-			ScratchpadDir: sess.ScratchpadDir(),
+	threadContext := runtimemodule.ThreadContext{}
+	if threadState != nil {
+		threadContext = runtimemodule.ThreadContext{
+			ID:            threadState.ID,
+			Dir:           threadState.Dir,
+			ScratchpadDir: threadState.ScratchpadDir(),
 		}
 	}
 	threadModule := &promptcontext.ThreadContextModule{WorkDir: workDir, Shell: shell, Now: now}
-	sessionSet, err := runtimemodule.BuildThreadSet(
+	threadSet, err := runtimemodule.BuildThreadSet(
 		t.Context(),
 		[]runtimemodule.ThreadFactorySpec{{
 			ID:      threadModule.ID(),
@@ -1112,23 +1112,23 @@ func e2ePromptBuilder(
 				return threadModule, nil
 			},
 		}},
-		sessionContext,
-		runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &sessionContext},
+		threadContext,
+		runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &threadContext},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sessionSet.StartThread(t.Context(), sessionContext); err != nil {
+	if err := threadSet.StartThread(t.Context(), threadContext); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sessionSet.CloseThread(context.Background()) })
+	t.Cleanup(func() { _ = threadSet.CloseThread(context.Background()) })
 
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return runtimemodule.CollectContext(context.Background(), runtimemodule.ContextRequest{
 			Purpose: runtimemodule.ContextPurposeProviderIteration,
 			Runtime: runtimeContext,
-			Thread:  &sessionContext,
-		}, runtimeSet, sessionSet)
+			Thread:  &threadContext,
+		}, runtimeSet, threadSet)
 	}}
 }
 
@@ -1388,7 +1388,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if _, err := a1.Run(context.Background(), "remember: alice"); err != nil {
 		t.Fatal(err)
 	}
-	sessionDir := a1.Thread.Dir
+	threadDir := a1.Thread.Dir
 	if err := a1.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1418,7 +1418,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work},
 		Provider: prov2,
 		WorkDir:  work,
-		ThreadID: filepath.Base(sessionDir),
+		ThreadID: filepath.Base(threadDir),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1431,8 +1431,8 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if out != "you are alice" {
 		t.Errorf("got %q", out)
 	}
-	if a2.Thread.ID != filepath.Base(sessionDir) {
-		t.Errorf("Thread id changed: %s vs %s", a2.Thread.ID, filepath.Base(sessionDir))
+	if a2.Thread.ID != filepath.Base(threadDir) {
+		t.Errorf("Thread id changed: %s vs %s", a2.Thread.ID, filepath.Base(threadDir))
 	}
 	// Resumed history is prior pair (user+assistant) + the new user prompt.
 	if len(prov2.history) == 0 {
@@ -1482,7 +1482,7 @@ func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionDir := first.Thread.Dir
+	threadDir := first.Thread.Dir
 	if err := first.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
@@ -1492,7 +1492,7 @@ func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testi
 		Config:     cfg,
 		Provider:   provider,
 		WorkDir:    work,
-		ThreadID:   filepath.Base(sessionDir),
+		ThreadID:   filepath.Base(threadDir),
 		DisableMCP: true,
 	})
 	if err != nil {
@@ -1534,7 +1534,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionDir := first.Thread.Dir
+	threadDir := first.Thread.Dir
 	timestamp := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	input, err := first.Thread.AppendAssigned(llm.TextMessage(llm.RoleUser, "interrupted request"))
 	if err != nil {
@@ -1626,7 +1626,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		t.Fatal(err)
 	}
 
-	eventsPath := filepath.Join(sessionDir, "journal.jsonl")
+	eventsPath := filepath.Join(threadDir, "journal.jsonl")
 	appendFile, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -1644,7 +1644,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		Config:     cfg,
 		Provider:   &recordingProvider{},
 		WorkDir:    work,
-		ThreadID:   filepath.Base(sessionDir),
+		ThreadID:   filepath.Base(threadDir),
 		DisableMCP: true,
 		Stderr:     &stderr,
 	})
@@ -1935,11 +1935,6 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 		goal.StatusReason != "continuation gate fired and final answer was verified" || !strings.Contains(goal.Acceptance, "goal.continued") {
 		t.Fatalf("Thread goal = %+v", goal)
 	}
-	for _, forbidden := range []string{"acceptance_criteria", "required_artifacts", "artifact_requirements", "validation_requirements", "verification_method"} {
-		if strings.Contains(string(goalData), forbidden) {
-			t.Fatalf("goal_state.json contains removed field %q:\n%s", forbidden, goalData)
-		}
-	}
 	eventsData, err := os.ReadFile(filepath.Join(a.Thread.Dir, "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -2090,26 +2085,26 @@ func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 	if compact.MessageID == "" {
 		t.Fatalf("manual compaction did not run: %+v", compact)
 	}
-	sessionDir := a.Thread.Dir
+	threadDir := a.Thread.Dir
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, rel := range []string{"logs/juex.log", "logs/debug.log"} {
-		if _, err := os.Stat(filepath.Join(sessionDir, rel)); err != nil {
+		if _, err := os.Stat(filepath.Join(threadDir, rel)); err != nil {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
 	}
-	if got := rootJSONLFiles(t, sessionDir); !slices.Equal(got, []string{"journal.jsonl"}) {
+	if got := rootJSONLFiles(t, threadDir); !slices.Equal(got, []string{"journal.jsonl"}) {
 		t.Fatalf("Thread JSONL files = %v, want the canonical Journal", got)
 	}
-	journal := readJSONLObjects(t, filepath.Join(sessionDir, "journal.jsonl"))
+	journal := readJSONLObjects(t, filepath.Join(threadDir, "journal.jsonl"))
 	for _, want := range []string{"tool.completed", "tool.errored", "context.compact.completed", "finish.attempted"} {
 		if !jsonlContainsString(journal, want) {
 			t.Fatalf("event journal missing %q: %+v", want, journal)
 		}
 	}
-	debugLog, err := os.ReadFile(filepath.Join(sessionDir, "logs", "debug.log"))
+	debugLog, err := os.ReadFile(filepath.Join(threadDir, "logs", "debug.log"))
 	if err != nil {
 		t.Fatal(err)
 	}

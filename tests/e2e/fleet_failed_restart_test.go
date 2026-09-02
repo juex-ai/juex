@@ -62,8 +62,8 @@ func TestFleetRestartContinuesFailedTurnOnce(t *testing.T) {
 				t.Fatalf("start: %v\n%s\n%s", err, stdout, stderr)
 			}
 			originalRuntime := waitFleetRuntime(t, address)
-			sessionID, originalTurnID := startFleetBlockingTurn(t, originalRuntime)
-			failed := waitFleetTurnState(t, originalRuntime, sessionID, originalTurnID, statusapi.TurnErrored)
+			threadID, originalTurnID := startFleetBlockingTurn(t, originalRuntime)
+			failed := waitFleetTurnState(t, originalRuntime, threadID, originalTurnID, statusapi.TurnErrored)
 			if failed.State != statusapi.ActivityIdle || failed.SelectedStatus.Thread.State != statusapi.ThreadFailed {
 				t.Fatalf("failed activity = %+v", failed)
 			}
@@ -99,7 +99,7 @@ func TestFleetRestartContinuesFailedTurnOnce(t *testing.T) {
 			}
 			restart(true)
 			replacement := waitFleetRuntimeVersion(t, address, originalRuntime.InstanceID, originalRuntime.BinaryVersion)
-			completed := waitFleetTurnState(t, replacement, sessionID, "", statusapi.TurnCompleted)
+			completed := waitFleetTurnState(t, replacement, threadID, "", statusapi.TurnCompleted)
 			if completed.SelectedStatus.Turn.ID == originalTurnID {
 				t.Fatal("continuation overwrote the failed Turn identity")
 			}
@@ -128,7 +128,7 @@ func TestFleetRestartContinuesFailedTurnOnce(t *testing.T) {
 			// A later explicit restart must not repeat the now-completed work.
 			restart(false)
 			finalRuntime := waitFleetRuntimeVersion(t, address, replacement.InstanceID, replacement.BinaryVersion)
-			waitFleetTurnState(t, finalRuntime, sessionID, completed.SelectedStatus.Turn.ID, statusapi.TurnCompleted)
+			waitFleetTurnState(t, finalRuntime, threadID, completed.SelectedStatus.Turn.ID, statusapi.TurnCompleted)
 			if got := calls.Load(); got != 2 {
 				t.Fatalf("provider requests = %d, want original failure and one continuation", got)
 			}
@@ -136,7 +136,7 @@ func TestFleetRestartContinuesFailedTurnOnce(t *testing.T) {
 	}
 }
 
-func waitFleetTurnState(t *testing.T, state endpoint.Runtime, sessionID, turnID string, want statusapi.TurnState) statusapi.AgentActivity {
+func waitFleetTurnState(t *testing.T, state endpoint.Runtime, threadID, turnID string, want statusapi.TurnState) statusapi.AgentActivity {
 	t.Helper()
 	target, err := endpoint.Parse(state.Endpoint)
 	if err != nil {
@@ -160,12 +160,12 @@ func waitFleetTurnState(t *testing.T, state endpoint.Runtime, sessionID, turnID 
 		if response.StatusCode != http.StatusOK || decodeErr != nil {
 			t.Fatalf("activity response: status=%d error=%v", response.StatusCode, decodeErr)
 		}
-		if selected := activity.SelectedStatus; selected != nil && selected.Thread.ID == sessionID &&
+		if selected := activity.SelectedStatus; selected != nil && selected.Thread.ID == threadID &&
 			selected.Turn != nil && selected.Turn.State == want && (turnID == "" || selected.Turn.ID == turnID) {
 			return activity
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatalf("Agent did not reach session=%s turn=%s state=%s; last activity: %+v", sessionID, turnID, want, activity)
+	t.Fatalf("Agent did not reach thread=%s turn=%s state=%s; last activity: %+v", threadID, turnID, want, activity)
 	return activity
 }

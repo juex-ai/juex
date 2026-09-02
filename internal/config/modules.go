@@ -7,7 +7,7 @@ import (
 )
 
 // ModulePolicy is the layered enabled envelope for compiled in-process
-// Modules. Missing entries intentionally default to enabled for compatibility.
+// Modules. Missing entries mean that the compiled Module uses its default.
 type ModulePolicy map[string]ModuleSettings
 
 type ModuleSettings struct {

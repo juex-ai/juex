@@ -14,7 +14,7 @@ import (
 
 func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	mediaDir := filepath.Join(t.TempDir(), "media")
 	relPath := ".juex/inbox/pixel.png"
 	sourcePath := filepath.Join(workDir, filepath.FromSlash(relPath))
 	writeAttachmentPNG(t, sourcePath)
@@ -22,7 +22,7 @@ func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 	report := ValidateAttachments([]AttachmentRef{{
 		Path:      relPath,
 		MediaType: "image/png",
-	}}, ValidationOptions{WorkDir: workDir, MediaDir: artifactDir})
+	}}, ValidationOptions{WorkDir: workDir, MediaDir: mediaDir})
 	if len(report.Errors) != 0 {
 		t.Fatalf("errors = %+v, want none", report.Errors)
 	}
@@ -43,7 +43,7 @@ func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 	if got.AbsolutePath == "" || !strings.HasPrefix(got.AbsolutePath, resolvedWorkDir) {
 		t.Fatalf("absolute path = %q, want inside workdir %q", got.AbsolutePath, resolvedWorkDir)
 	}
-	store, err := artifact.NewStore(artifactDir)
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,14 +59,14 @@ func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 func TestValidateAttachmentsAcceptsCurrentAgentStateImage(t *testing.T) {
 	workDir := t.TempDir()
 	agentStateDir := filepath.Join(t.TempDir(), "agents", "yqmgmu")
-	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	mediaDir := filepath.Join(agentStateDir, "media")
 	sourcePath := filepath.Join(agentStateDir, "extensions", "wechat-wire", "media", "pixel.png")
 	writeAttachmentPNG(t, sourcePath)
 
 	report := ValidateAttachments([]AttachmentRef{{
 		Path:      sourcePath,
 		MediaType: "image/png",
-	}}, ValidationOptions{WorkDir: workDir, AgentStateDir: agentStateDir, MediaDir: artifactDir})
+	}}, ValidationOptions{WorkDir: workDir, AgentStateDir: agentStateDir, MediaDir: mediaDir})
 	if len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("report = %+v, want one valid AgentStateDir attachment", report)
 	}
@@ -80,8 +80,8 @@ func TestValidateAttachmentsAcceptsCurrentAgentStateImage(t *testing.T) {
 }
 
 func TestValidateStoredAttachmentsUsesArtifactReferenceAndIntegrity(t *testing.T) {
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
-	store, err := artifact.NewStore(artifactDir)
+	mediaDir := filepath.Join(t.TempDir(), "media")
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestValidateStoredAttachmentsUsesArtifactReferenceAndIntegrity(t *testing.T
 		t.Fatal(err)
 	}
 	stored := AttachmentRef{Path: ref.Path, MediaType: "image/png", SHA256: ref.SHA256, Bytes: ref.Bytes}
-	report := ValidateStoredAttachments([]AttachmentRef{stored}, ValidationOptions{MediaDir: artifactDir})
+	report := ValidateStoredAttachments([]AttachmentRef{stored}, ValidationOptions{MediaDir: mediaDir})
 	if len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("stored report = %+v", report)
 	}
@@ -99,17 +99,17 @@ func TestValidateStoredAttachmentsUsesArtifactReferenceAndIntegrity(t *testing.T
 		t.Fatalf("stored attachment = %+v", got)
 	}
 
-	if err := os.WriteFile(filepath.Join(artifactDir, filepath.FromSlash(ref.Path)), []byte("tampered"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(mediaDir, filepath.FromSlash(ref.Path)), []byte("tampered"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	report = ValidateStoredAttachments([]AttachmentRef{stored}, ValidationOptions{MediaDir: artifactDir})
+	report = ValidateStoredAttachments([]AttachmentRef{stored}, ValidationOptions{MediaDir: mediaDir})
 	if len(report.Valid) != 0 || len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "integrity") {
 		t.Fatalf("tampered report = %+v", report)
 	}
 }
 
 func TestValidateStoredAttachmentsRequiresIntegrityMetadata(t *testing.T) {
-	report := ValidateStoredAttachments([]AttachmentRef{{Path: "event-media/image.png"}}, ValidationOptions{MediaDir: filepath.Join(t.TempDir(), "artifacts")})
+	report := ValidateStoredAttachments([]AttachmentRef{{Path: "event-media/image.png"}}, ValidationOptions{MediaDir: filepath.Join(t.TempDir(), "media")})
 	if len(report.Valid) != 0 || len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "integrity metadata") {
 		t.Fatalf("report = %+v", report)
 	}
@@ -147,7 +147,7 @@ func TestValidateAttachmentsHonorsBlockedPathsInAgentStateDir(t *testing.T) {
 	agentStateDir := filepath.Join(t.TempDir(), "agents", "current")
 	blockedPath := filepath.Join(agentStateDir, "extensions", "wechat-wire", "private.png")
 	writeAttachmentPNG(t, blockedPath)
-	policy := sandbox.LegacyDefaultPolicy()
+	policy := sandbox.DisabledPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{blockedPath}
 
@@ -172,7 +172,7 @@ func TestValidateAttachmentsHonorsPhysicalBlockedPathThroughAgentStateAlias(t *t
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	aliasPath := filepath.Join(aliasDir, "image.png")
-	policy := sandbox.LegacyDefaultPolicy()
+	policy := sandbox.DisabledPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{physicalDir}
 
@@ -299,7 +299,7 @@ func TestValidateAttachmentsRejectsTotalEventSizeLimit(t *testing.T) {
 
 func TestValidateAttachmentsAcceptsDeclaredJSON(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	mediaDir := filepath.Join(t.TempDir(), "media")
 	if err := os.WriteFile(filepath.Join(workDir, "event.json"), []byte(`{"kind":"deploy"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestValidateAttachmentsAcceptsDeclaredJSON(t *testing.T) {
 	report := ValidateAttachments([]AttachmentRef{{
 		Path:      "event.json",
 		MediaType: "application/json",
-	}}, ValidationOptions{WorkDir: workDir, MediaDir: artifactDir})
+	}}, ValidationOptions{WorkDir: workDir, MediaDir: mediaDir})
 	if len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("report = %+v, want one valid JSON attachment", report)
 	}
@@ -333,12 +333,12 @@ func TestValidateAttachmentsRejectsInvalidDeclaredJSON(t *testing.T) {
 
 func TestValidateAttachmentsParsesWebPDimensions(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	mediaDir := filepath.Join(t.TempDir(), "media")
 	if err := os.WriteFile(filepath.Join(workDir, "image.webp"), testWebPVP8X(640, 480), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	report := ValidateAttachments([]AttachmentRef{{Path: "image.webp", MediaType: "image/webp"}}, ValidationOptions{WorkDir: workDir, MediaDir: artifactDir})
+	report := ValidateAttachments([]AttachmentRef{{Path: "image.webp", MediaType: "image/webp"}}, ValidationOptions{WorkDir: workDir, MediaDir: mediaDir})
 	if len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("report = %+v, want one valid WebP attachment", report)
 	}

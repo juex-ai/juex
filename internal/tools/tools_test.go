@@ -36,7 +36,7 @@ func registerTestBuiltins(r *Registry, workDir string) {
 	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, MediaDir: testMediaDir(workDir), Shell: DefaultShellProfile()})
 }
 
-func testMediaDir(workDir string) string { return filepath.Join(workDir, "artifacts") }
+func testMediaDir(workDir string) string { return filepath.Join(workDir, "media") }
 
 func registerSandboxedTestBuiltins(r *Registry, workDir string, blockedPaths []string) {
 	policy := sandbox.DefaultPolicy()
@@ -967,11 +967,11 @@ func TestBuiltins_ReadWriteEdit(t *testing.T) {
 func TestBuiltins_ArtifactReadURIIsReadableAndReadOnly(t *testing.T) {
 	root := t.TempDir()
 	workDir := filepath.Join(root, "work")
-	artifactDir := filepath.Join(root, "artifacts")
+	mediaDir := filepath.Join(root, "media")
 	if err := os.Mkdir(workDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	store, err := artifact.NewStore(artifactDir)
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +985,7 @@ func TestBuiltins_ArtifactReadURIIsReadableAndReadOnly(t *testing.T) {
 	}
 
 	r := NewRegistry()
-	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, MediaDir: artifactDir, Shell: DefaultShellProfile()})
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, MediaDir: mediaDir, Shell: DefaultShellProfile()})
 	out, err := r.Call(context.Background(), "read", map[string]any{"path": uri})
 	if err != nil {
 		t.Fatal(err)
@@ -1008,8 +1008,8 @@ func TestBuiltins_ArtifactReadURIIsReadableAndReadOnly(t *testing.T) {
 		name  string
 		input map[string]any
 	}{
-		{name: "write", input: map[string]any{"path": filepath.Join(artifactDir, filepath.FromSlash(ref.Path)), "content": "overwritten"}},
-		{name: "edit", input: map[string]any{"path": filepath.Join(artifactDir, filepath.FromSlash(ref.Path)), "old": "complete", "new": "overwritten"}},
+		{name: "write", input: map[string]any{"path": filepath.Join(mediaDir, filepath.FromSlash(ref.Path)), "content": "overwritten"}},
+		{name: "edit", input: map[string]any{"path": filepath.Join(mediaDir, filepath.FromSlash(ref.Path)), "old": "complete", "new": "overwritten"}},
 	} {
 		if _, err := r.Call(context.Background(), call.name, call.input); err == nil || !strings.Contains(err.Error(), "read-only root") {
 			t.Fatalf("%s physical Artifact error = %v, want read-only root rejection", call.name, err)
@@ -1028,13 +1028,13 @@ func TestBuiltins_ArtifactReadURIRespectsSandboxBlockedPaths(t *testing.T) {
 	root := t.TempDir()
 	workDir := filepath.Join(root, "work")
 	agentStateDir := filepath.Join(root, "agent")
-	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	mediaDir := filepath.Join(agentStateDir, "media")
 	for _, path := range []string{workDir, agentStateDir} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	store, err := artifact.NewStore(artifactDir)
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1047,12 +1047,12 @@ func TestBuiltins_ArtifactReadURIRespectsSandboxBlockedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := sandbox.DefaultPolicyForOS("linux")
-	policy.FileSystem.BlockedPaths = []string{artifactDir}
+	policy.FileSystem.BlockedPaths = []string{mediaDir}
 	r := NewRegistry()
 	RegisterBuiltins(r, BuiltinOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
-		MediaDir:      artifactDir,
+		MediaDir:      mediaDir,
 		Shell:         DefaultShellProfile(),
 		Sandbox:       policy,
 	})
@@ -1092,7 +1092,7 @@ func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
 		t.Fatalf("original bytes = %d, want %d", media.OriginalBytes, len(source))
 	}
 	if !strings.HasPrefix(filepath.ToSlash(media.ArtifactPath), "read-media/") {
-		t.Fatalf("artifact path = %q, want read media artifact", media.ArtifactPath)
+		t.Fatalf("media path = %q, want stored read image", media.ArtifactPath)
 	}
 	cached, err := os.ReadFile(filepath.Join(testMediaDir(workDir), filepath.FromSlash(media.ArtifactPath)))
 	if err != nil {
@@ -1136,8 +1136,8 @@ func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
 func TestBuiltins_ReadImageRejectsSymlinkedMediaArtifactRoots(t *testing.T) {
 	source := testPNG(t, 2, 1)
 	cases := []string{
-		"artifacts",
-		filepath.Join("artifacts", "read-media"),
+		"media",
+		filepath.Join("media", "read-media"),
 	}
 	for _, linkRel := range cases {
 		t.Run(linkRel, func(t *testing.T) {
@@ -1158,14 +1158,14 @@ func TestBuiltins_ReadImageRejectsSymlinkedMediaArtifactRoots(t *testing.T) {
 			registerTestBuiltins(r, workDir)
 			_, _, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "shot.png"})
 			if err == nil {
-				t.Fatalf("read accepted symlinked media artifact root %s", linkRel)
+				t.Fatalf("read accepted symlinked media root %s", linkRel)
 			}
 			entries, readErr := os.ReadDir(outside)
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
 			if len(entries) != 0 {
-				t.Fatalf("read wrote through symlinked media artifact root %s into %s", linkRel, outside)
+				t.Fatalf("read wrote through symlinked media root %s into %s", linkRel, outside)
 			}
 		})
 	}
@@ -1329,7 +1329,7 @@ func TestBuiltins_ReadImageOmitsUnsafePixelCount(t *testing.T) {
 		t.Fatalf("structured result = %#v, want no media for unsafe pixel count", info.StructuredResult)
 	}
 	if _, err := os.Stat(testMediaDir(workDir)); !os.IsNotExist(err) {
-		t.Fatalf("unsafe image should not create media artifact dir, stat err=%v", err)
+		t.Fatalf("unsafe image should not create media dir, stat err=%v", err)
 	}
 }
 
@@ -1422,7 +1422,7 @@ func TestBuiltins_ReadImageOmitsReencodedOversizeImage(t *testing.T) {
 		t.Fatalf("structured result = %#v, want no media for oversized re-encode", info.StructuredResult)
 	}
 	if _, err := os.Stat(testMediaDir(workDir)); !os.IsNotExist(err) {
-		t.Fatalf("oversized re-encode should not create media artifact dir, stat err=%v", err)
+		t.Fatalf("oversized re-encode should not create media dir, stat err=%v", err)
 	}
 }
 
@@ -3082,7 +3082,7 @@ func TestBuiltins_ExecCommandSandboxDisabledDoesNotWrap(t *testing.T) {
 	RegisterBuiltins(r, BuiltinOptions{
 		WorkDir:       t.TempDir(),
 		Shell:         fakeShellProfile(),
-		Sandbox:       sandbox.LegacyDefaultPolicy(),
+		Sandbox:       sandbox.DisabledPolicy(),
 		SandboxRunner: runner,
 	})
 
@@ -3127,8 +3127,8 @@ func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	if err := os.MkdirAll(agentStateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	artifactDir := filepath.Join(agentStateDir, "artifacts")
-	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+	mediaDir := filepath.Join(agentStateDir, "media")
+	if err := os.Mkdir(mediaDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	runner := &fakeSandboxRunner{}
@@ -3138,7 +3138,7 @@ func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	RegisterBuiltins(r, BuiltinOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
-		MediaDir:      artifactDir,
+		MediaDir:      mediaDir,
 		Shell:         fakeShellProfile(),
 		Sandbox:       policy,
 		SandboxRunner: runner,
@@ -3153,8 +3153,8 @@ func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	if got := runner.requests[0].FilePolicy.WritableRoots(); len(got) != 2 || got[0] != canonicalPathForTest(t, workDir) || got[1] != canonicalPathForTest(t, agentStateDir) {
 		t.Fatalf("writable roots = %#v, want Workspace and AgentStateDir", got)
 	}
-	if got := runner.requests[0].FilePolicy.ReadOnlyRoots(); len(got) != 1 || got[0] != canonicalPathForTest(t, artifactDir) {
-		t.Fatalf("read-only roots = %#v, want Artifact root %q", got, canonicalPathForTest(t, artifactDir))
+	if got := runner.requests[0].FilePolicy.ReadOnlyRoots(); len(got) != 1 || got[0] != canonicalPathForTest(t, mediaDir) {
+		t.Fatalf("read-only roots = %#v, want media root %q", got, canonicalPathForTest(t, mediaDir))
 	}
 }
 

@@ -2,168 +2,131 @@
 
 > [English](ARCHITECTURE.md) | 中文
 
-领域词汇与不变量见 [DOMAIN.zh.md](DOMAIN.zh.md)，Web 交互见
-[DESIGN.zh.md](DESIGN.zh.md)。详细决策见
-[`docs/superpowers/specs/`](docs/superpowers/specs/2026-08-31-thread-lifecycle-and-interfaces-design.zh.md)。
+[DOMAIN.zh.md](DOMAIN.zh.md) 定义产品语义，本文定义稳定的模块所有权、依赖方向
+和数据流。具体 struct、route、flag 和文件 schema 以代码和测试为准。
 
 ## Runtime 结构
 
-一个 Agent Runtime 承载 Agent 级资源和多个 Thread Runtime：
-
 ```text
 Agent Runtime
-├── Provider profile 与健康状态
-├── 共享 MCP client 与 Tool descriptor
-├── Observable producer 与 scheduler
-├── Runtime Module 与进程资源
+├── Provider profile 与进程资源
+├── 共享 MCP client
+├── Observable producer
+├── Agent 级 Module
 └── Thread Manager
-    ├── Main Thread 0
+    ├── Main Thread 0 runtime
     └── Worker Thread runtimes
 ```
 
-Main 与 Worker 都通过同一个 `runtime.Engine` 执行，差异来自 capability
-policy：Agent Observation 只路由 Main。创建 Worker 时，调用工具的 Thread
-自动成为 parent。
+Main 与 Worker 都通过 `runtime.Engine` 执行，policy 只允许 Main 接收
+Observation。创建 Worker 时从调用方 Thread 自动推导 parent。
 
-CLI 与 Fleet Web 都是客户端。`juex send` 通过 Fleet 确保常驻的
-`juex listen` 已启动，然后调用与 Web 相同的 JSON/SSE API。不存在
-one-shot `run` runtime 或 REPL runtime。
+CLI 与 Fleet Web 都是常驻 Agent JSON/SSE 服务的 client。`juex send` 确保
+Agent 已监听，并使用与 Web 相同的 admission 和 subscription 接口。
+
+## 依赖方向
+
+Juex 分为三类职责：
+
+- Foundation 拥有 Provider-neutral value、持久化、Tool、Event、sandbox、
+  environment、media/spool 和进程基础能力。
+- Framework 拥有 Agent/Thread lifecycle、持久顺序、Module contract、
+  admission 和组合校验。
+- Feature 通过 Framework 接口提供 Tool、context、policy、observation、
+  status 或 scoped resource。
+
+依赖从 Feature 指向 Framework，再指向 Foundation。`internal/app` 是
+composition root，可以依赖具体 Feature。Framework 不通过全局 service
+locator 发现依赖。原因见
+[ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.zh.md)。
 
 ## 模块所有权
 
-| 模块 | 职责 |
+| 模块 | 所有权 |
 | --- | --- |
-| `internal/thread` | Thread id、Store、append-only Journal、replay/projection、EOF 分页、Generation fact、archive/delete 与协议尾修复。 |
-| `internal/runtime` | Provider loop、pending Input、Turn、context projection、compact、recitation、Goal/Notes、状态与 Tool execution。 |
-| `internal/app` | Agent 组合、Agent 级资源、Main/Worker manager、Observation 投递、slash command、订阅与 admission。 |
-| `internal/observable` | Observable 定义、生产者、`observable.Observation`、生成状态和调度。 |
-| `internal/mcp` | 每个 server 一个 Agent 级 client、Tool catalog、调用与 Notification transport。 |
-| `internal/web` | 单 Agent JSON/SSE API、cursor replay/live、附件、Thread 管理和状态资源。 |
-| `internal/fleet` / `internal/fleetweb` | 常驻 Agent 生命周期、restart continuation、registry、代理与 Web UI。 |
-| `internal/cli` | `send`、`listen`、`threads`、Fleet、诊断、配置与 bundle。 |
-| `frontend` | Thread Explorer、Thread detail/composer、typed transcript、状态、Observable 和 Fleet shell。 |
+| `internal/thread` | Thread 身份、Store、Journal、replay/projection、timeline paging、Generation、archive 和 delete。 |
+| `internal/runtime` | Input/Turn lifecycle、Provider loop、context projection、compaction、status 和 Tool execution。 |
+| `internal/runtime/module` | 类型化 Module capability 与 scoped lifecycle contract。 |
+| `internal/app` | Agent 组合、Main/Worker 管理、Observation admission、slash command 和订阅。 |
+| `internal/observable` | Observable 定义、producer、Observation value 和生成状态。 |
+| `internal/mcp` | Agent 级 MCP connection、Tool catalog、调用和 Notification transport。 |
+| `internal/web` | 单 Agent JSON/SSE transport 与资源 handler。 |
+| `internal/fleet` / `internal/fleetweb` | 常驻 Agent lifecycle、registry、proxy 和 Fleet UI 服务。 |
+| `internal/cli` | Agent、Thread、Fleet、配置和诊断的 CLI adapter。 |
+| `frontend` | Fleet shell、Thread Explorer、transcript、composer 和 runtime view。 |
 
-## 持久化内核
+Provider-neutral 消息位于 `internal/llm`。持久 Event transport 与 schema 位于
+`internal/events`、`internal/eventcatalog` 和 `internal/toolevents`。
 
-Agent state 位于 `$JUEX_HOME/agents/<agent-id>`：
+## 持久化权威
+
+生成状态位于 `$JUEX_HOME/agents/<agent-id>/`：
 
 ```text
 agent.json
 threads.index.json
-threads/
-  0/{thread.json,journal.jsonl,scratchpad/,spool/}
-  <worker-id>/...
-archive/threads/<worker-id>/...
-.trash/threads/<worker-id>/...
-media/threads/<thread-id>/media/...
+threads/<thread-id>/
+  thread.json
+  journal.jsonl
+  scratchpad/
+  spool/
+archive/threads/<thread-id>/
+media/
 logs/
 observables/
 extensions/
 ```
 
-`journal.jsonl` 是权威。每行是一个版本化原子 commit，包含一到多个 fact，
-使用 Thread 本地严格递增 sequence。消息与 durable Event、Input/attempt/Turn、
-Generation、Goal、Notes、usage、生命周期和 checkpoint 都在同一个 Journal。
+每个 Thread Journal 是消息与持久 Runtime fact 的权威。`thread.json` 和
+`threads.index.json` 是限制常见读取成本的可替换 projection；缺失或落后时
+从 Journal 重建。
 
-`thread.json` 是可替换的当前投影，`threads.index.json` 是唯一 Agent 列表
-加速器。投影落后时从 offset replay；缺失或非法时重建。完整但非法的 commit
-是损坏，只有 torn final line 可以在恢复时截断。
+Journal commit 按时间顺序 append，每个 commit 是原子的 fact batch，并使用
+Thread 本地 sequence。Reader 从 EOF 向前分页，再按时间正序返回。只有 torn
+final write 可以自动修复，完整但非法的 commit 属于 corruption。
 
-两个投影都分别保存 `retention_state` 与 `execution_state`。Active Thread 的执行态
-是 `idle`、`working` 或 `failed`；Archived Thread 不携带执行态，unarchive 后变为
-`active + idle`。`archived_at` 只是时间 metadata，不能替代 lifecycle 字段。永久
-delete 会从存储与 index 中移除 Thread。
+Active 与 archived Thread 目录分离。Scratchpad 是模型管理的 Thread 状态，
+跨 Generation 保留；spool 是系统管理的 Thread 临时数据；Agent media 独立存储。
 
-Journal 按时间顺序 append。Web 从 EOF 向前按 opaque offset/sequence cursor
-分页，再按时间正序展示。一个原子 commit 不会为了满足 item limit 而被拆开。
-
-Scratchpad 是模型可写的 Thread 工作目录，`/new` 和 `/compact` 后保留。
-Spool 是系统管理的超长 Provider input/Tool output，可按保留策略清理。
-Agent media 与两者分离。
-
-所有持久绝对时间统一为精确到毫秒的 UTC RFC 3339；顺序仍以 Journal sequence 为准。
-
-当 client 使用显式 `--config` 时，`agent.json` 记录其绝对
-`runtime_config_path`。Fleet detached 启动 `juex listen` 与后续 restart 都传递
-同一路径，resident Runtime 不会静默退回另一份 Workspace 或 Home 配置。
-
-## Input 与 Turn
+## 持久 Input 与发布
 
 ```text
-CLI/Web/Observation
+CLI / Web / Observation
   -> App admission
-  -> Journal input.accepted + sync
-  -> input_id/cursor receipt
+  -> Journal commit
   -> pending projection
-  -> attempt + Turn assignment
-  -> Prompt assembly
-  -> Provider / Tool
-  -> message、Event、usage、attempt、Input、Turn、settled facts
-  -> replay/live subscriber
+  -> attempt 与 Turn
+  -> prompt / Provider / Tool
+  -> terminal Journal fact
+  -> status 与 replay/live subscriber
 ```
 
-Journal 保存 Input 与 attempt 状态，重启后可以区分 pending、retryable、
-completed、dead-lettered、cancelled、expired，不需要第二份 Input journal。
-接受顺序显式保存并按原顺序恢复。
+`runtime.Engine.ReceivePendingInput` 是唯一 Framework admission 入口，负责
+start-or-queue 决策；更低层的 queue mutation 保留在 runtime 内部。Journal
+已经记录 Input attempt 与 outcome，因此恢复不需要第二份 Input history。
 
-持久发布遵循 commit-before-project：Journal commit 完成后才更新 status、
-browser transcript、subscription 或 Observation delivery。Transient delta
-可以仅实时存在，但必须显式标记。
+持久状态遵循 commit-before-project：fact 先 commit，再发布给 status、
+transcript 或 subscriber。仅实时存在的 delta 必须明确为 transient。
 
-## Prompt、MCP 与 Observation
+## Module、Prompt 与共享资源
 
-Prompt 由注册接口统一组装：base system prompt、project guidance、Skills、
-Hook context、Goal、Notes、Scratchpad 路由、active shell 信息和每次请求的
-context-window recitation。recitation 包含当前 token 估算、window、百分比、
-Thread 与 Generation。`context_compact` 和 `context_new` 允许模型主动清理。
+Module 在 Agent 或 Thread scope 注册一次类型化 capability。Framework 校验并
+seal Module set，按注册顺序启动，按反序关闭或 rollback。
 
-MCP client 属于 Agent，每个配置 server 只有一个实例；不同 Thread 共享
-Tool discovery、认证与连接。调用仍属于发起调用的 Thread Turn。所有自动外部
-信号统一为 `observable.Observation`，只由 App 投递给 Main。
+Prompt assembly 使用已注册的 context contributor。稳定 guidance、Hook
+context、Thread state 和每次请求的 recitation 在该接口汇合。Generation 边界
+活动不是普通 Provider 对话。
 
-## Worker 与订阅
+MCP transport 属于 Agent，避免重复进程、认证、catalog 和 Notification。
+Tool call 仍属于发起调用的 Thread Turn。Observation producer 同样属于 Agent，
+并通过一个只允许 Main 的投递入口。
 
-每个活跃 Thread 都向自己的直接子节点提供 create、send、status、list、
-subscribe、stop、archive 等 Worker Tools。各 Thread Manager 管理 live 直接子
-Worker App，并随 Agent Runtime 递归关闭。订阅不是所有权，subscriber 退出不会
-自动销毁 Worker。
+## 失败边界
 
-通用订阅从调用者 cursor 开始；cursor 为空时从当前 tail 开始，并统一处理
-replay/live 缝隙。Input wait 是更高层逻辑：跟随 `input_id`，发现消费它的
-Turn 后继续等待该 Turn settled。
-
-## Context 转换与 Thread 生命周期
-
-- `/new`：清除 Goal/Notes，保留 Scratchpad，创建空 provider history，记录 `context.renewed`。
-- `/compact`：生成 summary，保留 Goal/Notes/Scratchpad，从 compact bootstrap 开始，记录 `context.compacted`。
-- archive/unarchive 移动整个 Worker 目录并更新 Agent index，不改变 Generation；
-  archive 清空执行态，unarchive 初始化为 `idle`。
-- delete 只允许经过校验的归档 Worker。
-
-## API
-
-单 Agent API 以 `/api` 为根：
-
-- `GET|POST /api/threads`
-- `GET|PATCH|DELETE /api/threads/<id>`
-- `POST /api/threads/<id>/inputs|attachments|stop|archive|unarchive`
-- `GET /api/threads/<id>/events|status|status/events|context|scratchpad`
-- `GET /api/status`、`/api/runtime`、`/api/observables` 与资源路由
-
-Fleet Web 在 `/agents/<agent-id>/api/...` 下代理同一套 API。
-
-## 失败边界与验证
-
-- Journal append 失败不发布 fact。
-- 投影替换失败产生 stale projection，后续 replay 修复。
-- 已记录 Tool terminal outcome 在 crash 后精确恢复。
-- 已开始但没有持久 outcome 的 Tool 标记 `TOOL_OUTCOME_UNKNOWN`，不盲目重试。
-- restart 只在新 Runtime 健康且 Thread/Turn 身份一致时发送 continuation。
-- Worker Observation 被 policy 拒绝。
-- working Thread 与非法 parent/child 拓扑不能 archive/delete。
-
-```bash
-make verify-focused PKGS="./internal/thread ./internal/runtime ./internal/app ./internal/web"
-make verify-candidate RACE=1 WEB=1
-make verify-final RACE=1 WEB=1 COMPACTION=1
-```
+- Journal commit 失败时不发布任何 fact。
+- Stale projection 可以修复，非法 authoritative commit 不可自动忽略。
+- 已记录 Tool outcome 精确重放；没有持久 outcome 的已启动 Tool 标记 unknown，
+  不盲目重试。
+- Restart continuation 要求 replacement 健康且 Thread/Turn 身份一致。
+- Working Thread 或非法 parent/child 拓扑会阻止 archive/delete。
+- Feature disablement 必须阻止构造、副作用与发布，而不只是隐藏 UI。

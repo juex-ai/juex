@@ -286,7 +286,7 @@ func installMemoryExtensionFixture(t *testing.T, extensionDir string) {
 	write("mcp.json", `{"mcpServers":{"memory":{"command":"${JUEX_EXT_DIR}/memory-helper","args":["-test.run=TestExternalMemoryMCPHelperProcess"],"env":{"JUEX_E2E_MEMORY_MCP":"1"}}}}`, 0o600)
 	write("hooks.yaml", `trusted: true
 commands:
-  - name: memory-session-start
+  - name: memory-thread-start
     events: [ThreadStart]
     command: ["${JUEX_EXT_DIR}/memory-helper", "-test.run=TestExternalMemoryHookHelperProcess"]
 `, 0o600)

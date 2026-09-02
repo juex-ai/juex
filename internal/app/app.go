@@ -254,8 +254,8 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	case len(modelCandidates) > 0:
 		provider = modelCandidates[0].Provider
 	case provider != nil:
-		// A single injected provider is a compatibility/test seam and
-		// intentionally disables config-derived fallbacks.
+		// A single injected provider is an explicit test seam that disables
+		// config-derived fallbacks.
 	default:
 		resolvedChain, err := cfg.ModelChain()
 		if err != nil {
@@ -363,7 +363,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	if err != nil {
 		return nil, err
 	}
-	sess := attachment.Thread
+	threadState := attachment.Thread
 	var threadModules *runtimemodule.Set
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
@@ -385,7 +385,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			_ = eventSink.Close()
 			eventSink = nil
 		}
-		_ = sess.Close()
+		_ = threadState.Close()
 	}
 	creationCommitted := !attachment.Created
 	defer func() {
@@ -393,19 +393,19 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			return
 		}
 		closeThreadResources()
-		if err := attachment.Store.RollbackWorkerCreation(sess.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := attachment.Store.RollbackWorkerCreation(threadState.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 			resultErr = errors.Join(resultErr, fmt.Errorf("app: rollback Worker Thread creation: %w", err))
 		}
 		createdApp = nil
 	}()
 	eventCatalog := eventcatalog.Default()
-	eventSink = events.NewDurableSink(sess)
+	eventSink = events.NewDurableSink(threadState)
 	eventSink.SetCatalog(eventCatalog)
 	bus.SetCommitter(eventSink)
 	eventUnsubscribe = func() { bus.SetCommitter(nil) }
 	status, statusReplayErr := runtime.NewStatusStoreFromReplay(
-		runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
-		func(visit func(events.Event)) error { sess.ReplayEvents(visit); return nil },
+		runtimeStatusSeed(threadState, runtime.DefaultMaxPendingInput),
+		func(visit func(events.Event)) error { threadState.ReplayEvents(visit); return nil },
 	)
 	if statusReplayErr != nil {
 		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
@@ -462,11 +462,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		Tools:                   reg,
 		RuntimeContext:          runtimeModules.runtimeContext,
 		Bus:                     bus,
-		Thread:                  sess,
+		Thread:                  threadState,
 		Prompt:                  pb,
 		WorkDir:                 runtimePaths.WorkDir,
 		MediaDir:                runtimePaths.MediaDir,
-		PendingInputQueue:       runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{Thread: sess}),
+		PendingInputQueue:       runtime.NewPendingInputQueue(threadState.Dir, runtime.PendingInputQueueOptions{Thread: threadState}),
 		PendingInputTTL:         pendingInputTTL,
 		ExternalEventTTL:        externalEventTTL,
 		ShowBuiltinPolicyTraces: runtimeLimits.ShowBuiltinPolicyTraces,
@@ -480,14 +480,14 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		Engine:                eng,
 		Status:                status,
 		Bus:                   bus,
-		Thread:                sess,
+		Thread:                threadState,
 		ThreadStore:           attachment.Store,
 		ctx:                   appCtx,
 		cancel:                appCancel,
 		cfg:                   cfg,
 		stderr:                stderr,
 		chunkedWrites:         chunkedWrites,
-		threadResource:        sess,
+		threadResource:        threadState,
 		eventSink:             eventSink,
 		eventCatalog:          eventCatalog,
 		eventUnsubscribe:      eventUnsubscribe,
@@ -506,7 +506,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	}
 	statusUnsubscribe = eventSink.AddProjection(status)
 	a.statusUnsubscribe = statusUnsubscribe
-	if err := a.attachObservability(sess); err != nil {
+	if err := a.attachObservability(threadState); err != nil {
 		closeThreadResources()
 		return nil, err
 	}
@@ -547,7 +547,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		ForwardStderr: opts.Verbose,
 		Environment:   runtimeEnvironment,
 	}
-	if sess.ID == thread.MainID {
+	if threadState.ID == thread.MainID {
 		connectOpts.EnableClaudeChannel = true
 		notificationGate = newMCPNotificationGate(func(n mcp.Notification) {
 			record := a.ObservationFromMCPNotification(n)
@@ -572,7 +572,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		},
 		{
 			ID:      observable.ModuleID,
-			Enabled: cfg.ModuleEnabled(string(observable.ModuleID)) && sess.ID == thread.MainID && (opts.sharedObservables != nil || !opts.disableObservables),
+			Enabled: cfg.ModuleEnabled(string(observable.ModuleID)) && threadState.ID == thread.MainID && (opts.sharedObservables != nil || !opts.disableObservables),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				if opts.sharedObservables != nil {
 					observableRuntimeModule = observable.NewModule(opts.sharedObservables)
@@ -635,7 +635,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		cfg,
 		opts.threadModuleFactories,
 		runtimeModules.runtimeContext,
-		sess,
+		threadState,
 		eng,
 		runtimePaths.WorkDir,
 		promptcontext.ShellProfileFromConfig(cfg.Shell),
@@ -653,7 +653,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		_ = a.Close()
 		return nil, err
 	}
-	if err := validateThreadModuleContext(startupCtx, runtimeModules.set, threadModules, runtimeModules.runtimeContext, sess); err != nil {
+	if err := validateThreadModuleContext(startupCtx, runtimeModules.set, threadModules, runtimeModules.runtimeContext, threadState); err != nil {
 		_ = threadModules.CloseThread(context.Background())
 		_ = a.Close()
 		return nil, err
@@ -664,7 +664,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		_ = a.Close()
 		return nil, err
 	}
-	if err := eng.ReplaceThreadRuntimeBundle(sess, runtime.ThreadRuntimeReplacement{Modules: threadModules, Tools: reg}); err != nil {
+	if err := eng.ReplaceThreadRuntimeBundle(threadState, runtime.ThreadRuntimeReplacement{Modules: threadModules, Tools: reg}); err != nil {
 		_ = threadModules.CloseThread(context.Background())
 		_ = a.Close()
 		return nil, err
@@ -679,7 +679,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	status.RecoverAfterRestart()
-	chunkedWrites.RestoreActiveFromHistory(sess.History)
+	chunkedWrites.RestoreActiveFromHistory(threadState.History)
 	if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
 		_ = a.Close()
 		return nil, err
@@ -690,7 +690,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	}
 	appContextTransferred = true
 	var activateObservables func()
-	if observableRuntimeModule != nil && opts.sharedObservables == nil && sess.ID == thread.MainID {
+	if observableRuntimeModule != nil && opts.sharedObservables == nil && threadState.ID == thread.MainID {
 		activateObservables = func() { _ = observableRuntimeModule.StartAll(startupCtx) }
 	}
 	a.activateExternalInputAfterPendingRecovery(notificationGate, replayablePendingInput, activateObservables)
@@ -698,18 +698,18 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	return a, nil
 }
 
-func goalStateStore(sess *thread.Thread) *workmem.GoalStateStore {
-	if sess == nil || sess.Dir == "" {
+func goalStateStore(threadState *thread.Thread) *workmem.GoalStateStore {
+	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewThreadGoalStateStore(sess, workmem.GoalStateOptions{})
+	return workmem.NewThreadGoalStateStore(threadState, workmem.GoalStateOptions{})
 }
 
-func notesStore(sess *thread.Thread) *workmem.NotesStore {
-	if sess == nil || sess.Dir == "" {
+func notesStore(threadState *thread.Thread) *workmem.NotesStore {
+	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewThreadNotesStore(sess)
+	return workmem.NewThreadNotesStore(threadState)
 }
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
@@ -749,7 +749,7 @@ func (a *App) closeActiveThreadResources() error {
 		return nil
 	}
 	a.threadMu.Lock()
-	sess := a.threadResource
+	threadState := a.threadResource
 	a.threadResource = nil
 	a.Thread = nil
 	a.threadMu.Unlock()
@@ -760,8 +760,8 @@ func (a *App) closeActiveThreadResources() error {
 			moduleErr = modules.CloseThread(context.Background())
 		}
 	}
-	if sess != nil {
-		threadErr = sess.Close()
+	if threadState != nil {
+		threadErr = threadState.Close()
 	}
 	a.threadRelease.Do(func() {
 		if a.threadReleased != nil {
@@ -792,11 +792,11 @@ func (a *App) WaitThreadReleased(ctx context.Context) error {
 	return a.workers.WaitDeliveryWriters(ctx)
 }
 
-func runtimeStatusSeed(sess *thread.Thread, maxPendingInputs int) runtime.StatusSeed {
-	if sess == nil {
+func runtimeStatusSeed(threadState *thread.Thread, maxPendingInputs int) runtime.StatusSeed {
+	if threadState == nil {
 		return runtime.StatusSeed{MaxPendingInputs: maxPendingInputs}
 	}
-	info := sess.Info()
+	info := threadState.Info()
 	state := runtime.ThreadRuntimeIdle
 	switch info.ExecutionState {
 	case thread.ExecutionWorking:
@@ -805,13 +805,13 @@ func runtimeStatusSeed(sess *thread.Thread, maxPendingInputs int) runtime.Status
 		state = runtime.ThreadRuntimeFailed
 	}
 	return runtime.StatusSeed{
-		ThreadID:         sess.ID,
-		ThreadAlias:      sess.Alias,
+		ThreadID:         threadState.ID,
+		ThreadAlias:      threadState.Alias,
 		ThreadState:      state,
 		PendingCount:     info.PendingInputs,
 		MaxPendingInputs: maxPendingInputs,
-		TokenUsage:       sess.TokenUsageSnapshot(),
-		ContextUsage:     sess.ContextUsageSnapshot(),
+		TokenUsage:       threadState.TokenUsageSnapshot(),
+		ContextUsage:     threadState.ContextUsageSnapshot(),
 	}
 }
 
@@ -836,12 +836,12 @@ func (a *App) ReadCommittedEvents(read func() error) error {
 	return a.eventSink.ReadCommitted(read)
 }
 
-func (a *App) attachObservability(sess *thread.Thread) error {
-	if a == nil || a.Bus == nil || sess == nil {
+func (a *App) attachObservability(threadState *thread.Thread) error {
+	if a == nil || a.Bus == nil || threadState == nil {
 		return nil
 	}
 	rec, err := observability.NewRecorder(observability.Options{
-		ThreadDir: sess.Dir,
+		ThreadDir: threadState.Dir,
 		Debug:     a.debug,
 		LogLevel:  a.logLevel,
 	})

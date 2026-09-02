@@ -22,8 +22,8 @@ metadata:
 直接从仓库根目录运行命令。
 
 1. **编辑期间的 focused test**——使用显式变更 package 运行 `make verify-focused PKGS="..."`。它允许 dirty worktree，且绝不会把空 scope 扩大到整个仓库。共享 web stub 让 fresh checkout 中依赖 web 的 package 选择仍有效。
-2. **PR candidate**——提交实现后运行 `make verify-candidate`。对于 concurrency、shutdown、runtime Turn、MCP、Tool、Event、Session、web request 或 shared-state 变更，加入 `RACE=1`。对于 frontend 变更，加入 `WEB=1`。Race 会替代普通 suite；web-check 为 Go-only binary build 提供资源，不会再次构建 frontend。不会覆盖的轻量 web stub 让 Go check 可在 fresh checkout 工作。Candidate 与 final gate 会验证运行后 worktree 仍干净。
-3. **Final candidate**——交付前运行 `make verify-final`。它会重复 candidate plan，然后运行 live integration 和一个动态选中的 Provider smoke。对于 compaction、context projection、reasoning replay 或 long-session 变更，加入 `COMPACTION=1`。Candidate 和 final 要求 clean worktree，并在第一个失败步骤停止。
+2. **PR candidate**——提交实现后运行 `make verify-candidate`。对于 concurrency、shutdown、runtime Turn、MCP、Tool、Event、Thread、web request 或 shared-state 变更，加入 `RACE=1`。对于 frontend 变更，加入 `WEB=1`。Race 会替代普通 suite；web-check 为 Go-only binary build 提供资源，不会再次构建 frontend。不会覆盖的轻量 web stub 让 Go check 可在 fresh checkout 工作。Candidate 与 final gate 会验证运行后 worktree 仍干净。
+3. **Final candidate**——交付前运行 `make verify-final`。它会重复 candidate plan，然后运行 live integration 和一个动态选中的 Provider smoke。对于 compaction、context projection、reasoning replay 或 long-Thread 变更，加入 `COMPACTION=1`。Candidate 和 final 要求 clean worktree，并在第一个失败步骤停止。
 
 日常 Agent 交付不要手工组合 `make test`、`make race`、`make integration`、`make provider-smoke` 和 `make build`。这些命令仍可用于底层精确重跑和 harness 开发。
 
@@ -75,7 +75,7 @@ bash tests/eval/development_eval.sh
 
 Development evaluator 在 `.tmp/reports/development-validation/<run-id>/` 下记录命令日志和摘要。默认运行 deterministic test、build 和一个 seeded provider-config smoke。它的 deterministic plan 复用 candidate orchestrator，不会增加第二次 E2E 运行。当需要持久开发验证报告时使用它；`make verify-*` tier 仍是日常交付 gate。只有验证 harness 本身或 live Provider 无关的文档示例时，才使用 `--skip-tests` 和 `--no-provider-smoke`。
 
-使用 `--only provider:model` 限定 Provider smoke。变更涉及 compaction、context projection、Provider reasoning replay 或 long-session 行为时使用 `--compaction-eval`。Compaction evaluator 按记录的 seed 从已解析 Provider 配置选择一个 eligible ref，并在开发记录下写入 scorecard。显式 context window 不足的模型会被排除。使用 `--compaction-only provider:model` 进行 focused compaction 运行；当更大改动需要一次覆盖所有 eligible 配置模型时使用 `--compaction-all-models`。JSON、Markdown 和 terminal summary 会记录 seed、candidate set、脱敏 config hash 和复现命令。
+使用 `--only provider:model` 限定 Provider smoke。变更涉及 compaction、context projection、Provider reasoning replay 或 long-Thread 行为时使用 `--compaction-eval`。Compaction evaluator 按记录的 seed 从已解析 Provider 配置选择一个 eligible ref，并在开发记录下写入 scorecard。显式 context window 不足的模型会被排除。使用 `--compaction-only provider:model` 进行 focused compaction 运行；当更大改动需要一次覆盖所有 eligible 配置模型时使用 `--compaction-all-models`。JSON、Markdown 和 terminal summary 会记录 seed、candidate set、脱敏 config hash 和复现命令。
 
 直接 compaction 入口：
 

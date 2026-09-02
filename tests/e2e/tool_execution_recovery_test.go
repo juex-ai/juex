@@ -20,14 +20,14 @@ import (
 
 func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(filepath.Join(root, "threads"))
+	threadState, err := thread.New(filepath.Join(root, "threads"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(llm.TextMessage(llm.RoleUser, "send this once")); err != nil {
+	if err := threadState.Append(llm.TextMessage(llm.RoleUser, "send this once")); err != nil {
 		t.Fatal(err)
 	}
-	assistant, err := sess.AppendAssigned(llm.Message{
+	assistant, err := threadState.AppendAssigned(llm.Message{
 		ID: "assistant-recovery", Role: llm.RoleAssistant,
 		Blocks: []llm.Block{{
 			Type: llm.BlockToolUse, ToolUseID: "remote-call", ToolName: "mcp__remote__send",
@@ -40,24 +40,24 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Name: "mcp__remote__send", ToolUseID: "remote-call", Iter: 3,
 		CallIndex: 0, MessageID: assistant.ID,
 	}
-	epoch := testRequestEpoch(t, []llm.Message{sess.History[0]}, "recovery-epoch-1")
-	appendCatalogEvent(t, sess, events.Event{
+	epoch := testRequestEpoch(t, []llm.Message{threadState.History[0]}, "recovery-epoch-1")
+	appendCatalogEvent(t, threadState, events.Event{
 		Type: provenance.RequestEpochType, TurnID: "turn-before-crash",
 		Payload: provenance.RequestEpochPayload{Epoch: epoch},
 	})
-	appendCatalogEvent(t, sess, events.Event{
+	appendCatalogEvent(t, threadState, events.Event{
 		Type: "llm.requested", TurnID: "turn-before-crash",
 		Payload: runtime.LLMRequestedPayload{Iter: 3, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest},
 	})
-	appendCatalogEvent(t, sess, events.Event{
+	appendCatalogEvent(t, threadState, events.Event{
 		Type: "llm.responded", TurnID: "turn-before-crash",
 		Payload: runtime.LLMRespondedPayload{
 			Iter: 3, MessageID: assistant.ID, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest, Blocks: assistant.Blocks,
 			ToolCalls: []toolevents.ToolCallPayload{call},
 		},
 	})
-	appendCatalogEvent(t, sess, events.Event{Type: toolevents.RequestedType, TurnID: "turn-before-crash", Payload: toolevents.Requested(call)})
-	appendCatalogEvent(t, sess, events.Event{Type: toolevents.RunningType, TurnID: "turn-before-crash", Payload: toolevents.Running(call)})
+	appendCatalogEvent(t, threadState, events.Event{Type: toolevents.RequestedType, TurnID: "turn-before-crash", Payload: toolevents.Requested(call)})
+	appendCatalogEvent(t, threadState, events.Event{Type: toolevents.RunningType, TurnID: "turn-before-crash", Payload: toolevents.Running(call)})
 	completed := toolevents.Completed(call, 60, len("remote side effect committed"), "remote side effect committed", nil)
 	completed.Outcome = &toolevents.RecordedOutcome{
 		MessageID: "tool-result-recovery",
@@ -66,13 +66,13 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 			ToolName: call.Name, Content: "remote side effect committed",
 		},
 	}
-	appendCatalogEvent(t, sess, events.Event{Type: toolevents.CompletedType, TurnID: "turn-before-crash", Payload: completed})
-	sessionDir := sess.Dir
-	if err := sess.Close(); err != nil {
+	appendCatalogEvent(t, threadState, events.Event{Type: toolevents.CompletedType, TurnID: "turn-before-crash", Payload: completed})
+	threadDir := threadState.Dir
+	if err := threadState.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	recovered, err := thread.Load(sessionDir)
+	recovered, err := thread.Load(threadDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 			return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 		}, recovered),
 		WorkDir:  root,
-		MediaDir: filepath.Join(root, "artifacts"),
+		MediaDir: filepath.Join(root, "media"),
 	}
 
 	out, err := engine.Turn(context.Background(), "continue after restart")
@@ -127,14 +127,14 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 
 func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(filepath.Join(root, "threads"))
+	threadState, err := thread.New(filepath.Join(root, "threads"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(llm.TextMessage(llm.RoleUser, "run an ordered batch once")); err != nil {
+	if err := threadState.Append(llm.TextMessage(llm.RoleUser, "run an ordered batch once")); err != nil {
 		t.Fatal(err)
 	}
-	assistant, err := sess.AppendAssigned(llm.Message{
+	assistant, err := threadState.AppendAssigned(llm.Message{
 		ID: "assistant-mixed-recovery", Role: llm.RoleAssistant,
 		Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "recorded", ToolName: "effect_recorded"},
@@ -150,16 +150,16 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 		{Name: "effect_unknown", ToolUseID: "unknown", Input: map[string]any{"value": "provider"}, Iter: 3, CallIndex: 1, MessageID: assistant.ID},
 		{Name: "effect_not_started", ToolUseID: "not-started", Iter: 3, CallIndex: 2, MessageID: assistant.ID},
 	}
-	epoch := testRequestEpoch(t, []llm.Message{sess.History[0]}, "mixed-recovery-epoch")
-	appendCatalogEvent(t, sess, events.Event{
+	epoch := testRequestEpoch(t, []llm.Message{threadState.History[0]}, "mixed-recovery-epoch")
+	appendCatalogEvent(t, threadState, events.Event{
 		Type: provenance.RequestEpochType, TurnID: "turn-before-crash",
 		Payload: provenance.RequestEpochPayload{Epoch: epoch},
 	})
-	appendCatalogEvent(t, sess, events.Event{
+	appendCatalogEvent(t, threadState, events.Event{
 		Type: "llm.requested", TurnID: "turn-before-crash",
 		Payload: runtime.LLMRequestedPayload{Iter: 3, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest},
 	})
-	appendCatalogEvent(t, sess, events.Event{
+	appendCatalogEvent(t, threadState, events.Event{
 		Type: "llm.responded", TurnID: "turn-before-crash",
 		Payload: runtime.LLMRespondedPayload{
 			Iter: 3, MessageID: assistant.ID, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
@@ -167,9 +167,9 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 		},
 	})
 	for _, call := range calls {
-		appendCatalogEvent(t, sess, events.Event{Type: toolevents.RequestedType, TurnID: "turn-before-crash", Payload: toolevents.Requested(call)})
+		appendCatalogEvent(t, threadState, events.Event{Type: toolevents.RequestedType, TurnID: "turn-before-crash", Payload: toolevents.Requested(call)})
 	}
-	appendCatalogEvent(t, sess, events.Event{Type: toolevents.RunningType, TurnID: "turn-before-crash", Payload: toolevents.Running(calls[0])})
+	appendCatalogEvent(t, threadState, events.Event{Type: toolevents.RunningType, TurnID: "turn-before-crash", Payload: toolevents.Running(calls[0])})
 	recorded := toolevents.Completed(calls[0], 60, len("recorded once"), "recorded once", nil)
 	recorded.Outcome = &toolevents.RecordedOutcome{
 		MessageID: "mixed-tool-results",
@@ -178,17 +178,17 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 			ToolName: calls[0].Name, Content: "recorded once",
 		},
 	}
-	appendCatalogEvent(t, sess, events.Event{Type: toolevents.CompletedType, TurnID: "turn-before-crash", Payload: recorded})
-	appendCatalogEvent(t, sess, events.Event{Type: toolevents.RunningType, TurnID: "turn-before-crash", Payload: toolevents.Running(calls[1])})
+	appendCatalogEvent(t, threadState, events.Event{Type: toolevents.CompletedType, TurnID: "turn-before-crash", Payload: recorded})
+	appendCatalogEvent(t, threadState, events.Event{Type: toolevents.RunningType, TurnID: "turn-before-crash", Payload: toolevents.Running(calls[1])})
 	effectiveUnknown := calls[1]
 	effectiveUnknown.Input = map[string]any{"value": "effective"}
-	appendCatalogEvent(t, sess, events.Event{Type: toolevents.InputResolvedType, TurnID: "turn-before-crash", Payload: toolevents.InputResolved(effectiveUnknown)})
-	sessionDir := sess.Dir
-	if err := sess.Close(); err != nil {
+	appendCatalogEvent(t, threadState, events.Event{Type: toolevents.InputResolvedType, TurnID: "turn-before-crash", Payload: toolevents.InputResolved(effectiveUnknown)})
+	threadDir := threadState.Dir
+	if err := threadState.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	recovered, err := thread.Load(sessionDir)
+	recovered, err := thread.Load(threadDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 		}, recovered),
-		WorkDir: root, MediaDir: filepath.Join(root, "artifacts"),
+		WorkDir: root, MediaDir: filepath.Join(root, "media"),
 	}
 
 	out, err := engine.Turn(context.Background(), "continue after mixed recovery")
@@ -262,13 +262,13 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 	}
 }
 
-func appendCatalogEvent(t *testing.T, sess *thread.Thread, event events.Event) {
+func appendCatalogEvent(t *testing.T, threadState *thread.Thread, event events.Event) {
 	t.Helper()
 	prepared, err := eventcatalog.Default().Prepare(events.Normalize(event))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendEvent(prepared); err != nil {
+	if err := threadState.AppendEvent(prepared); err != nil {
 		t.Fatal(err)
 	}
 }

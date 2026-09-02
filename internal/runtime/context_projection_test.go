@@ -173,7 +173,7 @@ func artifactPathFromProviderText(t *testing.T, text string) string {
 	return ""
 }
 
-func TestProjectMessagesForProviderLockedBoundsLegacyToolResultWhenCompactionDisabled(t *testing.T) {
+func TestProjectMessagesForProviderLockedBoundsPersistedToolResultWhenCompactionDisabled(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.Compaction = CompactionPolicy{Enabled: false}
 	eng.ToolOutput = ToolOutputPolicy{
@@ -183,11 +183,11 @@ func TestProjectMessagesForProviderLockedBoundsLegacyToolResultWhenCompactionDis
 	}
 	original := "tool-head" + strings.Repeat("-middle", 40) + "-tool-tail"
 	msg := llm.Message{
-		ID:   "legacy-tool-result",
+		ID:   "persisted-tool-result",
 		Role: llm.RoleUser,
 		Blocks: []llm.Block{{
 			Type:      llm.BlockToolResult,
-			ToolUseID: "call-legacy",
+			ToolUseID: "call-persisted",
 			Content:   original,
 		}},
 	}

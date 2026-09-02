@@ -360,7 +360,7 @@ func TestUpdateConfigUsesRestartContinuationPolicy(t *testing.T) {
 				resumeCalls.Load() != test.wantResumeCall {
 				t.Fatalf("resume = %+v, calls = %d", restarted.Resume, resumeCalls.Load())
 			}
-			if test.wantSent && (restarted.Resume.ThreadID != "session-one" ||
+			if test.wantSent && (restarted.Resume.ThreadID != "234567" ||
 				restarted.Resume.TurnID != "turn-resume") {
 				t.Fatalf("resume = %+v", restarted.Resume)
 			}
@@ -440,12 +440,12 @@ func configRestartTestManager(
 			}
 			if turnState == statusapi.TurnErrored {
 				return restartActivity{
-					ThreadID: "session-one", TurnID: "turn-original", State: activity,
+					ThreadID: "234567", TurnID: "turn-original", State: activity,
 					TurnState: statusapi.TurnErrored, TurnErrorKind: statusapi.StatusErrorAuth,
 				}, nil
 			}
 			return restartActivity{
-				ThreadID:  "session-one",
+				ThreadID:  "234567",
 				TurnID:    "turn-original",
 				State:     activity,
 				TurnState: statusapi.TurnActive,
@@ -456,12 +456,12 @@ func configRestartTestManager(
 		}
 		if turnState == statusapi.TurnErrored {
 			return restartActivity{
-				ThreadID: "session-one", TurnID: "turn-original", State: statusapi.ActivityIdle,
+				ThreadID: "234567", TurnID: "turn-original", State: statusapi.ActivityIdle,
 				TurnState: statusapi.TurnErrored, TurnErrorKind: statusapi.StatusErrorAuth,
 			}, nil
 		}
 		return restartActivity{
-			ThreadID:      "session-one",
+			ThreadID:      "234567",
 			TurnID:        "turn-original",
 			State:         statusapi.ActivityIdle,
 			TurnState:     statusapi.TurnCancelled,
@@ -471,13 +471,13 @@ func configRestartTestManager(
 	deps.postRestartResume = func(
 		_ context.Context,
 		got endpoint.Runtime,
-		sessionID string,
+		threadID string,
 		prompt string,
 	) (string, error) {
 		resumeCalls.Add(1)
-		if !got.Matches(newRuntime) || sessionID != "session-one" ||
+		if !got.Matches(newRuntime) || threadID != "234567" ||
 			!strings.Contains(prompt, "System notice") {
-			t.Fatalf("resume runtime/session/prompt = %+v/%q/%q", got, sessionID, prompt)
+			t.Fatalf("resume runtime/Thread/prompt = %+v/%q/%q", got, threadID, prompt)
 		}
 		if resumeErr != nil {
 			return "", resumeErr

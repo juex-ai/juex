@@ -55,7 +55,7 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 		},
 	}
 
-	got := b.Build()
+	got := mustBuild(t, b)
 	mustContain(t, got, "project rule")
 	mustContain(t, got, "subdir rule")
 	mustContain(t, got, "global rule")
@@ -73,7 +73,7 @@ func TestBuilder_EmptySourcesSkipped(t *testing.T) {
 		&promptcontext.GuidanceModule{AgentsMDDirs: []string{t.TempDir()}},
 		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
-	got := b.Build()
+	got := mustBuild(t, b)
 	if strings.Contains(got, "Available Skills") {
 		t.Errorf("should not have skills section: %q", got)
 	}
@@ -93,7 +93,7 @@ func TestBuilder_AgentsMDOrderingDeterministic(t *testing.T) {
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
 		&promptcontext.GuidanceModule{AgentsMDDirs: []string{rootA, rootB}},
 	)
-	got := b.Build()
+	got := mustBuild(t, b)
 	posA := strings.Index(got, "AAA")
 	posB := strings.Index(got, "BBB")
 	if posA < 0 || posB < 0 {
@@ -116,7 +116,7 @@ func TestBuilder_OnlyGlobalAgentsMD(t *testing.T) {
 		&promptcontext.GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{t.TempDir()}},
 		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
-	got := b.Build()
+	got := mustBuild(t, b)
 	mustContain(t, got, "only-global-rule")
 	mustContain(t, got, "Operating Context")
 }
@@ -131,7 +131,7 @@ func TestBuilder_OnlyProjectAgentsMD(t *testing.T) {
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
 		&promptcontext.GuidanceModule{AgentsMDDirs: []string{root}},
 	)
-	got := b.Build()
+	got := mustBuild(t, b)
 	mustContain(t, got, "only-project-rule")
 }
 
@@ -158,7 +158,7 @@ func TestBuilder_SectionsIncludeInspectableAgentsEntries(t *testing.T) {
 		&promptcontext.GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{root, projectAgents}},
 		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
-	sections := b.Sections()
+	sections := mustSections(t, b)
 	if len(sections) != 4 {
 		t.Fatalf("sections = %+v", sections)
 	}
@@ -190,7 +190,7 @@ func TestBuilder_ModuleSectionsPreserveProviderOrder(t *testing.T) {
 		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
-	sections := b.Sections()
+	sections := mustSections(t, b)
 	if len(sections) != 2 {
 		t.Fatalf("sections = %+v, want runtime section and operating context", sections)
 	}
@@ -201,7 +201,7 @@ func TestBuilder_ModuleSectionsPreserveProviderOrder(t *testing.T) {
 		t.Fatalf("section[1] = %+v, want operating context after runtime section", sections[1])
 	}
 
-	got := b.Build()
+	got := mustBuild(t, b)
 	mustContain(t, got, "## Active Shell Sessions")
 	mustContain(t, got, "session_id=7")
 	if strings.Contains(got, "Empty Runtime") {
@@ -220,7 +220,7 @@ func TestBuilder_ThreadScratchpadSection(t *testing.T) {
 		&promptcontext.ThreadContextModule{WorkDir: work, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
-	sections := b.Sections()
+	sections := mustSections(t, b)
 	if len(sections) != 2 {
 		t.Fatalf("sections = %+v, want scratchpad and operating context", sections)
 	}
@@ -251,7 +251,7 @@ func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
 		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
-	got := b.Build()
+	got := mustBuild(t, b)
 	for _, want := range []string{"cwd:", "os:", "time:", "2026-05-01T12:30:45Z"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("operating context missing %q in:\n%s", want, got)
@@ -268,7 +268,7 @@ func TestBuilder_OperatingContextUsesWorkDir(t *testing.T) {
 		&promptcontext.ThreadContextModule{WorkDir: workDir, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
-	got := b.Build()
+	got := mustBuild(t, b)
 	mustContain(t, got, "- cwd: "+workDir)
 	if strings.Contains(got, "- cwd: "+processDir) {
 		t.Fatalf("operating context used process cwd instead of workdir:\n%s", got)
@@ -287,7 +287,7 @@ func TestBuilder_OperatingContextIncludesShellProfile(t *testing.T) {
 		}, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
-	got := b.Build()
+	got := mustBuild(t, b)
 	for _, want := range []string{
 		"- shell: powershell (pwsh)",
 		"- shell_family: powershell",
@@ -312,7 +312,7 @@ func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
 		&promptcontext.ThreadContextModule{WorkDir: "workspace", Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
-	got := b.Build()
+	got := mustBuild(t, b)
 	want := filepath.Join(base, "workspace")
 	mustContain(t, got, "- cwd: "+want)
 	if strings.Contains(got, "- cwd: workspace") {
@@ -328,7 +328,7 @@ func TestBuilder_ModuleSectionRendersProvidedContent(t *testing.T) {
 			}}, nil
 		},
 	}
-	got := b.Build()
+	got := mustBuild(t, b)
 	for _, want := range []string{"Example Module", "first desc", "second desc", "third desc"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -347,7 +347,7 @@ func TestBuilder_SectionsSeparatedByDivider(t *testing.T) {
 		&promptcontext.GuidanceModule{AgentsMDDirs: []string{root}},
 		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
-	got := b.Build()
+	got := mustBuild(t, b)
 	if !strings.Contains(got, "---") {
 		t.Fatalf("expected --- divider between sections, got:\n%s", got)
 	}
@@ -361,12 +361,12 @@ func TestBuilder_RebuildsFreshEachCall(t *testing.T) {
 		},
 	}
 
-	first := b.Build()
+	first := mustBuild(t, b)
 	if !strings.Contains(first, "before") {
 		t.Fatalf("initial module context missing:\n%s", first)
 	}
 	moduleText = "added-after"
-	second := b.Build()
+	second := mustBuild(t, b)
 	if !strings.Contains(second, "added-after") {
 		t.Fatalf("rebuild missed new module context:\n%s", second)
 	}
@@ -403,6 +403,24 @@ func builderFromProviders(request runtimemodule.ContextRequest, providers ...run
 		}
 		return sections, nil
 	}}
+}
+
+func mustBuild(t *testing.T, builder *Builder) string {
+	t.Helper()
+	text, err := builder.BuildWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text
+}
+
+func mustSections(t *testing.T, builder *Builder) []Section {
+	t.Helper()
+	sections, err := builder.SectionsWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sections
 }
 
 func mustContain(t *testing.T, hay, needle string) {

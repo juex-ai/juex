@@ -17,24 +17,12 @@ type Builder struct {
 
 type Section = runtimemodule.ContextSection
 
-// Build is the compatibility helper for callers that cannot return an error.
-// Runtime request paths use BuildWithError so Module failures stay visible.
-func (b *Builder) Build() string {
-	text, _ := b.BuildWithError()
-	return text
-}
-
 func (b *Builder) BuildWithError() (string, error) {
 	sections, err := b.SectionsWithError()
 	if err != nil {
 		return "", err
 	}
 	return JoinSections(sections), nil
-}
-
-func (b *Builder) Sections() []Section {
-	sections, _ := b.SectionsWithError()
-	return sections
 }
 
 func (b *Builder) SectionsWithError() ([]Section, error) {

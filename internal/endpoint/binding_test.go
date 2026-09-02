@@ -141,7 +141,7 @@ func TestReadRuntimeChecksExplicitAddressIdentity(t *testing.T) {
 	}
 }
 
-func TestReadRuntimeAcceptsLegacyRecordWithoutProcessIdentity(t *testing.T) {
+func TestReadRuntimeAcceptsRecordWithoutProcessIdentity(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
@@ -167,7 +167,7 @@ func TestReadRuntimeAcceptsLegacyRecordWithoutProcessIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !got.Matches(runtimeState) || got.ProcessIdentity != "" {
-		t.Fatalf("runtime = %+v, want legacy runtime %+v", got, runtimeState)
+		t.Fatalf("runtime = %+v, want record without process identity %+v", got, runtimeState)
 	}
 }
 
@@ -274,7 +274,7 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 	}
 }
 
-func TestRuntimeMatchesTreatsMissingVersionAsCompatible(t *testing.T) {
+func TestRuntimeMatchesTreatsMissingVersionAsUnspecified(t *testing.T) {
 	base := Runtime{
 		AgentID:    "aaaaaa",
 		InstanceID: "instance",
@@ -289,14 +289,14 @@ func TestRuntimeMatchesTreatsMissingVersionAsCompatible(t *testing.T) {
 	other.BinaryVersion = "1.0.0"
 
 	if !old.Matches(current) || !current.Matches(old) {
-		t.Fatal("missing binary version must remain compatible")
+		t.Fatal("missing binary version must match an otherwise identical Runtime")
 	}
 	if current.Matches(other) {
 		t.Fatal("different non-empty binary versions must not match")
 	}
 }
 
-func TestRuntimeMatchesTreatsProcessIdentityAsOptionalCompatibilityMetadata(t *testing.T) {
+func TestRuntimeMatchesTreatsProcessIdentityAsOptionalMetadata(t *testing.T) {
 	base := Runtime{
 		AgentID:    "aaaaaa",
 		InstanceID: "instance",
@@ -312,7 +312,7 @@ func TestRuntimeMatchesTreatsProcessIdentityAsOptionalCompatibilityMetadata(t *t
 	second.ProcessIdentity = "boot-a:200"
 
 	if !base.Matches(first) || !first.Matches(base) {
-		t.Fatal("missing process identity must remain compatible")
+		t.Fatal("missing process identity must match an otherwise identical Runtime")
 	}
 	if !first.Matches(same) {
 		t.Fatal("equal process identities must match")

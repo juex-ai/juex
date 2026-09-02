@@ -108,7 +108,7 @@ func TestLinuxReadOnlyBindsWorkspaceAndAgentStateRoots(t *testing.T) {
 }
 
 func TestLinuxBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
-	policy := LegacyDefaultPolicy()
+	policy := DisabledPolicy()
 	policy.Enabled = true
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
@@ -211,8 +211,8 @@ func TestLinuxBlockedPathMaskFollowsWritableAgentStateBind(t *testing.T) {
 func TestLinuxReadOnlyPathFollowsWritableAgentStateBind(t *testing.T) {
 	workspace := t.TempDir()
 	agentStateDir := t.TempDir()
-	artifactDir := filepath.Join(agentStateDir, "artifacts")
-	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+	mediaDir := filepath.Join(agentStateDir, "media")
+	if err := os.Mkdir(mediaDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	policy := DefaultPolicy()
@@ -222,7 +222,7 @@ func TestLinuxReadOnlyPathFollowsWritableAgentStateBind(t *testing.T) {
 		Policy:        policy,
 		WorkDir:       workspace,
 		AgentStateDir: agentStateDir,
-		ReadOnlyPaths: []string{artifactDir},
+		ReadOnlyPaths: []string{mediaDir},
 	})
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
@@ -238,7 +238,7 @@ func TestLinuxReadOnlyPathFollowsWritableAgentStateBind(t *testing.T) {
 	}
 	args := strings.Join(got.Args, "\x00")
 	bind := "--bind\x00" + agentStateDir + "\x00" + agentStateDir
-	readOnly := "--ro-bind\x00" + artifactDir + "\x00" + artifactDir
+	readOnly := "--ro-bind\x00" + mediaDir + "\x00" + mediaDir
 	bindAt, readOnlyAt := strings.Index(args, bind), strings.Index(args, readOnly)
 	if bindAt < 0 || readOnlyAt < 0 || readOnlyAt < bindAt {
 		t.Fatalf("read-only Artifact bind must follow AgentStateDir bind: %#v", got.Args)

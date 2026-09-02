@@ -50,7 +50,7 @@ func TestRipgrepRunnerKeepsReadableMatchesWhenDescendantIsUnreadable(t *testing.
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
 		RipgrepPath: rg,
 		WorkDir:     root,
-		Sandbox:     sandbox.LegacyDefaultPolicy(),
+		Sandbox:     sandbox.DisabledPolicy(),
 	})
 	result, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: root})
 	if err != nil {
@@ -97,7 +97,7 @@ func TestRipgrepRunnerDoesNotTraverseDirectorySymlinksAndAllowsExplicitFileSymli
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
 		RipgrepPath: rg,
 		WorkDir:     root,
-		Sandbox:     sandbox.LegacyDefaultPolicy(),
+		Sandbox:     sandbox.DisabledPolicy(),
 	})
 	result, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: root})
 	if err != nil {
@@ -138,7 +138,7 @@ exit 2
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
 		RipgrepPath: script,
 		WorkDir:     root,
-		Sandbox:     sandbox.LegacyDefaultPolicy(),
+		Sandbox:     sandbox.DisabledPolicy(),
 	})
 	result, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: root})
 	if err == nil || !strings.Contains(err.Error(), "unsupported invocation") {
@@ -172,7 +172,7 @@ while :; do sleep 1; done
 		runner := NewRipgrepRunner(RipgrepRunnerOptions{
 			RipgrepPath: script,
 			WorkDir:     root,
-			Sandbox:     sandbox.LegacyDefaultPolicy(),
+			Sandbox:     sandbox.DisabledPolicy(),
 		})
 		result, err := runner.Grep(ctx, GrepRequest{Pattern: "partial", Path: root})
 		done <- outcome{result: result, err: err}

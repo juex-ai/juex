@@ -70,7 +70,7 @@ func detectReadImage(path string, data []byte) (readImageKind, bool) {
 	return readImageKind{}, false
 }
 
-func readImageResult(artifactDir string, source []byte, kind readImageKind) (Result, error) {
+func readImageResult(mediaDir string, source []byte, kind readImageKind) (Result, error) {
 	artifactData := source
 	width, height := imageConfigDimensions(kind.mediaType, source)
 	downsampled := false
@@ -90,7 +90,7 @@ func readImageResult(artifactDir string, source []byte, kind readImageKind) (Res
 		reason := fmt.Sprintf("artifact byte size %d exceeds limit %d after downsampling", len(artifactData), readImageMaxBytes)
 		return Result{Text: readImageOmittedSummary(kind.mediaType, len(artifactData), width, height, reason)}, nil
 	}
-	store, err := artifact.NewStore(artifactDir)
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		return Result{}, err
 	}

@@ -94,11 +94,11 @@ func (p *interruptibleCompactWebProvider) Complete(ctx context.Context, sys stri
 func TestWeb_TranscriptPageReadsLatestItemsFromEOF(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
-	sess, err := thread.New(cfg.ThreadsDir())
+	threadState, err := thread.New(cfg.ThreadsDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	threadID := sess.ID
+	threadID := threadState.ID
 	messages := []llm.Message{
 		{ID: "m1", Role: llm.RoleUser, Kind: llm.MessageKindCompact, Blocks: []llm.Block{{Type: llm.BlockText, Text: "summary"}}},
 		{ID: "m2", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "read", Input: map[string]any{"path": "a.txt"}}}},
@@ -106,11 +106,11 @@ func TestWeb_TranscriptPageReadsLatestItemsFromEOF(t *testing.T) {
 		{ID: "m4", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "call-1", ToolName: "read", Content: "done"}}},
 		{ID: "m5", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockText, Text: "latest"}}},
 	}
-	if err := sess.AppendBatch(messages); err != nil {
-		_ = sess.Close()
+	if err := threadState.AppendBatch(messages); err != nil {
+		_ = threadState.Close()
 		t.Fatal(err)
 	}
-	if err := sess.Close(); err != nil {
+	if err := threadState.Close(); err != nil {
 		t.Fatal(err)
 	}
 

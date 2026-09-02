@@ -55,27 +55,27 @@ func TestDarwinProfileBlocksConfiguredPaths(t *testing.T) {
 func TestDarwinProfileMakesArtifactRootWriteOnlyDenied(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.Enabled = true
-	artifactDir := "/tmp/agent/artifacts"
-	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace", "/tmp/agent"}, []string{artifactDir})
+	mediaDir := "/tmp/agent/artifacts"
+	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace", "/tmp/agent"}, []string{mediaDir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"(deny file-write* (literal \"" + artifactDir + "\"))",
-		"(deny file-write* (subpath \"" + artifactDir + "\"))",
-		"(deny file-write-unlink (subpath \"" + artifactDir + "\"))",
+		"(deny file-write* (literal \"" + mediaDir + "\"))",
+		"(deny file-write* (subpath \"" + mediaDir + "\"))",
+		"(deny file-write-unlink (subpath \"" + mediaDir + "\"))",
 	} {
 		if !strings.Contains(profile, want) {
 			t.Fatalf("profile missing %q:\n%s", want, profile)
 		}
 	}
-	if strings.Contains(profile, "(deny file-read* (subpath \""+artifactDir+"\"))") {
+	if strings.Contains(profile, "(deny file-read* (subpath \""+mediaDir+"\"))") {
 		t.Fatalf("read-only root unexpectedly denies reads:\n%s", profile)
 	}
 }
 
 func TestDarwinBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
-	policy := LegacyDefaultPolicy()
+	policy := DisabledPolicy()
 	policy.Enabled = true
 	got, err := (DefaultRunner{
 		RuntimeOS: "darwin",
@@ -116,7 +116,7 @@ func TestDarwinBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
 func TestDarwinReadWritePreservesConfiguredCacheEnvironment(t *testing.T) {
 	agentStateDir := t.TempDir()
 	workDir := t.TempDir()
-	policy := LegacyDefaultPolicy()
+	policy := DisabledPolicy()
 	policy.Enabled = true
 	wantEnv := []string{
 		"TMPDIR=/custom/tmp",
