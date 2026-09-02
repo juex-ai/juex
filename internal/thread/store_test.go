@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -571,6 +572,122 @@ func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
 			t.Fatalf("repaired entry = %#v, metadata = %#v", entry, metadata)
 		}
 	}
+}
+
+func TestStaleStoreHandleCannotOverwriteAuthoritativeMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		mutateFresh func(*testing.T, *Thread)
+		mutateStale func(*Thread) error
+	}{
+		{
+			name: "append-after-rename",
+			mutateFresh: func(t *testing.T, target *Thread) {
+				t.Helper()
+				if err := target.ApplyAlias("fresh-alias"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			mutateStale: func(target *Thread) error {
+				return target.Append(llm.TextMessage(llm.RoleUser, "stale append"))
+			},
+		},
+		{
+			name: "rename-after-append",
+			mutateFresh: func(t *testing.T, target *Thread) {
+				t.Helper()
+				if err := target.Append(llm.TextMessage(llm.RoleUser, "fresh append")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			mutateStale: func(target *Thread) error { return target.ApplyAlias("stale-alias") },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			store.random = zeroReader{}
+			main, err := store.EnsureMain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = main.Close() }()
+			fresh, err := store.CreateWorker(MainID, "original")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = fresh.Close() }()
+			stale, err := store.OpenActive(fresh.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = stale.Close() }()
+
+			test.mutateFresh(t, fresh)
+			want := fresh.Projection()
+			journalBefore, err := os.Stat(filepath.Join(fresh.Dir, journalFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.mutateStale(stale); !errors.Is(err, ErrStaleHandle) {
+				t.Fatalf("stale mutation error = %v, want stale handle", err)
+			}
+			journalAfter, err := os.Stat(filepath.Join(fresh.Dir, journalFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if journalAfter.Size() != journalBefore.Size() {
+				t.Fatalf("stale mutation changed Journal size from %d to %d", journalBefore.Size(), journalAfter.Size())
+			}
+			metadata := mustReadProjection(t, filepath.Join(fresh.Dir, projectionFile))
+			if metadata.Revision != want.Revision || metadata.Alias != want.Alias || metadata.Journal != want.Journal {
+				t.Fatalf("stale mutation overwrote metadata: got %+v want %+v", metadata, want)
+			}
+		})
+	}
+}
+
+func TestBackwardClockRejectsJournalCommitBeforeWrite(t *testing.T) {
+	now := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	store := NewStore(t.TempDir())
+	store.random = zeroReader{}
+	store.now = func() time.Time { return now }
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	worker, err := store.CreateWorker(MainID, "clock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := worker.Projection()
+	journalPath := filepath.Join(worker.Dir, journalFile)
+	journalBefore, err := os.Stat(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(-time.Hour)
+	if err := worker.Append(llm.TextMessage(llm.RoleUser, "must not commit")); !errors.Is(err, ErrInvalidMetadata) {
+		t.Fatalf("backward-clock append error = %v, want invalid metadata", err)
+	}
+	journalAfter, err := os.Stat(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journalAfter.Size() != journalBefore.Size() {
+		t.Fatalf("backward-clock append changed Journal size from %d to %d", journalBefore.Size(), journalAfter.Size())
+	}
+	if metadata := mustReadProjection(t, filepath.Join(worker.Dir, projectionFile)); !reflect.DeepEqual(metadata, before) {
+		t.Fatalf("backward-clock append changed metadata: got %+v want %+v", metadata, before)
+	}
+	if err := worker.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewStore(store.AgentStateDir()).OpenActive(worker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reopened.Close()
 }
 
 type zeroReader struct{}

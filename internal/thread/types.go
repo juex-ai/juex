@@ -68,6 +68,7 @@ var (
 	ErrInvalidFact       = errors.New("thread: invalid fact")
 	ErrInvalidTransition = errors.New("thread: invalid transition")
 	ErrProjectionStale   = errors.New("thread: projection persistence failed after journal commit")
+	ErrStaleHandle       = errors.New("thread: stale Thread handle")
 )
 
 type Commit struct {
