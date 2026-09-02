@@ -101,6 +101,20 @@ func validateProjectionMetadata(projection Projection, id string) error {
 	if projection.Counts.TurnCount < 0 || projection.Counts.PendingInputCount < 0 {
 		return fail("negative counters")
 	}
+	journal := projection.Journal
+	if journal.ProjectedSeq == 0 || journal.ProjectedOffset <= 0 {
+		return fail("Journal cursor is empty")
+	}
+	if (journal.LastCheckpointSeq == 0) != (journal.LastCheckpointOffset == 0) ||
+		journal.LastCheckpointSeq > journal.ProjectedSeq ||
+		journal.LastCheckpointOffset < 0 || journal.LastCheckpointOffset >= journal.ProjectedOffset {
+		return fail("checkpoint cursor is inconsistent")
+	}
+	for index, generation := range projection.Generations {
+		if generation.StartSeq > journal.ProjectedSeq || generation.StartOffset >= journal.ProjectedOffset {
+			return fail("Generation registry entry %d is beyond the Journal cursor", index)
+		}
+	}
 	return nil
 }
 

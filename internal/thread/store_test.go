@@ -400,6 +400,13 @@ func TestListRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.T) {
 			projection.Counts.GenerationCount++
 			mustWriteJSON(t, path, projection)
 		}},
+		{name: "empty-journal-cursor", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.Journal.ProjectedSeq = 0
+			projection.Journal.ProjectedOffset = 0
+			mustWriteJSON(t, path, projection)
+		}},
 		{name: "unknown-field", mutate: func(t *testing.T, path string) {
 			t.Helper()
 			data, err := os.ReadFile(path)
@@ -436,6 +443,67 @@ func TestListRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.T) {
 			}
 			if _, err := NewStore(store.AgentStateDir()).List(); err == nil {
 				t.Fatal("List error = nil, want authoritative metadata failure")
+			}
+		})
+	}
+}
+
+func TestListRejectsAgentWideMetadataConflicts(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(first, second *Projection)
+	}{
+		{name: "duplicate-alias", mutate: func(first, second *Projection) {
+			second.Alias = first.Alias
+		}},
+		{name: "alias-conflicts-with-thread-id", mutate: func(first, second *Projection) {
+			second.Alias = first.ThreadID
+		}},
+		{name: "missing-parent", mutate: func(_, second *Projection) {
+			second.ParentThreadID = "222222"
+		}},
+		{name: "parent-cycle", mutate: func(first, second *Projection) {
+			first.ParentThreadID = second.ThreadID
+			second.ParentThreadID = first.ThreadID
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			main, err := store.EnsureMain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			store.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, 6), bytes.Repeat([]byte{1}, 6)...))
+			first, err := store.CreateWorker(MainID, "first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := store.CreateWorker(MainID, "second")
+			if err != nil {
+				t.Fatal(err)
+			}
+			firstPath := filepath.Join(first.Dir, projectionFile)
+			secondPath := filepath.Join(second.Dir, projectionFile)
+			firstProjection := first.Projection()
+			secondProjection := second.Projection()
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := second.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := main.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			test.mutate(&firstProjection, &secondProjection)
+			mustWriteJSON(t, firstPath, firstProjection)
+			mustWriteJSON(t, secondPath, secondProjection)
+			if err := os.Remove(store.IndexPath()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewStore(store.AgentStateDir()).List(); !errors.Is(err, ErrInvalidMetadata) {
+				t.Fatalf("List error = %v, want invalid metadata", err)
 			}
 		})
 	}

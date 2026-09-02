@@ -381,7 +381,54 @@ func (s *Store) scanProjectionFilesLocked() ([]Projection, error) {
 			projections = append(projections, projection)
 		}
 	}
+	if err := validateProjectionSet(projections); err != nil {
+		return nil, err
+	}
 	return projections, nil
+}
+
+func validateProjectionSet(projections []Projection) error {
+	ids := make(map[string]string, len(projections))
+	parents := make(map[string]string, len(projections))
+	for _, projection := range projections {
+		ids[strings.ToLower(projection.ThreadID)] = projection.ThreadID
+		parents[projection.ThreadID] = projection.ParentThreadID
+	}
+	_, hasMain := ids[MainID]
+
+	for index, projection := range projections {
+		for _, candidate := range projections {
+			if strings.EqualFold(projection.Alias, candidate.ThreadID) {
+				return fmt.Errorf("%w: alias %q conflicts with Thread ID %s", ErrInvalidMetadata, projection.Alias, candidate.ThreadID)
+			}
+		}
+		for previous := 0; previous < index; previous++ {
+			if strings.EqualFold(projection.Alias, projections[previous].Alias) {
+				return fmt.Errorf("%w: alias %q is shared by Threads %s and %s", ErrInvalidMetadata, projection.Alias, projections[previous].ThreadID, projection.ThreadID)
+			}
+		}
+		if projection.ThreadID != MainID && hasMain {
+			if _, exists := ids[strings.ToLower(projection.ParentThreadID)]; !exists {
+				return fmt.Errorf("%w: Thread %s has missing parent %s", ErrInvalidMetadata, projection.ThreadID, projection.ParentThreadID)
+			}
+		}
+	}
+
+	for id := range parents {
+		seen := map[string]struct{}{}
+		for current := id; current != MainID; {
+			if _, exists := seen[current]; exists {
+				return fmt.Errorf("%w: parent cycle includes Thread %s", ErrInvalidMetadata, current)
+			}
+			seen[current] = struct{}{}
+			parent, exists := parents[current]
+			if !exists {
+				break
+			}
+			current = parent
+		}
+	}
+	return nil
 }
 
 func (s *Store) writeProjectionIndexLocked(projections []Projection, revision uint64) (Index, error) {
