@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/juex-ai/juex/internal/events"
@@ -322,6 +323,7 @@ func (t *Thread) BeginCompactedGeneration(summary llm.Message, automatic bool) (
 }
 
 func (t *Thread) ApplyAlias(alias string) error {
+	alias = strings.TrimSpace(alias)
 	if alias == "" {
 		return fmt.Errorf("thread: alias is required")
 	}

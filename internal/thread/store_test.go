@@ -872,6 +872,44 @@ func TestWorkerAliasUniquenessMatchesCaseInsensitiveClientResolution(t *testing.
 	if err := worker.ApplyAlias(worker.ID); err == nil {
 		t.Fatal("Worker was renamed to its own Thread ID")
 	}
+	if _, err := store.CreateWorker(MainID, "#abc123"); err == nil {
+		t.Fatal("hash-prefixed Thread selector was accepted as an alias")
+	}
+	if err := worker.ApplyAlias("#def456"); err == nil {
+		t.Fatal("Worker was renamed to a hash-prefixed Thread selector")
+	}
+}
+
+func TestWorkerAliasesTrimClientInvisibleWhitespace(t *testing.T) {
+	t.Parallel()
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	worker, err := store.CreateWorker(MainID, " reviewer ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Close() }()
+	if worker.Info().Alias != "reviewer" {
+		t.Fatalf("created alias = %q, want reviewer", worker.Info().Alias)
+	}
+	if err := worker.ApplyAlias(" renamed "); err != nil {
+		t.Fatal(err)
+	}
+	if worker.Info().Alias != "renamed" {
+		t.Fatalf("renamed alias = %q, want renamed", worker.Info().Alias)
+	}
+	generated, err := store.CreateWorker(MainID, " \t ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = generated.Close() }()
+	if generated.Alias != DefaultWorkerAlias(generated.ID) {
+		t.Fatalf("generated alias = %q, want %q", generated.Alias, DefaultWorkerAlias(generated.ID))
+	}
 }
 
 func TestCreateWorkerDoesNotReuseArchivedThreadID(t *testing.T) {

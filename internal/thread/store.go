@@ -61,6 +61,7 @@ func (s *Store) EnsureMain() (*Thread, error) {
 func (s *Store) CreateWorker(parentID, alias string) (*Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	alias = strings.TrimSpace(alias)
 	if !ValidID(parentID) {
 		return nil, fmt.Errorf("%w: parent %q", ErrInvalidID, parentID)
 	}
@@ -141,6 +142,9 @@ func (s *Store) workerIDAvailableLocked(id string) (bool, error) {
 func validateAliasAvailable(index Index, alias, exceptID string) error {
 	if alias == "" {
 		return fmt.Errorf("thread: alias is required")
+	}
+	if strings.HasPrefix(alias, "#") {
+		return fmt.Errorf("thread: alias %q conflicts with the #<thread-id> selector", alias)
 	}
 	for _, entry := range index.Threads {
 		if strings.EqualFold(entry.ThreadID, alias) {

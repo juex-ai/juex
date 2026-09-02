@@ -124,7 +124,7 @@ func TestThreadAPIListCreateShowAndEOFPagination(t *testing.T) {
 	defer httpServer.Close()
 
 	var created thread.Info
-	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{"alias":"reviewer"}`, http.StatusCreated, &created)
+	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{"alias":" reviewer "}`, http.StatusCreated, &created)
 	if !thread.ValidWorkerID(created.ID) || created.Alias != "reviewer" || created.ParentThreadID != thread.MainID {
 		t.Fatalf("created Thread = %+v", created)
 	}
