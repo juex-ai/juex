@@ -26,6 +26,7 @@ type Store struct {
 	now             func() time.Time
 	writeIndex      func(string, []byte) error
 	writeProjection func(string, []byte) error
+	syncDir         func(string) error
 }
 
 var storeLocks sync.Map
@@ -239,18 +240,35 @@ func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 		return nil, err
 	}
 	published = true
-	if err := homestore.SyncDir(threadsDir); err != nil {
-		return nil, err
+	if err := s.syncDirectory(threadsDir); err != nil {
+		return nil, s.rollbackPublishedThread(destination, threadsDir, err)
 	}
 	if threadsDirCreated {
-		if err := homestore.SyncDir(filepath.Dir(threadsDir)); err != nil {
-			return nil, err
+		if err := s.syncDirectory(filepath.Dir(threadsDir)); err != nil {
+			return nil, s.rollbackPublishedThread(destination, threadsDir, err)
 		}
 	}
 	if err := s.updateProjectionLocked(); err != nil {
 		return nil, err
 	}
 	return s.openLocked(destination, id)
+}
+
+func (s *Store) syncDirectory(path string) error {
+	if s.syncDir != nil {
+		return s.syncDir(path)
+	}
+	return homestore.SyncDir(path)
+}
+
+func (s *Store) rollbackPublishedThread(destination, threadsDir string, publishErr error) error {
+	if err := os.RemoveAll(destination); err != nil {
+		return errors.Join(publishErr, fmt.Errorf("thread: roll back incomplete publication: %w", err))
+	}
+	if err := s.syncDirectory(threadsDir); err != nil {
+		return errors.Join(publishErr, fmt.Errorf("thread: sync publication rollback: %w", err))
+	}
+	return publishErr
 }
 
 func (s *Store) persistInitialProjectionLocked(thread *Thread) error {

@@ -581,6 +581,80 @@ func TestStoreCreationFailureDoesNotPublishIncompleteThread(t *testing.T) {
 	})
 }
 
+func TestStorePublicationSyncFailureRollsBackThread(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		failSyncCall int
+		create       func(*testing.T, *Store) (*Thread, error)
+		threadID     string
+	}{
+		{
+			name:         "Main threads directory",
+			failSyncCall: 1,
+			create: func(_ *testing.T, store *Store) (*Thread, error) {
+				return store.EnsureMain()
+			},
+			threadID: MainID,
+		},
+		{
+			name:         "Main agent directory",
+			failSyncCall: 2,
+			create: func(_ *testing.T, store *Store) (*Thread, error) {
+				return store.EnsureMain()
+			},
+			threadID: MainID,
+		},
+		{
+			name:         "Worker threads directory",
+			failSyncCall: 1,
+			create: func(_ *testing.T, store *Store) (*Thread, error) {
+				return store.CreateWorker(MainID, "retry-worker")
+			},
+			threadID: "000000",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			store.random = zeroReader{}
+			if test.threadID != MainID {
+				main, err := store.EnsureMain()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = main.Close() }()
+			}
+			injected := errors.New("injected directory sync failure")
+			calls := 0
+			store.syncDir = func(string) error {
+				calls++
+				if calls == test.failSyncCall {
+					return injected
+				}
+				return nil
+			}
+
+			if thread, err := test.create(t, store); !errors.Is(err, injected) {
+				if thread != nil {
+					_ = thread.Close()
+				}
+				t.Fatalf("create error = %v, want injected failure", err)
+			}
+			if _, err := os.Stat(filepath.Join(store.ThreadsDir(), test.threadID)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("published Thread after failed sync: %v", err)
+			}
+			store.syncDir = nil
+			thread, err := test.create(t, store)
+			if err != nil {
+				t.Fatalf("retry create: %v", err)
+			}
+			defer func() { _ = thread.Close() }()
+			if thread.ID != test.threadID {
+				t.Fatalf("retry Thread ID = %q, want %q", thread.ID, test.threadID)
+			}
+		})
+	}
+}
+
 func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
 	store := NewStore(t.TempDir())
 	store.random = zeroReader{}
