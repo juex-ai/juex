@@ -78,7 +78,7 @@ func TestReplaceThreadRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 	if err := engine.ReserveTurnID("turn-busy"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.EnqueuePendingInput(t.Context(), "keep this input"); err != nil {
+	if _, err := engine.enqueuePendingInput(t.Context(), "keep this input"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,7 +104,7 @@ func TestReplaceThreadRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 
 func TestReplaceThreadRuntimeRecoversUnconsumedPolicyContext(t *testing.T) {
 	root := t.TempDir()
-	sess := newThreadRuntimeTestThread(t, root)
+	threadState := newThreadRuntimeTestThread(t, root)
 	first := provenanceRuntimeContextMessage("hook-1", "consumed")
 	second := provenanceRuntimeContextMessage("hook-2", "pending")
 	for _, event := range []events.Event{
@@ -112,12 +112,12 @@ func TestReplaceThreadRuntimeRecoversUnconsumedPolicyContext(t *testing.T) {
 		{Type: provenance.RequestEpochType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.RequestEpochPayload{Epoch: validRecoveryEpoch(t, first.ID)}},
 		{Type: provenance.PolicyContextQueuedType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.PolicyContextQueuedPayload{Messages: []llm.Message{second}}},
 	} {
-		if err := sess.AppendEvent(events.Normalize(event)); err != nil {
+		if err := threadState.AppendEvent(events.Normalize(event)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	engine := &Engine{Thread: sess, Prompt: &prompt.Builder{}}
-	if err := engine.ReplaceThreadRuntime(sess); err != nil {
+	engine := &Engine{Thread: threadState, Prompt: &prompt.Builder{}}
+	if err := engine.ReplaceThreadRuntime(threadState); err != nil {
 		t.Fatal(err)
 	}
 	pending := engine.pendingPolicyRuntimeContextSnapshot()
@@ -128,8 +128,8 @@ func TestReplaceThreadRuntimeRecoversUnconsumedPolicyContext(t *testing.T) {
 
 func TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts(t *testing.T) {
 	root := t.TempDir()
-	sess := newThreadRuntimeTestThread(t, root)
-	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Thread: sess})
+	threadState := newThreadRuntimeTestThread(t, root)
+	queue := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState})
 	committed, err := queue.StageTurnInput(
 		"turn-committed",
 		llm.TextMessage(llm.RoleUser, "committed admission"),
@@ -154,17 +154,17 @@ func TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(transcribed.Message); err != nil {
+	if err := threadState.Append(transcribed.Message); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendEvent(events.Normalize(events.Event{
+	if err := threadState.AppendEvent(events.Normalize(events.Event{
 		Type:    TurnAdmittedType,
 		TurnID:  "turn-committed",
 		Payload: TurnAdmittedPayload{MessageID: committed.MessageID},
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendEvent(events.Normalize(events.Event{
+	if err := threadState.AppendEvent(events.Normalize(events.Event{
 		Type:    TurnAdmittedType,
 		TurnID:  "turn-uncommitted",
 		Payload: TurnAdmittedPayload{MessageID: "message-from-earlier-process"},
@@ -172,7 +172,7 @@ func TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts(t *testing.T)
 		t.Fatal(err)
 	}
 
-	engine := &Engine{Thread: sess, PendingInputQueue: queue, Prompt: &prompt.Builder{}}
+	engine := &Engine{Thread: threadState, PendingInputQueue: queue, Prompt: &prompt.Builder{}}
 	replayable, err := engine.RecoverPendingInputs()
 	if err != nil {
 		t.Fatal(err)
@@ -250,11 +250,11 @@ func TestRestoreThreadRuntimeCheckpointDoesNotReplayJournal(t *testing.T) {
 
 func TestRecoverThreadProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T) {
 	root := t.TempDir()
-	sess := newThreadRuntimeTestThread(t, root)
+	threadState := newThreadRuntimeTestThread(t, root)
 	queued := provenanceRuntimeContextMessage("hook-streamed", "pending")
 
 	for index := 0; index < 128; index++ {
-		if err := sess.AppendEvent(events.Normalize(events.Event{
+		if err := threadState.AppendEvent(events.Normalize(events.Event{
 			Type:          "tool.output",
 			ReplayPolicy:  events.ReplayIgnorable,
 			SchemaVersion: 1,
@@ -266,7 +266,7 @@ func TestRecoverThreadProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	if err := sess.AppendEvent(events.Normalize(events.Event{
+	if err := threadState.AppendEvent(events.Normalize(events.Event{
 		Type:          provenance.PolicyContextQueuedType,
 		ReplayPolicy:  events.ReplayRequired,
 		SchemaVersion: 1,
@@ -275,7 +275,7 @@ func TestRecoverThreadProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	tracker, err := recoverThreadProvenance(sess.Dir)
+	tracker, err := recoverThreadProvenance(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}

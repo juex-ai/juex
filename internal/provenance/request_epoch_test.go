@@ -19,7 +19,7 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 		},
 		ContextWindow:   128000,
 		MaxOutputTokens: 4096,
-		CachePolicy:     SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:session-a", Retention: "1h"}),
+		CachePolicy:     SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:thread-a", Retention: "1h"}),
 		SystemPrompt:    "system",
 		Tools: []llm.ToolSpec{{
 			Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"},
@@ -58,7 +58,7 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 		"headers":  func(in *RequestInput) { in.Provider.HeaderDigest = "headers-b" },
 		"query":    func(in *RequestInput) { in.Provider.QueryDigest = "query-b" },
 		"cache": func(in *RequestInput) {
-			in.CachePolicy = SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:session-b", Retention: "1h"})
+			in.CachePolicy = SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:thread-b", Retention: "1h"})
 		},
 		"system":  func(in *RequestInput) { in.SystemPrompt += " changed" },
 		"tool":    func(in *RequestInput) { in.Tools[0].Description += " changed" },

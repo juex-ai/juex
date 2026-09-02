@@ -54,14 +54,14 @@ type threadRuntimeState struct {
 // ReplaceThreadRuntime builds and publishes every thread-scoped dependency
 // under one synchronization boundary. It serializes with turns and compaction,
 // and refuses to move an active reservation or in-memory pending input.
-func (e *Engine) ReplaceThreadRuntime(sess *thread.Thread) error {
-	return e.ReplaceThreadRuntimeBundle(sess, ThreadRuntimeReplacement{})
+func (e *Engine) ReplaceThreadRuntime(threadState *thread.Thread) error {
+	return e.ReplaceThreadRuntimeBundle(threadState, ThreadRuntimeReplacement{})
 }
 
 // ReplaceThreadRuntimeBundle publishes Thread state and its sealed Module
 // set/tool catalog under the existing Engine replacement transaction.
-func (e *Engine) ReplaceThreadRuntimeBundle(sess *thread.Thread, replacement ThreadRuntimeReplacement) error {
-	if e == nil || sess == nil || strings.TrimSpace(sess.Dir) == "" {
+func (e *Engine) ReplaceThreadRuntimeBundle(threadState *thread.Thread, replacement ThreadRuntimeReplacement) error {
+	if e == nil || threadState == nil || strings.TrimSpace(threadState.Dir) == "" {
 		return errors.New("runtime: replacement thread is required")
 	}
 
@@ -75,13 +75,13 @@ func (e *Engine) ReplaceThreadRuntimeBundle(sess *thread.Thread, replacement Thr
 	if e.activeTurnID != "" || len(e.pendingInput) > 0 {
 		return ErrThreadRuntimeBusy
 	}
-	tracker, err := recoverThreadProvenance(sess.Dir)
+	tracker, err := recoverThreadProvenance(threadState.Dir)
 	if err != nil {
 		return fmt.Errorf("runtime: recover provider provenance: %w", err)
 	}
 
 	current := e.threadRuntimeStateLocked()
-	next := buildThreadRuntimeState(current, sess, replacement)
+	next := buildThreadRuntimeState(current, threadState, replacement)
 	e.publishThreadRuntimeLocked(next)
 	pendingPolicyContext := tracker.PendingPolicyContext()
 	e.policyRuntimeContextMu.Lock()
@@ -213,9 +213,9 @@ func (e *Engine) currentThread() *thread.Thread {
 	}
 	e.threadRuntimeMu.RLock()
 	state := e.threadRuntimeStateLocked()
-	sess := state.Thread
+	threadState := state.Thread
 	e.threadRuntimeMu.RUnlock()
-	return sess
+	return threadState
 }
 
 func (e *Engine) currentPendingInputQueue() *PendingInputQueue {
@@ -257,15 +257,15 @@ func (e *Engine) threadRuntimeStateLocked() threadRuntimeState {
 	}
 }
 
-func buildThreadRuntimeState(current threadRuntimeState, sess *thread.Thread, replacement ThreadRuntimeReplacement) threadRuntimeState {
-	scratchpadDir := sess.ScratchpadDir()
+func buildThreadRuntimeState(current threadRuntimeState, threadState *thread.Thread, replacement ThreadRuntimeReplacement) threadRuntimeState {
+	scratchpadDir := threadState.ScratchpadDir()
 	builder := clonePromptBuilder(current.prompt)
 	if builder == nil {
 		builder = &prompt.Builder{}
 	}
 
-	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Thread: sess})
-	if current.PendingInputQueue != nil && current.PendingInputQueue.thread == sess {
+	queue := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState})
+	if current.PendingInputQueue != nil && current.PendingInputQueue.thread == threadState {
 		queue = current.PendingInputQueue
 	}
 	modules := current.Modules
@@ -279,7 +279,7 @@ func buildThreadRuntimeState(current threadRuntimeState, sess *thread.Thread, re
 
 	return threadRuntimeState{
 		ThreadRuntimeSnapshot: ThreadRuntimeSnapshot{
-			Thread:            sess,
+			Thread:            threadState,
 			ScratchpadDir:     scratchpadDir,
 			PendingInputQueue: queue,
 			Modules:           modules,

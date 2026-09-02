@@ -2,246 +2,143 @@
 
 > English | [中文](ARCHITECTURE.zh.md)
 
-Read [DOMAIN.md](DOMAIN.md) for vocabulary and invariants and [DESIGN.md](DESIGN.md)
-for the Web interaction model. Detailed Thread decisions and rejected
-alternatives live in the bilingual specifications under
-[`docs/superpowers/specs/`](docs/superpowers/specs/2026-08-31-thread-lifecycle-and-interfaces-design.md).
+[DOMAIN.md](DOMAIN.md) defines product meaning. This document defines stable
+module ownership, dependency direction, and data flow. Exact structs, routes,
+flags, and file schemas are owned by code and tests.
 
 ## Runtime Shape
 
-One Agent Runtime hosts Agent-scoped resources and multiple Thread runtimes:
-
 ```text
 Agent Runtime
-├── Provider profiles and health
-├── shared MCP clients and Tool descriptors
-├── Observable producers and schedulers
-├── runtime Modules and process resources
+├── Provider profiles and process resources
+├── shared MCP clients
+├── Observable producers
+├── Agent-scoped Modules
 └── Thread Manager
     ├── Main Thread 0 runtime
     └── Worker Thread runtimes
 ```
 
-Main and Workers execute through the same `runtime.Engine`. Capability policy,
-not a second implementation, distinguishes them: the Agent Observation route
-targets Main only. Worker creation automatically takes the calling Thread as
-its parent.
+Main and Workers execute through the same `runtime.Engine`. Policy limits
+Observation delivery to Main. Worker creation derives the parent from the
+calling Thread.
 
-The CLI and Fleet Web UI are clients. `juex send` asks Fleet to ensure the
-resident `juex listen` process is serving, then calls the same Agent JSON/SSE
-API as Web. There is no one-shot `run` runtime and no interactive REPL runtime.
+CLI and Fleet Web are clients of the resident Agent JSON/SSE service.
+`juex send` ensures the Agent is listening and uses the same admission and
+subscription interfaces as Web.
+
+## Dependency Direction
+
+Juex separates three responsibilities:
+
+- Foundation packages own Provider-neutral values, persistence, Tools, Events,
+  sandboxing, environment, media/spool storage, and process primitives.
+- Framework packages own Agent/Thread lifecycles, durable ordering, Module
+  contracts, admission, and composition validation.
+- Feature packages contribute Tools, context, policy, observation, status, or
+  scoped resources through Framework interfaces.
+
+Dependencies point from Features to Framework to Foundation.
+`internal/app` is the composition root and may depend on concrete Features.
+Framework code does not discover dependencies through a global service
+locator. See [ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.md).
 
 ## Package Ownership
 
-| Package | Responsibility |
+| Package | Owns |
 | --- | --- |
-| `internal/thread` | Thread ids, Store, append-only Journal, replay/projection, timeline paging, Context Generation facts, archive, delete, and protocol-tail repair. |
-| `internal/runtime` | Provider loop, pending Input lifecycle, Turn lifecycle, context projection, compaction, Prompt-time recitation, Goal/Notes modules, status, and Tool execution. |
-| `internal/app` | Agent composition, Agent-scoped Module/resource lifecycle, Main/Worker manager, Observation admission, slash commands, subscriptions, and API-facing turn admission. |
-| `internal/observable` | Observable definitions, producers, normalized `observable.Observation`, generated state, and scheduling. |
-| `internal/mcp` | One Agent-scoped client per configured server, Tool catalog, calls, and Notification transport. |
-| `internal/web` | Single-Agent JSON/SSE API, cursor replay/live transport, attachments, Thread administration, and runtime/status resources. |
-| `internal/fleet` / `internal/fleetweb` | Resident Agent lifecycle, restart continuation, registry projection, reverse proxy, and embedded Web UI. |
-| `internal/cli` | `send`, `listen`, `threads`, Fleet, diagnostics, configuration, and bundle clients. |
-| `frontend` | Thread Explorer, Thread detail/composer, typed transcript projection, status panels, Observable management, and Fleet shell. |
+| `internal/thread` | Thread identity, Store, Journal, replay/projection, timeline paging, Generation facts, archive, and delete. |
+| `internal/runtime` | Input/Turn lifecycle, Provider loop, context projection, compaction, status, and Tool execution. |
+| `internal/runtime/module` | Typed Module capabilities and scoped lifecycle contracts. |
+| `internal/app` | Agent composition, Main/Worker management, Observation admission, slash commands, and subscriptions. |
+| `internal/observable` | Observable definitions, producers, Observation values, and generated state. |
+| `internal/mcp` | Agent-scoped MCP connections, Tool catalog, calls, and Notification transport. |
+| `internal/web` | Single-Agent JSON/SSE transport and resource handlers. |
+| `internal/fleet` / `internal/fleetweb` | Resident Agent lifecycle, registry, proxy, and Fleet UI service. |
+| `internal/cli` | CLI adapters for Agent, Thread, Fleet, config, and diagnostics. |
+| `frontend` | Fleet shell, Thread Explorer, transcript, composer, and runtime views. |
 
-Provider-neutral messages and Blocks stay in `internal/llm`; durable Events use
-`internal/events` plus the stable schemas in `internal/eventcatalog` and
+Provider-neutral messages live in `internal/llm`. Durable Event transport and
+schemas live in `internal/events`, `internal/eventcatalog`, and
 `internal/toolevents`.
 
-## Persistence Kernel
+## Persistence Authority
 
-Agent state is rooted at `$JUEX_HOME/agents/<agent-id>`:
+Generated state is rooted at `$JUEX_HOME/agents/<agent-id>/`:
 
 ```text
 agent.json
 threads.index.json
-threads/
-  0/
-    thread.json
-    journal.jsonl
-    scratchpad/
-    spool/
-  <worker-id>/...
-archive/threads/<worker-id>/...
-.trash/threads/<worker-id>/...
-media/threads/<thread-id>/media/...
+threads/<thread-id>/
+  thread.json
+  journal.jsonl
+  scratchpad/
+  spool/
+archive/threads/<thread-id>/
+media/
 logs/
 observables/
 extensions/
 ```
 
-`journal.jsonl` is the authority. Each newline is one versioned atomic commit
-containing one or more facts with a strictly increasing Thread-local sequence.
-It contains messages and durable Events together, plus Input/attempt/Turn,
-generation, Goal, Notes, usage, lifecycle, and checkpoint facts.
+Each Thread Journal is the authority for messages and durable runtime facts.
+`thread.json` and `threads.index.json` are replaceable projections used to
+bound common reads. Missing or stale projections are rebuilt from the Journal.
 
-`thread.json` is a replaceable current projection. `threads.index.json` is the
-only Agent-wide list accelerator. A projection behind the Journal replays from
-its recorded offset; a missing or invalid projection is rebuilt. A complete
-malformed commit is corruption. Only a torn final line may be truncated during
-recovery.
+Journal commits are chronological, append-only, atomic fact batches with a
+Thread-local sequence. Readers page backward from EOF while returning
+chronological display order. Only a torn final write may be repaired
+automatically; complete malformed commits are corruption.
 
-Both projections store `retention_state` independently from
-`execution_state`. Active Threads have `idle`, `working`, or `failed`
-execution state. Archived Threads omit execution state; unarchive returns them
-to `active` plus `idle`. `archived_at` is timestamp metadata and is never used
-as a substitute lifecycle field. Permanent delete removes the Thread from both
-storage and the index.
+Active and archived Thread directories are separate. Scratchpad is
+model-managed Thread state and survives Generation changes. Spool is
+system-managed temporary Thread data. Agent media is stored separately.
 
-Timeline writes remain chronological and append-only. Timeline reads start at
-EOF and page backward by opaque offset/sequence cursor, returning each page in
-chronological display order. An atomic commit is never split merely to satisfy
-an item limit.
-
-Scratchpad is model-writable Thread working storage and survives `/new` and
-`/compact`. Spool is system-managed oversized Provider input/Tool output data
-and may be reclaimed by retention policy. Agent media is content-addressed and
-separate from both.
-
-All persisted instants use canonical UTC RFC 3339 with exactly millisecond
-precision. Journal sequence remains ordering authority.
-
-When a client uses an explicit `--config`, `agent.json` records its absolute
-`runtime_config_path`. Fleet passes that path to detached `juex listen` and
-reuses it on restart, so a resident Runtime cannot silently fall back to a
-different Workspace or Home configuration.
-
-## Input And Turn Flow
+## Durable Input And Publication
 
 ```text
-CLI/Web/Observation
+CLI / Web / Observation
   -> App admission
-  -> Thread journal: input.accepted + sync
-  -> receipt with input_id and cursor
-  -> pending queue projection
-  -> attempt + Turn assignment
-  -> Prompt assembly
-  -> Provider iteration / Tool execution
-  -> message, Event, usage, attempt, Input, Turn and settled facts
-  -> replay/live subscribers
+  -> Journal commit
+  -> pending projection
+  -> attempt and Turn
+  -> prompt / Provider / Tools
+  -> terminal Journal facts
+  -> status and replay/live subscribers
 ```
 
-The receipt cursor is the last durable event captured before admission starts,
-not an event observed after asynchronous execution is launched. An empty cursor
-means Journal start. A waiter therefore replays admission and cannot miss a
-Turn that settles before it opens the stream.
+`runtime.Engine.ReceivePendingInput` is the single Framework admission seam.
+It owns the start-or-queue decision; lower-level queue mutation stays private
+to runtime. The Journal records Input attempts and outcomes, so recovery does
+not require a second Input history.
 
-The Journal stores accepted Input records and their attempt transitions, so a
-restart can distinguish pending, retryable, completed, dead-lettered,
-cancelled, and expired Inputs without a second input journal. Acceptance order
-is stored explicitly and restored in that order.
+Durable state follows commit-before-project: a fact is committed before it is
+published to status, transcript, or subscribers. Live-only deltas are
+explicitly transient.
 
-Durable publication follows commit-before-project: Journal commit completes
-before status, browser transcript, subscription, or Observable delivery is
-published. Transient deltas may be live-only and are marked as such.
+## Modules, Prompt, And Shared Resources
 
-## Prompt Assembly
+Modules register typed capabilities once per Agent or Thread scope. The
+Framework validates and seals the set, starts resources in registration order,
+and closes or rolls back in reverse order.
 
-Prompt assembly is a registered interface rather than ad hoc concatenation.
-Runtime and Thread Modules contribute:
+Prompt assembly consumes registered context contributors. Stable guidance,
+Hook context, Thread state, and per-request recitation meet at this interface.
+Generation boundary activity is not ordinary Provider dialogue.
 
-- base system instructions;
-- project guidance and Skills;
-- Hook-injected context;
-- Goal and Notes;
-- Thread Scratchpad routing information;
-- active shell-process information;
-- per-request context-window recitation.
-
-The recitation includes current estimated tokens, context-window size,
-percentage, Thread id, and Generation id. The built-in `context_compact` and
-`context_new` Tools let the model request cleanup at an appropriate lifecycle
-point. Runtime-context and generation-boundary UI records are not ordinary
-Provider dialogue.
-
-## MCP And Observations
-
-MCP client instances are Agent-scoped so server processes, authentication,
-Tool discovery, and Notifications are not duplicated per Thread. Each Thread
-gets Tool bindings to the shared manager. Calls still execute in the calling
-Thread's Turn and persist there.
-
-Every external automatic signal is an `observable.Observation`. The App owns a
-single Main delivery gate. Workers never receive these signals directly. This
-keeps startup notification ordering deterministic while allowing Workers to
-use shared MCP Tools.
-
-## Worker Lifecycle And Subscriptions
-
-Every active Thread exposes Worker Tools for create, send, status, list,
-subscribe, stop, and archive over its direct children. Each Thread manager owns
-its live child Apps and closes them recursively with the Agent Runtime. A Worker
-may outlive the subscriber because subscription is observation, not ownership.
-The manager reserves and indexes a Worker identity before child App
-initialization, keeps transport lookups behind that reservation until the
-initial Turn starts, and removes the unpublished Thread if initialization
-fails. A transport therefore cannot create a second App during the publication
-window.
-
-Generic subscription starts at a caller-provided cursor or at the current
-tail when omitted, then closes the replay/live gap under one stream contract.
-Input wait is a higher-level operation: it follows an `input_id` until an
-attempt claims it, then follows that consuming Turn until settlement.
-
-## Context Transitions
-
-`/new` and `/compact` append Generation facts to the same Thread Journal:
-
-- `/new`: clear Goal/Notes, retain Scratchpad, start empty provider history,
-  append `context.renewed`.
-- `/compact`: generate and persist a summary, retain Goal/Notes/Scratchpad,
-  start provider history from the compact bootstrap, append
-  `context.compacted`. Summary generation uses request-scoped low reasoning
-  effort even when normal Turns use a higher configured effort; request
-  provenance records the effective override.
-
-Archive/unarchive moves the entire Worker directory and updates the Agent
-index. It does not touch Generation state. Archive clears execution state;
-unarchive initializes it as `idle`. Delete is checked and restricted to
-archived Workers.
-
-## API Surface
-
-The single-Agent API is rooted at `/api`:
-
-- `GET|POST /api/threads`
-- `GET|PATCH|DELETE /api/threads/<id>`
-- `POST /api/threads/<id>/inputs`
-- `POST /api/threads/<id>/attachments`
-- `POST /api/threads/<id>/stop`
-- `POST /api/threads/<id>/archive|unarchive`
-- `GET /api/threads/<id>/events`
-- `GET /api/threads/<id>/status` and `/status/events`
-- `GET /api/threads/<id>/context|scratchpad`
-- `GET /api/status`, `/api/runtime`, `/api/observables`, and resource routes
-
-Fleet Web proxies these routes beneath `/agents/<agent-id>/api/...` and adds
-Agent registry/config/lifecycle routes.
+MCP transports are Agent-scoped to avoid duplicate processes, authentication,
+catalogs, and Notifications. Tool calls remain attached to the calling
+Thread's Turn. Observation producers are also Agent-scoped, with one Main-only
+delivery gate.
 
 ## Failure Boundaries
 
-- Journal append failure does not publish a fact.
-- Projection replacement failure after a durable append reports a typed stale
-  projection; replay repairs it.
-- A recorded terminal Tool outcome is restored exactly after crash.
-- A started Tool without durable outcome becomes `TOOL_OUTCOME_UNKNOWN` and is
-  not automatically retried.
-- Restart continuation is sent only after replacement health confirms the same
-  Thread and interrupted/failed Turn identity.
-- Worker Observation delivery is rejected by policy.
-- Archive/delete refuse working Threads and invalid parent/child topology.
-
-## Verification
-
-Use the staged project targets rather than composing overlapping checks:
-
-```bash
-make verify-focused PKGS="./internal/thread ./internal/runtime ./internal/app ./internal/web"
-make verify-candidate RACE=1 WEB=1
-make verify-final RACE=1 WEB=1 COMPACTION=1
-```
-
-Cross-package changes require E2E coverage; visible frontend changes require a
-real browser check. Live Provider integration remains behind the `integration`
-build tag and local selected configuration.
+- Failed Journal commits publish nothing.
+- Stale projections are repairable; invalid authoritative commits are not.
+- Recorded Tool outcomes replay exactly. A started Tool without a durable
+  outcome is marked unknown and is not retried blindly.
+- Restart continuation requires replacement health and matching Thread/Turn
+  identity.
+- Working Threads and invalid parent/child topology block archive or delete.
+- Feature disablement prevents construction, side effects, and publication;
+  it is not only a UI filter.

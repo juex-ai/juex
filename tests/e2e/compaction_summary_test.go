@@ -112,7 +112,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 	defer a.Close()
 	goals, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goals == nil || notes == nil {
-		t.Fatal("missing authoritative Session state stores")
+		t.Fatal("missing authoritative Thread state stores")
 	}
 	if _, err := goals.Create(goal, acceptance); err != nil {
 		t.Fatal(err)

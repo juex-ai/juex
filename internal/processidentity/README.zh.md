@@ -1,7 +1,7 @@
-# 进程身份
+# Process Identity
 
 > [English](README.md) | 中文
 
-此包是从 PID 读取进程身份的底层操作系统适配器。`Fingerprint` 返回一个不透明的进程实例身份，用于精确检查运行时所有权；在 Linux 上，它使用启动 ID 加原始进程启动 tick，而不是重建的墙上时钟时间。`StartedAt` 仍可供现有策略需要带容差比较时间戳的调用方使用。
-
-它不判断进程是否存活，不拥有 Fleet 健康策略，不定义运行时 JSON，也不选择陈旧文件的清理行为。调用方必须把无法获取或无法读取的身份视为结论不确定。
+本 package 是从 PID 读取 opaque process-incarnation fingerprint 的 leaf OS
+adapter。它不判断 liveness、Fleet health、ownership 或 stale-record cleanup。
+无法读取 identity 时只能判定为 inconclusive。

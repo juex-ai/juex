@@ -402,19 +402,19 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
                 return 1
 
     answer = (out_dir / "turn3.txt").read_text(encoding="utf-8", errors="replace")
-    legacy_score = score_answer(answer)
+    fact_score = score_answer(answer)
     authoritative = score_authoritative_state(work, answer)
-    score = legacy_score + authoritative["score"]
+    score = fact_score + authoritative["score"]
     compacted = "yes" if has_compaction(work) else "no"
     cache_ratio = cache_ratio_from_work(work)
-    write_scorecard(model, work, out_dir, legacy_score, authoritative, compacted, cache_ratio, args.keep_workdir, args.context_window, args.turn_timeout)
+    write_scorecard(model, work, out_dir, fact_score, authoritative, compacted, cache_ratio, args.keep_workdir, args.context_window, args.turn_timeout)
     copy_runtime_artifacts(work, out_dir)
     failed = 0
     if compacted != "yes":
         print(f"FAIL {model}: compaction did not run", file=sys.stderr)
         failed = 1
-    if legacy_score < 36:
-        print(f"FAIL {model}: legacy score {legacy_score}/52 is below the regression threshold", file=sys.stderr)
+    if fact_score < 36:
+        print(f"FAIL {model}: fact score {fact_score}/52 is below the regression threshold", file=sys.stderr)
         failed = 1
     failed_state_checks = [name for name, passed in authoritative["checks"].items() if not passed]
     if failed_state_checks:
@@ -712,7 +712,7 @@ def write_scorecard(
     model: str,
     work: pathlib.Path,
     out_dir: pathlib.Path,
-    legacy_score: int,
+    fact_score: int,
     authoritative: dict,
     compacted: str,
     cache_ratio: str,
@@ -720,8 +720,8 @@ def write_scorecard(
     context_window: int,
     timeout: int,
 ) -> None:
-    total = legacy_score + authoritative["score"]
-    write_scorecard_common(model, work, out_dir, f"{total}/82", compacted, cache_ratio, "", "", keep_workdir, context_window, timeout, legacy_score, authoritative)
+    total = fact_score + authoritative["score"]
+    write_scorecard_common(model, work, out_dir, f"{total}/82", compacted, cache_ratio, "", "", keep_workdir, context_window, timeout, fact_score, authoritative)
 
 
 def write_failure_scorecard(
@@ -752,7 +752,7 @@ def write_scorecard_common(
     keep_workdir: bool,
     context_window: int,
     timeout: int,
-    legacy_score: int | None,
+    fact_score: int | None,
     authoritative: dict | None,
 ) -> None:
     lines = [
@@ -766,9 +766,9 @@ def write_scorecard_common(
         f"- Compacted: {compacted}",
         f"- Cache ratio: {cache_ratio}",
     ]
-    if legacy_score is not None and authoritative is not None:
+    if fact_score is not None and authoritative is not None:
         lines += [
-            f"- Legacy fact score: {legacy_score}/52",
+            f"- Fact score: {fact_score}/52",
             f"- Authoritative state score: {authoritative['score']}/30",
             "",
             "## Authoritative State Checks",

@@ -104,14 +104,14 @@ func TestStoreReplayDoesNotDuplicateIdenticalUnrecordedCurrent(t *testing.T) {
 
 func TestCurrentOnlyStoreIgnoresCursorHistory(t *testing.T) {
 	store := testStore(0)
-	store.Publish(testSnapshot{Cursor: "same", State: "session-one"}, true)
-	store.Publish(testSnapshot{Cursor: "other", State: "session-two"}, true)
-	store.Publish(testSnapshot{Cursor: "same", State: "session-three"}, true)
+	store.Publish(testSnapshot{Cursor: "same", State: "value-one"}, true)
+	store.Publish(testSnapshot{Cursor: "other", State: "value-two"}, true)
+	store.Publish(testSnapshot{Cursor: "same", State: "value-three"}, true)
 
 	stream := store.Open(OpenOptions{After: "same"})
 	defer stream.Close()
 	snapshot, ok := stream.Next(context.Background())
-	if !ok || snapshot.State != "session-three" {
+	if !ok || snapshot.State != "value-three" {
 		t.Fatalf("current snapshot = %+v, %t", snapshot, ok)
 	}
 	if _, ok := stream.Next(context.Background()); ok {

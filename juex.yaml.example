@@ -106,11 +106,9 @@ models:
 # current AgentStateDir; Windows defaults to disabled. Network access remains
 # enabled. Linux requires bubblewrap; use `juex doctor` to verify the backend.
 #
-# For configuration compatibility, the first explicit sandbox section starts
-# from the historical disabled/read_write/network-enabled baseline, then
-# applies its fields. Set every field below when opting into the safe policy;
-# set enabled: false or outside_workspace: read_write as an explicit escape
-# hatch. blocked_paths overrides writable roots.
+# An explicit sandbox section starts from the same platform defaults and then
+# applies its fields. Set enabled: false or outside_workspace: read_write as an
+# explicit escape hatch. blocked_paths overrides writable roots.
 # sandbox:
 #   enabled: true
 #   file_system:

@@ -12,14 +12,14 @@ type attachmentSnapshot struct {
 	eventBytesExceeded bool
 }
 
-func snapshotAttachmentRefs(workDir, agentStateDir, artifactDir string, guard sandbox.PathGuard, refs []eventmedia.AttachmentRef, maxEventBytes int64) attachmentSnapshot {
+func snapshotAttachmentRefs(workDir, agentStateDir, mediaDir string, guard sandbox.PathGuard, refs []eventmedia.AttachmentRef, maxEventBytes int64) attachmentSnapshot {
 	if len(refs) == 0 {
 		return attachmentSnapshot{}
 	}
 	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
-		MediaDir:      artifactDir,
+		MediaDir:      mediaDir,
 		PathGuard:     guard,
 		MaxEventBytes: maxEventBytes,
 	})

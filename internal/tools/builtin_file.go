@@ -109,7 +109,7 @@ func applyPatchToolDefinition() ToolDefinition {
 	}
 }
 
-func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
+func readTool(workDir, mediaDir string, guard sandbox.PathGuard) Tool {
 	return readToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		path, _ := in["path"].(string)
 		if path == "" {
@@ -122,11 +122,11 @@ func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
 			if err != nil {
 				return Result{}, fmt.Errorf("read: %w", err)
 			}
-			store, err := artifact.NewStore(artifactDir)
+			store, err := artifact.NewStore(mediaDir)
 			if err != nil {
 				return Result{}, fmt.Errorf("read: %w", err)
 			}
-			physicalPath := filepath.Join(artifactDir, filepath.FromSlash(artifactPath))
+			physicalPath := filepath.Join(mediaDir, filepath.FromSlash(artifactPath))
 			if err := guard.CheckRead(physicalPath); err != nil {
 				return Result{}, fmt.Errorf("read: %w", err)
 			}
@@ -151,7 +151,7 @@ func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
 			if offset > 0 || limit > 0 {
 				return Result{}, fmt.Errorf("read: offset and limit are not supported for image files")
 			}
-			return readImageResult(artifactDir, data, kind)
+			return readImageResult(mediaDir, data, kind)
 		}
 		if offset <= 0 && limit <= 0 {
 			return Result{Text: string(data)}, nil

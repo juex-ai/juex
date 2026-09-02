@@ -39,7 +39,11 @@ def _git(root: Path, *arguments: str) -> str:
 
 def _tracked_markdown(root: Path) -> set[str]:
     output = _git(root, "ls-files", "-z", "--", "*.md")
-    return {PurePosixPath(item).as_posix() for item in output.split("\0") if item}
+    return {
+        PurePosixPath(item).as_posix()
+        for item in output.split("\0")
+        if item and (root / item).is_file()
+    }
 
 
 def _load_whitelist(root: Path, relative_path: PurePosixPath) -> tuple[set[str], list[str]]:

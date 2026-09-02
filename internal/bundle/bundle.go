@@ -262,11 +262,11 @@ func collectEntries(opts Options, workDir, threadDir string, now time.Time) ([]a
 		entries = append(entries, newEntry(pathInBundle("worktree/summary.json"), "", append(data, '\n'), false, false))
 	}
 	if opts.IncludeMedia {
-		artifactEntries, err := collectArtifacts(opts.Config.MediaDir(), opts.Redact)
+		mediaEntries, err := collectMedia(opts.Config.MediaDir(), opts.Redact)
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, artifactEntries...)
+		entries = append(entries, mediaEntries...)
 	}
 	for _, extra := range opts.ExtraFiles {
 		path, err := safeExtraArchivePath(extra.ArchivePath)
@@ -527,11 +527,11 @@ func threadBundleFiles() []threadBundleFile {
 	}
 }
 
-func collectArtifacts(artifactDir string, redact bool) ([]archiveEntry, error) {
-	if strings.TrimSpace(artifactDir) == "" {
+func collectMedia(mediaDir string, redact bool) ([]archiveEntry, error) {
+	if strings.TrimSpace(mediaDir) == "" {
 		return nil, nil
 	}
-	store, err := artifact.NewStore(artifactDir)
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +546,7 @@ func collectArtifacts(artifactDir string, redact bool) ([]archiveEntry, error) {
 		if redacted {
 			data = redactBytes(data)
 		}
-		entries = append(entries, newEntry(pathInBundle(filepath.Join("artifacts", filepath.FromSlash(file.Path))), "", data, redacted, false))
+		entries = append(entries, newEntry(pathInBundle(filepath.Join("media", filepath.FromSlash(file.Path))), "", data, redacted, false))
 	}
 	return entries, nil
 }

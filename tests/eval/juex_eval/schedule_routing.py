@@ -1400,7 +1400,7 @@ def _validate_persisted_config(
     allowed_fields = {"id", "name", "type", "schedule_config"}
     unexpected_fields = sorted(set(entry) - allowed_fields)
     if unexpected_fields:
-        issues.append("persisted entry contains legacy or unknown fields: " + ", ".join(unexpected_fields))
+        issues.append("persisted entry contains unknown fields: " + ", ".join(unexpected_fields))
     schedule_config = entry.get("schedule_config")
     if not isinstance(schedule_config, dict):
         issues.append("persisted entry must contain schedule_config")

@@ -191,10 +191,10 @@ func TestStoreFilesAndRemoveNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if exists, err := store.HasNamespace("threads/123456"); err != nil || exists {
-		t.Fatalf("session namespace after removal = %t, %v", exists, err)
+		t.Fatalf("Thread namespace after removal = %t, %v", exists, err)
 	}
 	if exists, err := store.HasNamespace("event-media"); err != nil || !exists {
-		t.Fatalf("Agent namespace after session removal = %t, %v", exists, err)
+		t.Fatalf("Agent namespace after Thread removal = %t, %v", exists, err)
 	}
 }
 

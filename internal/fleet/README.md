@@ -2,70 +2,33 @@
 
 > English | [中文](README.zh.md)
 
-This package owns registry-wide resident-agent health and lifecycle policy.
+This package owns registry-wide resident-Agent health and lifecycle policy. It
+does not own HTTP routing, CLI presentation, or native service installation.
 
-- `Status` preserves workspace binding and runtime health as separate axes,
-  projects the serving binary version from runtime metadata, and adds
-  best-effort RSS and interval CPU usage only after the process and endpoint
-  identity are verified healthy. When a PID is alive but its operating-system
-  process fingerprint differs from the runtime record, Fleet classifies the
-  record as stale only when the endpoint is not the exact recorded Runtime
-  Instance; missing or unreadable process identity remains ambiguous.
-- `Add` registers an existing absolute workspace through the standard marker
-  rules, applies optional name/autostart metadata, and can start it immediately.
-- `SetEnabled` makes disable reversible: disable stops before persisting the
-  flag, while enable does not implicitly start.
-- `Remove` requires transport confirmation, stops and locks the endpoint, then
-  delegates intentional registry and matching-marker deletion to agentstate.
-- `Start` launches a detached `juex -C <workspace> listen` child and
-  waits for an exact PID and endpoint identity. The supervisor passes only its
-  inherited launch environment plus `JUEX_HOME`; the child resolves its own
-  workspace YAML and `.env`, preventing cross-agent environment leakage.
-- `Stop` requests instance-bound self-shutdown; it never signals or force-kills
-  a recorded PID.
-- `Restart` detects active, pending-drain, or already-failed Thread work before graceful
-  shutdown, negotiates an identity-bound `runtime_restart` intent, and submits
-  one `system_notice` continuation turn only after the replacement confirms
-  the same Thread and Turn: active work needs the typed restart cause;
-  previously failed work must still be errored with the same error kind.
-  Completed, user-cancelled, or superseded Turns and a working replacement
-  never receive this continuation. Existing history is retained, and prior
-  Tool Calls are not replayed. Missing
-  acknowledgement, status-read failures, and continuation-submit failures are
-  reported without changing process restart success; `Stop` never sends
-  restart intent or resumes.
-- `RestartRunningAgents` sequentially restarts only enabled, bound, healthy
-  entries from one status snapshot, reports skips and failures, and continues
-  after individual restart errors.
-- `Serve` reconciles once, adopts verified runtimes, starts enabled autostart
-  agents, and remains resident without owning child lifetime. Reconciliation
-  removes a reused-PID runtime record only after the endpoint maintenance guard,
-  an exact runtime re-read, a repeated process-start mismatch, and a non-exact
-  endpoint probe; it never signals the process currently holding that PID.
-- `Logs` tails only the fleet-owned output created by `Start`; adopted
-  externally started processes retain their original terminal, service, or
-  redirection destination.
-- `Endpoint` exposes runtime metadata only after rechecking a bound, healthy
-  process and exact endpoint identity for an immediate proxy request.
-- `Config` reads the bound workspace config without creating identity.
-  `UpdateConfig` validates and atomically writes a replacement config, then
-  restarts under the same lifecycle lock and the same Turn continuation
-  policy as `Restart`. Fleet HTTP responses replace every
-  `environment.variables` value with `[REDACTED_ENV]`; PUT merges unchanged
-  placeholders with the existing file before validation so browser edits
-  neither expose nor erase secrets. To intentionally write that exact literal
-  value, submit `!juex/literal "[REDACTED_ENV]"`; Fleet strips the control tag
-  before persisting the string.
-- `GCCandidates` lists only definite workspace orphans, while `DeleteOrphans`
-  locks and revalidates each candidate before agentstate performs atomic
-  registry-boundary deletion. GC remains separate from intentional `Remove`.
+## Boundaries
 
-The package composes `internal/agentstate` for registry identity,
-`internal/endpoint` for runtime identity and maintenance guards, and
-`internal/config` for replacement workspace config validation, and
-`internal/processmetrics` for cross-platform process counters. HTTP routing,
-JSON shapes, and reverse proxy behavior stay in `internal/fleetweb`; Cobra
-output, prompts, and stable CLI exit categories stay in `internal/cli`.
-Native launchd, systemd user, and termux-services registration stays in
-`internal/fleetservice`; this package neither renders service definitions nor
-invokes a platform service manager.
+- `internal/agentstate` owns registered identity and Workspace binding.
+- `internal/endpoint` verifies process and Runtime Instance identity and
+  provides maintenance guards.
+- `internal/processmetrics` provides best-effort process counters.
+- `internal/config` validates effective and replacement configuration.
+- `internal/fleetweb` owns HTTP, JSON, reverse proxy, and embedded Web serving.
+- `internal/cli` owns prompts, output, and exit categories.
+- `internal/fleetservice` owns launchd, systemd-user, and termux-services.
+
+## Invariants
+
+- Process existence alone never proves Runtime ownership; lifecycle mutation
+  requires matching process and endpoint identity.
+- Stop uses instance-bound graceful shutdown and does not signal a recorded PID.
+- Start launches a detached `juex listen` and waits for exact identity.
+- Disable stops before persisting the flag; enable does not implicitly start.
+- Restart may submit one continuation only after the replacement confirms the
+  same Thread and interrupted/failed Turn identity. Completed, cancelled, or
+  superseded work is not resumed.
+- Registry removal and orphan collection lock and revalidate their exact
+  targets before deletion.
+- Runtime config secrets are redacted at the Web boundary.
+
+Exact operations and error categories are defined by exported interfaces and
+tests.

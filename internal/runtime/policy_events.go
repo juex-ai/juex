@@ -28,13 +28,13 @@ func (e *Engine) appendPolicyTraceMessage(turnID, text string) {
 	if e == nil || strings.TrimSpace(text) == "" {
 		return
 	}
-	sess := e.currentThread()
-	if sess == nil {
+	threadState := e.currentThread()
+	if threadState == nil {
 		return
 	}
 	msg := llm.TextMessage(llm.RoleSystem, text)
 	msg.Kind = llm.MessageKindPolicyEvent
-	persisted, err := sess.AppendAssigned(msg)
+	persisted, err := threadState.AppendAssigned(msg)
 	if err != nil {
 		return
 	}

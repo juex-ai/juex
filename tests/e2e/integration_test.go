@@ -225,12 +225,12 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{Shell: cfgShellProfile(cfg)})
 
 	bus := events.NewBus()
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sess.Close()
-	sess.SubscribeBus(bus)
+	defer threadState.Close()
+	threadState.SubscribeBus(bus)
 
 	pb := e2ePromptBuilder(
 		t,
@@ -239,10 +239,10 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 		"",
 		promptcontext.ShellProfileFromConfig(cfg.Shell),
 		func() time.Time { return time.Now().UTC() },
-		sess,
+		threadState,
 	)
 	eng := &runtime.Engine{
-		Provider: provider, Tools: reg, Bus: bus, Thread: sess, Prompt: pb,
+		Provider: provider, Tools: reg, Bus: bus, Thread: threadState, Prompt: pb,
 	}
 
 	bus.Subscribe("*", func(e events.Event) {

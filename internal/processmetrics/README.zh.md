@@ -1,13 +1,8 @@
-# 进程指标
+# Process Metrics
 
 > [English](README.md) | 中文
 
-此包提供跨平台的进程资源即时采样。
+本 package 采样跨平台进程 RSS 与 CPU。CPU 根据调用方持有的两次采样之间的累计
+process time 计算，因此第一次采样没有 CPU 值，完全占用一个 core 表示 100%。
 
-- RSS 以字节报告。
-- CPU 根据累计的用户态与系统态 CPU 时间增量除以经过的墙上时钟时间计算。一个核心完全占用时为 100%，因此结果可以超过 100%。
-- 对调用方自有 key 的第一次采样只建立基线，不返回 CPU。
-- PID 或进程启动时间变化、计数器倒退及读取失败都会重置基线。
-- 调用方通过 `Forget` 和 `Retain` 管理基线生命周期。
-
-采样器使用 gopsutil 获取 Darwin、Linux 和 Windows 的进程计数器。它不负责轮询、持久化、主机级指标、告警或展示。
+Polling、baseline retention、持久化、alert 与展示由调用方负责。

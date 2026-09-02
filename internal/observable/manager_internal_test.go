@@ -60,8 +60,8 @@ func TestCommandRunnerProtectsArtifactRoot(t *testing.T) {
 	root := t.TempDir()
 	workDir := filepath.Join(root, "work")
 	agentStateDir := filepath.Join(root, "agent")
-	artifactDir := filepath.Join(agentStateDir, "artifacts")
-	for _, path := range []string{workDir, artifactDir} {
+	mediaDir := filepath.Join(agentStateDir, "media")
+	for _, path := range []string{workDir, mediaDir} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -69,10 +69,10 @@ func TestCommandRunnerProtectsArtifactRoot(t *testing.T) {
 	r := newRunner(runnerOptions{
 		workDir:       workDir,
 		agentStateDir: agentStateDir,
-		artifactDir:   artifactDir,
+		mediaDir:      mediaDir,
 		sandboxPolicy: sandbox.DefaultPolicyForOS("linux"),
 	})
-	physical := filepath.Join(artifactDir, "sessions", "result.txt")
+	physical := filepath.Join(mediaDir, "threads", "result.txt")
 	if err := r.filePolicy.CheckRead(physical); err != nil {
 		t.Fatalf("Artifact read = %v, want allowed", err)
 	}
@@ -80,7 +80,7 @@ func TestCommandRunnerProtectsArtifactRoot(t *testing.T) {
 		t.Fatalf("Artifact write = %v, want read-only root rejection", err)
 	}
 	roots := r.filePolicy.ReadOnlyRoots()
-	wantRoot, err := filepath.EvalSymlinks(artifactDir)
+	wantRoot, err := filepath.EvalSymlinks(mediaDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestDeliverObservationOwnsOutcomeTransitionAndSkipsTransitionedRecord(t *te
 			Now: func() time.Time { return now },
 			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
 				deliveries++
-				return DeliveryOutcome{State: ObservationStateDelivered, TargetThread: "sess-1"}, nil
+				return DeliveryOutcome{State: ObservationStateDelivered, TargetThread: "234567"}, nil
 			},
 		},
 	}
@@ -408,7 +408,7 @@ func TestDeliverObservationOwnsOutcomeTransitionAndSkipsTransitionedRecord(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || updated.State != ObservationStateDelivered || updated.TargetThread != "sess-1" || updated.DeliveredAt.IsZero() {
+	if !ok || updated.State != ObservationStateDelivered || updated.TargetThread != "234567" || updated.DeliveredAt.IsZero() {
 		t.Fatalf("updated observation = %+v ok=%v", updated, ok)
 	}
 	if deliveries != 1 {
@@ -442,7 +442,7 @@ func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
 			Bus: bus,
 			Now: func() time.Time { return now },
 			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
-				return DeliveryOutcome{State: ObservationStateDelivered, TargetThread: "sess-1"}, nil
+				return DeliveryOutcome{State: ObservationStateDelivered, TargetThread: "234567"}, nil
 			},
 		},
 	}
@@ -464,7 +464,7 @@ func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
 		t.Fatalf("events = %+v, want recorded then delivered", seen)
 	}
 	delivered := seen[1].Observation
-	if delivered.ID != record.ID || delivered.State != ObservationStateDelivered || delivered.TargetThread != "sess-1" || !delivered.DeliveredAt.Equal(now) {
+	if delivered.ID != record.ID || delivered.State != ObservationStateDelivered || delivered.TargetThread != "234567" || !delivered.DeliveredAt.Equal(now) {
 		t.Fatalf("delivered observation = %+v", delivered)
 	}
 }

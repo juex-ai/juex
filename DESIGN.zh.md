@@ -2,159 +2,99 @@
 
 > [English](DESIGN.md) | 中文
 
-本文定义 `juex fleet serve` 提供的 Fleet Web UI 的稳定 Interaction 与 Visual
-Contract。Thread Explorer 的完整迁移细节见
-[Web 交互设计](docs/superpowers/specs/2026-08-31-thread-web-interaction-design.zh.md)。
+本文定义 Fleet Web UI 稳定的交互与视觉约束。组件结构和具体 API shape 以
+frontend 与 server 代码为准。
 
 ## 产品模型
 
-Web UI 是 Agent JSON/SSE Service 的 Client，不维护第二套 Conversation Model，
-也不从浏览器内存推断持久状态。
+Web 是 Agent JSON/SSE 服务的 client，不维护第二套对话模型，也不把浏览器
+内存当作持久权威。
 
-- Fleet 选择 Agent。
-- Thread Explorer 列出活跃与归档 Thread。
-- Thread Detail 跨 Context Generation 展示一个连续 Thread。
-- Runtime 页面展示 Resource、Observable、Log、Config 与 Health。
+- Fleet 选择并管理 Agent。
+- Thread Explorer 展示 active 与 archived Thread。
+- Thread detail 展示跨 Context Generation 的单一时间线。
+- Runtime view 展示健康、配置、日志、Extension 和 Observable。
 
-Server 是唯一 Source of Truth。Command 使用 HTTP；变化通过 Snapshot + SSE
-Invalidation/Event Stream 到达。重连后总是从权威 Snapshot 重新校准。
+Command 使用 HTTP，snapshot 与 event stream 提供状态。重连时从权威 snapshot
+重新校准。
 
-## 路由
+## 导航
 
-| 路由 | 用途 |
-| --- | --- |
-| `/` | 解析已选择 Agent，或显示 Fleet 空/错误状态。 |
-| `/settings` | Fleet 注册与进程控制。 |
-| `/agents/:agentId/threads` | 活跃和归档 Thread Explorer。 |
-| `/agents/:agentId/threads/:id` | Thread Transcript、Status、Context 与 Composer。 |
-| `/agents/:agentId/runtime` | Runtime Overview。 |
-| `/agents/:agentId/runtime/extensions` | 已选择 Extension。 |
-| `/agents/:agentId/runtime/observables` | Observable 定义与生命周期。 |
-| `/agents/:agentId/runtime/logs` | Agent Log。 |
-| `/agents/:agentId/runtime/config` | Effective Config。 |
+稳定层级是 Fleet、selected Agent、Thread list、Thread detail 和 Runtime view。
+Main Thread 是 Agent 默认目的地。Thread Explorer 同时承载当前工作与归档历史。
 
-Agent 首页重定向到 Main Thread `0`。Thread Explorer 同时承载活跃工作与归档历史。
+具体 route 名称和参数语法属于 router 实现细节。
 
 ## Thread Explorer
 
-页面明确分为 Active 和 Archived 两区。每一项展示：
+Active 与 Archived 分开展示。每一行无需打开 Thread 就应说明身份和可操作性：
 
-- Thread ID 与 alias；
-- 保存态（`active` 或 `archived`），以及 active Thread 的执行态（`idle`、
-  `working` 或 `failed`）；
-- 创建/最后活动时间；
-- Turn 数与 Context Generation 数；
-- Pending Input 数；
-- 当前 Context Token 数；
-- 累计 input、cached-input 与 output token usage。
+- id 与 alias；
+- retention state，以及 active 时的 execution state；
+- 创建时间与最近活动时间；
+- Turn 与 Context Generation 数量；
+- pending Input 数量与当前 context usage。
 
-Main 的视觉与普通 Thread 一致，但不能 archive、rename 或 delete。Idle Worker
-可以 archive；Archived Worker 可以 restore，或在确认后永久 delete。Create 只询问
-可选 alias，parent identity 由 Runtime 自动确定。
+Main 的视觉表现与普通 Thread 一致，但不能 rename、archive 或 delete。Idle
+Worker 可以 archive；Archived Worker 可以 restore，或在明确确认后永久删除。
 
-Thread List 来自可重建 Agent Index，渲染列表时不能扫描每个 Journal。
+列表数据来自 Agent index，渲染列表不能扫描每个 Thread Journal。
 
 ## Thread Detail
 
-Thread Detail 展示一个连续 Transcript。Context Generation Boundary 是 Timeline
-中的系统活动行：
+Transcript 是一条连续时间线。Context 转换显示为系统活动：
 
-- `context.compacted` 可见，并允许复制 Compact Summary；
-- `context.renewed` 可见，但没有 Provider Content，也不可复制。
+- `context.compacted` 可以复制 compact summary；
+- `context.renewed` 只标记边界，没有 Provider 内容或复制操作。
 
-两者都不进入 Provider Context。首次默认加载 Thread Journal 末端的完整一页；
-“Load older messages” 从 EOF 向前分页，不能拆分原子 Journal Commit。跨越
-Generation Boundary 不切换 Route。
+首次加载显示 Journal 尾部的完整一页。“Load older messages”向前分页，同时
+保持时间正序展示且不拆分原子 commit。
 
-Active Thread 显示 Composer；Archived Thread 只读。Runtime 不健康时也会禁用
-Mutation，但保留最新可读 Transcript 与 Status。
+Active Thread 显示 composer；Archived Thread 只读。Agent 或 Runtime 不可用时
+可以禁用 mutation，但要保留可读的 last-known content，并明确显示 stale/error。
 
-Composer 行为：
+## Input 与 Transcript
 
-- 接受文字、粘贴/拖放/选择 Attachment，或仅 Attachment Input；
-- 在持久提交 Input 前先上传 Attachment；
-- 不假设下一条 Assistant Message 是本 Input 的响应；
-- 分开显示 Durable Acceptance、Pending 与 Turn Execution；
-- 只有 Durable Acceptance 成功后才清空；
-- 只在 Turn Active 时显示 Stop。
+Composer 接受文本、附件或只有附件的 Input。只有持久接受成功后才清空，并把
+accepted/pending 与 Turn execution 区分展示。Stop 只在工作进行中可用。
 
-## Transcript 渲染
+UI 不假设下一条 Assistant 消息就是最新 Input 的回答。Input、message、Tool 与
+Turn identity 都来自持久记录。
 
-Assistant 正文使用普通 Conversation Text；运行过程使用紧凑、渐进披露的行：
+Assistant 正文按普通对话展示；运行过程使用紧凑的 progressive-disclosure row：
 
-- Reasoning 在完成后默认折叠；
-- Tool Call 按 `tool_use_id` 配对 request、streaming output 与 terminal outcome；
-- provisional stream content 被 canonical durable terminal result 替换；
-- 失败 Provider Attempt 不保留重复 Assistant Output；
-- Policy/System Activity 与 Provider Message 明确区分；
-- Image Media 只通过验证后的 Agent Resource Route 渲染。
+- reasoning 完成后默认折叠；
+- Tool request、streaming output 与 terminal outcome 按 identity 合并；
+- durable terminal content 替换 provisional streaming content；
+- system/policy activity 与 Provider 对话明确区分；
+- replay 与 live record 幂等合并。
 
-Message 与 Tool Identity 来自 Durable ID。Replay 与 Live Frame 的相同 Identity
-进行幂等合并，不重复展示。
+## 状态与实时更新
 
-## Status 与 Live Update
+Thread detail 从 metadata、最新 transcript page 和权威 status snapshot 开始，
+再从捕获的 cursor 跟随 event stream。Client 直接替换 server status，不自行
+实现 Runtime state machine。
 
-Thread 页面初次请求：
+Agent process health、Thread retention state 与 Thread execution state 是三个
+独立信号。断连与 reconciliation failure 必须明确展示，不能表现为空白或静默冻结。
 
-1. Thread Metadata 与最新 Transcript Page；
-2. Thread Status Snapshot；
-3. 打开 Context Panel 时的 Active Provider Context；
-4. 从已捕获 Cursor 开始的 Thread Event Stream。
+## 布局与视觉
 
-每个 Event 携带规范化 Transcript Projection 与应用该 Event 后的权威 Status
-Snapshot。Client 只 Replace Status，不自行重算 Runtime State Machine。重连从
-页面实际应用的最新 Durable Cursor 恢复，然后重新校准。
+- Desktop 使用 Fleet/Agent navigation shell 和易读的居中内容区。
+- Mobile 折叠导航，但保持 composer 可达。
+- Operational JSON 在 disclosure panel 内滚动，而不是让整页横向滚动。
+- Sticky control 为末条消息保留足够底部与 safe-area 空间。
+- Loading、empty、read-only、working、failed、disconnected 状态都明确展示。
 
-Thread 保存态、Thread 执行态与 Agent Process Health 相互独立。Agent unavailable
-时，Fleet Shell 可以保留 last-known Thread data，同时明确显示 reconciliation
-error。
-
-## 布局
-
-- Desktop 使用 Fleet/Agent Navigation Shell 与居中 Content Column。
-- Transcript 宽度优先保证正文可读；Operational JSON 只在自己的 Disclosure
-  Panel 中滚动，不能让整页横向滚动。
-- Mobile 折叠 Navigation，并保持 Composer 可触达。
-- Sticky Control 不能覆盖最后一条 Message；底部空间要包含 Composer Height
-  与 Safe Area。
-- Loading、Empty、Read-only、Working、Failed、Disconnected 都必须有明确状态，
-  不能以空白 Panel 表示。
-
-## 视觉语言
-
-设计目标是直观、清晰、平静。生产 Token 位于 `frontend/src/index.css`。
-
-- Forest 是品牌和主要 Action Color（`#064032` 色系）。
-- Gold（`#f6d78e` 色系）是克制的 Accent，不作为通用背景。
-- Neutral Surface 承载操作密度，Status Color 只表达语义。
-- Radius Scale 保持紧凑（`2px`、`4px`、`6px`、`8px`）。
-- System Font Stack 是刻意选择，不下载 Web Font。
-- Lucide Icon 使用 `currentColor`；含义不明显时配 Accessible Label 或 Tooltip。
-- Dark Mode 跟随 OS，并复用同一套 Semantic Token。
-
-避免装饰性 Gradient、营销式超大字体、过大的圆角 Card，以及与状态变化无关的
-Animation。
+视觉语言应直接、平静、紧凑。生产 token 位于 `frontend/src/index.css`。Forest
+是主要 action color，gold 只做克制强调，neutral surface 承载运行信息，status
+color 表达语义。避免装饰性 gradient、夸张 marketing typography，以及与状态
+变化无关的 animation。
 
 ## 无障碍
 
-- Keyboard Focus 始终可见。
-- Icon-only Action 必须有 Accessible Name。
-- Status 不能只靠颜色表达。
-- Composer、Disclosure Row、Pagination 使用合理 Tab Order。
+- Keyboard focus 始终可见，tab 顺序符合交互顺序。
+- Icon-only action 有 accessible name。
+- 状态不能只依赖颜色表达。
 - Motion 遵循 `prefers-reduced-motion`。
-- Destructive Delete 必须明确确认，并显示 Thread 名称。
-
-## 实现
-
-Frontend 使用 React + TypeScript + Vite，使用 Tailwind CSS 与本地 shadcn/AI
-Elements Component。`streamdown` 渲染 Markdown，Shiki 渲染 Code/JSON。
-`internal/fleetweb` 提供嵌入式 SPA 并代理选中 Agent 的 API；`internal/web`
-负责 Agent JSON/SSE Handler。
-
-```bash
-make web
-make verify-candidate WEB=1
-```
-
-每个可见 Interaction Change 都需要 Focused Frontend Test、Web Verification
-Tier 与真实 Browser Check。Gzip Bundle 需要保持在 `pnpm build` 报告的项目预算内。
+- Destructive confirmation 明确写出目标 Thread。

@@ -2,32 +2,14 @@
 
 > English | [中文](README.zh.md)
 
-This package owns how local processes address one running agent:
+This package owns addressing and exact identity for one running Agent: listener
+binding, endpoint parsing/dialing, `runtime.json` publication, identity probes,
+instance-bound shutdown, and maintenance locking.
 
-- a process-lifetime exclusive binding;
-- Unix-first listening with a loud loopback TCP fallback;
-- strict endpoint URI parsing and dialing;
-- HTTP client/transport construction for the existing JSON/SSE API;
-- atomic publication and owned cleanup of exact process identity in
-  `runtime.json`;
-- exact identity probing and instance-bound self-shutdown requests; and
-- an external lifetime/maintenance guard shared by serving and fleet GC.
+It consumes the explicit `agentstate.AgentAddress` and never infers Agent
+identity from a directory name. Listening requires the Agent state directory
+to exist and never recreates it. Process identity that cannot be read is
+inconclusive, not proof of ownership.
 
-The guard lives at
-`$JUEX_HOME/.locks/endpoints/<agent-id>.lock`, outside the deletable registry
-entry. `internal/agentstate` owns the `AgentAddress` value that binds the
-stored agent id, state directory, and guard path. This package consumes only
-that explicit address projection; it does not infer identity or home layout
-from directory names. `Listen` requires the addressed state directory to exist
-before and after locking and never recreates it.
-
-It does not own HTTP route registration, SPA behavior, fleet registry state,
-process spawning, or authentication. `internal/web` serves handlers over the
-listener, including the identity and shutdown routes. `internal/fleet`
-consumes `Probe`, `RequestShutdown`, `AcquireMaintenance`, and `Target`
-instead of branching on endpoint schemes or signaling recorded PIDs.
-
-New runtime records include an opaque operating-system process-incarnation
-fingerprint when `internal/processidentity` can provide it. Missing process
-identity stays compatible with older records, and a collection failure never
-prevents an Agent from starting.
+HTTP routes belong to `internal/web`. Registry and process lifecycle policy
+belong to `internal/fleet`.

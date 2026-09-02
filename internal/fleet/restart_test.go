@@ -23,7 +23,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 		confirmState    statusapi.TurnState
 		confirmKind     statusapi.StatusErrorKind
 		confirmActivity statusapi.ActivityState
-		confirmSession  string
+		confirmThread   string
 		confirmTurn     string
 		confirmErr      error
 		confirmWarmups  int
@@ -73,10 +73,10 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			wantDiagnostic:  "turn state",
 		},
 		{
-			name:            "failed turn with different selected session is not resumed",
+			name:            "failed turn with different selected Thread is not resumed",
 			state:           statusapi.ActivityIdle,
 			detectTurnState: statusapi.TurnErrored,
-			confirmSession:  "session-other",
+			confirmThread:   "345678",
 			wantDiagnostic:  "want Thread",
 		},
 		{
@@ -158,11 +158,11 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			wantDiagnostic: "turn state",
 		},
 		{
-			name:           "different selected session does not resume",
+			name:           "different selected Thread does not resume",
 			state:          statusapi.ActivityWorking,
 			confirmState:   statusapi.TurnCancelled,
 			confirmKind:    statusapi.StatusErrorRuntimeRestart,
-			confirmSession: "session-other",
+			confirmThread:  "345678",
 			wantDiagnostic: "want Thread",
 		},
 		{
@@ -213,7 +213,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 						turnState = statusapi.TurnActive
 					}
 					return restartActivity{
-						ThreadID:      "session-one",
+						ThreadID:      "234567",
 						TurnID:        "turn-original",
 						State:         test.state,
 						TurnState:     turnState,
@@ -227,9 +227,9 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				if test.confirmErr != nil {
 					return restartActivity{}, test.confirmErr
 				}
-				sessionID := test.confirmSession
-				if sessionID == "" {
-					sessionID = "session-one"
+				threadID := test.confirmThread
+				if threadID == "" {
+					threadID = "234567"
 				}
 				turnID := test.confirmTurn
 				if turnID == "" {
@@ -240,7 +240,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 					activityState = statusapi.ActivityIdle
 				}
 				return restartActivity{
-					ThreadID:      sessionID,
+					ThreadID:      threadID,
 					TurnID:        turnID,
 					State:         activityState,
 					TurnState:     test.confirmState,
@@ -250,12 +250,12 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			manager.deps.postRestartResume = func(
 				_ context.Context,
 				_ endpoint.Runtime,
-				sessionID string,
+				threadID string,
 				prompt string,
 			) (string, error) {
 				*events = append(*events, "resume")
-				if sessionID != "session-one" {
-					t.Fatalf("resume session = %q", sessionID)
+				if threadID != "234567" {
+					t.Fatalf("resume Thread = %q", threadID)
 				}
 				if !strings.Contains(prompt, "System notice") {
 					t.Fatalf("resume prompt = %q", prompt)
@@ -353,14 +353,14 @@ func TestRestartWithoutIntentAcknowledgementDoesNotResume(t *testing.T) {
 						activityState = statusapi.ActivityIdle
 					}
 					return restartActivity{
-						ThreadID:  "session-one",
+						ThreadID:  "234567",
 						TurnID:    "turn-original",
 						State:     activityState,
 						TurnState: turnState,
 					}, nil
 				}
 				return restartActivity{
-					ThreadID:      "session-one",
+					ThreadID:      "234567",
 					TurnID:        "turn-original",
 					State:         statusapi.ActivityIdle,
 					TurnState:     statusapi.TurnCancelled,

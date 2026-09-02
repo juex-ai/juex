@@ -343,12 +343,8 @@ func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error
 	return nil
 }
 
-func (e *Engine) EnqueuePendingInput(ctx context.Context, userInput string) (PendingInputStatus, error) {
-	return e.EnqueuePendingMessage(ctx, llm.ClassifyUserMessage(llm.TextMessage(llm.RoleUser, userInput)))
-}
-
-func (e *Engine) EnqueuePendingMessage(ctx context.Context, userMsg llm.Message) (PendingInputStatus, error) {
-	return e.EnqueuePendingMessageWithOptions(ctx, userMsg, PendingInputOptions{})
+func (e *Engine) enqueuePendingInput(ctx context.Context, userInput string) (PendingInputStatus, error) {
+	return e.enqueuePendingMessage(ctx, llm.ClassifyUserMessage(llm.TextMessage(llm.RoleUser, userInput)), PendingInputOptions{})
 }
 
 // PersistPendingMessageWithOptions durably accepts a message independently of
@@ -480,7 +476,7 @@ func (e *Engine) enqueuePersistedPendingMessage(ctx context.Context, record Pend
 	return status, nil
 }
 
-func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, error) {
+func (e *Engine) enqueuePendingMessage(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, error) {
 	if e == nil {
 		return PendingInputStatus{}, ErrNoActiveTurn
 	}
@@ -1229,8 +1225,8 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		messages = append(messages, *result.notice)
 	}
 	messages = append(messages, msg)
-	sess := e.currentThread()
-	persisted, err := sess.AppendBatchAssigned(messages)
+	threadState := e.currentThread()
+	persisted, err := threadState.AppendBatchAssigned(messages)
 	if err != nil {
 		return recordedProviderResponse{}, fmt.Errorf("thread append provider response: %w", err)
 	}
@@ -1240,7 +1236,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		notice = &persisted[0]
 	}
 	e.updateTokenEstimateCalibration(resp.Usage.InputTokens, request.estimatedInputTokens)
-	totalUsage := sess.RecordResponseUsage(resp.Usage, contextUsage)
+	totalUsage := threadState.RecordResponseUsage(resp.Usage, contextUsage)
 
 	// Enrich the responded event with the assistant's text + thinking +
 	// tool calls so verbose UIs can render them without subscribing to
@@ -1801,8 +1797,8 @@ func (e *Engine) hasPendingRecordLocked(id string) bool {
 	return false
 }
 
-func threadHasMessageID(sess *thread.Thread, id string) bool {
-	return sess != nil && id != "" && sess.HasMessageID(id)
+func threadHasMessageID(threadState *thread.Thread, id string) bool {
+	return threadState != nil && id != "" && threadState.HasMessageID(id)
 }
 
 func pendingRecordIDs(pending []queuedPendingInput) []string {
@@ -1850,7 +1846,7 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
 	queue := e.currentPendingInputQueue()
-	sess := e.currentThread()
+	threadState := e.currentThread()
 	if queue == nil {
 		return nil
 	}
@@ -1901,14 +1897,14 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 			continue
 		}
 		if reachedCurrentInput {
-			if threadHasMessageID(sess, record.MessageID) {
+			if threadHasMessageID(threadState, record.MessageID) {
 				alreadyProcessed = append(alreadyProcessed, record.ID)
 				continue
 			}
 			afterCurrent = append(afterCurrent, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 			continue
 		}
-		if threadHasMessageID(sess, record.MessageID) {
+		if threadHasMessageID(threadState, record.MessageID) {
 			alreadyProcessed = append(alreadyProcessed, record.ID)
 			continue
 		}
@@ -1931,11 +1927,11 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 		e.prependPendingInput(afterCurrent)
 		return err
 	}
-	e.mergeRecoveredPendingInputAfterCurrent(sess, afterCurrent)
+	e.mergeRecoveredPendingInputAfterCurrent(threadState, afterCurrent)
 	return nil
 }
 
-func (e *Engine) mergeRecoveredPendingInputAfterCurrent(sess *thread.Thread, recovered []queuedPendingInput) {
+func (e *Engine) mergeRecoveredPendingInputAfterCurrent(threadState *thread.Thread, recovered []queuedPendingInput) {
 	if len(recovered) == 0 {
 		return
 	}
@@ -1952,7 +1948,7 @@ func (e *Engine) mergeRecoveredPendingInputAfterCurrent(sess *thread.Thread, rec
 		if _, ok := mergedIDs[item.RecordID]; ok && item.RecordID != "" {
 			continue
 		}
-		if threadHasMessageID(sess, item.Message.ID) {
+		if threadHasMessageID(threadState, item.Message.ID) {
 			continue
 		}
 		merged = append(merged, item)
@@ -2149,7 +2145,7 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 		return nil
 	}
 	queue := e.currentPendingInputQueue()
-	sess := e.currentThread()
+	threadState := e.currentThread()
 	recordIDs := pendingRecordIDs(pending)
 	max := e.beginPendingInputDrain(turnID, len(pending), recordIDs)
 	if queue != nil {
@@ -2161,7 +2157,7 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 	var processedIDs []string
 	for _, item := range pending {
 		msg := item.Message
-		if threadHasMessageID(sess, msg.ID) {
+		if threadHasMessageID(threadState, msg.ID) {
 			if item.RecordID != "" {
 				processedIDs = append(processedIDs, item.RecordID)
 			}
@@ -2176,7 +2172,7 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 		if err := e.emitProjectionApplied(turnID, projection); err != nil {
 			return fmt.Errorf("commit pending input projection: %w", err)
 		}
-		if err := sess.Append(msg); err != nil {
+		if err := threadState.Append(msg); err != nil {
 			return fmt.Errorf("thread append pending input: %w", err)
 		}
 		if item.RecordID != "" {
@@ -2356,11 +2352,11 @@ func (e *Engine) cachePolicyLocked() llm.CachePolicy {
 	if e == nil {
 		return llm.CachePolicy{}
 	}
-	sess := e.currentThread()
-	if sess == nil || sess.ID == "" {
+	threadState := e.currentThread()
+	if threadState == nil || threadState.ID == "" {
 		return llm.CachePolicy{}
 	}
-	return llm.CachePolicy{StablePrefixKey: "juex:" + sess.ID}
+	return llm.CachePolicy{StablePrefixKey: "juex:" + threadState.ID}
 }
 
 func (e *Engine) activeTurnHasNoPending(turnID string) bool {

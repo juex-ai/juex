@@ -17,7 +17,7 @@ type PartialThreadDeleteError struct {
 }
 
 func (e *PartialThreadDeleteError) Error() string {
-	return fmt.Sprintf("Thread %q was deleted but Artifact cleanup failed: %v", e.ThreadID, e.Err)
+	return fmt.Sprintf("Thread %q was deleted but media cleanup failed: %v", e.ThreadID, e.Err)
 }
 
 func (e *PartialThreadDeleteError) Unwrap() error { return e.Err }
@@ -29,8 +29,8 @@ func DeleteThread(cfg config.Config, id string) error {
 	if err := store.DeleteArchived(id); err != nil {
 		return err
 	}
-	if artifactDir := cfg.MediaDir(); artifactDir != "" {
-		artifactStore, err := artifact.NewStore(artifactDir)
+	if mediaDir := cfg.MediaDir(); mediaDir != "" {
+		artifactStore, err := artifact.NewStore(mediaDir)
 		if err != nil {
 			return &PartialThreadDeleteError{ThreadID: id, Err: err}
 		}

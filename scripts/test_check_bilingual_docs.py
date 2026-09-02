@@ -139,6 +139,16 @@ class CheckBilingualDocsTest(unittest.TestCase):
 
         self.assertIn("missing English peer: orphan.md (for orphan.zh.md)", errors)
 
+    def test_ignores_tracked_documents_deleted_from_worktree(self) -> None:
+        self.write_whitelist()
+        self.repo.write("README.md", "# Project\n\n> English | [中文](README.zh.md)\n")
+        self.repo.write("README.zh.md", "# 项目\n\n> [English](README.md) | 中文\n")
+        self.repo.track_all()
+        (self.repo.root / "README.md").unlink()
+        (self.repo.root / "README.zh.md").unlink()
+
+        self.assertEqual(check_bilingual_docs.check_repository(self.repo.root), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -420,9 +420,9 @@ func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T)
 }
 
 func TestRunPublishesExplicitTCPAPI(t *testing.T) {
-	// This test covers listener publication and routing, not session startup.
+	// This test covers listener publication and routing, not Thread startup.
 	// Keeping the server provider-free avoids coupling shutdown to asynchronous
-	// active-session creation after OnReady has already fired.
+	// active-Thread creation after OnReady has already fired.
 	srv := NewServer(Options{Cfg: config.Config{WorkDir: t.TempDir()}})
 	t.Cleanup(srv.Close)
 	srv.opts.Addr = "127.0.0.1:0"
@@ -496,7 +496,7 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	srv := newTestServer(t)
 	as, err := srv.openThread(context.Background(), thread.MainID)
 	if err != nil {
-		t.Fatalf("open session: %v", err)
+		t.Fatalf("open Thread: %v", err)
 	}
 	sub := as.bcast.subscribe()
 	defer sub.unsubscribe()
@@ -537,7 +537,7 @@ func TestWebEventsSkipLiveDeliveryWhenJournalCommitFails(t *testing.T) {
 	srv := newTestServer(t)
 	as, err := srv.openThread(context.Background(), thread.MainID)
 	if err != nil {
-		t.Fatalf("open session: %v", err)
+		t.Fatalf("open Thread: %v", err)
 	}
 	sub := as.bcast.subscribe()
 	defer sub.unsubscribe()

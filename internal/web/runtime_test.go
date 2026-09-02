@@ -444,7 +444,7 @@ func TestRuntimeAPISerializesSafeMCPTransportMetadata(t *testing.T) {
 		t.Fatalf("remote = %+v", remote)
 	}
 	if command, ok := remote["command"]; !ok || command != "" {
-		t.Fatalf("remote command compatibility field = %#v, present=%v", command, ok)
+		t.Fatalf("remote command field = %#v, present=%v", command, ok)
 	}
 }
 

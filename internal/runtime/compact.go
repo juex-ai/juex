@@ -129,11 +129,11 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	if !policy.Enabled {
 		return CompactionResult{}, nil
 	}
-	sess := e.currentThread()
-	if sess == nil {
+	threadState := e.currentThread()
+	if threadState == nil {
 		return CompactionResult{}, fmt.Errorf("compact context: missing thread runtime")
 	}
-	_, threadHistory := sess.Snapshot()
+	_, threadHistory := threadState.Snapshot()
 	selection := selectCompactionInputWithEstimator(providerVisibleMessages(threadHistory), policy, e.estimateMessageTokens)
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
@@ -197,7 +197,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
 	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions, contextWindow, reservedModelRef)
 	if err != nil {
-		sess.RecordResponseUsage(generation.Usage, nil)
+		threadState.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
@@ -236,7 +236,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	tokensAfter := e.estimateContextTokens(systemPrompt, tools, assembleActiveContext(simulated, nil).Messages)
 	msg.Compaction.TokensAfter = tokensAfter
 	if err := e.commitCompactionMarker(ctx, operationGeneration, func() error {
-		if _, err := sess.BeginCompactedGeneration(msg, auto); err != nil {
+		if _, err := threadState.BeginCompactedGeneration(msg, auto); err != nil {
 			return fmt.Errorf("thread begin compacted generation: %w", err)
 		}
 		return nil
@@ -244,7 +244,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, err)
 	}
 	e.autoCompactFailures = 0
-	replay := sess.ReplaySnapshot()
+	replay := threadState.ReplaySnapshot()
 	if len(replay.Activities) > 0 {
 		activity := replay.Activities[len(replay.Activities)-1]
 		if activity.Summary != nil {
@@ -271,7 +271,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 			{Key: "active_context", Label: "active context after compaction", Tokens: tokensAfter},
 		},
 	}
-	sess.RecordResponseUsage(generation.Usage, &contextUsage)
+	threadState.RecordResponseUsage(generation.Usage, &contextUsage)
 	if err := e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,
 		Reason:             result.Reason,

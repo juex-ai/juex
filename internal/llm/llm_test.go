@@ -370,7 +370,7 @@ func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 
 func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	mediaDir := filepath.Join(t.TempDir(), "media")
 	sourcePath := filepath.Join(workDir, ".juex", "inbox", "event.png")
 	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
 		t.Fatal(err)
@@ -385,7 +385,7 @@ func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.
 	report := eventmedia.ValidateAttachments([]eventmedia.AttachmentRef{{
 		Path:      ".juex/inbox/event.png",
 		MediaType: "image/png",
-	}}, eventmedia.ValidationOptions{WorkDir: workDir, MediaDir: artifactDir})
+	}}, eventmedia.ValidationOptions{WorkDir: workDir, MediaDir: mediaDir})
 	if len(report.Valid) != 1 || len(report.Errors) != 0 {
 		t.Fatalf("event attachment report = %+v", report)
 	}
@@ -393,7 +393,7 @@ func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatal(err)
 	}
-	encoded, mediaType, ok := readImageBase64(artifactDir, &MediaRef{
+	encoded, mediaType, ok := readImageBase64(mediaDir, &MediaRef{
 		ArtifactPath:  attachment.ArtifactPath,
 		MediaType:     attachment.MediaType,
 		SHA256:        attachment.SHA256,
@@ -424,8 +424,8 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 }
 
 func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
-	artifactDir := t.TempDir()
-	if encoded, mediaType, ok := readImageBase64(artifactDir, &MediaRef{
+	mediaDir := t.TempDir()
+	if encoded, mediaType, ok := readImageBase64(mediaDir, &MediaRef{
 		ArtifactPath:  "threads/123456/media/too-large.png",
 		MediaType:     "image/png",
 		OriginalBytes: maxProviderImageArtifactBytes + 1,
@@ -433,7 +433,7 @@ func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 		t.Fatalf("oversized metadata accepted: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
 	}
 
-	store, err := artifact.NewStore(artifactDir)
+	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if encoded, mediaType, ok := readImageBase64(artifactDir, &MediaRef{
+	if encoded, mediaType, ok := readImageBase64(mediaDir, &MediaRef{
 		ArtifactPath: ref.Path,
 		MediaType:    "image/png",
 		SHA256:       ref.SHA256,
@@ -451,7 +451,7 @@ func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 }
 
 func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
-	media, artifactDir := testImageMedia(t)
+	media, mediaDir := testImageMedia(t)
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
@@ -465,7 +465,7 @@ func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
 		BaseURL:      srv.URL,
 		APIKey:       "test-key",
 		Model:        "claude-test",
-		MediaDir:     artifactDir,
+		MediaDir:     mediaDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}), nil)
 
@@ -1766,7 +1766,7 @@ func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 }
 
 func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
-	media, artifactDir := testImageMedia(t)
+	media, mediaDir := testImageMedia(t)
 	type wireReq struct {
 		Messages []map[string]any `json:"messages"`
 	}
@@ -1784,7 +1784,7 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "m",
-		MediaDir:     artifactDir,
+		MediaDir:     mediaDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}), nil)
 	hist := []Message{
@@ -2462,7 +2462,7 @@ func TestOpenAIResponses_RetriesStreamIdleTimeout(t *testing.T) {
 }
 
 func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing.T) {
-	media, artifactDir := testImageMedia(t)
+	media, mediaDir := testImageMedia(t)
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
@@ -2482,7 +2482,7 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "gpt-test",
-		MediaDir:     artifactDir,
+		MediaDir:     mediaDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}))
 	if err != nil {

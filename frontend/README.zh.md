@@ -1,57 +1,32 @@
-# Juex 前端
+# Juex Frontend
 
 > [English](README.md) | 中文
 
-本目录是由 `juex fleet serve` 提供的 React + Vite Fleet UI。Fleet 负责
-Agent 列表 API，并把选中 Agent 的 JSON/SSE 请求代理到 resident Agent
-Runtime。Resident Agent 只暴露 API，不提供 SPA。
+本 React + TypeScript + Vite 应用是 `juex fleet serve` 提供的 Fleet UI。
+Fleet 管理 roster 与进程控制，并代理 selected-Agent JSON/SSE 请求。Server
+始终是事实来源。
 
-## 技术栈
+## 本地开发
 
-- React、TypeScript、Vite、React Router
-- Tailwind CSS v4 与 shadcn/ui primitives
-- AI Elements 与 streamdown，用于 transcript 渲染
-- Shiki 与 lucide-react，用于代码和图标
-
-## 开发
-
-在仓库根目录准备嵌入 bundle，并启动 Fleet：
+在仓库根目录运行：
 
 ```bash
 make web
 go run ./cmd/juex fleet serve
-```
-
-在另一个 shell 中启动 Vite：
-
-```bash
 pnpm --dir frontend dev
 ```
 
-Vite 把 Fleet `/api` 请求和选中 Agent 的 `/agents/:agentId/api` 请求代理到
-默认 Fleet Server `127.0.0.1:5839`。
+Vite 把 Fleet 与 selected-Agent API 请求代理到本地 Fleet server。生产输出
+从 `frontend/dist/` 复制到 `internal/web/dist/`，不要直接编辑 embedded output。
 
-使用仓库验证入口，不要手工拼接重复检查：
+## 所有权
 
-```bash
-make verify-focused PKGS="./internal/web ./internal/fleetweb"
-make verify-candidate WEB=1
-```
+- `src/pages/` 负责 route 级 Fleet、Thread 和 Runtime view。
+- `src/components/` 负责可复用展示与交互。
+- `src/lib/` 负责 client read model 与 stream projection。
+- `src/api.ts` 是类型化 Fleet/Agent transport 边界。
+- `src/index.css` 负责生产 design token。
 
-## Thread UI 所有权
-
-- `src/pages/ThreadExplorer.tsx` 从 Agent index 展示活跃和归档 Thread。
-- `src/pages/Thread.tsx` 读取一个 Thread、从 journal 末端向前分页、从 event
-  cursor 订阅实时变化，并发送 Input。
-- `src/lib/thread-read-state.ts` 与 `thread-read-controller.ts` 负责纯 read
-  model 和 transport 协调。
-- `src/lib/live-thread-projection.ts` 在持久 timeline 刷新前投影乐观 Input
-  与实时 journal-backed event。
-- `src/components/thread/` 渲染 composer、transcript 与状态。
-- `src/api.ts` 是类型化 Fleet/Agent API 边界。
-
-`/new` 和 `/compact` 都停留在当前 Thread。二者都会创建 Context
-Generation；只有 `/compact` 保留 summary。归档 Thread 可以读取，但不能接收新
-Input。
-
-`make web` 会把 `frontend/dist/` 复制到 `internal/web/dist/`；不要直接编辑嵌入文件。
+稳定交互与视觉规则见 [DESIGN.zh.md](../DESIGN.zh.md)。具体 component name 和
+request shape 以代码与测试为准。验证流程使用仓库内
+[Juex local-test skill](../.agents/skills/juex-localtest/SKILL.zh.md)。

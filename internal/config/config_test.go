@@ -14,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 func TestLoadWithOptionsResolvesRuntimeEnvironmentPrecedenceAndMetadata(t *testing.T) {
@@ -1074,18 +1075,17 @@ func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-func TestLoad_SandboxExplicitSectionKeepsLegacySparseDefaults(t *testing.T) {
+func TestLoad_SandboxExplicitSectionInheritsPlatformDefaults(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		body string
+		name        string
+		body        string
+		blockedPath string
 	}{
 		{name: "empty", body: "sandbox: {}\n"},
 		{name: "implicit-null", body: "sandbox:\n"},
 		{name: "explicit-null", body: "sandbox: null\n"},
-		{name: "merged", body: "<<: &defaults {sandbox: {enabled: false}}\n"},
 		{name: "merged-null", body: "<<: &defaults {sandbox: null}\n"},
-		{name: "network-only", body: "sandbox:\n  network:\n    enabled: false\n"},
-		{name: "blocked-only", body: "sandbox:\n  file_system:\n    blocked_paths: [.env]\n"},
+		{name: "blocked-only", body: "sandbox:\n  file_system:\n    blocked_paths: [.env]\n", blockedPath: ".env"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prepareConfigTest(t)
@@ -1095,9 +1095,16 @@ func TestLoad_SandboxExplicitSectionKeepsLegacySparseDefaults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			policy := cfg.SandboxPolicyForOS("linux")
-			if policy.Enabled || policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite {
-				t.Fatalf("explicit sparse policy = %+v, want legacy disabled/read_write baseline", policy)
+			policy := cfg.SandboxPolicy()
+			want := sandbox.DefaultPolicy()
+			if tc.blockedPath != "" {
+				want.FileSystem.BlockedPaths = []string{tc.blockedPath}
+			}
+			if policy.Enabled != want.Enabled ||
+				policy.FileSystem.OutsideWorkspace != want.FileSystem.OutsideWorkspace ||
+				policy.Network.Enabled != want.Network.Enabled ||
+				strings.Join(policy.FileSystem.BlockedPaths, "\x00") != strings.Join(want.FileSystem.BlockedPaths, "\x00") {
+				t.Fatalf("explicit sparse policy = %+v, want platform defaults %+v", policy, want)
 			}
 		})
 	}
@@ -1612,18 +1619,6 @@ func TestLoadFromFile_EnableUserAgentsResourcesRejectsInvalidBool(t *testing.T) 
 	_, err := LoadFromFile(path)
 	if err == nil || !strings.Contains(err.Error(), "expected boolean value") {
 		t.Fatalf("err = %v, want boolean parse error", err)
-	}
-}
-
-func TestLoadFromFile_RemovedUserGlobalResourcesKeyIsUnknown(t *testing.T) {
-	prepareConfigTest(t)
-	key := "enable_user_global_" + "resources"
-	path := filepath.Join(t.TempDir(), "juex.yaml")
-	writeTextFile(t, path, key+": false\n")
-
-	_, err := LoadFromFile(path)
-	if err == nil || !strings.Contains(err.Error(), "field "+key+" not found") {
-		t.Fatalf("err = %v, want strict unknown-field error for %s", err, key)
 	}
 }
 

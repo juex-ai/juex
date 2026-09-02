@@ -69,7 +69,7 @@ def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[
                 if tool_uses.get(tool_use_id) == "exec_command" and token in content and "Process exited with code 0" in content:
                     saw_exec_result = True
     if legacy_uses:
-        return False, "Thread Journal contains legacy shell tool_use: " + ", ".join(legacy_uses)
+        return False, "Thread Journal contains unprojected shell tool_use: " + ", ".join(legacy_uses)
     required = {"read", "write", "edit", "grep", "exec_command", "write_stdin"}
     missing = sorted(required - seen_tools)
     if missing:

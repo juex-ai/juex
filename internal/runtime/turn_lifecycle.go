@@ -217,7 +217,7 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt string) error {
 	msg := llm.TextMessage(llm.RoleUser, prompt)
 	msg.Kind = llm.MessageKindContinuation
-	_, err := l.engine.EnqueuePendingMessage(ctx, msg)
+	_, err := l.engine.enqueuePendingMessage(ctx, msg, PendingInputOptions{})
 	return err
 }
 

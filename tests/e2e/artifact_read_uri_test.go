@@ -63,16 +63,16 @@ func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinSpoolPath(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	sess, err := thread.New(filepath.Join(agentStateDir, "threads"))
+	threadState, err := thread.New(filepath.Join(agentStateDir, "threads"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	bus := events.NewBus()
-	sess.SubscribeBus(bus)
+	threadState.SubscribeBus(bus)
 	registry := tools.NewRegistry()
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{
-		WorkDir: workDir, AgentStateDir: agentStateDir, MediaDir: sess.SpoolDir(),
+		WorkDir: workDir, AgentStateDir: agentStateDir, MediaDir: threadState.SpoolDir(),
 		Shell: tools.DefaultShellProfile(),
 	})
 	original := "artifact-read-success\n" + strings.Repeat("externalized detail\n", 20)
@@ -87,10 +87,10 @@ func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinSpoolPath(t *testing.T) 
 		Provider: provider,
 		Tools:    registry,
 		Bus:      bus,
-		Thread:   sess,
+		Thread:   threadState,
 		Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 24, 11, 0, 0, 0, time.UTC)
-		}, sess),
+		}, threadState),
 		WorkDir:  workDir,
 		MediaDir: mediaDir,
 		ToolOutput: runtime.ToolOutputPolicy{

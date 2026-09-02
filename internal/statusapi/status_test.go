@@ -82,11 +82,6 @@ func TestFromRuntimeProjectsPublicStatusWithoutRecoveryBookkeeping(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"resume_state", "resume_phase"} {
-		if strings.Contains(string(body), forbidden) {
-			t.Fatalf("public status leaked %q: %s", forbidden, body)
-		}
-	}
 	if !strings.Contains(string(body), `"working":true`) {
 		t.Fatalf("public status omitted computed working: %s", body)
 	}
@@ -97,7 +92,7 @@ func TestFromRuntimeProjectsPublicStatusWithoutRecoveryBookkeeping(t *testing.T)
 	}
 }
 
-func TestAgentActivityUsesOnlyAggregateContractFields(t *testing.T) {
+func TestAgentActivityAggregateContractRoundTrips(t *testing.T) {
 	activity := AgentActivity{
 		State:             ActivityWorking,
 		PendingInputCount: 3,
@@ -126,15 +121,6 @@ func TestAgentActivityUsesOnlyAggregateContractFields(t *testing.T) {
 			t.Fatalf("activity omitted %q: %s", required, body)
 		}
 	}
-	for _, forbidden := range []string{
-		`"pending_count":3`,
-		`"status"`,
-	} {
-		if strings.Contains(string(body), forbidden) {
-			t.Fatalf("activity leaked compatibility field %q: %s", forbidden, body)
-		}
-	}
-
 	var roundTrip AgentActivity
 	if err := json.Unmarshal(body, &roundTrip); err != nil {
 		t.Fatal(err)

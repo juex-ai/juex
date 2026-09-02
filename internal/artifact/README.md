@@ -1,20 +1,11 @@
-# Artifact Storage
+# Managed Byte Storage
 
 > English | [中文](README.zh.md)
 
-`artifact` owns safe, durable bytes under `<AgentStateDir>/artifacts`.
+The `artifact` package is a generic safe byte Store. Callers choose its root;
+current callers use it for Agent media.
 
-Its Store accepts logical paths relative to the artifact directory and returns
-root-relative references containing the path, SHA-256, and stored byte
-count. It centralizes:
-
-- Agent-rooted path and symlink safety through `os.Root`;
-- same-directory temporary writes and atomic replacement;
-- idempotent content-addressed storage;
-- integrity verification on read;
-- bounded reads that reject oversized artifacts before loading them in full.
-
-Callers retain format-specific decisions. The `read` tool detects and resizes
-images, provider adapters encode verified media, and runtime context projection
-chooses preview limits. Retention and garbage collection are intentionally
-outside the Store contract.
+The Store accepts root-relative logical paths and provides path/symlink
+containment, atomic replacement, content-addressed idempotence, integrity
+verification, bounded reads, and namespace removal. Callers own media format,
+projection, and retention policy.

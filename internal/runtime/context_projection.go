@@ -524,8 +524,8 @@ func (e *Engine) projectedArtifactPath(sourceKind, messageID string, blockIndex 
 	if e == nil {
 		return "", fmt.Errorf("context artifact: missing thread identity")
 	}
-	sess := e.currentThread()
-	if sess == nil || sess.ID == "" {
+	threadState := e.currentThread()
+	if threadState == nil || threadState.ID == "" {
 		return "", fmt.Errorf("context artifact: missing thread identity")
 	}
 	var dir, name string

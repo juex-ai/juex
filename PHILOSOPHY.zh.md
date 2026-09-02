@@ -2,7 +2,8 @@
 
 > [English](PHILOSOPHY.md) | 中文
 
-Juex 是用于本地、可检查工作的 Agent Runtime。它的设计倾向是让 Agent loop 容易理解：输入是普通文件，工具是显式契约，事件可观察，状态存放在用户可以读取或删除的位置。
+Juex 是用于本地、可检查工作的 Agent Runtime。它的设计倾向是让 Agent loop
+容易理解：Tool 是显式契约，Event 可观察，持久状态存放在用户可以检查或删除的位置。
 
 ## 原则
 
@@ -16,7 +17,9 @@ Juex 是用于本地、可检查工作的 Agent Runtime。它的设计倾向是�
 
 ### 将状态绑定到 Agent
 
-规范的所有权划分定义在 [DOMAIN.md](DOMAIN.zh.md) 中。其目的是让身份自有状态在 Workspace 移动后仍能保留，同时不隐藏哪个 Workspace 拥有它：生成的 Agent 状态跟随 Agent，而用户编写的配置/资源和以 Workspace 为根的 artifact 留在工作附近。
+规范的所有权划分定义在 [DOMAIN.zh.md](DOMAIN.zh.md) 中。其目的是让身份自有状态
+在 Workspace 移动后仍能保留，同时不隐藏哪个 Workspace 拥有它：生成状态跟随
+Agent，而用户编写的配置、资源和项目文件保留在 Workspace 中。
 
 ### 在统一模型后使用 Provider
 
@@ -32,7 +35,8 @@ Web UI 用于检查 Thread、提交 Input、中断工作及管理活跃或归档
 
 ### 等到真正痛时再做
 
-搜索、协作、附件、更丰富的权限和托管部署都有可能加入，但不是默认范围。仅在具体工作流确实需要，且实现仍足够小、可测试、可解释时才加入。
+新的抽象和部署模式都不是默认范围。仅在具体工作流确实需要，且实现仍足够小、
+可测试、可解释时才加入。
 
 ## 权衡
 

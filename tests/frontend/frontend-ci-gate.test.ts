@@ -40,13 +40,14 @@ test("CI runs the frontend gate separately without slowing Go jobs", () => {
   );
 });
 
-test("frontend tool versions and contributor guidance stay explicit", () => {
+test("frontend tool versions and verification authority stay explicit", () => {
   const packageJSON = JSON.parse(packageSource) as {
     packageManager?: string;
   };
   assert.equal(packageJSON.packageManager, "pnpm@11.6.0");
   assert.match(
     agentsSource,
-    /Web work: use `WEB=1` on the candidate\/final tier and verify the UI in a browser when behavior is visible\./,
+    /The authoritative verification workflow is\s+`\.agents\/skills\/juex-localtest\/SKILL\.md`\./,
   );
+  assert.match(agentsSource, /Visible Web\s+changes also require browser verification\./);
 });

@@ -105,7 +105,7 @@ func TestInspectFilesAndStoreFilesResolveLocalPaths(t *testing.T) {
 		}
 	}
 	if _, err := os.Stat(mediaDir); !os.IsNotExist(err) {
-		t.Fatalf("InspectFiles wrote artifacts: %v", err)
+		t.Fatalf("InspectFiles wrote media: %v", err)
 	}
 
 	refs, err := StoreFiles(workDir, mediaDir, "123456", []string{relativePath, absolutePath}, limits)

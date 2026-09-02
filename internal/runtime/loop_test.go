@@ -388,22 +388,22 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 		})
 	}
 	bus := events.NewBus()
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
-	sess.SubscribeBus(bus)
+	t.Cleanup(func() { _ = threadState.Close() })
+	threadState.SubscribeBus(bus)
 	pb := newTestPromptBuilder("", func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) })
 	artifactState := t.TempDir()
 	return &Engine{
 		Provider: prov,
 		Tools:    reg,
 		Bus:      bus,
-		Thread:   sess,
+		Thread:   threadState,
 		Prompt:   pb,
 		WorkDir:  t.TempDir(),
-		MediaDir: filepath.Join(artifactState, "artifacts"),
+		MediaDir: filepath.Join(artifactState, "media"),
 	}, bus
 }
 
@@ -544,7 +544,7 @@ func TestReserveTurnID_CommitFailurePreservesConcurrentPendingInput(t *testing.T
 	case <-time.After(5 * time.Second):
 		t.Fatal("reservation commit did not start")
 	}
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during reservation"), PendingInputOptions{
+	if _, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during reservation"), PendingInputOptions{
 		ID:  "reentrant-reservation-input",
 		TTL: time.Hour,
 	}); err != nil {
@@ -758,9 +758,9 @@ func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 	assertRecoveredPolicyContextCount(t, eng.Thread, 0)
 }
 
-func assertRecoveredPolicyContextCount(t *testing.T, sess *thread.Thread, want int) {
+func assertRecoveredPolicyContextCount(t *testing.T, threadState *thread.Thread, want int) {
 	t.Helper()
-	journal, err := thread.ReadEvents(sess.Dir)
+	journal, err := thread.ReadEvents(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1285,24 +1285,24 @@ func TestTurn_EmitsLLMOutputDeltaEvents(t *testing.T) {
 	}
 }
 
-func newEngineForThread(t *testing.T, sess *thread.Thread, prov llm.Provider) *Engine {
+func newEngineForThread(t *testing.T, threadState *thread.Thread, prov llm.Provider) *Engine {
 	t.Helper()
 	reg := tools.NewRegistry()
 	bus := events.NewBus()
-	sess.SubscribeBus(bus)
+	threadState.SubscribeBus(bus)
 	pb := newTestPromptBuilder("", func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) })
 	artifactState := t.TempDir()
 	return &Engine{
 		Provider:          prov,
 		Tools:             reg,
 		Bus:               bus,
-		Thread:            sess,
+		Thread:            threadState,
 		Prompt:            pb,
-		PendingInputQueue: NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: sess}),
+		PendingInputQueue: NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: threadState}),
 		PendingInputTTL:   time.Hour,
 		ExternalEventTTL:  24 * time.Hour,
 		WorkDir:           t.TempDir(),
-		MediaDir:          filepath.Join(artifactState, "artifacts"),
+		MediaDir:          filepath.Join(artifactState, "media"),
 	}
 }
 
@@ -1567,7 +1567,7 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 		t.Fatalf("first retained reference = %+v", firstReference)
 	}
 	if strings.Contains(firstReference.FirstText(), eng.MediaDir) {
-		t.Fatalf("durable retained reference contains runtime-specific Artifact root: %s", firstReference.FirstText())
+		t.Fatalf("durable retained reference contains runtime-specific media root: %s", firstReference.FirstText())
 	}
 
 	secondInput := "second-head " + strings.Repeat("second-private ", 1600) + " SECOND-TAIL"
@@ -2369,7 +2369,7 @@ func TestTurn_SecondOverflowDoesNotRetryForPendingInput(t *testing.T) {
 			{
 				err: errors.New("context_length_exceeded: compacted turn attempt"),
 				beforeReturn: func() {
-					_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during second overflow")
+					_, enqueueErr = eng.enqueuePendingInput(context.Background(), "queued during second overflow")
 				},
 			},
 		},
@@ -2722,7 +2722,11 @@ func TestTurn_CalibratesFallbackContextUsageFromPreviousProviderUsage(t *testing
 	if got == nil {
 		t.Fatal("context usage is nil")
 	}
-	staticEstimate := estimateContextTokens(prompt.JoinSections(eng.Prompt.Sections()), eng.Tools.Specs(), prov.histories[1])
+	sections, err := eng.Prompt.SectionsWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	staticEstimate := estimateContextTokens(prompt.JoinSections(sections), eng.Tools.Specs(), prov.histories[1])
 	if got.InputTokens <= staticEstimate {
 		t.Fatalf("fallback input tokens = %d, want calibrated above static estimate %d", got.InputTokens, staticEstimate)
 	}
@@ -5462,7 +5466,7 @@ func TestTurn_DrainsPendingInputAfterToolResults(t *testing.T) {
 		done <- err
 	}()
 	waitSignal(t, requested, "llm.requested")
-	status, err := eng.EnqueuePendingInput(context.Background(), "please steer")
+	status, err := eng.enqueuePendingInput(context.Background(), "please steer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5511,7 +5515,7 @@ func TestTurn_PendingInputContinuesAfterPlainResponse(t *testing.T) {
 		done <- err
 	}()
 	waitSignal(t, requested, "llm.requested")
-	if _, err := eng.EnqueuePendingInput(context.Background(), "follow up"); err != nil {
+	if _, err := eng.enqueuePendingInput(context.Background(), "follow up"); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -5558,7 +5562,7 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 		done <- err
 	}()
 	waitSignal(t, prov.started, "provider did not start")
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "continue after failure"), PendingInputOptions{
+	if _, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "continue after failure"), PendingInputOptions{
 		ID:  "pending-provider-failure",
 		TTL: time.Hour,
 	}); err != nil {
@@ -5685,7 +5689,7 @@ func TestTurn_CancellationPreservesPendingInputWithoutContinuing(t *testing.T) {
 		done <- err
 	}()
 	waitSignal(t, requested, "llm.requested")
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), PendingInputOptions{
+	if _, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), PendingInputOptions{
 		ID:  "pending-after-cancel",
 		TTL: time.Hour,
 	}); err != nil {
@@ -5731,7 +5735,7 @@ func TestTurn_AuthFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
 		done <- err
 	}()
 	waitSignal(t, prov.started, "provider did not start")
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "keep after auth failure"), PendingInputOptions{
+	if _, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "keep after auth failure"), PendingInputOptions{
 		ID:  "pending-auth-failure",
 		TTL: time.Hour,
 	}); err != nil {
@@ -5781,7 +5785,7 @@ func TestTurn_NonRetryableProviderFailurePreservesPendingInputWithoutContinuing(
 			waitSignal(t, prov.started, "provider did not start")
 			pendingID := "pending-" + tt.name
 			pendingText := "keep after " + tt.name
-			if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, pendingText), PendingInputOptions{
+			if _, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, pendingText), PendingInputOptions{
 				ID:  pendingID,
 				TTL: time.Hour,
 			}); err != nil {
@@ -5821,7 +5825,7 @@ func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T
 	}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve after tool failure"), PendingInputOptions{
+	if _, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "preserve after tool failure"), PendingInputOptions{
 		ID:  "pending-after-tool-failure",
 		TTL: time.Hour,
 	}); err != nil {
@@ -5855,22 +5859,22 @@ func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T
 
 func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng := newEngineForThread(t, sess, &mockProvider{})
+	eng := newEngineForThread(t, threadState, &mockProvider{})
 	if err := eng.ReserveTurnID("turn-active"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "replay me"), PendingInputOptions{ID: "event-1", TTL: time.Hour}); err != nil {
+	if _, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "replay me"), PendingInputOptions{ID: "event-1", TTL: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Close(); err != nil {
+	if err := threadState.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reloaded, err := thread.Load(sess.Dir)
+	reloaded, err := thread.Load(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5895,22 +5899,22 @@ func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 
 func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng := newEngineForThread(t, sess, &mockProvider{})
+	eng := newEngineForThread(t, threadState, &mockProvider{})
 	if err := eng.ReserveTurnID("turn-active"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "only once"), PendingInputOptions{ID: "event-1", TTL: time.Hour}); err != nil {
+	if _, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "only once"), PendingInputOptions{ID: "event-1", TTL: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Close(); err != nil {
+	if err := threadState.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	firstReload, err := thread.Load(sess.Dir)
+	firstReload, err := thread.Load(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5925,7 +5929,7 @@ func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondReload, err := thread.Load(sess.Dir)
+	secondReload, err := thread.Load(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5945,14 +5949,14 @@ func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 
 func TestTurn_RepairsDanglingToolUseBeforeAppendingNewUserInput(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
+	if err := threadState.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+	if err := threadState.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 		Type:      llm.BlockToolUse,
 		ToolUseID: "interrupted",
 		ToolName:  "grep",
@@ -5960,11 +5964,11 @@ func TestTurn_RepairsDanglingToolUseBeforeAppendingNewUserInput(t *testing.T) {
 	}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Close(); err != nil {
+	if err := threadState.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reloaded, err := thread.Load(sess.Dir)
+	reloaded, err := thread.Load(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6002,11 +6006,11 @@ func TestEngine_DeduplicatesPendingInputByEventID(t *testing.T) {
 	if err := eng.ReserveTurnID("turn-active"); err != nil {
 		t.Fatal(err)
 	}
-	first, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "one"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
+	first, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "one"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "two"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
+	second, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "two"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6017,11 +6021,11 @@ func TestEngine_DeduplicatesPendingInputByEventID(t *testing.T) {
 
 func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: sess})
+	store := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: threadState})
 	record, err := store.Enqueue(llm.TextMessage(llm.RoleUser, "already appended"), PendingInputOptions{ID: "event-1", TTL: time.Hour}, "turn-old")
 	if err != nil {
 		t.Fatal(err)
@@ -6029,14 +6033,14 @@ func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.
 	if err := store.MarkAdmitted([]string{record.ID}, "turn-old"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(record.Message); err != nil {
+	if err := threadState.Append(record.Message); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Close(); err != nil {
+	if err := threadState.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reloaded, err := thread.Load(sess.Dir)
+	reloaded, err := thread.Load(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6062,11 +6066,11 @@ func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.
 
 func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: sess})
+	store := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }, Thread: threadState})
 	record, err := store.Enqueue(llm.TextMessage(llm.RoleUser, "already appended before compact"), PendingInputOptions{ID: "event-1", TTL: time.Hour}, "turn-old")
 	if err != nil {
 		t.Fatal(err)
@@ -6074,20 +6078,20 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 	if err := store.MarkAdmitted([]string{record.ID}, "turn-old"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Append(record.Message); err != nil {
+	if err := threadState.Append(record.Message); err != nil {
 		t.Fatal(err)
 	}
 	compact := llm.TextMessage(llm.RoleUser, "summary")
 	compact.ID = "compact-1"
 	compact.Kind = llm.MessageKindCompact
-	if _, err := sess.BeginCompactedGeneration(compact, false); err != nil {
+	if _, err := threadState.BeginCompactedGeneration(compact, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Close(); err != nil {
+	if err := threadState.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reloaded, err := thread.Load(sess.Dir)
+	reloaded, err := thread.Load(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6105,7 +6109,7 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != "fresh input" {
 		t.Fatalf("last provider message = %q, want no duplicate replay", got)
 	}
-	_, full, err := thread.LoadInfo(sess.Dir)
+	_, full, err := thread.LoadInfo(threadState.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6129,19 +6133,19 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 
 func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
-	eng := newEngineForThread(t, sess, prov)
+	eng := newEngineForThread(t, threadState, prov)
 	if err := eng.ReserveTurnID("compact-1"); err != nil {
 		t.Fatal(err)
 	}
-	status, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "after compact"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
+	status, err := eng.enqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "after compact"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6215,19 +6219,19 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 
 func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
-	eng := newEngineForThread(t, sess, prov)
+	eng := newEngineForThread(t, threadState, prov)
 	if err := eng.ReserveTurnID("compact-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingMessageWithOptions(
+	if _, err := eng.enqueuePendingMessage(
 		context.Background(),
 		llm.TextMessage(llm.RoleUser, "original pending input"),
 		PendingInputOptions{ID: "event-replaced", TTL: time.Hour},
@@ -6271,15 +6275,15 @@ func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testi
 func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
 	const turnID = "turn-policy-checkpoint"
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
-	eng := newEngineForThread(t, sess, prov)
+	eng := newEngineForThread(t, threadState, prov)
 	var (
 		policyMessageID string
 		recordsAtPolicy map[string]PendingInputRecord
@@ -6287,7 +6291,7 @@ func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
 	)
 	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "replace-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
 		policyMessageID = request.Message.ID
-		recordsAtPolicy, policyReadErr = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Thread: sess}).Records()
+		recordsAtPolicy, policyReadErr = NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState}).Records()
 		return runtimemodule.TurnInputDecision{
 			Action:  runtimemodule.TurnInputReplace,
 			Message: llm.TextMessage(llm.RoleUser, "transformed input"),
@@ -6381,13 +6385,13 @@ func TestTurn_ProjectionFailurePersistsAcceptedInputOnce(t *testing.T) {
 }
 
 func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 
-	beforeCrash := newEngineForThread(t, sess, &mockProvider{})
+	beforeCrash := newEngineForThread(t, threadState, &mockProvider{})
 	accepted, err := beforeCrash.AdmitTurnMessage("turn-before-crash", llm.TextMessage(llm.RoleUser, "secret before crash"))
 	if err != nil {
 		t.Fatal(err)
@@ -6396,7 +6400,7 @@ func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
-	recovered := newEngineForThread(t, sess, prov)
+	recovered := newEngineForThread(t, threadState, prov)
 	var policyInputs []string
 	installRuntimeTestModules(t, recovered, &runtimeTurnInputPolicyModule{id: "redact-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
 		policyInputs = append(policyInputs, request.Message.FirstText())
@@ -6427,14 +6431,14 @@ func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
 }
 
 func TestTurn_RecoveryPreservesQueuedAndTurnInputAcceptanceOrder(t *testing.T) {
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 
 	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
-	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }, Thread: sess})
+	queue := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }, Thread: threadState})
 	queued, err := queue.Enqueue(
 		llm.TextMessage(llm.RoleUser, "queued before crash"),
 		PendingInputOptions{ID: "queued-before-crash", TTL: time.Hour},
@@ -6456,9 +6460,9 @@ func TestTurn_RecoveryPreservesQueuedAndTurnInputAcceptanceOrder(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
-	recovered := newEngineForThread(t, sess, prov)
+	recovered := newEngineForThread(t, threadState, prov)
 	now = now.Add(time.Second)
-	recovered.PendingInputQueue = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }, Thread: sess})
+	recovered.PendingInputQueue = NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }, Thread: threadState})
 	var (
 		policyInputs   []string
 		admissionOrder []string
@@ -6529,7 +6533,7 @@ func TestTurn_CurrentTurnFollowUpStaysAfterTrigger(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	var enqueueErr error
 	bus.Subscribe(TurnAdmittedType, func(events.Event) {
-		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during admission")
+		_, enqueueErr = eng.enqueuePendingInput(context.Background(), "queued during admission")
 	})
 
 	if _, err := eng.Turn(context.Background(), "current trigger"); err != nil {
@@ -6581,7 +6585,7 @@ func TestTurn_PersistedInputsAfterCurrentTriggerRestoreInOrder(t *testing.T) {
 	}
 	var enqueueErr error
 	bus.Subscribe(TurnAdmittedType, func(events.Event) {
-		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during admission")
+		_, enqueueErr = eng.enqueuePendingInput(context.Background(), "queued during admission")
 	})
 
 	if _, err := eng.TurnMessageWithID(context.Background(), current.Message, "turn-1"); err != nil {
@@ -6732,13 +6736,13 @@ func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
 }
 
 func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 
-	beforeCrash := newEngineForThread(t, sess, &mockProvider{})
+	beforeCrash := newEngineForThread(t, threadState, &mockProvider{})
 	acceptedRecord, err := beforeCrash.PendingInputQueue.AdmitTurnInput(
 		"turn-before-crash",
 		llm.TextMessage(llm.RoleUser, "blocked before crash"),
@@ -6759,7 +6763,7 @@ func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 	later := laterRecord.Message
 
 	prov := &mockProvider{}
-	recovered := newEngineForThread(t, sess, prov)
+	recovered := newEngineForThread(t, threadState, prov)
 	installRuntimeTestModules(t, recovered, &runtimeTurnInputPolicyModule{id: "reject-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
 		if request.Message.ID == accepted.ID {
 			return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputReject, Reason: "blocked"}, nil
@@ -6773,15 +6777,15 @@ func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want none after recovered input rejection", prov.called)
 	}
-	got := make([]string, 0, len(sess.History))
-	for _, message := range sess.History {
+	got := make([]string, 0, len(threadState.History))
+	for _, message := range threadState.History {
 		got = append(got, message.FirstText())
 	}
 	if want := []string{"blocked before crash", "accepted after blocked", "new trigger"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("persisted accepted inputs = %+v, want %v", sess.History, want)
+		t.Fatalf("persisted accepted inputs = %+v, want %v", threadState.History, want)
 	}
-	if !sess.History[0].PolicyBlocked {
-		t.Fatalf("recovered rejected input = %+v, want policy_blocked", sess.History[0])
+	if !threadState.History[0].PolicyBlocked {
+		t.Fatalf("recovered rejected input = %+v, want policy_blocked", threadState.History[0])
 	}
 	for _, message := range recovered.ActiveContext().Messages {
 		if message.FirstText() == "blocked before crash" {
@@ -6800,16 +6804,16 @@ func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 }
 
 func TestTurn_ReusedTurnIDGetsFreshAcceptedInputIdentity(t *testing.T) {
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "first done"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "second done"), StopReason: llm.StopEndTurn},
 	}}
-	eng := newEngineForThread(t, sess, prov)
+	eng := newEngineForThread(t, threadState, prov)
 	for _, input := range []string{"first input", "second input"} {
 		if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, input), "turn-1"); err != nil {
 			t.Fatal(err)
@@ -6859,16 +6863,16 @@ func (p *pendingAdmissionProbe) PendingInputsAdmitted(_ context.Context, admissi
 
 func TestPromotePendingInputKeepsRecordReplayableWhenTurnAdmissionFails(t *testing.T) {
 	root := t.TempDir()
-	sess, err := thread.New(root)
+	threadState, err := thread.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
-	eng := newEngineForThread(t, sess, &mockProvider{})
+	t.Cleanup(func() { _ = threadState.Close() })
+	eng := newEngineForThread(t, threadState, &mockProvider{})
 	if err := eng.ReserveTurnID("compact-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingMessageWithOptions(
+	if _, err := eng.enqueuePendingMessage(
 		context.Background(),
 		llm.TextMessage(llm.RoleUser, "after compact"),
 		PendingInputOptions{ID: "event-1", TTL: time.Hour},
@@ -6929,14 +6933,14 @@ func TestPromotePendingInputDefersReentrantQueuedEventUntilAfterPromotion(t *tes
 	store := NewStatusStore(StatusSeed{ThreadID: "thread-1", MaxPendingInputs: 4})
 	var enqueueErr error
 	bus.Subscribe(PendingInputPromotedType, func(events.Event) {
-		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "racing input")
+		_, enqueueErr = eng.enqueuePendingInput(context.Background(), "racing input")
 	})
 	bus.Subscribe("*", store.Publish)
 
 	if err := eng.ReserveTurnID("compact-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingInput(context.Background(), "promoted input"); err != nil {
+	if _, err := eng.enqueuePendingInput(context.Background(), "promoted input"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, ok, err := eng.PromotePendingInputTurn("compact-1", "turn-1"); err != nil {
@@ -6962,7 +6966,7 @@ func TestDrainPendingInputReportsMessagesQueuedWhileDraining(t *testing.T) {
 	if err := eng.ReserveTurnID("turn-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingInput(context.Background(), "first"); err != nil {
+	if _, err := eng.enqueuePendingInput(context.Background(), "first"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -6976,7 +6980,7 @@ func TestDrainPendingInputReportsMessagesQueuedWhileDraining(t *testing.T) {
 		}
 	})
 	bus.Subscribe(PendingInputDrainingType, func(events.Event) {
-		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "second")
+		_, enqueueErr = eng.enqueuePendingInput(context.Background(), "second")
 	})
 	var drained PendingInputDrainedPayload
 	bus.Subscribe("pending_input.drained", func(event events.Event) {
@@ -7008,13 +7012,13 @@ func TestPendingDrainedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 	if err := eng.ReserveTurnID("turn-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingInput(context.Background(), "first"); err != nil {
+	if _, err := eng.enqueuePendingInput(context.Background(), "first"); err != nil {
 		t.Fatal(err)
 	}
 
 	var nestedErr error
 	bus.Subscribe("pending_input.drained", func(events.Event) {
-		_, nestedErr = eng.EnqueuePendingInput(context.Background(), "second")
+		_, nestedErr = eng.enqueuePendingInput(context.Background(), "second")
 	})
 	done := make(chan error, 1)
 	go func() {
@@ -7050,13 +7054,13 @@ func TestPendingQueuedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 	var once sync.Once
 	bus.Subscribe("pending_input.queued", func(events.Event) {
 		once.Do(func() {
-			_, nestedErr = eng.EnqueuePendingInput(context.Background(), "second")
+			_, nestedErr = eng.enqueuePendingInput(context.Background(), "second")
 		})
 	})
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := eng.EnqueuePendingInput(context.Background(), "first")
+		_, err := eng.enqueuePendingInput(context.Background(), "first")
 		done <- err
 	}()
 	select {
@@ -7081,7 +7085,7 @@ func TestPendingRejectedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 	if err := eng.ReserveTurnID("turn-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.EnqueuePendingInput(context.Background(), "first"); err != nil {
+	if _, err := eng.enqueuePendingInput(context.Background(), "first"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -7089,13 +7093,13 @@ func TestPendingRejectedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 	var once sync.Once
 	bus.Subscribe("pending_input.rejected", func(events.Event) {
 		once.Do(func() {
-			_, nestedErr = eng.EnqueuePendingInput(context.Background(), "nested")
+			_, nestedErr = eng.enqueuePendingInput(context.Background(), "nested")
 		})
 	})
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := eng.EnqueuePendingInput(context.Background(), "second")
+		_, err := eng.enqueuePendingInput(context.Background(), "second")
 		done <- err
 	}()
 	select {
@@ -7139,10 +7143,10 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 	waitSignal(t, admitted, TurnAdmittedType)
 	waitSignal(t, requested, "llm.requested")
 	waitSignal(t, phase, TurnPhaseType)
-	if _, err := eng.EnqueuePendingInput(context.Background(), "one"); err != nil {
+	if _, err := eng.enqueuePendingInput(context.Background(), "one"); err != nil {
 		t.Fatal(err)
 	}
-	status, err := eng.EnqueuePendingInput(context.Background(), "two")
+	status, err := eng.enqueuePendingInput(context.Background(), "two")
 	if !errors.Is(err, ErrPendingInputQueueFull) {
 		t.Fatalf("err = %v, want ErrPendingInputQueueFull", err)
 	}
@@ -7417,13 +7421,13 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "all done"), StopReason: llm.StopEndTurn},
 	}}
 	bus := events.NewBus()
-	sess, err := thread.New(t.TempDir())
+	threadState, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = threadState.Close() })
 	pb := newTestPromptBuilder("", time.Now)
-	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Thread: sess, Prompt: pb}
+	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Thread: threadState, Prompt: pb}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

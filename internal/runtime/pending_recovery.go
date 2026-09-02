@@ -20,13 +20,13 @@ func (e *Engine) RecoverPendingInputs() ([]PendingInputRecovery, error) {
 		return nil, nil
 	}
 	queue := e.currentPendingInputQueue()
-	sess := e.currentThread()
-	if queue == nil || sess == nil {
+	threadState := e.currentThread()
+	if queue == nil || threadState == nil {
 		return nil, nil
 	}
 
 	admittedMessageIDs := map[string]struct{}{}
-	if err := thread.ReplayEvents(sess.Dir, func(event events.Event) {
+	if err := thread.ReplayEvents(threadState.Dir, func(event events.Event) {
 		if event.Type == TurnAdmittedType {
 			payload := payloadAs[TurnAdmittedPayload](event.Payload)
 			if payload.MessageID != "" {
@@ -42,7 +42,7 @@ func (e *Engine) RecoverPendingInputs() ([]PendingInputRecovery, error) {
 	}
 	transcriptMessageIDs := make(map[string]struct{}, len(records))
 	for _, record := range records {
-		if record.MessageID != "" && sess.HasMessageID(record.MessageID) {
+		if record.MessageID != "" && threadState.HasMessageID(record.MessageID) {
 			transcriptMessageIDs[record.MessageID] = struct{}{}
 		}
 	}

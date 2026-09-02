@@ -40,9 +40,9 @@ func TestWebTurnTransportInterruptPreservesQueuedInput(t *testing.T) {
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "active"))
 	waitPendingProviderStarted(t, prov, "provider did not start")
-	if _, err := as.app.Engine.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), runtime.PendingInputOptions{
-		ID:  "queued-before-interrupt",
-		TTL: time.Hour,
+	if _, err := as.app.Engine.ReceivePendingInput(context.Background(), runtime.PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "preserve me"),
+		Options: &runtime.PendingInputOptions{ID: "queued-before-interrupt", TTL: time.Hour},
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -31,12 +31,12 @@ func TestManager_RecordObservationSnapshotsAttachments(t *testing.T) {
 	if err := os.WriteFile(sourcePath, []byte(`{"kind":"deploy"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	mediaDir := filepath.Join(t.TempDir(), "media")
 	mgr, err := observable.NewManager(observable.ManagerOptions{
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		MediaDir:   artifactDir,
+		MediaDir:   mediaDir,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestManager_RecordObservationSnapshotsAttachments(t *testing.T) {
 	if len(record.Attachments) != 1 || !strings.HasPrefix(record.Attachments[0].Path, "event-media/") {
 		t.Fatalf("record attachments = %+v, want durable artifact", record.Attachments)
 	}
-	if report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{MediaDir: artifactDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
+	if report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{MediaDir: mediaDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("stored attachment validation = %+v", report)
 	}
 }
@@ -195,22 +195,22 @@ func TestManagerCommandResolvesRelativeExecutableFromWorkDir(t *testing.T) {
 
 func TestManagerInitializesArtifactRoot(t *testing.T) {
 	dir := t.TempDir()
-	artifactDir := filepath.Join(dir, "agent", "artifacts")
-	if err := os.MkdirAll(filepath.Dir(artifactDir), 0o700); err != nil {
+	mediaDir := filepath.Join(dir, "agent", "media")
+	if err := os.MkdirAll(filepath.Dir(mediaDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	mgr, err := observable.NewManager(observable.ManagerOptions{
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		MediaDir:   artifactDir,
+		MediaDir:   mediaDir,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = mgr.Close() }()
-	if info, err := os.Stat(artifactDir); err != nil || !info.IsDir() {
-		t.Fatalf("Artifact root stat = %+v, %v", info, err)
+	if info, err := os.Stat(mediaDir); err != nil || !info.IsDir() {
+		t.Fatalf("media root stat = %+v, %v", info, err)
 	}
 }
 
@@ -1323,7 +1323,7 @@ func TestManager_RunOnceDeliversStoppedScheduleWithoutChangingScheduleState(t *t
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		MediaDir:   filepath.Join(t.TempDir(), "artifacts"),
+		MediaDir:   filepath.Join(t.TempDir(), "media"),
 		Now:        func() time.Time { return now },
 		Deliver: func(_ context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			delivered <- record

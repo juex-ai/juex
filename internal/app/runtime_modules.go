@@ -155,7 +155,7 @@ func buildThreadModules(
 	cfg config.Config,
 	specs []runtimemodule.ThreadFactorySpec,
 	runtimeContext runtimemodule.RuntimeContext,
-	sess *thread.Thread,
+	threadState *thread.Thread,
 	engine *juexruntime.Engine,
 	workDir string,
 	shell promptcontext.ShellProfile,
@@ -164,11 +164,11 @@ func buildThreadModules(
 ) (*runtimemodule.Set, error) {
 	goalState := opts.goalState
 	if goalState == nil && cfg.ModuleEnabled(string(juexruntime.GoalModuleID)) {
-		goalState = goalStateStore(sess)
+		goalState = goalStateStore(threadState)
 	}
 	notes := opts.notes
 	if notes == nil && cfg.ModuleEnabled(string(juexruntime.NotesModuleID)) {
-		notes = notesStore(sess)
+		notes = notesStore(threadState)
 	}
 	eventSink := func(event events.Event) error {
 		if engine == nil || engine.Bus == nil {
@@ -227,8 +227,8 @@ func buildThreadModules(
 			Enabled: true,
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				base := opts.hookBaseRequest
-				base.ThreadID = sess.ID
-				base.JournalPath = filepath.Join(sess.Dir, "journal.jsonl")
+				base.ThreadID = threadState.ID
+				base.JournalPath = filepath.Join(threadState.Dir, "journal.jsonl")
 				return hooks.NewModule(opts.hookRunner, hooks.ModuleOptions{
 					BaseRequest: base,
 					GoalState:   func() []byte { return juexruntime.HookGoalStateFromModules(set) },
@@ -237,7 +237,7 @@ func buildThreadModules(
 		})
 	}
 	specs = append(builtinSpecs, specs...)
-	threadContext := threadModuleContext(sess)
+	threadContext := threadModuleContext(threadState)
 	var err error
 	set, err = runtimemodule.BuildAndStartThreadSet(ctx, specs, threadContext, runtimemodule.ToolContext{
 		Runtime: runtimeContext,
@@ -254,9 +254,9 @@ func validateThreadModuleContext(
 	runtimeSet *runtimemodule.Set,
 	threadSet *runtimemodule.Set,
 	runtimeContext runtimemodule.RuntimeContext,
-	sess *thread.Thread,
+	threadState *thread.Thread,
 ) error {
-	threadContext := threadModuleContext(sess)
+	threadContext := threadModuleContext(threadState)
 	_, err := runtimemodule.CollectContext(ctx, runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 		Runtime: runtimeContext,
@@ -265,14 +265,14 @@ func validateThreadModuleContext(
 	return err
 }
 
-func threadModuleContext(sess *thread.Thread) runtimemodule.ThreadContext {
-	if sess == nil {
+func threadModuleContext(threadState *thread.Thread) runtimemodule.ThreadContext {
+	if threadState == nil {
 		return runtimemodule.ThreadContext{}
 	}
 	return runtimemodule.ThreadContext{
-		ID:            sess.ID,
-		Dir:           sess.Dir,
-		ScratchpadDir: sess.ScratchpadDir(),
+		ID:            threadState.ID,
+		Dir:           threadState.Dir,
+		ScratchpadDir: threadState.ScratchpadDir(),
 	}
 }
 

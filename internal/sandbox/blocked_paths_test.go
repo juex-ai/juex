@@ -37,7 +37,7 @@ func TestPathGuardBlocksRelativeAbsoluteAndSymlinkTargets(t *testing.T) {
 	if err := os.Symlink(blockedOutside, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	policy := LegacyDefaultPolicy()
+	policy := DisabledPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{"private", blockedOutside}
 	guard := NewPathGuard(work, policy)
@@ -62,7 +62,7 @@ func TestPathGuardBlocksCaseVariantOnCaseInsensitivePlatforms(t *testing.T) {
 		t.Skip("case-insensitive guard behavior is platform-specific")
 	}
 	work := t.TempDir()
-	policy := LegacyDefaultPolicy()
+	policy := DisabledPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{"private"}
 	guard := NewPathGuard(work, policy)
@@ -107,18 +107,18 @@ func TestFilePolicyReadOnlyRootsAllowReadsAndRejectWrites(t *testing.T) {
 	root := t.TempDir()
 	work := filepath.Join(root, "work")
 	agentState := filepath.Join(root, "agent")
-	artifactDir := filepath.Join(agentState, "artifacts")
-	for _, path := range []string{work, artifactDir} {
+	mediaDir := filepath.Join(agentState, "media")
+	for _, path := range []string{work, mediaDir} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	artifactPath := filepath.Join(artifactDir, "sessions", "result.txt")
+	artifactPath := filepath.Join(mediaDir, "threads", "result.txt")
 	guard := NewFilePolicy(FilePolicyOptions{
 		Policy:        DefaultPolicyForOS("linux"),
 		WorkDir:       work,
 		AgentStateDir: agentState,
-		ReadOnlyPaths: []string{artifactDir},
+		ReadOnlyPaths: []string{mediaDir},
 	})
 	if err := guard.CheckRead(artifactPath); err != nil {
 		t.Fatalf("Artifact read = %v, want allowed", err)
@@ -130,18 +130,18 @@ func TestFilePolicyReadOnlyRootsAllowReadsAndRejectWrites(t *testing.T) {
 		t.Fatalf("other Agent state write = %v, want allowed", err)
 	}
 	roots := guard.ReadOnlyRoots()
-	wantRoot, ok := canonicalPath(work, artifactDir)
+	wantRoot, ok := canonicalPath(work, mediaDir)
 	if !ok {
-		t.Fatalf("canonicalPath(%q) failed", artifactDir)
+		t.Fatalf("canonicalPath(%q) failed", mediaDir)
 	}
 	if len(roots) != 1 || roots[0] != wantRoot {
 		t.Fatalf("read-only roots = %#v, want %q", roots, wantRoot)
 	}
 
 	disabled := NewFilePolicy(FilePolicyOptions{
-		Policy:        LegacyDefaultPolicy(),
+		Policy:        DisabledPolicy(),
 		WorkDir:       work,
-		ReadOnlyPaths: []string{artifactDir},
+		ReadOnlyPaths: []string{mediaDir},
 	})
 	if err := disabled.CheckWrite(artifactPath); err == nil || !strings.Contains(err.Error(), "read-only root") {
 		t.Fatalf("disabled sandbox Artifact write = %v, want builtin read-only root rejection", err)
@@ -154,13 +154,13 @@ func TestFilePolicyReadOnlyRootsRejectHardLinkAliasesWhenWritesAreUnrestricted(t
 	}
 	root := t.TempDir()
 	work := filepath.Join(root, "work")
-	artifactDir := filepath.Join(root, "agent", "artifacts")
-	for _, path := range []string{work, artifactDir} {
+	mediaDir := filepath.Join(root, "agent", "media")
+	for _, path := range []string{work, mediaDir} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	artifactPath := filepath.Join(artifactDir, "result.txt")
+	artifactPath := filepath.Join(mediaDir, "result.txt")
 	if err := os.WriteFile(artifactPath, []byte("durable result"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -172,14 +172,14 @@ func TestFilePolicyReadOnlyRootsRejectHardLinkAliasesWhenWritesAreUnrestricted(t
 	readWrite := DefaultPolicyForOS(runtime.GOOS)
 	readWrite.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
 	for name, policy := range map[string]Policy{
-		"disabled":   LegacyDefaultPolicy(),
+		"disabled":   DisabledPolicy(),
 		"read_write": readWrite,
 	} {
 		t.Run(name, func(t *testing.T) {
 			guard := NewFilePolicy(FilePolicyOptions{
 				Policy:        policy,
 				WorkDir:       work,
-				ReadOnlyPaths: []string{artifactDir},
+				ReadOnlyPaths: []string{mediaDir},
 			})
 			if err := guard.CheckWrite(alias); err == nil || !strings.Contains(err.Error(), "hard-link alias of read-only root") {
 				t.Fatalf("CheckWrite(%q) = %v, want read-only hard-link rejection", alias, err)
@@ -282,13 +282,13 @@ func TestFilePolicyRejectsUnrestrictedCommandWritesThroughReadOnlyHardLinkAliase
 	}
 	root := t.TempDir()
 	work := filepath.Join(root, "work")
-	artifactDir := filepath.Join(root, "agent", "artifacts")
-	for _, path := range []string{work, artifactDir} {
+	mediaDir := filepath.Join(root, "agent", "media")
+	for _, path := range []string{work, mediaDir} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	artifactPath := filepath.Join(artifactDir, "result.txt")
+	artifactPath := filepath.Join(mediaDir, "result.txt")
 	if err := os.WriteFile(artifactPath, []byte("durable result"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestFilePolicyRejectsUnrestrictedCommandWritesThroughReadOnlyHardLinkAliase
 	guard := NewFilePolicy(FilePolicyOptions{
 		Policy:        policy,
 		WorkDir:       work,
-		ReadOnlyPaths: []string{artifactDir},
+		ReadOnlyPaths: []string{mediaDir},
 	})
 	if err := guard.CheckCommandWrites(context.Background()); err == nil || !strings.Contains(err.Error(), "hard-link alias of read-only root") {
 		t.Fatalf("CheckCommandWrites() = %v, want read-only hard-link rejection", err)
@@ -472,7 +472,7 @@ func TestFilePolicyEscapeHatchesPreserveBlockedPaths(t *testing.T) {
 	work := t.TempDir()
 	outside := t.TempDir()
 	for _, policy := range []Policy{
-		LegacyDefaultPolicy(),
+		DisabledPolicy(),
 		{Enabled: true, FileSystem: FileSystemPolicy{OutsideWorkspace: OutsideWorkspaceReadWrite}, Network: NetworkPolicy{Enabled: true}},
 	} {
 		policy.FileSystem.BlockedPaths = []string{filepath.Join(outside, "blocked")}

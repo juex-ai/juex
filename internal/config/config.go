@@ -819,8 +819,8 @@ func (c Config) MCPConfigPaths() []string {
 }
 
 // EnvironmentSnapshot returns the immutable effective environment resolved for
-// this config. Manually constructed Config values fall back to the current
-// inherited environment for compatibility with package-level tests.
+// this config. Manually constructed Config values use the inherited process
+// environment as their explicit test and embedding default.
 func (c Config) EnvironmentSnapshot() environment.Snapshot {
 	if c.runtimeEnvironment.IsZero() {
 		return environment.FromEnviron(os.Environ())
@@ -1585,7 +1585,7 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 
 func applySandboxConfig(cfg *Config, c sandboxConfig) error {
 	if !cfg.sandboxConfigured {
-		cfg.Sandbox = sandbox.LegacyDefaultPolicy()
+		cfg.Sandbox = sandbox.DefaultPolicy()
 		cfg.sandboxConfigured = true
 	}
 	if c.Enabled.Set {
