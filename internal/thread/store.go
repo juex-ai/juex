@@ -63,7 +63,7 @@ func (s *Store) CreateWorker(parentID, alias string) (*Thread, error) {
 	}
 	parentFound := false
 	for _, entry := range index.Threads {
-		if entry.ThreadID == parentID && entry.ArchivedAt == nil {
+		if entry.ThreadID == parentID && entry.RetentionState == RetentionActive {
 			parentFound = true
 			break
 		}
@@ -260,7 +260,7 @@ func (s *Store) loadOrRebuildIndexLocked() (Index, error) {
 	data, err := os.ReadFile(s.IndexPath())
 	if err == nil {
 		var index Index
-		if decodeErr := json.Unmarshal(data, &index); decodeErr == nil && index.Version == ProjectionVersion {
+		if decodeErr := json.Unmarshal(data, &index); decodeErr == nil && index.Version == ProjectionVersion && validIndexLifecycle(index) {
 			return index, nil
 		}
 	}
@@ -268,6 +268,24 @@ func (s *Store) loadOrRebuildIndexLocked() (Index, error) {
 		return Index{}, err
 	}
 	return s.rebuildIndexLocked()
+}
+
+func validIndexLifecycle(index Index) bool {
+	for _, entry := range index.Threads {
+		switch entry.RetentionState {
+		case RetentionActive:
+			if entry.ArchivedAt != nil || (entry.ExecutionState != ExecutionIdle && entry.ExecutionState != ExecutionWorking && entry.ExecutionState != ExecutionFailed) {
+				return false
+			}
+		case RetentionArchived:
+			if entry.ArchivedAt == nil || entry.ExecutionState != "" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) rebuildIndexLocked() (Index, error) {
@@ -328,8 +346,8 @@ func (s *Store) writeIndexLocked(index Index) error {
 		if right.ThreadID == MainID {
 			return false
 		}
-		if (left.ArchivedAt == nil) != (right.ArchivedAt == nil) {
-			return left.ArchivedAt == nil
+		if (left.RetentionState == RetentionActive) != (right.RetentionState == RetentionActive) {
+			return left.RetentionState == RetentionActive
 		}
 		if !left.LastActivityAt.Equal(right.LastActivityAt.Time) {
 			return left.LastActivityAt.After(right.LastActivityAt.Time)
@@ -352,7 +370,8 @@ func indexEntryFromProjection(projection Projection) IndexEntry {
 		ArchivedAt:          projection.ArchivedAt,
 		CreatedAt:           projection.CreatedAt,
 		LastActivityAt:      projection.LastActivityAt,
-		State:               projection.State,
+		RetentionState:      projection.RetentionState,
+		ExecutionState:      projection.ExecutionState,
 		PendingInputCount:   projection.Counts.PendingInputCount,
 		TurnCount:           projection.Counts.TurnCount,
 		GenerationCount:     projection.Counts.GenerationCount,

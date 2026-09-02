@@ -30,6 +30,9 @@ func applyCommit(threadID string, state *ReplayState, commit scannedCommit) erro
 			return err
 		}
 	}
+	if err := validateProjectionLifecycle(state.Projection); err != nil {
+		return err
+	}
 	state.Projection.Revision = commit.Seq
 	if len(commit.Facts) != 1 || commit.Facts[0].Type != FactProjectionCheck {
 		state.Projection.LastActivityAt = commit.At
@@ -37,6 +40,31 @@ func applyCommit(threadID string, state *ReplayState, commit scannedCommit) erro
 	state.Projection.Journal.ProjectedSeq = commit.Seq
 	state.Projection.Journal.ProjectedOffset = commit.EndOffset
 	return nil
+}
+
+func validateProjectionLifecycle(projection Projection) error {
+	switch projection.RetentionState {
+	case RetentionActive:
+		if projection.ArchivedAt != nil {
+			return fmt.Errorf("%w: active Thread has archived_at", ErrInvalidTransition)
+		}
+		switch projection.ExecutionState {
+		case ExecutionIdle, ExecutionWorking, ExecutionFailed:
+			return nil
+		default:
+			return fmt.Errorf("%w: active Thread has execution state %q", ErrInvalidTransition, projection.ExecutionState)
+		}
+	case RetentionArchived:
+		if projection.ArchivedAt == nil {
+			return fmt.Errorf("%w: archived Thread lacks archived_at", ErrInvalidTransition)
+		}
+		if projection.ExecutionState != "" {
+			return fmt.Errorf("%w: archived Thread has execution state %q", ErrInvalidTransition, projection.ExecutionState)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: unknown retention state %q", ErrInvalidTransition, projection.RetentionState)
+	}
 }
 
 func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact Fact) error {
@@ -52,7 +80,8 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		p.ParentThreadID = fact.ParentThreadID
 		p.CreatedAt = commit.At
 		p.LastActivityAt = commit.At
-		p.State = StateIdle
+		p.RetentionState = RetentionActive
+		p.ExecutionState = ExecutionIdle
 		p.CurrentGeneration = GenerationProjection{
 			ID:          InitialGeneration,
 			Ordinal:     1,
@@ -66,18 +95,20 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		}
 		p.Alias = fact.Alias
 	case FactThreadArchived:
-		if p.ThreadID == "" || p.ArchivedAt != nil || p.ThreadID == MainID {
+		if p.ThreadID == "" || p.RetentionState != RetentionActive || p.ThreadID == MainID {
 			return fmt.Errorf("%w: archive unavailable", ErrInvalidTransition)
 		}
 		archivedAt := commit.At
 		p.ArchivedAt = &archivedAt
-		p.State = StateArchived
+		p.RetentionState = RetentionArchived
+		p.ExecutionState = ""
 	case FactThreadUnarchived:
-		if p.ArchivedAt == nil {
+		if p.RetentionState != RetentionArchived {
 			return fmt.Errorf("%w: unarchive requires archive", ErrInvalidTransition)
 		}
 		p.ArchivedAt = nil
-		p.State = StateIdle
+		p.RetentionState = RetentionActive
+		p.ExecutionState = ExecutionIdle
 	case FactMessageAppended:
 		if fact.GenerationID != p.CurrentGeneration.ID {
 			return fmt.Errorf("%w: message generation %q is not current %q", ErrInvalidTransition, fact.GenerationID, p.CurrentGeneration.ID)
@@ -138,7 +169,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		if p.Counts.PendingInputCount > 0 {
 			p.Counts.PendingInputCount--
 		}
-		p.State = StateWorking
+		p.ExecutionState = ExecutionWorking
 	case FactInputAttemptDone, FactInputAttemptFailed, FactInputAttemptCancel, FactInputAttemptStop:
 		input, attempt, err := requireRunningAttempt(state, fact.InputID, fact.AttemptID)
 		if err != nil {
@@ -196,17 +227,17 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 			p.Counts.PendingInputCount--
 		}
 	case FactTurnStarted:
-		p.State = StateWorking
+		p.ExecutionState = ExecutionWorking
 	case FactTurnCompleted:
 		p.Counts.TurnCount++
 	case FactTurnFailed:
 		p.Counts.TurnCount++
-		p.State = StateFailed
+		p.ExecutionState = ExecutionFailed
 	case FactTurnCancelled:
 		p.Counts.TurnCount++
 	case FactThreadSettled:
-		if p.ArchivedAt == nil {
-			p.State = StateIdle
+		if p.RetentionState == RetentionActive {
+			p.ExecutionState = ExecutionIdle
 		}
 	case FactContextRenewed, FactContextCompacted:
 		if fact.FromGenerationID != p.CurrentGeneration.ID {

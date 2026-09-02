@@ -82,6 +82,13 @@ its recorded offset; a missing or invalid projection is rebuilt. A complete
 malformed commit is corruption. Only a torn final line may be truncated during
 recovery.
 
+Both projections store `retention_state` independently from
+`execution_state`. Active Threads have `idle`, `working`, or `failed`
+execution state. Archived Threads omit execution state; unarchive returns them
+to `active` plus `idle`. `archived_at` is timestamp metadata and is never used
+as a substitute lifecycle field. Permanent delete removes the Thread from both
+storage and the index.
+
 Timeline writes remain chronological and append-only. Timeline reads start at
 EOF and page backward by opaque offset/sequence cursor, returning each page in
 chronological display order. An atomic commit is never split merely to satisfy
@@ -190,7 +197,8 @@ attempt claims it, then follows that consuming Turn until settlement.
   provenance records the effective override.
 
 Archive/unarchive moves the entire Worker directory and updates the Agent
-index. It does not touch Generation state. Delete is checked and restricted to
+index. It does not touch Generation state. Archive clears execution state;
+unarchive initializes it as `idle`. Delete is checked and restricted to
 archived Workers.
 
 ## API Surface

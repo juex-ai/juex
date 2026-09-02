@@ -1,6 +1,7 @@
 package thread
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +22,18 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	created := worker.Projection()
+	if created.RetentionState != RetentionActive || created.ExecutionState != ExecutionIdle {
+		t.Fatalf("created lifecycle = %s/%s, want active/idle", created.RetentionState, created.ExecutionState)
+	}
 	if _, err := worker.BeginNewGeneration(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := worker.appendFactsStoreLocked(Fact{Type: FactTurnFailed, TurnID: "turn-before-archive"}); err != nil {
+		t.Fatal(err)
+	}
+	if state := worker.Projection().ExecutionState; state != ExecutionFailed {
+		t.Fatalf("execution state before archive = %q, want failed", state)
 	}
 	scratchFile := filepath.Join(worker.ScratchpadDir(), "draft.md")
 	if err := os.WriteFile(scratchFile, []byte("keep"), 0o600); err != nil {
@@ -38,6 +49,22 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 	if generation := archived.Projection().CurrentGeneration.ID; generation != "g000002" {
 		t.Fatalf("archived generation = %s", generation)
 	}
+	archivedProjection := archived.Projection()
+	if archivedProjection.RetentionState != RetentionArchived || archivedProjection.ExecutionState != "" || archivedProjection.ArchivedAt == nil {
+		t.Fatalf("archived lifecycle = %s/%s archived_at=%v, want archived/<empty>/timestamp", archivedProjection.RetentionState, archivedProjection.ExecutionState, archivedProjection.ArchivedAt)
+	}
+	entries, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.ThreadID == worker.ID && (entry.RetentionState != RetentionArchived || entry.ExecutionState != "") {
+			t.Fatalf("archived index lifecycle = %s/%s, want archived/<empty>", entry.RetentionState, entry.ExecutionState)
+		}
+	}
+	if _, err := archived.appendFactsStoreLocked(Fact{Type: FactTurnStarted, TurnID: "turn-after-archive"}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("archived execution fact error = %v, want invalid transition", err)
+	}
 	_ = archived.Close()
 	restored, err := store.Unarchive(worker.ID)
 	if err != nil {
@@ -46,6 +73,10 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 	defer func() { _ = restored.Close() }()
 	if generation := restored.Projection().CurrentGeneration.ID; generation != "g000002" {
 		t.Fatalf("restored generation = %s", generation)
+	}
+	restoredProjection := restored.Projection()
+	if restoredProjection.RetentionState != RetentionActive || restoredProjection.ExecutionState != ExecutionIdle || restoredProjection.ArchivedAt != nil {
+		t.Fatalf("restored lifecycle = %s/%s archived_at=%v, want active/idle/<nil>", restoredProjection.RetentionState, restoredProjection.ExecutionState, restoredProjection.ArchivedAt)
 	}
 	data, err := os.ReadFile(filepath.Join(restored.ScratchpadDir(), "draft.md"))
 	if err != nil || string(data) != "keep" {
@@ -223,7 +254,7 @@ func TestRecoverLayoutRebuildsProjectionBeforeRelocatingArchivedWorker(t *testin
 		t.Fatal(err)
 	}
 	defer func() { _ = archived.Close() }()
-	if archived.Projection().ArchivedAt == nil {
+	if archived.Projection().RetentionState != RetentionArchived {
 		t.Fatal("recovered archived Worker has active projection")
 	}
 	entries, err := store.List()
@@ -231,7 +262,7 @@ func TestRecoverLayoutRebuildsProjectionBeforeRelocatingArchivedWorker(t *testin
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.ThreadID == workerID && entry.ArchivedAt == nil {
+		if entry.ThreadID == workerID && entry.RetentionState != RetentionArchived {
 			t.Fatalf("recovered index entry remains active: %+v", entry)
 		}
 	}

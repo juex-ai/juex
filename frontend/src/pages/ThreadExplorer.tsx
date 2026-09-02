@@ -201,7 +201,7 @@ function ThreadRow({ thread, archived, busy, mutationsEnabled, onAction, onDelet
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium text-foreground">{threadListTitle(thread)}</span>
           <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
-            <span>{thread.state}</span><span>{thread.turn_count} turns</span><span>Gen {thread.generation_count}</span><span>{thread.pending_input_count} pending</span><span>{thread.current_context_tokens.toLocaleString()} context</span>
+            <span>{thread.retention_state === "archived" ? "archived" : thread.execution_state}</span><span>{thread.turn_count} turns</span><span>Gen {thread.generation_count}</span><span>{thread.pending_input_count} pending</span><span>{thread.current_context_tokens.toLocaleString()} context</span>
             <span>{(usage.input_tokens ?? 0).toLocaleString()} in · {(usage.cached_input_tokens ?? 0).toLocaleString()} cached · {(usage.output_tokens ?? 0).toLocaleString()} out</span><span>{humanAgo(thread.last_activity_at)}</span>
           </span>
         </span>

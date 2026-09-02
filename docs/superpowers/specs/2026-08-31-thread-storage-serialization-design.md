@@ -101,8 +101,8 @@ authority. It makes listing, Prompt assembly, and suffix recovery cheap:
   "alias": "reviewer",
   "parent_thread_id": "0",
   "created_at": "2026-09-01T08:00:00.000Z",
-  "archived_at": null,
-  "state": "working",
+  "retention_state": "active",
+  "execution_state": "working",
   "revision": 42,
   "current_generation": {
     "generation_id": "g000003",
@@ -148,6 +148,13 @@ checkpoint and then atomically replaces this file.
 cumulative usage. Cached input tokens remain in usage accounting and do not
 reduce context occupancy.
 
+`retention_state` is authoritative for active/archive placement;
+`archived_at` is timestamp metadata. Active projections require one
+`execution_state` from `idle`, `working`, or `failed`. Archived projections
+omit `execution_state`. Unarchive preserves the Journal and Generation but
+initializes execution as `idle`. Permanent deletion removes the projection and
+index entry instead of persisting a `deleted` Thread.
+
 ## Agent Thread-List Projection
 
 `threads.index.json` is the only Agent-level list accelerator. A normal CLI,
@@ -162,11 +169,10 @@ Web, or Fleet list reads one file rather than every Journal:
     {
       "thread_id": "0",
       "alias": "main",
-      "parent_thread_id": null,
-      "archived_at": null,
       "created_at": "2026-08-20T01:00:00.000Z",
       "last_activity_at": "2026-09-01T08:12:34.567Z",
-      "state": "idle",
+      "retention_state": "active",
+      "execution_state": "idle",
       "pending_input_count": 1,
       "turn_count": 182,
       "generation_count": 7,

@@ -395,8 +395,10 @@ Archive 校验 non-Main Worker 没有 active Turn、transition、Pending Input�
 result subscription/handoff 或 in-flight commit。随后追加 archive fact，关闭 handle，
 把 `threads/<tid>` 原子移动到 `archive/threads/<tid>`，并更新 projections。
 
-Unarchive 把同一目录原子移回，校验 tail，追加 unarchive fact，并重新发布之前的
-当前 Generation 与 execution state。它永远不创建 Generation。
+Unarchive 把同一目录原子移回，校验 tail，追加 unarchive fact，重新发布之前的
+当前 Generation，并把 execution state 初始化为 `idle`。它永远不创建 Generation。
+Archive 使用没有 execution state 的 `retention_state=archived`；unarchive 恢复
+`retention_state=active`。
 
 Delete 校验 archived Worker、expected revision 与没有 child reference；archive
 precondition 已经保证活跃 subscription 和 handoff settled。它把目录原子移动到

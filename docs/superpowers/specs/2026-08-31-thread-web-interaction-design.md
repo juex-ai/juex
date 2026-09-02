@@ -62,7 +62,8 @@ Archive changes section and storage namespace, not URL or parent identity.
 | `thread_id` | Copyable `#tid`; Main is `#0` |
 | `alias` | Primary label; unnamed Worker uses `worker_#tid` |
 | `created_at` | Localized absolute time; full accessible tooltip |
-| execution state | Text badge `idle`, `working`, or `failed` |
+| retention state | `active` or `archived`; section membership uses this field |
+| execution state | Active-only text badge `idle`, `working`, or `failed` |
 | `pending_count` | Badge when nonzero, exact count accessible |
 | `turn_count` | Labelled Turns count |
 | `generation_count` | `Gen N` |
@@ -70,8 +71,8 @@ Archive changes section and storage namespace, not URL or parent identity.
 | cumulative usage | Input, cached-input, and output detail |
 | parent | `Main` or copyable `#parent` for Workers |
 
-Archived rows add archive time and retain final state and metrics. Status never
-relies on color alone and respects reduced motion.
+Archived rows add archive time, omit execution state, and retain metrics. Status
+never relies on color alone and respects reduced motion.
 
 ### List behavior and states
 
@@ -173,9 +174,9 @@ Archived detail replaces the composer with:
 Archived Sep 1, 2026 · This thread is read-only. Unarchive to continue.
 ```
 
-Unarchive restores the same current Generation and prior state, then enables
-the composer without changing route. Agent-offline active Threads are also
-temporarily read-only but use distinct copy.
+Unarchive restores the same current Generation with execution state `idle`,
+then enables the composer without changing route. Agent-offline active Threads
+are also temporarily read-only but use distinct copy.
 
 ### Actions
 
@@ -228,8 +229,8 @@ Main needs no special discovery route; clients know id `0`.
   "alias": "reviewer",
   "parent_thread_id": "0",
   "created_at": "2026-09-01T08:00:00.000Z",
-  "archived_at": null,
-  "state": "working",
+  "retention_state": "active",
+  "execution_state": "working",
   "pending_input_count": 0,
   "turn_count": 8,
   "generation_count": 2,

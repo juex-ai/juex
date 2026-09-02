@@ -113,7 +113,7 @@ Generation; they do not create Generation directories or rewrite old bytes.
 | Initial Thread creation | Base prompt only | Empty Goal, Notes, and Scratchpad |
 | `/new` | Base prompt only | Scratchpad files; Goal and Notes are cleared |
 | `/compact` | Base prompt plus compact summary bootstrap | Goal, Notes, Scratchpad, and active-runtime result subscriptions |
-| Archive/unarchive | No Generation change | The same current Generation and Thread state |
+| Archive/unarchive | No Generation change | Current Generation, Journal, Goal, Notes, and Scratchpad; execution state is cleared on archive and reset to `idle` on unarchive |
 
 `context.renewed` and `context.compacted` are durable System activities shown
 at the boundary in history. Neither activity record is projected as a User or
@@ -179,9 +179,9 @@ request/response API.
   or in-flight Journal commit.
 - Archive moves the complete Thread directory into the Agent archive namespace
   and makes it read-only. It does not close or create a Generation.
-- Unarchive moves the same directory back, validates its Journal tail, restores
-  its prior execution state and current Generation, and accepts new work only
-  after publication succeeds.
+- Unarchive moves the same directory back, validates its Journal tail, preserves
+  the current Generation, resets execution state to `idle`, and accepts new
+  work only after publication succeeds.
 - Archive and unarchive are per-Thread operations; descendants are not moved
   and parent ids are not rewritten.
 - Permanent delete is allowed only for an archived Worker with no remaining
@@ -191,8 +191,11 @@ request/response API.
 - A future archive-retention policy must invoke the same checked delete service
   rather than bypassing lifecycle validation.
 
-Execution state is `idle`, `working`, or `failed`. Archived is a separate
-lifecycle property, not a fourth execution state.
+Thread lifecycle is two orthogonal projections. `retention_state` is `active`
+or `archived`; `execution_state` is `idle`, `working`, or `failed` and exists
+only while retention is active. Archive clears execution state. Permanent
+delete removes the Thread, so `deleted` is an operation outcome and absence
+from the index rather than a persisted value on a surviving Thread.
 
 ## Domain Invariants
 
@@ -213,6 +216,7 @@ lifecycle property, not a fourth execution state.
 12. Subscription ownership stays outside the target Thread.
 13. Archived Threads are durable and read-only; delete is explicit and checked.
 14. Fleet owns Agent lifecycle and routing, never Thread execution.
+15. Active Threads have one execution state; archived Threads have none.
 
 ## Removed Concepts
 

@@ -176,7 +176,8 @@ interface RawThreadInfo {
   created_at: string;
   last_activity_at: string;
   archived_at?: string;
-  state: string;
+  retention_state: ThreadInfo["retention_state"];
+  execution_state?: ThreadInfo["execution_state"];
   revision: number;
   generation_id: string;
   turn_count: number;
@@ -217,10 +218,10 @@ function normalizeThreadInfo(raw: RawThreadInfo): ThreadInfo {
     alias: raw.alias,
     parent_thread_id: raw.parent_thread_id,
     dir: raw.dir,
-    active: !raw.archived_at,
+    retention_state: raw.retention_state,
+    execution_state: raw.execution_state,
     created_at: raw.created_at,
     last_active_at: raw.last_activity_at || raw.created_at,
-    state: raw.state,
     revision: raw.revision,
     generation_id: raw.generation_id,
     turns: raw.turn_count,

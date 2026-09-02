@@ -192,9 +192,9 @@ Default shows active Threads. `--all` groups active and archived rows. The table
 comes from `threads.index.json` projection and never opens Journals:
 
 ```text
-TID      ALIAS        PARENT  STATE    PENDING  TURNS  GEN  CONTEXT  CREATED
-#0       main         -       idle     1        182    7    43.2k    2026-08-20
-#4m8k2p  reviewer     #0      working  0        8      2    11.4k    2026-09-01
+TID      ALIAS        PARENT  RETENTION  EXECUTION  PENDING  TURNS  GEN  CONTEXT  CREATED
+#0       main         -       active     idle       1        182    7    43.2k    2026-08-20
+#4m8k2p  reviewer     #0      active     working    0        8      2    11.4k    2026-09-01
 ```
 
 JSON includes input, cached-input, and output usage plus canonical UTC
@@ -231,7 +231,8 @@ juex threads delete <tid|alias> [--yes]
 - Archive requires an idle/failed Worker with no pending Input, transition,
   result subscription, or commit; it moves the directory and changes no
   Generation.
-- Unarchive restores the same Generation and prior state.
+- Unarchive restores the same Generation and initializes execution state as
+  `idle`.
 - Stop requests active Turn cancellation only.
 - Delete accepts only an archived Worker with no child. Archive has already
   settled active result subscriptions and handoffs. Interactive use confirms

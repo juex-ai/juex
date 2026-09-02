@@ -172,19 +172,26 @@ func TestThreadAPIEmptyWorkerTimelineSerializesAsArray(t *testing.T) {
 
 	var created thread.Info
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{}`, http.StatusCreated, &created)
+	if created.RetentionState != thread.RetentionActive || created.ExecutionState != thread.ExecutionIdle {
+		t.Fatalf("created lifecycle = %s/%s", created.RetentionState, created.ExecutionState)
+	}
 	recorder := httptest.NewRecorder()
 	server.APIHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/threads/"+created.ID, nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	var response struct {
-		Items json.RawMessage `json:"items"`
-	}
+	var response map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if string(response.Items) != "[]" {
+	if string(response["items"]) != "[]" {
 		t.Fatalf("empty timeline was not serialized as an array: %s", recorder.Body.String())
+	}
+	if string(response["retention_state"]) != `"active"` || string(response["execution_state"]) != `"idle"` {
+		t.Fatalf("Thread lifecycle fields = retention:%s execution:%s", response["retention_state"], response["execution_state"])
+	}
+	if _, exists := response["state"]; exists {
+		t.Fatalf("legacy state field remains in Thread response: %s", recorder.Body.String())
 	}
 }
 
@@ -248,7 +255,8 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/archive", "", http.StatusOK, nil)
 	var list threadListResponse
 	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads", "", http.StatusOK, &list)
-	if len(list.Archived) != 1 || list.Archived[0].ThreadID != created.ID {
+	if len(list.Archived) != 1 || list.Archived[0].ThreadID != created.ID ||
+		list.Archived[0].RetentionState != thread.RetentionArchived || list.Archived[0].ExecutionState != "" {
 		t.Fatalf("archived list = %+v", list)
 	}
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/inputs", `{"prompt":"no"}`, http.StatusConflict, nil)
@@ -264,7 +272,8 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 
 	var restored thread.Info
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/unarchive", "", http.StatusOK, &restored)
-	if restored.ArchivedAt != nil || restored.GenerationID != created.GenerationID || restored.Alias != "archived-renamed" {
+	if restored.ArchivedAt != nil || restored.GenerationID != created.GenerationID || restored.Alias != "archived-renamed" ||
+		restored.RetentionState != thread.RetentionActive || restored.ExecutionState != thread.ExecutionIdle {
 		t.Fatalf("unarchived Thread changed generation = %+v", restored)
 	}
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/archive", "", http.StatusOK, nil)

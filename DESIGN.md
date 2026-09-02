@@ -43,7 +43,8 @@ work and archived history.
 The page has two explicit sections: Active and Archived. Each row shows:
 
 - Thread ID and alias;
-- state (`idle`, `working`, `failed`, or archived);
+- retention state (`active` or `archived`) and, for active Threads, execution
+  state (`idle`, `working`, or `failed`);
 - creation/last activity time;
 - Turn count and Context Generation count;
 - pending Input count;
@@ -115,9 +116,9 @@ authoritative status snapshot. The client replaces status; it does not
 recompute the runtime state machine. Event reconnect resumes from the latest
 durable cursor actually applied by the page, then recalibrates.
 
-Thread state is distinct from process health. The Fleet shell may show an
-Agent as unavailable while retaining last-known Thread data and an explicit
-reconciliation error.
+Thread retention state, Thread execution state, and Agent process health are
+distinct. The Fleet shell may show an Agent as unavailable while retaining
+last-known Thread data and an explicit reconciliation error.
 
 ## Layout
 

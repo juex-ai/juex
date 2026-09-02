@@ -4,7 +4,7 @@ import { agentPathFromLocation } from "./fleet-routes.ts";
 type ThreadListSummary = {
   thread_id: string;
   alias: string;
-  archived_at?: string;
+  retention_state: "active" | "archived";
   turn_count: number;
   generation_count: number;
 };
@@ -23,9 +23,9 @@ export function threadListTitle(
 }
 
 export function threadListBadges(
-  thread: Pick<ThreadListSummary, "archived_at" | "turn_count" | "generation_count">,
+  thread: Pick<ThreadListSummary, "retention_state" | "turn_count" | "generation_count">,
 ): string[] {
-  const badges: string[] = [thread.archived_at ? "archived" : "active"];
+  const badges: string[] = [thread.retention_state];
   badges.push(`${thread.turn_count} ${thread.turn_count === 1 ? "turn" : "turns"}`);
   badges.push(`${thread.generation_count} gen`);
   return badges;

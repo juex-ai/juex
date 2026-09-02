@@ -81,7 +81,8 @@ test("getThread encodes optional transcript pagination params", async () => {
         dir: "/tmp/thread",
         created_at: "2026-05-07T10:10:10.000Z",
         last_activity_at: "2026-05-07T10:10:10.000Z",
-        state: "idle",
+        retention_state: "active",
+        execution_state: "idle",
         revision: 2,
         generation_id: "1",
         turn_count: 1,
@@ -97,7 +98,9 @@ test("getThread encodes optional transcript pagination params", async () => {
   }) as typeof fetch;
 
   try {
-    await getThread("thread one", { before: "msg/1", limit: 25 });
+    const result = await getThread("thread one", { before: "msg/1", limit: 25 });
+    assert.equal(result.retention_state, "active");
+    assert.equal(result.execution_state, "idle");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -117,7 +120,8 @@ test("getThread treats a null empty timeline as no messages", async () => {
         dir: "/tmp/thread",
         created_at: "2026-09-01T00:00:00.000Z",
         last_activity_at: "2026-09-01T00:00:00.000Z",
-        state: "idle",
+        retention_state: "active",
+        execution_state: "idle",
         revision: 1,
         generation_id: "g000001",
         turn_count: 0,

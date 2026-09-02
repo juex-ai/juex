@@ -40,7 +40,8 @@ Agent 首页重定向到 Main Thread `0`。Thread Explorer 同时承载活跃工
 页面明确分为 Active 和 Archived 两区。每一项展示：
 
 - Thread ID 与 alias；
-- 状态（`idle`、`working`、`failed` 或 archived）；
+- 保存态（`active` 或 `archived`），以及 active Thread 的执行态（`idle`、
+  `working` 或 `failed`）；
 - 创建/最后活动时间；
 - Turn 数与 Context Generation 数；
 - Pending Input 数；
@@ -104,8 +105,9 @@ Thread 页面初次请求：
 Snapshot。Client 只 Replace Status，不自行重算 Runtime State Machine。重连从
 页面实际应用的最新 Durable Cursor 恢复，然后重新校准。
 
-Thread State 与 Process Health 分离。Agent unavailable 时，Fleet Shell 可以保留
-last-known Thread data，同时明确显示 reconciliation error。
+Thread 保存态、Thread 执行态与 Agent Process Health 相互独立。Agent unavailable
+时，Fleet Shell 可以保留 last-known Thread data，同时明确显示 reconciliation
+error。
 
 ## 布局
 

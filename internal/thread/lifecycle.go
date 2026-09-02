@@ -17,7 +17,7 @@ func (s *Store) Archive(target *Thread) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	projection := target.Projection()
-	if projection.State == StateWorking || projection.Counts.PendingInputCount != 0 {
+	if projection.RetentionState != RetentionActive || projection.ExecutionState == ExecutionWorking || projection.Counts.PendingInputCount != 0 {
 		return fmt.Errorf("thread: archive %s: Thread is busy", target.ID)
 	}
 	index, err := s.loadOrRebuildIndexLocked()
@@ -25,7 +25,7 @@ func (s *Store) Archive(target *Thread) error {
 		return err
 	}
 	for _, entry := range index.Threads {
-		if entry.ParentThreadID == target.ID && entry.ArchivedAt == nil {
+		if entry.ParentThreadID == target.ID && entry.RetentionState == RetentionActive {
 			return fmt.Errorf("thread: archive %s: active child %s still references it", target.ID, entry.ThreadID)
 		}
 	}
@@ -85,7 +85,7 @@ func (s *Store) DeleteArchived(id string) error {
 			return fmt.Errorf("thread: delete %s: child %s still references it", id, entry.ThreadID)
 		}
 		if entry.ThreadID == id {
-			if entry.ArchivedAt == nil {
+			if entry.RetentionState != RetentionArchived {
 				return fmt.Errorf("thread: delete %s: Thread is active", id)
 			}
 			found = true
@@ -134,7 +134,7 @@ func (s *Store) RollbackWorkerCreation(id string) error {
 			return fmt.Errorf("thread: rollback %s: child %s still references it", id, entry.ThreadID)
 		}
 		if entry.ThreadID == id {
-			if entry.ArchivedAt != nil {
+			if entry.RetentionState != RetentionActive {
 				return fmt.Errorf("thread: rollback %s: Thread is archived", id)
 			}
 			found = true
@@ -186,7 +186,7 @@ func (s *Store) RecoverLayout() error {
 				return fmt.Errorf("thread: recover projection %s: %w", entry.Name(), err)
 			}
 			archivedNamespace := root == s.ArchiveDir()
-			shouldArchive := projection.ArchivedAt != nil
+			shouldArchive := projection.RetentionState == RetentionArchived
 			if shouldArchive == archivedNamespace {
 				continue
 			}

@@ -165,6 +165,43 @@ func TestListUsesIndexWithoutOpeningJournal(t *testing.T) {
 	}
 }
 
+func TestListRebuildsIndexWithInvalidLifecycleProjection(t *testing.T) {
+	t.Parallel()
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(store.IndexPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index Index
+	if err := json.Unmarshal(data, &index); err != nil {
+		t.Fatal(err)
+	}
+	index.Threads[0].RetentionState = ""
+	index.Threads[0].ExecutionState = ""
+	data, err = json.Marshal(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.IndexPath(), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].RetentionState != RetentionActive || entries[0].ExecutionState != ExecutionIdle {
+		t.Fatalf("rebuilt lifecycle = %#v", entries)
+	}
+}
+
 func TestListRebuildsMissingOrInvalidProjectionFromJournal(t *testing.T) {
 	for _, test := range []struct {
 		name            string

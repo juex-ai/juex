@@ -1,11 +1,11 @@
 type ThreadAccessSummary = {
-  active: boolean;
+  retention_state: "active" | "archived";
 };
 
 export function threadCanSend(thread: ThreadAccessSummary): boolean {
-  return thread.active;
+  return thread.retention_state === "active";
 }
 
 export function threadReadOnlyMessage(thread: ThreadAccessSummary): string {
-  return thread.active ? "" : "Archived thread";
+  return thread.retention_state === "active" ? "" : "Archived thread";
 }

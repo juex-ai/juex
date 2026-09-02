@@ -249,7 +249,7 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 		threadDir = info.Dir
 		threadAlias = info.Alias
 		generationID = info.GenerationID
-		threadState = info.State
+		threadState = string(info.ExecutionState)
 		turns = info.TurnCount
 		startedAt = info.CreatedAt.Time
 		lastActiveAt = replay.Projection.LastActivityAt.Time

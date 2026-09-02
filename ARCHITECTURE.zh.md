@@ -69,6 +69,11 @@ Generation、Goal、Notes、usage、生命周期和 checkpoint 都在同一个 J
 加速器。投影落后时从 offset replay；缺失或非法时重建。完整但非法的 commit
 是损坏，只有 torn final line 可以在恢复时截断。
 
+两个投影都分别保存 `retention_state` 与 `execution_state`。Active Thread 的执行态
+是 `idle`、`working` 或 `failed`；Archived Thread 不携带执行态，unarchive 后变为
+`active + idle`。`archived_at` 只是时间 metadata，不能替代 lifecycle 字段。永久
+delete 会从存储与 index 中移除 Thread。
+
 Journal 按时间顺序 append。Web 从 EOF 向前按 opaque offset/sequence cursor
 分页，再按时间正序展示。一个原子 commit 不会为了满足 item limit 而被拆开。
 
@@ -131,7 +136,8 @@ Turn 后继续等待该 Turn settled。
 
 - `/new`：清除 Goal/Notes，保留 Scratchpad，创建空 provider history，记录 `context.renewed`。
 - `/compact`：生成 summary，保留 Goal/Notes/Scratchpad，从 compact bootstrap 开始，记录 `context.compacted`。
-- archive/unarchive 移动整个 Worker 目录并更新 Agent index，不改变 Generation。
+- archive/unarchive 移动整个 Worker 目录并更新 Agent index，不改变 Generation；
+  archive 清空执行态，unarchive 初始化为 `idle`。
 - delete 只允许经过校验的归档 Worker。
 
 ## API

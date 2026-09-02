@@ -798,10 +798,10 @@ func runtimeStatusSeed(sess *thread.Thread, maxPendingInputs int) runtime.Status
 	}
 	info := sess.Info()
 	state := runtime.ThreadRuntimeIdle
-	switch info.State {
-	case thread.StateWorking:
+	switch info.ExecutionState {
+	case thread.ExecutionWorking:
 		state = runtime.ThreadRuntimeTurnActive
-	case thread.StateFailed:
+	case thread.ExecutionFailed:
 		state = runtime.ThreadRuntimeFailed
 	}
 	return runtime.StatusSeed{

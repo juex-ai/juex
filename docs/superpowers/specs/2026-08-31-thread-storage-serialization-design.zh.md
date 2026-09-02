@@ -95,8 +95,8 @@ assembly 与 suffix recovery：
   "alias": "reviewer",
   "parent_thread_id": "0",
   "created_at": "2026-09-01T08:00:00.000Z",
-  "archived_at": null,
-  "state": "working",
+  "retention_state": "active",
+  "execution_state": "working",
   "revision": 42,
   "current_generation": {
     "generation_id": "g000003",
@@ -140,6 +140,12 @@ bounded Runtime state，然后原子替换这个文件。
 `current_tokens` 是 provider-visible context 的最近估算，不是累计 usage。
 Cached input token 仍计入 usage，不能减少 context occupancy。
 
+`retention_state` 是 active/archive placement 的权威；`archived_at` 只是时间
+metadata。Active projection 必须带一个 `idle`、`working` 或 `failed` 的
+`execution_state`；Archived projection 省略 `execution_state`。Unarchive 保留
+Journal 与 Generation，但把执行态初始化为 `idle`。永久删除会移除 projection 与
+index entry，不会继续持久化一个 `deleted` Thread。
+
 ## Agent Thread-List Projection
 
 `threads.index.json` 是唯一 Agent-level list accelerator。正常 CLI、Web 或 Fleet
@@ -154,11 +160,10 @@ list 只读一个文件，不打开每个 Journal：
     {
       "thread_id": "0",
       "alias": "main",
-      "parent_thread_id": null,
-      "archived_at": null,
       "created_at": "2026-08-20T01:00:00.000Z",
       "last_activity_at": "2026-09-01T08:12:34.567Z",
-      "state": "idle",
+      "retention_state": "active",
+      "execution_state": "idle",
       "pending_input_count": 1,
       "turn_count": 182,
       "generation_count": 7,

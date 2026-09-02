@@ -105,10 +105,18 @@ route directly to Workers.
 
 ## Archive And Delete
 
+Thread lifecycle has two orthogonal projections:
+
+- `retention_state` is `active` or `archived` and controls whether local Thread
+  bytes can participate in execution. Permanent deletion removes the Thread,
+  so `deleted` is an operation outcome rather than a persisted Thread value.
+- `execution_state` is `idle`, `working`, or `failed` for active Threads only.
+  Archived Threads omit it because no Agent execution lifecycle is attached.
+
 Archive and unarchive operate on a whole idle Worker Thread:
 
 - Archive moves its directory from `threads/<id>` to `archive/threads/<id>`.
-- Unarchive restores the same directory and state.
+- Unarchive restores the same directory and resets execution state to `idle`.
 - Neither action creates a Generation.
 - Archived Threads are read-only and receive no Inputs.
 - A Worker with an active child cannot be archived; archive children first.
@@ -133,3 +141,4 @@ partial failures do not expose a half-deleted Thread.
 10. Observations route only to Main.
 11. Archive/unarchive never changes Context Generation.
 12. Thread Journal is the sole durable conversation and runtime-history model.
+13. Active Threads have exactly one execution state; archived Threads have none.

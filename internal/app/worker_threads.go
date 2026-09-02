@@ -670,7 +670,7 @@ func (m *workerThreadManager) Archive(ctx context.Context, id string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.ParentThreadID == id && entry.ArchivedAt == nil {
+		if entry.ParentThreadID == id && entry.RetentionState == thread.RetentionActive {
 			return fmt.Errorf("thread_archive requires child Thread %s to be archived first", entry.ThreadID)
 		}
 	}

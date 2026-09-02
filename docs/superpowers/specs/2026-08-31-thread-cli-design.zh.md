@@ -182,9 +182,9 @@ juex threads list [--active|--archived|--all] [--format table|json]
 `threads.index.json` projection，永不打开 Journal：
 
 ```text
-TID      ALIAS        PARENT  STATE    PENDING  TURNS  GEN  CONTEXT  CREATED
-#0       main         -       idle     1        182    7    43.2k    2026-08-20
-#4m8k2p  reviewer     #0      working  0        8      2    11.4k    2026-09-01
+TID      ALIAS        PARENT  RETENTION  EXECUTION  PENDING  TURNS  GEN  CONTEXT  CREATED
+#0       main         -       active     idle       1        182    7    43.2k    2026-08-20
+#4m8k2p  reviewer     #0      active     working    0        8      2    11.4k    2026-09-01
 ```
 
 JSON 包含 input、cached-input、output usage 与规范 UTC millisecond timestamp。
@@ -219,7 +219,7 @@ juex threads delete <tid|alias> [--yes]
 - Main id 与 alias immutable，不能 archive/delete。
 - Archive 要求 idle/failed Worker 没有 Pending Input、transition、result
   subscription 或 commit；它移动目录，不改变 Generation。
-- Unarchive 恢复相同 Generation 与 prior state。
+- Unarchive 恢复相同 Generation，并把 execution state 初始化为 `idle`。
 - Stop 只请求 active Turn cancellation。
 - Delete 只接受没有 child 的 Archived Worker；archive 已经让 active result
   subscription 与 handoff settled。交互模式确认 exact id 与 alias；无人值守必须传

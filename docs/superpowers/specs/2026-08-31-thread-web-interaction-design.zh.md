@@ -59,7 +59,8 @@ namespace，不改变 URL 或 parent identity。
 | `thread_id` | 可复制 `#tid`；Main 是 `#0` |
 | `alias` | Primary label；未命名 Worker 使用 `worker_#tid` |
 | `created_at` | 本地化 absolute time 与完整 accessible tooltip |
-| execution state | 文本 badge：`idle`、`working` 或 `failed` |
+| retention state | `active` 或 `archived`；section membership 使用这个字段 |
+| execution state | 仅 active Thread 显示 `idle`、`working` 或 `failed` 文本 badge |
 | `pending_count` | 非零时 badge，并保留可访问 exact count |
 | `turn_count` | 带 label 的 Turns count |
 | `generation_count` | `Gen N` |
@@ -67,8 +68,8 @@ namespace，不改变 URL 或 parent identity。
 | cumulative usage | Input、cached-input、output detail |
 | parent | Worker 显示 `Main` 或可复制 `#parent` |
 
-Archived row 增加 archive time，同时保留 final state 与 metrics。Status 不只依赖
-color，并尊重 reduced motion。
+Archived row 增加 archive time、省略 execution state，同时保留 metrics。Status
+不只依赖 color，并尊重 reduced motion。
 
 ### List behavior 与 states
 
@@ -163,8 +164,9 @@ Archived detail 用以下 read-only bar 替代 composer：
 Archived Sep 1, 2026 · This thread is read-only. Unarchive to continue.
 ```
 
-Unarchive 恢复同一 current Generation 与 prior state，然后在不改变 route 的情况下
-启用 composer。Agent offline 的 active Thread 也暂时 read-only，但 copy 不同。
+Unarchive 恢复同一 current Generation，并把 execution state 初始化为 `idle`，然后
+在不改变 route 的情况下启用 composer。Agent offline 的 active Thread 也暂时
+read-only，但 copy 不同。
 
 ### Actions
 
@@ -216,8 +218,8 @@ Main 不需要特殊 discovery route；client 已知 id `0`。
   "alias": "reviewer",
   "parent_thread_id": "0",
   "created_at": "2026-09-01T08:00:00.000Z",
-  "archived_at": null,
-  "state": "working",
+  "retention_state": "active",
+  "execution_state": "working",
   "pending_input_count": 0,
   "turn_count": 8,
   "generation_count": 2,

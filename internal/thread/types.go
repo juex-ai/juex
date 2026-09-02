@@ -50,11 +50,19 @@ const (
 	FactProjectionCheck    = "projection.checkpoint"
 )
 
+type RetentionState string
+
 const (
-	StateIdle     = "idle"
-	StateWorking  = "working"
-	StateFailed   = "failed"
-	StateArchived = "archived"
+	RetentionActive   RetentionState = "active"
+	RetentionArchived RetentionState = "archived"
+)
+
+type ExecutionState string
+
+const (
+	ExecutionIdle    ExecutionState = "idle"
+	ExecutionWorking ExecutionState = "working"
+	ExecutionFailed  ExecutionState = "failed"
 )
 
 var (
@@ -146,7 +154,8 @@ type Projection struct {
 	ParentThreadID    string               `json:"parent_thread_id,omitempty"`
 	CreatedAt         Timestamp            `json:"created_at"`
 	ArchivedAt        *Timestamp           `json:"archived_at,omitempty"`
-	State             string               `json:"state"`
+	RetentionState    RetentionState       `json:"retention_state"`
+	ExecutionState    ExecutionState       `json:"execution_state,omitempty"`
 	Revision          uint64               `json:"revision"`
 	CurrentGeneration GenerationProjection `json:"current_generation"`
 	Counts            Counts               `json:"counts"`
@@ -160,20 +169,21 @@ type Projection struct {
 }
 
 type IndexEntry struct {
-	ThreadID             string     `json:"thread_id"`
-	Alias                string     `json:"alias"`
-	ParentThreadID       string     `json:"parent_thread_id,omitempty"`
-	ArchivedAt           *Timestamp `json:"archived_at,omitempty"`
-	CreatedAt            Timestamp  `json:"created_at"`
-	LastActivityAt       Timestamp  `json:"last_activity_at"`
-	State                string     `json:"state"`
-	PendingInputCount    int        `json:"pending_input_count"`
-	TurnCount            int        `json:"turn_count"`
-	GenerationCount      int        `json:"generation_count"`
-	CurrentGenerationID  string     `json:"current_generation_id"`
-	CurrentContextTokens int        `json:"current_context_tokens"`
-	TokenUsage           llm.Usage  `json:"token_usage"`
-	ThreadRevision       uint64     `json:"thread_revision"`
+	ThreadID             string         `json:"thread_id"`
+	Alias                string         `json:"alias"`
+	ParentThreadID       string         `json:"parent_thread_id,omitempty"`
+	ArchivedAt           *Timestamp     `json:"archived_at,omitempty"`
+	CreatedAt            Timestamp      `json:"created_at"`
+	LastActivityAt       Timestamp      `json:"last_activity_at"`
+	RetentionState       RetentionState `json:"retention_state"`
+	ExecutionState       ExecutionState `json:"execution_state,omitempty"`
+	PendingInputCount    int            `json:"pending_input_count"`
+	TurnCount            int            `json:"turn_count"`
+	GenerationCount      int            `json:"generation_count"`
+	CurrentGenerationID  string         `json:"current_generation_id"`
+	CurrentContextTokens int            `json:"current_context_tokens"`
+	TokenUsage           llm.Usage      `json:"token_usage"`
+	ThreadRevision       uint64         `json:"thread_revision"`
 }
 
 type Index struct {
@@ -193,7 +203,8 @@ type Info struct {
 	CreatedAt      Timestamp         `json:"created_at"`
 	LastActivityAt Timestamp         `json:"last_activity_at"`
 	ArchivedAt     *Timestamp        `json:"archived_at,omitempty"`
-	State          string            `json:"state"`
+	RetentionState RetentionState    `json:"retention_state"`
+	ExecutionState ExecutionState    `json:"execution_state,omitempty"`
 	Revision       uint64            `json:"revision"`
 	GenerationID   string            `json:"generation_id"`
 	TurnCount      int               `json:"turn_count"`

@@ -87,10 +87,17 @@ Worker 可以调用 Agent 共享的 MCP Tools，但 MCP Notification 不会直�
 
 ## Archive 与 Delete
 
+Thread lifecycle 有两个正交投影：
+
+- `retention_state` 是 `active` 或 `archived`，决定本地 Thread bytes 是否参与执行。
+  永久删除会移除 Thread，因此 `deleted` 是操作结果，不是已删除 Thread 继续持久化的值。
+- `execution_state` 只属于 active Thread，取值为 `idle`、`working` 或 `failed`。
+  Archived Thread 不携带执行态，因为它不再参与 Agent 执行生命周期。
+
 Archive/unarchive 针对整个 idle Worker：
 
 - archive 把目录从 `threads/<id>` 移到 `archive/threads/<id>`；
-- unarchive 恢复同一个目录和状态；
+- unarchive 恢复同一个目录，并把执行态重置为 `idle`；
 - 两者都不会创建 Generation；
 - 归档 Thread 只读，不能接收 Input。
 - 存在 active child 的 Worker 不能归档，必须先归档 child。
@@ -112,3 +119,4 @@ Delete 只允许删除没有存活子引用的归档 Worker。实现通过 Agent
 10. Observation 只路由 Main。
 11. Archive/unarchive 不改变 Context Generation。
 12. Thread Journal 是唯一的持久对话与 Runtime History 模型。
+13. Active Thread 恰好有一个执行态；Archived Thread 没有执行态。

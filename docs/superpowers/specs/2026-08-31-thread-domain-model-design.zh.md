@@ -103,7 +103,7 @@ Generation 是 append-only Thread Journal 中的逻辑分段，序号从一开�
 | 初始创建 Thread | 只有基础 Prompt | 空 Goal、Notes 与 Scratchpad |
 | `/new` | 只有基础 Prompt | Scratchpad 文件；Goal 与 Notes 被清除 |
 | `/compact` | 基础 Prompt 加 compact summary bootstrap | Goal、Notes、Scratchpad 与当前 Runtime 的活跃结果订阅 |
-| Archive/unarchive | 不改变 Generation | 同一当前 Generation 与 Thread 状态 |
+| Archive/unarchive | 不改变 Generation | 保留当前 Generation、Journal、Goal、Notes 与 Scratchpad；archive 清空执行态，unarchive 重置为 `idle` |
 
 `context.renewed` 与 `context.compacted` 是显示在历史边界上的持久 System
 activity。二者都不投影为 User 或 Assistant Message。Prompt Assembler 只从
@@ -160,8 +160,8 @@ Juex 不能承诺 exactly-once effect，也不能盲目重试。
   commit 时才能 archive。
 - Archive 把完整 Thread 目录移动到 Agent archive namespace 并设为只读，不关闭
   或创建 Generation。
-- Unarchive 把同一目录移回，校验 Journal tail，恢复之前的执行状态与当前
-  Generation；发布成功后才能接收新工作。
+- Unarchive 把同一目录移回，校验 Journal tail，保留当前 Generation，把执行态
+  重置为 `idle`；发布成功后才能接收新工作。
 - Archive/unarchive 都只作用于当前 Thread；descendant 不移动，parent id 不重写。
 - Permanent delete 只允许作用于没有 child 的 Archived Worker；archive 已保证
   当前 Runtime 的 subscription 与 result handoff 已 settled。删除先原子移动到
@@ -169,8 +169,10 @@ Juex 不能承诺 exactly-once effect，也不能盲目重试。
 - 将来的 archive retention policy 必须调用同一个带校验的 delete service，不能
   绕过生命周期规则。
 
-执行状态是 `idle`、`working` 或 `failed`。Archived 是独立 lifecycle property，
-不是第四种执行状态。
+Thread lifecycle 是两个正交投影。`retention_state` 是 `active` 或 `archived`；
+`execution_state` 是 `idle`、`working` 或 `failed`，且只在 retention 为 active 时
+存在。Archive 清空执行态。永久 delete 会移除 Thread，因此 `deleted` 是操作结果
+以及从 index 消失，不是继续持久化在存活 Thread 上的值。
 
 ## 领域不变量
 
@@ -190,6 +192,7 @@ Juex 不能承诺 exactly-once effect，也不能盲目重试。
 12. Subscription ownership 在目标 Thread 之外。
 13. Archived Thread 持久且只读；delete 必须显式且经过校验。
 14. Fleet 拥有 Agent lifecycle 与 routing，不拥有 Thread execution。
+15. Active Thread 有一个执行态；Archived Thread 没有执行态。
 
 ## 删除的概念
 

@@ -126,15 +126,19 @@ export interface ContextArtifactProjection {
   truncated: boolean;
 }
 
+export type ThreadRetentionState = "active" | "archived";
+
+export type ThreadExecutionState = "idle" | "working" | "failed";
+
 export interface ThreadInfo {
   id: string;
   alias: string;
   parent_thread_id?: string;
   dir: string;
-  active: boolean;
+  retention_state: ThreadRetentionState;
+  execution_state?: ThreadExecutionState;
   created_at: string;
   last_active_at: string;
-  state: string;
   revision: number;
   generation_id: string;
   turns: number;
@@ -165,9 +169,10 @@ export interface ThreadListItem {
   alias: string;
   parent_thread_id?: string;
   archived_at?: string;
+  retention_state: ThreadRetentionState;
+  execution_state?: ThreadExecutionState;
   created_at: string;
   last_activity_at: string;
-  state: string;
   pending_input_count: number;
   turn_count: number;
   generation_count: number;

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 func TestAgentClientResolvesThreadIDAndAliasAcrossIndexSections(t *testing.T) {
@@ -35,6 +37,24 @@ func TestAgentClientResolvesThreadIDAndAliasAcrossIndexSections(t *testing.T) {
 	}
 	if got, err := client.resolveThread(context.Background(), "old", true); err != nil || got.ThreadID != "def456" {
 		t.Fatalf("archived alias = %+v, err=%v", got, err)
+	}
+}
+
+func TestRenderThreadsTableSeparatesRetentionAndExecutionState(t *testing.T) {
+	var output bytes.Buffer
+	cmd := newThreadsListCmd(&persistentFlags{})
+	cmd.SetOut(&output)
+	renderThreadsTable(cmd, []thread.IndexEntry{
+		{ThreadID: "abc123", Alias: "active", RetentionState: thread.RetentionActive, ExecutionState: thread.ExecutionFailed},
+		{ThreadID: "def456", Alias: "archived", RetentionState: thread.RetentionArchived},
+	})
+
+	text := output.String()
+	if !strings.Contains(text, "RETENTION") || !strings.Contains(text, "EXECUTION") {
+		t.Fatalf("table header does not expose both lifecycle axes:\n%s", text)
+	}
+	if !strings.Contains(text, "active     failed") || !strings.Contains(text, "archived   -") {
+		t.Fatalf("table rows do not preserve lifecycle meaning:\n%s", text)
 	}
 }
 

@@ -414,8 +414,10 @@ archive fact, closes the handle, atomically moves `threads/<tid>` to
 `archive/threads/<tid>`, and updates projections.
 
 Unarchive atomically moves the same directory back, validates its tail, appends
-the unarchive fact, and republishes the prior current Generation and execution
-state. It never creates a Generation.
+the unarchive fact, republishes the prior current Generation, and initializes
+execution state as `idle`. It never creates a Generation. Archive uses
+`retention_state=archived` with no execution state; unarchive restores
+`retention_state=active`.
 
 Delete validates an archived Worker, expected revision, and no child reference.
 The archive precondition has already settled active subscriptions and handoffs.

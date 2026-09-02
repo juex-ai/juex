@@ -7,6 +7,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 func TestContextNewToolCreatesGenerationAndEndsTurn(t *testing.T) {
@@ -34,7 +35,7 @@ func TestContextNewToolCreatesGenerationAndEndsTurn(t *testing.T) {
 	if len(state.ProviderMessages) != 0 || len(state.Activities) != 1 || state.Activities[0].Type != "context.renewed" {
 		t.Fatalf("renewed replay = %+v", state)
 	}
-	if state.Projection.Counts.TurnCount != 1 || state.Projection.State != "idle" {
+	if state.Projection.Counts.TurnCount != 1 || state.Projection.ExecutionState != thread.ExecutionIdle {
 		t.Fatalf("projection = %+v", state.Projection)
 	}
 }

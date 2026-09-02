@@ -77,7 +77,7 @@ func (s *Server) listThreads(w http.ResponseWriter) {
 	}
 	response := threadListResponse{Active: []thread.IndexEntry{}, Archived: []thread.IndexEntry{}}
 	for _, entry := range entries {
-		if entry.ArchivedAt == nil {
+		if entry.RetentionState == thread.RetentionActive {
 			response.Active = append(response.Active, entry)
 		} else {
 			response.Archived = append(response.Archived, entry)

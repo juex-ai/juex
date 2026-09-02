@@ -133,7 +133,7 @@ func shouldAppendCheckpoint(state ReplayState, commit Commit) bool {
 	if len(commit.Facts) == 1 && commit.Facts[0].Type == FactProjectionCheck {
 		return false
 	}
-	if state.Projection.State == StateWorking {
+	if state.Projection.ExecutionState == ExecutionWorking {
 		return false
 	}
 	last := state.Projection.Journal.LastCheckpointSeq

@@ -132,14 +132,18 @@ func renderThreadsTable(cmd *cobra.Command, entries []thread.IndexEntry) {
 		cmdPrintln(cmd, "(no Threads)")
 		return
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%-8s  %-18s  %-8s  %-9s  %7s  %5s  %4s  %8s  %s\n", "TID", "ALIAS", "PARENT", "STATE", "PENDING", "TURNS", "GEN", "CONTEXT", "CREATED")
+	fmt.Fprintf(cmd.OutOrStdout(), "%-8s  %-18s  %-8s  %-9s  %-9s  %7s  %5s  %4s  %8s  %s\n", "TID", "ALIAS", "PARENT", "RETENTION", "EXECUTION", "PENDING", "TURNS", "GEN", "CONTEXT", "CREATED")
 	for _, entry := range entries {
 		parent := "-"
 		if entry.ParentThreadID != "" {
 			parent = "#" + entry.ParentThreadID
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%-8s  %-18s  %-8s  %-9s  %7d  %5d  %4d  %8d  %s\n",
-			"#"+entry.ThreadID, truncateRunes(entry.Alias, 18), parent, entry.State,
+		execution := string(entry.ExecutionState)
+		if execution == "" {
+			execution = "-"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%-8s  %-18s  %-8s  %-9s  %-9s  %7d  %5d  %4d  %8d  %s\n",
+			"#"+entry.ThreadID, truncateRunes(entry.Alias, 18), parent, entry.RetentionState, execution,
 			entry.PendingInputCount, entry.TurnCount, entry.GenerationCount,
 			entry.CurrentContextTokens, entry.CreatedAt.Format("2006-01-02"))
 	}
@@ -170,8 +174,12 @@ func newThreadsShowCmd(flags *persistentFlags) *cobra.Command {
 					cmdPrintln(cmd, mustJSON(view))
 					return nil
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "thread_id:   %s\nalias:       %s\nparent:      %s\nstate:       %s\ngeneration:  %s\nturns:       %d\npending:     %d\njournal:     %s\nscratchpad:  %s\n",
-					response.ID, response.Alias, response.ParentThreadID, response.State, response.GenerationID,
+				execution := string(response.ExecutionState)
+				if execution == "" {
+					execution = "-"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "thread_id:      %s\nalias:          %s\nparent:         %s\nretention:      %s\nexecution:      %s\ngeneration:     %s\nturns:          %d\npending:        %d\njournal:        %s\nscratchpad:     %s\n",
+					response.ID, response.Alias, response.ParentThreadID, response.RetentionState, execution, response.GenerationID,
 					response.TurnCount, response.PendingInputs, view["journal"], view["scratchpad"])
 				return nil
 			})

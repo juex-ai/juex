@@ -7,11 +7,11 @@ import {
 } from "../../frontend/src/lib/thread-access.ts";
 
 test("threadCanSend allows active Main and Worker threads", () => {
-  assert.equal(threadCanSend({ active: true }), true);
-  assert.equal(threadCanSend({ active: false }), false);
+  assert.equal(threadCanSend({ retention_state: "active" }), true);
+  assert.equal(threadCanSend({ retention_state: "archived" }), false);
 });
 
 test("threadReadOnlyMessage explains archived threads", () => {
-  assert.equal(threadReadOnlyMessage({ active: true }), "");
-  assert.equal(threadReadOnlyMessage({ active: false }), "Archived thread");
+  assert.equal(threadReadOnlyMessage({ retention_state: "active" }), "");
+  assert.equal(threadReadOnlyMessage({ retention_state: "archived" }), "Archived thread");
 });

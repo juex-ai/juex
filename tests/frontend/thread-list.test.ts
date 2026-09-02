@@ -28,11 +28,11 @@ test("threadListTitle combines alias and id", () => {
 
 test("threadListBadges shows lifecycle and generation counts", () => {
   assert.deepEqual(
-    threadListBadges({ turn_count: 3, generation_count: 2 }),
+    threadListBadges({ retention_state: "active", turn_count: 3, generation_count: 2 }),
     ["active", "3 turns", "2 gen"],
   );
   assert.deepEqual(
-    threadListBadges({ archived_at: "2026-09-01T00:00:00.000Z", turn_count: 1, generation_count: 1 }),
+    threadListBadges({ retention_state: "archived", turn_count: 1, generation_count: 1 }),
     ["archived", "1 turn", "1 gen"],
   );
 });
