@@ -20,11 +20,12 @@ import (
 const indexFile = "threads.index.json"
 
 type Store struct {
-	mu            *sync.Mutex
-	agentStateDir string
-	random        io.Reader
-	now           func() time.Time
-	writeIndex    func(string, []byte) error
+	mu              *sync.Mutex
+	agentStateDir   string
+	random          io.Reader
+	now             func() time.Time
+	writeIndex      func(string, []byte) error
+	writeProjection func(string, []byte) error
 }
 
 var storeLocks sync.Map
@@ -170,7 +171,28 @@ func (s *Store) OpenArchived(id string) (*Thread, error) {
 }
 
 func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
-	dir := filepath.Join(s.ThreadsDir(), id)
+	threadsDir := s.ThreadsDir()
+	_, statErr := os.Stat(threadsDir)
+	threadsDirCreated := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !threadsDirCreated {
+		return nil, statErr
+	}
+	if err := os.MkdirAll(threadsDir, 0o755); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp(threadsDir, "."+id+".creating-")
+	if err != nil {
+		return nil, err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "scratchpad"), 0o755); err != nil {
 		return nil, err
 	}
@@ -200,15 +222,46 @@ func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 	state.Projection.Revision = 1
 	thread := &Thread{ID: id, Dir: dir, journal: journal, state: state, store: s}
 	thread.refreshPublicLocked()
-	if err := thread.persistProjectionLocked(); err != nil {
+	if err := s.persistInitialProjectionLocked(thread); err != nil {
 		_ = thread.Close()
 		return nil, err
+	}
+	if err := thread.Close(); err != nil {
+		return nil, err
+	}
+	destination := filepath.Join(threadsDir, id)
+	if _, err := os.Stat(destination); err == nil {
+		return nil, fmt.Errorf("thread: create target %s already exists", id)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err := os.Rename(dir, destination); err != nil {
+		return nil, err
+	}
+	published = true
+	if err := homestore.SyncDir(threadsDir); err != nil {
+		return nil, err
+	}
+	if threadsDirCreated {
+		if err := homestore.SyncDir(filepath.Dir(threadsDir)); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.updateProjectionLocked(); err != nil {
-		_ = thread.Close()
 		return nil, err
 	}
-	return thread, nil
+	return s.openLocked(destination, id)
+}
+
+func (s *Store) persistInitialProjectionLocked(thread *Thread) error {
+	if s.writeProjection == nil {
+		return thread.persistProjectionLocked()
+	}
+	data, err := thread.projectionDataLocked()
+	if err != nil {
+		return err
+	}
+	return s.writeProjection(filepath.Join(thread.Dir, projectionFile), data)
 }
 
 func (s *Store) openLocked(dir, id string) (*Thread, error) {

@@ -443,15 +443,23 @@ func (t *Thread) Close() error {
 }
 
 func (t *Thread) persistProjectionLocked() error {
-	if err := validateProjectionMetadata(t.state.Projection, t.ID); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(t.state.Projection, "", "  ")
+	data, err := t.projectionDataLocked()
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
 	return homestore.WriteFileAtomic(filepath.Join(t.Dir, projectionFile), data, 0o600, 0o755)
+}
+
+func (t *Thread) projectionDataLocked() ([]byte, error) {
+	if err := validateProjectionMetadata(t.state.Projection, t.ID); err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(t.state.Projection, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	data = append(data, '\n')
+	return data, nil
 }
 
 func (t *Thread) mutateProjectionLocked(mutate func(*Projection, Timestamp)) error {

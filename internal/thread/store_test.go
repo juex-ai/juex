@@ -529,6 +529,58 @@ func TestEnsureMainDoesNotReconstructMissingMetadata(t *testing.T) {
 	}
 }
 
+func TestStoreCreationFailureDoesNotPublishIncompleteThread(t *testing.T) {
+	t.Run("Main", func(t *testing.T) {
+		store := NewStore(t.TempDir())
+		injected := errors.New("injected metadata write failure")
+		store.writeProjection = func(string, []byte) error { return injected }
+
+		if _, err := store.EnsureMain(); !errors.Is(err, injected) {
+			t.Fatalf("EnsureMain error = %v, want injected failure", err)
+		}
+		entries, err := os.ReadDir(store.ThreadsDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("Thread entries after failed creation = %v, want none", entries)
+		}
+
+		store.writeProjection = nil
+		main, err := store.EnsureMain()
+		if err != nil {
+			t.Fatalf("retry EnsureMain: %v", err)
+		}
+		defer func() { _ = main.Close() }()
+	})
+
+	t.Run("Worker", func(t *testing.T) {
+		store := NewStore(t.TempDir())
+		store.random = zeroReader{}
+		main, err := store.EnsureMain()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = main.Close() }()
+
+		injected := errors.New("injected metadata write failure")
+		store.writeProjection = func(string, []byte) error { return injected }
+		if _, err := store.CreateWorker(MainID, "retry-worker"); !errors.Is(err, injected) {
+			t.Fatalf("CreateWorker error = %v, want injected failure", err)
+		}
+		if _, err := os.Stat(filepath.Join(store.ThreadsDir(), "000000")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("published Worker after failed creation: %v", err)
+		}
+
+		store.writeProjection = nil
+		worker, err := store.CreateWorker(MainID, "retry-worker")
+		if err != nil {
+			t.Fatalf("retry CreateWorker: %v", err)
+		}
+		defer func() { _ = worker.Close() }()
+	})
+}
+
 func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
 	store := NewStore(t.TempDir())
 	store.random = zeroReader{}
