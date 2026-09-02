@@ -58,6 +58,7 @@ func createStandalone(dir, id, alias, parentID string, now func() time.Time) (*T
 		_ = journal.Close()
 		return nil, err
 	}
+	state.Projection.Revision = 1
 	target := &Thread{ID: id, Dir: dir, journal: journal, state: state}
 	target.refreshPublicLocked()
 	if err := target.persistProjectionLocked(); err != nil {
@@ -69,6 +70,10 @@ func createStandalone(dir, id, alias, parentID string, now func() time.Time) (*T
 
 func Load(dir string) (*Thread, error) {
 	id := filepath.Base(filepath.Clean(dir))
+	metadata, err := readProjectionFile(dir, id)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(filepath.Join(dir, journalFile)); err != nil {
 		return nil, err
 	}
@@ -76,17 +81,21 @@ func Load(dir string) (*Thread, error) {
 	if err != nil {
 		return nil, err
 	}
-	target := &Thread{ID: id, Dir: dir, journal: journal, state: state}
-	target.refreshPublicLocked()
-	if err := target.persistProjectionLocked(); err != nil {
-		_ = target.Close()
+	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
+		_ = journal.Close()
 		return nil, err
 	}
+	target := &Thread{ID: id, Dir: dir, journal: journal, state: state}
+	target.refreshPublicLocked()
 	return target, nil
 }
 
 func LoadInfo(dir string) (Info, []llm.Message, error) {
 	id := filepath.Base(filepath.Clean(dir))
+	metadata, err := readProjectionFile(dir, id)
+	if err != nil {
+		return Info{}, nil, err
+	}
 	if _, err := os.Stat(filepath.Join(dir, journalFile)); err != nil {
 		return Info{}, nil, err
 	}
@@ -101,6 +110,9 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 	}
 	if closeErr != nil {
 		return Info{}, nil, closeErr
+	}
+	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
+		return Info{}, nil, err
 	}
 	target := &Thread{ID: id, Dir: dir, state: state}
 	target.refreshPublicLocked()

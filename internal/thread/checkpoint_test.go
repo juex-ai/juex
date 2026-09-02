@@ -34,7 +34,7 @@ func TestCheckpointColdOpenRestoresContextAndReplaysSuffix(t *testing.T) {
 	}
 	checkpointProjection := target.Projection()
 	if checkpointProjection.Journal.LastCheckpointSeq == 0 ||
-		checkpointProjection.Journal.LastCheckpointSeq != checkpointProjection.Revision {
+		checkpointProjection.Journal.LastCheckpointSeq != checkpointProjection.Journal.ProjectedSeq {
 		t.Fatalf("terminal Turn did not append checkpoint: %+v", checkpointProjection.Journal)
 	}
 	if err := target.Append(llm.TextMessage(llm.RoleUser, "suffix")); err != nil {
@@ -44,7 +44,7 @@ func TestCheckpointColdOpenRestoresContextAndReplaysSuffix(t *testing.T) {
 	if err := target.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "threads", MainID, projectionFile), []byte("corrupt projection\n"), 0o600); err != nil {
+	if err := os.WriteFile(store.IndexPath(), []byte("corrupt index\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

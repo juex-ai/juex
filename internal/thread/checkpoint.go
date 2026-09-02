@@ -55,8 +55,7 @@ func replayStateFromCheckpoint(threadID string, scanned scannedCommit, checkpoin
 		return ReplayState{}, fmt.Errorf("%w: unsupported checkpoint version", ErrCorruptJournal)
 	}
 	projection := checkpoint.Projection
-	if projection.ThreadID != threadID || projection.Revision+1 != scanned.Seq ||
-		projection.Journal.ProjectedSeq != projection.Revision ||
+	if projection.ThreadID != threadID || projection.Journal.ProjectedSeq+1 != scanned.Seq ||
 		projection.Journal.ProjectedOffset != scanned.StartOffset {
 		return ReplayState{}, fmt.Errorf("%w: checkpoint sequence or Thread identity mismatch", ErrCorruptJournal)
 	}
@@ -121,8 +120,7 @@ func factsRequireCheckpoint(facts []Fact) bool {
 	for _, fact := range facts {
 		switch fact.Type {
 		case FactTurnCompleted, FactTurnFailed, FactTurnCancelled,
-			FactContextRenewed, FactContextCompacted,
-			FactThreadArchived, FactThreadUnarchived:
+			FactContextRenewed, FactContextCompacted:
 			return true
 		}
 	}

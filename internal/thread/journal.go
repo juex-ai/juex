@@ -131,7 +131,7 @@ func openJournalForReplay(path, threadID string, now func() time.Time) (*Journal
 			_ = file.Close()
 			return nil, ReplayState{}, err
 		}
-		nextSeq = state.Projection.Revision + 1
+		nextSeq = state.Projection.Journal.ProjectedSeq + 1
 	}
 	return &Journal{
 		path: path, threadID: threadID, file: file,
@@ -218,7 +218,7 @@ func replayFromLatestCheckpoint(file *os.File, threadID string, size int64) (Rep
 					return ReplayState{}, 0, false, fmt.Errorf("%w at sequence %d: %v", ErrCorruptJournal, reverseSuffix[index].Seq, err)
 				}
 			}
-			return state, state.Projection.Revision + 1, true, nil
+			return state, state.Projection.Journal.ProjectedSeq + 1, true, nil
 		}
 		reverseSuffix = append(reverseSuffix, scanned)
 	}
@@ -339,14 +339,6 @@ func validateFactShape(threadID string, fact Fact) error {
 		}
 		if threadID != MainID && !ValidID(fact.ParentThreadID) {
 			return fmt.Errorf("%w: Worker parent is invalid", ErrInvalidFact)
-		}
-	case FactThreadRenamed:
-		if fact.Alias == "" || threadID == MainID {
-			return fmt.Errorf("%w: invalid thread.renamed", ErrInvalidFact)
-		}
-	case FactThreadArchived, FactThreadUnarchived:
-		if threadID == MainID {
-			return fmt.Errorf("%w: Main lifecycle transition", ErrInvalidFact)
 		}
 	case FactMessageAppended:
 		if fact.Message == nil || fact.Message.Role == "" || fact.GenerationID == "" {

@@ -56,6 +56,10 @@ func TestStoreCreatesAndReplaysMainAndWorker(t *testing.T) {
 	if projection.CurrentGeneration.ID != InitialGeneration || projection.Counts.GenerationCount != 1 {
 		t.Fatalf("Projection = %#v", projection)
 	}
+	if projection.UpdatedAt.IsZero() || projection.Revision == 0 || len(projection.Generations) != 1 ||
+		projection.Generations[0] != projection.CurrentGeneration {
+		t.Fatalf("authoritative metadata = %#v", projection)
+	}
 	if _, err := os.Stat(reopened.ScratchpadDir()); err != nil {
 		t.Fatal(err)
 	}
@@ -202,13 +206,90 @@ func TestListRebuildsIndexWithInvalidLifecycleProjection(t *testing.T) {
 	}
 }
 
-func TestListRebuildsMissingOrInvalidProjectionFromJournal(t *testing.T) {
+func TestListRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing.T) {
 	for _, test := range []struct {
-		name            string
-		breakProjection func(string) error
+		name       string
+		breakIndex func(*testing.T, *Store)
 	}{
-		{name: "missing", breakProjection: os.Remove},
-		{name: "invalid", breakProjection: func(path string) error { return os.WriteFile(path, []byte("not-json\n"), 0o600) }},
+		{name: "missing", breakIndex: func(t *testing.T, store *Store) {
+			t.Helper()
+			if err := os.Remove(store.IndexPath()); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "malformed", breakIndex: func(t *testing.T, store *Store) {
+			t.Helper()
+			if err := os.WriteFile(store.IndexPath(), []byte("not-json\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "stale", breakIndex: func(t *testing.T, store *Store) {
+			t.Helper()
+			data, err := os.ReadFile(store.IndexPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var index Index
+			if err := json.Unmarshal(data, &index); err != nil {
+				t.Fatal(err)
+			}
+			index.Threads[1].Alias = "stale-alias"
+			index.Threads[1].ThreadRevision--
+			mustWriteJSON(t, store.IndexPath(), index)
+		}},
+		{name: "incomplete", breakIndex: func(t *testing.T, store *Store) {
+			t.Helper()
+			data, err := os.ReadFile(store.IndexPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var index Index
+			if err := json.Unmarshal(data, &index); err != nil {
+				t.Fatal(err)
+			}
+			index.Threads = index.Threads[:1]
+			mustWriteJSON(t, store.IndexPath(), index)
+		}},
+		{name: "misordered", breakIndex: func(t *testing.T, store *Store) {
+			t.Helper()
+			data, err := os.ReadFile(store.IndexPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var index Index
+			if err := json.Unmarshal(data, &index); err != nil {
+				t.Fatal(err)
+			}
+			index.Threads[0], index.Threads[1] = index.Threads[1], index.Threads[0]
+			mustWriteJSON(t, store.IndexPath(), index)
+		}},
+		{name: "extra", breakIndex: func(t *testing.T, store *Store) {
+			t.Helper()
+			data, err := os.ReadFile(store.IndexPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var index Index
+			if err := json.Unmarshal(data, &index); err != nil {
+				t.Fatal(err)
+			}
+			extra := index.Threads[1]
+			extra.ThreadID = "999999"
+			extra.Alias = "extra"
+			index.Threads = append(index.Threads, extra)
+			mustWriteJSON(t, store.IndexPath(), index)
+		}},
+		{name: "unknown-field", breakIndex: func(t *testing.T, store *Store) {
+			t.Helper()
+			data, err := os.ReadFile(store.IndexPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = bytes.Replace(data, []byte("{"), []byte(`{"unknown":true,`), 1)
+			if err := os.WriteFile(store.IndexPath(), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := NewStore(t.TempDir())
@@ -230,12 +311,13 @@ func TestListRebuildsMissingOrInvalidProjectionFromJournal(t *testing.T) {
 			if err := main.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if err := test.breakProjection(filepath.Join(workerDir, projectionFile)); err != nil {
-				t.Fatal(err)
+			for _, id := range []string{MainID, workerID} {
+				path := filepath.Join(store.ThreadsDir(), id, journalFile)
+				if err := os.Rename(path, path+".unavailable"); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := os.Remove(store.IndexPath()); err != nil {
-				t.Fatal(err)
-			}
+			test.breakIndex(t, store)
 
 			entries, err := NewStore(store.AgentStateDir()).List()
 			if err != nil {
@@ -244,18 +326,154 @@ func TestListRebuildsMissingOrInvalidProjectionFromJournal(t *testing.T) {
 			if len(entries) != 2 || entries[1].ThreadID != workerID || entries[1].Alias != "recover-me" {
 				t.Fatalf("rebuilt entries = %#v", entries)
 			}
-			data, err := os.ReadFile(filepath.Join(workerDir, projectionFile))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var projection Projection
-			if err := json.Unmarshal(data, &projection); err != nil || projection.ThreadID != workerID {
-				t.Fatalf("regenerated projection = %#v, %v", projection, err)
+			projection := mustReadProjection(t, filepath.Join(workerDir, projectionFile))
+			if projection.ThreadID != workerID {
+				t.Fatalf("metadata = %#v", projection)
 			}
 			if _, err := store.CreateWorker(MainID, "recover-me"); err == nil {
 				t.Fatal("duplicate alias unexpectedly succeeded after index rebuild")
 			}
 		})
+	}
+}
+
+func TestListRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{name: "missing", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "malformed", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte("not-json\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "unsupported-version", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.Version++
+			mustWriteJSON(t, path, projection)
+		}},
+		{name: "identity-mismatch", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.ThreadID = "111111"
+			mustWriteJSON(t, path, projection)
+		}},
+		{name: "generation-mismatch", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.Counts.GenerationCount++
+			mustWriteJSON(t, path, projection)
+		}},
+		{name: "unknown-field", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = bytes.Replace(data, []byte("{"), []byte(`{"unknown":true,`), 1)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			store.random = zeroReader{}
+			main, err := store.EnsureMain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker, err := store.CreateWorker(MainID, "authoritative")
+			if err != nil {
+				t.Fatal(err)
+			}
+			workerPath := filepath.Join(worker.Dir, projectionFile)
+			if err := worker.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := main.Close(); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(t, workerPath)
+			if err := os.Remove(store.IndexPath()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewStore(store.AgentStateDir()).List(); err == nil {
+				t.Fatal("List error = nil, want authoritative metadata failure")
+			}
+		})
+	}
+}
+
+func TestEnsureMainDoesNotReconstructMissingMetadata(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(main.Dir, projectionFile)
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(metadataPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewStore(store.AgentStateDir()).EnsureMain(); !errors.Is(err, ErrInvalidMetadata) {
+		t.Fatalf("EnsureMain error = %v, want invalid metadata", err)
+	}
+}
+
+func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
+	store := NewStore(t.TempDir())
+	store.random = zeroReader{}
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	worker, err := store.CreateWorker(MainID, "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Close() }()
+	before := worker.Projection()
+	journalInfo, err := os.Stat(filepath.Join(worker.Dir, journalFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected index write failure")
+	store.writeIndex = func(string, []byte) error { return injected }
+	if err := worker.ApplyAlias("after"); !errors.Is(err, injected) {
+		t.Fatalf("ApplyAlias error = %v, want injected failure", err)
+	}
+	metadata := mustReadProjection(t, filepath.Join(worker.Dir, projectionFile))
+	if metadata.Alias != "after" || metadata.Revision != before.Revision+1 || !metadata.UpdatedAt.After(before.UpdatedAt.Time) {
+		t.Fatalf("committed metadata = %#v, before = %#v", metadata, before)
+	}
+	afterJournalInfo, err := os.Stat(filepath.Join(worker.Dir, journalFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterJournalInfo.Size() != journalInfo.Size() {
+		t.Fatalf("rename changed Journal size from %d to %d", journalInfo.Size(), afterJournalInfo.Size())
+	}
+	entries, err := NewStore(store.AgentStateDir()).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.ThreadID == worker.ID && (entry.Alias != "after" || entry.ThreadRevision != metadata.Revision) {
+			t.Fatalf("repaired entry = %#v, metadata = %#v", entry, metadata)
+		}
 	}
 }
 
@@ -299,6 +517,9 @@ func TestNewGenerationClearsContextUsageAndPreservesCumulativeTokens(t *testing.
 		t.Fatal(err)
 	}
 	projection := main.Projection()
+	if len(projection.Generations) != 2 || projection.Generations[1] != projection.CurrentGeneration {
+		t.Fatalf("Generation registry = %#v, current = %#v", projection.Generations, projection.CurrentGeneration)
+	}
 	if projection.ContextUsage != nil || main.ContextUsageSnapshot() != nil {
 		t.Fatalf("renewed Generation retained Context Usage: projection=%+v runtime=%+v", projection.ContextUsage, main.ContextUsageSnapshot())
 	}
@@ -315,6 +536,31 @@ func TestNewGenerationClearsContextUsageAndPreservesCumulativeTokens(t *testing.
 	defer func() { _ = reopened.Close() }()
 	if reopened.Projection().ContextUsage != nil || reopened.ContextUsageSnapshot() != nil {
 		t.Fatalf("replay restored stale Context Usage: projection=%+v runtime=%+v", reopened.Projection().ContextUsage, reopened.ContextUsageSnapshot())
+	}
+}
+
+func mustReadProjection(t *testing.T, path string) Projection {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projection Projection
+	if err := json.Unmarshal(data, &projection); err != nil {
+		t.Fatal(err)
+	}
+	return projection
+}
+
+func mustWriteJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

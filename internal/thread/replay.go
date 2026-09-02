@@ -33,10 +33,10 @@ func applyCommit(threadID string, state *ReplayState, commit scannedCommit) erro
 	if err := validateProjectionLifecycle(state.Projection); err != nil {
 		return err
 	}
-	state.Projection.Revision = commit.Seq
 	if len(commit.Facts) != 1 || commit.Facts[0].Type != FactProjectionCheck {
 		state.Projection.LastActivityAt = commit.At
 	}
+	state.Projection.UpdatedAt = commit.At
 	state.Projection.Journal.ProjectedSeq = commit.Seq
 	state.Projection.Journal.ProjectedOffset = commit.EndOffset
 	return nil
@@ -79,6 +79,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		p.Alias = fact.Alias
 		p.ParentThreadID = fact.ParentThreadID
 		p.CreatedAt = commit.At
+		p.UpdatedAt = commit.At
 		p.LastActivityAt = commit.At
 		p.RetentionState = RetentionActive
 		p.ExecutionState = ExecutionIdle
@@ -88,27 +89,8 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 			StartSeq:    commit.Seq,
 			StartOffset: commit.StartOffset,
 		}
+		p.Generations = []GenerationProjection{p.CurrentGeneration}
 		p.Counts.GenerationCount = 1
-	case FactThreadRenamed:
-		if p.ThreadID == "" {
-			return fmt.Errorf("%w: rename unavailable", ErrInvalidTransition)
-		}
-		p.Alias = fact.Alias
-	case FactThreadArchived:
-		if p.ThreadID == "" || p.RetentionState != RetentionActive || p.ThreadID == MainID {
-			return fmt.Errorf("%w: archive unavailable", ErrInvalidTransition)
-		}
-		archivedAt := commit.At
-		p.ArchivedAt = &archivedAt
-		p.RetentionState = RetentionArchived
-		p.ExecutionState = ""
-	case FactThreadUnarchived:
-		if p.RetentionState != RetentionArchived {
-			return fmt.Errorf("%w: unarchive requires archive", ErrInvalidTransition)
-		}
-		p.ArchivedAt = nil
-		p.RetentionState = RetentionActive
-		p.ExecutionState = ExecutionIdle
 	case FactMessageAppended:
 		if fact.GenerationID != p.CurrentGeneration.ID {
 			return fmt.Errorf("%w: message generation %q is not current %q", ErrInvalidTransition, fact.GenerationID, p.CurrentGeneration.ID)
@@ -268,6 +250,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 			StartSeq:    commit.Seq,
 			StartOffset: commit.StartOffset,
 		}
+		p.Generations = append(p.Generations, p.CurrentGeneration)
 		p.Counts.GenerationCount++
 		if fact.Type == FactContextRenewed {
 			state.ContextUsage = nil
@@ -315,7 +298,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		}
 	case FactProjectionCheck:
 		if fact.Checkpoint == nil || fact.Checkpoint.Projection.ThreadID != threadID ||
-			fact.Checkpoint.Projection.Revision+1 != commit.Seq ||
+			fact.Checkpoint.Projection.Journal.ProjectedSeq+1 != commit.Seq ||
 			fact.Checkpoint.Projection.Journal.ProjectedOffset != commit.StartOffset {
 			return fmt.Errorf("%w: checkpoint does not describe its Journal prefix", ErrInvalidTransition)
 		}

@@ -71,6 +71,9 @@ func TestIncrementalProjectionMatchesFullReplayAcrossGeneratedHistory(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err := applyAuthoritativeProjection(&got, want.Projection); err != nil {
+				t.Fatal(err)
+			}
 			assertReplayStateJSONEqual(t, got, want)
 			if err := target.Close(); err != nil {
 				t.Fatal(err)
