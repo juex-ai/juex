@@ -1,10 +1,12 @@
 package jsonl
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -80,7 +82,11 @@ func TestFileAppendsBatchesAndReadsForward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(data), "{\"id\":1}\n{\"id\":2,\"text\":\"two\"}\n{\"id\":3}\n"; got != want {
+	want := append(
+		mustEncodeBatch(t, json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2,"text":"two"}`)),
+		mustEncodeBatch(t, json.RawMessage(`{"id":3}`))...,
+	)
+	if got := string(data); got != string(want) {
 		t.Fatalf("file = %q, want %q", got, want)
 	}
 }
@@ -186,7 +192,8 @@ func TestFileRollsBackSyncFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(data), "{\"id\":1}\n"; got != want {
+	want := mustEncodeBatch(t, json.RawMessage(`{"id":1}`))
+	if got := string(data); got != string(want) {
 		t.Fatalf("file = %q, want %q", got, want)
 	}
 }
@@ -238,7 +245,7 @@ func TestFileReportsRollbackFailure(t *testing.T) {
 func TestOpenRepairsOnlyTornFinalLine(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "events.jsonl")
-	want := []byte("{\"id\":1}\n{\"id\":2}\n")
+	want := mustEncodeBatch(t, json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`))
 	if err := os.WriteFile(path, append(append([]byte(nil), want...), []byte(`{"id":3`)...), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -302,10 +309,134 @@ func TestOpenReportsTornTailRepairFailures(t *testing.T) {
 	}
 }
 
+func TestOpenSyncsNewFileAndParentDirectoryEntries(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	path := filepath.Join(root, "first", "second", "events.jsonl")
+	var synced []string
+	file, err := open(path, fileOps{
+		syncDir: func(path string) error {
+			synced = append(synced, path)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(root, "first", "second"),
+		filepath.Join(root, "first"),
+		root,
+	}
+	if !reflect.DeepEqual(synced, want) {
+		t.Fatalf("synced directories = %#v, want %#v", synced, want)
+	}
+}
+
+func TestOpenReportsNewFileDirectorySyncFailure(t *testing.T) {
+	t.Parallel()
+	injected := errors.New("sync directory failed")
+	path := filepath.Join(t.TempDir(), "nested", "events.jsonl")
+	file, err := open(path, fileOps{
+		syncDir: func(string) error { return injected },
+	})
+	if file != nil {
+		_ = file.Close()
+		t.Fatal("open file is non-nil after directory sync failure")
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("Open error = %v, want injected error", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("created file remains after failed durability sync: %v", statErr)
+	}
+}
+
+func TestOpenDiscardsCompletePrefixOfInterruptedBatch(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	file, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Append(json.RawMessage(`{"id":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	wantSize := file.Size()
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := encodeBatch([]json.RawMessage{
+		json.RawMessage(`{"id":2}`),
+		json.RawMessage(`{"id":3}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEnd := bytes.IndexByte(payload, '\n') + 1
+	appendBytes(t, path, payload[:firstEnd])
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if reopened.Size() != wantSize {
+		t.Fatalf("repaired size = %d, want %d", reopened.Size(), wantSize)
+	}
+	var records []Record
+	if _, err := reopened.ReadForward(0, func(record Record) error {
+		records = append(records, record)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertRecordData(t, records, `{"id":1}`)
+}
+
+func TestOpenDiscardsInterruptedBatchAfterTornRecord(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	file, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Append(json.RawMessage(`{"id":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	wantSize := file.Size()
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := encodeBatch([]json.RawMessage{
+		json.RawMessage(`{"id":2}`),
+		json.RawMessage(`{"id":3}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEnd := bytes.IndexByte(payload, '\n') + 1
+	appendBytes(t, path, payload[:firstEnd+3])
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if reopened.Size() != wantSize {
+		t.Fatalf("repaired size = %d, want %d", reopened.Size(), wantSize)
+	}
+}
+
 func TestReadersRejectCompleteMalformedRecordWithoutRepairingIt(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "events.jsonl")
-	body := []byte("{\"id\":1}\nnot-json\n")
+	first := mustEncodeBatch(t, json.RawMessage(`{"id":1}`))
+	last := mustEncodeBatch(t, json.RawMessage(`{"id":2}`))
+	body := append(append(append([]byte(nil), first...), []byte("not-json\n")...), last...)
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -316,9 +447,9 @@ func TestReadersRejectCompleteMalformedRecordWithoutRepairingIt(t *testing.T) {
 	defer func() { _ = file.Close() }()
 
 	_, err = file.ReadForward(0, func(Record) error { return nil })
-	assertCorruptionOffset(t, err, int64(len("{\"id\":1}\n")))
+	assertCorruptionOffset(t, err, int64(len(first)))
 	_, err = file.ReadReverse(file.Size(), 2)
-	assertCorruptionOffset(t, err, int64(len("{\"id\":1}\n")))
+	assertCorruptionOffset(t, err, int64(len(first)))
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -447,6 +578,26 @@ func TestReadOffsetsMustBeRecordBoundaries(t *testing.T) {
 	}
 }
 
+func TestReadReverseAcceptsMaximumLimitWithoutOverflow(t *testing.T) {
+	t.Parallel()
+	file, err := Open(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := file.Append(json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	page, err := file.ReadReverse(file.Size(), math.MaxInt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.HasPrevious || page.PreviousEnd != 0 {
+		t.Fatalf("page cursor = previous:%t end:%d", page.HasPrevious, page.PreviousEnd)
+	}
+	assertRecordData(t, page.Records, `{"id":1}`, `{"id":2}`)
+}
+
 func TestReversePagingRoundTripProperty(t *testing.T) {
 	root := t.TempDir()
 	caseNumber := 0
@@ -507,6 +658,7 @@ func TestReadForwardReturnsVisitorErrorAtLastCommittedBoundary(t *testing.T) {
 	if _, err := file.Append(json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`)); err != nil {
 		t.Fatal(err)
 	}
+	payload := mustEncodeBatch(t, json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`))
 	injected := errors.New("stop")
 	end, err := file.ReadForward(0, func(record Record) error {
 		if string(record.Data) == `{"id":2}` {
@@ -517,7 +669,8 @@ func TestReadForwardReturnsVisitorErrorAtLastCommittedBoundary(t *testing.T) {
 	if !errors.Is(err, injected) {
 		t.Fatalf("ReadForward error = %v, want injected", err)
 	}
-	if end != int64(len("{\"id\":1}\n")) {
+	wantEnd := int64(bytes.IndexByte(payload, '\n') + 1)
+	if end != wantEnd {
 		t.Fatalf("end = %d, want first record boundary", end)
 	}
 }
@@ -561,4 +714,28 @@ func assertCorruptionOffset(t *testing.T, err error, want int64) {
 	if corruption.Offset != want {
 		t.Fatalf("corruption offset = %d, want %d", corruption.Offset, want)
 	}
+}
+
+func appendBytes(t *testing.T, path string, data []byte) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustEncodeBatch(t *testing.T, records ...json.RawMessage) []byte {
+	t.Helper()
+	payload, err := encodeBatch(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }

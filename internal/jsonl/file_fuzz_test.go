@@ -2,6 +2,7 @@ package jsonl
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +17,10 @@ func FuzzOpenRepairsArbitraryTornTail(f *testing.F) {
 			tail = []byte{'{'}
 		}
 		path := filepath.Join(t.TempDir(), "events.jsonl")
-		prefix := []byte("{\"id\":1}\n")
+		prefix, err := encodeBatch([]json.RawMessage{json.RawMessage(`{"id":1}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
 		body := append(append([]byte(nil), prefix...), tail...)
 		if err := os.WriteFile(path, body, 0o600); err != nil {
 			t.Fatal(err)

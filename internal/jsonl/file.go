@@ -1,5 +1,6 @@
 // Package jsonl provides domain-neutral durable append and bounded reads for
-// newline-delimited JSON files.
+// newline-delimited JSON files. Each physical line carries a logical record
+// plus batch-position framing so crash repair never exposes part of a batch.
 package jsonl
 
 import (
@@ -13,9 +14,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 const (
+	diskVersion          = 1
 	defaultReadBlockSize = 64 << 10
 	defaultWriteBuffer   = 64 << 10
 )
@@ -67,11 +71,21 @@ type Page struct {
 	HasPrevious bool
 }
 
+// diskRecord frames every logical record with enough domain-neutral batch
+// metadata to remove a complete prefix of an interrupted append on reopen.
+type diskRecord struct {
+	Version int             `json:"v"`
+	Index   int             `json:"index"`
+	Count   int             `json:"count"`
+	Data    json.RawMessage `json:"data"`
+}
+
 type fileOps struct {
 	write    func(*os.File, []byte) (int, error)
 	sync     func(*os.File) error
 	truncate func(*os.File, int64) error
 	readAt   func(*os.File, []byte, int64) (int, error)
+	syncDir  func(string) error
 }
 
 func (ops fileOps) writeBytes(file *os.File, data []byte) (int, error) {
@@ -102,6 +116,13 @@ func (ops fileOps) readBytesAt(file *os.File, data []byte, offset int64) (int, e
 	return file.ReadAt(data, offset)
 }
 
+func (ops fileOps) syncDirectory(path string) error {
+	if ops.syncDir != nil {
+		return ops.syncDir(path)
+	}
+	return homestore.SyncDir(path)
+}
+
 // File owns one append-only JSONL file. Its methods serialize access so reads
 // observe a committed prefix and appends cannot interleave.
 type File struct {
@@ -114,8 +135,9 @@ type File struct {
 	closed        bool
 }
 
-// Open opens or creates path and durably removes an incomplete final line.
-// Complete lines are preserved and validated when read.
+// Open opens or creates path, durably removes an incomplete final line, and
+// rolls back a complete prefix of an interrupted batch. Complete records are
+// otherwise preserved and validated when read.
 func Open(path string) (*File, error) {
 	return open(path, fileOps{})
 }
@@ -125,10 +147,7 @@ func open(path string, ops fileOps) (*File, error) {
 		return nil, errors.New("jsonl: path is required")
 	}
 	path = filepath.Clean(path)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("jsonl: create parent: %w", err)
-	}
-	target, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	target, created, missingDirs, err := openTarget(path)
 	if err != nil {
 		return nil, fmt.Errorf("jsonl: open %s: %w", path, err)
 	}
@@ -138,7 +157,21 @@ func open(path string, ops fileOps) (*File, error) {
 		readBlockSize: defaultReadBlockSize,
 		ops:           ops,
 	}
+	if created {
+		if err := file.syncCreatedPathLocked(missingDirs); err != nil {
+			closeErr := target.Close()
+			removeErr := os.Remove(path)
+			if removeErr == nil {
+				_ = ops.syncDirectory(filepath.Dir(path))
+			}
+			return nil, errors.Join(err, closeErr, removeErr)
+		}
+	}
 	if err := file.repairTornTailLocked(); err != nil {
+		_ = target.Close()
+		return nil, err
+	}
+	if err := file.repairIncompleteBatchLocked(); err != nil {
 		_ = target.Close()
 		return nil, err
 	}
@@ -155,8 +188,9 @@ func (f *File) Size() int64 {
 	return f.size
 }
 
-// Append validates and compacts records before writing them as one durable
-// batch. A failed write, flush, or fsync is rolled back to the prior boundary.
+// Append validates and compacts records, adds domain-neutral batch framing,
+// and writes them as one durable batch. A failed write, flush, or fsync is
+// rolled back to the prior boundary.
 func (f *File) Append(records ...json.RawMessage) (Batch, error) {
 	payload, err := encodeBatch(records)
 	if err != nil {
@@ -219,11 +253,11 @@ func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error)
 			return committed, &CorruptionError{Offset: offset, Err: fmt.Errorf("incomplete record: %w", err)}
 		}
 		end := offset + int64(len(line))
-		data := line[:len(line)-1]
-		if err := validateRecord(data, offset); err != nil {
+		disk, err := decodeDiskRecord(line[:len(line)-1], offset)
+		if err != nil {
 			return committed, err
 		}
-		record := Record{Start: offset, End: end, Data: append(json.RawMessage(nil), data...)}
+		record := Record{Start: offset, End: end, Data: append(json.RawMessage(nil), disk.Data...)}
 		if err := visit(record); err != nil {
 			return committed, err
 		}
@@ -259,7 +293,7 @@ func (f *File) ReadReverse(end int64, limit int) (Page, error) {
 	newlineCount := 0
 	var chunks [][]byte
 	total := 0
-	for position > 0 && newlineCount < limit+1 {
+	for position > 0 && newlineCount <= limit {
 		start := position - int64(f.readBlockSize)
 		if start < 0 {
 			start = 0
@@ -332,9 +366,20 @@ func encodeBatch(records []json.RawMessage) ([]byte, error) {
 		if !json.Valid(record) {
 			return nil, fmt.Errorf("jsonl: record %d is invalid JSON", index)
 		}
-		if err := json.Compact(&payload, record); err != nil {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, record); err != nil {
 			return nil, fmt.Errorf("jsonl: compact record %d: %w", index, err)
 		}
+		line, err := json.Marshal(diskRecord{
+			Version: diskVersion,
+			Index:   index,
+			Count:   len(records),
+			Data:    json.RawMessage(compact.Bytes()),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("jsonl: encode record %d: %w", index, err)
+		}
+		_, _ = payload.Write(line)
 		_ = payload.WriteByte('\n')
 	}
 	return payload.Bytes(), nil
@@ -352,14 +397,15 @@ func decodePage(data []byte, base int64) ([]Record, error) {
 			return nil, &CorruptionError{Offset: offset, Err: errors.New("incomplete record")}
 		}
 		line := data[:newline]
-		if err := validateRecord(line, offset); err != nil {
+		disk, err := decodeDiskRecord(line, offset)
+		if err != nil {
 			return nil, err
 		}
 		end := offset + int64(newline) + 1
 		records = append(records, Record{
 			Start: offset,
 			End:   end,
-			Data:  append(json.RawMessage(nil), line...),
+			Data:  append(json.RawMessage(nil), disk.Data...),
 		})
 		data = data[newline+1:]
 		offset = end
@@ -367,11 +413,33 @@ func decodePage(data []byte, base int64) ([]Record, error) {
 	return records, nil
 }
 
-func validateRecord(data []byte, offset int64) error {
-	if json.Valid(data) {
-		return nil
+func decodeDiskRecord(data []byte, offset int64) (diskRecord, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var record diskRecord
+	if err := decoder.Decode(&record); err != nil {
+		return diskRecord{}, &CorruptionError{Offset: offset, Err: fmt.Errorf("invalid record: %w", err)}
 	}
-	return &CorruptionError{Offset: offset, Err: errors.New("invalid JSON record")}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return diskRecord{}, &CorruptionError{Offset: offset, Err: fmt.Errorf("invalid record: %w", err)}
+	}
+	if record.Version != diskVersion {
+		return diskRecord{}, &CorruptionError{Offset: offset, Err: fmt.Errorf("unsupported version %d", record.Version)}
+	}
+	if record.Count <= 0 || record.Index < 0 || record.Index >= record.Count {
+		return diskRecord{}, &CorruptionError{
+			Offset: offset,
+			Err:    fmt.Errorf("invalid batch position %d of %d", record.Index, record.Count),
+		}
+	}
+	if !json.Valid(record.Data) {
+		return diskRecord{}, &CorruptionError{Offset: offset, Err: errors.New("invalid JSON data")}
+	}
+	return record, nil
 }
 
 func (f *File) ensureOpenLocked() error {
@@ -408,6 +476,64 @@ func (f *File) validateBoundaryLocked(offset int64) error {
 	}
 	if last[0] != '\n' {
 		return fmt.Errorf("%w: %d", ErrInvalidOffset, offset)
+	}
+	return nil
+}
+
+func openTarget(path string) (*os.File, bool, []string, error) {
+	dir := filepath.Dir(path)
+	missingDirs, err := missingParentDirectories(dir)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, false, nil, fmt.Errorf("create parent: %w", err)
+	}
+	target, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err == nil {
+		return target, true, missingDirs, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, false, nil, err
+	}
+	target, err = os.OpenFile(path, os.O_RDWR, 0o600)
+	return target, false, nil, err
+}
+
+func missingParentDirectories(path string) ([]string, error) {
+	var missing []string
+	for dir := filepath.Clean(path); ; dir = filepath.Dir(dir) {
+		info, err := os.Stat(dir)
+		if err == nil {
+			if !info.IsDir() {
+				return nil, fmt.Errorf("%s is not a directory", dir)
+			}
+			return missing, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		missing = append(missing, dir)
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return missing, nil
+		}
+	}
+}
+
+func (f *File) syncCreatedPathLocked(missingDirs []string) error {
+	if err := f.ops.syncFile(f.file); err != nil {
+		return fmt.Errorf("jsonl: sync new file %s: %w", f.path, err)
+	}
+	dir := filepath.Dir(f.path)
+	if err := f.ops.syncDirectory(dir); err != nil {
+		return fmt.Errorf("jsonl: sync new file directory %s: %w", dir, err)
+	}
+	for _, created := range missingDirs {
+		parent := filepath.Dir(created)
+		if err := f.ops.syncDirectory(parent); err != nil {
+			return fmt.Errorf("jsonl: sync created directory parent %s: %w", parent, err)
+		}
 	}
 	return nil
 }
@@ -453,6 +579,94 @@ func (f *File) repairTornTailLocked() error {
 	}
 	f.size = truncateAt
 	return nil
+}
+
+func (f *File) repairIncompleteBatchLocked() error {
+	if f.size == 0 {
+		return nil
+	}
+	line, start, err := f.previousLineLocked(f.size)
+	if err != nil {
+		return err
+	}
+	last, err := decodeDiskRecord(line, start)
+	if err != nil {
+		return err
+	}
+	if last.Index == last.Count-1 {
+		return nil
+	}
+	batchStart := start
+	for want := last.Index - 1; want >= 0; want-- {
+		line, previousStart, err := f.previousLineLocked(batchStart)
+		if err != nil {
+			return err
+		}
+		previous, err := decodeDiskRecord(line, previousStart)
+		if err != nil {
+			return err
+		}
+		if previous.Count != last.Count || previous.Index != want {
+			return &CorruptionError{
+				Offset: previousStart,
+				Err: fmt.Errorf(
+					"interrupted batch position %d of %d follows %d of %d",
+					last.Index, last.Count, previous.Index, previous.Count,
+				),
+			}
+		}
+		batchStart = previousStart
+	}
+	if err := f.ops.truncateFile(f.file, batchStart); err != nil {
+		return fmt.Errorf("jsonl: truncate interrupted batch at %d: %w", batchStart, err)
+	}
+	if err := f.ops.syncFile(f.file); err != nil {
+		return fmt.Errorf("jsonl: sync interrupted-batch repair at %d: %w", batchStart, err)
+	}
+	f.size = batchStart
+	return nil
+}
+
+func (f *File) previousLineLocked(end int64) ([]byte, int64, error) {
+	if end <= 0 || end > f.size {
+		return nil, 0, fmt.Errorf("%w: %d outside 1..%d", ErrInvalidOffset, end, f.size)
+	}
+	newline := []byte{0}
+	if err := f.readFullAtLocked(newline, end-1); err != nil {
+		return nil, 0, fmt.Errorf("jsonl: read line boundary %d: %w", end, err)
+	}
+	if newline[0] != '\n' {
+		return nil, 0, fmt.Errorf("%w: %d", ErrInvalidOffset, end)
+	}
+	position := end - 1
+	var chunks [][]byte
+	total := 0
+	startOffset := int64(0)
+	for position > 0 {
+		start := position - int64(f.readBlockSize)
+		if start < 0 {
+			start = 0
+		}
+		chunk := make([]byte, int(position-start))
+		if err := f.readFullAtLocked(chunk, start); err != nil {
+			return nil, 0, fmt.Errorf("jsonl: read previous line at %d: %w", start, err)
+		}
+		if index := bytes.LastIndexByte(chunk, '\n'); index >= 0 {
+			chunks = append(chunks, append([]byte(nil), chunk[index+1:]...))
+			total += len(chunk) - index - 1
+			startOffset = start + int64(index) + 1
+			break
+		}
+		chunks = append(chunks, chunk)
+		total += len(chunk)
+		position = start
+	}
+	line := make([]byte, total)
+	next := 0
+	for index := len(chunks) - 1; index >= 0; index-- {
+		next += copy(line[next:], chunks[index])
+	}
+	return line, startOffset, nil
 }
 
 func (f *File) rollbackLocked(offset int64, cause error) error {
