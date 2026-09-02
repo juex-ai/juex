@@ -18,7 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -65,7 +65,7 @@ type CapabilityResult struct {
 	FinalText      string             `json:"final_text"`
 	Error          string             `json:"error,omitempty"`
 	WorkDir        string             `json:"-"`
-	SessionDir     string             `json:"-"`
+	ThreadDir      string             `json:"-"`
 	TranscriptText string             `json:"-"`
 	Snapshots      []ProviderSnapshot `json:"-"`
 }
@@ -134,14 +134,15 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 		}
 	}
 
-	sess, err := session.New(filepath.Join(workDir, ".juex", "sessions"))
+	store := thread.NewStore(filepath.Join(workDir, ".juex", "agent-state"))
+	worker, err := store.EnsureMain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = worker.Close() })
 
 	bus := events.NewBus()
-	sess.SubscribeBus(bus)
+	worker.SubscribeBus(bus)
 
 	var hookRunner hooks.PolicyRunner
 	if tc.Hooks != nil {
@@ -157,19 +158,18 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 		Provider:       provider,
 		Tools:          reg,
 		Bus:            bus,
-		Session:        sess,
-		Prompt:         capabilityPromptBuilder(workDir, sess),
+		Thread:         worker,
+		Prompt:         capabilityPromptBuilder(workDir, worker),
 		WorkDir:        workDir,
-		ArtifactDir:    filepath.Join(workDir, ".juex", "artifacts"),
+		MediaDir:       filepath.Join(workDir, ".juex", "media"),
 		RuntimeContext: runtimemodule.RuntimeContext{WorkDir: workDir},
 	}
 	if hookRunner != nil {
 		hookModule := hooks.NewModule(hookRunner, hooks.ModuleOptions{BaseRequest: hooks.Request{
-			SessionID:        sess.ID,
-			CWD:              workDir,
-			WorkspaceRoots:   []string{workDir},
-			ConversationPath: filepath.Join(sess.Dir, "conversation.jsonl"),
-			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
+			ThreadID:       worker.ID,
+			CWD:            workDir,
+			WorkspaceRoots: []string{workDir},
+			JournalPath:    filepath.Join(worker.Dir, "journal.jsonl"),
 		}})
 		engine.RuntimeModules, err = runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{{
 			ID: hooks.ModuleID, Enabled: true,
@@ -185,7 +185,7 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 	start := time.Now()
 	finalText, turnErr := engine.Turn(context.Background(), tc.Prompt)
 	elapsed := time.Since(start)
-	result := collectCapabilityResult(t, tc.Name, workDir, sess.Dir, finalText, elapsed, provider, tc.Contract)
+	result := collectCapabilityResult(t, tc.Name, workDir, worker, finalText, elapsed, provider, tc.Contract)
 	if turnErr != nil {
 		result.Success = false
 		result.Error = turnErr.Error()
@@ -193,16 +193,16 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 	return result
 }
 
-func capabilityPromptBuilder(workDir string, sess *session.Session) *prompt.Builder {
+func capabilityPromptBuilder(workDir string, worker *thread.Thread) *prompt.Builder {
 	guidance := &promptcontext.GuidanceModule{AgentsMDDirs: []string{workDir}}
-	runtimeContext := &promptcontext.SessionContextModule{
+	runtimeContext := &promptcontext.ThreadContextModule{
 		WorkDir: workDir,
 		Shell:   capabilityPromptShellProfile(),
 		Now:     func() time.Time { return time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC) },
 	}
 	request := runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
-		Session: &runtimemodule.SessionContext{ID: sess.ID, Dir: sess.Dir, ScratchpadDir: sess.ScratchpadDir()},
+		Thread:  &runtimemodule.ThreadContext{ID: worker.ID, Dir: worker.Dir, ScratchpadDir: worker.ScratchpadDir()},
 	}
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		sections, err := guidance.Context(context.Background(), request)
@@ -214,12 +214,23 @@ func capabilityPromptBuilder(workDir string, sess *session.Session) *prompt.Buil
 	}}
 }
 
-func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText string, elapsed time.Duration, provider *capabilityProvider, contract ContractExpectations) CapabilityResult {
+func collectCapabilityResult(t *testing.T, name, workDir string, worker *thread.Thread, finalText string, elapsed time.Duration, provider *capabilityProvider, contract ContractExpectations) CapabilityResult {
 	t.Helper()
-	convPath := filepath.Join(sessionDir, "conversation.jsonl")
-	eventPath := filepath.Join(sessionDir, "events.jsonl")
-	convLines := readCapabilityLines(t, convPath)
-	eventLines := readCapabilityLines(t, eventPath)
+	replay := worker.ReplaySnapshot()
+	convLines := marshalCapabilityLines(t, replay.Messages)
+	eventLines := marshalCapabilityLines(t, replay.Events)
+	oracleDir := filepath.Join(workDir, ".eval")
+	if err := os.MkdirAll(oracleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	convPath := filepath.Join(oracleDir, "conversation.jsonl")
+	eventPath := filepath.Join(oracleDir, "events.jsonl")
+	if err := os.WriteFile(convPath, []byte(strings.Join(convLines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eventPath, []byte(strings.Join(eventLines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	transcriptText := strings.Join(convLines, "\n")
 	result := CapabilityResult{
 		Name:           name,
@@ -232,7 +243,7 @@ func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText 
 		ToolNames:      map[string]int{},
 		FinalText:      finalText,
 		WorkDir:        workDir,
-		SessionDir:     sessionDir,
+		ThreadDir:      worker.Dir,
 		TranscriptText: transcriptText,
 		Snapshots:      append([]ProviderSnapshot(nil), provider.snaps...),
 	}
@@ -270,6 +281,19 @@ func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText 
 		result.Events[ev.Type]++
 	}
 	return result
+}
+
+func marshalCapabilityLines[T any](t *testing.T, values []T) []string {
+	t.Helper()
+	lines := make([]string, 0, len(values))
+	for _, value := range values {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(data))
+	}
+	return lines
 }
 
 func capabilityPromptShellProfile() promptcontext.ShellProfile {

@@ -8,7 +8,7 @@ const imageBlockSource = readFileSync(
 );
 const transcriptSource = readFileSync(
   new URL(
-    "../../frontend/src/components/session/SessionTranscript.tsx",
+    "../../frontend/src/components/thread/ThreadTranscript.tsx",
     import.meta.url,
   ),
   "utf8",

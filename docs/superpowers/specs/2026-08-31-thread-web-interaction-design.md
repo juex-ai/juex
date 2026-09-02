@@ -3,7 +3,8 @@
 > English | [中文](2026-08-31-thread-web-interaction-design.zh.md)
 
 Date: 2026-08-31
-Status: Proposed
+Updated: 2026-09-01
+Status: Accepted for implementation
 Depends on: [Thread Domain Model](2026-08-31-thread-domain-model-design.md),
 [Core Lifecycle And Interfaces](2026-08-31-thread-lifecycle-and-interfaces-design.md),
 [Local Storage And Serialization](2026-08-31-thread-storage-serialization-design.md),
@@ -12,396 +13,310 @@ UI baseline: [DESIGN.md](../../../DESIGN.md)
 
 ## Purpose
 
-Replace the Session History page and Active Session navigation with a Thread
-Explorer and a writable Thread detail view. The interface must make long-lived
-Main and Worker Threads easy to inspect, show Context Generation boundaries
-without turning them into separate conversations, and clearly separate active
-work from archived read-only history.
+Replace Session History and Active Session navigation with a Thread Explorer
+and writable Thread detail. The UI must expose long-lived Main and Workers,
+show logical Context Generation boundaries inside one history, load recent work
+first, and distinguish active, archived, offline, and permanently deleted work.
 
-The redesign preserves the existing fleet-first shell, typed transcript,
-composer, Workspace panel, design tokens, responsive behavior, and Agent
-Runtime pages. It changes the information architecture and read model rather
-than inventing a second visual system.
+Reuse the existing Fleet shell, typed transcript, composer, design tokens,
+responsive behavior, and Runtime pages. This is a new read model and
+information architecture, not a second visual system.
 
 ## Information Architecture
 
-### Routes
-
 ```text
-/agents/:agentId                    -> redirect to Main Thread detail
+/agents/:agentId                    -> redirect to /threads/0
 /agents/:agentId/threads            -> Thread Explorer
 /agents/:agentId/threads/:threadId  -> Thread detail
 /agents/:agentId/runtime/...        -> unchanged Runtime pages
 ```
 
-- Remove `/sessions/:id` and `/history` routes.
-- The stage header action previously labelled History becomes Threads and
-  opens the Thread Explorer.
-- Chat continues to mean the selected Thread detail, not a list of Sessions.
-- A URL always contains the immutable `thread_id`; alias changes do not break
-  bookmarks.
-- If a legacy route is encountered before the first release, show the normal
-  not-found state. Do not retain compatibility redirects.
-
-### Navigation rules
-
-- Selecting an Agent routes to its Main Thread.
-- Selecting a row in Thread Explorer routes to that Thread.
-- Browser Back returns to the prior list position and filters.
-- Deep links to archived Threads remain valid and open the read-only detail.
-- A missing Thread distinguishes not found from Agent stopped or unavailable.
+- Remove `/sessions/:id` and `/history` with no compatibility redirect.
+- Rename the History navigation action to Threads.
+- URLs always use immutable `thread_id`; Main is always `/threads/0`.
+- Alias changes never break bookmarks.
+- Archived deep links open read-only detail. Deleted or missing Thread is a
+  not-found state distinct from Agent stopped/unavailable.
+- Browser Back restores Explorer filters and list/scroll position.
 
 ## Thread Explorer
 
-### Page purpose and naming
+### Sections and ordering
 
-The page title is **Threads**, not History. A Thread is current work with
-durable history, while Context Generations are internal historical segments.
-Do not generate or display a summary title for a Thread row. Identity is the
-pair of alias and short id.
+The title is **Threads**, not History. A Thread row has no generated summary,
+preview, first-message title, or duplicated transcript text. Its visible
+identity is alias plus short id.
 
-### Sections
+1. **Active Threads** is expanded by default. Main `#0` is pinned first;
+   Workers follow by recent activity.
+2. **Archived Threads** is collapsed by default with a visible count and sorts
+   by `archived_at` descending.
 
-The page has two explicit sections:
-
-1. **Active Threads**, expanded by default.
-2. **Archived Threads**, collapsed by default with a visible count.
-
-The Main Thread is pinned first in Active Threads. Workers follow by most recent
-activity. Parent information is shown without forcing the list into a deeply
-nested tree; an indented parent path may be revealed in the row details or
-tooltip. This keeps nested Workers legible on narrow screens and still exposes
-the Thread tree.
-
-Archived Threads sort by `archived_at` descending. Archival does not move a
-Thread into a different URL or erase its parent.
+Parent metadata is visible without forcing a deep tree on narrow screens.
+Archive changes section and storage namespace, not URL or parent identity.
 
 ### Thread row
 
-Every row shows the fields requested for operational inspection:
-
 | Field | Presentation |
 | --- | --- |
-| `thread_id` | Short `#tid`, always visible and copyable |
-| `alias` | Primary row label; creation persists `worker_#tid` as the default |
-| `created_at` | Localized absolute time on wide screens; concise time plus full tooltip on narrow screens |
-| `turn_count` | Completed plus current Turn count, labelled Turns |
-| execution state | `idle`, `working`, or `failed` semantic status badge |
-| `pending_count` | Pending badge only when greater than zero; exact count remains accessible |
-| `generation_count` | `Gen N`, where N is the total persisted Generation count |
-| current context usage | Current Generation context-token estimate, prefixed with `~`, formatted compactly, with the integer value in a tooltip |
-| parent | `Main` or `#parent`, secondary metadata for Workers |
+| `thread_id` | Copyable `#tid`; Main is `#0` |
+| `alias` | Primary label; unnamed Worker uses `worker_#tid` |
+| `created_at` | Localized absolute time; full accessible tooltip |
+| retention state | `active` or `archived`; section membership uses this field |
+| execution state | Active-only text badge `idle`, `working`, or `failed` |
+| `pending_count` | Badge when nonzero, exact count accessible |
+| `turn_count` | Labelled Turns count |
+| `generation_count` | `Gen N` |
+| current context | Compact `~tokens / window` and percentage tooltip |
+| cumulative usage | Input, cached-input, and output detail |
+| parent | `Main` or copyable `#parent` for Workers |
 
-Archived rows replace execution emphasis with an Archived badge and archive
-time, while retaining the final execution state and all metrics. The list does
-not show an LLM-generated preview, Session summary, first-message title, or
-duplicated transcript snippet.
+Archived rows add archive time, omit execution state, and retain metrics. Status
+never relies on color alone and respects reduced motion.
 
-Status must never rely on color alone. Each status has text, semantic color,
-and the existing reduced-motion-aware working indicator.
+### List behavior and states
 
-### List behavior
+- Search matches alias and `#tid`; when the loaded page is incomplete, the
+  server applies the same query semantics.
+- State filters apply to Active only and cannot silently hide Archived.
+- Resource events patch changed rows without transcript refetch.
+- Create Worker requests optional alias, parent defaulting to Main, and optional
+  initial Input.
+- Worker overflow actions expose rename, stop, archive, unarchive, and delete
+  according to lifecycle eligibility.
+- Main has no rename, archive, or delete action because id `0` and alias `main`
+  are reserved.
+- Server-side section cursors keep hundreds or thousands of list projections
+  bounded.
 
-- A single search field matches exact or partial alias and `#tid` locally over
-  the loaded projection.
-- Optional state filters are Active section concerns; they do not silently hide
-  Archived Threads.
-- A visible Refresh action is available when live updates are disconnected.
-- Fleet resource events update changed rows without refetching all transcripts.
-- Creating a Worker is a secondary page action. It requests alias, parent
-  defaulting to Main, and optional initial input.
-- Rename, archive, unarchive, and stop are row overflow actions with the same
-  eligibility rules as the core API.
-- There is no Delete action.
-
-For hundreds of Threads, the server pages list projections by stable section
-cursor. Search may switch to server-side filtering when not all rows are loaded;
-the visible behavior remains the same.
-
-### Explorer states
-
-- **Loading:** use the existing centered loading treatment for initial load;
-  quiet row refreshes do not replace the page.
-- **Empty active:** Main should normally exist. If Agent initialization is
-  incomplete, explain that Main is being initialized rather than offering a
-  fake Session creator.
-- **Empty archived:** show a compact "No archived threads" state inside the
-  expanded section.
-- **Agent stopped:** show the last durable Thread projection read through Fleet
-  when available, label it as offline, disable mutating actions, and offer the
-  existing Agent start action.
-- **Load error:** retain the last good rows, show a non-blocking error banner,
-  and provide Retry.
+Loading uses the existing centered state; quiet refresh does not blank rows.
+Agent-offline state shows the last durable projection when Fleet can provide it,
+labels it offline, and disables mutation. Load errors retain last-good rows and
+offer Retry.
 
 ## Thread Detail
 
 ### Header
 
-The Thread header contains:
+Show alias, copyable `#tid`, parent link, Active/Archived and execution badges,
+pending count, Turns, Generations, current context pressure, cumulative token
+usage, and revision-aware actions. Do not synthesize a conversation title.
+Narrow layouts keep identity and state visible and move metrics into an
+expandable details panel.
 
-- Alias and copyable `#tid`.
-- Main or Worker relationship and copyable parent link.
-- Active/Archived lifecycle badge.
-- `idle`, `working`, or `failed` execution state.
-- Pending count, total Turns, Generation count, and current context tokens.
-- Rename and overflow actions allowed by lifecycle state.
+### Tail-first history
 
-Do not synthesize a conversation title. On narrow screens, alias and state stay
-visible while metrics move into an expandable details panel.
+Opening a Thread asks for the newest display window. The server seeks Journal
+EOF, reads backward in bounded blocks, then returns display records in
+chronological order. It does not scan from Thread creation or load only one
+physical Generation directory.
 
-### Transcript tail-first loading
+At the top, **Load older messages**:
 
-Opening a Thread loads the newest displayable window from its current
-Generation. The user sees the latest work immediately instead of loading every
-Generation.
+1. Continues from the opaque older cursor.
+2. Prepends the preceding chronological page.
+3. Preserves the viewport anchor.
+4. Includes any Context boundary needed to interpret the window.
+5. Ends at **Beginning of thread**.
 
-At the top of the loaded window, show **Load older messages**. Each activation:
+Store read cursor and scroll position per `(agent_id, thread_id)` for the
+browser session. **Jump to latest** resets to the tail. Browser code never
+decodes Journal offsets, sequences, or disk schemas.
 
-1. Loads the preceding page within the current Generation.
-2. Preserves the viewport anchor so existing content does not jump.
-3. When the Generation beginning is reached, inserts its boundary and continues
-   into the previous Generation on the next page.
-4. Ends with a clear "Beginning of thread" marker.
+### Context Generation activities
 
-The paging cursor is opaque. The browser must not reconstruct sequence from
-message timestamps or ids.
-
-Store the last read cursor and scroll position per `(agent_id, thread_id)` for
-the current browser session. Returning from Threads restores that position;
-explicitly choosing "Jump to latest" resets it to the tail.
-
-### Generation boundaries
-
-Generations are sections of one Thread, not items in the Thread list. Render a
-compact, accessible separator:
+Generations are logical sections inside one Thread. Render durable System
+activities as separators, never User or Assistant messages:
 
 ```text
-Generation 4 · Compact · Aug 31, 14:26 · 12 turns
+Context compacted · Generation 3 · Sep 1, 16:10
+Context renewed   · Generation 4 · Sep 1, 17:42
 ```
 
-- `/compact` boundaries offer an expandable **Compaction context** containing
-  the bootstrap summary carried into the newer Generation.
-- `/new` boundaries say **New context** and have no summary disclosure.
-- The current Generation separator can show current context token usage.
-- Closed Generations show created time, closed time, transition reason, Turns,
-  and final usage in their disclosure.
-- A boundary is never rendered as a user or Assistant message.
+- `context.compacted` is expandable. **Compaction context** displays and copies
+  the summary used as the next Generation bootstrap.
+- `context.renewed` is a non-interactive marker with no summary disclosure.
+- Current Generation detail may show context tokens/window and percentage.
+- Older boundary disclosure may show times, Turns, and final input,
+  cached-input, and output usage derived from Journal facts.
 
-This presentation gives the feeling of loading older compacted history while
-preserving the exact fact that `/new` and `/compact` both create Generations.
+The activity marker itself never enters Provider context. Only the structured
+compact summary is projected by the Prompt Assembler.
 
 ### Live updates
 
-An active Thread detail subscribes to that Thread's replayable event stream.
-The projection handles:
+Active detail subscribes from its last acknowledged replay cursor. It projects:
 
-- Accepted inputs and stable `input_id` pending rows.
-- Input claim by a Turn, including one Turn claiming multiple inputs.
+- Accepted Inputs, attempts, stable pending rows, and assignment to Turns.
 - Assistant streaming, Thinking, Tool Calls, Tool Results, retries, and usage.
-- Generation close/open transitions.
-- Turn completion, failure, cancellation, and Thread status.
-- Archive or rename changes made by another client.
+- Context activities without remounting the Thread route.
+- Turn terminal facts, `thread.settled`, and Thread status.
+- Rename, archive, unarchive, or delete initiated elsewhere.
 
-Reconnect from the last acknowledged cursor and suppress replay overlap by
-stable event and message ids. A Generation transition changes the subscribed
-Generation projection but does not remount the Thread route or clear the
-visible prior window.
-
-When the user has scrolled away from the tail, incoming items do not steal
-scroll. Show a **New activity** / **Jump to latest** affordance with a count.
+Stable ids suppress replay overlap. When the user is away from the tail,
+incoming activity does not steal scroll; show counted **New activity** and
+**Jump to latest** controls.
 
 ### Composer and write access
 
-Every active Thread, Main or Worker, has the same composer. The composer:
+Every active Thread uses the same composer:
 
-- Admits input and attachments through the Thread input API.
-- Clears only after the durable input receipt returns.
-- Shows queued items by `input_id`, not by assuming a reply pair.
-- Allows sending while the Thread is working; the input joins pending order.
-- Supports `/new` and `/compact` through the normal message path.
-- Displays generation-transition and current context usage feedback.
+- Submit Input and attachments through the Thread Input API.
+- Clear only after the durable receipt.
+- Display queued work by `input_id` without invented reply pairing.
+- Permit sending while working; order is the server Journal order.
+- Submit `/new` and `/compact` through the same Input path.
+- Display current context pressure and resulting Context activity.
 
-An archived Thread has no enabled composer. Replace it with a persistent
-read-only bar:
+Archived detail replaces the composer with:
 
 ```text
-Archived Aug 31, 2026 · This thread is read-only. Unarchive to continue.
+Archived Sep 1, 2026 · This thread is read-only. Unarchive to continue.
 ```
 
-Users with mutation access may unarchive from that bar. Successful unarchive
-creates a fresh Generation, switches the lifecycle to active, and enables the
-composer without changing the route.
-
-If the Agent is stopped, even active Threads are temporarily read-only. The UI
-must distinguish "archived" from "Agent offline."
+Unarchive restores the same current Generation with execution state `idle`,
+then enables the composer without changing route. Agent-offline active Threads
+are also temporarily read-only but use distinct copy.
 
 ### Actions
 
 | Action | Main | Active Worker | Archived Worker |
 | --- | --- | --- | --- |
-| Send input | Yes | Yes | No |
-| `/new` or `/compact` | Yes | Yes | No |
-| Rename | Yes, subject to alias rules | Yes | Yes |
-| Create child Worker | Yes | Yes | No |
-| Stop current Turn | When working | When working | No |
-| Archive | No | When idle with no pending input | Already archived |
+| Send Input | Yes | Yes | No |
+| New/Compact | Yes | Yes | No |
+| Rename | No | Yes | Yes |
+| Create child | Yes | Yes | No |
+| Stop active Turn | When working | When working | No |
+| Archive | No | Eligible idle/failed only | Already archived |
 | Unarchive | No | Not applicable | Yes |
-| Delete | No | No | No |
+| Delete | No | No | Eligible archived only |
 
-Destructive-looking actions require a confirmation dialog that states exact
-`#tid` and alias. Stop and archive confirmations explain their different
-effects; archive does not cancel or delete.
+Archive confirmation states that no history is removed. Delete confirmation
+shows exact alias and `#tid`, states that Journal and Scratchpad bytes will be
+permanently removed, and is disabled with a concrete child blocker. Active
+result subscriptions and handoffs block the earlier archive action. After
+success, navigate to Archived Threads and remove the row. Future
+automatic retention is a server policy, not a hidden Web delete flow.
 
-## API Contract Required By Web
-
-Selected-Agent routes replace Session APIs:
+## Web API Contract
 
 ```text
-GET    /api/threads
-GET    /api/threads/main
-POST   /api/threads
-GET    /api/threads/:threadId
-PATCH  /api/threads/:threadId
-GET    /api/threads/:threadId/messages
-POST   /api/threads/:threadId/inputs
-POST   /api/threads/:threadId/attachments
-GET    /api/threads/:threadId/events
-POST   /api/threads/:threadId/stop
-POST   /api/threads/:threadId/archive
-POST   /api/threads/:threadId/unarchive
+GET     /api/threads
+POST    /api/threads
+GET     /api/threads/:threadId?before=<cursor>&limit=<n>
+PATCH   /api/threads/:threadId
+POST    /api/threads/:threadId/inputs
+POST    /api/threads/:threadId/attachments
+GET     /api/threads/:threadId/events
+GET     /api/threads/:threadId/status
+GET     /api/threads/:threadId/status/events
+GET     /api/threads/:threadId/context
+GET     /api/threads/:threadId/scratchpad
+POST    /api/threads/:threadId/compact
+POST    /api/threads/:threadId/stop
+POST    /api/threads/:threadId/archive
+POST    /api/threads/:threadId/unarchive
+DELETE  /api/threads/:threadId
 ```
 
-### List response
+Main needs no special discovery route; clients know id `0`.
 
-`GET /api/threads` supports `lifecycle`, `state`, `query`, `cursor`, and
-`limit`. Each list item is served from the Thread index projection and includes:
+### List item
 
 ```json
 {
   "thread_id": "4m8k2p",
   "alias": "reviewer",
-  "is_main": false,
-  "parent_thread_id": "mainid",
-  "created_at": "2026-08-31T12:34:56.789Z",
-  "archived_at": null,
-  "state": "working",
-  "pending_count": 0,
+  "parent_thread_id": "0",
+  "created_at": "2026-09-01T08:00:00.000Z",
+  "retention_state": "active",
+  "execution_state": "working",
+  "pending_input_count": 0,
   "turn_count": 8,
   "generation_count": 2,
   "current_generation_id": "g000002",
   "current_context_tokens": 11421,
-  "last_activity_at": "2026-08-31T13:08:04.102Z",
-  "revision": 42
+  "token_usage": {
+    "input_tokens": 64000,
+    "cached_input_tokens": 38000,
+    "output_tokens": 9200
+  },
+  "last_activity_at": "2026-09-01T08:12:34.567Z",
+  "thread_revision": 42
 }
 ```
 
-There is no `summary` or generated title field.
+There is no summary, preview, generated title, or persisted `is_main`; clients
+derive Main from `thread_id == "0"`.
 
-### Message paging response
+### Message page
 
-`GET /api/threads/:threadId/messages?before=<cursor>&limit=<n>` returns:
+`GET /api/threads/:threadId?before=<cursor>&limit=<n>` returns Thread metadata
+and its timeline page together:
 
-- Displayable message and process records in chronological order.
-- Generation boundary records needed for the window.
-- `older_cursor` or null.
-- Tail and live replay cursors.
-- Current Thread lifecycle and revision for stale-view detection.
+- Displayable messages, process rows, and System activities in chronological
+  order.
+- `older_cursor` or null, tail cursor, and live replay cursor.
+- Context boundary DTOs with copyable summary only for Compact.
+- Current lifecycle and Thread revision for stale-view detection.
 
-Thread metadata, Generation metadata, compact bootstrap, and journal internals
-remain server concerns. Web receives a stable presentation DTO rather than
-reading serialization shapes directly.
+Disk paths, offsets, commit arrays, and projection files stay server-private.
 
 ### Mutation consistency
 
-- Every mutation returns the new Thread revision.
-- Input admission returns the same `InputReceipt` used by CLI.
-- Rename and archive use the expected revision to reject stale actions.
-- SSE resource events contain enough Thread projection data to patch list rows.
-- Authorization and availability errors distinguish read-only archive, stopped
-  Agent, stale revision, missing Thread, and invalid transition.
+- Every mutation uses expected revision and returns the new revision.
+- Input admission returns the same receipt as CLI.
+- Resource events carry enough projection data to patch Explorer rows.
+- Errors distinguish archived read-only, Agent offline, stale revision,
+  missing/deleted Thread, invalid transition, and delete reference blockers.
 
 ## Component And State Changes
 
-Replace Session-named page and state responsibilities:
-
 | Current responsibility | New responsibility |
 | --- | --- |
-| `History.tsx` | `Threads.tsx`, active/archived projections and actions |
+| `History.tsx` | `Threads.tsx`, active/archived projection and actions |
 | `Session.tsx` | `Thread.tsx`, tail-first history plus live projection |
-| `Sessions.tsx` active redirect/creator | Main Thread route resolution |
+| `Sessions.tsx` redirect/creator | fixed Main `0` route |
 | `history-sessions.ts` | `thread-list.ts` projection and formatting |
-| Session read controller/state | Thread read controller/state with Generation window and event cursor |
-| Session composer/status/transcript | Thread-named components sharing the existing visual primitives |
-| Session title helpers | Removed; alias and `#tid` are canonical presentation |
+| Session read state/controller | Thread paging, Context activity, and event cursor |
+| Session composer/status/transcript | Thread-named components reusing visual primitives |
+| Session title helpers | removed; alias and `#tid` are canonical |
 
-TypeScript API types mirror transport DTOs, not disk schemas. Thread list
-state, transcript paging state, live event state, and composer submission state
-remain separate pure reducers so reconnects and route changes do not corrupt
-one another.
+Keep list, transcript paging, live events, and composer submission as separate
+pure reducers. TypeScript types mirror transport DTOs, never disk schemas.
 
 ## Responsive And Accessible Behavior
 
-- Wide layouts may use a compact metric grid; narrow layouts keep alias, id,
-  state, and pending count visible and move secondary metrics below.
-- Rows are one keyboard focus target with separate labelled overflow actions.
-- Active and Archived sections use proper heading/disclosure semantics.
-- "Load older messages," "Jump to latest," and Generation disclosures are
-  real buttons with visible focus treatment.
-- Status and pending changes announce concise updates through an `aria-live`
-  region without announcing every streaming token.
-- Generation separators are landmarks or labelled separators, not decorative
-  color rules.
-- All timestamps expose a full localized accessible label even when visually
-  abbreviated.
-- Existing reduced-motion, color contrast, and responsive shell rules remain
-  mandatory.
-
-## Key Interaction Scenarios
-
-### Open recent Main work
-
-1. Select an Agent.
-2. Web resolves `main_thread_id` and opens its Thread URL.
-3. The current Generation tail renders immediately.
-4. Older Generations remain unloaded until requested.
-
-### Send while work is already running
-
-1. Submit from the active composer.
-2. The API durably accepts the input and returns `input_id`.
-3. Composer clears and the pending stack shows that id.
-4. A later event links it to the consuming Turn; the UI does not invent a
-   paired Assistant response.
-
-### Inspect pre-compaction context
-
-1. Select **Load older messages** until the current Generation beginning.
-2. The compact boundary appears with an optional bootstrap disclosure.
-3. Load again to page the previous Generation tail without losing position.
-
-### Continue archived work
-
-1. Open Archived Threads and select a row.
-2. Inspect the read-only transcript.
-3. Choose Unarchive.
-4. The server creates a new empty Generation and returns an active revision.
-5. The same route enables the composer at the new tail.
+- Wide rows use a compact metric grid; narrow rows preserve alias, id, state,
+  and pending count.
+- Rows and overflow actions have separate keyboard targets and labels.
+- Active/Archived sections use heading and disclosure semantics.
+- Load older, Jump to latest, Compact disclosure, archive, and delete dialogs
+  are keyboard-operable with visible focus.
+- `aria-live` announces concise status/pending changes, not every token.
+- Context separators are labelled landmarks, not decorative rules.
+- Abbreviated timestamps retain full localized accessible labels.
+- Existing reduced-motion, contrast, and responsive shell rules remain binding.
 
 ## Verification
 
-Implementation must add pure reducer/component tests and browser coverage for:
+Pure reducer/component tests and real browser coverage must include:
 
-- Active/Archived grouping, Main-first sorting, metrics, and no summary title.
-- Deep links, alias rename stability, Back navigation, and restored scroll.
-- Tail-first load, stable prepend anchor, Generation boundary paging, and end
+- Main `#0`, Active/Archived grouping, metrics, search, paging, and no summary.
+- Deep links, rename stability, Back navigation, and restored scroll.
+- EOF-first first page, stable prepend anchor, Context activities, and beginning
   of history.
-- Compact bootstrap disclosure versus summary-free `/new` boundary.
-- Two pending inputs consumed by one Turn without false reply pairing.
-- SSE replay overlap, reconnect, transition across Generations, and new-activity
-  affordance.
-- Composer access for every active Thread and read-only archived/offline states.
-- Archive, unarchive, stop, rename, and create-child eligibility.
-- Keyboard, focus, screen-reader labels, reduced motion, and narrow viewport.
-- Fleet proxy behavior when the Agent is serving, stopped, or replaced.
-- Removal of History, Session routes, Active Session switching, deletion, and
-  compatibility redirects.
+- Expand/copy Compact summary versus non-interactive Renewed marker.
+- Multiple Inputs consumed by one Turn without false reply pairing.
+- Replay overlap, reconnect, new-activity behavior, and transition without route
+  remount.
+- Active composer and archived/offline read-only states.
+- Archive/unarchive preserving Generation, checked delete confirmation and
+  blockers, stop, rename, and child creation.
+- Keyboard, screen reader, reduced motion, narrow viewport, and destructive
+  confirmation focus management.
+- Fleet proxy behavior for serving, stopped, and replaced Agents.
+
+Final cleanup removes Session/History components, routes, fixtures, and tests
+whose only purpose was proving deleted surfaces absent; keep replacement
+behavior and browser tests.

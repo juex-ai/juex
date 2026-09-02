@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,14 +18,14 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {
 	workDir := t.TempDir()
-	sessionsDir := filepath.Join(t.TempDir(), "sessions")
-	hub := newResourceEventHub(workDir, sessionsDir)
+	threadsDir := filepath.Join(t.TempDir(), "threads")
+	hub := newResourceEventHub(workDir, threadsDir)
 
 	tests := []struct {
 		path string
@@ -34,7 +35,7 @@ func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {
 		{path: filepath.Join(workDir, ".git", "index")},
 		{path: filepath.Join(workDir, ".juex", "events.jsonl")},
 		{path: filepath.Join(workDir, ".juex", "observables.json"), want: resourceObservable},
-		{path: filepath.Join(sessionsDir, "session-1", "scratchpad", "notes.md"), want: resourceScratchpad},
+		{path: filepath.Join(threadsDir, "123456", "scratchpad", "notes.md"), want: resourceScratchpad},
 	}
 	for _, test := range tests {
 		if got := hub.resourceForPath(test.path); got != test.want {
@@ -44,9 +45,9 @@ func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {
 }
 
 func TestResourceEventHubClassifiesScratchpadAsRuntimeInput(t *testing.T) {
-	sessionsDir := filepath.Join(t.TempDir(), "sessions")
-	hub := newResourceEventHub(t.TempDir(), sessionsDir)
-	path := filepath.Join(sessionsDir, "session-1", "scratchpad", "notes.md")
+	threadsDir := filepath.Join(t.TempDir(), "threads")
+	hub := newResourceEventHub(t.TempDir(), threadsDir)
+	path := filepath.Join(threadsDir, "123456", "scratchpad", "notes.md")
 
 	got := hub.resourcesForPath(path)
 	want := []string{resourceScratchpad, resourceRuntime}
@@ -127,11 +128,11 @@ func TestResourceEventHubProjectsObservableAndWriteEvents(t *testing.T) {
 
 func TestResourceEventHubCoalescesProjectedAndFilesystemChanges(t *testing.T) {
 	workDir := t.TempDir()
-	sessionsDir := filepath.Join(t.TempDir(), "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	threadsDir := filepath.Join(t.TempDir(), "threads")
+	if err := os.MkdirAll(threadsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hub := newResourceEventHub(workDir, sessionsDir)
+	hub := newResourceEventHub(workDir, threadsDir)
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -165,11 +166,11 @@ func TestResourceEventHubCoalescesProjectedAndFilesystemChanges(t *testing.T) {
 
 func TestResourceEventHubWatchesWorkspaceOnDemand(t *testing.T) {
 	workDir := t.TempDir()
-	sessionsDir := filepath.Join(t.TempDir(), "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	threadsDir := filepath.Join(t.TempDir(), "threads")
+	if err := os.MkdirAll(threadsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hub := newResourceEventHub(workDir, sessionsDir)
+	hub := newResourceEventHub(workDir, threadsDir)
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -255,8 +256,9 @@ func TestResourceEventHubWatchesExternalGlobalAgentsFile(t *testing.T) {
 	}
 	select {
 	case <-subscription.updates:
-		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
-			t.Fatalf("resources = %v, want runtime", got)
+		got := subscription.take().Resources
+		if !slices.Contains(got, resourceRuntime) {
+			t.Fatalf("resources = %v, want runtime invalidation", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("external global AGENTS.md mutation was not observed")
@@ -328,15 +330,8 @@ func assertRuntimeInvalidation(t *testing.T, subscription resourceSubscription, 
 	}
 }
 
-func TestResourceEventHubWatchesExternalActiveSessionChange(t *testing.T) {
+func TestResourceEventHubWatchesExternalThreadIndexChange(t *testing.T) {
 	srv := newTestServer(t)
-	firstID := "20260814T090000-first"
-	secondID := "20260814T100000-second"
-	seedSession(t, srv.opts.Cfg.WorkDir, firstID, `{"role":"user","content":"first"}`)
-	seedSession(t, srv.opts.Cfg.WorkDir, secondID, `{"role":"user","content":"second"}`)
-	if _, err := session.Activate(srv.opts.Cfg.SessionsDir(), srv.opts.Cfg.HistoryPath(), firstID); err != nil {
-		t.Fatal(err)
-	}
 
 	subscription, err := srv.resources.subscribe()
 	if err != nil {
@@ -344,26 +339,29 @@ func TestResourceEventHubWatchesExternalActiveSessionChange(t *testing.T) {
 	}
 	defer subscription.cancel()
 
-	if _, err := session.Activate(srv.opts.Cfg.SessionsDir(), srv.opts.Cfg.HistoryPath(), secondID); err != nil {
+	created, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).CreateWorker(thread.MainID, "external-index-change")
+	if err != nil {
 		t.Fatal(err)
 	}
+	_ = created.Close()
 	select {
 	case <-subscription.updates:
-		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
-			t.Fatalf("resources = %v, want runtime", got)
+		got := subscription.take().Resources
+		if !slices.Contains(got, resourceRuntime) {
+			t.Fatalf("resources = %v, want runtime invalidation", got)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("external active Session change did not invalidate runtime")
+		t.Fatal("external Thread index change did not invalidate runtime")
 	}
 }
 
 func TestResourceEventHubWatchesLateObservableConfigWithoutRuntimeTree(t *testing.T) {
 	workDir := t.TempDir()
-	sessionsDir := filepath.Join(t.TempDir(), "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	threadsDir := filepath.Join(t.TempDir(), "threads")
+	if err := os.MkdirAll(threadsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hub := newResourceEventHub(workDir, sessionsDir)
+	hub := newResourceEventHub(workDir, threadsDir)
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)

@@ -21,8 +21,8 @@ export function agentStatusText(agent: AgentStatus): string {
   if (state === "stopped") return "Stopped";
   if (state === "failed") return agent.problem || "Needs attention";
   if (state === "working") {
-    return agent.activity?.selected_status?.session.alias
-      ? `Working · ${agent.activity.selected_status.session.alias}`
+    return agent.activity?.selected_status?.thread.alias
+      ? `Working · ${agent.activity.selected_status.thread.alias}`
       : "Working";
   }
   const workspaceName = lastPathSegment(agent.workspace);

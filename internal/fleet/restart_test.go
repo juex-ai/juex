@@ -77,14 +77,14 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			state:           statusapi.ActivityIdle,
 			detectTurnState: statusapi.TurnErrored,
 			confirmSession:  "session-other",
-			wantDiagnostic:  "want session",
+			wantDiagnostic:  "want Thread",
 		},
 		{
 			name:            "failed turn with newer selected turn is not resumed",
 			state:           statusapi.ActivityIdle,
 			detectTurnState: statusapi.TurnErrored,
 			confirmTurn:     "turn-newer",
-			wantDiagnostic:  "want session",
+			wantDiagnostic:  "want Thread",
 		},
 		{
 			name:            "failed turn with changed error is not resumed",
@@ -163,7 +163,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			confirmState:   statusapi.TurnCancelled,
 			confirmKind:    statusapi.StatusErrorRuntimeRestart,
 			confirmSession: "session-other",
-			wantDiagnostic: "want session",
+			wantDiagnostic: "want Thread",
 		},
 		{
 			name:           "different selected turn does not resume",
@@ -171,7 +171,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			confirmState:   statusapi.TurnCancelled,
 			confirmKind:    statusapi.StatusErrorRuntimeRestart,
 			confirmTurn:    "turn-other",
-			wantDiagnostic: "want session",
+			wantDiagnostic: "want Thread",
 		},
 		{
 			name:           "confirmation failure does not risk duplicate continuation",
@@ -213,7 +213,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 						turnState = statusapi.TurnActive
 					}
 					return restartActivity{
-						SessionID:     "session-one",
+						ThreadID:      "session-one",
 						TurnID:        "turn-original",
 						State:         test.state,
 						TurnState:     turnState,
@@ -240,7 +240,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 					activityState = statusapi.ActivityIdle
 				}
 				return restartActivity{
-					SessionID:     sessionID,
+					ThreadID:      sessionID,
 					TurnID:        turnID,
 					State:         activityState,
 					TurnState:     test.confirmState,
@@ -353,14 +353,14 @@ func TestRestartWithoutIntentAcknowledgementDoesNotResume(t *testing.T) {
 						activityState = statusapi.ActivityIdle
 					}
 					return restartActivity{
-						SessionID: "session-one",
+						ThreadID:  "session-one",
 						TurnID:    "turn-original",
 						State:     activityState,
 						TurnState: turnState,
 					}, nil
 				}
 				return restartActivity{
-					SessionID:     "session-one",
+					ThreadID:      "session-one",
 					TurnID:        "turn-original",
 					State:         statusapi.ActivityIdle,
 					TurnState:     statusapi.TurnCancelled,

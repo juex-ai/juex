@@ -18,8 +18,8 @@ import (
 const (
 	maxRestartResponseBytes   = 64 << 10
 	restartActivityPath       = "/api/status"
-	restartResumePrompt       = "System notice: this agent was restarted while the previous turn was active. Review the session notes and recent tool results, then continue the interrupted work."
-	restartFailedResumePrompt = "System notice: this agent was restarted after the previous turn failed. Review the session notes and recent tool results, then continue the unfinished work. Do not repeat completed tool actions."
+	restartResumePrompt       = "System notice: this agent was restarted while the previous turn was active. Review the Thread notes and recent tool results, then continue the interrupted work."
+	restartFailedResumePrompt = "System notice: this agent was restarted after the previous turn failed. Review the Thread notes and recent tool results, then continue the unfinished work. Do not repeat completed tool actions."
 )
 
 func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartActivity, error) {
@@ -58,10 +58,10 @@ func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartAc
 		}
 		return restartActivity{}, nil
 	}
-	sessionID := strings.TrimSpace(body.SelectedStatus.Session.ID)
+	threadID := strings.TrimSpace(body.SelectedStatus.Thread.ID)
 	activity := restartActivity{
-		SessionID: sessionID,
-		State:     body.State,
+		ThreadID: threadID,
+		State:    body.State,
 	}
 	if body.SelectedStatus.Turn != nil {
 		activity.TurnID = strings.TrimSpace(body.SelectedStatus.Turn.ID)
@@ -71,8 +71,8 @@ func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartAc
 		}
 	}
 	if activity.State == statusapi.ActivityWorking || activity.TurnState == statusapi.TurnErrored {
-		if activity.SessionID == "" {
-			return restartActivity{}, fmt.Errorf("restart activity omitted session id")
+		if activity.ThreadID == "" {
+			return restartActivity{}, fmt.Errorf("restart activity omitted Thread id")
 		}
 		if activity.TurnID == "" {
 			return restartActivity{}, fmt.Errorf("restart activity omitted turn id")
@@ -84,7 +84,7 @@ func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartAc
 func postRestartResume(
 	ctx context.Context,
 	state endpoint.Runtime,
-	sessionID string,
+	threadID string,
 	prompt string,
 ) (string, error) {
 	target, err := endpoint.Parse(state.Endpoint)
@@ -101,7 +101,7 @@ func postRestartResume(
 	if err != nil {
 		return "", fmt.Errorf("encode restart continuation: %w", err)
 	}
-	path := "/api/sessions/" + url.PathEscape(sessionID) + "/turns"
+	path := "/api/threads/" + url.PathEscape(threadID) + "/inputs"
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,

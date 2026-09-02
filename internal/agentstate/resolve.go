@@ -32,12 +32,13 @@ type Marker struct {
 }
 
 type Agent struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Workspace string    `json:"workspace"`
-	Enabled   bool      `json:"enabled"`
-	Autostart bool      `json:"autostart"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Workspace         string    `json:"workspace"`
+	RuntimeConfigPath string    `json:"runtime_config_path,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	Autostart         bool      `json:"autostart"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Resolution struct {
@@ -88,7 +89,7 @@ type NoAgentError struct {
 
 func (e *NoAgentError) Error() string {
 	return fmt.Sprintf(
-		"agentstate: no agent exists for workspace %s; marker %s is missing; run juex run, repl, or listen to create a durable workspace agent",
+		"agentstate: no agent exists for workspace %s; marker %s is missing; run juex send or listen to create a durable workspace agent",
 		e.WorkDir, e.Marker,
 	)
 }
@@ -101,7 +102,7 @@ type RebindRequiredError struct {
 
 func (e *RebindRequiredError) Error() string {
 	return fmt.Sprintf(
-		"agentstate: workspace for agent %q moved from %s to %s; run juex run, repl, or listen once to rebind the durable workspace agent",
+		"agentstate: workspace for agent %q moved from %s to %s; run juex send or listen once to rebind the durable workspace agent",
 		e.AgentID, e.RecordedWorkspace, e.CurrentWorkspace,
 	)
 }

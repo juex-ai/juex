@@ -25,7 +25,7 @@ func (s *commandSourceRuntime) start(callCtx context.Context, run *observableRun
 		runID:         run.runID,
 		workDir:       s.opts.WorkDir,
 		agentStateDir: s.opts.AgentStateDir,
-		artifactDir:   s.opts.ArtifactDir,
+		artifactDir:   s.opts.MediaDir,
 		environment:   s.opts.Environment,
 		sandboxPolicy: s.opts.Sandbox,
 		sandboxRunner: s.opts.SandboxRunner,

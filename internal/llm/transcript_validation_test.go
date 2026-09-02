@@ -72,7 +72,7 @@ func TestBuildProviderContextRejectsImageBeforePendingToolResult(t *testing.T) {
 			ToolName:  "render_chart",
 		}}},
 		{Role: RoleUser, Blocks: []Block{
-			{Type: BlockImage, Media: &MediaRef{ArtifactPath: "sessions/s/media/image.png", MediaType: "image/png"}},
+			{Type: BlockImage, Media: &MediaRef{ArtifactPath: "threads/123456/media/image.png", MediaType: "image/png"}},
 			{Type: BlockToolResult, ToolUseID: "call_image", ToolName: "render_chart", Content: "chart"},
 		}},
 	}

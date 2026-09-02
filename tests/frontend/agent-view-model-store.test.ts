@@ -10,15 +10,15 @@ import type {
 
 function runtimeStatus(
   cursor: string,
-  state: AgentRuntimeStatusSnapshot["session"]["state"],
-  sessionID = "session-1",
+  state: AgentRuntimeStatusSnapshot["thread"]["state"],
+  threadID = "thread-1",
   updatedAt = "",
 ): AgentRuntimeStatusSnapshot {
   return {
     cursor,
     updated_at: updatedAt,
-    session: {
-      id: sessionID,
+    thread: {
+      id: threadID,
       alias: "Primary",
       state,
       working: state === "turn_active" || state === "draining_pending",
@@ -44,11 +44,11 @@ function runtimeStatus(
 
 function agentActivity(
   status: AgentRuntimeStatusSnapshot,
-  state: AgentActivity["state"] = status.session.working ? "working" : "idle",
+  state: AgentActivity["state"] = status.thread.working ? "working" : "idle",
 ): AgentActivity {
   return {
     state,
-    pending_input_count: state === "working" ? status.session.pending_count : 0,
+    pending_input_count: state === "working" ? status.thread.pending_count : 0,
     selected_status: status,
   };
 }
@@ -61,12 +61,12 @@ test("frontend activity policy stays backend-owned", () => {
     ),
     "utf8",
   );
-  assert.doesNotMatch(source, /session\.working/);
-  assert.doesNotMatch(source, /SessionRuntimeTurnActive|draining_pending/);
+  assert.doesNotMatch(source, /thread\.working/);
+  assert.doesNotMatch(source, /ThreadRuntimeTurnActive|draining_pending/);
   assert.doesNotMatch(source, /state === "turn_active"/);
 });
 
-test("store preserves aggregate state even when selected session differs", () => {
+test("store preserves aggregate state even when selected thread differs", () => {
   const store = new AgentViewModelStore();
   const selected = runtimeStatus("one", "turn_active");
   store.applyFleetEvent({
@@ -192,18 +192,18 @@ test("roster snapshots remove state for absent agents", () => {
     agent_id: base.id,
     activity: agentActivity(runtimeStatus("old", "turn_active")),
   });
-  store.setStatus(base.id, runtimeStatus("session-old", "idle"));
+  store.setStatus(base.id, runtimeStatus("thread-old", "idle"));
 
   store.seedAgents([]);
   store.seedAgents([base]);
 
   assert.equal(store.projectAgents([base])[0].activity, undefined);
-  assert.equal(store.status(base.id, "session-1"), undefined);
+  assert.equal(store.status(base.id, "thread-1"), undefined);
 });
 
-test("session streams do not replace the fleet-selected session", () => {
+test("thread streams do not replace the fleet-selected thread", () => {
   const store = new AgentViewModelStore();
-  const selected = runtimeStatus("fleet-1", "turn_active", "session-1");
+  const selected = runtimeStatus("fleet-1", "turn_active", "thread-1");
   store.applyFleetEvent({
     type: "agent.status",
     agent_id: "agent-1",
@@ -211,7 +211,7 @@ test("session streams do not replace the fleet-selected session", () => {
   });
   store.setStatus("agent-1", selected);
 
-  const historical = runtimeStatus("history-1", "idle", "session-2");
+  const historical = runtimeStatus("history-1", "idle", "thread-2");
   store.setStatus("agent-1", historical);
 
   const projected = store.projectAgents([
@@ -227,20 +227,20 @@ test("session streams do not replace the fleet-selected session", () => {
       endpoint_matched: true,
     },
   ])[0];
-  assert.equal(projected.activity?.selected_status?.session.id, "session-1");
-  assert.equal(store.status("agent-1", "session-2")?.cursor, "history-1");
+  assert.equal(projected.activity?.selected_status?.thread.id, "thread-1");
+  assert.equal(store.status("agent-1", "thread-2")?.cursor, "history-1");
 
   store.applyFleetEvent({
     type: "agent.status",
     agent_id: "agent-1",
     activity: agentActivity(
-      runtimeStatus("fleet-2", "idle", "session-1"),
+      runtimeStatus("fleet-2", "idle", "thread-1"),
     ),
   });
-  assert.equal(store.status("agent-1", "session-1")?.cursor, "fleet-1");
-  assert.equal(store.status("agent-1", "session-2")?.cursor, "history-1");
-  store.clearStatus("agent-1", "session-1");
-  assert.equal(store.status("agent-1", "session-1"), undefined);
+  assert.equal(store.status("agent-1", "thread-1")?.cursor, "fleet-1");
+  assert.equal(store.status("agent-1", "thread-2")?.cursor, "history-1");
+  store.clearStatus("agent-1", "thread-1");
+  assert.equal(store.status("agent-1", "thread-1"), undefined);
   assert.equal(
     store.projectAgents([projected])[0].activity?.selected_status?.cursor,
     "fleet-2",
@@ -256,7 +256,7 @@ test("stream delivery order wins over updated_at timestamps", () => {
       runtimeStatus(
         "cursor-1",
         "turn_active",
-        "session-1",
+        "thread-1",
         "2026-07-19T00:00:02Z",
       ),
     ),
@@ -268,7 +268,7 @@ test("stream delivery order wins over updated_at timestamps", () => {
       runtimeStatus(
         "cursor-2",
         "idle",
-        "session-1",
+        "thread-1",
         "2026-07-19T00:00:01Z",
       ),
     ),
@@ -295,7 +295,7 @@ test("stream delivery order wins over updated_at timestamps", () => {
     runtimeStatus(
       "direct-1",
       "turn_active",
-      "session-1",
+      "thread-1",
       "2026-07-19T00:00:02Z",
     ),
   );
@@ -304,9 +304,9 @@ test("stream delivery order wins over updated_at timestamps", () => {
     runtimeStatus(
       "direct-2",
       "idle",
-      "session-1",
+      "thread-1",
       "2026-07-19T00:00:01Z",
     ),
   );
-  assert.equal(store.status("agent-1", "session-1")?.cursor, "direct-2");
+  assert.equal(store.status("agent-1", "thread-1")?.cursor, "direct-2");
 });

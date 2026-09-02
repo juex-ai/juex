@@ -43,7 +43,7 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 		t.Fatalf("updated state = %+v", state)
 	}
 
-	data, err := os.ReadFile(filepath.Join(store.SessionDir, "goal_state.json"))
+	data, err := os.ReadFile(filepath.Join(store.ThreadDir, "goal_state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

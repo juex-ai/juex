@@ -2,27 +2,27 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const sessionSource = readFileSync(
-  new URL("../../frontend/src/pages/Session.tsx", import.meta.url),
+const threadSource = readFileSync(
+  new URL("../../frontend/src/pages/Thread.tsx", import.meta.url),
   "utf8",
 );
 const composerSource = readFileSync(
   new URL(
-    "../../frontend/src/components/session/SessionComposer.tsx",
+    "../../frontend/src/components/thread/ThreadComposer.tsx",
     import.meta.url,
   ),
   "utf8",
 );
 const statusSource = readFileSync(
   new URL(
-    "../../frontend/src/components/session/SessionStatusPanel.tsx",
+    "../../frontend/src/components/thread/ThreadStatusPanel.tsx",
     import.meta.url,
   ),
   "utf8",
 );
 const controllerSource = readFileSync(
   new URL(
-    "../../frontend/src/lib/session-read-controller.ts",
+    "../../frontend/src/lib/thread-read-controller.ts",
     import.meta.url,
   ),
   "utf8",
@@ -42,7 +42,7 @@ const promptInputSource = readFileSync(
 test("composer groups utility actions before matching status controls", () => {
   const actions = composerSource.indexOf('aria-label="Composer actions"');
   const separator = composerSource.indexOf('orientation="vertical"');
-  const status = composerSource.indexOf('aria-label="Session status"');
+  const status = composerSource.indexOf('aria-label="Thread status"');
   assert.ok(actions >= 0 && separator > actions && status > separator);
   assert.match(
     composerSource,
@@ -50,7 +50,7 @@ test("composer groups utility actions before matching status controls", () => {
   );
   assert.match(
     composerSource,
-    /aria-label="Session status"\s+role="group"/,
+    /aria-label="Thread status"\s+role="group"/,
   );
   assert.match(statusSource, /STATUS_CONTROL_CLASS/);
   assert.match(statusSource, /<PopoverTrigger asChild>/);
@@ -138,7 +138,7 @@ test("composer feedback is announced and queued inputs stay bounded", () => {
 test("blocked keyboard submissions preserve the composer draft", () => {
   assert.match(
     composerSource,
-    /submitAction === "loading"[\s\S]*?throw new Error\("Loading session status"\)/,
+    /submitAction === "loading"[\s\S]*?throw new Error\("Loading thread status"\)/,
     "loading status must reject form submission so PromptInput does not clear the draft",
   );
   assert.match(
@@ -151,7 +151,7 @@ test("blocked keyboard submissions preserve the composer draft", () => {
 test("controller owns status application and close-before-clear cleanup", () => {
   assert.match(
     controllerSource,
-    /if \(!subscribed \|\| !isLatestSessionRoute\(route, sessionID\)\) return;[\s\S]*status\.apply\(sessionID, event\.status\)/,
+    /if \(!subscribed \|\| !isLatestThreadRoute\(route, threadID\)\) return;[\s\S]*status\.apply\(threadID, event\.status\)/,
     "the controller must reject disposed or stale frames before applying status",
   );
   assert.match(
@@ -161,7 +161,7 @@ test("controller owns status application and close-before-clear cleanup", () => 
   );
   assert.match(
     controllerSource,
-    /subscribed = false;[\s\S]*unsubscribe\(\);[\s\S]*status\.clear\(sessionID\)/,
+    /subscribed = false;[\s\S]*unsubscribe\(\);[\s\S]*status\.clear\(threadID\)/,
     "controller cleanup must close the stream before clearing status",
   );
 });
@@ -183,40 +183,40 @@ test("manual compaction clears only its submitted draft when compaction starts",
   assert.match(composerSource, /value=\{draft\}/);
 });
 
-test("active session composer floats without consuming conversation layout", () => {
+test("active thread composer floats without consuming conversation layout", () => {
   assert.match(composerSource, /new ResizeObserver/);
   assert.match(
     composerSource,
     /if \(!canSend \|\| !overlayNode\) \{[\s\S]*onClearanceChange\(0\);[\s\S]*return;/,
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /<ConversationContent[\s\S]*style=\{\{[\s\S]*paddingBottom:/,
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /<ConversationScrollButton[\s\S]*style=\{\{[\s\S]*bottom:/,
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /<ConversationClearanceFollower clearance=\{effectiveClearance\}/,
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /clearance > previousClearance\.current[\s\S]*scrollToBottom\(\{ animation: "instant" \}\)/,
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /canSend \? composerClearance : 0/,
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /<ConversationContent[\s\S]*max-w-\[808px\]/,
     "desktop transcript content bounds should align with the 760px composer after padding",
   );
   assert.match(
     composerSource,
-    /data-testid="session-composer-overlay"/,
+    /data-testid="thread-composer-overlay"/,
   );
   assert.match(
     composerSource,
@@ -227,34 +227,34 @@ test("active session composer floats without consuming conversation layout", () 
     /className="flex max-h-full w-full flex-col overflow-visible px-4 md:px-6"/,
     "the composer frame must let the negative top fade render outside its measured height",
   );
-  assert.match(composerSource, /data-testid="session-composer-obstruction"/);
+  assert.match(composerSource, /data-testid="thread-composer-obstruction"/);
   assert.match(
     composerSource,
-    /data-testid="session-composer-fade"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*-top-12[\s\S]*h-16[\s\S]*bg-linear-to-b/,
+    /data-testid="thread-composer-fade"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*-top-12[\s\S]*h-16[\s\S]*bg-linear-to-b/,
     "the fade should continue through the prompt's 16px rounded top edge",
   );
   assert.match(
     composerSource,
-    /data-testid="session-composer-content-occluder"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*top-4[\s\S]*bottom-0[\s\S]*bg-background/,
+    /data-testid="thread-composer-content-occluder"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*top-4[\s\S]*bottom-0[\s\S]*bg-background/,
     "a composer-width surface must hide transcript content below the rounded top without covering the scrollbar",
   );
   assert.doesNotMatch(
-    sessionSource,
+    threadSource,
     /<Conversation[\s\S]*marginBottom:/,
     "the conversation scrollport must keep its full height so its scrollbar reaches the bottom",
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /<ConversationContent[\s\S]*paddingBottom: effectiveClearance/,
     "the full composer clearance must keep the latest content above the obstruction",
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /<ConversationScrollButton[\s\S]*bottom: effectiveClearance \? effectiveClearance \+ 16 : 16/,
     "the scroll-to-bottom control must preserve its original gap above the composer",
   );
   const overlay = composerSource.match(
-    /data-testid="session-composer-overlay"[\s\S]*?data-testid="session-composer-obstruction"/,
+    /data-testid="thread-composer-overlay"[\s\S]*?data-testid="thread-composer-obstruction"/,
   )?.[0];
   assert.ok(overlay);
   assert.doesNotMatch(
@@ -266,10 +266,10 @@ test("active session composer floats without consuming conversation layout", () 
     composerSource,
     /pb-\[max\(0\.75rem,env\(safe-area-inset-bottom\)\)\][\s\S]*md:pb-\[max\(1\.25rem,env\(safe-area-inset-bottom\)\)\]/,
   );
-  assert.match(composerSource, /data-testid="session-composer-stack"/);
+  assert.match(composerSource, /data-testid="thread-composer-stack"/);
   assert.match(
     composerSource,
-    /className="pointer-events-auto relative z-10 flex min-h-0 flex-col overflow-visible"[\s\S]*data-testid="session-composer-stack"/,
+    /className="pointer-events-auto relative z-10 flex min-h-0 flex-col overflow-visible"[\s\S]*data-testid="thread-composer-stack"/,
     "the stack must not rectangularly clip the prompt surface shadow",
   );
   assert.match(

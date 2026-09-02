@@ -495,6 +495,15 @@ func (t *Tracker) ReplayEvent(event events.Event) error {
 		if err := t.recordTerminalLinkLocked(event.Type, event.Payload, "compaction"); err != nil {
 			return err
 		}
+	case "turn.completed", "turn.errored", "turn.cancelled":
+		// A terminal Turn is a recovery boundary. The next Turn records complete
+		// snapshots again so a bounded Thread checkpoint never depends on an
+		// unbounded chain of reused snapshot digests.
+		clear(t.known)
+		clear(t.epochs)
+		clear(t.purposes)
+		clear(t.requested)
+		clear(t.terminal)
 	}
 	return nil
 }

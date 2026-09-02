@@ -23,10 +23,18 @@ type Provider interface {
 type CompleteOptions struct {
 	Purpose           string
 	MaxOutputTokens   int
+	ThinkingEffort    string
 	CachePolicy       CachePolicy
 	RetryObserver     func(ProviderRetryDiagnostic)
 	OnDelta           func(StreamDelta)
 	StreamIdleTimeout time.Duration
+}
+
+func requestThinkingEffort(profile ProviderProfile, opts CompleteOptions) string {
+	if opts.ThinkingEffort != "" {
+		return opts.ThinkingEffort
+	}
+	return profile.ThinkingEffort
 }
 
 type StreamDelta struct {
@@ -75,7 +83,7 @@ type Config struct {
 	Query          map[string]string
 	Capabilities   CapabilityOverrides
 	Compat         CompatOptions
-	ArtifactDir    string
+	MediaDir       string
 }
 
 // New constructs the appropriate Provider for the resolved provider profile.

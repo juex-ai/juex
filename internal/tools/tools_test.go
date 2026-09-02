@@ -33,10 +33,10 @@ import (
 )
 
 func registerTestBuiltins(r *Registry, workDir string) {
-	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, ArtifactDir: testArtifactDir(workDir), Shell: DefaultShellProfile()})
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, MediaDir: testMediaDir(workDir), Shell: DefaultShellProfile()})
 }
 
-func testArtifactDir(workDir string) string { return filepath.Join(workDir, "artifacts") }
+func testMediaDir(workDir string) string { return filepath.Join(workDir, "artifacts") }
 
 func registerSandboxedTestBuiltins(r *Registry, workDir string, blockedPaths []string) {
 	policy := sandbox.DefaultPolicy()
@@ -164,7 +164,7 @@ func TestToolGroupGuideSkill(t *testing.T) {
 	}{
 		{name: "observable", group: ToolGroupObservable, want: "juex-observables", ok: true},
 		{name: "chunked write", group: ToolGroupChunkedWrite, want: "juex-chunked-write", ok: true},
-		{name: "session state", group: ToolGroupSessionState, want: "juex-session-state", ok: true},
+		{name: "thread state", group: ToolGroupThreadState, want: "juex-thread-state", ok: true},
 		{name: "unguided", group: ToolGroupFile},
 		{name: "unknown", group: ToolGroup("future")},
 	}
@@ -975,7 +975,7 @@ func TestBuiltins_ArtifactReadURIIsReadableAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session-1/tool-results/call-1.txt", []byte("complete tool output"))
+	ref, err := store.Put("threads/123456/spool/call-1.txt", []byte("complete tool output"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +985,7 @@ func TestBuiltins_ArtifactReadURIIsReadableAndReadOnly(t *testing.T) {
 	}
 
 	r := NewRegistry()
-	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, ArtifactDir: artifactDir, Shell: DefaultShellProfile()})
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, MediaDir: artifactDir, Shell: DefaultShellProfile()})
 	out, err := r.Call(context.Background(), "read", map[string]any{"path": uri})
 	if err != nil {
 		t.Fatal(err)
@@ -1038,7 +1038,7 @@ func TestBuiltins_ArtifactReadURIRespectsSandboxBlockedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session-1/tool-results/call-1.txt", []byte("blocked tool output"))
+	ref, err := store.Put("threads/123456/spool/call-1.txt", []byte("blocked tool output"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1052,7 +1052,7 @@ func TestBuiltins_ArtifactReadURIRespectsSandboxBlockedPaths(t *testing.T) {
 	RegisterBuiltins(r, BuiltinOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
-		ArtifactDir:   artifactDir,
+		MediaDir:      artifactDir,
 		Shell:         DefaultShellProfile(),
 		Sandbox:       policy,
 	})
@@ -1094,7 +1094,7 @@ func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
 	if !strings.HasPrefix(filepath.ToSlash(media.ArtifactPath), "read-media/") {
 		t.Fatalf("artifact path = %q, want read media artifact", media.ArtifactPath)
 	}
-	cached, err := os.ReadFile(filepath.Join(testArtifactDir(workDir), filepath.FromSlash(media.ArtifactPath)))
+	cached, err := os.ReadFile(filepath.Join(testMediaDir(workDir), filepath.FromSlash(media.ArtifactPath)))
 	if err != nil {
 		t.Fatalf("read cached media: %v", err)
 	}
@@ -1103,7 +1103,7 @@ func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
 		t.Fatalf("sha = %q, want cached file sha %q", media.SHA256, got)
 	}
 	sentinel := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	artifactPath := filepath.Join(testArtifactDir(workDir), filepath.FromSlash(media.ArtifactPath))
+	artifactPath := filepath.Join(testMediaDir(workDir), filepath.FromSlash(media.ArtifactPath))
 	if err := os.Chtimes(artifactPath, sentinel, sentinel); err != nil {
 		t.Fatalf("set cached media time: %v", err)
 	}
@@ -1253,7 +1253,7 @@ func TestBuiltins_ReadImageDownsamplesLongSide(t *testing.T) {
 	if media.Width > readImageMaxSide || media.Height > readImageMaxSide {
 		t.Fatalf("media dimensions = %dx%d, want max side <= %d", media.Width, media.Height, readImageMaxSide)
 	}
-	cached, err := os.Open(filepath.Join(testArtifactDir(workDir), filepath.FromSlash(media.ArtifactPath)))
+	cached, err := os.Open(filepath.Join(testMediaDir(workDir), filepath.FromSlash(media.ArtifactPath)))
 	if err != nil {
 		t.Fatalf("open cached media: %v", err)
 	}
@@ -1300,7 +1300,7 @@ func TestBuiltins_ReadImageDownsampleFailureStillReturnsMedia(t *testing.T) {
 	if !ok || media == nil {
 		t.Fatalf("structured result = %#v, want media", info.StructuredResult)
 	}
-	cached, err := os.ReadFile(filepath.Join(testArtifactDir(workDir), filepath.FromSlash(media.ArtifactPath)))
+	cached, err := os.ReadFile(filepath.Join(testMediaDir(workDir), filepath.FromSlash(media.ArtifactPath)))
 	if err != nil {
 		t.Fatalf("read cached media: %v", err)
 	}
@@ -1328,7 +1328,7 @@ func TestBuiltins_ReadImageOmitsUnsafePixelCount(t *testing.T) {
 	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
 		t.Fatalf("structured result = %#v, want no media for unsafe pixel count", info.StructuredResult)
 	}
-	if _, err := os.Stat(testArtifactDir(workDir)); !os.IsNotExist(err) {
+	if _, err := os.Stat(testMediaDir(workDir)); !os.IsNotExist(err) {
 		t.Fatalf("unsafe image should not create media artifact dir, stat err=%v", err)
 	}
 }
@@ -1421,7 +1421,7 @@ func TestBuiltins_ReadImageOmitsReencodedOversizeImage(t *testing.T) {
 	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
 		t.Fatalf("structured result = %#v, want no media for oversized re-encode", info.StructuredResult)
 	}
-	if _, err := os.Stat(testArtifactDir(workDir)); !os.IsNotExist(err) {
+	if _, err := os.Stat(testMediaDir(workDir)); !os.IsNotExist(err) {
 		t.Fatalf("oversized re-encode should not create media artifact dir, stat err=%v", err)
 	}
 }
@@ -3138,7 +3138,7 @@ func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	RegisterBuiltins(r, BuiltinOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
-		ArtifactDir:   artifactDir,
+		MediaDir:      artifactDir,
 		Shell:         fakeShellProfile(),
 		Sandbox:       policy,
 		SandboxRunner: runner,

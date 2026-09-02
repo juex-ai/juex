@@ -222,7 +222,7 @@ func doctorAgentCheck(workDir string) doctorCheck {
 			Name:       "agent",
 			Status:     doctorStatusWarn,
 			Message:    noAgent.Error(),
-			Suggestion: "run juex run, repl, or listen to create a durable workspace agent",
+			Suggestion: "run juex send or listen to create a durable workspace agent",
 		}
 	}
 	var rebind *agentstate.RebindRequiredError
@@ -231,7 +231,7 @@ func doctorAgentCheck(workDir string) doctorCheck {
 			Name:       "agent",
 			Status:     doctorStatusFail,
 			Message:    rebind.Error(),
-			Suggestion: "run juex run, repl, or listen once to automatically rebind the workspace agent",
+			Suggestion: "run juex send or listen once to automatically rebind the workspace agent",
 		}
 	}
 	var copied *agentstate.WorkspaceCopyError
@@ -482,18 +482,6 @@ func doctorMCPCheck(ctx context.Context, cfg config.Config, agentRuntime app.Age
 		check.Suggestion = "check process environment permissions and retry"
 	}
 	return check
-}
-
-func doctorMCPCheckWithOptions(
-	ctx context.Context,
-	cfg config.Config,
-	opts mcp.RemoteReadinessOptions,
-) doctorCheck {
-	agentRuntime, err := app.ResolveAgentRuntime(cfg)
-	if err != nil {
-		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix selected Extension environment declarations and retry"}
-	}
-	return doctorMCPCheckWithAgentRuntimeOptions(ctx, cfg, agentRuntime, opts)
 }
 
 func doctorMCPCheckWithAgentRuntimeOptions(

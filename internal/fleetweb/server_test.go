@@ -26,7 +26,7 @@ import (
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/processmetrics"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 type fakeBackend struct {
@@ -107,10 +107,10 @@ func (f *fakeBackend) Restart(context.Context, string) (fleet.RestartResult, err
 	return fleet.RestartResult{
 		AgentStatus: f.actionStatus,
 		Resume: fleet.RestartResume{
-			Required:  true,
-			Sent:      true,
-			SessionID: "session-one",
-			TurnID:    "turn-resume",
+			Required: true,
+			Sent:     true,
+			ThreadID: "session-one",
+			TurnID:   "turn-resume",
 		},
 	}, f.actionErr
 }
@@ -181,35 +181,29 @@ func (f *fakeBackend) recordAction(action string) {
 	f.action = action
 }
 
-func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
+func TestStoppedAgentServesPersistedThreadHistory(t *testing.T) {
 	stateDir := t.TempDir()
 	workspace := t.TempDir()
-	sessionsDir := filepath.Join(stateDir, "sessions")
-	historyPath := filepath.Join(stateDir, "history.json")
 	previewPNG := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x00}
 	if err := os.WriteFile(filepath.Join(workspace, "preview.png"), previewPNG, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	persisted, err := session.NewWithOptions(sessionsDir, session.Options{
-		Alias:       "offline-session",
-		Active:      true,
-		HistoryPath: historyPath,
-	})
+	persisted, err := thread.NewStore(stateDir).EnsureMain()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := persisted.Append(llm.TextMessage(llm.RoleUser, "persisted while offline")); err != nil {
 		t.Fatal(err)
 	}
-	sessionID := persisted.ID
+	threadID := persisted.ID
 	if err := persisted.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err := artifact.NewStore(filepath.Join(stateDir, "artifacts"))
+	store, err := artifact.NewStore(filepath.Join(stateDir, "media"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifactRef, err := store.PutContentAddressed("sessions/"+sessionID+"/media", ".png", previewPNG)
+	artifactRef, err := store.PutContentAddressed("threads/"+threadID+"/media", ".png", previewPNG)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,9 +220,8 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 	handler := newServer(backend, Options{Addr: "127.0.0.1:0"}).Handler()
 
 	for _, path := range []string{
-		"/agents/aaaaaa/api/sessions",
-		"/agents/aaaaaa/api/sessions/active",
-		"/agents/aaaaaa/api/sessions/" + sessionID,
+		"/agents/aaaaaa/api/threads",
+		"/agents/aaaaaa/api/threads/" + threadID,
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
@@ -240,7 +233,7 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 
 	request := httptest.NewRequest(
 		http.MethodGet,
-		"/agents/aaaaaa/api/sessions/"+sessionID,
+		"/agents/aaaaaa/api/threads/"+threadID,
 		nil,
 	)
 	response := httptest.NewRecorder()
@@ -285,24 +278,23 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 }
 
 func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
-	const sessionID = "20260718T065604-8f0582f4"
+	const threadID = "8f0582"
 	tests := []struct {
 		path string
 		want bool
 	}{
-		{path: "/api/sessions", want: true},
-		{path: "/api/sessions/active", want: true},
-		{path: "/api/sessions/" + sessionID, want: true},
-		{path: "/api/sessions/" + sessionID + "/context", want: true},
-		{path: "/api/sessions/" + sessionID + "/scratchpad", want: true},
+		{path: "/api/threads", want: true},
+		{path: "/api/threads/" + threadID, want: true},
+		{path: "/api/threads/" + threadID + "/context", want: true},
+		{path: "/api/threads/" + threadID + "/scratchpad", want: true},
 		{path: "/api/media", want: true},
 		{path: "/api/runtime", want: false},
-		{path: "/api/sessions/" + sessionID + "/events", want: false},
-		{path: "/api/sessions/" + sessionID + "/turns", want: false},
-		{path: "/api/sessions/" + sessionID + "/context/extra", want: false},
-		{path: "/api/sessions/", want: false},
-		{path: "/api/sessions/..", want: false},
-		{path: `/api/sessions/20260718T065604-8f0582f4\..\other`, want: false},
+		{path: "/api/threads/" + threadID + "/events", want: false},
+		{path: "/api/threads/" + threadID + "/inputs", want: false},
+		{path: "/api/threads/" + threadID + "/context/extra", want: false},
+		{path: "/api/threads/", want: false},
+		{path: "/api/threads/..", want: false},
+		{path: `/api/threads/8f0582\..\other`, want: false},
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {
@@ -345,10 +337,10 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		updateStatus: fleet.RestartResult{
 			AgentStatus: status,
 			Resume: fleet.RestartResume{
-				Required:  true,
-				Sent:      true,
-				SessionID: "session-one",
-				TurnID:    "turn-resume",
+				Required: true,
+				Sent:     true,
+				ThreadID: "session-one",
+				TurnID:   "turn-resume",
 			},
 		},
 	}
@@ -1006,7 +998,7 @@ func TestAgentReverseProxyFailureAndSPAFallback(t *testing.T) {
 	spaRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(
 		spaRecorder,
-		httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/sessions/example", http.NoBody),
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/threads/0", http.NoBody),
 	)
 	if spaRecorder.Code != http.StatusOK ||
 		!strings.Contains(spaRecorder.Header().Get("Content-Type"), "text/html") ||

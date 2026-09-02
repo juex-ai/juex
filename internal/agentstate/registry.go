@@ -32,9 +32,10 @@ type WorkspaceBinding struct {
 }
 
 type AgentUpdate struct {
-	Name      *string
-	Enabled   *bool
-	Autostart *bool
+	Name              *string
+	RuntimeConfigPath *string
+	Enabled           *bool
+	Autostart         *bool
 }
 
 var removeWorkspaceMarker = os.Remove
@@ -90,6 +91,16 @@ func UpdateAgent(homeDir, agentID string, update AgentUpdate) (Agent, error) {
 			return Agent{}, errors.New("agentstate: agent name must not be empty")
 		}
 		agent.Name = name
+	}
+	if update.RuntimeConfigPath != nil {
+		configPath := strings.TrimSpace(*update.RuntimeConfigPath)
+		if configPath != "" {
+			if !filepath.IsAbs(configPath) {
+				return Agent{}, errors.New("agentstate: runtime config path must be absolute")
+			}
+			configPath = filepath.Clean(configPath)
+		}
+		agent.RuntimeConfigPath = configPath
 	}
 	if update.Enabled != nil {
 		agent.Enabled = *update.Enabled

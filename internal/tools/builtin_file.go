@@ -29,7 +29,7 @@ func (FileToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefinit
 func (FileToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	guard := ctx.FilePolicy
 	out := []Tool{
-		readTool(ctx.WorkDir, ctx.ArtifactDir, guard),
+		readTool(ctx.WorkDir, ctx.MediaDir, guard),
 		writeTool(ctx.WorkDir, guard),
 		editTool(ctx.WorkDir, guard),
 	}

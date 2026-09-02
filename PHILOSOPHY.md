@@ -47,10 +47,10 @@ be persisted in order.
 
 ### Make The Web UI A Control Surface
 
-The web UI exists to inspect sessions, run turns, interrupt work, and manage
-session history. It should stay close to the JSON/SSE API instead of becoming a
-separate app model. React state mirrors server state; the server remains the
-source of truth.
+The web UI exists to inspect Threads, submit Inputs, interrupt work, and manage
+active or archived history. It should stay close to the JSON/SSE API instead of
+becoming a separate app model. React state mirrors server state; the server
+remains the source of truth.
 
 ### Defer Until It Hurts
 
@@ -69,6 +69,6 @@ them and when the implementation can stay small enough to test and explain.
   migration step.
 - Synchronous turn loop with parallel tool calls: simple ordering and tests,
   while still allowing independent tool calls inside one model response.
-- JSONL history: durable and append-friendly; validated metadata checkpoints
-  and reverse paging keep common reads bounded, while full audit reads remain
-  proportional to transcript size.
+- One chronological Thread Journal: durable and append-friendly; rebuildable
+  projections and reverse paging keep common reads bounded, while full audit
+  reads remain proportional to history size.

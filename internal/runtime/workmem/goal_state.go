@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 const goalStateFile = "goal_state.json"
@@ -52,11 +54,19 @@ type GoalStateOptions struct {
 }
 
 type GoalStateStore struct {
-	SessionDir string
-	Path       string
-	Now        func() time.Time
+	ThreadDir string
+	Path      string
+	Now       func() time.Time
+	Thread    *thread.Thread
 
 	mu sync.Mutex
+}
+
+func NewThreadGoalStateStore(target *thread.Thread, opts GoalStateOptions) *GoalStateStore {
+	store := NewGoalStateStore(target.Dir, opts)
+	store.Thread = target
+	store.Path = ""
+	return store
 }
 
 type GoalGateDecision struct {
@@ -76,16 +86,32 @@ type GoalStatusSnapshot struct {
 	UpdatedAt         time.Time  `json:"updated_at,omitempty"`
 }
 
-func NewGoalStateStore(sessionDir string, opts GoalStateOptions) *GoalStateStore {
+func NewGoalStateStore(threadDir string, opts GoalStateOptions) *GoalStateStore {
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &GoalStateStore{
-		SessionDir: sessionDir,
-		Path:       filepath.Join(sessionDir, goalStateFile),
-		Now:        now,
+		ThreadDir: threadDir,
+		Path:      filepath.Join(threadDir, goalStateFile),
+		Now:       now,
 	}
+}
+
+func (s *GoalStateStore) Clear() error {
+	if s != nil && s.Thread != nil {
+		_, err := s.Thread.AppendFacts(thread.Fact{Type: thread.FactGoalCleared})
+		return err
+	}
+	if s == nil || strings.TrimSpace(s.Path) == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.Remove(s.Path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("goal state clear: %w", err)
+	}
+	return nil
 }
 
 func (s *GoalStateStore) Snapshot() (GoalState, error) {
@@ -186,9 +212,9 @@ func (s *GoalStateStore) CompletionGateDecision() (GoalGateDecision, error) {
 	if state.Status != GoalStatusInProgress {
 		return GoalGateDecision{Status: state.Status, ContinuationCount: state.ContinuationCount}, nil
 	}
-	prompt := "The current session goal is still in progress. Continue working toward the goal, call update_goal with status wait_for_user when useful progress requires new user or external input, or call update_goal with status success or failure when the goal is complete or cannot be completed."
+	prompt := "The current thread goal is still in progress. Continue working toward the goal, call update_goal with status wait_for_user when useful progress requires new user or external input, or call update_goal with status success or failure when the goal is complete or cannot be completed."
 	if contract, ok := state.RenderProviderContext(); ok {
-		prompt = "The current session goal is still in progress.\n\n" + contract +
+		prompt = "The current thread goal is still in progress.\n\n" + contract +
 			"\n\nContinue working, call update_goal with status wait_for_user when useful progress requires new user or external input, or call update_goal with status success or failure when the goal is complete or cannot be completed."
 	}
 	return GoalGateDecision{
@@ -259,6 +285,16 @@ func (s GoalState) RawMessage() json.RawMessage {
 
 func (s *GoalStateStore) loadLocked() (GoalState, error) {
 	state := GoalState{Version: 1}
+	if s != nil && s.Thread != nil {
+		raw := s.Thread.Projection().Goal
+		if len(bytes.TrimSpace(raw)) == 0 {
+			return state, nil
+		}
+		if err := json.Unmarshal(raw, &state); err != nil {
+			return state, fmt.Errorf("goal state parse: %w", err)
+		}
+		return normalizeGoalState(state), nil
+	}
 	if s == nil || s.Path == "" {
 		return state, nil
 	}
@@ -280,6 +316,15 @@ func (s *GoalStateStore) loadLocked() (GoalState, error) {
 }
 
 func (s *GoalStateStore) saveLocked(state GoalState) error {
+	if s != nil && s.Thread != nil {
+		state = normalizeGoalState(state)
+		data, err := json.Marshal(redactGoalState(state))
+		if err != nil {
+			return fmt.Errorf("goal state encode: %w", err)
+		}
+		_, err = s.Thread.AppendFacts(thread.Fact{Type: thread.FactGoalUpdated, Goal: data})
+		return err
+	}
 	if s == nil || s.Path == "" {
 		return nil
 	}

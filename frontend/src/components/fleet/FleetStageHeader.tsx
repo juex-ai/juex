@@ -117,14 +117,14 @@ export function FleetStageHeader({
                 className="shrink-0"
               >
                 <Link
-                  to={`${agentTabPath(agent.id, "chat")}/history`}
-                  aria-label="Session history"
+                  to={`${agentTabPath(agent.id, "chat")}/threads`}
+                  aria-label="Thread Explorer"
                 >
                   <History className="size-4" />
                 </Link>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Session history</TooltipContent>
+            <TooltipContent>Thread Explorer</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>

@@ -9,7 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/runtime"
 )
 
-var errTurnAdmissionBusy = errors.New("app: session busy")
+var errTurnAdmissionBusy = errors.New("app: Thread busy")
 
 // turnAdmissionQueue keeps only App-owned command and compaction exclusion.
 // Runtime is the sole authority for ordinary input start-versus-queue state.
@@ -27,7 +27,7 @@ func (a *App) admissionQueue() turnAdmissionQueue {
 
 func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) TurnAdmissionResult {
 	if q.state == nil || q.engine == nil {
-		return errorResult(fmt.Errorf("turn admission: app, engine, or session is not initialized"), nil)
+		return errorResult(fmt.Errorf("turn admission: app, engine, or Thread is not initialized"), nil)
 	}
 	q.state.transitionMu.Lock()
 	defer q.state.transitionMu.Unlock()
@@ -35,19 +35,19 @@ func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) 
 	phase := q.state.phase
 	q.state.mu.Unlock()
 	if phase == turnAdmissionCommand {
-		return conflictResult("session busy", errTurnAdmissionBusy, q.engine.PendingInputStatus())
+		return conflictResult("Thread busy", errTurnAdmissionBusy, q.engine.PendingInputStatus())
 	}
 	return admissionResultFromPendingInput(q.engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{Message: message}))
 }
 
 func admissionResultFromPendingInput(result runtime.PendingInputResult, err error) TurnAdmissionResult {
 	if result.Retry == runtime.PendingInputRetryAfterTurn && errors.Is(err, runtime.ErrActiveTurnExists) {
-		return conflictResult("session busy", err, result.Status)
+		return conflictResult("Thread busy", err, result.Status)
 	}
 	switch result.Disposition {
 	case runtime.PendingInputStarted:
 		start := &AdmittedTurn{TurnID: result.TurnID, Message: result.Message}
-		return TurnAdmissionResult{Kind: TurnAdmissionStarted, TurnID: result.TurnID, Start: start}
+		return TurnAdmissionResult{Kind: TurnAdmissionStarted, InputID: result.RecordID, TurnID: result.TurnID, Start: start}
 	case runtime.PendingInputQueued:
 		if errors.Is(err, runtime.ErrPendingInputQueueFull) {
 			return rejectedResult(
@@ -62,7 +62,7 @@ func admissionResultFromPendingInput(result runtime.PendingInputResult, err erro
 		if err != nil {
 			return errorResult(err, nil)
 		}
-		return queuedResult(result.Status)
+		return queuedResult(result.RecordID, result.Status)
 	default:
 		if err != nil {
 			return errorResult(err, nil)

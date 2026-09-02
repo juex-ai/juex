@@ -42,17 +42,17 @@ export function useFleetAgent(): FleetAgentContextValue {
   return context;
 }
 
-export function useAgentSessionStatus(
+export function useAgentThreadStatus(
   agentID: string | undefined,
-  sessionID: string | undefined,
+  threadID: string | undefined,
 ): AgentRuntimeStatusSnapshot | undefined {
   const { statusStore } = useFleetAgent();
   const getSnapshot = useCallback(
     () =>
-      statusStore && agentID && sessionID
-        ? statusStore.status(agentID, sessionID)
+      statusStore && agentID && threadID
+        ? statusStore.status(agentID, threadID)
         : undefined,
-    [agentID, sessionID, statusStore],
+    [agentID, threadID, statusStore],
   );
 
   return useSyncExternalStore(

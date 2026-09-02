@@ -15,7 +15,7 @@ type BatcherOptions struct {
 	RunID         string
 	WorkDir       string
 	AgentStateDir string
-	ArtifactDir   string
+	MediaDir      string
 	PathGuard     sandbox.PathGuard
 	MaxEventBytes int64
 }
@@ -63,7 +63,7 @@ func newCommandBatcher(spec commandRuntimeSpec, store *Store, opts BatcherOption
 		runID:         opts.RunID,
 		workDir:       opts.WorkDir,
 		agentStateDir: opts.AgentStateDir,
-		artifactDir:   opts.ArtifactDir,
+		artifactDir:   opts.MediaDir,
 		pathGuard:     opts.PathGuard,
 		maxEventBytes: maxEventBytes,
 	}

@@ -33,7 +33,7 @@ func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
 
 // NewRuntimeModule defers config loading and durable store construction until
 // the runtime Module lifecycle starts. Producer startup remains an explicit
-// App action after Session recovery barriers have been published.
+// App action after Thread recovery barriers have been published.
 func NewRuntimeModule(options ManagerOptions) *Module {
 	return &Module{options: options, owned: true}
 }
@@ -71,7 +71,7 @@ func (m *Module) StartRuntime(context.Context, runtimemodule.RuntimeContext) err
 }
 
 // StartAll starts producers for an App-owned manager after the App has
-// published its Session recovery boundary. Injected managers retain lifecycle
+// published its Thread recovery boundary. Injected managers retain lifecycle
 // ownership in their caller and are intentionally left untouched.
 func (m *Module) StartAll(ctx context.Context) error {
 	if m == nil || !m.owned {

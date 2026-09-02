@@ -139,7 +139,7 @@ func TestAdmitTurnQueuesBehindRuntimeOwnedTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "steer"})
-	if result.Kind != TurnAdmissionQueued || result.TurnID != "external-turn" || result.PendingCount != 1 {
+	if result.Kind != TurnAdmissionQueued || result.InputID == "" || result.TurnID != "" || result.PendingCount != 1 {
 		t.Fatalf("result = %+v", result)
 	}
 	if phase, turnID := a.admissionQueue().snapshot(); phase != turnAdmissionIdle || turnID != "" {
@@ -185,7 +185,7 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesWithFrameworkIdentity(t *testing
 		t.Fatalf("compact = %q admission = %+v", compactID, admitted)
 	}
 	queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "after compact"})
-	if queued.Kind != TurnAdmissionQueued || queued.TurnID != compactID {
+	if queued.Kind != TurnAdmissionQueued || queued.InputID == "" || queued.TurnID != "" {
 		t.Fatalf("queued during compact = %+v", queued)
 	}
 	promoted, err := a.finishCompactAdmission(compactID)
@@ -242,7 +242,7 @@ func TestFinishCompactWaitsForConcurrentQueuedAdmissionPublication(t *testing.T)
 
 	release()
 	queued := <-queuedDone
-	if queued.Kind != TurnAdmissionQueued || queued.TurnID != compactID {
+	if queued.Kind != TurnAdmissionQueued || queued.InputID == "" || queued.TurnID != "" {
 		t.Fatalf("queued admission = %+v", queued)
 	}
 	finished := <-finishDone
@@ -279,7 +279,7 @@ func TestAdmitTurnNewSlashRejectsWhileBusy(t *testing.T) {
 		t.Fatalf("started = %+v", started)
 	}
 	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/new"})
-	if result.Kind != TurnAdmissionConflict || result.Error.Message != "session busy" {
+	if result.Kind != TurnAdmissionConflict || result.Error.Message != "Thread busy" {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -299,41 +299,14 @@ func TestPendingInputTerminalPublicationMapsToRetryableConflict(t *testing.T) {
 	}
 }
 
-func TestAdmitTurnNewSlashStartsGreetingWithFrameworkIdentity(t *testing.T) {
+func TestAdmitTurnNewSlashRenewsContextWithoutStartingTurn(t *testing.T) {
 	a, _ := newStubApp(t)
-	oldID := a.Session.ID
 	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/new"})
-	if result.Kind != TurnAdmissionCommandCompleted || result.Start == nil || result.TurnID == "" {
+	if result.Kind != TurnAdmissionCommandCompleted || result.Start != nil || result.TurnID != "" {
 		t.Fatalf("result = %+v", result)
 	}
-	if result.SessionChanged == nil || result.SessionChanged.OldID != oldID || result.SessionChanged.NewID != a.Session.ID {
-		t.Fatalf("session change = %+v", result.SessionChanged)
-	}
-	if result.Start.Message.FirstText() != NewSessionGreetingPrompt() {
-		t.Fatalf("greeting = %q", result.Start.Message.FirstText())
-	}
-}
-
-func TestAdmitTurnNewSlashPreservesSessionChangeWhenGreetingCanceled(t *testing.T) {
-	a, _ := newStubApp(t)
-	oldID := a.Session.ID
-	command, err := a.ExecuteParsedSlashCommand(context.Background(), SlashCommand{Name: SlashNew})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	result := a.admitNewSlashGreeting(ctx, command, oldID)
-	if result.Kind != TurnAdmissionError || !errors.Is(result.Err, context.Canceled) {
-		t.Fatalf("result = %+v, want canceled greeting admission", result)
-	}
-	current, ok := a.SessionIdentity()
-	if !ok || current.ID == oldID {
-		t.Fatalf("current session = %+v, want committed replacement", current)
-	}
-	if result.SessionChanged == nil || result.SessionChanged.OldID != oldID || result.SessionChanged.NewID != current.ID {
-		t.Fatalf("session change = %+v, want %s -> %s", result.SessionChanged, oldID, current.ID)
+	if got := a.Thread.Info().GenerationID; got != "g000002" {
+		t.Fatalf("generation = %q", got)
 	}
 }
 
@@ -367,11 +340,11 @@ func TestAdmitTurnRequiresInitializedApp(t *testing.T) {
 	}{
 		{name: "nil app", app: func(*testing.T) *App { return nil }},
 		{name: "nil engine", app: func(t *testing.T) *App { a, _ := newStubApp(t); a.Engine = nil; return a }},
-		{name: "nil session", app: func(t *testing.T) *App { a, _ := newStubApp(t); a.Session = nil; return a }},
+		{name: "nil thread", app: func(t *testing.T) *App { a, _ := newStubApp(t); a.Thread = nil; return a }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result := test.app(t).AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "hello"})
-			if result.Kind != TurnAdmissionError || result.Error.Message != "turn admission: app, engine, or session is not initialized" {
+			if result.Kind != TurnAdmissionError || result.Error.Message != "turn admission: app, engine, or Thread is not initialized" {
 				t.Fatalf("result = %+v", result)
 			}
 		})
@@ -380,7 +353,7 @@ func TestAdmitTurnRequiresInitializedApp(t *testing.T) {
 
 func turnAdmissionMediaRef() llm.MediaRef {
 	return llm.MediaRef{
-		ArtifactPath: "sessions/session-1/media/image.png", MediaType: "image/png",
+		ArtifactPath: "threads/123456/media/image.png", MediaType: "image/png",
 		SHA256: strings.Repeat("a", 64), OriginalBytes: 123, Width: 2, Height: 3,
 	}
 }

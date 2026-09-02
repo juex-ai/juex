@@ -14,7 +14,7 @@ import (
 
 const NotesToolUpdate = "update_notes"
 
-const notesGuide = `Guide available via skill_load("juex-session-state").`
+const notesGuide = `Guide available via skill_load("juex-thread-state").`
 
 const NotesModuleID runtimemodule.ID = "notes"
 
@@ -54,7 +54,7 @@ func (m *NotesModule) Context(_ context.Context, request runtimemodule.ContextRe
 		return nil, nil
 	}
 	return []runtimemodule.ContextSection{{
-		Key:        "session_notes",
+		Key:        "thread_notes",
 		Source:     "runtime",
 		Text:       text,
 		Projection: runtimemodule.ContextProjectionRuntimeMessage,
@@ -66,8 +66,8 @@ func (m *NotesModule) Context(_ context.Context, request runtimemodule.ContextRe
 func NotesToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{
 		Name:        NotesToolUpdate,
-		Group:       tools.ToolGroupSessionState,
-		Description: "Replace concise session working notes; use scratchpad files for long material. " + notesGuide,
+		Group:       tools.ToolGroupThreadState,
+		Description: "Replace concise thread working notes; use scratchpad files for long material. " + notesGuide,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

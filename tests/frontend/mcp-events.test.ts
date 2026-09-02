@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   formatMCPEventForDisplay,
   formatObservationEventForDisplay,
-  formatSideSessionEventForDisplay,
+  formatWorkerThreadEventForDisplay,
   oneLinePreview,
   parseMCPEventText,
 } from "../../frontend/src/lib/mcp-events.ts";
@@ -92,28 +92,28 @@ test("formatObservationEventForDisplay previews observation JSON content", () =>
   });
 });
 
-test("formatSideSessionEventForDisplay previews output and preserves the envelope", () => {
-  const text = `Side Session result:\n${JSON.stringify({
-    session_id: "side-1",
+test("formatWorkerThreadEventForDisplay previews output and preserves the envelope", () => {
+  const text = `Worker Thread result:\n${JSON.stringify({
+    thread_id: "side-1",
     status: "completed",
     output: "delegated answer",
   })}`;
-  assert.deepEqual(formatSideSessionEventForDisplay(text), {
-    label: "side_session:result",
+  assert.deepEqual(formatWorkerThreadEventForDisplay(text), {
+    label: "worker_thread:result",
     content: text,
     preview: "delegated answer",
     copyText: text,
   });
 });
 
-test("formatSideSessionEventForDisplay previews failures", () => {
-  const text = `Side Session result:\n${JSON.stringify({
-    session_id: "side-2",
+test("formatWorkerThreadEventForDisplay previews failures", () => {
+  const text = `Worker Thread result:\n${JSON.stringify({
+    thread_id: "side-2",
     status: "failed",
     error: "delegation failed",
   })}`;
-  assert.deepEqual(formatSideSessionEventForDisplay(text), {
-    label: "side_session:result",
+  assert.deepEqual(formatWorkerThreadEventForDisplay(text), {
+    label: "worker_thread:result",
     content: text,
     preview: "delegation failed",
     copyText: text,

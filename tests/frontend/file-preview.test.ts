@@ -15,8 +15,8 @@ test("getFileRawURL encodes workspace paths for image previews", () => {
 
 test("getMediaURL encodes explicit media roots and paths", () => {
 	assert.equal(
-		getMediaURL("sessions/s/media/image 1.png", "artifact"),
-		"/api/media?root=artifact&path=sessions%2Fs%2Fmedia%2Fimage%201.png",
+		getMediaURL("threads/s/media/image 1.png", "artifact"),
+		"/api/media?root=artifact&path=threads%2Fs%2Fmedia%2Fimage%201.png",
 	);
 });
 

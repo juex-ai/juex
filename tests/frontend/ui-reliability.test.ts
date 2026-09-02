@@ -11,7 +11,7 @@ const promptInputSource = source(
   "../../frontend/src/components/ai-elements/prompt-input.tsx",
 );
 const shellSource = source("../../frontend/src/components/AppShell.tsx");
-const sessionsSource = source("../../frontend/src/pages/Sessions.tsx");
+const threadExplorerSource = source("../../frontend/src/pages/ThreadExplorer.tsx");
 const observablesSource = source("../../frontend/src/pages/Observables.tsx");
 const observableDetailSource = source(
   "../../frontend/src/pages/ObservableDetail.tsx",
@@ -21,25 +21,27 @@ const conversationSource = source(
   "../../frontend/src/components/ai-elements/conversation.tsx",
 );
 
-test("runtime and sessions expose initial request failures", () => {
+test("runtime and Thread Explorer expose initial request failures", () => {
   assert.match(
     runtimeSource,
     /if \(error && !data\)[\s\S]*role="alert"[\s\S]*if \(!data\)/,
   );
-  assert.match(sessionsSource, /setLookupError\(/);
-  assert.match(sessionsSource, /setSubmitError\(/);
-  assert.match(sessionsSource, /role="alert"/);
-  assert.match(sessionsSource, /if \(lookupError\)/);
-  assert.doesNotMatch(sessionsSource, /if \(submitError\)/);
-  assert.match(sessionsSource, /getActiveSession\(\)/);
-  assert.doesNotMatch(sessionsSource, /\blistSessions\b/);
+  assert.match(threadExplorerSource, /setError\(/);
+  assert.match(threadExplorerSource, /role="alert"/);
+  assert.match(threadExplorerSource, /listThreads\(\)/);
   assert.match(
-    sessionsSource,
-    /setCheckingSession\(true\);\s*setLookupError\(null\);\s*getActiveSession\(\)/,
-    "switching agents must discard the previous active-session lookup state",
+    threadExplorerSource,
+    /setError\(null\);[\s\S]*const response = await listThreads\(\)/,
+    "refresh must discard a stale list error before loading",
   );
-  assert.match(sessionsSource, /if \(!live\) return/);
-  assert.match(sessionsSource, /setSubmitError\(message\);\s*throw e/);
+  assert.match(threadExplorerSource, /setError\(cause instanceof Error/);
+});
+
+test("Thread Explorer creates Workers through an accessible dialog", () => {
+  assert.doesNotMatch(threadExplorerSource, /window\.prompt/);
+  assert.match(threadExplorerSource, /<Dialog open=\{createOpen\}/);
+  assert.match(threadExplorerSource, /htmlFor="worker-thread-alias"/);
+  assert.match(threadExplorerSource, /type="submit"[\s\S]*Create Worker/);
 });
 
 test("failed uncontrolled prompt submission preserves text for retry", () => {

@@ -19,7 +19,7 @@ func snapshotAttachmentRefs(workDir, agentStateDir, artifactDir string, guard sa
 	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
-		ArtifactDir:   artifactDir,
+		MediaDir:      artifactDir,
 		PathGuard:     guard,
 		MaxEventBytes: maxEventBytes,
 	})

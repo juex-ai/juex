@@ -392,10 +392,9 @@ func TestFleetHelpAdvertisesOnlyAcceptedInheritedFlags(t *testing.T) {
 	visit(fleetCommand)
 
 	for _, commandName := range []string{
-		"run",
-		"repl",
+		"send",
 		"listen",
-		"sessions",
+		"threads",
 		"init",
 		"bundle",
 		"doctor",
@@ -475,6 +474,7 @@ func TestFleetServeRejectsMalformedAddressBeforeReconciliation(t *testing.T) {
 
 func TestFleetAddressPrecedenceUsesFlagThenHomeConfigThenDefault(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("JUEX_HOME", home)
 
 	cmd := newFleetServeCmd(nil)
@@ -539,6 +539,7 @@ func TestFleetServeReadsPersistentUnsafeBindForEachInvocation(t *testing.T) {
 
 func TestFleetInstallUsesCurrentDefaultWithoutPersisting(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("JUEX_HOME", home)
 	fleetCfg, err := config.LoadHomeFleetConfig()
 	if err != nil {

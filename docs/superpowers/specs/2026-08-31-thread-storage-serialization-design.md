@@ -3,626 +3,475 @@
 > English | [中文](2026-08-31-thread-storage-serialization-design.zh.md)
 
 Date: 2026-08-31
-Status: Proposed
+Updated: 2026-09-01
+Status: Accepted for implementation
 Depends on: [Thread Domain Model](2026-08-31-thread-domain-model-design.md),
 [Core Lifecycle And Interfaces](2026-08-31-thread-lifecycle-and-interfaces-design.md)
 
 ## Goals
 
-- Make Thread and Context Generation ownership visible in the filesystem.
-- Keep every `/new` and `/compact` generation independently inspectable.
-- Persist explicit creation and close times without encoding time into ids.
-- Rebuild live state from the durable tail rather than rescanning all history.
-- List many Threads without opening every transcript.
-- Page backward through messages and across generations efficiently.
-- Keep accepted input durable even when its consuming generation or Turn is not
-  known yet.
-- Make torn-tail repair, restart recovery, and external-change detection
-  explicit.
-- Remove Session preview/summary caches and all old-format compatibility.
+- Make one append-only Thread Journal the durable authority for Inputs,
+  attempts, Turns, messages, System activities, Context Generations, state,
+  Goal, Notes, and usage.
+- Recover pending work and every accepted Input outcome without a second Input
+  Journal.
+- Keep Thread listing, cold startup, current-context construction, and newest
+  transcript paging bounded as histories grow.
+- Preserve Thread Scratchpad files across New, Compact, archive, and unarchive.
+- Separate model-owned working files, runtime spill payloads, and durable media.
+- Use one precise timestamp contract and a small number of rebuildable
+  projections.
 
 ## Non-Goals
 
-- Reading or migrating old `sessions/`, `history.json`, Session metadata, or
-  old conversation/event/pending journals.
-- Using a database.
-- Encoding timestamps in Thread, Turn, Input, or Message ids.
-- Treating derived indexes as authoritative state.
-- Storing transient streaming deltas as durable history.
+- Reading, migrating, detecting, or rewriting legacy Session state.
+- A database, distributed writer, cross-Agent transaction, or full-text index.
+- Storing transient streaming token deltas as durable conversation history.
+- Exactly-once execution of arbitrary external Tool side effects.
 
-## Canonical Layout
+## Canonical Agent Layout
 
 ```text
-<AgentStateDir>/
-├── agent.json
-├── state-format.json
+AgentStateDir/
+├── threads.index.json                 # rebuildable Agent Thread-list projection
 ├── threads/
-│   ├── index.json
-│   └── <thread-id>/
-│       ├── thread.json
-│       ├── state.json
-│       ├── inputs.jsonl
-│       ├── inputs.index.json
-│       ├── transition.json                 # exists only during a transition
-│       └── generations/
-│           ├── g000001/
-│           │   ├── generation.json
-│           │   ├── bootstrap.json          # compact generations only
-│           │   ├── journal.jsonl
-│           │   ├── index.json
-│           │   ├── state/
-│           │   │   ├── goal.json
-│           │   │   └── notes.md
-│           │   └── scratchpad/
-│           └── g000002/
-│               └── ...
-├── artifacts/
-│   └── threads/<thread-id>/generations/<generation-id>/...
-├── extensions/
-├── observables/
-└── logs/
+│   ├── 0/                             # active Main
+│   │   ├── thread.json                # current rebuildable Thread projection
+│   │   ├── journal.jsonl              # sole durable Thread authority
+│   │   ├── scratchpad/                # model-owned Thread working files
+│   │   └── spool/                     # runtime-managed oversized payloads
+│   └── <worker-tid>/
+│       └── ...same files...
+├── archive/
+│   └── threads/
+│       └── <worker-tid>/               # complete read-only archived directory
+├── .trash/
+│   └── threads/                        # private recoverable delete staging
+├── media/                              # durable admitted user/Observation media
+├── extensions/                         # unchanged Agent-owned Extension data
+└── logs/                               # unchanged runtime logs
 ```
 
-Archival does not move a Thread directory. Stable paths and parent references
-remain valid; `archived_at` and the derived Thread index control presentation.
+There are no Generation directories, `inputs.jsonl`, `state.json`,
+`transition.json`, per-Generation metadata/bootstrap/index files, or format
+marker. Generation boundaries and compact bootstrap data are Journal facts.
 
-## Format Marker
+Only Juex writes `journal.jsonl`, `thread.json`, and `threads.index.json`.
+Scratchpad is intentionally model-writable. Spool and media have distinct
+retention rules.
 
-`state-format.json` prevents accidental dual-read behavior:
+## Time And Identifier Formats
 
-```json
-{
-  "format": "juex-thread-state",
-  "version": 1,
-  "created_at": "2026-08-31T12:34:56.789Z"
-}
-```
-
-If an Agent directory contains old Session runtime state without this marker,
-startup returns a typed unsupported-state error and does not mutate either
-format. Configuration and credentials live outside this boundary and remain
-usable after the operator removes old runtime state.
-
-## Time Format
-
-Every persisted wall-clock timestamp uses UTC RFC 3339 with exactly three
-fractional digits:
+Every persisted absolute instant uses UTC RFC 3339 with exactly millisecond
+precision:
 
 ```text
-2006-01-02T15:04:05.000Z
+2026-09-01T08:12:34.567Z
 ```
 
-Rules:
+Decode accepts only this canonical form and encode always emits it. Durations,
+timeouts, monotonic measurements, and Schedule wall-clock rules are not
+absolute instants: durations stay numeric and Schedules retain their named
+timezone and local-time intent.
 
-- Field names are `created_at`, `updated_at`, `closed_at`, `archived_at`, and
-  `last_activity_at`; there are no `_ms`, local-time, or id-derived times.
-- Writers truncate to milliseconds before serialization.
-- Missing terminal times are omitted or `null`, never a zero timestamp.
-- Ordering authority is journal sequence, not wall-clock time.
-- Monotonic process clock values may be used in memory but are never persisted.
-
-This format is human-readable, stable across Go/JavaScript, lexicographically
-sortable, and precise enough for product history. Sequence numbers resolve
-same-millisecond operations.
-
-## Identifier Formats
+Identifiers are strings:
 
 | Identity | Format | Scope |
 | --- | --- | --- |
-| Thread | six lowercase Crockford Base32 characters, for example `4m7k2p` | Agent |
-| Generation | zero-padded ordinal, for example `g000003` | Thread |
-| Input | `in_` plus ten lowercase Crockford Base32 characters | Thread |
-| Turn | `turn_` plus ten lowercase Crockford Base32 characters | Generation |
-| Message | `msg_` plus ten lowercase Crockford Base32 characters | Generation |
-| Batch | `batch_` plus ten lowercase Crockford Base32 characters | Journal |
-| Transition | `tr_` plus ten lowercase Crockford Base32 characters | Thread |
-| Event cursor | `e_` plus a 16-digit decimal event sequence | Thread event stream |
+| Main Thread | `0` | Agent |
+| Worker Thread | six lowercase Crockford Base32 characters | Agent |
+| Generation | `g` plus six decimal digits | Thread |
+| Input | random `in_...` | Agent Runtime |
+| Input attempt | random `ia_...` | Input |
+| Turn | random `turn_...` | Agent Runtime |
+| Message | stable `msg_...` | Agent Runtime |
 
-Ids are opaque and carry no timestamps. Random ids are collision-checked
-against the relevant durable index before commit. A complete reference always
-includes its containing scope; API Events carry Thread and Generation ids
-explicitly.
+Numeric-looking ids are never decoded as numbers. Main alias `main` and id `0`
+are reserved.
 
-## Agent Metadata
+## `thread.json` Projection
 
-`agent.json` gains one field:
+`thread.json` is an atomically replaced current projection, not a second
+authority. It makes listing, Prompt assembly, and suffix recovery cheap:
 
 ```json
 {
-  "id": "abc123",
-  "workspace": "/absolute/workspace",
-  "main_thread_id": "4m7k2p"
-}
-```
-
-Publishing a newly initialized Agent stages the Main Thread first, then
-atomically publishes `main_thread_id`. A non-empty value must resolve to a
-well-formed, non-archived root Thread with no parent.
-
-## Thread Metadata
-
-`thread.json` is small authoritative identity metadata and changes only for
-rename or archive/unarchive lifecycle:
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
-  "alias": "main",
-  "parent_thread_id": null,
-  "created_at": "2026-08-31T12:34:56.789Z",
-  "archived_at": null
-}
-```
-
-`alias` is always non-empty. Worker creation persists `worker_#<tid>` when the
-request omits an alias; readers do not synthesize a different display-only
-name.
-
-It deliberately excludes:
-
-- Main/Worker kind.
-- Creator and result destination.
-- Execution status.
-- Current generation.
-- Preview, title, or summary.
-- Usage and pending counts.
-
-Main is derived from `agent.json`; mutable execution values come from the
-derived `state.json`.
-
-## Thread State Projection
-
-`state.json` is atomically replaced after durable commits and is optimized for
-Thread list/detail reads:
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
+  "v": 1,
+  "thread_id": "4m8k2p",
+  "alias": "reviewer",
+  "parent_thread_id": "0",
+  "created_at": "2026-09-01T08:00:00.000Z",
+  "retention_state": "active",
+  "execution_state": "working",
   "revision": 42,
-  "state": "working",
-  "current_generation_id": "g000003",
-  "generation_count": 3,
-  "turn_count": 18,
-  "pending_input_count": 2,
-  "current_context_tokens": 42137,
+  "current_generation": {
+    "generation_id": "g000003",
+    "ordinal": 3,
+    "start_seq": 188,
+    "start_offset": 91204
+  },
+  "counts": {
+    "generation_count": 3,
+    "turn_count": 18,
+    "pending_input_count": 2
+  },
+  "goal": null,
+  "notes": "",
   "token_usage": {
     "input_tokens": 120000,
+    "cached_input_tokens": 76000,
     "output_tokens": 18000
   },
-  "last_activity_at": "2026-08-31T13:00:00.123Z",
-  "input_cursor": 57,
-  "event_cursor": "e_0000000000000187"
-}
-```
-
-This file is a projection, never the authority for accepted input, messages,
-Turn terminal state, or Generation publication. If missing, malformed, or
-ahead of its journals, it is rebuilt and atomically replaced.
-
-For an archived Thread, `current_generation_id` is null because no Generation
-is open. Counts and `current_context_tokens` retain the final projection of the
-most recently closed Generation for list and detail inspection.
-
-`failed` means the latest terminal Turn in the current generation errored and
-no later Turn is active or completed. Cancellation returns to `idle` unless a
-typed failure remains the latest terminal fact.
-
-`current_context_tokens` is the latest calibrated estimate of the context that
-would be visible to the Provider in the current Generation: Agent prompt and
-Tools plus compact bootstrap, if present, and the active Generation messages.
-It is refreshed whenever provider context is prepared or a Generation is
-published. It is distinct from cumulative `token_usage`; clients present it as
-an approximate value.
-
-## Thread Input Journal
-
-Accepted input exists before its consuming Generation or Turn may be known, so
-it is persisted at Thread scope in `inputs.jsonl` rather than inside the
-current Generation directory.
-
-Each line is a typed transition:
-
-```json
-{
-  "v": 1,
-  "seq": 57,
-  "event_seq": 187,
-  "at": "2026-08-31T13:00:00.123Z",
-  "input_id": "in_0m7k2p9d4x",
-  "type": "input.accepted",
-  "source": "direct",
-  "source_id": "cli:request-id",
-  "data": {
-    "message": {"role": "user", "blocks": [{"type": "text", "text": "continue"}]}
-  }
-}
-```
-
-Later records for the same `input_id` may be:
-
-- `input.queued`
-- `input.assigned` with `generation_id` and `turn_id`
-- `input.processed` with durable Message id
-- `input.expired`
-- `input.rejected`
-- `input.cancelled`
-
-`input.accepted` is the durability boundary returned to `juex send`. A record
-remains pending until one terminal input transition is durable. Generation
-recovery reconciles `input.assigned` and `input.processed` against generation
-journal facts by stable ids.
-
-`inputs.index.json` contains the last input sequence, first and last Thread
-event sequences, sparse event offsets, journal byte length, last checkpoint
-offset, and the current pending set. It is derived and replaceable.
-
-## Generation Metadata
-
-`generation.json` is authoritative boundary metadata:
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
-  "generation_id": "g000003",
-  "ordinal": 3,
-  "created_at": "2026-08-31T13:00:01.000Z",
-  "closed_at": null,
-  "close_reason": null,
-  "origin": {
-    "kind": "compact",
-    "previous_generation_id": "g000002"
-  }
-}
-```
-
-Allowed origin kinds are `initial`, `new`, `compact`, and `unarchive`.
-Allowed close reasons are `new`, `compact`, and `archived`. An open generation
-has no `closed_at` or `close_reason`.
-
-Every active Thread has exactly one open Generation. Archived Threads have no
-open Generation.
-
-## Compact Bootstrap
-
-Only a compact-origin generation has `bootstrap.json`:
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
-  "generation_id": "g000003",
-  "source_generation_id": "g000002",
-  "created_at": "2026-08-31T13:00:00.900Z",
-  "message": {
-    "id": "msg_31v8h2q9km",
-    "role": "assistant",
-    "kind": "generation_bootstrap",
-    "blocks": [{"type": "text", "text": "...compact context..."}]
+  "context_usage": {
+    "context_window": 128000,
+    "current_tokens": 42137,
+    "percentage": 32.9195,
+    "calibrated_at": "2026-09-01T08:12:34.567Z"
   },
-  "provider": {
-    "profile": "openai/codex",
-    "model": "gpt-5",
-    "input_tokens": 32000,
-    "output_tokens": 1800
+  "last_activity_at": "2026-09-01T08:12:34.567Z",
+  "journal": {
+    "projected_seq": 194,
+    "projected_offset": 95640,
+    "last_checkpoint_seq": 192,
+    "last_checkpoint_offset": 94421
   }
 }
 ```
 
-There is no generic `summary` field on Thread, Generation, or list indexes.
-The compact bootstrap is explicit domain content, loaded only while assembling
-provider context and optionally displayed at the generation boundary.
+Goal and Notes live in this projection for prompt-speed only; Journal facts are
+authoritative. Scratchpad content is never embedded. A projection ahead of the
+Journal is invalid. `thread.json` is a derived list and inspection accelerator;
+a cold writer open restores bounded Runtime state from the latest Journal
+checkpoint and then atomically replaces this file.
 
-`/new` and unarchive generations have no bootstrap file.
+`current_tokens` is the latest estimate of provider-visible context, not
+cumulative usage. Cached input tokens remain in usage accounting and do not
+reduce context occupancy.
 
-## Generation Journal
+`retention_state` is authoritative for active/archive placement;
+`archived_at` is timestamp metadata. Active projections require one
+`execution_state` from `idle`, `working`, or `failed`. Archived projections
+omit `execution_state`. Unarchive preserves the Journal and Generation but
+initializes execution as `idle`. Permanent deletion removes the projection and
+index entry instead of persisting a `deleted` Thread.
 
-`journal.jsonl` is the canonical ordered history for one Generation. It
-replaces separate conversation and event authority. Each line has a common
-envelope:
+## Agent Thread-List Projection
+
+`threads.index.json` is the only Agent-level list accelerator. A normal CLI,
+Web, or Fleet list reads one file rather than every Journal:
 
 ```json
 {
   "v": 1,
-  "seq": 42,
-  "event_seq": 188,
-  "at": "2026-08-31T13:00:02.345Z",
-  "batch_id": "batch_0q9m4k2p7x",
-  "batch_index": 1,
-  "batch_size": 2,
-  "type": "message.appended",
-  "thread_id": "4m7k2p",
-  "generation_id": "g000003",
-  "turn_id": "turn_7m2k9p4d0x",
-  "input_id": "in_0m7k2p9d4x",
-  "data": {
-    "message": {"id": "msg_31v8h2q9km", "role": "user", "blocks": []}
-  }
-}
-```
-
-The journal stores durable facts including:
-
-- Generation started/closed.
-- Input admitted and processed references.
-- Canonical user, assistant, and Tool Result messages.
-- Turn admitted/started/completed/errored/cancelled.
-- Provider request epochs and terminal Provider outcomes.
-- Tool declaration, start, resolved input, and terminal outcome.
-- Goal and Notes updates.
-- Context usage and cumulative token usage.
-- Generation-owned subscription changes.
-- Periodic projection checkpoints.
-
-Transient assistant/thinking/tool-output deltas are streamed live but not
-stored. Final canonical messages and terminal Tool outcomes remain durable.
-
-## Thread Event Sequence And Replay
-
-Input and Generation journals are separate ownership boundaries, but clients
-need one replay order across both. Every externally observable durable record
-therefore receives an Agent-process-independent, Thread-scoped `event_seq`
-under the Thread writer lock.
-
-- Cursor format is `e_%016d`, for example `e_0000000000000188`.
-- A committed sequence is greater than every earlier committed sequence in the
-  same Thread. Gaps are allowed after a failed or crashed reservation.
-- `/new`, `/compact`, restart, and unarchive never reset the sequence.
-- `input.accepted` receives an event sequence, so its cursor can be returned in
-  the durable input receipt before a Generation or Turn is assigned.
-- Durable Generation facts and final canonical messages also receive event
-  sequences.
-- Transient streaming deltas do not advance the durable cursor. On reconnect,
-  final canonical facts repair any missed transient presentation.
-
-Input and Generation indexes record their first and last event sequences plus
-sparse offsets. Replay selects only journals whose ranges intersect the
-requested cursor and performs a stable merge by `event_seq`; it does not scan
-unrelated message bodies. The next sequence after recovery is one greater than
-the maximum durable tail in `inputs.jsonl` and the latest Generation journal.
-If a derived index is stale, only those tails are repaired before accepting a
-writer.
-
-The sequence is an ordering fact, not an Event payload id. More than one
-subscriber can replay the same cursor, and filtering by Input or Turn never
-changes the underlying Thread order.
-
-## Append And Batch Durability
-
-One Generation has one append lock and one writer. A commit:
-
-1. Validates and serializes the entire logical batch in memory.
-2. Assigns consecutive sequences and one `batch_id`.
-3. Records the starting file offset.
-4. Appends the complete byte slice with one writer operation loop.
-5. Syncs the file before publishing live Events or updating projections.
-6. On write/sync failure, truncates to the starting offset and syncs the
-   repaired file before returning an error.
-
-Recovery accepts only complete final batches with contiguous `batch_index` and
-`batch_size`. A torn final line or incomplete final batch is truncated. A gap,
-duplicate sequence, invalid scope identity, or invalid stable Event schema
-before the final batch is corruption and fails loudly rather than inventing
-history.
-
-## Checkpoints And Tail Reconstruction
-
-Full journals must not be scanned on every startup. A
-`projection.checkpoint` record is appended:
-
-- after every terminal Turn;
-- at Generation close;
-- after at most 256 durable records without another checkpoint.
-
-The checkpoint contains only derived reconstruction state:
-
-```json
-{
-  "turn_count": 18,
-  "message_count": 73,
-  "pending_input_ids": ["in_..."],
-  "token_usage": {"input_tokens": 120000, "output_tokens": 18000},
-  "current_context_tokens": 42137,
-  "last_terminal_turn": {"turn_id": "turn_...", "state": "completed"},
-  "goal_revision": 4,
-  "notes_revision": 9
-}
-```
-
-`index.json` stores the last verified journal length, last sequence, checkpoint
-sequence and byte offset, plus sparse message-page offsets. Normal startup
-seeks directly to the checkpoint and replays its suffix.
-
-If `index.json` is missing or stale, recovery:
-
-1. Finds the final newline from EOF and truncates a torn suffix.
-2. Reverse-scans JSONL lines to the nearest valid checkpoint.
-3. Replays forward from that checkpoint.
-4. Rebuilds generation state files and indexes atomically.
-
-The journal remains authoritative throughout repair.
-
-## Generation Index And Message Paging
-
-`generations/<gid>/index.json` is a derived read model:
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
-  "generation_id": "g000003",
-  "revision": 42,
-  "journal_bytes": 91827,
-  "last_seq": 142,
-  "checkpoint_seq": 128,
-  "checkpoint_offset": 80122,
-  "first_event_seq": 120,
-  "last_event_seq": 188,
-  "turn_count": 6,
-  "message_count": 31,
-  "token_usage": {"input_tokens": 42000, "output_tokens": 7000},
-  "current_context_tokens": 42137,
-  "last_activity_at": "2026-08-31T13:00:02.345Z",
-  "message_pages": [
-    {"first_seq": 1, "last_seq": 64, "offset": 0},
-    {"first_seq": 65, "last_seq": 142, "offset": 40120}
-  ]
-}
-```
-
-One sparse page entry is recorded per 64 displayable messages. The Web/API
-history reader seeks to the final page first and returns an opaque cursor.
-`Load older messages` moves backward within that Generation, then to the final
-page of the previous Generation. It never depends on a generated title or
-summary preview.
-
-## Goal, Notes, And Scratchpad
-
-- Goal and Notes updates are durable journal facts.
-- `state/goal.json` and `state/notes.md` are atomically replaced current
-  projections for fast prompt assembly and inspection.
-- If either projection is missing or its revision disagrees with the last
-  checkpoint, replay rebuilds it from the journal.
-- Scratchpad is mutable generation-local working material and is not
-  automatically placed in provider context.
-- Generation close makes its Goal, Notes, and Scratchpad read-only history.
-- A new generation begins with empty Goal, Notes, and Scratchpad. Compact does
-  not copy them outside its explicit bootstrap summary.
-
-## Thread List Index
-
-`threads/index.json` is a replaceable Agent-wide projection used by CLI, Web,
-and Fleet status enrichment:
-
-```json
-{
-  "format_version": 1,
   "revision": 100,
-  "updated_at": "2026-08-31T13:00:02.400Z",
+  "updated_at": "2026-09-01T08:12:34.567Z",
   "threads": [
     {
-      "thread_id": "4m7k2p",
+      "thread_id": "0",
       "alias": "main",
-      "parent_thread_id": null,
-      "main": true,
-      "archived": false,
-      "created_at": "2026-08-31T12:34:56.789Z",
-      "last_activity_at": "2026-08-31T13:00:02.345Z",
-      "state": "working",
-      "turn_count": 18,
-      "pending_input_count": 2,
-      "generation_count": 3,
-      "current_context_tokens": 42137,
-      "token_usage": {"input_tokens": 120000, "output_tokens": 18000},
-      "state_revision": 42
+      "created_at": "2026-08-20T01:00:00.000Z",
+      "last_activity_at": "2026-09-01T08:12:34.567Z",
+      "retention_state": "active",
+      "execution_state": "idle",
+      "pending_input_count": 1,
+      "turn_count": 182,
+      "generation_count": 7,
+      "current_generation_id": "g000007",
+      "current_context_tokens": 43200,
+      "token_usage": {
+        "input_tokens": 900000,
+        "cached_input_tokens": 510000,
+        "output_tokens": 82000
+      },
+      "thread_revision": 77
     }
   ]
 }
 ```
 
-It contains exactly the Thread-list fields and no preview, title, last message,
-or summary. Normal list requests read one file. If it is missing or an entry's
-`state_revision` disagrees with the corresponding `state.json`, repair scans
-only `thread.json` and `state.json` for each Thread, not generation journals.
+It has no title, preview, last-message text, or generic summary. A valid index
+serves normal list requests without opening any Thread Journal. If the index is
+missing or invalid, recovery replays every active and archived authoritative
+Journal, regenerates each `thread.json`, and atomically replaces the index.
+This exceptional rebuild must not trust a missing, corrupt, or stale Thread
+projection. Alias resolution and revision-checked mutation use one snapshot of
+the resulting projection under the Agent lock.
 
-Sorting is a presentation rule: Main first, then active `working`, `failed`,
-and `idle` Threads by `last_activity_at`; archived Threads are returned in a
-separate section by `archived_at` descending.
+## Thread Journal Commit Format
 
-## Generation Transition Transaction
-
-Thread root `transition.json` is a temporary durable intent:
+`journal.jsonl` is chronological: oldest commit first, newest at EOF. Each line
+is one bounded logical commit so no batch id or batch-index protocol is needed:
 
 ```json
 {
-  "format_version": 1,
-  "transition_id": "tr_0m7k2p9d4x",
-  "thread_id": "4m7k2p",
-  "from_generation_id": "g000002",
-  "to_generation_id": "g000003",
-  "kind": "compact",
-  "phase": "candidate_ready",
-  "started_at": "2026-08-31T13:00:00.500Z"
+  "v": 1,
+  "seq": 194,
+  "at": "2026-09-01T08:12:34.567Z",
+  "facts": [
+    {
+      "type": "input.attempt.started",
+      "input_id": "in_0m7k2p9d4x",
+      "attempt_id": "ia_4k2p7x0m9d",
+      "generation_id": "g000003",
+      "turn_id": "turn_7m2k9p4d0x"
+    },
+    {
+      "type": "message.appended",
+      "generation_id": "g000003",
+      "turn_id": "turn_7m2k9p4d0x",
+      "input_id": "in_0m7k2p9d4x",
+      "message": {
+        "id": "msg_31v8h2q9km",
+        "role": "user",
+        "blocks": [{"type": "text", "text": "continue"}]
+      }
+    }
+  ]
 }
 ```
 
-Commit protocol:
+- `seq` is a strictly increasing Thread commit sequence and durable replay
+  order. Array order is fact order within a commit.
+- One commit is size- and fact-count-bounded. Oversized payloads use Spool or
+  media references before encoding.
+- Stable fact schemas reject unknown required fields and invalid Thread,
+  Generation, Input, Turn, or Message relationships.
+- Temporary Assistant token deltas, Thinking deltas, and Tool-output deltas are
+  live-only. Final canonical messages and terminal Tool outcomes are durable.
 
-1. Generate a compact bootstrap first when required. Failure changes nothing.
-2. Create and sync `generations/.g000003.tmp` with metadata, optional
-   bootstrap, empty journal, and initial checkpoint.
-3. Atomically publish `transition.json` as `candidate_ready`.
-4. Append and sync `generation.closed` to the old journal; atomically set the
-   old `generation.json.closed_at` and close reason.
-5. Advance intent to `old_closed`.
-6. Rename the candidate directory to `g000003` and sync `generations/`.
-7. Atomically replace Thread `state.json` with the new current generation.
-8. Advance intent to `published`, update indexes, then remove the intent.
+## Durable Fact Catalog
 
-Recovery rules:
+The Journal contains at least:
 
-- Before `old_closed`, discard the candidate and retain the old generation.
-- At or after `old_closed`, validate the complete candidate and finish
-  publication; never reopen the closed old generation.
-- A published state with a leftover intent completes projection repair and
-  removes the intent.
+- `thread.created`, `thread.renamed`, `thread.archived`, and
+  `thread.unarchived`.
+- `input.accepted`, attempt lifecycle, retry/requeue, and terminal Input facts.
+- `turn.started`, `turn.completed`, `turn.failed`, `turn.cancelled`, and
+  `thread.settled`.
+- Canonical User, Assistant, Tool Use, Tool Result, policy, and system-notice
+  messages.
+- Provider request epoch, model transition, terminal Provider outcome, and
+  usage calibration.
+- Tool declaration, start, resolved input, terminal outcome, and explicit
+  unknown outcome.
+- `context.renewed` and `context.compacted` Generation boundaries.
+- Goal and Notes updates.
+- Projection checkpoints.
 
-## Archive And Unarchive Storage
+System activities appear in presentation history but are not Message facts.
+`context.compacted` carries its compact summary as structured data; Prompt
+projection extracts that summary, while `context.renewed` has no Provider
+projection.
 
-Archive uses the same close protocol with close reason `archived`, then
-atomically sets `thread.json.archived_at`. It does not move or delete files.
-Unarchive stages a new generation with origin `unarchive`, clears
-`archived_at`, and publishes the new generation in one Thread transaction.
+## Input Lifecycle In The Journal
 
-Main archival is rejected before mutation.
-
-## Artifact Paths
-
-Generation-owned media, projected user inputs, Tool results, and other durable
-bytes use:
+Input durability does not require a separate `inputs.jsonl`. The same ordered
+Journal records the full lifecycle:
 
 ```text
-artifacts/threads/<tid>/generations/<gid>/<category>/...
+input.accepted
+  └── input.attempt.started (attempt_id, generation_id, turn_id)
+        ├── input.attempt.succeeded
+        ├── input.attempt.failed
+        ├── input.attempt.cancelled
+        └── input.attempt.interrupted
+  ├── input.requeued -> another attempt
+  ├── input.completed
+  ├── input.dead_lettered
+  ├── input.cancelled
+  └── input.expired
 ```
 
-Agent-owned artifacts with no Thread/Generation ownership remain directly
-under the Agent Artifact root. Artifact references store `thread_id` and
-`generation_id` metadata and are validated against the target scope. Closing
-or archiving a Generation does not delete artifacts.
+- `input.accepted` is the client acknowledgement durability boundary.
+- One Input may have multiple attempts, but exactly one terminal Input outcome.
+- Acceptance before assignment is valid; Generation and Turn fields are absent
+  until an attempt starts.
+- Recovery projects every accepted Input without a terminal outcome. A started
+  attempt without outcome becomes interrupted.
+- A Tool side effect committed externally but not durably recorded locally is
+  outcome-unknown. Retry requires idempotency evidence or an explicit decision.
 
-## External Modification Detection
+Because Input, Generation boundary, and Turn facts share one commit sequence,
+there is no cross-Journal merge, `event_seq`, or Input/Generation reconciliation.
 
-Every open journal tracks file identity, length, mtime, and the last validated
-sequence. Before append it verifies that the same file still has the expected
-length and final sequence. Unexpected replacement, truncation, or append from
-another writer fails with a typed concurrent-change error. The runtime never
-silently overwrites externally edited history.
+## Context Generation Boundaries
+
+Initial `thread.created` establishes `g000001`. A New transition appends one
+`context.renewed` commit; replay atomically clears Goal and Notes as part of
+that boundary. The post-commit Context renewal lifecycle notification clears
+active-runtime result subscriptions. A Compact transition appends
+`context.compacted` with the validated summary. The next commit uses the new
+Generation id.
+
+```json
+{
+  "v": 1,
+  "seq": 188,
+  "at": "2026-09-01T08:10:00.000Z",
+  "facts": [
+    {
+      "type": "context.compacted",
+      "from_generation_id": "g000002",
+      "to_generation_id": "g000003",
+      "summary": {"blocks": [{"type": "text", "text": "..."}]},
+      "automatic": false
+    }
+  ]
+}
+```
+
+Archive and unarchive append lifecycle facts but retain the current Generation.
+Generation metadata, counts, start/end times, usage, and transition reason are
+derived by replay. No generic Thread or Generation `summary` field exists.
+
+## Append Durability And Corruption Boundary
+
+Each Thread has one append file descriptor and writer lock. One commit:
+
+1. Validates and serializes the complete bounded line in memory.
+2. Records the current EOF offset.
+3. Writes all bytes through one writer loop in append mode.
+4. Syncs the file before publishing live events or client success.
+5. On write/sync error, truncates to the recorded offset and syncs the repair.
+
+Recovery accepts complete newline-terminated commits only. A torn final line is
+truncated. A malformed commit before the final recoverable tail, duplicate or
+non-increasing sequence, invalid identity relationship, or invalid stable fact
+is corruption and fails loudly.
+
+Append preserves all earlier byte offsets and makes EOF repair local. Prepending
+would require rewriting the entire Journal, invalidate cursors and checkpoints,
+and widen crash damage; it is forbidden.
+
+## Checkpoints And Recovery
+
+Append `projection.checkpoint` after each terminal Turn, idle Context boundary,
+archive transition, and at least every 256 commits at a safe idle boundary. A
+Context boundary committed inside an active compaction Turn is checkpointed by
+that Turn's terminal commit. The checkpoint contains the current
+provider-visible context, nonterminal Inputs and their records, current
+projection, and latest Context activity. It never contains the full
+presentation transcript or terminal Input history.
+
+Checkpoints accelerate projection recovery only. Their bounded status-event
+seed is not a transport replay log and cannot answer an SSE cursor that
+predates the checkpoint. Cursor replay captures a stable Journal EOF and reads
+the complete authoritative prefix through that boundary.
+
+Provider provenance reuse is scoped to one Turn. A terminal Turn resets the
+snapshot-reuse boundary, so the next Turn's first request epoch is
+self-contained and a checkpoint never depends on an unbounded chain of older
+request snapshots.
+
+Cold open follows this order:
+
+1. Repair only a torn, non-newline-terminated EOF tail.
+2. Reverse-scan complete Journal lines for the latest valid checkpoint.
+3. Restore its bounded state and replay only the suffix to EOF.
+4. Fall back to full replay only when no checkpoint exists.
+5. Atomically replace `thread.json`, then update `threads.index.json`.
+
+The sole Journal is sufficient to rebuild Input state, current Generation,
+Goal, Notes, current provider context, usage, and Thread status. Full display
+history remains in the Journal and is read through tail-first paging rather
+than retained in the cold-open projection. Active-runtime subscriptions are
+intentionally not recovered after Runtime shutdown.
+
+## Tail-First Message Paging
+
+Web first-page loading seeks directly to EOF and reads complete lines backward
+in blocks until it has enough display records. The returned page is reordered
+chronologically before presentation. `Load older messages` continues from an
+opaque cursor containing validated Journal position and sequence information.
+
+- The browser never receives raw offsets or disk schemas.
+- Appends do not invalidate earlier offsets.
+- A page includes the System activities and Generation boundaries necessary to
+  interpret its messages.
+- Current provider-context construction starts at
+  `current_generation.start_offset`, not at Journal byte zero.
+- Direct local inspection remains natural through `tail`, `less`, `rg`, and
+  `jq`; newest records remain at EOF.
+
+No persistent per-Journal index is required initially. If measured histories
+show pathological reverse-scan cost, add one rebuildable sparse offset index;
+it must never become authority.
+
+## Scratchpad, Spool, And Media
+
+### Scratchpad
+
+`scratchpad/` is model-owned Thread working space. It is not recited or
+Journaled automatically. It survives New, Compact, archive, and unarchive and
+is removed only with permanent Thread deletion. Automated TTL cleanup must not
+touch it.
+
+### Spool
+
+`spool/` holds runtime-managed oversized Input bodies, Tool Results, and other
+payloads that are too large for a bounded commit. References include relative
+path, media type, size, and digest. Retention is reference- and state-aware:
+payloads needed by current context, pending Input, recovery, or incomplete Tool
+outcomes cannot expire. Expired historical payloads leave their digest and
+metadata in the immutable Journal and render as unavailable.
+
+### Media
+
+`media/` holds durable admitted user and Observation attachments. It is not a
+Tool-result spill directory and follows the longer-lived media policy. Existing
+Artifact domain language may remain for durable integrity-addressed content;
+runtime spill must never be called an Artifact.
+
+## Archive, Unarchive, And Delete Storage
+
+Archive appends `thread.archived`, closes the handle, and atomically renames the
+whole directory from `threads/<tid>` to `archive/threads/<tid>`. Recovery that
+finds the fact in the active namespace completes the move.
+
+Unarchive appends `thread.unarchived` under the exclusive lifecycle lease,
+atomically moves the same bytes back, validates the projection, and opens the
+same current Generation. Recovery completes a move whose fact and directory
+namespace disagree.
+
+Delete first validates references, atomically renames the archived directory to
+`.trash/threads/<tid>.<operation-id>`, removes it from projections, then removes
+the bytes. Startup finishes known trash operations. Main `0` never enters
+archive or trash.
+
+All internal references are ids or Thread-root-relative paths; no persisted
+absolute path may break after archive movement.
 
 ## Retention
 
-- Archive is the only Thread-retirement operation in this redesign. It is
-  reversible and retains all bytes.
-- There is no Thread delete API, CLI command, Web action, tombstone, trash
-  protocol, or automatic age-based history and Artifact deletion.
-- A future destructive-retention design must separately define confirmation,
-  parent/child references, subscription references, Artifact cleanup, and
-  recovery. Those policies are not inferred here.
+- Active and archived Journal history remains until explicit Thread deletion.
+- Scratchpad remains until Thread deletion.
+- Spool has configurable, reference-aware cleanup and is the target for future
+  temporary-system-file retention.
+- Media follows its independent durable-media policy.
+- Future “delete N days after archive” automation calls checked Thread Delete
+  and records policy diagnostics outside the removed Thread Journal.
 
-## Validation And Repair Tests
+## Verification And Failure Injection
 
-- Fixed timestamp format in Go and JavaScript.
-- Id shape, collision retry, and no time derivation from ids.
-- Exact Thread/Generation directory validation and path traversal rejection.
-- Complete-batch append, sync failure rollback, torn-line repair, incomplete
-  final-batch truncation, and non-tail corruption rejection.
-- Missing/stale/corrupt generation, input, Thread, and Agent indexes.
-- Tail checkpoint recovery bounded independently of full journal length.
-- Input accepted before assignment and recovered across every transition phase.
-- Compact bootstrap failure and transition crash matrix.
-- Message paging backward within and across generations.
-- Large Thread lists read only `threads/index.json` on the healthy path.
-- Archive/unarchive, nested parent retention, and absence of deletion paths.
-- External file replacement/truncation detection.
-- Old Session state rejection without mutation.
+Tests must cover:
+
+- Canonical UTC millisecond timestamps and id validation including Main `0`.
+- Commit ordering, bounded fact arrays, rollback after partial write/sync, and
+  torn-tail truncation on Unix and Windows.
+- Full Input lifecycle, multiple attempts, restart requeue, dead-letter, and
+  unknown external side-effect outcomes.
+- New and Compact atomic boundary commits, state carry/clear rules, and compact
+  summary projection without Provider-visible activity markers.
+- Projection ahead/behind/corrupt cases, checkpoint reverse scan, and full
+  replay equivalence.
+- Thread list without opening Journals on the normal path, plus index and
+  missing/corrupt `thread.json` rebuild from active/archived Journals.
+- EOF-first paging, opaque cursor continuation, viewport-order DTOs, and large
+  Journal bounded-read benchmarks.
+- Scratchpad preservation, Spool expiry guards, and missing historical payload
+  presentation.
+- Archive/unarchive crash points with no Generation change, checked delete,
+  trash recovery, child rejection, active-subscription settling, and Main
+  protection.
+- Race tests for creation, alias resolution, admission, Context transition,
+  projection publication, archive, and delete.

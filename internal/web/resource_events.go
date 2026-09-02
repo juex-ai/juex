@@ -79,7 +79,7 @@ func (s *resourceSubscriber) take() agentResourceEvent {
 
 type resourceEventHub struct {
 	workDir      string
-	sessionsDir  string
+	threadsDir   string
 	runtimeFiles map[string]struct{}
 
 	mu            sync.Mutex
@@ -99,10 +99,10 @@ type resourceSubscription struct {
 	cancel  func()
 }
 
-func newResourceEventHub(workDir, sessionsDir string) *resourceEventHub {
+func newResourceEventHub(workDir, threadsDir string) *resourceEventHub {
 	return &resourceEventHub{
 		workDir:      filepath.Clean(workDir),
-		sessionsDir:  filepath.Clean(sessionsDir),
+		threadsDir:   filepath.Clean(threadsDir),
 		runtimeFiles: map[string]struct{}{},
 		subscribers:  map[uint64]*resourceSubscriber{},
 		addWatch: func(watcher *fsnotify.Watcher, path string) error {
@@ -137,7 +137,7 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			h.mu.Unlock()
 			return resourceSubscription{}, err
 		}
-		if err := h.addRoot(watcher, h.sessionsDir); err != nil {
+		if err := h.addRoot(watcher, h.threadsDir); err != nil {
 			_ = watcher.Close()
 			h.mu.Unlock()
 			return resourceSubscription{}, err
@@ -358,7 +358,7 @@ func (h *resourceEventHub) runWatcher(
 
 func (h *resourceEventHub) shouldWatchCreatedDirectory(path string) bool {
 	path = filepath.Clean(path)
-	if pathWithin(h.workDir, path) || pathWithin(h.sessionsDir, path) {
+	if pathWithin(h.workDir, path) || pathWithin(h.threadsDir, path) {
 		return true
 	}
 	for file := range h.runtimeFiles {
@@ -399,7 +399,7 @@ func (h *resourceEventHub) failWatcher(failed *fsnotify.Watcher) {
 
 func (h *resourceEventHub) resourceForPath(path string) string {
 	path = filepath.Clean(path)
-	if pathWithin(h.sessionsDir, path) && strings.Contains(path, string(filepath.Separator)+"scratchpad") {
+	if pathWithin(h.threadsDir, path) && strings.Contains(path, string(filepath.Separator)+"scratchpad") {
 		return resourceScratchpad
 	}
 	if !pathWithin(h.workDir, path) {

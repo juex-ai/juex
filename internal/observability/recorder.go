@@ -1,4 +1,4 @@
-// Package observability derives human-readable session logs from runtime
+// Package observability derives human-readable thread logs from runtime
 // events without changing the canonical conversation and event journals.
 package observability
 
@@ -68,15 +68,15 @@ func (l Level) String() string {
 }
 
 type Options struct {
-	SessionDir string
-	Debug      bool
-	LogLevel   string
+	ThreadDir string
+	Debug     bool
+	LogLevel  string
 }
 
 type Recorder struct {
-	sessionDir string
-	level      Level
-	debug      bool
+	threadDir string
+	level     Level
+	debug     bool
 
 	mu    sync.Mutex
 	files map[string]*os.File
@@ -94,15 +94,15 @@ func NewRecorder(opts Options) (*Recorder, error) {
 		level = LevelDebug
 	}
 	return &Recorder{
-		sessionDir: opts.SessionDir,
-		level:      level,
-		debug:      opts.Debug || level == LevelDebug,
-		files:      map[string]*os.File{},
+		threadDir: opts.ThreadDir,
+		level:     level,
+		debug:     opts.Debug || level == LevelDebug,
+		files:     map[string]*os.File{},
 	}, nil
 }
 
 func (r *Recorder) Record(ev events.Event) error {
-	if r == nil || r.sessionDir == "" {
+	if r == nil || r.threadDir == "" {
 		return nil
 	}
 	if ev.Transient {
@@ -193,7 +193,7 @@ func (r *Recorder) fileLocked(name string) (*os.File, error) {
 	if f := r.files[name]; f != nil {
 		return f, nil
 	}
-	path := filepath.Join(r.sessionDir, filepath.FromSlash(name))
+	path := filepath.Join(r.threadDir, filepath.FromSlash(name))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}

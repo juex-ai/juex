@@ -1,4 +1,4 @@
-// Mirror of Go API/session DTOs and the internal/web browser event contract.
+// Mirror of Go API/thread DTOs and the internal/web browser event contract.
 // When the Go side changes, update this file in the same PR.
 
 export type Role = "user" | "assistant" | "system";
@@ -55,7 +55,7 @@ export interface ToolResultBlock extends BlockBase {
   media?: MediaRef;
   is_error?: boolean;
   // UI-local live projection marker. Persisted history omits this field; it
-  // lets the session transcript keep streamed tool output in a running state
+  // lets the thread transcript keep streamed tool output in a running state
   // until the final tool.completed/tool.errored event arrives.
   streaming?: boolean;
 }
@@ -74,7 +74,7 @@ export interface Message {
   pending?: boolean;
   turn_id?: string;
   // Model that produced this assistant message. Stamped by the provider at
-  // generation time so resumed sessions retain attribution even if the
+  // generation time so resumed threads retain attribution even if the
   // current config has been swapped to a different model.
   model?: string;
 }
@@ -126,20 +126,28 @@ export interface ContextArtifactProjection {
   truncated: boolean;
 }
 
-export interface SessionInfo {
+export type ThreadRetentionState = "active" | "archived";
+
+export type ThreadExecutionState = "idle" | "working" | "failed";
+
+export interface ThreadInfo {
   id: string;
+  alias: string;
+  parent_thread_id?: string;
   dir: string;
-  kind: "primary" | "side";
-  active: boolean;
-  started_at: string;        // RFC3339
-  last_active_at: string;    // RFC3339
+  retention_state: ThreadRetentionState;
+  execution_state?: ThreadExecutionState;
+  created_at: string;
+  last_active_at: string;
+  revision: number;
+  generation_id: string;
   turns: number;
-  preview: string;
+  pending_input_count: number;
   token_usage: TokenUsage;
   context_usage?: ContextUsage;
 }
 
-export interface SessionShowResponse extends SessionInfo {
+export interface ThreadShowResponse extends ThreadInfo {
   messages: Message[];
   model?: string;
   event_cursor: string;
@@ -149,19 +157,34 @@ export interface SessionShowResponse extends SessionInfo {
   notes?: NotesSnapshot;
 }
 
-export interface SessionsListResponse {
-  sessions: SessionInfo[];
+export interface ThreadsListResponse {
+  active_threads: ThreadListItem[];
+  archived_threads: ThreadListItem[];
 }
 
-export interface ActiveSessionResponse {
-  session_id?: string;
+export type CreateThreadResponse = ThreadInfo;
+
+export interface ThreadListItem {
+  thread_id: string;
+  alias: string;
+  parent_thread_id?: string;
+  archived_at?: string;
+  retention_state: ThreadRetentionState;
+  execution_state?: ThreadExecutionState;
+  created_at: string;
+  last_activity_at: string;
+  pending_input_count: number;
+  turn_count: number;
+  generation_count: number;
+  current_generation_id: string;
+  current_context_tokens: number;
+  token_usage: TokenUsage;
+  thread_revision: number;
 }
 
-export type CreateSessionResponse = SessionInfo;
-
-export interface DeleteSessionResponse {
+export interface DeleteThreadResponse {
   deleted: boolean;
-  id: string;
+  thread_id: string;
 }
 
 export interface TurnWarning {
@@ -182,14 +205,14 @@ export interface StartTurnResponse {
 export interface SlashCommandResponse {
   name: string;
   text: string;
-  compact?: CompactSessionResponse;
+  compact?: CompactThreadResponse;
   status?: SlashStatusResponse;
 }
 
 export interface SlashStatusResponse {
-  session_id?: string;
-  session_dir?: string;
-  session_kind?: "primary" | "side";
+  thread_id?: string;
+  thread_dir?: string;
+  thread_kind?: "primary" | "side";
   active?: boolean;
   work_dir?: string;
   turns?: number;
@@ -224,7 +247,7 @@ export type RuntimeTurnPhase =
   | "tool_batch"
   | "compacting";
 
-export type RuntimeSessionState =
+export type RuntimeThreadState =
   | "idle"
   | "turn_active"
   | "draining_pending"
@@ -268,10 +291,10 @@ export interface RuntimeTurnStatus {
   error?: RuntimeStatusError;
 }
 
-export interface RuntimeSessionStatus {
+export interface RuntimeThreadStatus {
   id: string;
   alias?: string;
-  state: RuntimeSessionState;
+  state: RuntimeThreadState;
   working: boolean;
   pending_count: number;
   max_pending_inputs: number;
@@ -281,7 +304,7 @@ export interface RuntimeSessionStatus {
 export interface AgentRuntimeStatusSnapshot {
   cursor?: string;
   updated_at?: string;
-  session: RuntimeSessionStatus;
+  thread: RuntimeThreadStatus;
   turn?: RuntimeTurnStatus;
   tools: RuntimeToolCallStatus[];
   token_usage: TokenUsage;
@@ -293,7 +316,7 @@ export interface InterruptResponse {
   cancelled: boolean;
 }
 
-export interface CompactSessionResponse {
+export interface CompactThreadResponse {
   message_id?: string;
   reason?: string;
   auto?: boolean;
@@ -579,7 +602,7 @@ export interface ToolCompletedPayload {
 export interface ToolOutputDeltaPayload {
   name: string;
   tool_use_id: string;
-  session_id: string;
+  thread_id: string;
   chunk_id: number;
   stream: string;
   text: string;
@@ -768,7 +791,7 @@ export interface ObservationRecord {
   truncated?: boolean;
   artifact_path?: string;
   state: ObservationState | string;
-  target_session?: string;
+  target_thread?: string;
   pending_input_id?: string;
   created_at: number;
   delivered_at?: number;
@@ -996,7 +1019,7 @@ export interface RuntimeStatusResponse {
   work_dir: string;
   modules: Array<{
     id: string;
-    scope: "runtime" | "session" | string;
+    scope: "runtime" | "thread" | string;
   }>;
   provider: {
     id?: string;
@@ -1308,7 +1331,7 @@ export interface AgentStatus {
 export interface AgentRestartResume {
   required: boolean;
   sent: boolean;
-  session_id?: string;
+  thread_id?: string;
   turn_id?: string;
   error?: string;
 }

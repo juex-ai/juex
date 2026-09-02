@@ -1,10 +1,10 @@
-import { historySessionHref } from "./history-sessions.ts";
+import { threadHref } from "./thread-list.ts";
 
-export function homeActiveSessionHref(
-  activeSessionID?: string | null,
+export function homeActiveThreadHref(
+  activeThreadID?: string | null,
   pathname?: string,
 ): string | null {
-  return activeSessionID
-    ? historySessionHref(activeSessionID, pathname)
+  return activeThreadID
+    ? threadHref(activeThreadID, pathname)
     : null;
 }

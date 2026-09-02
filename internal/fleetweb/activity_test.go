@@ -58,8 +58,8 @@ func TestActivityClientDecodesSharedStatusContract(t *testing.T) {
 			"state":"working",
 			"pending_input_count":1,
 			"selected_status":{
-				"session":{
-					"id":"session-current",
+				"thread":{
+					"id":"0",
 					"state":"turn_active",
 					"working":true,
 					"pending_count":1,
@@ -82,7 +82,7 @@ func TestActivityClientDecodesSharedStatusContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if activity.SelectedStatus == nil ||
-		!activity.SelectedStatus.Session.Working ||
+		!activity.SelectedStatus.Thread.Working ||
 		activity.PendingInputCount != 1 {
 		t.Fatalf("activity = %+v", activity)
 	}

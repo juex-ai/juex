@@ -85,14 +85,16 @@ func Normalize(e Event) Event {
 		e.ID = newID()
 	}
 	if e.Timestamp.IsZero() {
-		e.Timestamp = time.Now().UTC()
+		e.Timestamp = time.Now()
 	}
+	e.Timestamp = e.Timestamp.UTC().Truncate(time.Millisecond)
 	return e
 }
 
 // Emit dispatches e synchronously to all matching subscribers.
 // If e.ID is empty, a random one is generated.
-// If e.Timestamp is zero, time.Now().UTC() is used.
+// If e.Timestamp is zero, the current time is used. Timestamps are normalized
+// to UTC millisecond precision before persistence or publication.
 func (b *Bus) Emit(e Event) error {
 	if b == nil {
 		return nil

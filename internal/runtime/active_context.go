@@ -31,11 +31,11 @@ func (e *Engine) ActiveContextWithError(ctx context.Context, incoming ...llm.Mes
 	if e == nil {
 		return ActiveContextSnapshot{}, nil
 	}
-	runtime := e.SessionRuntimeSnapshot()
-	if runtime.Session == nil {
+	runtime := e.ThreadRuntimeSnapshot()
+	if runtime.Thread == nil {
 		return ActiveContextSnapshot{}, nil
 	}
-	_, history := runtime.Session.Snapshot()
+	_, history := runtime.Thread.Snapshot()
 	snap := assembleActiveContext(history, incoming)
 	contextMessages, err := e.moduleRuntimeContextMessages(ctx, runtime)
 	if err != nil {
@@ -60,11 +60,12 @@ func (e *Engine) activeContextLockedWithPolicyContextError(ctx context.Context, 
 	if e == nil {
 		return ActiveContextSnapshot{}, nil
 	}
-	runtime := e.SessionRuntimeSnapshot()
-	if runtime.Session == nil {
+	runtime := e.ThreadRuntimeSnapshot()
+	if runtime.Thread == nil {
 		return ActiveContextSnapshot{}, nil
 	}
-	snap := assembleActiveContext(runtime.Session.History, incoming)
+	_, history := runtime.Thread.Snapshot()
+	snap := assembleActiveContext(history, incoming)
 	contextMessages, err := e.moduleRuntimeContextMessages(ctx, runtime)
 	if err != nil {
 		return ActiveContextSnapshot{}, err
@@ -75,22 +76,22 @@ func (e *Engine) activeContextLockedWithPolicyContextError(ctx context.Context, 
 	return snap, nil
 }
 
-func (e *Engine) moduleRuntimeContextMessages(ctx context.Context, runtime SessionRuntimeSnapshot) ([]llm.Message, error) {
-	if runtime.Session == nil {
+func (e *Engine) moduleRuntimeContextMessages(ctx context.Context, runtime ThreadRuntimeSnapshot) ([]llm.Message, error) {
+	if runtime.Thread == nil {
 		return nil, nil
 	}
-	sessionContext := runtimemodule.SessionContext{
-		ID:            runtime.Session.ID,
-		Dir:           runtime.Session.Dir,
+	threadContext := runtimemodule.ThreadContext{
+		ID:            runtime.Thread.ID,
+		Dir:           runtime.Thread.Dir,
 		ScratchpadDir: runtime.ScratchpadDir,
 	}
 	sections, err := runtimemodule.CollectContext(ctx, runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 		Runtime: runtimemodule.RuntimeContext{
-			WorkDir:     e.WorkDir,
-			ArtifactDir: e.ArtifactDir,
+			WorkDir:  e.WorkDir,
+			MediaDir: e.MediaDir,
 		},
-		Session: &sessionContext,
+		Thread: &threadContext,
 	}, e.RuntimeModules, runtime.Modules)
 	if err != nil {
 		return nil, err

@@ -1,9 +1,7 @@
 package e2e
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,744 +21,62 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 )
 
-// TestLiveBinary_LoadsSkillsAndMCP builds the real `juex` binary, points
-// it at a tempdir containing both a skill and an mcp.json that launches a
-// real Python MCP server (via the project uv environment), and asserts that
-// `juex run --dry-run --json` reports both pieces in the resulting plan.
-//
-// This complements TestEndToEnd_FullStack (in-process, mocked LLM) by
-// proving the live binary subprocess wires everything correctly using a
-// realistic MCP server (the official Python SDK — most MCP servers in
-// the wild are Python).
-func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
-	if _, err := exec.LookPath("uv"); err != nil {
-		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
-	}
-
-	bin := buildJuex(t)
-	mcpScript := pythonMCPScript(t)
-	root, err := findRepoRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	work := t.TempDir()
-	if err := writeSkillFile(work, "trim-tool", "trim trailing whitespace"); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeMCPConfig(work, "uv", []string{"run", "--quiet", "--project", root, "python", mcpScript}); err != nil {
-		t.Fatal(err)
-	}
-
-	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configBody := "models: [openai:m]\n" +
-		"providers:\n" +
-		"  - id: openai\n" +
-		"    base_url: https://example\n" +
-		"    api_key: k\n" +
-		"    models:\n" +
-		"      - id: m\n"
-	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command(bin,
-		"--cwd", work,
-		"--config", configPath,
-		"run", "--dry-run", "--json", "x")
-	home := t.TempDir()
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"USERPROFILE="+home,
-		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
-	)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	out := stdout.Bytes()
-	if err != nil {
-		ee, ok := err.(*exec.ExitError)
-		if !ok || ee.ExitCode() != 10 {
-			t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, out, stderr.String())
-		}
-	}
-	if strings.Contains(stderr.String(), "JUEX-FAKE-MCP-STDERR") {
-		t.Fatalf("MCP server stderr leaked to CLI stderr:\n%s", stderr.String())
-	}
-
-	var plan struct {
-		Tools  []string `json:"tools"`
-		Skills []struct {
-			Name string `json:"name"`
-			Path string `json:"path"`
-		} `json:"skills"`
-	}
-	if err := json.Unmarshal(out, &plan); err != nil {
-		t.Fatalf("parse plan: %v\noutput:\n%s", err, out)
-	}
-
-	// MCP server started + tool registered.
-	have := map[string]bool{}
-	for _, name := range plan.Tools {
-		have[name] = true
-	}
-	if !have["mcp__local__echo"] {
-		t.Errorf("mcp__local__echo not in tool list (MCP server not loaded?). tools=%v", plan.Tools)
-	}
-
-	// Skill loaded: name + absolute path appear in the dry-run plan.
-	skillFound := false
-	for _, s := range plan.Skills {
-		if s.Name == "trim-tool" {
-			skillFound = true
-			wantPath := filepath.Join(work, ".agents", "skills", "trim-tool", "SKILL.md")
-			if s.Path != wantPath {
-				t.Errorf("trim-tool path = %q, want %q", s.Path, wantPath)
-			}
-		}
-	}
-	if !skillFound {
-		t.Errorf("trim-tool not in plan.skills (skills not loaded?). skills=%+v", plan.Skills)
-	}
-	builtinFound := map[string]bool{
-		"juex-chunked-write": false,
-		"juex-observables":   false,
-		"juex-session-state": false,
-	}
-	for _, skill := range plan.Skills {
-		if _, ok := builtinFound[skill.Name]; !ok {
-			continue
-		}
-		if skill.Path != "builtin://skills/"+skill.Name+"/SKILL.md" {
-			t.Errorf("builtin skill path = %q for %s", skill.Path, skill.Name)
-		}
-		builtinFound[skill.Name] = true
-	}
-	for name, found := range builtinFound {
-		if !found {
-			t.Errorf("builtin skill %s not in compiled-binary plan: %+v", name, plan.Skills)
-		}
-	}
-}
-
-func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
-	if _, err := exec.LookPath("uv"); err != nil {
-		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
-	}
-
-	bin := buildJuex(t)
-	mcpScript := pythonMCPScript(t)
-	root, err := findRepoRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	work := t.TempDir()
-	extDir := filepath.Join(work, ".juex", "extensions", "demo")
-	if err := os.MkdirAll(extDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	manifest := `{"manifest_version":1,"name":"demo","version":"1.0.0","requirements":[{"name":"Demo CLI","description":"Install the Demo CLI.","url":"https://example.com/demo-cli","future_metadata":true}],"future_metadata":{"ignored":true},"agent":{"future_metadata":true,"environment":{"future_metadata":true}}}`
-	if err := os.WriteFile(filepath.Join(extDir, "juex.extension.json"), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeExtensionSkillFile(extDir, "ext-skill", "extension provided skill"); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeMCPConfigFile(
-		filepath.Join(extDir, "mcp.json"),
-		"extlocal",
-		"uv",
-		[]string{"run", "--quiet", "--project", root, "python", mcpScript},
-	); err != nil {
-		t.Fatal(err)
-	}
-	blockedExtDir := filepath.Join(work, ".juex", "extensions", "blocked")
-	if err := writeExtensionSkillFile(blockedExtDir, "blocked-skill", "must not load"); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeMCPConfigFile(
-		filepath.Join(blockedExtDir, "mcp.json"),
-		"blockedlocal",
-		"uv",
-		[]string{"run", "--quiet", "--project", root, "python", mcpScript},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configBody := "models: [openai:m]\n" +
-		"extensions:\n" +
-		"  allow: [demo]\n" +
-		"providers:\n" +
-		"  - id: openai\n" +
-		"    base_url: https://example\n" +
-		"    api_key: k\n" +
-		"    models:\n" +
-		"      - id: m\n"
-	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command(bin,
-		"--cwd", work,
-		"--config", configPath,
-		"run", "--dry-run", "--json", "x")
-	home := t.TempDir()
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"USERPROFILE="+home,
-		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		ee, ok := err.(*exec.ExitError)
-		if !ok || ee.ExitCode() != 10 {
-			t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, out, ee.Stderr)
-		}
-	}
-
-	var plan struct {
-		Tools  []string `json:"tools"`
-		Skills []struct {
-			Name string `json:"name"`
-			Path string `json:"path"`
-		} `json:"skills"`
-	}
-	if err := json.Unmarshal(out, &plan); err != nil {
-		t.Fatalf("parse plan: %v\noutput:\n%s", err, out)
-	}
-
-	have := map[string]bool{}
-	for _, name := range plan.Tools {
-		have[name] = true
-	}
-	if !have["mcp__extlocal__echo"] {
-		t.Errorf("mcp__extlocal__echo not in tool list (extension MCP server not loaded?). tools=%v", plan.Tools)
-	}
-	if have["mcp__blockedlocal__echo"] {
-		t.Errorf("blocked extension MCP tool entered the plan. tools=%v", plan.Tools)
-	}
-
-	skillFound := false
-	for _, s := range plan.Skills {
-		if s.Name == "blocked-skill" {
-			t.Errorf("blocked extension skill entered the plan: %+v", plan.Skills)
-		}
-		if s.Name == "ext-skill" {
-			skillFound = true
-			wantPath := filepath.Join(extDir, "skills", "ext-skill", "SKILL.md")
-			if s.Path != wantPath {
-				t.Errorf("ext-skill path = %q, want %q", s.Path, wantPath)
-			}
-		}
-	}
-	if !skillFound {
-		t.Errorf("ext-skill not in plan.skills (extension skills not loaded?). skills=%+v", plan.Skills)
-	}
-}
-
-func TestLiveBinary_UserAgentsGateDoesNotDisableHomeExtensions(t *testing.T) {
-	bin := buildJuex(t)
-	home := t.TempDir()
-	work := t.TempDir()
-	if err := writeSkillFile(home, "personal-only", "personal agents skill"); err != nil {
-		t.Fatal(err)
-	}
-	extDir := filepath.Join(home, "extensions", "home-bundle")
-	if err := writeExtensionManifestFile(extDir, "home-bundle"); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeExtensionSkillFile(extDir, "home-extension", "home extension skill"); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configBody := `models: [openai:m]
-enable_user_agents_resources: false
-extensions:
-  allow: [home-bundle]
-providers:
-  - id: openai
-    base_url: https://example
-    api_key: k
-    models:
-      - id: m
-`
-	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command(bin, "-C", work, "run", "--dry-run", "--json", "x")
-	cmd.Env = filteredEnv("HOME", "USERPROFILE", "JUEX_HOME", "CODEX_HOME")
-	cmd.Env = append(cmd.Env,
-		"HOME="+home,
-		"USERPROFILE="+home,
-		"JUEX_HOME="+home,
-		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
-	)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 10 {
-		t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
-	}
-
-	var plan struct {
-		Skills []struct {
-			Name string `json:"name"`
-			Path string `json:"path"`
-		} `json:"skills"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
-		t.Fatalf("parse plan: %v\noutput:\n%s", err, stdout.String())
-	}
-	found := map[string]string{}
-	for _, skill := range plan.Skills {
-		found[skill.Name] = skill.Path
-	}
-	if _, ok := found["personal-only"]; ok {
-		t.Fatalf("personal ~/.agents skill loaded with gate disabled: %+v", plan.Skills)
-	}
-	resolvedHome, err := filepath.EvalSymlinks(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := found["home-extension"], filepath.Join(resolvedHome, "extensions", "home-bundle", "skills", "home-extension", "SKILL.md"); got != want {
-		t.Fatalf("home extension skill path = %q, want %q; skills=%+v", got, want, plan.Skills)
-	}
-}
-
-func TestLiveBinary_ModelsFlagUsesUserGlobalProvider(t *testing.T) {
-	bin := buildJuex(t)
-	work := t.TempDir()
-	home := t.TempDir()
-
-	configPath := filepath.Join(home, ".juex", "juex.yaml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configBody := `models: [openai:gpt-default]
-providers:
-  - id: openai
-    base_url: https://global.example
-    api_key: sk-global
-    models:
-      - id: gpt-default
-      - id: gpt-global
-`
-	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command(bin,
-		"--cwd", work,
-		"--models", "openai:gpt-global",
-		"run", "--dry-run", "--json", "x")
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"USERPROFILE="+home,
-		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		ee, ok := err.(*exec.ExitError)
-		if !ok || ee.ExitCode() != 10 {
-			t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, out, ee.Stderr)
-		}
-	}
-
-	var plan struct {
-		ProviderID string `json:"provider_id"`
-		Model      string `json:"model"`
-		BaseURL    string `json:"base_url"`
-		WorkDir    string `json:"work_dir"`
-	}
-	if err := json.Unmarshal(out, &plan); err != nil {
-		t.Fatalf("parse plan: %v\noutput:\n%s", err, out)
-	}
-	if plan.ProviderID != "openai" || plan.Model != "gpt-global" || plan.BaseURL != "https://global.example" || plan.WorkDir != work {
-		t.Fatalf("plan = %+v", plan)
-	}
-}
-
-func TestLiveBinary_NonDefaultHomesShareConfigAndIsolateWritableState(t *testing.T) {
+func TestLiveBinary_SendWaitUsesMainThreadJournal(t *testing.T) {
 	bin := buildJuex(t)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, chatCompletionResponse("multi-home ok"))
-	}))
-	defer provider.Close()
-	userHome := t.TempDir()
-	defaultHome := filepath.Join(userHome, ".juex")
-	if err := os.MkdirAll(defaultHome, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	defaultPath := filepath.Join(defaultHome, "juex.yaml")
-	defaultBody := []byte("models: [local:base]\n" +
-		"providers:\n" +
-		"  - id: local\n" +
-		"    protocol: openai/chat\n" +
-		"    base_url: " + provider.URL + "\n" +
-		"    api_key: shared-key\n" +
-		"    capabilities:\n" +
-		"      streaming: false\n" +
-		"    models:\n" +
-		"      - id: base\n" +
-		"      - id: one\n" +
-		"      - id: two\n" +
-		"sandbox:\n" +
-		"  enabled: true\n")
-	if err := os.WriteFile(defaultPath, defaultBody, 0o640); err != nil {
-		t.Fatal(err)
-	}
-
-	type instanceCase struct {
-		name      string
-		model     string
-		fleetAddr string
-		home      string
-		work      string
-	}
-	firstFleetAddr := availableFleetAddress(t)
-	secondFleetAddr := availableFleetAddress(t)
-	for secondFleetAddr == firstFleetAddr {
-		secondFleetAddr = availableFleetAddress(t)
-	}
-	cases := []instanceCase{
-		{name: "first", model: "one", fleetAddr: firstFleetAddr, home: t.TempDir(), work: t.TempDir()},
-		{name: "second", model: "two", fleetAddr: secondFleetAddr, home: t.TempDir(), work: t.TempDir()},
-	}
-	for _, tc := range cases {
-		if err := os.WriteFile(
-			filepath.Join(tc.home, "juex.yaml"),
-			[]byte("models: [local:"+tc.model+"]\nfleet:\n  addr: "+tc.fleetAddr+"\n"),
-			0o600,
-		); err != nil {
-			t.Fatal(err)
-		}
-		environment := filteredEnv(
-			"HOME",
-			"USERPROFILE",
-			"JUEX_HOME",
-			"CODEX_HOME",
-			"GIT_CONFIG_GLOBAL",
-			"GIT_CONFIG_NOSYSTEM",
-			"PROVIDER_API_ID",
-			"PROVIDER_API_PROTOCOL",
-			"PROVIDER_API_BASE",
-			"PROVIDER_API_KEY",
-			"PROVIDER_API_MODEL",
-		)
-		environment = append(environment,
-			"HOME="+userHome,
-			"USERPROFILE="+userHome,
-			"JUEX_HOME="+tc.home,
-			"CODEX_HOME="+filepath.Join(userHome, "missing-codex-home"),
-			"GIT_CONFIG_GLOBAL="+filepath.Join(userHome, "gitconfig"),
-			"GIT_CONFIG_NOSYSTEM=1",
-		)
-
-		command := exec.Command(bin, "-C", tc.work, "run", "--dry-run", "--json", "x")
-		command.Env = environment
-		var stdout, stderr bytes.Buffer
-		command.Stdout = &stdout
-		command.Stderr = &stderr
-		err := command.Run()
-		if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 10 {
-			t.Fatalf("%s dry run: %v\nstdout:\n%s\nstderr:\n%s", tc.name, err, stdout.String(), stderr.String())
-		}
-		var plan struct {
-			ProviderID string `json:"provider_id"`
-			Model      string `json:"model"`
-			Sandbox    struct {
-				Enabled bool `json:"enabled"`
-			} `json:"sandbox"`
-		}
-		if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
-			t.Fatalf("%s parse plan: %v\n%s", tc.name, err, stdout.String())
-		}
-		if plan.ProviderID != "local" || plan.Model != tc.model || !plan.Sandbox.Enabled {
-			t.Fatalf("%s plan = %+v, want shared provider/sandbox and instance model", tc.name, plan)
-		}
-
-		command = exec.Command(bin, "fleet", "add", tc.work, "--name", tc.name)
-		command.Env = environment
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("%s fleet add: %v\n%s", tc.name, err, output)
-		}
-		entries, err := os.ReadDir(filepath.Join(tc.home, "agents"))
-		if err != nil {
-			t.Fatalf("%s instance registry: %v", tc.name, err)
-		}
-		if len(entries) != 1 || !entries[0].IsDir() {
-			t.Fatalf("%s instance registry entries = %+v, want one agent", tc.name, entries)
-		}
-		agentDir := filepath.Join(tc.home, "agents", entries[0].Name())
-		command = exec.Command(bin, "--debug", "-C", tc.work, "run", "--json", "hello")
-		command.Env = environment
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("%s run: %v\n%s", tc.name, err, output)
-		}
-		if _, err := os.Stat(filepath.Join(agentDir, "history.json")); err != nil {
-			t.Fatalf("%s history: %v", tc.name, err)
-		}
-		sessions, err := os.ReadDir(filepath.Join(agentDir, "sessions"))
-		if err != nil {
-			t.Fatalf("%s sessions: %v", tc.name, err)
-		}
-		if len(sessions) != 1 || !sessions[0].IsDir() {
-			t.Fatalf("%s sessions = %+v, want one durable session", tc.name, sessions)
-		}
-		if _, err := os.Stat(filepath.Join(agentDir, "sessions", sessions[0].Name(), "logs")); err != nil {
-			t.Fatalf("%s debug logs: %v", tc.name, err)
-		}
-
-		supervisor := startFleetSupervisorWithArgs(t, bin, environment)
-		if got := waitFleetWebReady(t, supervisor); got != tc.fleetAddr {
-			t.Fatalf("%s fleet address = %q, want instance override %q", tc.name, got, tc.fleetAddr)
-		}
-		killSupervisor(t, supervisor)
-	}
-
-	if _, err := os.Stat(filepath.Join(defaultHome, "agents")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("default home received instance agent state: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(defaultHome, ".locks")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("default home received instance locks: %v", err)
-	}
-	gotDefault, err := os.ReadFile(defaultPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotDefault, defaultBody) {
-		t.Fatalf("default config changed:\n%s", gotDefault)
-	}
-	info, err := os.Stat(defaultPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
-		t.Fatalf("default config mode = %o, want unchanged 640", info.Mode().Perm())
-	}
-}
-
-func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
-	bin := buildJuex(t)
-	work := t.TempDir()
-	home := t.TempDir()
-	sessionID := "20260614T120000-e2ebundle"
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("JUEX_HOME", filepath.Join(home, ".juex"))
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	resolution, err := agentstate.Resolve(agentstate.Options{
-		HomeDir: filepath.Join(home, ".juex"),
-		WorkDir: work,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionDir := filepath.Join(resolution.Address.StateDir(), "sessions", sessionID)
-	for name, body := range map[string]string{
-		"session.json":       `{"kind":"primary"}`,
-		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"api_key=sk-e2e-secret"}]}` + "\n",
-		"events.jsonl":       `{"type":"x","payload":{"token_usage":{"input_tokens":1}}}` + "\n",
-		"logs/juex.log":      "Bearer e2e-token\n",
-	} {
-		path := filepath.Join(sessionDir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	outPath := filepath.Join(work, "debug.tar.gz")
-	cmd := exec.Command(bin, "-C", work, "bundle", "--session", sessionID, "--out", outPath)
-	cmd.Env = filteredEnv("HOME", "USERPROFILE", "CODEX_HOME", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "PROVIDER_API_KEY")
-	cmd.Env = append(cmd.Env,
-		"HOME="+home,
-		"USERPROFILE="+home,
-		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
-		"JUEX_HOME="+filepath.Join(home, ".juex"),
-		"GIT_CONFIG_GLOBAL="+filepath.Join(home, "gitconfig"),
-		"GIT_CONFIG_NOSYSTEM=1",
-		"PROVIDER_API_KEY=sk-env-secret",
-	)
-	stdout, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			t.Fatalf("juex bundle: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, ee.Stderr)
-		}
-		t.Fatal(err)
-	}
-	var result struct {
-		Path      string `json:"path"`
-		SessionID string `json:"session_id"`
-		Files     int    `json:"files"`
-		Redacted  bool   `json:"redacted"`
-	}
-	if err := json.Unmarshal(stdout, &result); err != nil {
-		t.Fatalf("parse result: %v\n%s", err, stdout)
-	}
-	if result.Path != outPath || result.SessionID != sessionID || result.Files == 0 || !result.Redacted {
-		t.Fatalf("result = %+v", result)
-	}
-	files := readE2EBundleArchive(t, outPath)
-	body := string(files["juex-debug-bundle/session/conversation.jsonl"]) + string(files["juex-debug-bundle/session/logs/juex.log"]) + string(files["juex-debug-bundle/runtime.json"])
-	for _, leaked := range []string{"sk-e2e-secret", "e2e-token", "sk-env-secret"} {
-		if strings.Contains(body, leaked) {
-			t.Fatalf("bundle leaked %q:\n%s", leaked, body)
-		}
-	}
-	if !strings.Contains(body, "[REDACTED]") {
-		t.Fatalf("bundle missing redaction marker:\n%s", body)
-	}
-}
-
-func TestLiveBinary_IgnoresWorkspaceStateAndRebindsAgent(t *testing.T) {
-	bin := buildJuex(t)
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(chatCompletionResponse("state-ok")))
+		_, _ = io.WriteString(w, chatCompletionResponse("send wait complete"))
 	}))
 	defer provider.Close()
 
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	work := filepath.Join(root, "workspace")
-	staleSessionID := "20260717T120000-stale001"
-	workspaceFiles := map[string]string{
-		filepath.Join("sessions", staleSessionID, "conversation.jsonl"): `{"id":"stale-message","role":"user","blocks":[{"type":"text","text":"workspace state"}]}` + "\n",
-		"history.json":                                     `{"sessions":[{"id":"20260717T120000-stale001"}]}` + "\n",
-		filepath.Join("logs", "listen.log"):                "workspace log\n",
-		filepath.Join("observables", "observations.jsonl"): `{"id":"workspace-observation"}` + "\n",
-		"juex.yaml": strings.ReplaceAll(`models: [local-chat:chat-test]
+	if err := os.MkdirAll(filepath.Join(work, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configBody := strings.ReplaceAll(`models: [local-chat:chat-test]
 providers:
   - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
-    api_key: k
+    api_key: test-key
     capabilities:
       streaming: false
     models:
       - id: chat-test
-`, "BASE_URL", provider.URL),
-		"observables.json": "{\"observables\":[]}\n",
-	}
-	for rel, body := range workspaceFiles {
-		path := filepath.Join(work, ".juex", rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
+`, "BASE_URL", provider.URL)
+	if err := os.WriteFile(filepath.Join(work, ".juex", "juex.yaml"), []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	stdout, stderr, err := runAgentStateCommand(bin, home, work, "run", "--json", "create isolated agent state")
+	markerPath := filepath.Join(work, ".juex", "juex.local.json")
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
+
+	stdout, stderr, err := runAgentStateCommand(bin, home, work, "send", "--wait", "--json", "hello Main")
 	if err != nil {
-		t.Fatalf("stateful run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		t.Fatalf("juex send --wait: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	var runResult struct {
-		SessionID string `json:"session_id"`
+	if !strings.Contains(stdout, `"type":"input.terminal"`) || !strings.Contains(stdout, `"state":"succeeded"`) {
+		t.Fatalf("send output missing terminal success:\n%s", stdout)
 	}
-	if err := json.Unmarshal([]byte(stdout), &runResult); err != nil {
-		t.Fatalf("parse run output: %v\n%s", err, stdout)
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if runResult.SessionID == "" || runResult.SessionID == staleSessionID {
-		t.Fatalf("run result = %+v, want a fresh agent-owned session", runResult)
-	}
-	stdout, stderr, err = runAgentStateCommand(bin, home, work, "sessions", "list")
-	if err != nil || !strings.Contains(stdout, runResult.SessionID) || strings.Contains(stdout, staleSessionID) {
-		t.Fatalf("sessions list after run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
-	}
-
 	var marker struct {
 		AgentID string `json:"agent_id"`
 	}
-	markerData, err := os.ReadFile(filepath.Join(work, ".juex", "juex.local.json"))
+	if err := json.Unmarshal(data, &marker); err != nil || marker.AgentID == "" {
+		t.Fatalf("workspace marker = %s, err=%v", data, err)
+	}
+	journal, err := os.ReadFile(filepath.Join(home, "agents", marker.AgentID, "threads", "0", "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(markerData, &marker); err != nil {
-		t.Fatal(err)
-	}
-	agentDir := filepath.Join(home, "agents", marker.AgentID)
-	for _, path := range []string{
-		filepath.Join(agentDir, "sessions", runResult.SessionID, "conversation.jsonl"),
-		filepath.Join(agentDir, "history.json"),
-	} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected agent-owned path %s: %v", path, err)
-		}
-	}
-	for _, rel := range []string{
-		filepath.Join("sessions", staleSessionID, "conversation.jsonl"),
-		filepath.Join("logs", "listen.log"),
-		filepath.Join("observables", "observations.jsonl"),
-	} {
-		if _, err := os.Stat(filepath.Join(agentDir, rel)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("workspace state unexpectedly copied to %s: %v", rel, err)
-		}
-	}
-	assertE2EWorkspaceFiles(t, work, workspaceFiles)
-
-	moved := filepath.Join(root, "moved-workspace")
-	if err := os.Rename(work, moved); err != nil {
-		t.Fatal(err)
-	}
-	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "sessions", "list")
-	if err == nil || !strings.Contains(stderr, "run, repl, or listen once to rebind") {
-		t.Fatalf("read-only command unexpectedly rebound moved workspace: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
-	}
-	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "run", "--json", "rebind moved workspace")
-	if err != nil || !strings.Contains(stderr, "workspace for agent") || !strings.Contains(stderr, "moved") {
-		t.Fatalf("move output missing evidence\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
-	}
-	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "sessions", "list")
-	if err != nil || !strings.Contains(stdout, runResult.SessionID) {
-		t.Fatalf("sessions list after stateful rebind: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
-	}
-	assertE2EWorkspaceFiles(t, moved, workspaceFiles)
-
-	copied := filepath.Join(root, "copied-workspace")
-	if err := os.MkdirAll(filepath.Join(copied, ".juex"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(copied, ".juex", "juex.local.json"), markerData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, stderr, err = runAgentStateCommand(bin, home, copied, "sessions", "list")
-	if err == nil {
-		t.Fatal("copied workspace unexpectedly reused the original identity")
-	}
-	if !strings.Contains(stderr, "appears to be a copy") || !strings.Contains(stderr, "remove") {
-		t.Fatalf("copy error is not actionable:\n%s", stderr)
-	}
-}
-
-func assertE2EWorkspaceFiles(t *testing.T, work string, files map[string]string) {
-	t.Helper()
-	for rel, want := range files {
-		data, err := os.ReadFile(filepath.Join(work, ".juex", rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(data) != want {
-			t.Fatalf("workspace state %s = %q, want %q", rel, data, want)
+	for _, want := range []string{"hello Main", "send wait complete", `"thread_id":"0"`} {
+		if !strings.Contains(string(journal), want) {
+			t.Fatalf("Main Thread journal missing %q:\n%s", want, journal)
 		}
 	}
 }
@@ -1046,7 +362,11 @@ func sameStringSet(left, right []string) bool {
 
 func runAgentStateCommand(bin, home, work string, args ...string) (string, string, error) {
 	commandArgs := append([]string{"-C", work}, args...)
-	cmd := exec.Command(bin, commandArgs...)
+	return runJuexHomeCommand(bin, home, commandArgs...)
+}
+
+func runJuexHomeCommand(bin, home string, args ...string) (string, string, error) {
+	cmd := exec.Command(bin, args...)
 	cmd.Env = filteredEnv(
 		"HOME", "USERPROFILE", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
 	)
@@ -1098,80 +418,6 @@ func buildJuex(t *testing.T) string {
 		t.Fatalf("build juex: %v\n%s", err, buildOut)
 	}
 	return out
-}
-
-func readE2EBundleArchive(t *testing.T, path string) map[string][]byte {
-	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = gz.Close() }()
-	tr := tar.NewReader(gz)
-	files := map[string][]byte{}
-	for {
-		h, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if h.FileInfo().IsDir() {
-			continue
-		}
-		body, err := io.ReadAll(tr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		files[h.Name] = body
-	}
-	return files
-}
-
-// pythonMCPScript returns the absolute path to the fake MCP server script.
-func pythonMCPScript(t *testing.T) string {
-	t.Helper()
-	root, err := findRepoRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := filepath.Join(root, "tests", "e2e", "testdata", "fake-mcp", "server.py")
-	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("fake MCP script missing at %s: %v", p, err)
-	}
-	return p
-}
-
-func writeSkillFile(workDir, name, description string) error {
-	dir := filepath.Join(workDir, ".agents", "skills", name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	body := "---\nname: " + name + "\ndescription: " + description + "\ntype: model-invocable\n---\nFull skill body."
-	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644)
-}
-
-func writeExtensionSkillFile(extensionDir, name, description string) error {
-	dir := filepath.Join(extensionDir, "skills", name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	body := "---\nname: " + name + "\ndescription: " + description + "\ntype: model-invocable\n---\nFull skill body."
-	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644)
-}
-
-func writeExtensionManifestFile(extensionDir, name string) error {
-	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
-		return err
-	}
-	body := `{"manifest_version":1,"name":"` + name + `","version":"1.0.0"}`
-	return os.WriteFile(filepath.Join(extensionDir, "juex.extension.json"), []byte(body), 0o644)
 }
 
 func writeMCPConfig(workDir, command string, args []string) error {

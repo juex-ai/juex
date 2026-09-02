@@ -14,18 +14,18 @@ import (
 
 func TestRestartClientReadsFailedTurnAndRequiresIdentity(t *testing.T) {
 	for _, test := range []struct {
-		name, sessionID, turnID, wantError string
+		name, threadID, turnID, wantError string
 	}{
-		{name: "failed", sessionID: "session-one", turnID: "turn-failed"},
-		{name: "missing session", turnID: "turn-failed", wantError: "omitted session id"},
-		{name: "missing turn", sessionID: "session-one", wantError: "omitted turn id"},
+		{name: "failed", threadID: "123456", turnID: "turn-failed"},
+		{name: "missing thread", turnID: "turn-failed", wantError: "omitted Thread id"},
+		{name: "missing turn", threadID: "123456", wantError: "omitted turn id"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_ = json.NewEncoder(w).Encode(statusapi.AgentActivity{
 					State: statusapi.ActivityIdle,
 					SelectedStatus: &statusapi.Snapshot{
-						Session: statusapi.SessionStatus{ID: test.sessionID, State: statusapi.SessionFailed},
+						Thread: statusapi.ThreadStatus{ID: test.threadID, State: statusapi.ThreadFailed},
 						Turn: &statusapi.TurnStatus{
 							ID: test.turnID, State: statusapi.TurnErrored,
 							Error: &statusapi.StatusError{Kind: statusapi.StatusErrorAuth, Message: "provider rejected credentials"},
@@ -46,7 +46,7 @@ func TestRestartClientReadsFailedTurnAndRequiresIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if activity.State != statusapi.ActivityIdle || activity.SessionID != test.sessionID ||
+			if activity.State != statusapi.ActivityIdle || activity.ThreadID != test.threadID ||
 				activity.TurnID != test.turnID || activity.TurnState != statusapi.TurnErrored ||
 				activity.TurnErrorKind != statusapi.StatusErrorAuth {
 				t.Fatalf("failed activity = %+v", activity)
@@ -66,7 +66,7 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 					"state":"working",
 					"pending_input_count":0,
 					"selected_status":{
-						"session":{"id":"session-one","state":"turn_active","working":true},
+						"thread":{"id":"123456","state":"turn_active","working":true},
 						"turn":{
 							"id":"turn-original",
 							"state":"active",
@@ -74,7 +74,7 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 						}
 					}
 				}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/sessions/session-one/turns":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/threads/123456/inputs":
 			var body struct {
 				Prompt string `json:"prompt"`
 				Kind   string `json:"kind"`
@@ -100,7 +100,7 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if activity.SessionID != "session-one" ||
+	if activity.ThreadID != "123456" ||
 		activity.TurnID != "turn-original" ||
 		activity.State != "working" ||
 		activity.TurnState != "active" ||
@@ -110,7 +110,7 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 	turnID, err := postRestartResume(
 		context.Background(),
 		state,
-		activity.SessionID,
+		activity.ThreadID,
 		restartResumePrompt,
 	)
 	if err != nil {
@@ -123,12 +123,12 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 	}
 }
 
-func TestRestartClientRejectsActiveStatusWithoutSessionID(t *testing.T) {
+func TestRestartClientRejectsActiveStatusWithoutThreadID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{
 			"state":"working",
 			"pending_input_count":0,
-			"selected_status":{"session":{"state":"draining_pending","working":true}}
+			"selected_status":{"thread":{"state":"draining_pending","working":true}}
 		}`))
 	}))
 	defer server.Close()
@@ -136,7 +136,7 @@ func TestRestartClientRejectsActiveStatusWithoutSessionID(t *testing.T) {
 	_, err := readRestartActivity(context.Background(), endpoint.Runtime{
 		Endpoint: "tcp://" + strings.TrimPrefix(server.URL, "http://"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "omitted session id") {
+	if err == nil || !strings.Contains(err.Error(), "omitted Thread id") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -161,7 +161,7 @@ func TestRestartClientRejectsActiveStatusWithoutTurnID(t *testing.T) {
 			"state":"working",
 			"pending_input_count":0,
 			"selected_status":{
-				"session":{"id":"session-one","state":"turn_active","working":true},
+				"thread":{"id":"123456","state":"turn_active","working":true},
 				"turn":{"state":"active"}
 			}
 		}`))

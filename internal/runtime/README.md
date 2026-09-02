@@ -2,143 +2,120 @@
 
 > English | [中文](README.zh.md)
 
-This package owns Juex's Framework-level Turn loop. The stable product meaning
-is defined in [`DOMAIN.md`](../../DOMAIN.md); the repository boundary and data
-flow are defined in [`ARCHITECTURE.md`](../../ARCHITECTURE.md). This file is the
-implementation-facing checkpoint map, failure matrix, and test index. It does
-not define a separate lifecycle.
+This package owns the Framework-level Turn loop. Product meanings are defined
+in [`DOMAIN.md`](../../DOMAIN.md); repository ownership is defined in
+[`ARCHITECTURE.md`](../../ARCHITECTURE.md).
 
-## Ownership And Checkpoints
+## Ownership
 
-`internal/app` classifies transport input, owns startup recovery barriers and
-Session leases, executes runtime-issued start actions, and owns active Session
-replacement. `internal/runtime` exposes the source-neutral Pending-input
-lifecycle Interface and owns start-versus-queue, Framework Turn identity,
-durable states, retry/recovery classification, Provider iteration ordering,
-Tool execution ordering, typed policy orchestration, and the final completion
-check. `internal/session`
-owns the transcript, Event journal, and single-writer Session lock.
-`internal/events` and `internal/eventcatalog` provide the commit-before-project
-boundary. `internal/tools` owns raw handler execution, while
-`internal/toolevents` owns stable Tool Event payload constructors.
-`internal/session` owns the per-call recovery-state projection and the pure
-projection from transcript repairs to recovery Events; Runtime and Session load
-commit that same repair projection through their own durable Event paths.
+- `internal/thread` owns Thread identity, the single Journal, replay,
+  projections, Input states, Generations, archive/delete, and timeline paging.
+- `internal/app` assembles one Runtime per active Thread, owns process-level
+  resources, runs Workers, and converts transport or Observation delivery into
+  Runtime Inputs.
+- `internal/runtime` owns admission, Provider iteration, Tool batches, policy
+  checkpoints, Context Generation transitions, completion, cancellation, and
+  authoritative runtime status projection.
+- `runtime/module` defines registered prompt, lifecycle, policy, and Tool
+  contributions.
 
-The required order is:
+The Engine is Thread-scoped. Main and Worker instantiate the same Engine; Main
+only gains additional Agent-level Observation and Worker-management modules.
 
-1. **Turn input:** append a non-replayable `accepting` intent for a new main
-   input; commit `turn.admitted`; promote the record to `admitted`; repair the
-   transcript; apply ordered Turn-input policies; project and append the
-   accepted message; only then checkpoint and call a Provider. A failed
-   admission commit attempts to mark a new intent `dropped`; if that
-   compensation also fails, the surviving `accepting` intent remains inert
-   unless restart finds the matching committed admission Event, and both errors
-   are returned.
-2. **Pending input:** `Engine.ReceivePendingInput` accepts direct or stable
-   external input and returns a typed start, queued, processed, inert, or retry
-   outcome without exposing durable states to App. Append `pending` before
-   adding the live queue entry; drain only at a Provider-iteration boundary;
-   mark `admitted`, project and append in queue order, then mark `processed`.
-   `pending_input.jsonl` remains authoritative across cancellation, Turn
-   boundaries, and restart.
-3. **Tool batch:** treat one or more Tool Calls from one Provider response as
-   the same ordered batch. Commit `llm.responded` and every ordered
-   `tool.requested` before any call starts. Commit `tool.running` before the
-   first pre-Tool policy or handler action. Checkpoint each transformed input
-   before a later policy can
-   observe it. After raw handler output and post-Tool policy, project the complete
-   ordered result batch; commit one terminal Tool outcome containing each exact
-   Provider-visible block; append that same batch before the next Provider call.
-4. **Finish:** commit `llm.responded`; evaluate every Finish Policy; queue all
-   valid policy context; commit the first still-valid continuation candidate;
-   durably enqueue its continuation; notify its observation-only callback; let
-   the Pending-input queue make the final continue-or-complete decision; then
-   commit `turn.completed` or, on failure, `turn.errored`.
-5. **Session replacement:** `internal/app` creates a candidate and provisionally
-   updates persisted active history before attempting its lock. Lock failure may
-   leave the candidate selected and requires history reconciliation. After the
-   lock succeeds, App builds, validates, and starts the complete candidate
-   Module set and Tool registry; captures the old Engine checkpoint; publishes
-   the candidate under the App lifecycle writer; runs Session-start policy;
-   commits App/status state; releases readers; then closes the old Module set,
-   lock, and Session. Later rejection deletes the candidate and reasserts the
-   resident old App Session in active history after runtime rollback. That write
-   is not a compare-and-swap restore of any concurrent history selection.
+## Commit Order
 
-The lock order for replacement and Turn work is App Session lifecycle,
-`Engine.mu`, `Engine.sessionRuntimeMu`, `Engine.pendingMu`, then Session or
-Module-owned store locks. Do not acquire these in reverse order.
+Durable facts are committed to the owning Thread Journal before status, Web,
+subscriber, or Hook observation. One Journal commit may contain an ordered
+atomic fact batch; consumers must never observe a prefix of that batch.
 
-Tool handler output is not automatically the Provider-visible result. The raw
-text, structured result, timeout, exit code, and cause belong to the Tool call's
-diagnostic observation. Before-Tool policies may change the effective input;
-after-Tool policies, corrective context, guided error normalization, and context
-projection may change the effective Tool Result. The terminal Tool Event's
-`outcome` block is the recovery authority. A retained raw structured diagnostic
-may explain that outcome, but must not replace or re-transform it.
+### Input and Turn
 
-Policy observation is one-way after the required checkpoint.
-`PolicyObserver.Requested` is the commit gate and may fail closed before policy
-code runs. `Started`, `Completed`, and `Errored`,
-`PendingInputObserver.PendingInputsAdmitted`, and
-`FinishPolicyContinuationObserver.FinishContinuationCommitted` have no flow
-result. They must not mutate admission, policy selection, Tool Result content,
-or Turn completion.
+1. Persist `input.accepted` with a stable Input ID.
+2. If the Thread can start work, persist Turn admission and Input assignment in
+   one ordered transition. Otherwise the Input stays pending.
+3. Project the admitted Input into Provider conversation exactly once.
+4. Run prompt contributors and request recitation, then call the Provider.
+5. At Provider iteration boundaries, assign durable pending Inputs in their
+   accepted order.
 
-## Failure Matrix
+Input identity survives retries and restart. Turn identity does not replace it.
+An accepted Input is `pending`, `assigned`, `processed`, `failed`, or
+`cancelled` according to Journal facts; transport success alone is never the
+recovery authority.
 
-Every test named below is an executable regression contract for its row. When
-a checkpoint changes, update the behavior, recovery assertion, and referenced
-test together without reopening unrelated ownership or ordering decisions.
+### Tool Batch
 
-| Checkpoint | Owner | Durable write | Live projection | State after failure | Recovery action | Regression test |
-| --- | --- | --- | --- | --- | --- | --- |
-| New main-input staging | `internal/runtime.PendingInputQueue` | `accepting` record in `pending_input.jsonl` | None; App still has no started result | Open or marshal failure leaves no record. Write, stat, or size-check failure returns before in-memory indexing, but the current queue writer does not synchronize and roll back its append, so disk may contain a partial or complete unindexed line | Retry only after queue reload validates the journal. An invalid tail must be repaired to the valid prefix before admission can continue; never infer acceptance from the transport error alone | `TestPendingInputQueue_TurnInputDoesNotExpireAndUsesOneAdmissionCheckpoint`; `TestPendingInputQueue_AppendFailureLeavesNoLiveRecordAndRequiresValidPrefixRepair`; `TestAdmitTurnMessage_IntentAppendFailureLeavesNoActiveTurn` |
-| Main Turn admission | `internal/runtime.Engine.ReceivePendingInput` delegates durable checkpoints to `AdmitTurnMessage` and the Catalog-backed Bus | `turn.admitted` carrying the accepted message id, followed by `accepting -> admitted` | Status/Web update only after Event commit; App returns `started` only after promotion | Event failure clears the active reservation and attempts to drop a newly created intent. Without a committed admission Event for the same Framework-owned message id, any surviving `accepting` intent remains inert. A process stop after the Event commit but before queue promotion leaves an accepted record recoverable from the cross-journal facts. A pre-existing Pending record remains replayable | On startup, promote `accepting` only when a committed `turn.admitted` Event names the same message id; otherwise leave it inert. Framework Turn ids are not recovery identity. Explicit `dropped` and `expired` records remain inert. Retry only when the runtime outcome requests it | `TestReceivePendingInputStartsIdleTurnWithFrameworkIdentity`; `TestAdmitTurnMessage_DurableAdmissionEventFailureDropsAcceptedInput`; `TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput`; `TestAdmitTurnMessage_FailedAdmissionKeepsPersistedInputReplayable`; `TestPendingInputQueue_ReconcileRecoveryFactsDoesNotMatchReusedTurnID`; `TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts` |
-| Recovered Turn input policy or projection | `internal/runtime.turnLifecycle` and `runtime/module` Turn-input policies | Existing `admitted` record, then the projected transcript message and `turn.started` | Policy and projection Events after their commit | Rejection or preparation failure ends the Turn; accepted input is appended once, with policy-blocked state when applicable, before `turn.errored` | Resume from transcript when append succeeded; otherwise retry recovery from the still-unprocessed durable record | `TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy`; `TestTurn_ProjectionFailurePersistsAcceptedInputOnce`; `TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed` |
-| Pending-input acceptance | `internal/runtime.Engine.EnqueuePendingMessageWithOptions` | `pending` record before the in-memory queue entry | `pending_input.queued` and status are best-effort projections after acceptance | Queue-full rejects without changing an already accepted persisted record. Queue append failure returns before live publication, but a write-phase failure has the same unresolved partial-or-unindexed disk boundary as main-input staging | Reload and identify the durable record before deciding whether the producer may retry; repair an invalid tail first. An already accepted persisted input is re-admitted rather than duplicated | `TestEngine_PendingInputBackpressure`; `TestPendingInputQueue_StagePersistedInputKeepsItReplayableUntilCommit`; `TestPendingInputQueue_AppendFailureLeavesNoLiveRecordAndRequiresValidPrefixRepair` |
-| Pending-input drain | `internal/runtime.turnLifecycle` and the Pending-input lifecycle Interface | `pending -> admitted`, projected transcript append, then `processed` | Typed runtime outcomes instruct App delivery; drain/status Events and `PendingInputObserver` are non-authoritative | The uncommitted tail is prepended to the live queue; durable unprocessed records remain replayable. Terminal Turn failure attempts transcript repair and drains accepted input before closing | Retry in the same Turn when allowed. On restart, runtime reconciles journal/Event/transcript facts and returns ordered opaque handles; App executes them behind its barrier and follows runtime retry instructions | `TestReceivePendingInputDefersAcceptedExternalInputUntilRecoveryBarrier`; `TestResolvePendingInputTreatsTranscriptAsDeliveredAfterTerminalFailure`; `TestTurn_PersistedInputsAfterCurrentTriggerRestoreInOrder`; `TestTurn_CancellationPreservesPendingInputWithoutContinuing`; `TestAppStartupReplaysDurablePendingInputWithoutNewUserTurn`; `TestAppRunWaitsForStartupPendingInputRecovery` |
-| Tool-batch declaration | `internal/runtime.recordToolBatchLocked` | Complete ordered `tool.requested` set after `llm.responded` | Status/Web show declared calls only after commit | Any declaration failure aborts the batch before every Tool start; earlier declarations remain durable declared-only facts | Transcript repair emits `TOOL_NOT_STARTED` exactly once in Provider order | `TestTurn_DeclaresWholeToolBatchBeforeAnyToolStarts`; `TestTurn_DurableToolRequestFailurePreventsToolCall`; `TestToolExecutionRecoveryDistinguishesCrashBoundaries` |
-| Tool start and transformed input | `internal/runtime.runToolCall` and `runtime/module` Tool policies | `tool.running`, then `tool.input_resolved` for each effective input change | Policy/Tool running projections follow committed facts | Start commit failure prevents all policy/handler work. Input checkpoint failure prevents later policy and handler work; recovery treats a started call without terminal outcome as uncertain | Repair emits `TOOL_OUTCOME_UNKNOWN`; verify external state before any manual retry | `TestTurn_DurableToolStartedFailurePreventsToolCall`; `TestTurn_TransformedToolInputIsDurableBeforeLaterPolicyExecution`; `TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution` |
-| Tool terminal outcome | `internal/runtime.emitToolFinished` with `internal/toolevents` | `tool.completed` or `tool.errored` containing the exact projected Provider-visible Tool Result and message id | Terminal status is absorbing; live deltas are provisional and may be suppressed | A commit failure stops transcript append and the next Provider call. Handler side effects may already exist, so the durable state remains started-without-outcome | Repair reports `TOOL_OUTCOME_UNKNOWN`; never re-execute automatically | `TestTurn_DurableToolResultFailurePreventsNextProviderCall`; `TestTurn_DurableToolErrorFailurePersistsActualResult`; `TestTurn_DurableToolProjectionFailurePersistsProjectedResult`; `TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution` |
-| Tool-result transcript append | `internal/session.Session` after terminal Tool Events | Ordered projected Tool Result message in `conversation.jsonl` | No later Provider request occurs until append succeeds | Terminal outcomes are durable but transcript lacks the result batch | Transcript repair reconstructs the exact outcome blocks and appends them once | `TestToolExecutionRecoveryPreservesProviderOrderForMixedBatch`; `TestToolExecutionRecoveryDoesNotReclassifyNormalRecordedOutcomeAsRepair`; `TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution` |
-| Candidate Session preparation and lock | `internal/app.activeSessionReplacementTransaction`, its private preparation helper, and `internal/session` | Candidate Session files and lifetime lock; the transaction does not change active history | App, Engine, and status readers remain on the resident Session; an independent explicit history selection remains authoritative | Lock failure retains the candidate identity for cleanup while leaving active history unchanged | Close candidate resources and delete persistence only if no explicit concurrent activation selected that candidate | `TestActiveSessionReplacementLockRejectionKeepsOldHistory`; `TestActivateAndCommitIfInactiveAreAtomic` |
-| Candidate Session build, validation, or start | `internal/app.activeSessionReplacementTransaction` and `runtime/module` | Locked candidate Session; no active-history or App/Engine publication by the transaction | Current App, Engine, and status readers stay on the resident Session; an independent explicit history selection remains authoritative | Build or validation failure closes candidate Modules and Session resources. Cleanup preserves a candidate selected by another actor | Continue on the resident Session. Join cleanup diagnostics with the typed rejection; reconcile only if conditional deletion itself fails | `TestActiveSessionReplacementCatalogValidationRejectsCandidate`; `TestAppRollsBackStartedSessionModulesAfterCompleteCatalogValidation`; `TestAppRollsBackStartedSessionModulesAfterCompleteContextValidation`; `internal/runtime/module/lifecycle_test.go: TestSessionStartFailureRollsBackStartedModulesInReverseOrder` |
-| Engine publication, Session-start policy, and active-history gate | `internal/app.activeSessionReplacementTransaction`, `internal/runtime.ReplaceSessionRuntimeBundle`, and `internal/session.CompareAndSetActive` | Candidate Engine bundle is provisional until policy succeeds and active history is atomically replaced as the final fallible gate | App readers remain on the resident App state while the writer lock is held. A process-owned OS history lock cannot expire during rollback and prevents explicit activation from interleaving with post-replacement reconciliation | Busy publication rejects atomically. Policy failure or cancellation restores the exact Engine checkpoint and old Event/observability targets. A post-replacement history error performs that runtime rollback and restores the exact previous history before releasing the history lock. Candidate Modules close only after Engine restore succeeds | Continue on the resident Session after successful rollback. Conditional cleanup preserves any candidate explicitly selected after reconciliation; joined rollback or cleanup errors require diagnosis before reuse | `TestReplaceSessionRuntimeRejectsBusyRuntimeAtomically`; `TestSwitchToNewPrimarySessionStartPolicyRejectsReplacement`; `TestSwitchToNewPrimarySessionPolicyRejectionPreservesExternallyActivatedCandidate`; `TestActiveSessionReplacementHistoryCommitFailureRollsBackPublication`; `TestCompareAndSetActiveHoldsHistoryLockThroughFailedWriteRollback`; `TestSwitchToNewPrimarySessionRollbackUsesCapturedRuntime`; `TestSwitchToNewPrimarySessionCancellationStopsSessionStartPolicy` |
-| Committed Session replacement cleanup | `internal/app.activeSessionReplacementTransaction` | New App Session, Engine snapshot, active history, Event journal target, and replayed status are authoritative | Readers see one coherent new Session after writer release | Failure closing old Modules, lock, or Session is diagnostic; rollback would be unsafe after App publication | Keep the new Session active and surface the cleanup warning | `TestSwitchToNewPrimarySessionWaitsForLifecycleReaders`; `TestSwitchToNewPrimarySessionIsAtomicForConcurrentReaders`; `TestSwitchToNewPrimarySessionKeepsCommittedReplacementWhenOldModuleCleanupFails` |
-| Finish-policy evaluation | `internal/runtime.turnLifecycle` and `runtime/module` | Durable assistant response already exists; policy context is queued only after all evaluations validate | Requested checkpoint may gate execution; later observer callbacks only report | Policy error, invalid context, or cancellation ends the Turn before any candidate is selected; no continuation is admitted | Resume from Session transcript and policy-owned durable state on later input | `TestTypedPoliciesPreserveModuleOrderAndEvaluateEveryFinishPolicy`; `TestFinishContinuationAndPolicyContextAreBounded`; `TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks` |
-| Candidate commit and continuation admission | Selected `runtime/module.FinishPolicy`, then `internal/runtime.PendingInputQueue` | Selected owner state first, then a durable continuation `pending` record | Continuation observer runs only after queue admission | A stale candidate changes nothing and evaluation falls through. Commit failure or queue failure ends the Turn; already committed owner state is not rolled back and no observer may claim admission | Retry from the durable owner state and transcript; only a real Pending record authorizes automatic continuation | `TestFinishCandidateCanBecomeStaleWithoutCommittingFlow`; `TestTurn_GoalCompletionGateContinuesThenCompletes`; `TestTurn_ContinuationQueueFailurePreservesCommittedPolicyStateWithoutObservation` |
-| Final completion Event | `internal/runtime.turnLifecycle` | Append `turn.completed` under the Pending lifecycle barrier, then release admission before synchronous projections and live publication; failure stages `turn.errored` in the same order | Status/Web/logs consume only the committed terminal Event; synchronous callbacks may inspect or retry admission without re-entering the barrier | Completion commit failure returns a terminal Turn error; the durable transcript remains, but no successful completion fact exists, and a wider journal failure may also prevent the error Event | Resume from transcript on a later admitted input; do not synthesize `turn.completed` from UI state | `TestTurn_CompletionCommitFailureReturnsErrorAndPreservesTranscript`; `TestTerminalDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue`; `TestErrorDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue` |
+1. Commit the complete ordered `tool.requested` batch after the Provider
+   response.
+2. Commit `tool.running` before any policy or handler action.
+3. Commit any policy-transformed effective input before later execution.
+4. Execute independent calls concurrently, retaining Provider order.
+5. Commit each exact Provider-visible terminal outcome before appending the
+   result message or calling the Provider again.
 
-## Test Index
+Recovery rules are intentionally conservative:
 
-Run focused lifecycle tests with:
+- a requested but not started call becomes `TOOL_NOT_STARTED`;
+- a started call without a durable outcome becomes `TOOL_OUTCOME_UNKNOWN` and
+  is not automatically retried;
+- a durable terminal outcome is replayed byte-for-byte as the Provider-visible
+  result, without re-running projection logic.
+
+### Completion
+
+Finish policies run only after the Assistant response is durable. A valid
+continuation is persisted as a new Input before it can continue the loop.
+`turn.completed`, `turn.errored`, or `turn.cancelled` is committed last. Status
+and subscribers only report committed terminal facts.
+
+## Context Generations
+
+`context_new` and `context_compact` are lifecycle requests, not direct mutation
+inside a Tool handler. The Runtime applies them at a safe boundary:
+
+- `new`: start a Generation without summary, clear Goal and Notes, retain
+  Scratchpad;
+- `compact`: create a summary, start a Generation from that summary, retain
+  Goal, Notes, and Scratchpad.
+
+Both persist a UI-visible system activity record. These records are excluded
+from Provider context. Prompt recitation reports current context tokens and
+percentage so the Agent can choose the appropriate transition.
+
+## Observation Policy
+
+External automated events use `observable.Observation`. `DeliverObservation`
+is enabled only for Main Thread `0`. Worker delivery fails before Input
+acceptance. Provider-independent MCP clients may be Agent-owned and shared, but
+Tool invocation and emitted facts remain Thread-scoped.
+
+## Failure Boundaries
+
+- Journal append failure publishes nothing.
+- Projection write failure after a durable append returns a stale-projection
+  error; replay rebuilds it from Journal facts.
+- Invalid or torn Journal tails are truncated only to the last valid complete
+  commit. A corrupt committed prefix fails loud.
+- Runtime restart reconstructs pending Inputs, active Generation, status, and
+  Tool recovery only from Journal facts.
+- Working Threads cannot archive or delete. Main cannot archive, rename, or
+  delete. A parent cannot be removed while active descendants violate the
+  topology rule.
+
+## Tests
+
+High-signal suites:
+
+- `internal/thread`: Journal atomicity, replay, index rebuild, reverse paging,
+  lifecycle constraints, and protocol repair;
+- `loop_test.go`: admission, pending drain, Provider/Tool ordering, Finish
+  policies, cancellation, and terminal failures;
+- `context_control_test.go`: Agent-triggered `new`/`compact` requests;
+- `thread_runtime_test.go`: coherent Engine bundle publication and recovery;
+- `internal/app/worker_threads_test.go`: Worker lifecycle and subscriptions;
+- `tests/e2e`: cross-package durable Input, Web, restart, and Tool recovery.
 
 ```bash
-go test ./internal/runtime ./internal/runtime/module ./internal/app ./internal/session
-go test ./tests/e2e -run 'DurableToolOutcome|PendingInput'
+make verify-focused PKGS="./internal/thread ./internal/runtime ./internal/app"
+make verify-final RACE=1 COMPACTION=1
 ```
-
-The highest-signal suites are:
-
-- `internal/runtime/loop_test.go`: admission, pending-input failure recovery,
-  Tool checkpoint ordering, finish policy, cancellation, and terminal failures.
-- `internal/runtime/policy_lifecycle_test.go`: compact golden order across Turn
-  admission, input policy, Tool policy, Finish Policy, and completion.
-- `internal/runtime/module/policy_test.go`: typed policy ordering, ownership,
-  stale candidates, checkpoint failure, and observer non-authority.
-- `internal/runtime/session_runtime_test.go`: coherent Engine bundle publication,
-  busy rejection, provenance recovery, and exact checkpoint restoration.
-- `internal/app/session_runtime_test.go`: candidate validation, rollback,
-  reader atomicity, Session-start policy, and post-commit cleanup.
-- `internal/runtime/pending_lifecycle_test.go`: source-neutral receive outcomes,
-  Framework Turn identity, stable source deduplication, barrier deferral, and
-  terminal delivery classification. The fallback-terminal Turn fixture releases
-  and joins its Turn before Session cleanup; readiness failures retain the last
-  commit phase and a bounded goroutine snapshot.
-- `internal/runtime/pending_queue_test.go`: durable record states, replay order,
-  stable identity, expiry, and processed deduplication.
-- `internal/session/tool_execution_recovery_external_test.go` and
-  `tests/e2e/tool_execution_recovery_test.go`: Tool crash-boundary repair and
-  no duplicate execution after restart.

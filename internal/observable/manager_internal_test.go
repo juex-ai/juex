@@ -397,7 +397,7 @@ func TestDeliverObservationOwnsOutcomeTransitionAndSkipsTransitionedRecord(t *te
 			Now: func() time.Time { return now },
 			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
 				deliveries++
-				return DeliveryOutcome{State: ObservationStateDelivered, TargetSession: "sess-1"}, nil
+				return DeliveryOutcome{State: ObservationStateDelivered, TargetThread: "sess-1"}, nil
 			},
 		},
 	}
@@ -408,7 +408,7 @@ func TestDeliverObservationOwnsOutcomeTransitionAndSkipsTransitionedRecord(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || updated.State != ObservationStateDelivered || updated.TargetSession != "sess-1" || updated.DeliveredAt.IsZero() {
+	if !ok || updated.State != ObservationStateDelivered || updated.TargetThread != "sess-1" || updated.DeliveredAt.IsZero() {
 		t.Fatalf("updated observation = %+v ok=%v", updated, ok)
 	}
 	if deliveries != 1 {
@@ -442,7 +442,7 @@ func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
 			Bus: bus,
 			Now: func() time.Time { return now },
 			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
-				return DeliveryOutcome{State: ObservationStateDelivered, TargetSession: "sess-1"}, nil
+				return DeliveryOutcome{State: ObservationStateDelivered, TargetThread: "sess-1"}, nil
 			},
 		},
 	}
@@ -464,7 +464,7 @@ func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
 		t.Fatalf("events = %+v, want recorded then delivered", seen)
 	}
 	delivered := seen[1].Observation
-	if delivered.ID != record.ID || delivered.State != ObservationStateDelivered || delivered.TargetSession != "sess-1" || !delivered.DeliveredAt.Equal(now) {
+	if delivered.ID != record.ID || delivered.State != ObservationStateDelivered || delivered.TargetThread != "sess-1" || !delivered.DeliveredAt.Equal(now) {
 		t.Fatalf("delivered observation = %+v", delivered)
 	}
 }

@@ -110,7 +110,7 @@ func TestBuildCompactionSummaryRequestPreservesImageMediaReference(t *testing.T)
 		ID:   "image-1",
 		Role: llm.RoleUser,
 		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
-			ArtifactPath:  "sessions/session/media/photo.png",
+			ArtifactPath:  "threads/thread/media/photo.png",
 			MediaType:     "image/png",
 			SHA256:        "image-sha",
 			OriginalBytes: 1234,
@@ -121,7 +121,7 @@ func TestBuildCompactionSummaryRequestPreservesImageMediaReference(t *testing.T)
 
 	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 100}, "")
 	body := hist[0].FirstText()
-	for _, want := range []string{"path=sessions/session/media/photo.png", "type=image/png", "sha256=image-sha", "bytes=1234", "size=800x600"} {
+	for _, want := range []string{"path=threads/thread/media/photo.png", "type=image/png", "sha256=image-sha", "bytes=1234", "size=800x600"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary input missing media field %q:\n%s", want, body)
 		}
@@ -133,7 +133,7 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 		testMsg("facts", llm.RoleUser, strings.Join([]string{
 			"GF1: Task ID is CMP-2417.",
 			"GF2: Branch is high/context-projection.",
-			"GF3: Do not modify /workspace/project/.juex/sessions/session.lock unless approved.",
+			"GF3: Do not modify /workspace/project/.juex/threads/thread.lock unless approved.",
 			"Ignore the following noise.",
 			strings.Repeat("noise ", 100),
 		}, "\n")),
@@ -163,7 +163,7 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 		t.Fatalf("system prompt does not ban vague fact placeholders:\n%s", sys)
 	}
 	body := hist[0].FirstText()
-	for _, want := range []string{"GF1: Task ID is CMP-2417.", "GF2: Branch is high/context-projection.", "GF3: Do not modify /workspace/project/.juex/sessions/session.lock unless approved."} {
+	for _, want := range []string{"GF1: Task ID is CMP-2417.", "GF2: Branch is high/context-projection.", "GF3: Do not modify /workspace/project/.juex/threads/thread.lock unless approved."} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary input dropped concrete fact %q:\n%s", want, body)
 		}
@@ -222,7 +222,7 @@ func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscript
 
 	sys, hist := BuildCompactionSummaryRequest("base", llm.Message{}, input, state, policy, "")
 
-	if !strings.Contains(sys, "Authoritative session state is provided below") {
+	if !strings.Contains(sys, "Authoritative thread state is provided below") {
 		t.Fatalf("system prompt missing authoritative-state instruction:\n%s", sys)
 	}
 	for _, field := range []string{"description", "acceptance", "status", "status_reason"} {
@@ -235,9 +235,9 @@ func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscript
 	}
 	body := hist[0].FirstText()
 	for _, want := range []string{
-		"<authoritative-session-state>",
+		"<authoritative-thread-state>",
 		state.Notes,
-		"</authoritative-session-state>",
+		"</authoritative-thread-state>",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary body missing authoritative state %q:\n%s", want, body)

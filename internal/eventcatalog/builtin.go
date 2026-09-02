@@ -10,7 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -97,7 +97,7 @@ func builtinDefinitions() []Definition {
 		ignorable("tool.failure.recorded", func() any { return &juexruntime.ToolFailureRecordedPayload{} }, false),
 		ignorable("tool.failure.resolved", func() any { return &juexruntime.ToolFailureResolvedPayload{} }, false),
 		ignorable("tool.failure.stale", func() any { return &juexruntime.ToolFailureStalePayload{} }, false),
-		ignorable("transcript.repaired", func() any { return &session.TranscriptRepairedPayload{} }, true),
+		ignorable("transcript.repaired", func() any { return &thread.ProtocolRepairedPayload{} }, true),
 	}
 }
 
@@ -317,7 +317,7 @@ func validatePolicyIdentity(moduleID runtimemodule.ID, point runtimemodule.Polic
 		return fmt.Errorf("policy lifecycle payload requires module_id and policy_point")
 	}
 	switch point {
-	case runtimemodule.PolicyPointSessionStart,
+	case runtimemodule.PolicyPointThreadStart,
 		runtimemodule.PolicyPointTurnInput,
 		runtimemodule.PolicyPointToolBefore,
 		runtimemodule.PolicyPointToolAfter,

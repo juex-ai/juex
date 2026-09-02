@@ -45,18 +45,18 @@ const (
 	TurnPhaseCompacting        TurnPhase = "compacting"
 )
 
-type SessionRuntimeState string
+type ThreadRuntimeState string
 
 const (
-	SessionRuntimeIdle            SessionRuntimeState = "idle"
-	SessionRuntimeTurnActive      SessionRuntimeState = "turn_active"
-	SessionRuntimeDrainingPending SessionRuntimeState = "draining_pending"
-	SessionRuntimeFailed          SessionRuntimeState = "failed"
+	ThreadRuntimeIdle            ThreadRuntimeState = "idle"
+	ThreadRuntimeTurnActive      ThreadRuntimeState = "turn_active"
+	ThreadRuntimeDrainingPending ThreadRuntimeState = "draining_pending"
+	ThreadRuntimeFailed          ThreadRuntimeState = "failed"
 )
 
-func (state SessionRuntimeState) IsWorking() bool {
-	return state == SessionRuntimeTurnActive ||
-		state == SessionRuntimeDrainingPending
+func (state ThreadRuntimeState) IsWorking() bool {
+	return state == ThreadRuntimeTurnActive ||
+		state == ThreadRuntimeDrainingPending
 }
 
 type StatusErrorKind string
@@ -89,20 +89,22 @@ func (kind StatusErrorKind) IsCancellation() bool {
 }
 
 type StatusSeed struct {
-	SessionID        string
-	SessionAlias     string
+	ThreadID         string
+	ThreadAlias      string
+	ThreadState      ThreadRuntimeState
+	PendingCount     int
 	MaxPendingInputs int
 	TokenUsage       llm.Usage
 	ContextUsage     *llm.ContextUsage
 }
 
-type SessionRuntimeStatus struct {
-	ID               string              `json:"id"`
-	Alias            string              `json:"alias,omitempty"`
-	State            SessionRuntimeState `json:"state"`
-	PendingCount     int                 `json:"pending_count"`
-	MaxPendingInputs int                 `json:"max_pending_inputs"`
-	CanAcceptInput   bool                `json:"can_accept_input"`
+type ThreadRuntimeStatus struct {
+	ID               string             `json:"id"`
+	Alias            string             `json:"alias,omitempty"`
+	State            ThreadRuntimeState `json:"state"`
+	PendingCount     int                `json:"pending_count"`
+	MaxPendingInputs int                `json:"max_pending_inputs"`
+	CanAcceptInput   bool               `json:"can_accept_input"`
 }
 
 type StatusError struct {
@@ -135,14 +137,14 @@ type ToolCallStatus struct {
 }
 
 type StatusSnapshot struct {
-	Cursor       string               `json:"cursor,omitempty"`
-	UpdatedAt    time.Time            `json:"updated_at,omitempty"`
-	Session      SessionRuntimeStatus `json:"session"`
-	Turn         *TurnRuntimeStatus   `json:"turn,omitempty"`
-	Tools        []ToolCallStatus     `json:"tools"`
-	TokenUsage   llm.Usage            `json:"token_usage"`
-	ContextUsage *llm.ContextUsage    `json:"context_usage,omitempty"`
-	LastError    *StatusError         `json:"last_error,omitempty"`
+	Cursor       string              `json:"cursor,omitempty"`
+	UpdatedAt    time.Time           `json:"updated_at,omitempty"`
+	Thread       ThreadRuntimeStatus `json:"thread"`
+	Turn         *TurnRuntimeStatus  `json:"turn,omitempty"`
+	Tools        []ToolCallStatus    `json:"tools"`
+	TokenUsage   llm.Usage           `json:"token_usage"`
+	ContextUsage *llm.ContextUsage   `json:"context_usage,omitempty"`
+	LastError    *StatusError        `json:"last_error,omitempty"`
 }
 
 type StatusStore struct {
@@ -180,11 +182,16 @@ func NewStatusStore(seed StatusSeed) *StatusStore {
 	if maxPending <= 0 {
 		maxPending = DefaultMaxPendingInput
 	}
+	state := seed.ThreadState
+	if state == "" {
+		state = ThreadRuntimeIdle
+	}
 	snapshot := StatusSnapshot{
-		Session: SessionRuntimeStatus{
-			ID:               seed.SessionID,
-			Alias:            seed.SessionAlias,
-			State:            SessionRuntimeIdle,
+		Thread: ThreadRuntimeStatus{
+			ID:               seed.ThreadID,
+			Alias:            seed.ThreadAlias,
+			State:            state,
+			PendingCount:     seed.PendingCount,
 			MaxPendingInputs: maxPending,
 			CanAcceptInput:   true,
 		},
@@ -231,7 +238,7 @@ func newStatusStoreFromSnapshot(snapshot StatusSnapshot) *StatusStore {
 	}
 }
 
-// Reset replaces the projection with a new session seed and its durable
+// Reset replaces the projection with a new thread seed and its durable
 // journal. Existing subscribers receive the recovered snapshot immediately.
 func (s *StatusStore) Reset(seed StatusSeed, journal []events.Event) {
 	_ = s.ResetFromReplay(seed, func(visit func(events.Event)) error {
@@ -308,8 +315,8 @@ func (s *StatusStore) RecoverAfterRestart() {
 		}
 	}
 	snapshot.Tools = unknownTools
-	snapshot.Session.State = SessionRuntimeFailed
-	snapshot.Session.PendingCount = 0
+	snapshot.Thread.State = ThreadRuntimeFailed
+	snapshot.Thread.PendingCount = 0
 	snapshot.LastError = statusErr
 	recomputeCanAcceptInput(&snapshot)
 	s.stream.Publish(snapshot, false)
@@ -322,6 +329,20 @@ func (s *StatusStore) Publish(event events.Event) {
 	s.projectionMu.Lock()
 	snapshot := ProjectStatus(s.stream.Snapshot(), event)
 	s.stream.Publish(snapshot, !event.Transient)
+	s.projectionMu.Unlock()
+}
+
+// ClearContextUsage projects a committed Context renewal that has no runtime
+// event of its own. It preserves the last durable cursor and cumulative token
+// usage while publishing the new current-Generation pressure to subscribers.
+func (s *StatusStore) ClearContextUsage() {
+	if s == nil {
+		return
+	}
+	s.projectionMu.Lock()
+	snapshot := s.stream.Snapshot()
+	snapshot.ContextUsage = nil
+	s.stream.Publish(snapshot, false)
 	s.projectionMu.Unlock()
 }
 
@@ -360,7 +381,7 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		next.Turn = newTurnStatus(event, TurnLifecycleAdmitted, "")
 		next.Turn.CanInterrupt = !payload.NonInterruptible
 		next.Tools = []ToolCallStatus{}
-		next.Session.State = SessionRuntimeTurnActive
+		next.Thread.State = ThreadRuntimeTurnActive
 		next.LastError = nil
 	case TurnPhaseType:
 		payload := payloadAs[TurnPhasePayload](event.Payload)
@@ -434,7 +455,7 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 	case PendingInputDrainingType:
 		payload := payloadAs[PendingInputDrainingPayload](event.Payload)
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
-		next.Session.State = SessionRuntimeDrainingPending
+		next.Thread.State = ThreadRuntimeDrainingPending
 	case PendingInputPromotedType:
 		payload := payloadAs[PendingInputPromotedPayload](event.Payload)
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
@@ -444,9 +465,9 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		// can queue more input. Preserve any later queued count here.
 		setPendingStatus(&next, -1, payload.MaxPendingInputs)
 		if next.Turn != nil {
-			next.Session.State = SessionRuntimeTurnActive
+			next.Thread.State = ThreadRuntimeTurnActive
 		} else {
-			next.Session.State = SessionRuntimeIdle
+			next.Thread.State = ThreadRuntimeIdle
 		}
 	case "pending_input.dropped":
 		payload := payloadAs[PendingInputDroppedPayload](event.Payload)
@@ -471,7 +492,7 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		turn.State = TurnLifecycleActive
 		turn.Phase = TurnPhaseCompacting
 		turn.Streaming = false
-		next.Session.State = SessionRuntimeTurnActive
+		next.Thread.State = ThreadRuntimeTurnActive
 	case "context.compact.completed":
 		payload := payloadAs[ContextCompactCompletedPayload](event.Payload)
 		if payload.ContextUsage != nil {
@@ -491,7 +512,7 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		turn.Streaming = false
 		turn.Error = nil
 		next.Tools = []ToolCallStatus{}
-		next.Session.State = SessionRuntimeIdle
+		next.Thread.State = ThreadRuntimeIdle
 		next.LastError = nil
 	case "turn.errored":
 		payload := payloadAs[TurnErroredPayload](event.Payload)
@@ -512,7 +533,7 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		} else {
 			turn.State = TurnLifecycleErrored
 		}
-		next.Session.State = SessionRuntimeFailed
+		next.Thread.State = ThreadRuntimeFailed
 		next.LastError = statusErr
 	}
 
@@ -540,7 +561,7 @@ func ensureTurnStatus(snapshot *StatusSnapshot, event events.Event) *TurnRuntime
 		snapshot.Tools = []ToolCallStatus{}
 		snapshot.LastError = nil
 	}
-	snapshot.Session.State = SessionRuntimeTurnActive
+	snapshot.Thread.State = ThreadRuntimeTurnActive
 	return snapshot.Turn
 }
 
@@ -593,10 +614,10 @@ func turnAcceptsToolEvent(snapshot *StatusSnapshot, event events.Event) bool {
 
 func setPendingStatus(snapshot *StatusSnapshot, pendingCount, maxPending int) {
 	if pendingCount >= 0 {
-		snapshot.Session.PendingCount = pendingCount
+		snapshot.Thread.PendingCount = pendingCount
 	}
 	if maxPending > 0 {
-		snapshot.Session.MaxPendingInputs = maxPending
+		snapshot.Thread.MaxPendingInputs = maxPending
 	}
 }
 
@@ -615,7 +636,7 @@ func completeCompactionStatus(snapshot *StatusSnapshot, statusErr *StatusError) 
 		turn.ResumeState = ""
 		turn.ResumePhase = ""
 		turn.Error = nil
-		snapshot.Session.State = SessionRuntimeTurnActive
+		snapshot.Thread.State = ThreadRuntimeTurnActive
 		if statusErr != nil {
 			snapshot.LastError = cloneStatusError(statusErr)
 		}
@@ -626,12 +647,12 @@ func completeCompactionStatus(snapshot *StatusSnapshot, statusErr *StatusError) 
 		turn.Streaming = false
 		turn.Error = nil
 		snapshot.Tools = []ToolCallStatus{}
-		snapshot.Session.State = SessionRuntimeIdle
+		snapshot.Thread.State = ThreadRuntimeIdle
 		return
 	}
 	turn.State = TurnLifecycleErrored
 	turn.Error = cloneStatusError(statusErr)
-	snapshot.Session.State = SessionRuntimeFailed
+	snapshot.Thread.State = ThreadRuntimeFailed
 	snapshot.LastError = cloneStatusError(statusErr)
 }
 
@@ -689,10 +710,10 @@ func cloneContextUsage(usage *llm.ContextUsage) *llm.ContextUsage {
 }
 
 func recomputeCanAcceptInput(snapshot *StatusSnapshot) {
-	maxPending := snapshot.Session.MaxPendingInputs
+	maxPending := snapshot.Thread.MaxPendingInputs
 	if maxPending <= 0 {
 		maxPending = DefaultMaxPendingInput
-		snapshot.Session.MaxPendingInputs = maxPending
+		snapshot.Thread.MaxPendingInputs = maxPending
 	}
-	snapshot.Session.CanAcceptInput = snapshot.Session.PendingCount < maxPending
+	snapshot.Thread.CanAcceptInput = snapshot.Thread.PendingCount < maxPending
 }

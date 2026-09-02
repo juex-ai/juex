@@ -28,7 +28,7 @@ func spawnDetached(executable, homeDir string, entry agentstate.RegistryEntry) (
 	}
 	defer stdin.Close()
 
-	cmd := exec.Command(executable, "-C", entry.Agent.Workspace, "listen")
+	cmd := exec.Command(executable, runtimeCommandArgs(entry)...)
 	cmd.Dir = entry.Agent.Workspace
 	cmd.Env = withEnvironment(os.Environ(), "JUEX_HOME", homeDir)
 	cmd.Stdin = stdin
@@ -44,6 +44,14 @@ func spawnDetached(executable, homeDir string, entry agentstate.RegistryEntry) (
 		close(done)
 	}()
 	return spawnedProcess{PID: cmd.Process.Pid, Done: done, LogPath: logPath}, nil
+}
+
+func runtimeCommandArgs(entry agentstate.RegistryEntry) []string {
+	args := []string{"-C", entry.Agent.Workspace}
+	if entry.Agent.RuntimeConfigPath != "" {
+		args = append(args, "--config", entry.Agent.RuntimeConfigPath)
+	}
+	return append(args, "listen")
 }
 
 func withEnvironment(environment []string, key, value string) []string {

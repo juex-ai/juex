@@ -15,10 +15,10 @@ func TestFromRuntimeProjectsPublicStatusWithoutRecoveryBookkeeping(t *testing.T)
 	source := runtime.StatusSnapshot{
 		Cursor:    "cursor-1",
 		UpdatedAt: now,
-		Session: runtime.SessionRuntimeStatus{
-			ID:               "session-one",
+		Thread: runtime.ThreadRuntimeStatus{
+			ID:               "thread-one",
 			Alias:            "primary",
-			State:            runtime.SessionRuntimeTurnActive,
+			State:            runtime.ThreadRuntimeTurnActive,
 			PendingCount:     2,
 			MaxPendingInputs: 4,
 			CanAcceptInput:   true,
@@ -66,8 +66,8 @@ func TestFromRuntimeProjectsPublicStatusWithoutRecoveryBookkeeping(t *testing.T)
 	}
 
 	got := FromRuntime(source)
-	if got.Session.ID != "session-one" || !got.Session.Working {
-		t.Fatalf("session = %+v", got.Session)
+	if got.Thread.ID != "thread-one" || !got.Thread.Working {
+		t.Fatalf("thread = %+v", got.Thread)
 	}
 	if got.Turn == nil || got.Turn.ID != "turn-one" || got.Turn.Error == nil ||
 		got.Turn.Error.Kind != StatusErrorCompaction {
@@ -102,9 +102,9 @@ func TestAgentActivityUsesOnlyAggregateContractFields(t *testing.T) {
 		State:             ActivityWorking,
 		PendingInputCount: 3,
 		SelectedStatus: &Snapshot{
-			Session: SessionStatus{
-				ID:               "session-new",
-				State:            SessionTurnActive,
+			Thread: ThreadStatus{
+				ID:               "thread-new",
+				State:            ThreadTurnActive,
 				Working:          true,
 				PendingCount:     2,
 				MaxPendingInputs: 4,
@@ -127,8 +127,6 @@ func TestAgentActivityUsesOnlyAggregateContractFields(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		`"session_id"`,
-		`"session_alias"`,
 		`"pending_count":3`,
 		`"status"`,
 	} {
@@ -144,7 +142,7 @@ func TestAgentActivityUsesOnlyAggregateContractFields(t *testing.T) {
 	if roundTrip.State != ActivityWorking ||
 		roundTrip.PendingInputCount != 3 ||
 		roundTrip.SelectedStatus == nil ||
-		!roundTrip.SelectedStatus.Session.Working {
+		!roundTrip.SelectedStatus.Thread.Working {
 		t.Fatalf("round trip = %+v", roundTrip)
 	}
 }

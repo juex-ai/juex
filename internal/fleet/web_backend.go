@@ -94,7 +94,7 @@ func (m *Manager) ReadOnlyState(selector string) (ReadOnlyAgentState, error) {
 	if binding.Kind != agentstate.WorkspaceBound {
 		return ReadOnlyAgentState{}, &ConflictError{
 			AgentID: entry.ID,
-			Reason:  "cannot read sessions for an unbound workspace: " + binding.Reason,
+			Reason:  "cannot read Threads for an unbound workspace: " + binding.Reason,
 		}
 	}
 	return ReadOnlyAgentState{

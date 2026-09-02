@@ -213,7 +213,7 @@ func Delta(call ToolCallPayload, delta OutputDelta) OutputDeltaPayload {
 }
 
 // OutputDeltaEvent is the only supported runtime event envelope for streamed
-// Tool output. Deltas are live projections, never durable Session facts.
+// Tool output. Deltas are live projections, never durable Thread facts.
 func OutputDeltaEvent(turnID string, call ToolCallPayload, delta OutputDelta) events.Event {
 	return events.Event{
 		Type:      OutputDeltaType,

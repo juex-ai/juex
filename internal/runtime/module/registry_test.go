@@ -290,8 +290,8 @@ func TestContextRejectsInvalidContributionMetadata(t *testing.T) {
 		{name: "projection", section: ContextSection{Key: "x", Source: "test", Text: "text", Budget: UnboundedContextBudget()}, want: "invalid projection"},
 		{name: "budget", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt}, want: "invalid budget"},
 		{name: "bounded limit", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: BoundedContextBudget(2)}, want: "exceeds max_chars 2"},
-		{name: "scope", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: UnboundedContextBudget(), Scope: ScopeSession}, want: "claims scope"},
-		{name: "purpose", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: UnboundedContextBudget(), Purpose: ContextPurposeSessionStart}, want: "claims purpose"},
+		{name: "scope", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: UnboundedContextBudget(), Scope: ScopeThread}, want: "claims scope"},
+		{name: "purpose", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: UnboundedContextBudget(), Purpose: ContextPurposeThreadStart}, want: "claims purpose"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -314,8 +314,8 @@ func TestContextRejectsInvalidContributionMetadata(t *testing.T) {
 
 func TestBuildToolRegistryIsAtomicAcrossSets(t *testing.T) {
 	runtimeSet := mustToolSet(t, ScopeRuntime, testModule{id: "runtime", toolNames: []string{"first"}})
-	sessionSet := mustToolSet(t, ScopeSession, testModule{id: "session", toolNames: []string{"first"}})
-	registry, err := BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, sessionSet)
+	threadSet := mustToolSet(t, ScopeThread, testModule{id: "thread", toolNames: []string{"first"}})
+	registry, err := BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, threadSet)
 	if err == nil || !strings.Contains(err.Error(), `tool "first"`) {
 		t.Fatalf("BuildToolRegistry() error = %v", err)
 	}
@@ -323,8 +323,8 @@ func TestBuildToolRegistryIsAtomicAcrossSets(t *testing.T) {
 		t.Fatalf("failed build returned partial registry: %#v", registry.List())
 	}
 
-	sessionSet = mustToolSet(t, ScopeSession, testModule{id: "session", toolNames: []string{"second"}})
-	registry, err = BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, sessionSet)
+	threadSet = mustToolSet(t, ScopeThread, testModule{id: "thread", toolNames: []string{"second"}})
+	registry, err = BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, threadSet)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,7 +40,7 @@ type AttachmentRef struct {
 type ValidationOptions struct {
 	WorkDir            string
 	AgentStateDir      string
-	ArtifactDir        string
+	MediaDir           string
 	PathGuard          sandbox.PathGuard
 	MaxAttachmentBytes int64
 	MaxEventBytes      int64
@@ -122,7 +122,7 @@ func ValidateAttachments(refs []AttachmentRef, opts ValidationOptions) Validatio
 	if len(inspected) == 0 {
 		return report
 	}
-	store, err := artifact.NewStore(opts.ArtifactDir)
+	store, err := artifact.NewStore(opts.MediaDir)
 	if err != nil {
 		report.Errors = append(report.Errors, AttachmentError{Index: -1, Error: fmt.Sprintf("store event attachment: %v", err)})
 		return report
@@ -149,7 +149,7 @@ func ValidateStoredAttachments(refs []AttachmentRef, opts ValidationOptions) Val
 	if len(refs) == 0 {
 		return report
 	}
-	store, err := artifact.NewStore(opts.ArtifactDir)
+	store, err := artifact.NewStore(opts.MediaDir)
 	if err != nil {
 		report.Errors = append(report.Errors, AttachmentError{Index: -1, Error: fmt.Sprintf("open stored attachment: %v", err)})
 		return report

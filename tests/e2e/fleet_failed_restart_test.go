@@ -64,7 +64,7 @@ func TestFleetRestartContinuesFailedTurnOnce(t *testing.T) {
 			originalRuntime := waitFleetRuntime(t, address)
 			sessionID, originalTurnID := startFleetBlockingTurn(t, originalRuntime)
 			failed := waitFleetTurnState(t, originalRuntime, sessionID, originalTurnID, statusapi.TurnErrored)
-			if failed.State != statusapi.ActivityIdle || failed.SelectedStatus.Session.State != statusapi.SessionFailed {
+			if failed.State != statusapi.ActivityIdle || failed.SelectedStatus.Thread.State != statusapi.ThreadFailed {
 				t.Fatalf("failed activity = %+v", failed)
 			}
 			select {
@@ -160,7 +160,7 @@ func waitFleetTurnState(t *testing.T, state endpoint.Runtime, sessionID, turnID 
 		if response.StatusCode != http.StatusOK || decodeErr != nil {
 			t.Fatalf("activity response: status=%d error=%v", response.StatusCode, decodeErr)
 		}
-		if selected := activity.SelectedStatus; selected != nil && selected.Session.ID == sessionID &&
+		if selected := activity.SelectedStatus; selected != nil && selected.Thread.ID == sessionID &&
 			selected.Turn != nil && selected.Turn.State == want && (turnID == "" || selected.Turn.ID == turnID) {
 			return activity
 		}

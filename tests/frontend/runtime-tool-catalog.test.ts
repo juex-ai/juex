@@ -17,8 +17,8 @@ test("runtimeToolGroupLabel maps the builtin group taxonomy", () => {
       "shell",
       "search",
       "skill",
-      "session_state",
-      "side_session",
+      "thread_state",
+      "worker_thread",
       "observable",
     ].map(runtimeToolGroupLabel),
     [
@@ -27,8 +27,8 @@ test("runtimeToolGroupLabel maps the builtin group taxonomy", () => {
       "Shell",
       "Search",
       "Skill",
-      "Session State",
-      "Side Session",
+      "Thread State",
+      "Worker Thread",
       "Observable",
     ],
   );

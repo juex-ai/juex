@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,7 +17,6 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/observability"
-	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -64,11 +64,6 @@ func Execute() int {
 	var doctorErr *doctorExitError
 	if errors.As(err, &doctorErr) {
 		return doctorErr.ExitCode()
-	}
-	var lockErr *session.LockError
-	if errors.As(err, &lockErr) {
-		printErrorIfNeeded(alreadyEmitted, err)
-		return ExitConflict
 	}
 	switch err.(type) {
 	case *dryRunOK:
@@ -165,7 +160,6 @@ const (
 	agentStateNone agentStatePolicy = iota
 	agentStateExisting
 	agentStateMint
-	agentStateEphemeral
 )
 
 const agentStatePolicyAnnotation = "juex.ai/agent-state-policy"
@@ -198,16 +192,6 @@ func commandAgentStatePolicy(cmd *cobra.Command) (agentStatePolicy, error) {
 		case "existing":
 			return agentStateExisting, nil
 		case "mint":
-			ephemeral, err := current.Flags().GetBool("ephemeral")
-			if err == nil && ephemeral {
-				return agentStateEphemeral, nil
-			}
-			if current.Name() == "run" {
-				dryRun, dryRunErr := current.Flags().GetBool("dry-run")
-				if dryRunErr == nil && dryRun {
-					return agentStateEphemeral, nil
-				}
-			}
 			return agentStateMint, nil
 		default:
 			return agentStateNone, fmt.Errorf("juex: command %s declares unknown agent-state policy %q", cmd.CommandPath(), value)
@@ -224,7 +208,7 @@ func newRootCmd() *cobra.Command {
 		Short: "Juex agent runtime",
 		Long: `Juex agent runtime.
 
-Agent, session, and troubleshooting commands resolve the workspace agent from
+Agent, Thread, and troubleshooting commands resolve the workspace agent from
 the current directory or --cwd. juex fleet commands manage all agents
 registered under the effective $JUEX_HOME. CLI information commands do not
 operate on an agent.`,
@@ -265,8 +249,8 @@ operate on an agent.`,
 	}
 	// --verbose has no short form at root level so each subcommand can use
 	// -v locally (see version.go); cobra would otherwise conflict.
-	cmd.PersistentFlags().BoolVar(&flags.debug, "debug", false, "write detailed session logs, traces, spans, and tool summaries")
-	cmd.PersistentFlags().StringVar(&flags.logLevel, "log-level", "", "minimum session log level: debug, info, warn, or error (default info)")
+	cmd.PersistentFlags().BoolVar(&flags.debug, "debug", false, "write detailed Thread logs, traces, spans, and tool summaries")
+	cmd.PersistentFlags().StringVar(&flags.logLevel, "log-level", "", "minimum Thread log level: debug, info, warn, or error (default info)")
 	cmd.PersistentFlags().BoolVar(&flags.verbose, "verbose", false, "stream runtime lifecycle events to stderr")
 
 	cmd.AddGroup(
@@ -285,10 +269,9 @@ operate on an agent.`,
 	}
 	addGrouped(
 		workspaceCommandGroupID,
-		newRunCmd(flags),
-		newREPLCmd(flags),
+		newSendCmd(flags),
 		newListenCmd(flags),
-		newSessionsCmd(flags),
+		newThreadsCmd(flags),
 		newInitCmd(flags),
 	)
 	addGrouped(
@@ -331,7 +314,7 @@ func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (conf
 		mode = config.AgentStateMint
 	case agentStateExisting:
 		mode = config.AgentStateExisting
-	case agentStateNone, agentStateEphemeral:
+	case agentStateNone:
 		mode = config.AgentStateNone
 	default:
 		return cfg, fmt.Errorf("juex: unsupported agent-state policy %d", policy)
@@ -368,9 +351,6 @@ func loadConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Co
 	if err != nil {
 		return config.Config{}, err
 	}
-	if policy == agentStateEphemeral {
-		return config.Config{}, fmt.Errorf("juex: command %s requires the ephemeral runtime loader", cmd.CommandPath())
-	}
 	cfg, err := loadConfigWithPolicy(flags, policy)
 	if err != nil {
 		return cfg, err
@@ -386,13 +366,10 @@ func writeConfigMessages(cmd *cobra.Command, cfg config.Config) {
 }
 
 type runtimeConfigLifecycle struct {
-	state              *agentstate.Ephemeral
-	keep               bool
-	path               string
 	restoreEnvironment func() error
 }
 
-func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags, keep bool) (config.Config, *runtimeConfigLifecycle, error) {
+func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Config, *runtimeConfigLifecycle, error) {
 	policy, err := commandAgentStatePolicy(cmd)
 	if err != nil {
 		return config.Config{}, nil, err
@@ -403,24 +380,8 @@ func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags, kee
 	}
 	writeConfigMessages(cmd, cfg)
 	lifecycle := &runtimeConfigLifecycle{}
-	if policy == agentStateEphemeral {
-		state, err := agentstate.CreateEphemeral(cfg.WorkDir)
-		if err != nil {
-			return cfg, nil, err
-		}
-		cfg.AgentID = state.Resolution.Agent.ID
-		cfg.AgentName = state.Resolution.Agent.Name
-		cfg.AgentStateDir = state.Resolution.Address.StateDir()
-		cfg.AgentAddress = state.Resolution.Address
-		lifecycle.state = state
-		lifecycle.keep = keep
-		lifecycle.path = state.Resolution.Address.StateDir()
-	}
 	restore, err := cfg.EnvironmentSnapshot().Activate()
 	if err != nil {
-		if lifecycle.state != nil {
-			_ = lifecycle.state.Remove()
-		}
 		return cfg, nil, err
 	}
 	lifecycle.restoreEnvironment = restore
@@ -430,17 +391,6 @@ func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags, kee
 func (lifecycle *runtimeConfigLifecycle) finish(cmd *cobra.Command, primary error) error {
 	if lifecycle == nil {
 		return primary
-	}
-	if lifecycle.state != nil {
-		if lifecycle.keep {
-			fmt.Fprintln(cmd.ErrOrStderr(), "juex: kept ephemeral state at "+lifecycle.path)
-		} else if err := lifecycle.state.Remove(); err != nil {
-			if primary != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), "juex: warning: "+err.Error())
-			} else {
-				primary = err
-			}
-		}
 	}
 	if lifecycle.restoreEnvironment != nil {
 		if err := lifecycle.restoreEnvironment(); err != nil {
@@ -452,19 +402,6 @@ func (lifecycle *runtimeConfigLifecycle) finish(cmd *cobra.Command, primary erro
 		}
 	}
 	return primary
-}
-
-func validateEphemeralFlags(ephemeral, keep, dryRun bool) error {
-	switch {
-	case dryRun && ephemeral:
-		return &usageError{msg: "juex run: --dry-run cannot be combined with --ephemeral; dry-run is already isolated"}
-	case dryRun && keep:
-		return &usageError{msg: "juex run: --dry-run cannot be combined with --keep"}
-	case keep && !ephemeral:
-		return &usageError{msg: "--keep requires --ephemeral"}
-	default:
-		return nil
-	}
 }
 
 func explicitConfigPath(flags *persistentFlags) string {
@@ -485,4 +422,13 @@ func modelsOverride(flags *persistentFlags) []string {
 // command's stdout (which tests can capture via cmd.SetOut).
 func cmdPrintln(c *cobra.Command, s string) {
 	fmt.Fprintln(c.OutOrStdout(), s)
+}
+
+func mustJSON(v any) string {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	return string(b)
+}
+
+func configFileForPlan(flags *persistentFlags) string {
+	return explicitConfigPath(flags)
 }

@@ -27,10 +27,10 @@ type RuntimeContext struct {
 	ID            string
 	WorkDir       string
 	AgentStateDir string
-	ArtifactDir   string
+	MediaDir      string
 }
 
-type SessionContext struct {
+type ThreadContext struct {
 	ID            string
 	Dir           string
 	ScratchpadDir string
@@ -38,13 +38,13 @@ type SessionContext struct {
 
 type ToolContext struct {
 	Runtime RuntimeContext
-	Session *SessionContext
+	Thread  *ThreadContext
 }
 
 type ContextPurpose string
 
 const (
-	ContextPurposeSessionStart      ContextPurpose = "session_start"
+	ContextPurposeThreadStart       ContextPurpose = "thread_start"
 	ContextPurposeTurnPreparation   ContextPurpose = "turn_preparation"
 	ContextPurposeProviderIteration ContextPurpose = "provider_iteration"
 )
@@ -52,7 +52,7 @@ const (
 type ContextRequest struct {
 	Purpose ContextPurpose
 	Runtime RuntimeContext
-	Session *SessionContext
+	Thread  *ThreadContext
 }
 
 type ContextProjection string
@@ -123,7 +123,7 @@ type Registry struct {
 	turnInputPolicies     []registeredModule
 	toolPolicies          []registeredModule
 	finishPolicies        []registeredModule
-	sessionStartPolicies  []registeredModule
+	threadStartPolicies   []registeredModule
 	compactionPolicies    []registeredModule
 	pendingInputObservers []registeredModule
 }
@@ -170,8 +170,8 @@ func (r *Registry) Register(mod Module) error {
 	if _, ok := mod.(FinishPolicy); ok {
 		r.finishPolicies = append(r.finishPolicies, registered)
 	}
-	if _, ok := mod.(SessionStartPolicy); ok {
-		r.sessionStartPolicies = append(r.sessionStartPolicies, registered)
+	if _, ok := mod.(ThreadStartPolicy); ok {
+		r.threadStartPolicies = append(r.threadStartPolicies, registered)
 	}
 	if _, ok := mod.(CompactionPolicy); ok {
 		r.compactionPolicies = append(r.compactionPolicies, registered)
@@ -220,7 +220,7 @@ func (r *Registry) freeze() (*Set, error) {
 	turnInputPolicies := append([]registeredModule(nil), r.turnInputPolicies...)
 	toolPolicies := append([]registeredModule(nil), r.toolPolicies...)
 	finishPolicies := append([]registeredModule(nil), r.finishPolicies...)
-	sessionStartPolicies := append([]registeredModule(nil), r.sessionStartPolicies...)
+	threadStartPolicies := append([]registeredModule(nil), r.threadStartPolicies...)
 	compactionPolicies := append([]registeredModule(nil), r.compactionPolicies...)
 	pendingInputObservers := append([]registeredModule(nil), r.pendingInputObservers...)
 	r.mu.Unlock()
@@ -232,7 +232,7 @@ func (r *Registry) freeze() (*Set, error) {
 		turnInputPolicies:     turnInputPolicies,
 		toolPolicies:          toolPolicies,
 		finishPolicies:        finishPolicies,
-		sessionStartPolicies:  sessionStartPolicies,
+		threadStartPolicies:   threadStartPolicies,
 		compactionPolicies:    compactionPolicies,
 		pendingInputObservers: pendingInputObservers,
 	}, nil
@@ -327,7 +327,7 @@ type Set struct {
 	turnInputPolicies     []registeredModule
 	toolPolicies          []registeredModule
 	finishPolicies        []registeredModule
-	sessionStartPolicies  []registeredModule
+	threadStartPolicies   []registeredModule
 	compactionPolicies    []registeredModule
 	pendingInputObservers []registeredModule
 
@@ -514,7 +514,7 @@ func SectionsForProjection(sections []ContextSection, projection ContextProjecti
 }
 
 // CollectContext validates context ownership across complete Runtime and
-// Session sets while preserving their explicit composition order.
+// Thread sets while preserving their explicit composition order.
 func CollectContext(ctx context.Context, request ContextRequest, sets ...*Set) ([]ContextSection, error) {
 	owners := make(map[string]ID)
 	var sections []ContextSection

@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"path"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -34,7 +35,7 @@ func (e *Engine) projectCompactionRetentionMessageLocked(msg llm.Message, policy
 }
 
 func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compactionPolicy, tightenRetainedInput bool) (llm.Message, projectionStats, error) {
-	if e == nil || e.currentSession() == nil {
+	if e == nil || e.currentThread() == nil {
 		return msg, projectionStats{}, nil
 	}
 	if msg.ID == "" && policy.Enabled {
@@ -431,7 +432,7 @@ func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex
 }
 
 func (e *Engine) renderProjectedArtifactReadURIs(msg llm.Message) (llm.Message, error) {
-	rendered, err := renderProjectedArtifactBlockReadURIs(msg)
+	rendered, err := e.renderProjectedArtifactBlockReadPaths(msg)
 	if err != nil {
 		return msg, err
 	}
@@ -441,7 +442,7 @@ func (e *Engine) renderProjectedArtifactReadURIs(msg llm.Message) (llm.Message, 
 
 	references := make([]llm.Message, len(msg.Compaction.RetainedInputReferences))
 	for index, reference := range msg.Compaction.RetainedInputReferences {
-		references[index], err = renderProjectedArtifactBlockReadURIs(reference)
+		references[index], err = e.renderProjectedArtifactBlockReadPaths(reference)
 		if err != nil {
 			return msg, err
 		}
@@ -458,7 +459,7 @@ func (e *Engine) renderProjectedArtifactReadURIs(msg llm.Message) (llm.Message, 
 	return out, nil
 }
 
-func renderProjectedArtifactBlockReadURIs(msg llm.Message) (llm.Message, error) {
+func (e *Engine) renderProjectedArtifactBlockReadPaths(msg llm.Message) (llm.Message, error) {
 	var blocks []llm.Block
 	for index, block := range msg.Blocks {
 		if block.Artifact == nil {
@@ -467,7 +468,7 @@ func renderProjectedArtifactBlockReadURIs(msg llm.Message) (llm.Message, error) 
 			}
 			continue
 		}
-		readURI, err := artifact.FormatReadURI(block.Artifact.StoredPath)
+		readPath, err := e.projectedSpoolReadPath(block.Artifact.StoredPath)
 		if err != nil {
 			return msg, err
 		}
@@ -477,9 +478,9 @@ func renderProjectedArtifactBlockReadURIs(msg llm.Message) (llm.Message, error) 
 		}
 		switch block.Type {
 		case llm.BlockText:
-			block.Text = replaceProjectedArtifactPath(block.Text, block.Artifact.StoredPath, readURI)
+			block.Text = replaceProjectedArtifactPath(block.Text, block.Artifact.StoredPath, readPath)
 		case llm.BlockToolResult:
-			block.Content = replaceProjectedArtifactPath(block.Content, block.Artifact.StoredPath, readURI)
+			block.Content = replaceProjectedArtifactPath(block.Content, block.Artifact.StoredPath, readPath)
 		}
 		blocks = append(blocks, block)
 	}
@@ -496,32 +497,44 @@ func replaceProjectedArtifactPath(text, storedPath, readPath string) string {
 }
 
 func (e *Engine) projectedArtifactStore() (artifact.Store, error) {
-	if e == nil || e.ArtifactDir == "" {
-		return artifact.Store{}, fmt.Errorf("context artifact: missing Agent Artifact directory")
+	if e == nil || e.currentThread() == nil || e.currentThread().SpoolDir() == "" {
+		return artifact.Store{}, fmt.Errorf("context spool: missing Thread spool directory")
 	}
-	store, err := artifact.NewStore(e.ArtifactDir)
+	store, err := artifact.NewStore(e.currentThread().SpoolDir())
 	if err != nil {
-		return artifact.Store{}, fmt.Errorf("context artifact store: %w", err)
+		return artifact.Store{}, fmt.Errorf("context spool store: %w", err)
 	}
 	return store, nil
 }
 
+func (e *Engine) projectedSpoolReadPath(storedPath string) (string, error) {
+	if e == nil || e.currentThread() == nil {
+		return "", fmt.Errorf("context spool: missing Thread")
+	}
+	root := e.currentThread().SpoolDir()
+	target := filepath.Join(root, filepath.FromSlash(storedPath))
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("context spool: invalid stored path %q", storedPath)
+	}
+	return target, nil
+}
+
 func (e *Engine) projectedArtifactPath(sourceKind, messageID string, blockIndex int, block llm.Block) (string, error) {
 	if e == nil {
-		return "", fmt.Errorf("context artifact: missing session identity")
+		return "", fmt.Errorf("context artifact: missing thread identity")
 	}
-	sess := e.currentSession()
+	sess := e.currentThread()
 	if sess == nil || sess.ID == "" {
-		return "", fmt.Errorf("context artifact: missing session identity")
+		return "", fmt.Errorf("context artifact: missing thread identity")
 	}
 	var dir, name string
-	sessionID := safeArtifactName(sess.ID)
 	switch sourceKind {
 	case "user_input":
-		dir = path.Join("sessions", sessionID, "user-inputs")
+		dir = "user-inputs"
 		name = messageID
 	case "tool_result":
-		dir = path.Join("sessions", sessionID, "tool-results")
+		dir = "tool-results"
 		name = block.ToolUseID
 		if name == "" {
 			name = messageID

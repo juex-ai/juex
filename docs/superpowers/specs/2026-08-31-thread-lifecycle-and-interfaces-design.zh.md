@@ -3,111 +3,147 @@
 > [English](2026-08-31-thread-lifecycle-and-interfaces-design.md) | 中文
 
 日期：2026-08-31
-状态：提案
-依赖：[Thread 领域模型重构](2026-08-31-thread-domain-model-design.zh.md)
+更新：2026-09-01
+状态：已确认，等待实现
+依赖：[Thread 领域模型](2026-08-31-thread-domain-model-design.zh.md)
 
 ## 目的
 
-用四个明确的生命周期作用域，替换 App 拥有的 Active Session replacement 和
-Primary 拥有的 Side Session 管理：
+用四个显式生命周期替换 App 拥有的 Active Session replacement 与 Primary 拥有
+的 Side Session 管理：
 
 ```text
 Runtime Instance
   └── Agent Runtime
-        ├── Agent 共享资源
+        ├── Agent-scoped resources
         └── Thread Manager
               └── Thread Runtime
-                    └── Context Generation
-                          └── Turn
+                    ├── logical Context Generation
+                    └── Turn
 ```
 
-一个常驻 Agent 进程必须能并发承载 Main 和 Worker Threads，只加载一次昂贵的
-共享资源，同时按 Thread 和 Generation 隔离可变上下文，只向 Main 路由 Observe，
-并为 CLI 和 Web 暴露同一套与传输无关的输入和订阅契约。
+一个常驻 Agent 进程并发承载 Main 与 Workers，只加载一次昂贵共享资源，隔离可变
+Thread 状态，只向 Main 路由 Observations，并向 CLI 与 Web 暴露同一套 transport-
+neutral contract。
 
 ## 生命周期作用域
 
 ### Runtime Instance
 
-只负责进程实例问题：
-
-- Endpoint 绑定和精确进程身份。
-- 信号处理和优雅关闭。
-- 发布和删除 `runtime.json`。
-- 进程本地日志和健康状态。
-
-重启会替换 Runtime Instance，但不改变 Agent、Thread 或 Generation 身份。
+只拥有进程实例问题：endpoint identity、signals、graceful shutdown、
+`runtime.json`、logs 与 health。Restart 会替换 Runtime Instance，但不会改变
+Agent、Thread、Generation、Input 或 Turn identity。
 
 ### Agent Runtime
 
-每个 Agent 服务进程只构建一次。它拥有所有 Thread 共享的资源：
+每个 serving process 只构建一次，拥有：
 
-- 已解析的 Workspace 和 Agent Address。
-- 不可变运行时环境和 sandbox policy。
-- Provider profiles、model health 和 Provider adapters。
-- 已封闭的 Runtime Module 集和 Tool catalog。
-- 一个 MCP Manager，每个已配置 server 只有一套 client 生命周期。
-- Observable Manager 和 Observe Router。
-- Artifact Store。
-- Thread Manager、Thread 列表投影和 Agent 事件/状态投影。
+- Workspace、Agent address、不可变 environment 与 sandbox policy。
+- Provider adapters、profiles、health 与 model fallback state。
+- Sealed Agent Modules 与 Tool catalog。
+- 一个 MCP Manager，每个已配置 server 只有一套 client lifecycle。
+- Observable Manager 与 Observation delivery router。
+- 共享 shell manager 与持久 media stores。
+- Thread Manager，以及 Agent 与 Thread-list projections。
 
-Agent Runtime 不拥有某一个“当前对话”。即使没有 Thread 正在执行 Turn，它仍然
-可以保持健康。
+Agent Runtime 没有可替换的“当前对话”。所有 Thread idle 时仍保持健康。
 
 ### Thread Runtime
 
-一个活跃 Thread 对应一个 live handle。它拥有：
+一个活跃 Thread 最多有一个 live handle，拥有：
 
-- Thread 元数据和单写者 lease。
-- 一个 Engine 和它的活跃 Turn reservation。
-- 能跨 Generation 转换保留的持久 Accepted Input Queue。
-- 当前 Generation 的发布和 reader lease。
-- Thread 状态、累计用量、该 Thread 创建的订阅和取消边界。
-- Generation 级资源的按需打开和关闭。
+- 不可变 id 与 parent、可修改 Worker alias，以及一个 writer lease。
+- 一个 append-only Journal 与唯一有序 commit path。
+- 持久 Accepted Input 状态、attempts、Pending Queue 与 retry decision。
+- 一个 Engine、active Turn reservation、cancellation 与 status。
+- 当前 Generation identity 与 Provider Context projection。
+- Thread-scoped Goal、Notes、Scratchpad path 与 usage；活跃 Thread Runtime 还拥有
+  自己发出的 Worker-result subscriptions。
+- Thread projection publication 与 replay/live event handoff。
 
-Thread Runtime 通过 `thread_id` 寻址。Main 和 Worker 的构造方式完全相同；
-Observe Router 通过 `main_thread_id` 选择 Main。
+Main 与 Worker 使用相同 constructor，只有 `ThreadID("0")` 选择 Main。
+Main-owned transport registry 会沿 ownership tree 递归解析 managed Worker App，
+因此 API 不会为嵌套 descendant 打开第二个 Runtime，lifecycle action 也会路由到
+实际 parent manager。
 
 ### Context Generation
 
-一个只追加的 Provider Context 分段。它拥有：
+Generation 是逻辑 Provider Context 分段，不是目录或单独 Runtime owner。它包含：
 
-- 规范 Generation journal 和派生 index。
-- 该 Generation 的 Provider 可见消息。
-- 可选 compact bootstrap。
-- Goal、Notes、Scratchpad、Generation 用量、Context Usage 和 Generation 状态
-  投影。
-- 模型创建的 Generation 级订阅。
+- Thread Journal 中的 Generation id 与 boundary commit。
+- 该分段内 Provider-visible Messages。
+- 可选 compact-summary bootstrap。
+- Generation usage 与当前 Context Usage projection。
 
-Goal、Notes 和 Scratchpad 不会暗中跨越 `/new` 或 `/compact`。Compact 总结是
-唯一携带到下一代的 Provider Context。
+Goal、Notes 与 Scratchpad 是持久 Thread state。当前 Runtime 的 result
+subscriptions 由 subscriber 拥有，但不是 Journal state。Runtime 保持活跃时，
+Compact 保留四者；New 清除 Goal、Notes 与活跃 subscriptions，但保留 Scratchpad
+文件。Archive/unarchive 不改变 Generation。
 
 ### Turn
 
-现有 Turn loop 继续作为 Provider 迭代、Tool Call 顺序、Pending Input safe point、
-Policy checkpoint、完成、取消和错误的执行权威。它现在接收显式
-`(thread_id, generation_id)` 作用域，不能选择或替换 Thread 或 Generation。
+Turn loop 继续作为 Provider iterations、Tool ordering、Pending Input safe points、
+policy checks、completion、cancellation 与 errors 的权威。它接收显式
+`(thread_id, generation_id)` scope，不能选择或替换 Thread/Generation。
 
 ## Module 作用域
 
-现有 Runtime/Session Module 划分改为 Agent/Generation 作用域：
-
-| 新作用域 | 示例 | 生命周期 |
+| Scope | 示例 | 生命周期 |
 | --- | --- | --- |
-| Agent Module | builtin Tools、Skills catalog、project guidance loader、MCP、Observable tools、共享 shell manager | Agent Runtime |
-| Thread service | Engine、Pending Queue、status、cancellation、Thread subscriptions | Thread Runtime |
-| Generation Module | prompt operating context、Goal、Notes、Hooks、Generation Scratchpad context | Context Generation |
-| Turn policy/observer | input、Tool、finish、生命周期观察 | 某 Generation 内的一个 Turn |
+| Agent Module | Builtin Tools、Skills、project guidance、MCP、Observable tools、共享 shell manager | Agent Runtime |
+| Thread service | Engine、Journal writer、Pending Queue、Goal、Notes、status、cancellation、活跃 subscriptions | Thread Runtime |
+| Prompt contribution | System guidance、Hook injection、Thread state、per-request recitation | 一次 Prompt assembly |
+| Turn policy/observer | Input、Tool、finish 与 lifecycle policies | 一个 Turn |
 
-Framework 继续拥有稳定 Module identity、typed capability index、排序和清理。
-App 仍是 composition root。具体 Module 不读取 Thread Manager 全局状态；依赖通过
-typed context 显式传入。
+Framework 保留稳定 Module identity、typed capabilities、ordering 与 cleanup。App
+继续是 composition root。Modules 接收显式 scoped dependency，不读取 Thread
+Manager 全局状态。
+
+## Prompt Assembly
+
+现有 Prompt Builder 与 `ContextProvider` capability 演进成一个显式 assembly
+boundary，不能再建立第二套平行 Prompt 系统。
+
+```go
+type PromptContext struct {
+    ThreadID          ThreadID
+    GenerationID      GenerationID
+    Purpose           PromptPurpose
+    ContextWindow     int
+    ContextTokens     int
+    ContextPercentage float64
+    PendingInputs     int
+}
+
+type PromptContributor interface {
+    Contribute(context.Context, PromptContext) ([]PromptSection, error)
+}
+
+type PromptAssembler interface {
+    Assemble(context.Context, PromptContext) (llm.Prompt, error)
+}
+```
+
+Contribution 使用稳定 phase 与确定顺序：
+
+1. Stable system guidance、Tool docs、Skills 与 project guidance。
+2. Hook-contributed prompt sections。
+3. Thread state：Goal、Notes、active shell summary 与 Scratchpad path。
+4. Generation bootstrap 与 Provider-visible Journal projection。
+5. 位于末端的 per-request recitation。
+
+Recitation 包含 context-window maximum、估算 visible tokens、占用百分比、Pending
+Input 数、当前 Generation，以及何时调用 `context_compact` 或 `context_new` 的明确
+指导。把 volatile content 放在末端，可以保留可缓存 stable prefix。
+`cached_input_tokens` 属于 usage accounting，不能从 context occupancy 中扣除。
 
 ## 核心值
 
 ```go
 type ThreadID string
 type GenerationID string
+
+const MainThreadID ThreadID = "0"
 
 type ThreadRecord struct {
     ID             ThreadID
@@ -127,25 +163,23 @@ const (
 
 type ThreadSnapshot struct {
     Record               ThreadRecord
-    Main                 bool
     State                ThreadState
-    CurrentGenerationID  *GenerationID
+    CurrentGenerationID  GenerationID
     GenerationCount      uint64
     TurnCount            uint64
     PendingInputCount    int
     CurrentContextTokens int
     TokenUsage           llm.Usage
     LastActivityAt       time.Time
+    Revision             uint64
     Cursor               string
 }
 ```
 
-`ThreadSnapshot` 中的 `Main` 和所有计数都是投影。持久身份来自 Agent 元数据和
-`thread.json`，不是 Snapshot。
-`CurrentContextTokens` 是当前 Generation 最近一次投影的 provider-visible context
-总量，不是整个 Thread 的累计 input usage。
+`ID == MainThreadID` 推导 Main，`is_main` 只属于 transport projection。
+`llm.Usage` 包含 input、cached input 与 output tokens。
 
-## Thread Manager 接口
+## Thread Manager
 
 ```go
 type CreateThreadRequest struct {
@@ -157,30 +191,24 @@ type ThreadManager interface {
     Main(context.Context) (ThreadHandle, error)
     Open(context.Context, ThreadID) (ThreadHandle, error)
     Create(context.Context, CreateThreadRequest) (ThreadSnapshot, error)
-    List(context.Context, ListThreadsRequest) ([]ThreadSnapshot, error)
-    Rename(context.Context, ThreadID, string) (ThreadSnapshot, error)
-    Archive(context.Context, ThreadID) (ThreadSnapshot, error)
-    Unarchive(context.Context, ThreadID) (ThreadSnapshot, error)
+    List(context.Context, ListThreadsRequest) (ThreadPage, error)
+    Rename(context.Context, ThreadID, string, uint64) (ThreadSnapshot, error)
+    Archive(context.Context, ThreadID, uint64) (ThreadSnapshot, error)
+    Unarchive(context.Context, ThreadID, uint64) (ThreadSnapshot, error)
+    Delete(context.Context, ThreadID, uint64) error
     Stop(context.Context, ThreadID, error) error
     Close() error
 }
 ```
 
-同一个 Runtime Instance 内，`Open` 按需且幂等。它在发布 handle 前校验元数据并
-取得 Thread writer lease。并发 Open 会收敛到同一个 handle。一个已停止且 idle
-的 handle 可以从内存淘汰，不会因此归档或删除持久历史。
+`Open` 幂等，并让并发调用收敛到一个 live handle。Worker 创建持有 Agent
+creation/index lock，校验 active parent，生成无冲突 id，在临时目录准备
+`thread.created` 与 `g000001`，sync 后原子发布，再更新派生 projection。
 
-创建过程持有 Agent 级 creation/index lock：
+受信任的 transport 与 recovery caller 传入 `ParentThreadID`；模型侧 Tool adapter
+从 Tool invocation context 推导它，并且不在 Tool schema 暴露。
 
-1. 解析并校验活跃 parent。
-2. 生成并碰撞检查 `thread_id`。
-3. 使用请求 alias 或 `worker_#<tid>`，再校验唯一性。
-4. 在临时目录中准备 Thread 元数据和 `g000001`。
-5. Sync 后原子发布完整 Thread 目录。
-6. 更新派生 Thread index。
-7. 只有需要执行时才打开 Thread Runtime。
-
-## Thread Handle 与输入接口
+## Thread Handle 与 Input
 
 ```go
 type InputRequest struct {
@@ -193,91 +221,83 @@ type InputRequest struct {
 type InputReceipt struct {
     InputID      string
     ThreadID     ThreadID
-    GenerationID *GenerationID
-    TurnID       string
     State        InputState
     PendingCount int
     Cursor       string
+    AcceptedAt   time.Time
 }
 
 type ThreadHandle interface {
     Snapshot(context.Context) (ThreadSnapshot, error)
     AcceptInput(context.Context, InputRequest) (InputReceipt, error)
-    StartGeneration(context.Context, GenerationTransition) (GenerationSnapshot, error)
+    RequestContextTransition(context.Context, ContextTransition) error
     Subscribe(context.Context, SubscribeRequest) (EventStream, error)
+    WatchInput(context.Context, string, string) (EventStream, error)
     CancelActiveTurn(error) bool
 }
 ```
 
-初始 receipt 中 `TurnID` 可以为空。例如排在 Generation 转换后面的输入，此时
-尚不能知道消费它的 Turn。之后持久 input lifecycle 会发布最终分配的 Generation
-和 Turn。
+Admission 只返回 acceptance 时已知事实，Generation 与 Turn 可以稍后分配。所有
+transport、Observation 与 Worker-result adapter 都调用同一个 `AcceptInput`，不能
+重新实现 start-or-queue。
 
-所有 transport 都调用同一个 `AcceptInput`。CLI、Web、MCP、Observables、
-Worker 结果适配器和 Fleet restart continuation 都不能自行实现 start-or-queue
-策略。
+Journal 记录 `input.accepted`、每个 `input.attempt.started`、attempt terminal
+outcome、retry/requeue decision 与一个 Input terminal outcome。Acceptance commit
+sync 后才能返回 acknowledgement。
 
-## Generation 转换接口
+## Context Transition 与 Builtin Tools
 
 ```go
-type GenerationTransitionKind string
+type ContextTransitionKind string
 
 const (
-    GenerationNew       GenerationTransitionKind = "new"
-    GenerationCompact   GenerationTransitionKind = "compact"
-    GenerationUnarchive GenerationTransitionKind = "unarchive"
+    ContextNew     ContextTransitionKind = "new"
+    ContextCompact ContextTransitionKind = "compact"
 )
 
-type GenerationTransition struct {
-    Kind         GenerationTransitionKind
+type ContextTransition struct {
+    Kind         ContextTransitionKind
     Reason       string
     Automatic    bool
     Instructions string
 }
 ```
 
-`/new` 和 `/compact` 由 App 解析为有序控制输入。它们不能从无关的管理 goroutine
-直接调用 `StartGeneration`。控制输入到达 safe boundary 时：
+Slash inputs 与 builtin Tools 请求相同的有序 transition：
 
-1. 停止把更晚的输入加入旧 Generation。
-2. 在有效协议边界完成或关闭活跃 Turn。
-3. Compact 时，先生成并校验 bootstrap，再提交任何转换状态；失败时旧
-   Generation 仍是当前权威。
-4. 准备并 sync candidate Generation。
-5. 通过持久 transition protocol 提交旧 Generation 关闭和新 Generation 发布。
-6. 原子重新绑定 Generation Modules 和 Engine context。
-7. 按原始顺序把后续已接纳输入 admission 到新 Generation。
+- `context_compact(instructions?)` 生成并校验 summary，然后追加带下一代 id 的
+  `context.compacted`。
+- `context_new(reason?)` 追加 `context.renewed`，清除 Goal 与 Notes，并取消 active
+  result subscriptions。它同时清除当前 Generation 的 Context Usage calibration，
+  但保留 cumulative Token Usage。
+- 两者都保留 Scratchpad 文件。
+- 即使普通 Turn 配置了更高 reasoning effort，compact-summary request 也使用
+  request-scoped low effort；provider request epoch 记录这个实际 override。
+- 由 Tool Call 请求时，必须先 commit Tool Result，再在下一个 protocol-safe
+  boundary 执行 transition。
+- Compact summary 失败时不追加 boundary，旧 Generation 仍然权威。
 
-只有 Thread Runtime 可以执行此协议。
+Boundary commit 与所有后续 Inputs 使用同一个 Thread writer，因此不需要独立
+transition intent 文件或 Generation publication transaction。
 
-## Observe Router
+## Observation Delivery
 
 ```go
 type ObserveRouter interface {
-    DeliverMCP(context.Context, mcp.Notification) (InputReceipt, error)
     DeliverObservation(context.Context, observable.Observation) (InputReceipt, error)
 }
 ```
 
-每次投递时，Router：
+MCP、Command、Schedule 与未来 adapter 先标准化 business event，再调用该接口。
+Router 始终打开 `MainThreadID`，持久化 source delivery state，并用稳定 source
+identity 与 TTL 调用 `AcceptInput`。Protocol telemetry 仍是 diagnostics。Worker
+不能注册为 ambient target；多个 Thread 仍然共享每个 server 的一个 MCP client。
 
-1. 从 Agent 权威读取当前 `main_thread_id`。
-2. 通过 Thread Manager 打开该 Thread。
-3. 在输入投递前持久化 source-specific observation state。
-4. 使用稳定 source identity 和 TTL 调用同一个 `AcceptInput`。
-5. 把 queued/delivered/error 状态投影回 source owner。
-
-Worker 没有 Observe callback，也不能把自己注册成环境目标。MCP clients 是 Agent
-级的，因此打开十个 Thread 仍然只为每个 MCP server 启动一个 client。
-
-## Subscription 接口
+## Subscriptions
 
 ```go
 type SubscribeRequest struct {
     AfterCursor string
-    InputID     string
-    TurnID      string
-    Terminal    bool
 }
 
 type ThreadEvent struct {
@@ -292,138 +312,135 @@ type ThreadEvent struct {
 }
 ```
 
-Stream 保证持久 Event 从 replay 到 live handoff 之间无缺口。Input filter 匹配
-`InputIDs` 中的成员，因此一个 Turn Event 可以关联该 Turn 消费的全部输入。
-Subscription filter 只是投影，不能修改或完成 Turn。
+显式 cursor 先 replay committed events，再无缺口交接到 live delivery。空 cursor
+在当前 tail 原子定位。通用 Subscription 不包含 Input、Turn、terminal 或
+terminal-client flag。
 
-Subscriber 分两类：
+`WatchInput` 是 `send --wait` 使用的高层 correlation service；它发现 consuming
+Turn，并在该 Turn settled 时结束。Worker-result Subscription 是独立的活跃
+subscriber-Thread service，观察注册后目标的下一次 `thread.settled`，并可以把结果
+适配成 subscriber Input；它不跨 Runtime shutdown 存在。目标 Worker 不保存
+subscriber 或 destination。
 
-- **临时 client subscriber：** 只存在于 CLI/API/Web 连接状态。关闭它没有
-  Runtime 副作用。
-- **Generation 拥有的结果 subscriber：** 持久化在订阅方 Generation journal。
-  它可以把目标 Worker Turn 终态结果适配成订阅方 Thread 的 Accepted Input。
+## Worker 与 Context Tools
 
-目标 Worker 不持久化任何一种 subscriber。
+用以下 Tools 替换 `side_session_*`：
 
-## Worker Tools
-
-用 Thread 工具替换 `side_session_*`：
-
-- `thread_create(parent_thread_id?, alias?, message)`
+- `thread_create(alias?, message?)`
 - `thread_list(include_archived?)`
 - `thread_status(thread_id)`
 - `thread_send(thread_id, message)`
 - `thread_subscribe(thread_id, subscribed)`
 - `thread_stop(thread_id)`
 - `thread_archive(thread_id)`
+- `context_compact(instructions?)`
+- `context_new(reason?)`
 
-模型调用省略 `parent_thread_id` 时，默认 parent 是调用方 Thread。因此创建结果
-既可以是 Main 的子 Thread，也可以是另一个 Worker 的子 Thread。工具返回 Input
-Receipt 和 Thread Snapshot，不内嵌同步执行结果。
+`thread_create` 自动使用调用方 Thread 作为 parent。Tools 返回 receipt 与 snapshot，
+不内嵌同步 Worker result。
 
-## 启动与关闭
+## Startup、Shutdown 与 Recovery
 
-### Agent 启动
+### Startup
 
-1. 解析 Agent Address 并取得 Runtime Instance endpoint guard。
-2. 校验新存储格式；把旧 Session 运行时数据明确拒绝为 unsupported，但不修改。
-3. 如果没有 `main_thread_id`，创建 Main Thread 及其初始 Generation。
-4. 构建并启动 Agent Modules。
-5. 启动一个 MCP Manager 和 Observable Manager。
-6. 打开 Main 并完成 Pending Input/Generation Transition recovery。
-7. 把 endpoint 发布为 ready。
-8. 只有 Main recovery 完成后才启用 Observe delivery。
+1. 解析 Agent address，并取得 Runtime endpoint guard。
+2. 确保 active Main directory `threads/0`；不存在时 exactly-once 初始化。
+3. 加载 Agent Modules、MCP Manager 与 Observable Manager。
+4. 加载 Thread-list projection；缺失或过期时从 `thread.json` snapshots 重建。
+5. 打开 Main，校验 Journal tail，加载最后 checkpoint 并 replay suffix。
+6. 恢复 accepted nonterminal Inputs 与 interrupted attempts。
+7. 发布 ready endpoint，然后启用 Observation delivery。
 
-Worker 按需打开；只有存在需要 restart recovery 调和的持久未完成工作时例外。
+Worker 按需打开，除非 durable unfinished work 要求 recovery。新 Runtime 只期待新
+layout，不通过特殊 format marker 检测、拒绝或迁移旧 Session storage。
 
-### 关闭
+### Shutdown
 
-1. 停止新的 transport admission 和 Observe production。
-2. 关闭临时 subscriptions。
-3. 使用 typed shutdown cause 取消或 checkpoint 活跃 Turns。
-4. 等待持久 input 和 journal commit。
-5. 按确定顺序关闭 Thread handles。
-6. 反向关闭 Observable、MCP 和剩余 Agent Modules。
-7. 只删除本 Runtime Instance 的 endpoint record。
+停止新 admission 与 Observation production，关闭 transient subscriber，以 typed
+cause checkpoint 或 cancel active Turns，sync Journal commits，关闭 Thread handles，
+再逆序关闭 Observable、MCP 与其余 Agent Modules。只删除本 Runtime Instance 的
+endpoint record。
 
-## 重启恢复
+### Recovery
 
-- Recovery 扫描 Agent Thread index，并优先打开 Main。
-- 每个打开的 Thread 校验当前 Generation tail，加载最后一个有效 checkpoint，只
-  replay 后缀。
-- 持久 Generation Transition intent 决定丢弃未发布 candidate，还是在旧
-  Generation 已关闭后完成发布。
-- 已接纳但未处理的输入根据 `input_id` 和 journal facts 恢复，永远不依赖 live
-  subscriber。
-- 已开始外部副作用但没有持久 outcome 的操作保持明确 unknown，不自动重试。
-- Fleet restart continuation 以相同 Thread 和先前 Turn facts 为目标，不再选择
+- 有效 `thread.json` projection 只 replay stored offset 之后的 Journal bytes；
+  projection 缺失时，反向查找最近 checkpoint。
+- 没有 Input terminal outcome 的 `input.accepted` 恢复为 pending。
+- 没有 durable outcome 的 started attempt 恢复为 interrupted。外部副作用 outcome
+  unknown 时不自动重试。
+- Fleet restart continuation 使用相同 Thread、Generation 与 Turn facts，不选择
   Active Session。
 
-## 并发与锁顺序
+## 并发与 Lock Order
 
-使用以下全局顺序：
+统一使用：
 
-1. Agent Thread creation/index lock。
-2. Thread lifecycle/write lease。
-3. Generation publication read/write lease。
+1. Agent Thread creation/list-projection lock。
+2. Thread lifecycle lease。
+3. Thread Journal writer lock。
 4. Engine Turn mutex。
-5. Pending Input mutex。
-6. Generation journal/store mutex。
-7. 派生 index projection mutex。
+5. Pending projection mutex。
+6. Derived projection mutex。
 
-只读 list 和 history API 使用不可变 snapshot，向 HTTP 或 SSE 写输出时不保留
-Thread writer lock。
+不存在 Generation directory 或 Generation writer lock。只读 list、history 与
+replay API 使用 immutable snapshot，在写 HTTP、SSE 或 CLI output 时不持有 writer。
 
-## 归档生命周期
+Committed event replay 在 event commit barrier 内捕获已打开的只读 handle 和精确
+Journal EOF，随后释放 barrier，再扫描并投影完整 prefix。Bounded checkpoint
+projection 绝不能作为 durable replay source。
 
-Archive 校验目标是非 Main 的活跃 Worker，并且：
+## Archive、Unarchive 与 Delete Lifecycle
 
-- 没有活跃 Turn；
-- 没有 Generation transition；
-- 没有已接纳 Pending Input；
-- 没有进行中的 journal commit。
+Archive 校验 non-Main Worker 没有 active Turn、transition、Pending Input、active
+result subscription/handoff 或 in-flight commit。随后追加 archive fact，关闭 handle，
+把 `threads/<tid>` 原子移动到 `archive/threads/<tid>`，并更新 projections。
 
-之后提交 Generation close reason `archived`，记录 `archived_at`，关闭 live handle
-并更新 Thread index。Unarchive 清除 `archived_at`，创建新的空 Generation，再
-发布 idle handle。Unarchive 失败时绝不重新打开之前已经关闭的 Generation。
+Unarchive 把同一目录原子移回，校验 tail，追加 unarchive fact，重新发布之前的
+当前 Generation，并把 execution state 初始化为 `idle`。它永远不创建 Generation。
+Archive 使用没有 execution state 的 `retention_state=archived`；unarchive 恢复
+`retention_state=active`。
 
-## Package 所有权变化
+Delete 校验 archived Worker、expected revision 与没有 child reference；archive
+precondition 已经保证活跃 subscription 和 handoff settled。它把目录原子移动到
+private trash，更新 projection，再删除 bytes。Recovery 要么完成 trash deletion，
+要么在 publication 前恢复目录；未来 retention automation 调用同一个 service。
+
+## Package Ownership 变化
 
 | 当前区域 | 新职责 |
 | --- | --- |
-| `internal/session` | 由 `internal/thread` 加 Generation journal/store 代码替换 |
-| `internal/app/session_attachment.go` | Main/Thread 解析和 Thread handle attachment |
-| `internal/app/session_replacement.go` | 删除；Generation transition 替代 Active Session replacement |
-| `internal/app/side_sessions.go` | 由 Agent 级 Thread Manager 适配器和 Subscription tools 替换 |
-| `internal/runtime` | 显式 Thread/Generation scoped Engine，Turn 权威不变 |
-| `internal/mcp` | 一个 Agent 级 Manager；不拥有 Thread 生命周期 |
-| `internal/observable` | source lifecycle 和 state；Observe Router 负责 Main delivery |
-| `internal/statusapi` | 按 Thread/Generation keyed 的 Agent 和 Thread snapshots |
-| `internal/web` 和 `internal/cli` | Thread Manager/Input/Subscription 接口上的 transport |
-| `internal/fleet` | 只管理 Agent 生命周期和代理；Thread id 是不透明 Runtime status |
+| `internal/session` | 由 `internal/thread` Journal、projection、replay、archive 与 deletion services 替换 |
+| `internal/app/session_attachment.go` | Thread resolution 与 handle attachment |
+| `internal/app/session_replacement.go` | 删除；有序 Context transition 替代 Session replacement |
+| `internal/app/side_sessions.go` | 由 Thread Manager adapters 与 subscriber-owned result tools 替换 |
+| `internal/runtime` | 显式 Thread/Generation Engine scope；Turn authority 仍在此处 |
+| `internal/runtime/module` 与 `internal/prompt` | 统一 Prompt Contributor/Assembler contract 与确定 phases |
+| `internal/mcp` | 一个 Agent-scoped Manager；notification adapter 产生 `observable.Observation` |
+| `internal/observable` | Observable sources、标准化 Observation type、delivery state 与 Main routing contract |
+| `internal/statusapi` | 按 Thread/Generation keyed 的 Agent 与 Thread snapshots |
+| `internal/web`、`internal/fleetweb`、`internal/cli` | Thread Manager、Input、replay 与 subscription interfaces 上的 transports |
+| `internal/fleet` | 只负责 Agent lifecycle 与 proxy；Thread id 保持 opaque |
 
-## 错误边界
+## Error Boundaries
 
-- 向不存在/已归档 Thread 输入：typed conflict/not-found。
-- Alias 冲突：显式 conflict，并返回已有 tid。
-- Parent 不存在、已归档、跨 Agent 或成环：在任何文件系统修改前拒绝创建。
-- Pending overflow：拒绝输入，不改变已经 accepted 的记录。
-- Compact summary 失败：旧 Generation 保持打开且权威。
-- Transition publish 失败：通过持久 intent 恢复。
+- 向不存在或 archived Thread 输入：typed not-found/conflict。
+- Reserved/colliding alias、非法 Worker id 或 parent：任何文件系统 mutation 前拒绝。
+- Pending overflow：不写入 `input.accepted`。
+- Compact 失败：不写 boundary commit，旧 Generation 继续 current。
 - Subscriber 断开：不取消 Turn。
-- 修改 archived Thread：拒绝，不隐式 unarchive。
+- Stale mutation revision：返回 conflict，不产生部分 archive/rename/delete。
+- Crash 后外部 Tool outcome unknown：显式 interrupted/unknown，不能静默 retry。
 
 ## 验证要求
 
-- 并发启动下 Main 恰好创建一次。
-- 随机 tid 冲突重试和 alias 唯一性。
-- 嵌套 Worker 创建和环检测。
-- 多 Thread 下每个 MCP server 仍只有一个共享 client。
-- Observe 到达 Main，永不进入 Worker。
-- 多 Thread 独立并发执行，同时每个 Thread 保持单写者。
-- `/new` 和 `/compact` 跨边界保持输入顺序。
-- Compact 失败后旧 Generation 仍活跃。
-- Subscription replay-to-live 无缺口且不会重复 accepted delivery。
-- Restart recovery 覆盖 torn journal 和每个 transition phase。
-- Archive/unarchive 和只读约束。
-- Fleet restart continuation 保留 Thread 和 Turn 身份。
+- 并发 startup 下 Main `"0"` exactly-once 创建。
+- Worker collision retry、reserved alias、nested parent 与 cycle 校验。
+- 多 Thread 共享每 server 一个 MCP client；Observation 只到 Main。
+- 多 Thread 并发独立执行，同时单个 Thread 保持 single-writer。
+- Input acceptance、attempt retry、crash recovery 与 unknown side-effect matrix 确定。
+- New/Compact 保持 Journal 总顺序与各自状态策略。
+- Prompt phases 确定；recitation 准确报告 context pressure。
+- Generic replay-to-live 与 Input watching 无缺口、无重复 terminal delivery。
+- 覆盖 tail corruption、stale projection 与 checkpoint recovery。
+- Archive/unarchive 保留 Generation；delete 与 trash recovery 原子。
+- Fleet restart continuation 保留 Thread 与 Turn identity。

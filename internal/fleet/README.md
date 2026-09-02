@@ -23,10 +23,10 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   workspace YAML and `.env`, preventing cross-agent environment leakage.
 - `Stop` requests instance-bound self-shutdown; it never signals or force-kills
   a recorded PID.
-- `Restart` detects active, pending-drain, or already-failed session work before graceful
+- `Restart` detects active, pending-drain, or already-failed Thread work before graceful
   shutdown, negotiates an identity-bound `runtime_restart` intent, and submits
   one `system_notice` continuation turn only after the replacement confirms
-  the same session and turn: active work needs the typed restart cause;
+  the same Thread and Turn: active work needs the typed restart cause;
   previously failed work must still be errored with the same error kind.
   Completed, user-cancelled, or superseded Turns and a working replacement
   never receive this continuation. Existing history is retained, and prior

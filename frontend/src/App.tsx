@@ -21,11 +21,11 @@ const AgentConfig = lazy(() =>
   }))
 );
 
-const Sessions = lazy(() =>
-  import("@/pages/Sessions").then((module) => ({ default: module.Sessions }))
+const ThreadExplorer = lazy(() =>
+  import("@/pages/ThreadExplorer").then((module) => ({ default: module.ThreadExplorer }))
 );
-const Session = lazy(() =>
-  import("@/pages/Session").then((module) => ({ default: module.Session }))
+const Thread = lazy(() =>
+  import("@/pages/Thread").then((module) => ({ default: module.Thread }))
 );
 const Observables = lazy(() =>
   import("@/pages/Observables").then((module) => ({
@@ -36,9 +36,6 @@ const ObservableDetail = lazy(() =>
   import("@/pages/ObservableDetail").then((module) => ({
     default: module.ObservableDetail,
   }))
-);
-const History = lazy(() =>
-  import("@/pages/History").then((module) => ({ default: module.History }))
 );
 const Runtime = lazy(() =>
   import("@/pages/Runtime").then((module) => ({ default: module.Runtime }))
@@ -84,25 +81,21 @@ const router = createBrowserRouter([
         children: [
           {
             index: true,
+            element: <Navigate to="threads/0" replace />,
+          },
+          {
+            path: "threads",
             element: (
               <RouteSuspense>
-                <Sessions />
+                <ThreadExplorer />
               </RouteSuspense>
             ),
           },
           {
-            path: "sessions/:id",
+            path: "threads/:id",
             element: (
               <RouteSuspense>
-                <Session />
-              </RouteSuspense>
-            ),
-          },
-          {
-            path: "history",
-            element: (
-              <RouteSuspense>
-                <History />
+                <Thread />
               </RouteSuspense>
             ),
           },

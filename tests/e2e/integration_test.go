@@ -22,7 +22,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -209,7 +209,7 @@ func writeLiveProviderConfig(root, source, output, modelRef string) error {
 }
 
 // runLiveTurn drives one real LLM turn with the supplied prompt against the
-// shared builtin tool registry, in a fresh tempdir session.
+// shared builtin tool registry, in a fresh tempdir thread.
 func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	t.Helper()
 	profile, err := cfg.ProviderProfile()
@@ -225,7 +225,7 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{Shell: cfgShellProfile(cfg)})
 
 	bus := events.NewBus()
-	sess, err := session.New(t.TempDir())
+	sess, err := thread.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 		sess,
 	)
 	eng := &runtime.Engine{
-		Provider: provider, Tools: reg, Bus: bus, Session: sess, Prompt: pb,
+		Provider: provider, Tools: reg, Bus: bus, Thread: sess, Prompt: pb,
 	}
 
 	bus.Subscribe("*", func(e events.Event) {

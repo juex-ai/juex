@@ -24,15 +24,14 @@ const stateBarSource = source(
 const agentContextSource = source(
   "../../frontend/src/components/fleet/FleetAgentContext.tsx",
 );
-const sessionSource = source("../../frontend/src/pages/Session.tsx");
-const sessionComposerSource = source(
-  "../../frontend/src/components/session/SessionComposer.tsx",
+const threadSource = source("../../frontend/src/pages/Thread.tsx");
+const threadComposerSource = source(
+  "../../frontend/src/components/thread/ThreadComposer.tsx",
 );
-const sessionControllerSource = source(
-  "../../frontend/src/lib/session-read-controller.ts",
+const threadControllerSource = source(
+  "../../frontend/src/lib/thread-read-controller.ts",
 );
-const sessionsSource = source("../../frontend/src/pages/Sessions.tsx");
-const historySource = source("../../frontend/src/pages/History.tsx");
+const threadExplorerSource = source("../../frontend/src/pages/ThreadExplorer.tsx");
 const fleetSource = source("../../frontend/src/pages/Fleet.tsx");
 const switchSource = source("../../frontend/src/components/ui/switch.tsx");
 const apiSource = source("../../frontend/src/api.ts");
@@ -81,8 +80,8 @@ test("fleet roster snapshots preserve only healthy streamed activity", () => {
 test("router exposes fleet and selected-agent pages", () => {
   for (const route of [
     'path: "agents/:agentId"',
-    'path: "sessions/:id"',
-    'path: "history"',
+    'path: "threads"',
+    'path: "threads/:id"',
     'path: "runtime"',
     'path: "extensions"',
     'path: "observables"',
@@ -93,7 +92,7 @@ test("router exposes fleet and selected-agent pages", () => {
   ]) {
     assert.match(appSource, new RegExp(route.replace(/[/:]/g, "\\$&")));
   }
-  assert.doesNotMatch(appSource, /history\/sessions\/:id/);
+  assert.doesNotMatch(appSource, /path: "history"|history\/threads\/:id/);
   assert.match(appSource, /path: "runtime"[\s\S]*element:[\s\S]*<RuntimeLayout \/>[\s\S]*children:/);
   assert.doesNotMatch(appSource, /path: "agents\/:agentId"[\s\S]*path: "logs"[\s\S]*path: "runtime"/);
 });
@@ -248,87 +247,76 @@ test("stage remounts primary pages through tabs and gates offline composers", ()
     "the selected-agent retry control must keep start semantics for failed runtimes",
   );
   assert.match(stateBarSource, /data-testid="agent-runtime-state-bar"/);
-  assert.match(sessionComposerSource, /<AgentRuntimeStateBar \/>/);
-  assert.match(sessionsSource, /<AgentRuntimeStateBar \/>/);
-  assert.match(historySource, /<AgentRuntimeStateBar \/>/);
+  assert.match(threadComposerSource, /<AgentRuntimeStateBar \/>/);
+  assert.match(threadExplorerSource, /<AgentRuntimeStateBar \/>/);
   assert.match(
-    historySource,
+    threadExplorerSource,
     /const mutationsEnabled =\s+agentsLoaded && agent\?\.runtime_health === "healthy"/,
-    "history mutations require a loaded healthy agent",
+    "Thread mutations require a loaded healthy agent",
   );
   assert.match(
-    historySource,
+    threadExplorerSource,
     /disabled=\{creating \|\| !mutationsEnabled\}/,
-    "offline agents must not create sessions from history",
+    "offline agents must not create Workers",
   );
   assert.match(
-    historySource,
-    /disabled=\{deleting \|\| !mutationsEnabled\}/,
-    "offline agents must not delete sessions from history",
+    threadExplorerSource,
+    /disabled=\{busy \|\| !mutationsEnabled\}/,
+    "offline agents must not mutate Worker rows",
   );
   assert.match(
-    historySource,
-    /!agentsLoaded\s+\? "Loading agent\.\.\."/,
-    "history actions must describe the agent loading state accurately",
-  );
-  assert.match(
-    historySource,
-    /<HistoryRow[\s\S]*agentsLoaded=\{agentsLoaded\}/,
-    "history rows must receive the already-resolved fleet loading state",
-  );
-  assert.match(
-    sessionSource,
-    /controller\.configureLiveStatus\(\{[\s\S]*load: getSessionStatus[\s\S]*statusStore\.setStatus[\s\S]*controller\.subscribeLiveEvents\(id/,
+    threadSource,
+    /controller\.configureLiveStatus\(\{[\s\S]*load: getThreadStatus[\s\S]*statusStore\.setStatus[\s\S]*controller\.subscribeLiveEvents\(id/,
     "the live stream controller must calibrate canonical status without gating stream creation",
   );
   assert.match(
-    sessionComposerSource,
+    threadComposerSource,
     /composerSubmitAction\(\{[\s\S]*status: runtimeStatus/,
     "the composer must derive admission state from the shared runtime status",
   );
   assert.match(
-    sessionSource,
-    /useAgentSessionStatus\(agent\?\.id, id\)/,
-    "the session must select its canonical per-session runtime snapshot",
+    threadSource,
+    /useAgentThreadStatus\(agent\?\.id, id\)/,
+    "the thread must select its canonical per-thread runtime snapshot",
   );
   assert.match(
     agentContextSource,
-    /statusStore\.status\(agentID, sessionID\)/,
-    "the canonical session selector must read the shared status store",
+    /statusStore\.status\(agentID, threadID\)/,
+    "the canonical thread selector must read the shared status store",
   );
   assert.match(
     agentContextSource,
     /useSyncExternalStore\(/,
-    "the canonical session selector must subscribe to the shared status store",
+    "the canonical thread selector must subscribe to the shared status store",
   );
   assert.doesNotMatch(
-    sessionSource,
-    /void getSessionStatus\(id\)[\s\S]*\.then\([\s\S]*controller\.subscribeLiveEvents\(id/,
+    threadSource,
+    /void getThreadStatus\(id\)[\s\S]*\.then\([\s\S]*controller\.subscribeLiveEvents\(id/,
     "a transient status request failure must not prevent the projected transcript stream from opening",
   );
   assert.match(
-    sessionSource,
-    /captureSessionLiveSubscription\(current, data\)[\s\S]*controller\.subscribeLiveEvents\(id,[\s\S]*since: sessionLiveSubscription\.cursor/,
-    "the transcript stream must capture the transcript response cursor once per session route",
+    threadSource,
+    /captureThreadLiveSubscription\(current, data\)[\s\S]*controller\.subscribeLiveEvents\(id,[\s\S]*since: threadLiveSubscription\.cursor/,
+    "the transcript stream must capture the transcript response cursor once per thread route",
   );
   assert.match(
-    sessionComposerSource,
+    threadComposerSource,
     /submitAction === "loading"/,
     "status-dependent submission must remain disabled before the snapshot loads",
   );
   assert.match(
-    sessionControllerSource,
+    threadControllerSource,
     /onOpen: \(\) => \{[\s\S]*void refreshStatus\(\)/,
     "stream reconnects must trigger controller-owned status calibration",
   );
   assert.match(
-    sessionSource,
+    threadSource,
     /!agentsLoaded \|\| agent\?\.runtime_health === "healthy"/,
     "a missing selected agent must not be treated as a healthy runtime",
   );
   assert.match(
-    sessionsSource,
-    /agentsLoaded && agent && agent\.runtime_health !== "healthy"/,
+    threadExplorerSource,
+    /agentsLoaded && agent && !mutationsEnabled/,
     "the stopped state bar requires a real selected agent",
   );
   assert.match(

@@ -3,592 +3,441 @@
 > [English](2026-08-31-thread-storage-serialization-design.md) | 中文
 
 日期：2026-08-31
-状态：提案
+更新：2026-09-01
+状态：已确认，等待实现
 依赖：[Thread 领域模型](2026-08-31-thread-domain-model-design.zh.md)、
 [核心生命周期与接口](2026-08-31-thread-lifecycle-and-interfaces-design.zh.md)
 
 ## 目标
 
-- 在文件系统中明确展示 Thread 和 Context Generation 的所有权。
-- 让每次 `/new` 和 `/compact` 产生的 Generation 都能独立查看。
-- 显式保存创建和结束时间，不再把时间编码进 id。
-- 从持久 tail 重建 live state，而不是每次扫描全部历史。
-- 列出大量 Threads 时不打开每份 transcript。
-- 高效向前翻页，并跨 Generation 加载消息。
-- 即使消费输入的 Generation 或 Turn 尚未确定，也要持久保存 Accepted Input。
-- 明确 torn-tail repair、restart recovery 和外部修改检测。
-- 删除 Session preview/summary cache 和所有旧格式兼容。
+- 让一个 append-only Thread Journal 成为 Inputs、attempts、Turns、Messages、
+  System activities、Context Generations、state、Goal、Notes 与 usage 的持久权威。
+- 不依赖第二份 Input Journal，也能恢复 Pending work 和每个 Accepted Input outcome。
+- 历史增长后，Thread list、cold startup、当前 Context 构建和最新 transcript 分页
+  仍然有界。
+- Thread Scratchpad 文件跨越 New、Compact、archive 与 unarchive。
+- 分离模型工作文件、Runtime spill payload 与 durable media。
+- 使用统一精确 timestamp contract 和少量可重建 projections。
 
 ## 非目标
 
-- 读取或迁移旧 `sessions/`、`history.json`、Session metadata 或旧
-  conversation/event/pending journals。
-- 引入数据库。
-- 在 Thread、Turn、Input 或 Message id 中编码时间戳。
-- 把派生 index 当成权威状态。
-- 把临时 streaming delta 保存成持久历史。
+- 读取、迁移、检测或重写旧 Session state。
+- 引入数据库、distributed writer、跨 Agent transaction 或 full-text index。
+- 把临时 streaming token delta 保存成 durable conversation history。
+- 为任意外部 Tool side effect 保证 exactly-once execution。
 
-## 规范目录结构
+## 规范 Agent 目录结构
 
 ```text
-<AgentStateDir>/
-├── agent.json
-├── state-format.json
+AgentStateDir/
+├── threads.index.json                 # 可重建 Agent Thread-list projection
 ├── threads/
-│   ├── index.json
-│   └── <thread-id>/
-│       ├── thread.json
-│       ├── state.json
-│       ├── inputs.jsonl
-│       ├── inputs.index.json
-│       ├── transition.json                 # 只在转换期间存在
-│       └── generations/
-│           ├── g000001/
-│           │   ├── generation.json
-│           │   ├── bootstrap.json          # 只有 compact generation 存在
-│           │   ├── journal.jsonl
-│           │   ├── index.json
-│           │   ├── state/
-│           │   │   ├── goal.json
-│           │   │   └── notes.md
-│           │   └── scratchpad/
-│           └── g000002/
-│               └── ...
-├── artifacts/
-│   └── threads/<thread-id>/generations/<generation-id>/...
-├── extensions/
-├── observables/
-└── logs/
+│   ├── 0/                             # active Main
+│   │   ├── thread.json                # 当前可重建 Thread projection
+│   │   ├── journal.jsonl              # 唯一持久 Thread 权威
+│   │   ├── scratchpad/                # 模型拥有的 Thread working files
+│   │   └── spool/                     # Runtime 管理的 oversized payloads
+│   └── <worker-tid>/
+│       └── ...相同文件...
+├── archive/
+│   └── threads/
+│       └── <worker-tid>/               # 完整只读 archived directory
+├── .trash/
+│   └── threads/                        # 私有、可恢复 delete staging
+├── media/                              # 持久 admitted user/Observation media
+├── extensions/                         # 保持现有 Agent-owned Extension data
+└── logs/                               # 保持现有 runtime logs
 ```
 
-归档不移动 Thread 目录。稳定路径和 parent 引用继续有效；`archived_at` 和派生
-Thread index 决定展示位置。
+不存在 Generation directory、`inputs.jsonl`、`state.json`、`transition.json`、
+per-Generation metadata/bootstrap/index 或 format marker。Generation boundary 与
+compact bootstrap 都是 Journal fact。
 
-## 格式标记
+只有 Juex 写 `journal.jsonl`、`thread.json` 与 `threads.index.json`。Scratchpad
+刻意允许模型写入，Spool 与 media 使用不同 retention policy。
 
-`state-format.json` 防止意外双读：
+## 时间与标识格式
 
-```json
-{
-  "format": "juex-thread-state",
-  "version": 1,
-  "created_at": "2026-08-31T12:34:56.789Z"
-}
-```
-
-如果 Agent 目录包含旧 Session runtime state，但没有该 marker，启动返回 typed
-unsupported-state error，并且不修改任何一种格式。配置和凭据不在此边界内，
-operator 删除旧 runtime state 后仍然可用。
-
-## 时间格式
-
-所有持久 wall-clock timestamp 都使用 UTC RFC 3339，并固定三位小数：
+所有持久化绝对时间统一使用精确到毫秒的 UTC RFC 3339：
 
 ```text
-2006-01-02T15:04:05.000Z
+2026-09-01T08:12:34.567Z
 ```
 
-规则：
+Decode 只接受该规范格式，encode 始终输出该格式。Duration、timeout、monotonic
+measurement 与 Schedule wall-clock rule 不是 absolute instant：duration 保持数值，
+Schedule 保留 named timezone 与 local-time intent。
 
-- 字段统一为 `created_at`、`updated_at`、`closed_at`、`archived_at` 和
-  `last_activity_at`；不再使用 `_ms`、本地时区或从 id 推导的时间。
-- Writer 在序列化前截断到毫秒。
-- 尚未结束时省略 terminal time 或写 `null`，永远不用 zero timestamp。
-- Journal sequence 才是顺序权威，wall-clock time 不是。
-- 进程内可以使用 monotonic clock，但绝不持久化。
+Identifier 都是字符串：
 
-该格式人类可读、Go/JavaScript 一致、字典序可排序，并且对产品历史足够精确。
-同毫秒内的操作由 sequence 排序。
-
-## 标识格式
-
-| 身份 | 格式 | 作用域 |
+| Identity | 格式 | Scope |
 | --- | --- | --- |
-| Thread | 六位小写 Crockford Base32，例如 `4m7k2p` | Agent |
-| Generation | 补零序号，例如 `g000003` | Thread |
-| Input | `in_` 加十位小写 Crockford Base32 | Thread |
-| Turn | `turn_` 加十位小写 Crockford Base32 | Generation |
-| Message | `msg_` 加十位小写 Crockford Base32 | Generation |
-| Batch | `batch_` 加十位小写 Crockford Base32 | Journal |
-| Transition | `tr_` 加十位小写 Crockford Base32 | Thread |
-| Event cursor | `e_` 加 16 位十进制 event sequence | Thread Event Stream |
+| Main Thread | `0` | Agent |
+| Worker Thread | 六位小写 Crockford Base32 | Agent |
+| Generation | `g` 加六位十进制数字 | Thread |
+| Input | 随机 `in_...` | Agent Runtime |
+| Input attempt | 随机 `ia_...` | Input |
+| Turn | 随机 `turn_...` | Agent Runtime |
+| Message | 稳定 `msg_...` | Agent Runtime |
 
-Id 是不透明值，不带时间。随机 id 在提交前与对应持久 index 做碰撞检查。完整引用
-始终包含其容器作用域；API Events 显式携带 Thread 和 Generation id。
+看起来像数字的 id 也绝不能 decode 为 number。Main alias `main` 与 id `0` 都是
+保留值。
 
-## Agent Metadata
+## `thread.json` Projection
 
-`agent.json` 增加一个字段：
-
-```json
-{
-  "id": "abc123",
-  "workspace": "/absolute/workspace",
-  "main_thread_id": "4m7k2p"
-}
-```
-
-初始化 Agent 时先准备 Main Thread，再原子发布 `main_thread_id`。非空值必须指向
-格式正确、未归档且没有 parent 的根 Thread。
-
-## Thread Metadata
-
-`thread.json` 是很小的权威身份元数据，只在 rename 或 archive/unarchive 生命周期中
-变化：
+`thread.json` 是原子替换的当前 projection，不是第二权威，用于加速 list、Prompt
+assembly 与 suffix recovery：
 
 ```json
 {
-  "format_version": 1,
-  "thread_id": "4m7k2p",
-  "alias": "main",
-  "parent_thread_id": null,
-  "created_at": "2026-08-31T12:34:56.789Z",
-  "archived_at": null
-}
-```
-
-`alias` 始终非空。Worker 创建请求未提供 alias 时，持久化 `worker_#<tid>`；读取方不
-另外合成只用于展示的名称。
-
-它刻意不包含：
-
-- Main/Worker kind。
-- Creator 和结果目标。
-- 执行状态。
-- 当前 Generation。
-- Preview、title 或 summary。
-- Usage 和 pending count。
-
-Main 从 `agent.json` 推导；可变执行值来自派生 `state.json`。
-
-## Thread State 投影
-
-`state.json` 在持久 commit 后原子替换，为 Thread list/detail 读取优化：
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
+  "v": 1,
+  "thread_id": "4m8k2p",
+  "alias": "reviewer",
+  "parent_thread_id": "0",
+  "created_at": "2026-09-01T08:00:00.000Z",
+  "retention_state": "active",
+  "execution_state": "working",
   "revision": 42,
-  "state": "working",
-  "current_generation_id": "g000003",
-  "generation_count": 3,
-  "turn_count": 18,
-  "pending_input_count": 2,
-  "current_context_tokens": 42137,
+  "current_generation": {
+    "generation_id": "g000003",
+    "ordinal": 3,
+    "start_seq": 188,
+    "start_offset": 91204
+  },
+  "counts": {
+    "generation_count": 3,
+    "turn_count": 18,
+    "pending_input_count": 2
+  },
+  "goal": null,
+  "notes": "",
   "token_usage": {
     "input_tokens": 120000,
+    "cached_input_tokens": 76000,
     "output_tokens": 18000
   },
-  "last_activity_at": "2026-08-31T13:00:00.123Z",
-  "input_cursor": 57,
-  "event_cursor": "e_0000000000000187"
-}
-```
-
-该文件是投影，永远不是 Accepted Input、Messages、Turn terminal state 或
-Generation publication 的权威。缺失、格式错误或领先于 Journal 时，系统会重建
-并原子替换。
-
-归档 Thread 没有打开的 Generation，因此 `current_generation_id` 为 null。为了列表
-和详情检查，计数与 `current_context_tokens` 保留最近关闭 Generation 的最终投影。
-
-`failed` 表示当前 Generation 最新 terminal Turn 失败，并且之后没有 active 或
-completed Turn。Cancellation 默认回到 `idle`，除非最近仍有 typed failure fact。
-
-`current_context_tokens` 是当前 Generation 中最近一次校准后的 provider-visible
-context 估算值：包括 Agent prompt 与 Tools、可能存在的 compact bootstrap，以及当前
-Generation 的 active messages。每次准备 provider context 或发布 Generation 时刷新。
-它不同于累计 `token_usage`；客户端以近似值展示。
-
-## Thread Input Journal
-
-Accepted Input 在消费它的 Generation 或 Turn 确定前就存在，因此保存在 Thread
-级 `inputs.jsonl`，而不是当前 Generation 目录。
-
-每行是一个 typed transition：
-
-```json
-{
-  "v": 1,
-  "seq": 57,
-  "event_seq": 187,
-  "at": "2026-08-31T13:00:00.123Z",
-  "input_id": "in_0m7k2p9d4x",
-  "type": "input.accepted",
-  "source": "direct",
-  "source_id": "cli:request-id",
-  "data": {
-    "message": {"role": "user", "blocks": [{"type": "text", "text": "continue"}]}
-  }
-}
-```
-
-同一 `input_id` 后续记录可以是：
-
-- `input.queued`
-- 带 `generation_id` 和 `turn_id` 的 `input.assigned`
-- 带持久 Message id 的 `input.processed`
-- `input.expired`
-- `input.rejected`
-- `input.cancelled`
-
-`input.accepted` 是 `juex send` 返回时的 durability boundary。直到某个 terminal
-input transition 持久化前，该记录都保持 pending。Generation recovery 使用稳定 id
-对账 `input.assigned`、`input.processed` 和 Generation journal facts。
-
-`inputs.index.json` 包含最后 Input sequence、首尾 Thread event sequence、稀疏
-event offset、journal byte length、最后 checkpoint offset 和当前 pending set。它是
-派生并且可替换的。
-
-## Generation Metadata
-
-`generation.json` 是权威边界元数据：
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
-  "generation_id": "g000003",
-  "ordinal": 3,
-  "created_at": "2026-08-31T13:00:01.000Z",
-  "closed_at": null,
-  "close_reason": null,
-  "origin": {
-    "kind": "compact",
-    "previous_generation_id": "g000002"
-  }
-}
-```
-
-允许的 origin kind 是 `initial`、`new`、`compact` 和 `unarchive`。允许的 close
-reason 是 `new`、`compact` 和 `archived`。打开的 Generation 没有 `closed_at` 和
-`close_reason`。
-
-每个活跃 Thread 恰好有一个打开的 Generation。归档 Thread 没有打开的
-Generation。
-
-## Compact Bootstrap
-
-只有 compact-origin Generation 有 `bootstrap.json`：
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
-  "generation_id": "g000003",
-  "source_generation_id": "g000002",
-  "created_at": "2026-08-31T13:00:00.900Z",
-  "message": {
-    "id": "msg_31v8h2q9km",
-    "role": "assistant",
-    "kind": "generation_bootstrap",
-    "blocks": [{"type": "text", "text": "...compact context..."}]
+  "context_usage": {
+    "context_window": 128000,
+    "current_tokens": 42137,
+    "percentage": 32.9195,
+    "calibrated_at": "2026-09-01T08:12:34.567Z"
   },
-  "provider": {
-    "profile": "openai/codex",
-    "model": "gpt-5",
-    "input_tokens": 32000,
-    "output_tokens": 1800
+  "last_activity_at": "2026-09-01T08:12:34.567Z",
+  "journal": {
+    "projected_seq": 194,
+    "projected_offset": 95640,
+    "last_checkpoint_seq": 192,
+    "last_checkpoint_offset": 94421
   }
 }
 ```
 
-Thread、Generation 和 list index 都没有通用 `summary` 字段。Compact bootstrap
-是显式领域内容，只在构建 Provider Context 时加载，也可以在 Generation 边界按需
-展示。
+Goal 与 Notes 放在 projection 中只为加速 Prompt；Journal facts 才是权威。
+Scratchpad content 永不嵌入。Projection 领先 Journal 时非法。`thread.json` 是派生的
+list/inspection accelerator；cold writer open 从最近 Journal checkpoint 恢复
+bounded Runtime state，然后原子替换这个文件。
 
-`/new` 和 unarchive Generation 没有 bootstrap 文件。
+`current_tokens` 是 provider-visible context 的最近估算，不是累计 usage。
+Cached input token 仍计入 usage，不能减少 context occupancy。
 
-## Generation Journal
+`retention_state` 是 active/archive placement 的权威；`archived_at` 只是时间
+metadata。Active projection 必须带一个 `idle`、`working` 或 `failed` 的
+`execution_state`；Archived projection 省略 `execution_state`。Unarchive 保留
+Journal 与 Generation，但把执行态初始化为 `idle`。永久删除会移除 projection 与
+index entry，不会继续持久化一个 `deleted` Thread。
 
-`journal.jsonl` 是一个 Generation 的规范有序历史，替代分离的 conversation 和
-event 权威。每行使用统一 envelope：
+## Agent Thread-List Projection
+
+`threads.index.json` 是唯一 Agent-level list accelerator。正常 CLI、Web 或 Fleet
+list 只读一个文件，不打开每个 Journal：
 
 ```json
 {
   "v": 1,
-  "seq": 42,
-  "event_seq": 188,
-  "at": "2026-08-31T13:00:02.345Z",
-  "batch_id": "batch_0q9m4k2p7x",
-  "batch_index": 1,
-  "batch_size": 2,
-  "type": "message.appended",
-  "thread_id": "4m7k2p",
-  "generation_id": "g000003",
-  "turn_id": "turn_7m2k9p4d0x",
-  "input_id": "in_0m7k2p9d4x",
-  "data": {
-    "message": {"id": "msg_31v8h2q9km", "role": "user", "blocks": []}
-  }
-}
-```
-
-Journal 保存以下持久 facts：
-
-- Generation started/closed。
-- Input admitted 和 processed reference。
-- Canonical user、assistant 和 Tool Result messages。
-- Turn admitted/started/completed/errored/cancelled。
-- Provider request epoch 和 terminal Provider outcome。
-- Tool declaration、start、resolved input 和 terminal outcome。
-- Goal 和 Notes updates。
-- Context usage 和累计 token usage。
-- Generation-owned subscription changes。
-- 定期 projection checkpoints。
-
-临时 assistant/thinking/tool-output delta 只做 live stream，不保存。最终 canonical
-message 和 terminal Tool outcome 仍然持久。
-
-## Thread Event Sequence 与 Replay
-
-Input journal 和 Generation journal 有各自的所有权边界，但客户端需要跨越两者的
-统一 replay 顺序。因此，每条对外可观察的持久 record 都在 Thread writer lock 下
-取得一个不依赖 Agent process incarnation 的 Thread 级 `event_seq`。
-
-- Cursor 格式为 `e_%016d`，例如 `e_0000000000000188`。
-- 同一 Thread 中，已提交 sequence 大于所有更早提交的 sequence。分配后写入失败或
-  crash 可以留下 gap。
-- `/new`、`/compact`、restart 和 unarchive 都不重置 sequence。
-- `input.accepted` 取得 event sequence，因此在分配 Generation 或 Turn 之前，持久输入
-  回执就能返回 cursor。
-- 持久 Generation fact 和最终 canonical message 也取得 event sequence。
-- 临时 streaming delta 不推进 durable cursor。重连时，用最终 canonical fact 修复
-  丢失的临时展示。
-
-Input 与 Generation index 保存各自首尾 event sequence 和稀疏 offset。Replay 只选择
-range 与请求 cursor 相交的 journal，再按 `event_seq` 做稳定 merge；它不会扫描无关
-message body。恢复后的下一个 sequence 是 `inputs.jsonl` 和最新 Generation journal
-持久末端最大值加一。派生 index 过期时，只修复这些末端，再接纳 writer。
-
-Sequence 是顺序事实，不是 Event payload id。多个 subscriber 可以重放同一 cursor，
-按 Input 或 Turn 筛选也不会改变底层 Thread 顺序。
-
-## Append 与 Batch Durability
-
-一个 Generation 只有一个 append lock 和一个 writer。一次 commit：
-
-1. 在内存中校验并序列化整个 logical batch。
-2. 分配连续 sequence 和一个 `batch_id`。
-3. 记录起始 file offset。
-4. 通过一个完整 writer loop append 全部 bytes。
-5. 发布 live Events 或更新 projection 前先 sync 文件。
-6. Write/sync 失败时 truncate 回起始 offset，并 sync 修复后的文件后再返回错误。
-
-Recovery 只接受 `batch_index`、`batch_size` 连续且完整的最终 batch。Torn final line
-或不完整 final batch 会被截断。Final batch 之前出现 sequence gap、重复 sequence、
-scope identity 错误或 stable Event schema 错误都属于 corruption，必须明确失败，
-不能编造历史。
-
-## Checkpoint 与 Tail 重建
-
-启动不能每次扫描完整 journal。以下时机 append `projection.checkpoint`：
-
-- 每个 terminal Turn 之后；
-- Generation close 时；
-- 连续 256 条持久 record 都没有其他 checkpoint 时。
-
-Checkpoint 只包含派生重建状态：
-
-```json
-{
-  "turn_count": 18,
-  "message_count": 73,
-  "pending_input_ids": ["in_..."],
-  "token_usage": {"input_tokens": 120000, "output_tokens": 18000},
-  "current_context_tokens": 42137,
-  "last_terminal_turn": {"turn_id": "turn_...", "state": "completed"},
-  "goal_revision": 4,
-  "notes_revision": 9
-}
-```
-
-`index.json` 保存最后校验的 journal length、last sequence、checkpoint sequence 和
-byte offset，以及 sparse message-page offsets。正常启动直接 seek checkpoint，只
-replay 后缀。
-
-`index.json` 缺失或过期时，Recovery：
-
-1. 从 EOF 找到最后换行并截断 torn suffix。
-2. 反向扫描 JSONL 到最近有效 checkpoint。
-3. 从 checkpoint 向前 replay。
-4. 原子重建 Generation state files 和 indexes。
-
-整个 repair 过程中 journal 始终是权威。
-
-## Generation Index 与消息分页
-
-`generations/<gid>/index.json` 是派生 read model：
-
-```json
-{
-  "format_version": 1,
-  "thread_id": "4m7k2p",
-  "generation_id": "g000003",
-  "revision": 42,
-  "journal_bytes": 91827,
-  "last_seq": 142,
-  "checkpoint_seq": 128,
-  "checkpoint_offset": 80122,
-  "first_event_seq": 120,
-  "last_event_seq": 188,
-  "turn_count": 6,
-  "message_count": 31,
-  "token_usage": {"input_tokens": 42000, "output_tokens": 7000},
-  "current_context_tokens": 42137,
-  "last_activity_at": "2026-08-31T13:00:02.345Z",
-  "message_pages": [
-    {"first_seq": 1, "last_seq": 64, "offset": 0},
-    {"first_seq": 65, "last_seq": 142, "offset": 40120}
-  ]
-}
-```
-
-每 64 条可展示 message 记录一个 sparse page entry。Web/API history reader 首先
-seek 最后一页并返回不透明 cursor。`Load older messages` 先在当前 Generation 内
-向前移动，耗尽后进入前一 Generation 的最后一页。它不依赖生成 title 或 summary
-preview。
-
-## Goal、Notes 与 Scratchpad
-
-- Goal 和 Notes update 是持久 journal facts。
-- `state/goal.json` 和 `state/notes.md` 是原子替换的当前投影，用于快速组装 prompt
-  和查看。
-- 其中任何一个缺失，或 revision 与最后 checkpoint 不一致时，Replay 从 journal
-  重建。
-- Scratchpad 是可变 Generation-local working material，不自动进入 Provider Context。
-- Generation close 后，其 Goal、Notes 和 Scratchpad 都成为只读历史。
-- 新 Generation 以空 Goal、Notes 和 Scratchpad 开始。Compact 除了显式 bootstrap
-  summary 外，不复制这些状态。
-
-## Thread List Index
-
-`threads/index.json` 是 CLI、Web 和 Fleet status enrichment 使用的可替换 Agent 级
-投影：
-
-```json
-{
-  "format_version": 1,
   "revision": 100,
-  "updated_at": "2026-08-31T13:00:02.400Z",
+  "updated_at": "2026-09-01T08:12:34.567Z",
   "threads": [
     {
-      "thread_id": "4m7k2p",
+      "thread_id": "0",
       "alias": "main",
-      "parent_thread_id": null,
-      "main": true,
-      "archived": false,
-      "created_at": "2026-08-31T12:34:56.789Z",
-      "last_activity_at": "2026-08-31T13:00:02.345Z",
-      "state": "working",
-      "turn_count": 18,
-      "pending_input_count": 2,
-      "generation_count": 3,
-      "current_context_tokens": 42137,
-      "token_usage": {"input_tokens": 120000, "output_tokens": 18000},
-      "state_revision": 42
+      "created_at": "2026-08-20T01:00:00.000Z",
+      "last_activity_at": "2026-09-01T08:12:34.567Z",
+      "retention_state": "active",
+      "execution_state": "idle",
+      "pending_input_count": 1,
+      "turn_count": 182,
+      "generation_count": 7,
+      "current_generation_id": "g000007",
+      "current_context_tokens": 43200,
+      "token_usage": {
+        "input_tokens": 900000,
+        "cached_input_tokens": 510000,
+        "output_tokens": 82000
+      },
+      "thread_revision": 77
     }
   ]
 }
 ```
 
-它只包含 Thread list 所需字段，不包含 preview、title、last message 或 summary。
-正常 list 请求只读一个文件。缺失或某个 entry 的 `state_revision` 与对应
-`state.json` 不一致时，repair 只扫描每个 Thread 的 `thread.json` 和 `state.json`，
-不扫描 Generation journals。
+它不包含 title、preview、last-message text 或通用 summary。正常 list 在 index
+有效时不打开任何 Thread Journal。index 缺失或非法时，recovery replay 所有 active
+与 archived 权威 Journal，重新生成每个 `thread.json`，再原子替换 index。这个异常
+重建路径不能信任缺失、损坏或 stale 的 Thread projection。Alias resolution 与
+revision-checked mutation 在 Agent lock 下使用同一最终 projection snapshot。
 
-排序是 presentation rule：Main 优先，然后按 `last_activity_at` 排列活跃的
-`working`、`failed` 和 `idle` Threads；Archived Threads 单独按 `archived_at`
-倒序返回。
+## Thread Journal Commit 格式
 
-## Generation Transition Transaction
-
-Thread 根目录 `transition.json` 是临时持久 intent：
+`journal.jsonl` 按时间正序保存：最旧 commit 在前，最新 commit 在 EOF。每一行是
+一个有界 logical commit，不需要 batch id 或 batch-index protocol：
 
 ```json
 {
-  "format_version": 1,
-  "transition_id": "tr_0m7k2p9d4x",
-  "thread_id": "4m7k2p",
-  "from_generation_id": "g000002",
-  "to_generation_id": "g000003",
-  "kind": "compact",
-  "phase": "candidate_ready",
-  "started_at": "2026-08-31T13:00:00.500Z"
+  "v": 1,
+  "seq": 194,
+  "at": "2026-09-01T08:12:34.567Z",
+  "facts": [
+    {
+      "type": "input.attempt.started",
+      "input_id": "in_0m7k2p9d4x",
+      "attempt_id": "ia_4k2p7x0m9d",
+      "generation_id": "g000003",
+      "turn_id": "turn_7m2k9p4d0x"
+    },
+    {
+      "type": "message.appended",
+      "generation_id": "g000003",
+      "turn_id": "turn_7m2k9p4d0x",
+      "input_id": "in_0m7k2p9d4x",
+      "message": {
+        "id": "msg_31v8h2q9km",
+        "role": "user",
+        "blocks": [{"type": "text", "text": "continue"}]
+      }
+    }
+  ]
 }
 ```
 
-Commit protocol：
+- `seq` 是严格递增的 Thread commit sequence 与 durable replay order。数组顺序是
+  commit 内 fact order。
+- 一个 commit 有 size 与 fact-count 上限；oversized payload 在 encode 前转换成
+  Spool 或 media reference。
+- Stable fact schema 拒绝未知 required field，以及非法 Thread、Generation、Input、
+  Turn 或 Message relationship。
+- 临时 Assistant token、Thinking 与 Tool-output delta 只存在于 live stream；最终
+  canonical Message 与 terminal Tool outcome 必须持久化。
 
-1. 需要时先生成 compact bootstrap。失败时不改变任何状态。
-2. 创建并 sync `generations/.g000003.tmp`，其中包含 metadata、可选 bootstrap、
-   empty journal 和 initial checkpoint。
-3. 原子发布 phase 为 `candidate_ready` 的 `transition.json`。
-4. 向旧 journal append 并 sync `generation.closed`；原子设置旧
-   `generation.json.closed_at` 和 close reason。
-5. 把 intent 推进到 `old_closed`。
-6. 把 candidate directory rename 为 `g000003`，并 sync `generations/`。
-7. 原子替换 Thread `state.json`，指向新的 current generation。
-8. 把 intent 推进到 `published`，更新 indexes，再删除 intent。
+## 持久 Fact Catalog
 
-Recovery rules：
+Journal 至少包含：
 
-- `old_closed` 之前，丢弃 candidate，保留旧 Generation。
-- `old_closed` 及之后，校验完整 candidate 并完成发布；绝不重新打开已关闭旧
-  Generation。
-- 已发布状态仍残留 intent 时，完成 projection repair 并删除 intent。
+- `thread.created`、`thread.renamed`、`thread.archived` 与
+  `thread.unarchived`。
+- `input.accepted`、attempt lifecycle、retry/requeue 与 Input terminal facts。
+- `turn.started`、`turn.completed`、`turn.failed`、`turn.cancelled` 与
+  `thread.settled`。
+- Canonical User、Assistant、Tool Use、Tool Result、policy 与 system-notice
+  Messages。
+- Provider request epoch、model transition、terminal Provider outcome 与 usage
+  calibration。
+- Tool declaration、start、resolved input、terminal outcome 与显式 unknown outcome。
+- `context.renewed` 与 `context.compacted` Generation boundaries。
+- Goal 与 Notes updates。
+- Projection checkpoints。
 
-## Archive 与 Unarchive 存储
+System activity 会出现在 presentation history，但不是 Message fact。
+`context.compacted` 以结构化数据携带 compact summary；Prompt projection 提取该
+summary，`context.renewed` 则没有 Provider projection。
 
-Archive 使用相同 close protocol，close reason 为 `archived`，然后原子设置
-`thread.json.archived_at`。它不移动或删除文件。Unarchive 准备 origin 为
-`unarchive` 的新 Generation，清除 `archived_at`，并在一次 Thread transaction
-中发布新 Generation。
+## Journal 中的 Input Lifecycle
 
-Main archive 在修改前直接拒绝。
-
-## Artifact 路径
-
-Generation 拥有的 media、projected user input、Tool Result 和其他 durable bytes
-使用：
+Input durability 不要求独立 `inputs.jsonl`。同一个有序 Journal 记录完整生命周期：
 
 ```text
-artifacts/threads/<tid>/generations/<gid>/<category>/...
+input.accepted
+  └── input.attempt.started (attempt_id, generation_id, turn_id)
+        ├── input.attempt.succeeded
+        ├── input.attempt.failed
+        ├── input.attempt.cancelled
+        └── input.attempt.interrupted
+  ├── input.requeued -> another attempt
+  ├── input.completed
+  ├── input.dead_lettered
+  ├── input.cancelled
+  └── input.expired
 ```
 
-没有 Thread/Generation 所有权的 Agent Artifact 仍直接位于 Agent Artifact root。
-Artifact reference 保存 `thread_id` 和 `generation_id` metadata，并对目标 scope
-校验。关闭或归档 Generation 不删除 Artifacts。
+- `input.accepted` 是客户端 acknowledgement durability boundary。
+- 一个 Input 可以有多个 attempts，但只有一个 Input terminal outcome。
+- Assignment 前 acceptance 合法；attempt started 前没有 Generation/Turn fields。
+- Recovery 投影所有没有 terminal outcome 的 Accepted Input；没有 outcome 的
+  started attempt 变成 interrupted。
+- Tool side effect 已在外部发生、但本地没有 durable outcome 时，状态是 outcome-
+  unknown；只有存在 idempotency evidence 或显式 decision 才能 retry。
 
-## 外部修改检测
+Input、Generation boundary 与 Turn facts 共享一个 commit sequence，因此不需要
+cross-Journal merge、`event_seq` 或 Input/Generation reconciliation。
 
-每个打开的 journal 跟踪 file identity、length、mtime 和最后校验 sequence。Append
-前确认仍是同一文件，并且 length 和 final sequence 符合预期。另一 writer 造成的
-replacement、truncation 或 append 返回 typed concurrent-change error。Runtime
-绝不静默覆盖外部编辑的历史。
+## Context Generation Boundaries
 
-## 保留策略
+初始 `thread.created` 建立 `g000001`。New transition 追加一个
+`context.renewed` commit；replay 把 Goal/Notes clearing 作为该边界的原子语义。
+commit 后的 Context renewal lifecycle notification 清除当前 Runtime 的结果订阅。
+Compact transition 追加带 validated summary 的 `context.compacted`。下一个 commit
+开始使用新 Generation id。
 
-- Archive 是本次重构中唯一的 Thread 退役操作；可逆并保留全部 bytes。
-- 不提供 Thread delete API、CLI command、Web action、tombstone、trash protocol，
-  也不自动按时间删除 history 或 Artifact。
-- 未来的破坏性 retention 设计必须单独定义确认、parent/child reference、subscription
-  reference、Artifact cleanup 和恢复；本方案不推断这些策略。
+```json
+{
+  "v": 1,
+  "seq": 188,
+  "at": "2026-09-01T08:10:00.000Z",
+  "facts": [
+    {
+      "type": "context.compacted",
+      "from_generation_id": "g000002",
+      "to_generation_id": "g000003",
+      "summary": {"blocks": [{"type": "text", "text": "..."}]},
+      "automatic": false
+    }
+  ]
+}
+```
 
-## 校验与 Repair 测试
+Archive/unarchive 追加 lifecycle fact，但保留当前 Generation。Generation metadata、
+count、start/end time、usage 与 transition reason 都通过 replay 派生。不存在通用
+Thread 或 Generation `summary` 字段。
 
-- Go 和 JavaScript 中固定 timestamp 格式。
-- Id shape、collision retry，以及不能从 id 推导时间。
-- 精确 Thread/Generation directory 校验和 path traversal 拒绝。
-- Complete-batch append、sync failure rollback、torn-line repair、incomplete final
-  batch truncation 和 non-tail corruption rejection。
-- Generation、Input、Thread 和 Agent index 缺失/过期/损坏。
-- Tail checkpoint recovery 成本不随完整 journal 长度增长。
-- Input 在 assignment 前 accepted，并能跨每个 transition phase 恢复。
-- Compact bootstrap failure 和 transition crash matrix。
-- 在 Generation 内及跨 Generation 向前翻页。
-- 健康路径下大型 Thread list 只读取 `threads/index.json`。
-- Archive/unarchive、nested parent retention，以及不存在 deletion path。
-- 外部 file replacement/truncation 检测。
-- 拒绝旧 Session state 且不做修改。
+## Append Durability 与 Corruption Boundary
+
+每个 Thread 有一个 append file descriptor 与 writer lock。一次 commit：
+
+1. 在内存校验并序列化完整 bounded line。
+2. 记录当前 EOF offset。
+3. 以 append mode 通过一个 writer loop 写入全部 bytes。
+4. 发布 live event 或 client success 前 sync 文件。
+5. Write/sync 失败时 truncate 到原 offset，并 sync repair。
+
+Recovery 只接受完整 newline-terminated commit。Torn final line 被截断。可恢复末端
+之前的 malformed commit、重复或非递增 sequence、非法 identity relationship 或
+非法 stable fact 都属于 corruption，必须明确失败。
+
+Append 保证旧 byte offset 不变，并把 EOF repair 限制在尾部。Prepend 会重写整个
+Journal，使 cursor/checkpoint 失效，并扩大 crash damage，因此禁止。
+
+## Checkpoint 与 Recovery
+
+每个 terminal Turn、idle Context boundary、archive transition 后，以及至少每 256
+个 commit 的安全 idle boundary，追加 `projection.checkpoint`。如果 Context boundary
+发生在 active compaction Turn 内，则由该 Turn 的 terminal commit 追加 checkpoint。
+Checkpoint 包含当前 provider-visible context、nonterminal Inputs 及其 records、当前
+projection 与最近 Context activity；不包含完整 presentation transcript 或 terminal
+Input history。
+
+Checkpoint 只用于加速 projection recovery。其中 bounded status-event seed 不是
+transport replay log，不能回答早于 checkpoint 的 SSE cursor。Cursor replay 必须
+捕获稳定的 Journal EOF，并读取直到该 boundary 为止的完整权威 prefix。
+
+Provider provenance reuse 只跨越一个 Turn。Terminal Turn 会重置 snapshot reuse
+boundary，因此下一个 Turn 的第一次 request epoch 是 self-contained 的，checkpoint
+不会依赖无限延伸的旧 request snapshot 链。
+
+Cold open 按以下顺序：
+
+1. 只修复 EOF 处没有 newline 结尾的 torn tail。
+2. 反向扫描完整 Journal line，寻找最近 valid checkpoint。
+3. 恢复 bounded state，并只 replay suffix 到 EOF。
+4. 没有 checkpoint 时才 full replay。
+5. 原子替换 `thread.json`，再更新 `threads.index.json`。
+
+唯一 Journal 足以重建 Input state、当前 Generation、Goal、Notes、当前 provider
+context、usage 与 Thread status。完整 display history 保留在 Journal 中，通过
+tail-first paging 读取，而不常驻 cold-open projection。当前 Runtime 的
+subscriptions 不会在 Runtime shutdown 后恢复。
+
+## 从 Tail 加载 Message
+
+Web 首次加载直接 seek EOF，按 block 反向读取完整 line，直到取得足够 display
+records；返回前将该页恢复成时间正序。`Load older messages` 使用包含已校验 Journal
+position 与 sequence 信息的 opaque cursor 继续向前。
+
+- Browser 不接收 raw offset 或 disk schema。
+- Append 不会使旧 offset 失效。
+- Page 包含解释当前消息所需的 System activity 与 Generation boundary。
+- 当前 Provider Context 从 `current_generation.start_offset` 开始构建，不从 Journal
+  byte zero 开始。
+- 本地可以自然使用 `tail`、`less`、`rg` 与 `jq` 查看；最新记录仍在 EOF。
+
+初始版本不需要 persistent per-Journal index。如果实测出现 pathological reverse-
+scan cost，再增加一个可重建 sparse offset index；它永远不能成为权威。
+
+## Scratchpad、Spool 与 Media
+
+### Scratchpad
+
+`scratchpad/` 是模型拥有的 Thread working space，不自动 recite，也不自动写入
+Journal。它跨越 New、Compact、archive 与 unarchive，只在永久删除 Thread 时移除。
+自动 TTL cleanup 不得触碰它。
+
+### Spool
+
+`spool/` 保存无法放入 bounded commit 的 Runtime-managed oversized Input body、
+Tool Result 与其他 payload。Reference 包含 relative path、media type、size 与
+digest。Retention 必须感知 reference 与状态：当前 Context、Pending Input、Recovery
+或未完成 Tool outcome 需要的 payload 不能过期。历史 payload 过期后，immutable
+Journal 仍保留 digest/metadata，界面显示 unavailable。
+
+### Media
+
+`media/` 保存持久 admitted user 与 Observation attachments，不是 Tool-result spill
+directory，并使用更长期的 media policy。现有 Artifact 领域语言可以继续表示持久、
+完整性寻址的内容；Runtime spill 绝不能再叫 Artifact。
+
+## Archive、Unarchive 与 Delete 存储
+
+Archive 追加 `thread.archived`，关闭 handle，并把完整目录从 `threads/<tid>` 原子
+rename 到 `archive/threads/<tid>`。Recovery 发现 fact 已在 active namespace 时完成
+move。
+
+Unarchive 在 exclusive lifecycle lease 下追加 `thread.unarchived`，把相同 bytes
+原子移回，校验 projection，并打开相同 current Generation。Recovery 处理 fact 与
+directory namespace 不一致的中断 move。
+
+Delete 先校验 references，把 archived directory 原子 rename 到
+`.trash/threads/<tid>.<operation-id>`，从 projection 移除，再删除 bytes。Startup
+完成已知 trash operation。Main `0` 永远不能进入 archive 或 trash。
+
+所有 internal reference 都是 id 或 Thread-root-relative path；不能持久化 archive
+move 后失效的 absolute path。
+
+## Retention
+
+- Active/archived Journal history 一直保留到显式 Thread delete。
+- Scratchpad 一直保留到 Thread delete。
+- Spool 使用 configurable、reference-aware cleanup，也是未来系统临时文件
+  retention 的目标。
+- Media 使用独立 durable-media policy。
+- 将来“archive N 天后 delete”的 automation 调用 checked Thread Delete，并把 policy
+  diagnostics 写在被删除 Thread Journal 之外。
+
+## Verification 与 Failure Injection
+
+测试必须覆盖：
+
+- 规范 UTC millisecond timestamp 与包含 Main `0` 的 id validation。
+- Commit ordering、bounded fact array、partial write/sync rollback，以及 Unix/Windows
+  torn-tail truncation。
+- 完整 Input lifecycle、multiple attempts、restart requeue、dead-letter 与 unknown
+  external side-effect outcome。
+- New/Compact atomic boundary commit、state carry/clear rule，以及不把 activity
+  marker 投影给 Provider 的 compact summary。
+- Projection ahead/behind/corrupt、checkpoint reverse scan 与 full replay equivalence。
+- 正常 Thread list 不打开 Journal，以及从 active/archived Journal 重建 index 与
+  缺失/损坏的 `thread.json`。
+- EOF-first paging、opaque cursor continuation、viewport-order DTO 与大 Journal
+  bounded-read benchmark。
+- Scratchpad preservation、Spool expiry guard 与 missing historical payload UI。
+- Archive/unarchive 所有 crash point、Generation 不变、checked delete、trash recovery、
+  child rejection、active-subscription settling 与 Main protection。
+- Creation、alias resolution、admission、Context transition、projection publication、
+  archive 与 delete 的 race tests。

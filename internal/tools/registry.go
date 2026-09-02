@@ -40,8 +40,8 @@ const (
 	ToolGroupShell        ToolGroup = "shell"
 	ToolGroupSearch       ToolGroup = "search"
 	ToolGroupSkill        ToolGroup = "skill"
-	ToolGroupSessionState ToolGroup = "session_state"
-	ToolGroupSideSession  ToolGroup = "side_session"
+	ToolGroupThreadState  ToolGroup = "thread_state"
+	ToolGroupWorkerThread ToolGroup = "worker_thread"
 	ToolGroupObservable   ToolGroup = "observable"
 	ToolGroupMCP          ToolGroup = "mcp"
 )
@@ -52,8 +52,8 @@ func (g ToolGroup) GuideSkill() (string, bool) {
 	switch g {
 	case ToolGroupChunkedWrite:
 		return "juex-chunked-write", true
-	case ToolGroupSessionState:
-		return "juex-session-state", true
+	case ToolGroupThreadState:
+		return "juex-thread-state", true
 	case ToolGroupObservable:
 		return "juex-observables", true
 	default:

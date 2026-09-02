@@ -56,7 +56,7 @@ type ManagerOptions struct {
 	StateDir              string
 	WorkDir               string
 	AgentStateDir         string
-	ArtifactDir           string
+	MediaDir              string
 	Environment           environment.Snapshot
 	Shell                 config.ShellProfile
 	Sandbox               sandbox.Policy
@@ -200,8 +200,8 @@ type ScheduleStatus struct {
 
 func NewManager(opts ManagerOptions) (*Manager, error) {
 	opts.ReadOnlyConfigSources = cloneReadOnlyConfigSources(opts.ReadOnlyConfigSources)
-	if strings.TrimSpace(opts.ArtifactDir) != "" {
-		store, err := artifact.NewStore(opts.ArtifactDir)
+	if strings.TrimSpace(opts.MediaDir) != "" {
+		store, err := artifact.NewStore(opts.MediaDir)
 		if err != nil {
 			return nil, fmt.Errorf("observable: initialize Artifact Store: %w", err)
 		}
@@ -673,7 +673,7 @@ func (m *Manager) RecordObservation(record ObservationRecord) (ObservationRecord
 	if m == nil || m.store == nil {
 		return ObservationRecord{}, nil
 	}
-	snapshot := snapshotAttachmentRefs(m.opts.WorkDir, m.opts.AgentStateDir, m.opts.ArtifactDir, sandbox.NewPathGuard(m.opts.WorkDir, m.opts.Sandbox), record.Attachments, eventmedia.DefaultMaxEventBytes)
+	snapshot := snapshotAttachmentRefs(m.opts.WorkDir, m.opts.AgentStateDir, m.opts.MediaDir, sandbox.NewPathGuard(m.opts.WorkDir, m.opts.Sandbox), record.Attachments, eventmedia.DefaultMaxEventBytes)
 	record.Attachments = snapshot.refs
 	record.AttachmentErrors = append(record.AttachmentErrors, snapshot.errors...)
 	if len(record.AttachmentErrors) > 0 {
@@ -1105,7 +1105,7 @@ func (m *Manager) recordObservation(record ObservationRecord) (ObservationRecord
 	if m == nil || m.store == nil {
 		return ObservationRecord{}, false, nil
 	}
-	snapshot := snapshotAttachmentRefs(m.opts.WorkDir, m.opts.AgentStateDir, m.opts.ArtifactDir, sandbox.NewPathGuard(m.opts.WorkDir, m.opts.Sandbox), record.Attachments, eventmedia.DefaultMaxEventBytes)
+	snapshot := snapshotAttachmentRefs(m.opts.WorkDir, m.opts.AgentStateDir, m.opts.MediaDir, sandbox.NewPathGuard(m.opts.WorkDir, m.opts.Sandbox), record.Attachments, eventmedia.DefaultMaxEventBytes)
 	record.Attachments = snapshot.refs
 	record.AttachmentErrors = append(record.AttachmentErrors, snapshot.errors...)
 	if len(record.AttachmentErrors) > 0 {

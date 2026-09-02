@@ -1152,7 +1152,7 @@ function RemoveAgentDialog({
         <DialogHeader>
           <DialogTitle>Remove {agent.name || agent.id}</DialogTitle>
           <DialogDescription>
-            This permanently deletes the agent's sessions, artifacts, logs,
+            This permanently deletes the agent's threads, artifacts, logs,
             Extension data, and registry state. The workspace files remain.
           </DialogDescription>
         </DialogHeader>

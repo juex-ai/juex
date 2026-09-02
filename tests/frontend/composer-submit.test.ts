@@ -12,7 +12,7 @@ import type {
 } from "../../frontend/src/types.ts";
 
 function status(
-  state: AgentRuntimeStatusSnapshot["session"]["state"],
+  state: AgentRuntimeStatusSnapshot["thread"]["state"],
   pendingCount = 0,
   maxPendingInputs = 4,
   phase: RuntimeTurnPhase = "provider_iteration",
@@ -22,8 +22,8 @@ function status(
   const active = state === "turn_active" || state === "draining_pending";
   return {
     cursor: "1",
-    session: {
-      id: "session-1",
+    thread: {
+      id: "thread-1",
       state,
       working: active,
       pending_count: pendingCount,

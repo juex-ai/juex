@@ -62,8 +62,8 @@ func (m *Module) StartRuntime(context.Context, runtimemodule.RuntimeContext) err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if strings.TrimSpace(m.options.ArtifactDir) != "" {
-		store, err := artifact.NewStore(m.options.ArtifactDir)
+	if strings.TrimSpace(m.options.MediaDir) != "" {
+		store, err := artifact.NewStore(m.options.MediaDir)
 		if err != nil {
 			return fmt.Errorf("builtin tools: initialize Artifact Store: %w", err)
 		}

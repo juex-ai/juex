@@ -597,7 +597,7 @@ func TestPolicyEvaluationLeasesSetUntilCallReturns(t *testing.T) {
 		releaseFinish: make(chan struct{}),
 	}
 	set := mustPolicySet(t, mod)
-	if err := set.StartSession(context.Background(), SessionContext{}); err != nil {
+	if err := set.StartThread(context.Background(), ThreadContext{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -608,7 +608,7 @@ func TestPolicyEvaluationLeasesSetUntilCallReturns(t *testing.T) {
 	}()
 	<-mod.finishEntered
 	closeDone := make(chan error, 1)
-	go func() { closeDone <- set.CloseSession(context.Background()) }()
+	go func() { closeDone <- set.CloseThread(context.Background()) }()
 	select {
 	case err := <-closeDone:
 		t.Fatalf("set closed during policy call: %v", err)
@@ -649,7 +649,7 @@ func mustPolicySet(t *testing.T, modules ...Module) *Set {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set.scope = ScopeSession
+	set.scope = ScopeThread
 	return set
 }
 

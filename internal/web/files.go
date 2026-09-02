@@ -14,13 +14,13 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/artifact"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 const maxFilePreviewBytes = 256 * 1024
 const maxFileTreeDepth = 12
-const scratchpadLogicalRoot = ".juex/sessions"
+const scratchpadLogicalRoot = ".juex"
 
 type FileNode struct {
 	Name              string      `json:"name"`
@@ -120,14 +120,14 @@ func buildFileTreeWithSkip(root, relPath string, depth int, skip func(string) bo
 	return node, nil
 }
 
-func (s *Server) handleSessionScratchpad(w http.ResponseWriter, r *http.Request, id string) {
-	dir, ok := s.sessionScratchpadDir(id)
+func (s *Server) handleThreadScratchpad(w http.ResponseWriter, r *http.Request, id string) {
+	dir, ok := s.threadScratchpadDir(id)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		writeErr(w, http.StatusNotFound, "not_found", "Thread not found: "+id)
 		return
 	}
 
-	root := s.opts.Cfg.SessionsDir()
+	root := s.opts.Cfg.RuntimePaths().StateDir
 	root, relPath, err := resolveScratchpadTreePath(root, dir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -185,8 +185,7 @@ func resolveScratchpadTreePath(root, dir string) (string, string, error) {
 	}
 	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		// Lazy sessions intentionally have no directory yet. Their lexical path
-		// remains valid relative to the resolved workspace root.
+		// A missing scratchpad directory remains a valid empty tree.
 		return root, relPath, nil
 	}
 	if _, err := relativeInside(root, resolvedDir); err != nil {
@@ -213,26 +212,34 @@ func rejectScratchpadTreeSymlinks(root, relPath string) error {
 	return nil
 }
 
-func (s *Server) sessionScratchpadDir(id string) (string, bool) {
-	if active, ok := s.sessions.Load(id); ok {
-		as := active.(*activeSession)
+func (s *Server) threadScratchpadDir(id string) (string, bool) {
+	if active, ok := s.threads.Load(id); ok {
+		as := active.(*activeThread)
 		var scratchpadDir string
-		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
-			scratchpadDir = sess.ScratchpadDir()
+		err := as.app.ReadThreadID(id, func(target *thread.Thread) error {
+			scratchpadDir = target.ScratchpadDir()
 			return nil
 		})
 		if err == nil {
 			return scratchpadDir, true
 		}
 	}
-	if id == "" || id == "." || id == ".." || filepath.Base(id) != id {
+	if !thread.ValidID(id) {
 		return "", false
 	}
-	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
-	if !session.HasConversation(dir) {
+	store := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir)
+	target, err := store.OpenActive(id)
+	if os.IsNotExist(err) {
+		target, err = store.OpenArchived(id)
+	}
+	if err != nil {
 		return "", false
 	}
-	return session.ScratchpadDir(dir), true
+	scratchpadDir := target.ScratchpadDir()
+	if err := target.Close(); err != nil {
+		return "", false
+	}
+	return scratchpadDir, true
 }
 
 func scratchpadName(dir string) string {
@@ -420,7 +427,7 @@ func (s *Server) handleArtifactMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "forbidden", "artifact media path is not content-addressed")
 		return
 	}
-	store, err := artifact.NewStore(s.opts.Cfg.ArtifactDir())
+	store, err := artifact.NewStore(s.opts.Cfg.MediaDir())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
@@ -479,7 +486,7 @@ func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *file
 	}
 	displayPath := ""
 	if scratchpadPath, logicalPath, ok := resolveScratchpadRequestPath(reqPath); ok {
-		root = s.opts.Cfg.SessionsDir()
+		root = s.opts.Cfg.ThreadsDir()
 		reqPath = scratchpadPath
 		displayPath = logicalPath
 	}
@@ -540,7 +547,7 @@ func resolveScratchpadRequestPath(reqPath string) (physicalPath, logicalPath str
 	parts := strings.Split(clean, string(filepath.Separator))
 	if len(parts) < 5 ||
 		parts[0] != ".juex" ||
-		parts[1] != "sessions" ||
+		parts[1] != "threads" ||
 		parts[2] == "" ||
 		parts[2] == "." ||
 		parts[2] == ".." ||

@@ -450,7 +450,7 @@ only: TURN1 STORED.
 
 GF1: Task ID is CMP-2417.
 GF2: Branch is high/context-projection.
-GF3: Do not modify /workspace/project/.juex/sessions/20260525T043307-7f5f9f85/session.lock unless the user explicitly approves.
+GF3: Do not modify /workspace/project/.juex/threads/0/journal.jsonl unless the user explicitly approves.
 GF4: The failing error string is compact context: openai codex responses: codex SSE read: context deadline exceeded.
 GF5: The selected design is sidecar externalization plus frozen provider-visible replacement.
 GF6: The next command is go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1.
@@ -471,9 +471,9 @@ Irrelevant context begins below.
         encoding="utf-8",
     )
     turn3.write_text(
-        """No tools. Answer the evaluation questions using only this session's context.
-The session may have been compacted; compacted summaries and replacement
-context are valid session context for this evaluation.
+        """No tools. Answer the evaluation questions using only this Thread's context.
+The Thread may have been compacted; compacted summaries and replacement
+context are valid Thread context for this evaluation.
 
 Return exactly these labels:
 GF1:
@@ -522,11 +522,13 @@ def run_eval_turn(args: argparse.Namespace, work: pathlib.Path, prompt_file: pat
         "-C",
         str(work),
         "--enable-user-agents-resources=false",
-        "run",
+        "send",
+        "--wait",
         prompt_file.read_text(encoding="utf-8"),
     ]
     with output_file.open("wb") as output:
         status = helper.run_subprocess_with_timeout(command, args.turn_timeout, env=env, stdout=output, stderr=output)
+    helper.stop_agent_runtime(args.juex, work, env)
     print(output_file.read_text(encoding="utf-8", errors="replace"), end="")
     return status
 
@@ -536,7 +538,7 @@ def score_answer(answer: str) -> int:
     checks = [
         ("CMP-2417", 6),
         ("high/context-projection", 6),
-        ("/workspace/project/.juex/sessions/20260525T043307-7f5f9f85/session.lock", 6),
+        ("/workspace/project/.juex/threads/0/journal.jsonl", 6),
         ("compact context: openai codex responses: codex SSE read: context deadline exceeded", 6),
         ("go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1", 6),
     ]
@@ -560,20 +562,39 @@ def score_answer(answer: str) -> int:
 
 
 def seed_authoritative_state(work: pathlib.Path) -> None:
-    conversations = session_files(work, "conversation.jsonl")
-    if len(conversations) != 1:
-        raise ValueError(f"expected one active session after turn1, found {len(conversations)}")
-    session = conversations[0].parent
-    (session / "goal_state.json").write_text(
-        json.dumps(AUTHORITATIVE_GOAL, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    (session / "notes.md").write_text(AUTHORITATIVE_NOTES, encoding="utf-8")
+    journals = thread_files(work, "journal.jsonl")
+    if len(journals) != 1:
+        raise ValueError(f"expected one active Thread after turn1, found {len(journals)}")
+    journal = journals[0]
+    commits = [
+        json.loads(line)
+        for line in journal.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not commits or not isinstance(commits[-1].get("seq"), int):
+        raise ValueError("Thread Journal has no valid commit sequence")
+    now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    commit = {
+        "v": 1,
+        "seq": commits[-1]["seq"] + 1,
+        "at": now,
+        "facts": [
+            {"type": "goal.updated", "goal": AUTHORITATIVE_GOAL},
+            {
+                "type": "notes.updated",
+                "notes": AUTHORITATIVE_NOTES,
+                "notes_updated_at": now,
+            },
+        ],
+    }
+    with journal.open("a", encoding="utf-8") as output:
+        output.write(json.dumps(commit, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def score_authoritative_state(work: pathlib.Path, answer: str) -> dict:
-    goal = read_latest_json(work, "goal_state.json")
-    notes = read_latest_text(work, "notes.md")
+    projection = read_latest_json(work, "thread.json")
+    goal = projection.get("goal") if isinstance(projection.get("goal"), dict) else {}
+    notes = projection.get("notes") if isinstance(projection.get("notes"), str) else ""
     summary = latest_compact_summary(work)
     goal_section = summary_section(summary, "Goal", "Critical Context")
     next_steps = summary_section(summary, "Next Steps", "Relevant Files")
@@ -597,7 +618,7 @@ def contains_note_text(haystack: str, note: str) -> bool:
 
 
 def read_latest_json(work: pathlib.Path, name: str) -> dict:
-    paths = session_files(work, name)
+    paths = thread_files(work, name)
     if not paths:
         return {}
     try:
@@ -608,7 +629,7 @@ def read_latest_json(work: pathlib.Path, name: str) -> dict:
 
 
 def read_latest_text(work: pathlib.Path, name: str) -> str:
-    paths = session_files(work, name)
+    paths = thread_files(work, name)
     if not paths:
         return ""
     return paths[-1].read_text(encoding="utf-8", errors="replace")
@@ -616,18 +637,20 @@ def read_latest_text(work: pathlib.Path, name: str) -> str:
 
 def latest_compact_summary(work: pathlib.Path) -> str:
     latest = ""
-    for path in session_files(work, "conversation.jsonl"):
+    for path in thread_files(work, "journal.jsonl"):
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
-                message = json.loads(line)
+                commit = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if message.get("kind") != "compact":
-                continue
-            for block in message.get("blocks") or []:
-                if block.get("type") == "text" and block.get("text"):
-                    latest = str(block["text"])
-                    break
+            for fact in commit.get("facts") or []:
+                if fact.get("type") != "context.compacted":
+                    continue
+                summary = fact.get("summary") or {}
+                for block in summary.get("blocks") or []:
+                    if block.get("type") == "text" and block.get("text"):
+                        latest = str(block["text"])
+                        break
     return latest
 
 
@@ -638,24 +661,24 @@ def summary_section(summary: str, heading: str, next_heading: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def session_files(work: pathlib.Path, name: str) -> list[pathlib.Path]:
+def thread_files(work: pathlib.Path, name: str) -> list[pathlib.Path]:
     try:
-        sessions = session_root(work)
+        threads = thread_root(work)
     except (OSError, ValueError, json.JSONDecodeError):
         return []
-    return sorted(sessions.rglob(name)) if sessions.is_dir() else []
+    return sorted(threads.rglob(name)) if threads.is_dir() else []
 
 
-def session_root(work: pathlib.Path) -> pathlib.Path:
-    return helper.agent_sessions_dir(work, work / "home" / ".juex")
+def thread_root(work: pathlib.Path) -> pathlib.Path:
+    return helper.agent_threads_dir(work, work / "home" / ".juex")
 
 
 def has_compaction(work: pathlib.Path) -> bool:
-    return any('"kind":"compact"' in path.read_text(encoding="utf-8", errors="replace") for path in session_files(work, "conversation.jsonl"))
+    return any('"type":"context.compacted"' in path.read_text(encoding="utf-8", errors="replace") for path in thread_files(work, "journal.jsonl"))
 
 
 def cache_ratio_from_work(work: pathlib.Path) -> str:
-    for path in session_files(work, "events.jsonl"):
+    for path in thread_files(work, "journal.jsonl"):
         ratio = cache_ratio_from_events(path)
         if ratio != "not captured":
             return ratio
@@ -680,8 +703,8 @@ def match_int(text: str, pattern: str) -> int:
 
 
 def copy_runtime_artifacts(work: pathlib.Path, out_dir: pathlib.Path) -> None:
-    for name in ["conversation.jsonl", "events.jsonl", "goal_state.json", "notes.md"]:
-        for path in session_files(work, name):
+    for name in ["journal.jsonl", "thread.json"]:
+        for path in thread_files(work, name):
             shutil.copy2(path, out_dir / name)
 
 

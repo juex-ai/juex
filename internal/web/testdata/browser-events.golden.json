@@ -9,8 +9,8 @@
     "status": {
       "cursor": "evt-turn-admitted",
       "updated_at": "2026-06-14T23:59:59Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -47,8 +47,8 @@
     "status": {
       "cursor": "evt-turn-started",
       "updated_at": "2026-06-15T00:00:00Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -84,8 +84,8 @@
     "status": {
       "cursor": "evt-turn-provider-phase",
       "updated_at": "2026-06-15T00:00:00.5Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -147,8 +147,8 @@
     "status": {
       "cursor": "evt-llm-responded",
       "updated_at": "2026-06-15T00:00:01Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -193,8 +193,8 @@
     "status": {
       "cursor": "evt-tool-running",
       "updated_at": "2026-06-15T00:00:02.5Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -256,8 +256,8 @@
     "status": {
       "cursor": "evt-llm-retry",
       "updated_at": "2026-06-15T00:00:01.5Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -309,8 +309,8 @@
     "status": {
       "cursor": "evt-llm-retry",
       "updated_at": "2026-06-15T00:00:01.75Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -361,8 +361,8 @@
     "status": {
       "cursor": "evt-llm-fallback",
       "updated_at": "2026-06-15T00:00:01.8Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -418,8 +418,8 @@
     "status": {
       "cursor": "evt-tool-requested",
       "updated_at": "2026-06-15T00:00:02Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -476,8 +476,8 @@
     "status": {
       "cursor": "evt-tool-requested",
       "updated_at": "2026-06-15T00:00:03Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -544,8 +544,8 @@
     "status": {
       "cursor": "evt-tool-completed",
       "updated_at": "2026-06-15T00:00:04Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -594,8 +594,8 @@
     "status": {
       "cursor": "evt-policy-trace",
       "updated_at": "2026-06-15T00:00:05Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -647,8 +647,8 @@
     "status": {
       "cursor": "evt-pending-queued",
       "updated_at": "2026-06-15T00:00:06Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 1,
@@ -698,8 +698,8 @@
     "status": {
       "cursor": "evt-pending-draining",
       "updated_at": "2026-06-15T00:00:06.5Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "draining_pending",
         "working": true,
         "pending_count": 0,
@@ -749,8 +749,8 @@
     "status": {
       "cursor": "evt-pending-drained",
       "updated_at": "2026-06-15T00:00:07Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -802,8 +802,8 @@
     "status": {
       "cursor": "evt-goal-updated",
       "updated_at": "2026-06-15T00:00:07.2Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -852,8 +852,8 @@
     "status": {
       "cursor": "evt-notes-updated",
       "updated_at": "2026-06-15T00:00:07.3Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -897,13 +897,13 @@
     "turn_id": "turn-1",
     "payload": {
       "error": "notes read: notes content must be valid UTF-8",
-      "path": "/workspace/.juex/sessions/session-1/notes.md"
+      "path": "/state/threads/123456/notes.md"
     },
     "status": {
       "cursor": "evt-notes-errored",
       "updated_at": "2026-06-15T00:00:07.4Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -954,8 +954,8 @@
     "status": {
       "cursor": "evt-observable-started",
       "updated_at": "2026-06-15T00:00:07.5Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -1015,8 +1015,8 @@
     "status": {
       "cursor": "evt-observation-delivered",
       "updated_at": "2026-06-15T00:00:08Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -1087,8 +1087,8 @@
     "status": {
       "cursor": "evt-observation-errored",
       "updated_at": "2026-06-15T00:00:08.5Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -1142,8 +1142,8 @@
     "status": {
       "cursor": "evt-compact-started",
       "updated_at": "2026-06-15T00:00:09Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -1198,8 +1198,8 @@
     "status": {
       "cursor": "evt-compact-summary-retry",
       "updated_at": "2026-06-15T00:00:09.5Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -1265,8 +1265,8 @@
     "status": {
       "cursor": "evt-compact-completed",
       "updated_at": "2026-06-15T00:00:10Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,
@@ -1320,8 +1320,8 @@
     "status": {
       "cursor": "evt-projection-applied",
       "updated_at": "2026-06-15T00:00:11Z",
-      "session": {
-        "id": "session-1",
+      "thread": {
+        "id": "123456",
         "state": "turn_active",
         "working": true,
         "pending_count": 0,

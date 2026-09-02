@@ -42,15 +42,15 @@ func (*Module) ID() runtimemodule.ID { return ModuleID }
 // or hide the raw Tool result, so existing live output remains safe to expose.
 func (*Module) AllowsLiveToolOutput() bool { return true }
 
-func (m *Module) ApplySessionStart(ctx context.Context, request runtimemodule.SessionStartRequest) (runtimemodule.SessionStartDecision, error) {
-	results, err := m.run(ctx, EventSessionStart, request.Observer, func(*Request) {})
+func (m *Module) ApplyThreadStart(ctx context.Context, request runtimemodule.ThreadStartRequest) (runtimemodule.ThreadStartDecision, error) {
+	results, err := m.run(ctx, EventThreadStart, request.Observer, func(*Request) {})
 	if err != nil {
-		return runtimemodule.SessionStartDecision{}, err
+		return runtimemodule.ThreadStartDecision{}, err
 	}
 	if denied, reason := blocked(results); denied {
-		return runtimemodule.SessionStartDecision{Reject: true, Reason: reason}, nil
+		return runtimemodule.ThreadStartDecision{Reject: true, Reason: reason}, nil
 	}
-	return runtimemodule.SessionStartDecision{Context: runtimeContexts(results)}, nil
+	return runtimemodule.ThreadStartDecision{Context: runtimeContexts(results)}, nil
 }
 
 func (m *Module) ApplyTurnInput(ctx context.Context, request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
@@ -260,8 +260,8 @@ func (r Result) policyResult() runtimemodule.PolicyResult {
 
 func policyPoint(event EventName) runtimemodule.PolicyPoint {
 	switch event {
-	case EventSessionStart:
-		return runtimemodule.PolicyPointSessionStart
+	case EventThreadStart:
+		return runtimemodule.PolicyPointThreadStart
 	case EventUserPromptSubmit:
 		return runtimemodule.PolicyPointTurnInput
 	case EventPreToolUse:

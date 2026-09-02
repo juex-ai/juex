@@ -13,7 +13,7 @@ import (
 
 func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
-	_, as := newTurnTransportTestSession(t, prov)
+	_, as := newTurnTransportTestThread(t, prov)
 
 	if as.turns.interrupt() {
 		t.Fatal("idle interrupt returned true")
@@ -36,7 +36,7 @@ func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 
 func TestWebTurnTransportInterruptPreservesQueuedInput(t *testing.T) {
 	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn})
-	_, as := newTurnTransportTestSession(t, prov)
+	_, as := newTurnTransportTestThread(t, prov)
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "active"))
 	waitPendingProviderStarted(t, prov, "provider did not start")
@@ -51,10 +51,11 @@ func TestWebTurnTransportInterruptPreservesQueuedInput(t *testing.T) {
 	}
 	as.turns.wait()
 
-	if got := len(as.app.Session.History); got != 2 {
-		t.Fatalf("history len = %d, want active and preserved pending input: %+v", got, as.app.Session.History)
+	_, history := as.app.Thread.Snapshot()
+	if got := len(history); got != 2 {
+		t.Fatalf("history len = %d, want active and preserved pending input: %+v", got, history)
 	}
-	if got := as.app.Session.History[1].FirstText(); got != "preserve me" {
+	if got := history[1].FirstText(); got != "preserve me" {
 		t.Fatalf("preserved message = %q", got)
 	}
 	records, err := as.app.Engine.PendingInputQueue.Records()
@@ -71,7 +72,7 @@ func TestWebTurnTransportStartCancelsExistingTurn(t *testing.T) {
 		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
 		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
 	)
-	_, as := newTurnTransportTestSession(t, prov)
+	_, as := newTurnTransportTestThread(t, prov)
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "first"))
 	waitPendingProviderStarted(t, prov, "provider did not start")
@@ -85,7 +86,7 @@ func TestWebTurnTransportStartCancelsExistingTurn(t *testing.T) {
 	}
 }
 
-func newTurnTransportTestSession(t *testing.T, provider llm.Provider) (*Server, *activeSession) {
+func newTurnTransportTestThread(t *testing.T, provider llm.Provider) (*Server, *activeThread) {
 	t.Helper()
 	work := t.TempDir()
 	srv := NewServer(Options{
@@ -93,7 +94,10 @@ func newTurnTransportTestSession(t *testing.T, provider llm.Provider) (*Server, 
 		Provider: provider,
 	})
 	t.Cleanup(srv.Close)
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+		t.Fatal(err)
+	}
+	as, err := srv.openThread(context.Background(), "0")
 	if err != nil {
 		t.Fatal(err)
 	}

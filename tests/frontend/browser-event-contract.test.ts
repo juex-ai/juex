@@ -4,9 +4,9 @@ import test from "node:test";
 
 import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
 import {
-  createLiveSessionProjection,
-  projectLiveSessionEvent,
-} from "../../frontend/src/lib/live-session-projection.ts";
+  createLiveThreadProjection,
+  projectLiveThreadEvent,
+} from "../../frontend/src/lib/live-thread-projection.ts";
 import {
   BROWSER_EVENT_TYPES,
   type BrowserEvent,
@@ -20,13 +20,13 @@ test("frontend projects backend browser event fixture stream", () => {
   const events = readJSON("browser-events.golden.json") as BrowserEvent[];
   const notesError = events.find((event) => event.type === "notes.errored");
   assert.equal(notesError?.payload.error, "notes read: notes content must be valid UTF-8");
-  assert.equal(notesError?.payload.path, "/workspace/.juex/sessions/session-1/notes.md");
+  assert.equal(notesError?.payload.path, "/state/threads/123456/notes.md");
 
-  let state = createLiveSessionProjection();
+  let state = createLiveThreadProjection();
   const effects = [];
 
   for (const event of events) {
-    const result = projectLiveSessionEvent(state, event);
+    const result = projectLiveThreadEvent(state, event);
     state = result.state;
     effects.push(...result.effects);
   }
@@ -76,14 +76,14 @@ test("frontend projects backend browser event fixture stream", () => {
 
 test("pending promotion removes the queued item and starts its live turn", () => {
   const initial = {
-    ...createLiveSessionProjection(),
+    ...createLiveThreadProjection(),
     queuedInput: {
       items: [{ id: "queued-1", input: "after compact", kind: "user" }],
       nextSeq: 1,
     },
   };
 
-  const result = projectLiveSessionEvent(
+  const result = projectLiveThreadEvent(
     initial,
     {
       id: "promoted-1",
@@ -119,7 +119,7 @@ test("pending promotion removes the queued item and starts its live turn", () =>
 
 test("promoted turn start does not consume an identical next queued item", () => {
   const initial = {
-    ...createLiveSessionProjection(),
+    ...createLiveThreadProjection(),
     queuedInput: {
       items: [
         { id: "queued-1", input: "same input", kind: "user" },
@@ -129,7 +129,7 @@ test("promoted turn start does not consume an identical next queued item", () =>
     },
   };
 
-  let state = projectLiveSessionEvent(initial, {
+  let state = projectLiveThreadEvent(initial, {
     id: "promoted-1",
     type: "pending_input.promoted",
     ts: "2026-07-19T00:00:00Z",
@@ -139,7 +139,7 @@ test("promoted turn start does not consume an identical next queued item", () =>
       max_pending_inputs: 16,
     },
   }).state;
-  state = projectLiveSessionEvent(state, {
+  state = projectLiveThreadEvent(state, {
     id: "turn-started-1",
     type: "turn.started",
     ts: "2026-07-19T00:00:01Z",
@@ -157,8 +157,8 @@ test("promoted turn start does not consume an identical next queued item", () =>
 });
 
 test("compact completion leaves runtime state to the attached backend snapshot", () => {
-  const result = projectLiveSessionEvent(
-    createLiveSessionProjection(),
+  const result = projectLiveThreadEvent(
+    createLiveThreadProjection(),
     {
       id: "compact-completed-1",
       type: "context.compact.completed",

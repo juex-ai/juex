@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -15,7 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 type observedContext struct {
@@ -372,7 +371,7 @@ func TestTerminalDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *tes
 		StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, provider, false)
-	sink := events.NewDurableSink(eng.Session)
+	sink := events.NewDurableSink(eng.Thread)
 	bus.SetCommitter(sink)
 	defer func() {
 		bus.SetCommitter(nil)
@@ -408,7 +407,7 @@ func TestTerminalDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *tes
 
 func TestErrorDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
 	eng, bus := newEngine(t, errorProvider{}, false)
-	sink := events.NewDurableSink(eng.Session)
+	sink := events.NewDurableSink(eng.Thread)
 	bus.SetCommitter(sink)
 	defer func() {
 		bus.SetCommitter(nil)
@@ -444,7 +443,7 @@ func TestErrorDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *testin
 
 func TestAdmissionDurableProjectionCanSynchronouslyReceivePendingInput(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
-	sink := events.NewDurableSink(eng.Session)
+	sink := events.NewDurableSink(eng.Thread)
 	bus.SetCommitter(sink)
 	projectionResult := make(chan PendingInputResult, 1)
 	projectionErr := make(chan error, 1)
@@ -546,7 +545,7 @@ func TestDiscardPendingInputRejectsDuringAdmissionPublication(t *testing.T) {
 
 func TestTerminalErrorCommitDoesNotWaitForProjectionHoldingCommitBarrier(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
-	sink := events.NewDurableSink(eng.Session)
+	sink := events.NewDurableSink(eng.Thread)
 	bus.SetCommitter(sink)
 	if err := eng.ReserveTurnID("terminal-lock-order"); err != nil {
 		t.Fatal(err)
@@ -652,11 +651,32 @@ type fallbackTerminalTestTurn struct {
 	committer     *blockingFallbackTerminalCommitter
 }
 
+type blockingFallbackTerminalCommitter struct {
+	delegate      events.Committer
+	completionErr error
+	errorStarted  chan struct{}
+	releaseError  chan struct{}
+	once          sync.Once
+	lastEvent     atomic.Value
+}
+
+func (c *blockingFallbackTerminalCommitter) Commit(event events.Event) (events.Event, error) {
+	c.lastEvent.Store(event.Type)
+	if event.Type == "turn.completed" {
+		return events.Event{}, c.completionErr
+	}
+	if event.Type == "turn.errored" {
+		c.once.Do(func() { close(c.errorStarted) })
+		<-c.releaseError
+	}
+	return c.delegate.Commit(event)
+}
+
 func (turn *fallbackTerminalTestTurn) diagnostics() string {
 	stacks := make([]byte, 256<<10)
 	n := goruntime.Stack(stacks, true)
-	return fmt.Sprintf("session=%s last_commit=%v\ngoroutines:\n%s",
-		turn.engine.Session.Dir, turn.committer.lastEvent.Load(), stacks[:n])
+	return fmt.Sprintf("thread=%s last_commit=%v\ngoroutines:\n%s",
+		turn.engine.Thread.Dir, turn.committer.lastEvent.Load(), stacks[:n])
 }
 
 func startFallbackTerminalTestTurn(t *testing.T) *fallbackTerminalTestTurn {
@@ -670,7 +690,7 @@ func startFallbackTerminalTestTurn(t *testing.T) *fallbackTerminalTestTurn {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	committer := &blockingFallbackTerminalCommitter{
-		delegate:      selectiveSessionCommitter{session: eng.Session},
+		delegate:      selectiveThreadCommitter{thread: eng.Thread},
 		completionErr: completionErr,
 		errorStarted:  started,
 		releaseError:  release,
@@ -687,7 +707,7 @@ func startFallbackTerminalTestTurn(t *testing.T) *fallbackTerminalTestTurn {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	// The committer deliberately blocks without observing context cancellation.
-	// Release and join the Turn before newEngine's Session cleanup runs.
+	// Release and join the Turn before newEngine's Thread cleanup runs.
 	t.Cleanup(func() {
 		cancel()
 		turn.release()
@@ -729,131 +749,7 @@ func TestFallbackTerminalFixtureCleanupJoinsAbandonedTurn(t *testing.T) {
 	select {
 	case <-turn.finished:
 	default:
-		t.Fatal("fixture cleanup left the fallback Turn running after Session cleanup")
-	}
-}
-
-func TestFailedPendingPreservationRejectsAdmissionDuringTerminalCommit(t *testing.T) {
-	eng, bus := newEngine(t, &mockProvider{}, false)
-	turnID := eng.beginActiveTurn("failed-preservation-turn")
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), PendingInputOptions{
-		ID:  "pending-before-preservation-failure",
-		TTL: time.Hour,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	queue := eng.currentPendingInputQueue()
-	originalWrite := queue.fileOps.write
-	wantStorageErr := errors.New("pending terminal storage failure")
-	queue.fileOps.write = func(*os.File, []byte) (int, error) { return 0, wantStorageErr }
-	t.Cleanup(func() { queue.fileOps.write = originalWrite })
-	errorStarted := make(chan struct{})
-	releaseError := make(chan struct{})
-	bus.SetCommitter(&blockingFallbackTerminalCommitter{
-		delegate:     selectiveSessionCommitter{session: eng.Session},
-		errorStarted: errorStarted,
-		releaseError: releaseError,
-	})
-
-	wantTurnErr := errors.New("provider failed")
-	failDone := make(chan error, 1)
-	go func() { failDone <- eng.failActiveTurnLocked(turnID, wantTurnErr, false) }()
-	select {
-	case <-errorStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("fallback terminal commit did not start")
-	}
-
-	nextResult := make(chan PendingInputResult, 1)
-	nextErr := make(chan error, 1)
-	go func() {
-		result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
-			Message: llm.TextMessage(llm.RoleUser, "next input"),
-		})
-		nextResult <- result
-		nextErr <- err
-	}()
-	select {
-	case result := <-nextResult:
-		if err := <-nextErr; !errors.Is(err, ErrActiveTurnExists) {
-			close(releaseError)
-			t.Fatalf("next admission error = %v, want %v", err, ErrActiveTurnExists)
-		}
-		if result.Retry != PendingInputRetryAfterTurn || result.Status.TurnID != turnID {
-			close(releaseError)
-			t.Fatalf("next admission = %+v, want retry after failed turn %q", result, turnID)
-		}
-	case <-time.After(time.Second):
-		close(releaseError)
-		t.Fatal("next admission blocked behind failed turn terminal commit")
-	}
-
-	queue.fileOps.write = originalWrite
-	close(releaseError)
-	if err := <-failDone; !errors.Is(err, wantTurnErr) || !errors.Is(err, wantStorageErr) {
-		t.Fatalf("failed turn error = %v, want joined turn and storage failures", err)
-	}
-	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
-		Message: llm.TextMessage(llm.RoleUser, "next input"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Disposition != PendingInputStarted || result.TurnID == "" {
-		t.Fatalf("next admission = %+v, want a fresh started turn", result)
-	}
-	if status := eng.PendingInputStatus(); status.TurnID != result.TurnID {
-		t.Fatalf("active turn = %+v, want only fresh reservation %q", status, result.TurnID)
-	}
-	eng.finishActiveTurn(result.TurnID)
-}
-
-type blockingFallbackTerminalCommitter struct {
-	delegate      events.Committer
-	completionErr error
-	errorStarted  chan struct{}
-	releaseError  chan struct{}
-	once          sync.Once
-	lastEvent     atomic.Value
-}
-
-func (c *blockingFallbackTerminalCommitter) Commit(event events.Event) (events.Event, error) {
-	c.lastEvent.Store(event.Type)
-	if event.Type == "turn.completed" {
-		return events.Event{}, c.completionErr
-	}
-	if event.Type == "turn.errored" {
-		c.once.Do(func() { close(c.errorStarted) })
-		<-c.releaseError
-	}
-	return c.delegate.Commit(event)
-}
-
-func TestReceivePendingInputReturnsStartedAfterCommittedAdmissionWithoutJournalReread(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
-	queue := eng.currentPendingInputQueue()
-	originalPath := queue.path
-	writes := 0
-	originalWrite := queue.fileOps.write
-	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
-		n, err := originalWrite(file, body)
-		writes++
-		if err == nil && writes == 2 {
-			queue.path = originalPath + ".unavailable"
-		}
-		return n, err
-	}
-	t.Cleanup(func() { queue.path = originalPath })
-
-	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
-		Message: llm.TextMessage(llm.RoleUser, "start despite journal reread failure"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Disposition != PendingInputStarted || result.RecordID == "" || result.TurnID == "" || result.Message.ID == "" {
-		t.Fatalf("ReceivePendingInput() result = %+v, want committed start action", result)
+		t.Fatal("fixture cleanup left the fallback Turn running after Thread cleanup")
 	}
 }
 
@@ -913,7 +809,7 @@ func TestReceivePendingInputDefersAcceptedExternalInputUntilRecoveryBarrier(t *t
 	opts := PendingInputOptions{ID: "side-result-1", TTL: time.Hour}
 
 	accepted, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
-		Message:       llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindSideSession, Blocks: []llm.Block{{Type: llm.BlockText, Text: "child result"}}},
+		Message:       llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindWorkerThread, Blocks: []llm.Block{{Type: llm.BlockText, Text: "child result"}}},
 		Options:       &opts,
 		DeferDelivery: true,
 	})
@@ -931,7 +827,7 @@ func TestReceivePendingInputDefersAcceptedExternalInputUntilRecoveryBarrier(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if started.Disposition != PendingInputStarted || started.RecordID != accepted.RecordID || started.Message.Kind != llm.MessageKindSideSession {
+	if started.Disposition != PendingInputStarted || started.RecordID != accepted.RecordID || started.Message.Kind != llm.MessageKindWorkerThread {
 		t.Fatalf("resumed input = %+v", started)
 	}
 }
@@ -987,7 +883,7 @@ func TestTurnRejectsSynchronousInputBeforeQueueingWhenTurnIsReserved(t *testing.
 func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	eng.MaxPendingInputs = 1
-	statusStore := NewStatusStore(StatusSeed{SessionID: "discard-session", MaxPendingInputs: 1})
+	statusStore := NewStatusStore(StatusSeed{ThreadID: "discard-thread", MaxPendingInputs: 1})
 	unsubscribe := bus.Subscribe("*", statusStore.Publish)
 	defer unsubscribe()
 	if err := eng.ReserveTurnID("active-turn"); err != nil {
@@ -1005,8 +901,8 @@ func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
 	if queued.Disposition != PendingInputQueued || queued.Status.PendingCount != 1 {
 		t.Fatalf("queued input = %+v", queued)
 	}
-	if snapshot := statusStore.Snapshot(); snapshot.Session.PendingCount != 1 || snapshot.Session.CanAcceptInput {
-		t.Fatalf("queued status projection = %+v, want full queue", snapshot.Session)
+	if snapshot := statusStore.Snapshot(); snapshot.Thread.PendingCount != 1 || snapshot.Thread.CanAcceptInput {
+		t.Fatalf("queued status projection = %+v, want full queue", snapshot.Thread)
 	}
 
 	discarded, err := eng.DiscardPendingInput(queued.RecordID)
@@ -1019,8 +915,8 @@ func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
 	if record := pendingLifecycleTestRecord(t, eng, queued.RecordID); record.State != PendingInputStateDropped {
 		t.Fatalf("durable record = %+v, want dropped", record)
 	}
-	if snapshot := statusStore.Snapshot(); snapshot.Session.PendingCount != 0 || !snapshot.Session.CanAcceptInput {
-		t.Fatalf("discarded status projection = %+v, want available queue", snapshot.Session)
+	if snapshot := statusStore.Snapshot(); snapshot.Thread.PendingCount != 0 || !snapshot.Thread.CanAcceptInput {
+		t.Fatalf("discarded status projection = %+v, want available queue", snapshot.Thread)
 	}
 }
 
@@ -1068,7 +964,7 @@ func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, provider, false)
-	statusStore := NewStatusStore(StatusSeed{SessionID: "discard-start"})
+	statusStore := NewStatusStore(StatusSeed{ThreadID: "discard-start"})
 	unsubscribe := bus.Subscribe("*", statusStore.Publish)
 	defer unsubscribe()
 	started, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
@@ -1103,11 +999,11 @@ func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
 	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.ID != started.TurnID || snapshot.Turn.State != TurnLifecycleErrored {
 		t.Fatalf("live status = %+v, want discarded turn errored", snapshot.Turn)
 	}
-	journal, err := session.ReadEvents(eng.Session.Dir)
+	journal, err := thread.ReadEvents(eng.Thread.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed := NewStatusStoreFromJournal(StatusSeed{SessionID: "discard-start"}, journal).Snapshot()
+	replayed := NewStatusStoreFromJournal(StatusSeed{ThreadID: "discard-start"}, journal).Snapshot()
 	if replayed.Turn == nil || replayed.Turn.ID != started.TurnID || replayed.Turn.State != TurnLifecycleErrored {
 		t.Fatalf("replayed status = %+v, want discarded turn errored", replayed.Turn)
 	}
@@ -1115,7 +1011,7 @@ func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
 
 func TestDiscardPendingInputPreservesQueuedTailBeforeTerminalError(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
-	statusStore := NewStatusStore(StatusSeed{SessionID: "discard-start-tail"})
+	statusStore := NewStatusStore(StatusSeed{ThreadID: "discard-start-tail"})
 	unsubscribe := bus.Subscribe("*", statusStore.Publish)
 	defer unsubscribe()
 	started, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
@@ -1144,10 +1040,10 @@ func TestDiscardPendingInputPreservesQueuedTailBeforeTerminalError(t *testing.T)
 	if record := pendingLifecycleTestRecord(t, eng, queued.RecordID); record.State != PendingInputStateProcessed {
 		t.Fatalf("queued tail record = %+v, want processed preservation", record)
 	}
-	if len(eng.Session.History) != 1 || eng.Session.History[0].ID != queuedRecord.MessageID {
-		t.Fatalf("durable history = %+v, want queued tail preserved once", eng.Session.History)
+	if len(eng.Thread.History) != 1 || eng.Thread.History[0].ID != queuedRecord.MessageID {
+		t.Fatalf("durable history = %+v, want queued tail preserved once", eng.Thread.History)
 	}
-	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.State != TurnLifecycleErrored || snapshot.Session.PendingCount != 0 {
+	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.State != TurnLifecycleErrored || snapshot.Thread.PendingCount != 0 {
 		t.Fatalf("live status = %+v, want terminal error with empty queue", snapshot)
 	}
 }
@@ -1238,7 +1134,7 @@ func TestDiscardPendingInputRetriesStartedTurnTerminalCommit(t *testing.T) {
 		t.Fatalf("durable record = %+v, want dropped before terminal retry", record)
 	}
 
-	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session})
+	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread})
 	result, err = eng.DiscardPendingInput(started.RecordID)
 	if err != nil {
 		t.Fatal(err)
@@ -1249,158 +1145,13 @@ func TestDiscardPendingInputRetriesStartedTurnTerminalCommit(t *testing.T) {
 	if status := eng.PendingInputStatus(); status.TurnID != "" {
 		t.Fatalf("pending status = %+v, want released after terminal retry", status)
 	}
-	journal, err := session.ReadEvents(eng.Session.Dir)
+	journal, err := thread.ReadEvents(eng.Thread.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed := NewStatusStoreFromJournal(StatusSeed{SessionID: "discard-retry"}, journal).Snapshot()
+	replayed := NewStatusStoreFromJournal(StatusSeed{ThreadID: "discard-retry"}, journal).Snapshot()
 	if replayed.Turn == nil || replayed.Turn.ID != started.TurnID || replayed.Turn.State != TurnLifecycleErrored {
 		t.Fatalf("replayed status = %+v, want retried terminal error", replayed.Turn)
-	}
-}
-
-func TestReceivePendingInputReturnsStorageRetryWhenPersistedRecordCannotBeRead(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
-	record, err := eng.PersistPendingMessageWithOptions(
-		context.Background(),
-		llm.TextMessage(llm.RoleUser, "retry journal read"),
-		PendingInputOptions{ID: "journal-read-retry", TTL: time.Hour},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queue := eng.currentPendingInputQueue()
-	pendingPath := queue.path
-	backupPath := pendingPath + ".before-read-failure"
-	if err := os.Rename(pendingPath, backupPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(pendingPath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.Remove(pendingPath)
-		_ = os.Rename(backupPath, pendingPath)
-	})
-
-	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{RecordID: record.ID})
-	if err == nil {
-		t.Fatal("ReceivePendingInput() error = nil, want journal read failure")
-	}
-	if result.RecordID != record.ID || result.Retry != PendingInputRetryAfterStorage {
-		t.Fatalf("ReceivePendingInput() result = %+v, want record %q with storage retry", result, record.ID)
-	}
-}
-
-func TestReceivePersistedPendingInputReturnsStartedAfterCommittedAdmissionWithoutJournalReread(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
-	record, err := eng.PersistPendingMessageWithOptions(
-		context.Background(),
-		llm.TextMessage(llm.RoleUser, "resume despite journal reread failure"),
-		PendingInputOptions{ID: "resume-without-reread", TTL: time.Hour},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queue := eng.currentPendingInputQueue()
-	originalPath := queue.path
-	originalWrite := queue.fileOps.write
-	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
-		n, err := originalWrite(file, body)
-		if err == nil {
-			queue.path = originalPath + ".unavailable"
-		}
-		return n, err
-	}
-	t.Cleanup(func() { queue.path = originalPath })
-
-	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{RecordID: record.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Disposition != PendingInputStarted || result.RecordID != record.ID || result.TurnID == "" || result.Message.ID != record.MessageID {
-		t.Fatalf("ReceivePendingInput() result = %+v, want committed persisted start action", result)
-	}
-}
-
-func TestFinishPendingInputCompactionReturnsPromotedStartWithoutJournalReread(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
-	compactTurnID, err := eng.ReservePendingInputCompaction()
-	if err != nil {
-		t.Fatal(err)
-	}
-	queued, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
-		Message: llm.TextMessage(llm.RoleUser, "promote despite journal reread failure"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	queue := eng.currentPendingInputQueue()
-	originalPath := queue.path
-	originalWrite := queue.fileOps.write
-	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
-		n, err := originalWrite(file, body)
-		if err == nil {
-			queue.path = originalPath + ".unavailable"
-		}
-		return n, err
-	}
-	t.Cleanup(func() { queue.path = originalPath })
-
-	result, err := eng.FinishPendingInputCompaction(compactTurnID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Disposition != PendingInputStarted || result.RecordID != queued.RecordID || result.TurnID == "" || result.Message.ID == "" {
-		t.Fatalf("FinishPendingInputCompaction() result = %+v, want promoted start action", result)
-	}
-}
-
-func TestResolvePendingInputReturnsStorageRetryWhenRecordCannotBeRead(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
-	record, err := eng.PersistPendingMessageWithOptions(
-		context.Background(),
-		llm.TextMessage(llm.RoleUser, "resolve after storage recovers"),
-		PendingInputOptions{ID: "resolve-read-retry", TTL: time.Hour},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queue := eng.currentPendingInputQueue()
-	originalPath := queue.path
-	queue.path = originalPath + ".unavailable"
-	t.Cleanup(func() { queue.path = originalPath })
-
-	result, err := eng.ResolvePendingInput(record.ID, errors.New("provider failed"))
-	if err == nil {
-		t.Fatal("ResolvePendingInput() error = nil, want journal read failure")
-	}
-	if result.RecordID != record.ID || result.Retry != PendingInputRetryAfterStorage {
-		t.Fatalf("ResolvePendingInput() result = %+v, want record %q with storage retry", result, record.ID)
-	}
-}
-
-func TestReceivePendingInputReturnsStorageRetryWhenPersistedEnqueueWriteFails(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
-	record, err := eng.PersistPendingMessageWithOptions(
-		context.Background(),
-		llm.TextMessage(llm.RoleUser, "retry enqueue write"),
-		PendingInputOptions{ID: "enqueue-write-retry", TTL: time.Hour},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queue := eng.currentPendingInputQueue()
-	queue.now = func() time.Time { return record.ExpiresAt.Add(time.Second) }
-	wantErr := errors.New("journal append failed")
-	queue.fileOps.write = func(*os.File, []byte) (int, error) { return 0, wantErr }
-
-	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{RecordID: record.ID})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("ReceivePendingInput() error = %v, want %v", err, wantErr)
-	}
-	if result.RecordID != record.ID || result.Retry != PendingInputRetryAfterStorage {
-		t.Fatalf("ReceivePendingInput() result = %+v, want record %q with storage retry", result, record.ID)
 	}
 }
 

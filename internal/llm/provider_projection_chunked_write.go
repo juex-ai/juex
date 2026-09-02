@@ -14,8 +14,8 @@ const providerWriteChunkRecentReplayCount = 4
 
 // FoldChunkedWriteHistoryForProvider removes provider-heavy chunked write
 // tool-call pairs from replay while preserving durable conversation history.
-// Active sessions keep the most recent chunks visible so the model can
-// continue; committed or aborted sessions collapse to a text summary.
+// Active chunked writes keep the most recent chunks visible so the model can
+// continue; committed or aborted writes collapse to a text summary.
 func FoldChunkedWriteHistoryForProvider(history []Message) []Message {
 	return foldChunkedWriteHistoryForProvider(history)
 }

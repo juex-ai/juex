@@ -17,8 +17,6 @@ func newListenCmd(flags *persistentFlags) *cobra.Command {
 	var (
 		addr          string
 		unsafeBindAny bool
-		ephemeral     bool
-		keep          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "listen",
@@ -31,19 +29,16 @@ This command does not serve the React SPA. Use juex fleet serve for the fleet
 browser UI, agent switcher, and per-agent API proxy.
 
 Hit Ctrl-C to shut down. In-flight turns receive context cancellation
-and the server flushes session jsonl before exit.`,
+and the server flushes Thread Journal before exit.`,
 		Example: `  juex listen
   juex listen --addr 127.0.0.1:9000`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
-			if err := validateEphemeralFlags(ephemeral, keep, false); err != nil {
-				return err
-			}
 			addrChanged := cmd.Flags().Changed("addr")
 			if err := validateListenOptions(addr, addrChanged, unsafeBindAny); err != nil {
 				return err
 			}
-			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags, keep)
+			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -80,8 +75,6 @@ and the server flushes session jsonl before exit.`,
 	}
 	cmd.Flags().StringVar(&addr, "addr", "", "loopback address (host:port); enables the TCP API listener")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
-	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "use isolated temporary agent state and remove it on exit")
-	cmd.Flags().BoolVar(&keep, "keep", false, "retain and print ephemeral agent state after exit (requires --ephemeral)")
 	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
 }

@@ -20,7 +20,7 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/processmetrics"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/web"
 )
 
@@ -497,19 +497,19 @@ func isReadOnlyAgentRequest(method, path string) bool {
 }
 
 func isReadOnlyAgentPath(path string) bool {
-	if path == "/api/sessions" || path == "/api/sessions/active" || path == "/api/media" {
+	if path == "/api/threads" || path == "/api/media" {
 		return true
 	}
-	const prefix = "/api/sessions/"
+	const prefix = "/api/threads/"
 	if !strings.HasPrefix(path, prefix) {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
 	if len(parts) == 1 {
-		return session.ValidID(parts[0])
+		return thread.ValidID(parts[0])
 	}
 	return len(parts) == 2 &&
-		session.ValidID(parts[0]) &&
+		thread.ValidID(parts[0]) &&
 		(parts[1] == "context" || parts[1] == "scratchpad")
 }
 

@@ -8,25 +8,22 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-func TestProjectedArtifactStoreUsesExplicitArtifactDir(t *testing.T) {
+func TestProjectedContentStoreUsesThreadSpool(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
-	eng.ArtifactDir = artifactDir
 
 	store, err := eng.projectedArtifactStore()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session/tool-results/item.txt", []byte("result\n"))
+	ref, err := store.Put("threads/thread/tool-results/item.txt", []byte("result\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(artifactDir, filepath.FromSlash(ref.Path))); err != nil {
-		t.Fatalf("artifact was not stored in explicit ArtifactDir: %v", err)
+	if _, err := os.Stat(filepath.Join(eng.Thread.SpoolDir(), filepath.FromSlash(ref.Path))); err != nil {
+		t.Fatalf("projected content was not stored in Thread spool: %v", err)
 	}
 }
 
@@ -38,7 +35,7 @@ func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 	cfg.UserInputPreviewTailBytes = 8
 	policy := effectiveCompactionPolicy(cfg, DefaultContextWindowTokens)
 	original := "head-" + strings.Repeat("secret ", 40) + "-tail"
-	if err := eng.Session.Append(llm.Message{
+	if err := eng.Thread.Append(llm.Message{
 		ID:   "message-1",
 		Role: llm.RoleUser,
 		Blocks: []llm.Block{{
@@ -49,18 +46,18 @@ func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	projected, stats, err := eng.projectMessageLocked(eng.Session.History[0], policy)
+	projected, stats, err := eng.projectMessageLocked(eng.Thread.History[0], policy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stats.UserInputsExternalized != 1 {
 		t.Fatalf("stats = %+v, want one externalized input", stats)
 	}
-	if got := eng.Session.History[0].Blocks[0].Text; got != original {
-		t.Fatalf("session history was mutated: got %q", got)
+	if got := eng.Thread.History[0].Blocks[0].Text; got != original {
+		t.Fatalf("thread history was mutated: got %q", got)
 	}
-	if eng.Session.History[0].Blocks[0].Artifact != nil {
-		t.Fatalf("session history artifact = %+v, want nil", eng.Session.History[0].Blocks[0].Artifact)
+	if eng.Thread.History[0].Blocks[0].Artifact != nil {
+		t.Fatalf("thread history artifact = %+v, want nil", eng.Thread.History[0].Blocks[0].Artifact)
 	}
 	if projected.Blocks[0].Artifact == nil || !strings.Contains(projected.Blocks[0].Text, "User input stored outside context.") {
 		t.Fatalf("projected block missing artifact projection: %+v", projected.Blocks[0])
@@ -150,16 +147,12 @@ func TestProjectMessagesForProviderLockedAdvertisesReadOnlyToolResultURI(t *test
 		t.Fatal("projected Tool Result is missing artifact metadata")
 	}
 	readURI := artifactPathFromProviderText(t, projected.Blocks[0].Content)
-	wantURI, err := artifact.FormatReadURI(projection.StoredPath)
-	if err != nil {
-		t.Fatal(err)
+	wantPath := filepath.Join(eng.Thread.SpoolDir(), filepath.FromSlash(projection.StoredPath))
+	if readURI != wantPath {
+		t.Fatalf("provider-visible path = %q, want Thread spool path %q", readURI, wantPath)
 	}
-	if readURI != wantURI {
-		t.Fatalf("provider-visible path = %q, want read-only Artifact URI %q", readURI, wantURI)
-	}
-	parsedPath, recognized, err := artifact.ParseReadURI(readURI)
-	if err != nil || !recognized || parsedPath != projection.StoredPath {
-		t.Fatalf("parse advertised path = (%q, %t, %v), want (%q, true, nil)", parsedPath, recognized, err, projection.StoredPath)
+	if !filepath.IsAbs(readURI) {
+		t.Fatalf("provider-visible spool path = %q, want absolute", readURI)
 	}
 	if got := string(readProjectedArtifact(t, eng, projection)); got != original {
 		t.Fatalf("advertised artifact = %q, want original Tool Result", got)
@@ -198,11 +191,11 @@ func TestProjectMessagesForProviderLockedBoundsLegacyToolResultWhenCompactionDis
 			Content:   original,
 		}},
 	}
-	if err := eng.Session.Append(msg); err != nil {
+	if err := eng.Thread.Append(msg); err != nil {
 		t.Fatal(err)
 	}
 
-	projected, stats, err := eng.projectMessagesForProviderLocked(eng.Session.History, effectiveCompactionPolicy(eng.Compaction, DefaultContextWindowTokens))
+	projected, stats, err := eng.projectMessagesForProviderLocked(eng.Thread.History, effectiveCompactionPolicy(eng.Compaction, DefaultContextWindowTokens))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +206,7 @@ func TestProjectMessagesForProviderLockedBoundsLegacyToolResultWhenCompactionDis
 	if block.Artifact == nil || !strings.Contains(block.Content, "Tool output stored outside context.") || !strings.Contains(block.Content, "tool-hea") || !strings.Contains(block.Content, "ool-tail") {
 		t.Fatalf("projected block = %+v", block)
 	}
-	if got := eng.Session.History[0].Blocks[0]; got.Content != original || got.Artifact != nil {
+	if got := eng.Thread.History[0].Blocks[0]; got.Content != original || got.Artifact != nil {
 		t.Fatalf("canonical history was mutated: %+v", got)
 	}
 	if got := string(readProjectedArtifact(t, eng, block.Artifact)); got != original {
@@ -311,12 +304,9 @@ func TestProjectMessagesForProviderLockedPreservesExistingUserInputPreview(t *te
 	}
 	storedPath := artifactPathFromProviderText(t, projected.Blocks[0].Text)
 	readPath := artifactPathFromProviderText(t, got[0].Blocks[0].Text)
-	wantReadURI, err := artifact.FormatReadURI(projected.Blocks[0].Artifact.StoredPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if storedPath != projected.Blocks[0].Artifact.StoredPath || readPath != wantReadURI {
-		t.Fatalf("durable/provider paths = %q / %q, want %q / %q", storedPath, readPath, projected.Blocks[0].Artifact.StoredPath, wantReadURI)
+	wantReadPath := filepath.Join(eng.Thread.SpoolDir(), filepath.FromSlash(projected.Blocks[0].Artifact.StoredPath))
+	if storedPath != projected.Blocks[0].Artifact.StoredPath || readPath != wantReadPath {
+		t.Fatalf("durable/provider paths = %q / %q, want %q / %q", storedPath, readPath, projected.Blocks[0].Artifact.StoredPath, wantReadPath)
 	}
 	if strings.Replace(got[0].Blocks[0].Text, readPath, storedPath, 1) != projected.Blocks[0].Text {
 		t.Fatalf("provider projection changed more than the readable path:\ngot: %s\nwant: %s", got[0].Blocks[0].Text, projected.Blocks[0].Text)
@@ -409,7 +399,7 @@ func TestProjectOversizedCompactionInputsKeepsOneByteCaptionAlongsideImage(t *te
 		Blocks: []llm.Block{
 			{Type: llm.BlockText, Text: "A"},
 			{Type: llm.BlockImage, Media: &llm.MediaRef{
-				ArtifactPath:  "sessions/session/media/photo.png",
+				ArtifactPath:  "threads/thread/media/photo.png",
 				MediaType:     "image/png",
 				SHA256:        "image-sha",
 				OriginalBytes: 1234,
@@ -430,7 +420,7 @@ func TestProjectOversizedCompactionInputsKeepsOneByteCaptionAlongsideImage(t *te
 		t.Fatalf("projected text block count = %d, want 1", got)
 	}
 	reference := appendCompactionInputReferences("summary", retained)
-	for _, want := range []string{"\nA\n", "Image: path=sessions/session/media/photo.png"} {
+	for _, want := range []string{"\nA\n", "Image: path=threads/thread/media/photo.png"} {
 		if !strings.Contains(reference, want) {
 			t.Fatalf("retained reference missing %q:\n%s", want, reference)
 		}
@@ -446,7 +436,7 @@ func TestCarryCompactionInputReferencesPrunesOldestToCompleteBudget(t *testing.T
 			Role: llm.RoleUser,
 			Kind: llm.MessageKindDirect,
 			Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
-				ArtifactPath:  fmt.Sprintf("sessions/session/media/image-%02d.png", i),
+				ArtifactPath:  fmt.Sprintf("threads/thread/media/image-%02d.png", i),
 				MediaType:     "image/png",
 				SHA256:        strings.Repeat(fmt.Sprintf("%x", i%16), 64),
 				OriginalBytes: 1234 + i,

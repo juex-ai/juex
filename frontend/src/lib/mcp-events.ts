@@ -25,10 +25,10 @@ export function formatObservationEventForDisplay(
   });
 }
 
-export function formatSideSessionEventForDisplay(
+export function formatWorkerThreadEventForDisplay(
   text: string,
 ): ExternalEventDisplay {
-  const prefix = "Side Session result:";
+  const prefix = "Worker Thread result:";
   const trimmed = text.trim();
   const payload = trimmed.startsWith(prefix)
     ? trimmed.slice(prefix.length).trim()
@@ -48,7 +48,7 @@ export function formatSideSessionEventForDisplay(
     // Keep the raw payload as the preview when an older message is not JSON.
   }
   return {
-    label: "side_session:result",
+    label: "worker_thread:result",
     content: text,
     preview: oneLinePreview(previewText),
     copyText: text,

@@ -18,7 +18,7 @@ import {
 import { AlertTriangle, ArrowLeftRight, Plus } from "lucide-react";
 
 import {
-  getSessionScratchpad,
+  getThreadScratchpad,
   listAgents,
   runAgentAction,
   subscribeAgentResourceEvents,
@@ -101,9 +101,9 @@ export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const agentMatch = useMatch("/agents/:agentId/*");
-  const sessionMatch = useMatch("/agents/:agentId/sessions/:sessionId");
+  const threadMatch = useMatch("/agents/:agentId/threads/:threadId");
   const agentId = agentMatch?.params.agentId ?? "";
-  const sessionID = sessionMatch?.params.sessionId ?? "";
+  const threadID = threadMatch?.params.threadId ?? "";
   const settings = location.pathname === "/settings";
   const activeTab = agentTabFromPath(location.pathname);
   const workspaceDocked = useMediaQuery(WORKSPACE_DOCK_QUERY);
@@ -275,8 +275,8 @@ export function AppShell() {
   }, [location.pathname]);
 
   const loadScratchpadTree = useCallback(
-    (signal?: AbortSignal) => getSessionScratchpad(sessionID, signal),
-    [sessionID],
+    (signal?: AbortSignal) => getThreadScratchpad(threadID, signal),
+    [threadID],
   );
 
   const runLifecycle = useCallback(
@@ -340,8 +340,8 @@ export function AppShell() {
     : workspaceSheetOpen && workspaceAvailable;
   const scratchpadMode = filePanelMode === "scratchpad";
   const filePanelTitle = scratchpadMode ? "Scratchpad" : "Workspace";
-  const filePanelKey = `${agentId}:${sessionID || "workspace"}:${filePanelMode}`;
-  const filePanelHeaderAction = sessionID ? (
+  const filePanelKey = `${agentId}:${threadID || "workspace"}:${filePanelMode}`;
+  const filePanelHeaderAction = threadID ? (
     <FilePanelModeToggle
       mode={filePanelMode}
       onToggle={() =>

@@ -92,7 +92,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		}
 	}
 	owners := make(map[string]runtimemodule.ID)
-	for _, set := range []*runtimemodule.Set{enabled.Engine.RuntimeModules, enabled.Engine.SessionRuntimeSnapshot().Modules} {
+	for _, set := range []*runtimemodule.Set{enabled.Engine.RuntimeModules, enabled.Engine.ThreadRuntimeSnapshot().Modules} {
 		for _, entry := range set.ToolCatalog().Entries() {
 			owners[entry.Tool.Name] = entry.ModuleID
 		}
@@ -142,7 +142,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		"memory-search":   "temporary JUEX_HOME",
 	})
 	dataDir := filepath.Join(address.StateDir(), "extensions", "memory")
-	if marker, err := os.ReadFile(filepath.Join(dataDir, "hook-ran")); err != nil || string(marker) != "SessionStart" {
+	if marker, err := os.ReadFile(filepath.Join(dataDir, "hook-ran")); err != nil || string(marker) != "ThreadStart" {
 		t.Fatalf("extension hook marker = %q, err=%v", marker, err)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "memory-entry")); err != nil {
@@ -190,7 +190,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	disabledCfg := cfg
 	disabledCfg.Extensions = config.ExtensionPolicy{Allow: []string{}, Configured: true}
 	disabled, err := app.New(app.Options{
-		Config: disabledCfg, Provider: &bareScriptProvider{}, WorkDir: work, SessionMode: app.SessionModeNewPrimary,
+		Config: disabledCfg, Provider: &bareScriptProvider{}, WorkDir: work,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +287,7 @@ func installMemoryExtensionFixture(t *testing.T, extensionDir string) {
 	write("hooks.yaml", `trusted: true
 commands:
   - name: memory-session-start
-    events: [SessionStart]
+    events: [ThreadStart]
     command: ["${JUEX_EXT_DIR}/memory-helper", "-test.run=TestExternalMemoryHookHelperProcess"]
 `, 0o600)
 	write("skills/memory/SKILL.md", `---

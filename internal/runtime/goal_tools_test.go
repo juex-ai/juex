@@ -10,7 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-func TestGoalToolDefinitionsBindSessionStateGroup(t *testing.T) {
+func TestGoalToolDefinitionsBindThreadStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
 	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
 	installModuleTools(t, reg, NewGoalModule(store))
@@ -19,8 +19,8 @@ func TestGoalToolDefinitionsBindSessionStateGroup(t *testing.T) {
 		t.Fatalf("definition count = %d, want 3", len(definitions))
 	}
 	for _, definition := range definitions {
-		if definition.Group != tools.ToolGroupSessionState {
-			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, tools.ToolGroupSessionState)
+		if definition.Group != tools.ToolGroupThreadState {
+			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, tools.ToolGroupThreadState)
 		}
 		registered, ok := reg.Get(definition.Name)
 		if !ok {
@@ -33,7 +33,7 @@ func TestGoalToolDefinitionsBindSessionStateGroup(t *testing.T) {
 	}
 }
 
-func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
+func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 	reg := tools.NewRegistry()
 	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
 	installModuleTools(t, reg, NewGoalModule(store))
@@ -65,7 +65,7 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(updateTool.Description), "success requires acceptance") ||
 		!strings.Contains(updateTool.Description, string(workmem.GoalStatusWaitForUser)) ||
-		!strings.Contains(updateTool.Description, `Guide available via skill_load("juex-session-state").`) {
+		!strings.Contains(updateTool.Description, `Guide available via skill_load("juex-thread-state").`) {
 		t.Fatalf("update_goal description should retain routing and guide pointer: %q", updateTool.Description)
 	}
 
@@ -118,6 +118,6 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snapshot != nil {
-		t.Fatalf("goal leaked across sessions: %+v", snapshot)
+		t.Fatalf("goal leaked across threads: %+v", snapshot)
 	}
 }

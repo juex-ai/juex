@@ -11,7 +11,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 const (
@@ -21,7 +21,7 @@ const (
 	SlashStatus  = "/status"
 )
 
-const newSessionGreetingPrompt = "Please greet me briefly, introduce what you can help with in one concise sentence, and ask what I want to do next. You may suggest a concrete place to start."
+const newThreadGreetingPrompt = "Please greet me briefly, introduce what you can help with in one concise sentence, and ask what I want to do next. You may suggest a concrete place to start."
 
 var slashCommandNames = []string{SlashCompact, SlashGoal, SlashNew, SlashStatus}
 
@@ -62,12 +62,12 @@ func AvailableSlashCommandsText() string {
 	return strings.Join(slashCommandNames, ", ")
 }
 
-func NewSessionGreetingPrompt() string {
-	return newSessionGreetingPrompt
+func NewThreadGreetingPrompt() string {
+	return newThreadGreetingPrompt
 }
 
-func NewSessionGreetingMessage() llm.Message {
-	msg := llm.TextMessage(llm.RoleUser, newSessionGreetingPrompt)
+func NewThreadGreetingMessage() llm.Message {
+	msg := llm.TextMessage(llm.RoleUser, newThreadGreetingPrompt)
 	msg.Kind = llm.MessageKindSystemNotice
 	return msg
 }
@@ -75,9 +75,9 @@ func NewSessionGreetingMessage() llm.Message {
 func GoalInstructionPrompt(args string) string {
 	args = strings.TrimSpace(args)
 	if args == "" {
-		return "The user wants to inspect or update the session goal. Use get_goal first, then create_goal or update_goal if a goal should be created, changed, marked success, or marked failure. Do not treat this slash command text itself as the goal description."
+		return "The user wants to inspect or update the Thread goal. Use get_goal first, then create_goal or update_goal if a goal should be created, changed, marked success, or marked failure. Do not treat this slash command text itself as the goal description."
 	}
-	return "The user wants to create or update the session goal. Use get_goal first, then call create_goal or update_goal as appropriate. Do not write goal state directly; use the goal tools only.\n\nUser goal request:\n" + args
+	return "The user wants to create or update the Thread goal. Use get_goal first, then call create_goal or update_goal as appropriate. Do not write goal state directly; use the goal tools only.\n\nUser goal request:\n" + args
 }
 
 func ParseSlashCommand(input string) (SlashCommand, bool, error) {
@@ -127,11 +127,11 @@ func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (
 		status := a.StatusSnapshot()
 		return SlashCommandResult{Name: cmd.Name, Text: status.Text(), Status: &status}, nil
 	case SlashNew:
-		if err := a.SwitchToNewPrimarySessionContext(ctx); err != nil {
+		if err := a.NewContext(ctx); err != nil {
 			return SlashCommandResult{}, err
 		}
 		status := a.StatusSnapshot()
-		text := fmt.Sprintf("New primary session: %s", status.SessionID)
+		text := fmt.Sprintf("New context generation: %s", status.GenerationID)
 		return SlashCommandResult{Name: cmd.Name, Text: text, Status: &status}, nil
 	default:
 		return SlashCommandResult{}, &UnknownSlashCommandError{Input: cmd.Name}
@@ -160,10 +160,11 @@ func (a *App) executeCompactSlashCommand(ctx context.Context, cmd SlashCommand, 
 }
 
 type StatusSnapshot struct {
-	SessionID    string                      `json:"session_id"`
-	SessionDir   string                      `json:"session_dir,omitempty"`
-	SessionKind  string                      `json:"session_kind,omitempty"`
-	Active       bool                        `json:"active"`
+	ThreadID     string                      `json:"thread_id"`
+	ThreadDir    string                      `json:"thread_dir,omitempty"`
+	ThreadAlias  string                      `json:"thread_alias,omitempty"`
+	GenerationID string                      `json:"generation_id"`
+	State        string                      `json:"state"`
 	WorkDir      string                      `json:"work_dir"`
 	Turns        int                         `json:"turns"`
 	StartedAt    time.Time                   `json:"started_at"`
@@ -176,7 +177,6 @@ type StatusSnapshot struct {
 	TokenTotal   int                         `json:"token_total"`
 	ContextUsage *llm.ContextUsage           `json:"context_usage,omitempty"`
 	Compaction   StatusCompactionSnapshot    `json:"compaction"`
-	SuccessRates StatusSuccessRatesSnapshot  `json:"success_rates"`
 	PendingInput runtime.PendingInputStatus  `json:"pending_input"`
 	Goal         *workmem.GoalStatusSnapshot `json:"goal,omitempty"`
 }
@@ -207,8 +207,8 @@ type StatusSuccessRatesSnapshot struct {
 }
 
 const (
-	statusIconSession     = "\U0001F4AC"
-	statusIconSessionKind = "\U0001F4CC"
+	statusIconThread      = "\U0001F4AC"
+	statusIconGeneration  = "\U0001F4CC"
 	statusIconWorkDir     = "\U0001F4C1"
 	statusIconProvider    = "\U0001F916"
 	statusIconMCP         = "\U0001F50C"
@@ -227,51 +227,53 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 	if a == nil {
 		return StatusSnapshot{}
 	}
-	a.sessionMu.RLock()
-	defer a.sessionMu.RUnlock()
+	a.threadMu.RLock()
+	defer a.threadMu.RUnlock()
 	var (
-		sessionID    string
-		sessionDir   string
+		threadID     string
+		threadDir    string
+		threadAlias  string
+		generationID string
+		threadState  string
 		turns        int
 		startedAt    time.Time
 		lastActiveAt time.Time
-		sessionKind  string
-		active       bool
 		tokenUsage   llm.Usage
 		contextUsage *llm.ContextUsage
 		compaction   StatusCompactionSnapshot
-		successRates StatusSuccessRatesSnapshot
 	)
-	if a.Session != nil {
-		info, history := a.Session.Snapshot()
-		sessionID = info.ID
-		sessionDir = info.Dir
-		sessionKind = info.Kind
-		active = info.Active
-		turns = info.Turns
-		startedAt = info.StartedAt
-		lastActiveAt = info.LastActiveAt
+	if a.Thread != nil {
+		info := a.Thread.Info()
+		replay := a.Thread.ReplaySnapshot()
+		threadID = info.ID
+		threadDir = info.Dir
+		threadAlias = info.Alias
+		generationID = info.GenerationID
+		threadState = string(info.ExecutionState)
+		turns = info.TurnCount
+		startedAt = info.CreatedAt.Time
+		lastActiveAt = replay.Projection.LastActivityAt.Time
 		tokenUsage = info.TokenUsage
 		if info.ContextUsage != nil {
 			copied := *info.ContextUsage
 			copied.Breakdown = append([]llm.ContextUsagePart(nil), info.ContextUsage.Breakdown...)
 			contextUsage = &copied
 		}
-		compaction = compactionStatusFromHistory(history)
-		successRates = successRatesFromSessionStats(a.Session.RuntimeStats())
+		compaction = compactionStatusFromReplay(replay)
 	}
 	observables := observablesStatusFromManager(a.obsv)
 	pending := runtime.PendingInputStatus{}
 	var goal *workmem.GoalStatusSnapshot
 	if a.Engine != nil {
 		pending = a.Engine.PendingInputStatus()
-		goal, _ = a.Engine.SessionStateStatus()
+		goal, _ = a.Engine.ThreadStateStatus()
 	}
 	return StatusSnapshot{
-		SessionID:    sessionID,
-		SessionDir:   sessionDir,
-		SessionKind:  sessionKind,
-		Active:       active,
+		ThreadID:     threadID,
+		ThreadDir:    threadDir,
+		ThreadAlias:  threadAlias,
+		GenerationID: generationID,
+		State:        threadState,
 		WorkDir:      a.cfg.WorkDir,
 		Turns:        turns,
 		StartedAt:    startedAt,
@@ -284,7 +286,6 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 		TokenTotal:   tokenUsage.TotalTokens(),
 		ContextUsage: contextUsage,
 		Compaction:   compaction,
-		SuccessRates: successRates,
 		PendingInput: pending,
 		Goal:         goal,
 	}
@@ -305,15 +306,11 @@ func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {
 
 func (s StatusSnapshot) Text() string {
 	var lines []string
-	if s.SessionID != "" {
-		lines = append(lines, statusLabel(statusIconSession, formatSessionStatus(s.SessionID, s.Turns, s.StartedAt)))
+	if s.ThreadID != "" {
+		lines = append(lines, statusLabel(statusIconThread, formatThreadStatus(s.ThreadID, s.ThreadAlias, s.Turns, s.StartedAt)))
 	}
-	if s.SessionKind != "" {
-		state := "inactive"
-		if s.Active {
-			state = "active"
-		}
-		lines = append(lines, statusLabel(statusIconSessionKind, fmt.Sprintf("session kind: %s (%s)", s.SessionKind, state)))
+	if s.GenerationID != "" {
+		lines = append(lines, statusLabel(statusIconGeneration, fmt.Sprintf("generation: %s (%s)", s.GenerationID, s.State)))
 	}
 	if s.WorkDir != "" {
 		lines = append(lines, statusLabel(statusIconWorkDir, "workdir: "+s.WorkDir))
@@ -329,7 +326,6 @@ func (s StatusSnapshot) Text() string {
 		lines = append(lines, statusLabel(statusIconContext, "context: not measured yet"))
 	}
 	lines = append(lines, statusLabel(statusIconCompact, formatCompactionStatus(s.Compaction)))
-	lines = append(lines, statusLabel(statusIconSuccess, formatSuccessRates(s.SuccessRates)))
 	if s.Goal != nil {
 		lines = append(lines, statusLabel(statusIconGoal, formatGoalStatus(s.Goal)))
 	}
@@ -377,40 +373,34 @@ func observablesStatusFromManager(manager *observable.Manager) StatusObservables
 	}
 }
 
-func formatSessionStatus(sessionID string, turns int, startedAt time.Time) string {
-	if startedAt.IsZero() {
-		return fmt.Sprintf("session: %s (%d turns)", sessionID, turns)
+func formatThreadStatus(threadID, alias string, turns int, startedAt time.Time) string {
+	label := threadID
+	if alias != "" {
+		label += " (" + alias + ")"
 	}
-	return fmt.Sprintf("session: %s (started %s, %d turns)", sessionID, formatStatusLocalTime(startedAt), turns)
+	if startedAt.IsZero() {
+		return fmt.Sprintf("thread: %s (%d turns)", label, turns)
+	}
+	return fmt.Sprintf("thread: %s (started %s, %d turns)", label, formatStatusLocalTime(startedAt), turns)
 }
 
 func formatStatusLocalTime(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04:05")
 }
 
-func compactionStatusFromHistory(history []llm.Message) StatusCompactionSnapshot {
-	var status StatusCompactionSnapshot
-	for _, msg := range history {
-		if msg.Kind != llm.MessageKindCompact {
+func compactionStatusFromReplay(replay thread.ReplayState) StatusCompactionSnapshot {
+	status := StatusCompactionSnapshot{Count: replay.CompactionCount}
+	for _, activity := range replay.Activities {
+		if activity.Type != thread.FactContextCompacted || activity.Summary == nil {
 			continue
 		}
-		status.Count++
-		status.MemoryTokens = compactMemoryTokens(msg)
+		status.MemoryTokens = compactMemoryTokens(*activity.Summary)
 	}
 	return status
 }
 
 func compactMemoryTokens(msg llm.Message) int {
 	return runtime.EstimateTextTokens(msg.FirstText())
-}
-
-func successRatesFromSessionStats(stats session.RuntimeStats) StatusSuccessRatesSnapshot {
-	return StatusSuccessRatesSnapshot{
-		LLMRequests:   stats.LLMRequests,
-		LLMSuccesses:  stats.LLMSuccesses,
-		ToolRequests:  stats.ToolRequests,
-		ToolSuccesses: stats.ToolSuccesses,
-	}
 }
 
 func formatModelSnapshot(p ProviderStatusSnapshot) string {
@@ -444,19 +434,6 @@ func formatCompactionStatus(status StatusCompactionSnapshot) string {
 		memory = fmt.Sprintf("~%s tokens", FormatCompactTokenCount(status.MemoryTokens))
 	}
 	return fmt.Sprintf("compact: %d, memory: %s", status.Count, memory)
-}
-
-func formatSuccessRates(status StatusSuccessRatesSnapshot) string {
-	return fmt.Sprintf("success: llm %s, tools %s",
-		formatSuccessRate(status.LLMSuccesses, status.LLMRequests),
-		formatSuccessRate(status.ToolSuccesses, status.ToolRequests))
-}
-
-func formatSuccessRate(successes, requests int) string {
-	if requests <= 0 {
-		return "n/a"
-	}
-	return fmt.Sprintf("%d/%d (%s)", successes, requests, percent(successes, requests))
 }
 
 func percent(numerator, denominator int) string {

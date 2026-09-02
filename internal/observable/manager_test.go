@@ -33,10 +33,10 @@ func TestManager_RecordObservationSnapshotsAttachments(t *testing.T) {
 	}
 	artifactDir := filepath.Join(t.TempDir(), "artifacts")
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:  configPath(dir),
-		StateDir:    stateDir(dir),
-		WorkDir:     dir,
-		ArtifactDir: artifactDir,
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		MediaDir:   artifactDir,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestManager_RecordObservationSnapshotsAttachments(t *testing.T) {
 	if len(record.Attachments) != 1 || !strings.HasPrefix(record.Attachments[0].Path, "event-media/") {
 		t.Fatalf("record attachments = %+v, want durable artifact", record.Attachments)
 	}
-	if report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{ArtifactDir: artifactDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
+	if report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{MediaDir: artifactDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("stored attachment validation = %+v", report)
 	}
 }
@@ -200,10 +200,10 @@ func TestManagerInitializesArtifactRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:  configPath(dir),
-		StateDir:    stateDir(dir),
-		WorkDir:     dir,
-		ArtifactDir: artifactDir,
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		MediaDir:   artifactDir,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1320,11 +1320,11 @@ func TestManager_RunOnceDeliversStoppedScheduleWithoutChangingScheduleState(t *t
 	writeObservableConfig(t, dir, spec)
 	delivered := make(chan observable.ObservationRecord, 1)
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:  configPath(dir),
-		StateDir:    stateDir(dir),
-		WorkDir:     dir,
-		ArtifactDir: filepath.Join(t.TempDir(), "artifacts"),
-		Now:         func() time.Time { return now },
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		MediaDir:   filepath.Join(t.TempDir(), "artifacts"),
+		Now:        func() time.Time { return now },
 		Deliver: func(_ context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			delivered <- record
 			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil

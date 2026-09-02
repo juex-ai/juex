@@ -82,7 +82,7 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 		return nil
 	}
 	if e.autoCompactFailures >= policy.MaxAutoFailures {
-		err := fmt.Errorf("auto compaction paused after %d consecutive failures; run /compact with focus instructions or start a new session", policy.MaxAutoFailures)
+		err := fmt.Errorf("auto compaction paused after %d consecutive failures; run /compact with focus instructions or start a new thread", policy.MaxAutoFailures)
 		if emitErr := e.emit(events.Event{Type: "context.compact.skipped", TurnID: turnID, Payload: ContextCompactSkippedPayload{
 			Reason:              "failure_circuit_breaker",
 			Auto:                true,
@@ -129,11 +129,12 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	if !policy.Enabled {
 		return CompactionResult{}, nil
 	}
-	sess := e.currentSession()
+	sess := e.currentThread()
 	if sess == nil {
-		return CompactionResult{}, fmt.Errorf("compact context: missing session runtime")
+		return CompactionResult{}, fmt.Errorf("compact context: missing thread runtime")
 	}
-	selection := selectCompactionInputWithEstimator(providerVisibleMessages(sess.History), policy, e.estimateMessageTokens)
+	_, threadHistory := sess.Snapshot()
+	selection := selectCompactionInputWithEstimator(providerVisibleMessages(threadHistory), policy, e.estimateMessageTokens)
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
 	}
@@ -144,7 +145,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	}
 	prePolicy, err := runtimemodule.ApplyCompactionPolicies(ctx, runtimemodule.CompactionPolicyRequest{
 		Runtime:  e.policyRuntimeContext(),
-		Session:  e.policySessionContext(),
+		Thread:   e.policyThreadContext(),
 		TurnID:   turnID,
 		Stage:    runtimemodule.CompactionPolicyBefore,
 		Reason:   reason,
@@ -229,22 +230,26 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	if selection.HasPreviousSummary {
 		msg.Compaction.PreviousSummaryID = selection.PreviousSummary.ID
 	}
-	simulated := make([]llm.Message, 0, len(sess.History)+1)
-	simulated = append(simulated, sess.History...)
+	simulated := make([]llm.Message, 0, len(threadHistory)+1)
+	simulated = append(simulated, threadHistory...)
 	simulated = append(simulated, msg)
 	tokensAfter := e.estimateContextTokens(systemPrompt, tools, assembleActiveContext(simulated, nil).Messages)
 	msg.Compaction.TokensAfter = tokensAfter
 	if err := e.commitCompactionMarker(ctx, operationGeneration, func() error {
-		if err := sess.Append(msg); err != nil {
-			return fmt.Errorf("session append compact: %w", err)
+		if _, err := sess.BeginCompactedGeneration(msg, auto); err != nil {
+			return fmt.Errorf("thread begin compacted generation: %w", err)
 		}
 		return nil
 	}); err != nil {
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, err)
 	}
 	e.autoCompactFailures = 0
-	if len(sess.History) > 0 {
-		msg = sess.History[len(sess.History)-1]
+	replay := sess.ReplaySnapshot()
+	if len(replay.Activities) > 0 {
+		activity := replay.Activities[len(replay.Activities)-1]
+		if activity.Summary != nil {
+			msg = *activity.Summary
+		}
 	}
 	result := CompactionResult{
 		MessageID:          msg.ID,
@@ -286,7 +291,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	}
 	postPolicy, postErr := runtimemodule.ApplyCompactionPolicies(ctx, runtimemodule.CompactionPolicyRequest{
 		Runtime:  e.policyRuntimeContext(),
-		Session:  e.policySessionContext(),
+		Thread:   e.policyThreadContext(),
 		TurnID:   turnID,
 		Stage:    runtimemodule.CompactionPolicyAfter,
 		Reason:   reason,

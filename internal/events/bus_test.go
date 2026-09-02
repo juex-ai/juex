@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestBus_ExactMatch(t *testing.T) {
@@ -127,5 +128,21 @@ func TestBus_AutoFillsIDAndTimestamp(t *testing.T) {
 	}
 	if captured.Timestamp.IsZero() {
 		t.Fatal("Timestamp should be auto-filled")
+	}
+	if captured.Timestamp.Location() != time.UTC {
+		t.Fatalf("Timestamp location = %v, want UTC", captured.Timestamp.Location())
+	}
+	if captured.Timestamp.Nanosecond()%int(time.Millisecond) != 0 {
+		t.Fatalf("Timestamp = %s, want millisecond precision", captured.Timestamp.Format(time.RFC3339Nano))
+	}
+}
+
+func TestNormalizeCanonicalizesTimestamp(t *testing.T) {
+	input := time.Date(2026, 9, 1, 12, 34, 56, 987654321, time.FixedZone("test", 8*60*60))
+
+	got := Normalize(Event{Type: "x", Timestamp: input})
+	want := input.UTC().Truncate(time.Millisecond)
+	if !got.Timestamp.Equal(want) || got.Timestamp.Location() != time.UTC {
+		t.Fatalf("Timestamp = %s (%v), want %s (UTC)", got.Timestamp, got.Timestamp.Location(), want)
 	}
 }

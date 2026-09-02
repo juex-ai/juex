@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/observable"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 type observableCreateRequest = observable.Spec
@@ -151,31 +151,24 @@ func observablePathID(path string) (id, rest string) {
 }
 
 func (s *Server) observableManager(w http.ResponseWriter, r *http.Request) (*observable.Manager, bool) {
-	as, err := s.activeObservableSession(r)
+	active, err := s.mainObservableThread(r)
 	if err != nil {
 		if os.IsNotExist(err) {
-			writeErr(w, http.StatusNotFound, "not_found", "active session not found")
+			writeErr(w, http.StatusNotFound, "not_found", "Main Thread not found")
 			return nil, false
 		}
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return nil, false
 	}
-	if as == nil || as.app == nil || as.app.Observables() == nil {
+	if active == nil || active.app == nil || active.app.Observables() == nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", "observable manager unavailable")
 		return nil, false
 	}
-	return as.app.Observables(), true
+	return active.app.Observables(), true
 }
 
-func (s *Server) activeObservableSession(r *http.Request) (*activeSession, error) {
-	as, err := s.getCurrentActiveSession(r.Context())
-	if err == nil {
-		return as, nil
-	}
-	if !os.IsNotExist(err) {
-		return nil, err
-	}
-	return s.openSession(r.Context(), "", app.SessionModeAttachActive)
+func (s *Server) mainObservableThread(r *http.Request) (*activeThread, error) {
+	return s.getThread(r.Context(), thread.MainID)
 }
 
 func parsePositiveInt(raw string, fallback int) int {

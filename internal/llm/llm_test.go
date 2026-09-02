@@ -178,7 +178,7 @@ func testImageMedia(t *testing.T) (*MediaRef, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session/media/image.png", data)
+	ref, err := store.Put("threads/123456/media/image.png", data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestBlockImageJSONRoundTripStoresMediaReference(t *testing.T) {
 		Blocks: []Block{{
 			Type: BlockImage,
 			Media: &MediaRef{
-				ArtifactPath:  "sessions/s/media/sha.png",
+				ArtifactPath:  "threads/123456/media/sha.png",
 				MediaType:     "image/png",
 				SHA256:        "sha",
 				OriginalBytes: 123,
@@ -352,7 +352,7 @@ func TestReadImageBase64RejectsUnsafePathsAndMediaTypes(t *testing.T) {
 func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 	workDir := t.TempDir()
 	otherDir := t.TempDir()
-	artifactPath := "sessions/session/media/image.png"
+	artifactPath := "threads/123456/media/image.png"
 	filePath := filepath.Join(workDir, filepath.FromSlash(artifactPath))
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		t.Fatal(err)
@@ -385,7 +385,7 @@ func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.
 	report := eventmedia.ValidateAttachments([]eventmedia.AttachmentRef{{
 		Path:      ".juex/inbox/event.png",
 		MediaType: "image/png",
-	}}, eventmedia.ValidationOptions{WorkDir: workDir, ArtifactDir: artifactDir})
+	}}, eventmedia.ValidationOptions{WorkDir: workDir, MediaDir: artifactDir})
 	if len(report.Valid) != 1 || len(report.Errors) != 0 {
 		t.Fatalf("event attachment report = %+v", report)
 	}
@@ -410,7 +410,7 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session/media/image.png", []byte("fake image bytes"))
+	ref, err := store.Put("threads/123456/media/image.png", []byte("fake image bytes"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 	artifactDir := t.TempDir()
 	if encoded, mediaType, ok := readImageBase64(artifactDir, &MediaRef{
-		ArtifactPath:  "sessions/session/media/too-large.png",
+		ArtifactPath:  "threads/123456/media/too-large.png",
 		MediaType:     "image/png",
 		OriginalBytes: maxProviderImageArtifactBytes + 1,
 	}); ok || encoded != "" || mediaType != "" {
@@ -437,7 +437,7 @@ func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("sessions/session/media/large.png", bytes.Repeat([]byte("x"), maxProviderImageArtifactBytes+1))
+	ref, err := store.Put("threads/123456/media/large.png", bytes.Repeat([]byte("x"), maxProviderImageArtifactBytes+1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
 		BaseURL:      srv.URL,
 		APIKey:       "test-key",
 		Model:        "claude-test",
-		ArtifactDir:  artifactDir,
+		MediaDir:     artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}), nil)
 
@@ -1784,7 +1784,7 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "m",
-		ArtifactDir:  artifactDir,
+		MediaDir:     artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}), nil)
 	hist := []Message{
@@ -1955,7 +1955,7 @@ func TestOpenAI_ThinkingEffort(t *testing.T) {
 	}
 }
 
-func TestOpenAI_DeepSeekPresetEnablesThinkingEffort(t *testing.T) {
+func TestOpenAI_CompleteOptionsOverrideDeepSeekThinkingEffort(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
@@ -1972,11 +1972,11 @@ func TestOpenAI_DeepSeekPresetEnablesThinkingEffort(t *testing.T) {
 		Model:          "deepseek-v4-pro",
 		ThinkingEffort: "max",
 	}), nil)
-	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
-		t.Fatalf("Complete: %v", err)
+	if _, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{ThinkingEffort: "low"}); err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
 	}
-	if capturedBody["reasoning_effort"] != "max" {
-		t.Errorf("reasoning_effort = %v, want %q", capturedBody["reasoning_effort"], "max")
+	if capturedBody["reasoning_effort"] != "low" {
+		t.Errorf("reasoning_effort = %v, want request override %q", capturedBody["reasoning_effort"], "low")
 	}
 }
 
@@ -2076,7 +2076,7 @@ func TestOpenAI_CapabilityGateOmitsUnsupportedParams(t *testing.T) {
 		BaseURL:        srv.URL,
 		APIKey:         "k",
 		Model:          "m",
-		ThinkingEffort: "low",
+		ThinkingEffort: "max",
 		Capabilities: CapabilityOverrides{
 			Tools:           &disabled,
 			ReasoningEffort: &disabled,
@@ -2145,14 +2145,14 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 		BaseURL:        srv.URL,
 		APIKey:         "k",
 		Model:          "gpt-test",
-		ThinkingEffort: "low",
+		ThinkingEffort: "max",
 		Headers:        map[string]string{"X-Juex-Test": "yes"},
 		Query:          map[string]string{"trace": "1"},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := p.Complete(context.Background(), "system",
+	resp, err := CompleteWithOptions(context.Background(), p, "system",
 		[]Message{
 			TextMessage(RoleUser, "hello"),
 			{Role: RoleAssistant, Blocks: []Block{
@@ -2162,6 +2162,7 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 			{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_prev", Content: "old file"}}},
 		},
 		[]ToolSpec{{Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"}}},
+		CompleteOptions{ThinkingEffort: "low"},
 	)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -2481,7 +2482,7 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "gpt-test",
-		ArtifactDir:  artifactDir,
+		MediaDir:     artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}))
 	if err != nil {
@@ -2690,13 +2691,13 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 		BaseURL:        srv.URL,
 		APIKey:         "codex-token",
 		Model:          "gpt-test",
-		ThinkingEffort: "low",
+		ThinkingEffort: "max",
 		Headers:        map[string]string{"ChatGPT-Account-ID": "acct_1"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := p.Complete(context.Background(), "system",
+	resp, err := CompleteWithOptions(context.Background(), p, "system",
 		[]Message{
 			TextMessage(RoleUser, "hello"),
 			{Role: RoleAssistant, Blocks: []Block{
@@ -2706,6 +2707,7 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 			{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_prev", Content: "old file"}}},
 		},
 		[]ToolSpec{{Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"}}},
+		CompleteOptions{ThinkingEffort: "low"},
 	)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -2719,7 +2721,8 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 	if capturedBody["model"] != "gpt-test" || capturedBody["instructions"] != "system" || capturedBody["stream"] != true {
 		t.Fatalf("captured body = %+v", capturedBody)
 	}
-	if capturedBody["reasoning"] == nil || capturedBody["include"] == nil {
+	reasoning, _ := capturedBody["reasoning"].(map[string]any)
+	if reasoning["effort"] != "low" || capturedBody["include"] == nil {
 		t.Fatalf("codex request should include reasoning controls: %+v", capturedBody)
 	}
 	input, _ := capturedBody["input"].([]any)
@@ -3480,9 +3483,9 @@ func TestAnthropic_ThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test", ThinkingEffort: "low"}), nil)
-	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
-		t.Fatalf("Complete: %v", err)
+	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test", ThinkingEffort: "max"}), nil)
+	if _, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{ThinkingEffort: "low"}); err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
 	}
 	outputConfig, ok := capturedBody["output_config"].(map[string]any)
 	if !ok {

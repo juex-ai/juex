@@ -13,14 +13,13 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/session"
 )
 
-func TestAgentStatusReportsRunningSession(t *testing.T) {
+func TestAgentStatusReportsRunningThread(t *testing.T) {
 	server := NewServer(Options{})
 	status := runtime.NewStatusStore(runtime.StatusSeed{
-		SessionID:    "session-1",
-		SessionAlias: "Release prep",
+		ThreadID:    "123456",
+		ThreadAlias: "Release prep",
 	})
 	status.Publish(events.Event{
 		ID:      "event-1",
@@ -28,10 +27,9 @@ func TestAgentStatusReportsRunningSession(t *testing.T) {
 		TurnID:  "turn-1",
 		Payload: runtime.TurnAdmittedPayload{},
 	})
-	server.sessions.Store("session-1", &activeSession{
+	server.threads.Store("123456", &activeThread{
 		app: &app.App{
-			Session: &session.Session{ID: "session-1", Alias: "Release prep"},
-			Status:  status,
+			Status: status,
 		},
 		StartedAt: time.Now().UTC(),
 	})
@@ -50,19 +48,19 @@ func TestAgentStatusReportsRunningSession(t *testing.T) {
 	if got.State != agentActivityWorking ||
 		got.PendingInputCount != 0 ||
 		got.SelectedStatus == nil ||
-		got.SelectedStatus.Session.ID != "session-1" ||
-		got.SelectedStatus.Session.Alias != "Release prep" ||
+		got.SelectedStatus.Thread.ID != "123456" ||
+		got.SelectedStatus.Thread.Alias != "Release prep" ||
 		got.SelectedStatus.Cursor != "event-1" {
 		t.Fatalf("activity = %+v", got)
 	}
 }
 
-func TestAgentStatusAggregatesWorkingPendingAndSelectsSession(t *testing.T) {
+func TestAgentStatusAggregatesWorkingPendingAndSelectsThread(t *testing.T) {
 	server := NewServer(Options{})
 	add := func(id, alias string, pending int, started time.Time) {
 		status := runtime.NewStatusStore(runtime.StatusSeed{
-			SessionID:        id,
-			SessionAlias:     alias,
+			ThreadID:         id,
+			ThreadAlias:      alias,
 			MaxPendingInputs: 4,
 		})
 		status.Publish(events.Event{
@@ -79,25 +77,24 @@ func TestAgentStatusAggregatesWorkingPendingAndSelectsSession(t *testing.T) {
 				PendingCount: pending, MaxPendingInputs: 4,
 			},
 		})
-		server.sessions.Store(id, &activeSession{
+		server.threads.Store(id, &activeThread{
 			app: &app.App{
-				Session: &session.Session{ID: id, Alias: alias},
-				Status:  status,
+				Status: status,
 			},
 			StartedAt: started,
 		})
 	}
 	now := time.Now().UTC()
-	add("session-old", "Old", 1, now.Add(-time.Minute))
-	add("session-new", "New", 2, now)
+	add("123456", "Old", 1, now.Add(-time.Minute))
+	add("654321", "New", 2, now)
 
 	got := server.agentActivity()
 	if got.State != agentActivityWorking || got.PendingInputCount != 3 {
 		t.Fatalf("activity = %+v", got)
 	}
 	if got.SelectedStatus == nil ||
-		got.SelectedStatus.Session.ID != "session-new" ||
-		got.SelectedStatus.Session.PendingCount != 2 {
+		got.SelectedStatus.Thread.ID != "654321" ||
+		got.SelectedStatus.Thread.PendingCount != 2 {
 		t.Fatalf("selected activity = %+v", got)
 	}
 }
@@ -116,17 +113,16 @@ func TestAgentStatusRejectsNonGET(t *testing.T) {
 
 func TestAgentStatusStreamReturnsCurrentSnapshotOnSameCursorReconnect(t *testing.T) {
 	server := NewServer(Options{})
-	status := runtime.NewStatusStore(runtime.StatusSeed{SessionID: "session-1"})
+	status := runtime.NewStatusStore(runtime.StatusSeed{ThreadID: "123456"})
 	status.Publish(events.Event{
 		ID:        "cursor-1",
 		Type:      runtime.TurnAdmittedType,
 		TurnID:    "turn-1",
 		Timestamp: time.Now().UTC(),
 	})
-	server.sessions.Store("session-1", &activeSession{
+	server.threads.Store("123456", &activeThread{
 		app: &app.App{
-			Session: &session.Session{ID: "session-1"},
-			Status:  status,
+			Status: status,
 		},
 		StartedAt: time.Now().UTC(),
 	})
@@ -181,7 +177,7 @@ func TestAgentStatusStreamReturnsCurrentSnapshotOnSameCursorReconnect(t *testing
 	if eventID != "cursor-1" ||
 		event.Type != "agent.status" ||
 		event.Activity.SelectedStatus == nil ||
-		event.Activity.SelectedStatus.Session.ID != "session-1" {
+		event.Activity.SelectedStatus.Thread.ID != "123456" {
 		t.Fatalf("event id/body = %q/%+v", eventID, event)
 	}
 }

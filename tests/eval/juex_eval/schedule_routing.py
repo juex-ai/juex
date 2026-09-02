@@ -259,7 +259,11 @@ def validate_outcome(
 ) -> ValidationOutcome:
     hard_issues: list[str] = []
     capability_issues: list[str] = []
-    messages = _load_jsonl(conversation_path, "conversation", hard_issues)
+    messages = contract_oracle.load_thread_journal_records(
+        conversation_path,
+        "message",
+        hard_issues,
+    )
     uses, results = _transcript_tools(messages)
     _validate_tool_contract(messages, uses, results, expectation, capability_issues)
     list_uses = [use for use in uses if use.name == "observable_list"]

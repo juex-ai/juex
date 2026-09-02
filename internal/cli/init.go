@@ -88,8 +88,7 @@ Use --scope workspace to write the current workspace .juex/juex.yaml.`,
 				cmdPrintln(cmd, "Provider hello check passed.")
 			}
 			cmdPrintln(cmd, "Next:")
-			cmdPrintln(cmd, `  juex run "say hello"`)
-			cmdPrintln(cmd, "  juex repl")
+			cmdPrintln(cmd, `  juex send --wait "say hello"`)
 			cmdPrintln(cmd, "  juex listen")
 			return nil
 		},

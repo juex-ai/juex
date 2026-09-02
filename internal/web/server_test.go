@@ -22,7 +22,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 type stubProvider struct{}
@@ -48,6 +48,9 @@ func newTestServer(t *testing.T) *Server {
 		Cfg:      cfg,
 		Provider: stubProvider{},
 	})
+	if err := app.EnsureMainThread(cfg); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -93,7 +96,7 @@ func TestServerHandlersSeparateAgentEndpointFromTCPPointer(t *testing.T) {
 	tcpServer := httptest.NewServer(srv.Handler())
 	defer tcpServer.Close()
 
-	for _, path := range []string{"/", "/sessions/anything"} {
+	for _, path := range []string{"/", "/threads/0"} {
 		response, err := http.Get(apiServer.URL + path)
 		if err != nil {
 			t.Fatalf("GET endpoint %s: %v", path, err)
@@ -194,13 +197,19 @@ func TestServerTCPPointerUsesConfiguredFleetAddress(t *testing.T) {
 	}
 }
 
-func TestServerSessionsShareProcessModelHealth(t *testing.T) {
+func TestServerThreadsShareProcessModelHealth(t *testing.T) {
 	srv := newTestServer(t)
-	first, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	first, err := srv.openThread(context.Background(), thread.MainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := srv.openSession(context.Background(), "", app.SessionModeNewSide)
+	worker, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).CreateWorker(thread.MainID, "model-health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerID := worker.ID
+	_ = worker.Close()
+	second, err := srv.openThread(context.Background(), workerID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +218,7 @@ func TestServerSessionsShareProcessModelHealth(t *testing.T) {
 	}
 }
 
-func TestRunEnsuresActivePrimarySession(t *testing.T) {
+func TestRunEnsuresMainThread(t *testing.T) {
 	srv := newTestServer(t)
 	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
@@ -219,31 +228,23 @@ func TestRunEnsuresActivePrimarySession(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 	defer stopRunServer(t, cancel, errCh)
 
-	var h session.History
-	var open bool
 	deadline := time.After(2 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
-	for h.Active == nil || !open {
+	for {
+		target, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).OpenActive(thread.MainID)
+		if err == nil {
+			if target.Alias != thread.MainAlias {
+				t.Fatalf("Main alias = %q", target.Alias)
+			}
+			_ = target.Close()
+			break
+		}
 		select {
 		case <-deadline:
-			if h.Active == nil {
-				t.Fatal("server did not create an active primary session")
-			}
-			t.Fatalf("session %q not open in server", h.Active.ID)
+			t.Fatal("server did not create Main Thread")
 		case <-tick.C:
-			var err error
-			h, err = session.LoadHistory(srv.opts.Cfg.HistoryPath())
-			if err != nil {
-				continue
-			}
-			if h.Active != nil {
-				_, open = srv.sessions.Load(h.Active.ID)
-			}
 		}
-	}
-	if h.Active.Kind != session.KindPrimary || !h.Active.Active {
-		t.Fatalf("active session = %+v, want active primary", h.Active)
 	}
 }
 
@@ -260,27 +261,23 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 	defer stopRunServer(t, cancel, errCh)
 
-	var h session.History
 	deadline := time.After(5 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
-	for h.Active == nil {
+	for {
+		target, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).OpenActive(thread.MainID)
+		if err == nil {
+			_ = target.Close()
+			break
+		}
 		select {
 		case <-deadline:
-			t.Fatalf("active session = %+v, want active primary", h.Active)
+			t.Fatal("Main Thread was not persisted")
 		case <-tick.C:
-			var err error
-			h, err = session.LoadHistory(srv.opts.Cfg.HistoryPath())
-			if err != nil {
-				continue
-			}
 		}
 	}
-	if h.Active.Kind != session.KindPrimary || !h.Active.Active {
-		t.Fatalf("active session = %+v, want active primary", h.Active)
-	}
-	if _, ok := srv.sessions.Load(h.Active.ID); ok {
-		t.Fatalf("server opened runtime app for %s without provider config", h.Active.ID)
+	if _, ok := srv.threads.Load(thread.MainID); ok {
+		t.Fatal("server opened Main runtime without provider config")
 	}
 }
 
@@ -368,7 +365,7 @@ func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T)
 	}
 	srv := newTestServer(t)
 	srv.opts.Provider = provider
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	as, err := srv.openThread(context.Background(), thread.MainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +382,7 @@ func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T)
 	defer srv.clearEndpointControl(expected)
 
 	response, err := http.Post(
-		ts.URL+"/api/sessions/"+as.app.Session.ID+"/turns",
+		ts.URL+"/api/threads/"+as.app.Thread.ID+"/inputs",
 		"application/json",
 		strings.NewReader(`{"prompt":"work until restart"}`),
 	)
@@ -497,7 +494,7 @@ func TestValidLoopbackAcceptsTheFullLoopbackRange(t *testing.T) {
 
 func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	srv := newTestServer(t)
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	as, err := srv.openThread(context.Background(), thread.MainID)
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -523,35 +520,35 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live event")
 	}
-	data, err := os.ReadFile(filepath.Join(as.app.Session.Dir, "events.jsonl"))
+	data, err := os.ReadFile(filepath.Join(as.app.Thread.Dir, "journal.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), `"id":"evt-committed"`) {
-		t.Fatalf("events.jsonl does not contain committed event:\n%s", data)
+		t.Fatalf("journal.jsonl does not contain committed event:\n%s", data)
 	}
 	if !strings.Contains(string(data), `"schema_version":1`) ||
 		!strings.Contains(string(data), `"replay_policy":"required"`) {
-		t.Fatalf("events.jsonl does not contain the Catalog replay contract:\n%s", data)
+		t.Fatalf("journal.jsonl does not contain the Catalog replay contract:\n%s", data)
 	}
 }
 
 func TestWebEventsSkipLiveDeliveryWhenJournalCommitFails(t *testing.T) {
 	srv := newTestServer(t)
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	as, err := srv.openThread(context.Background(), thread.MainID)
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
 	sub := as.bcast.subscribe()
 	defer sub.unsubscribe()
 
-	if err := as.app.Session.Close(); err != nil {
+	if err := as.app.Thread.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(as.app.Session.Dir); err != nil {
+	if err := os.RemoveAll(as.app.Thread.Dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(as.app.Session.Dir, []byte("not a directory"), 0o644); err != nil {
+	if err := os.WriteFile(as.app.Thread.Dir, []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -611,9 +608,12 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 		Provider: provider,
 	})
 	defer srv.Close()
+	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+		t.Fatal(err)
+	}
 
-	if _, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary); err != nil {
-		t.Fatalf("open session: %v", err)
+	if _, err := srv.openThread(context.Background(), thread.MainID); err != nil {
+		t.Fatalf("open Thread: %v", err)
 	}
 	errCh := make(chan error, 1)
 	go func() {

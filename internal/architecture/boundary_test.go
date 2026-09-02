@@ -53,8 +53,8 @@ var foundationDirs = []string{
 	"internal/provenance",
 	"internal/processmetrics",
 	"internal/sandbox",
-	"internal/session",
 	"internal/statusstream",
+	"internal/thread",
 	"internal/toolevents",
 	"internal/tools",
 	"internal/version",
@@ -72,6 +72,22 @@ func TestFrameworkDoesNotImportConcreteFeatures(t *testing.T) {
 	for _, dir := range frameworkDirs {
 		checkImports(t, root, dir, "Framework", isConcreteFeatureImport)
 	}
+}
+
+func TestThreadStorageDoesNotImportAdaptersOrFeatureTransports(t *testing.T) {
+	root := repositoryRoot(t)
+	forbidden := []string{
+		modulePath + "/internal/app",
+		modulePath + "/internal/cli",
+		modulePath + "/internal/fleet",
+		modulePath + "/internal/fleetweb",
+		modulePath + "/internal/mcp",
+		modulePath + "/internal/observable",
+		modulePath + "/internal/web",
+	}
+	checkImports(t, root, "internal/thread", "Thread storage", func(importPath string) bool {
+		return matchesImportRoot(importPath, forbidden)
+	})
 }
 
 func TestImportBoundaryClassifiesCurrentFrameworkAndFeatureRoots(t *testing.T) {

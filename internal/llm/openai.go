@@ -65,8 +65,8 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 	if p.profile.Capabilities.Tools {
 		params.Tools = toOpenAITools(tools)
 	}
-	if p.profile.Capabilities.ReasoningEffort && p.profile.ThinkingEffort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(p.profile.ThinkingEffort)
+	if effort := requestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(effort)
 	}
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))
@@ -213,7 +213,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					userText.WriteString(b.Text)
 				case BlockImage:
 					flushDeferredUserMessages()
-					if dataURL, ok := imageDataURL(profile.ArtifactDir, b.Media); ok {
+					if dataURL, ok := imageDataURL(profile.MediaDir, b.Media); ok {
 						if userText.Len() > 0 {
 							userParts = append(userParts, openai.TextContentPart(userText.String()))
 							userText.Reset()
@@ -235,7 +235,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					}
 					out = append(out, openai.ToolMessage(content, b.ToolUseID))
 					if b.Media != nil {
-						if dataURL, ok := imageDataURL(profile.ArtifactDir, b.Media); ok {
+						if dataURL, ok := imageDataURL(profile.MediaDir, b.Media); ok {
 							deferredUserMessages = append(deferredUserMessages, openAIUserContentPartsMessage([]openai.ChatCompletionContentPartUnionParam{
 								openai.TextContentPart(openAIToolResultImageAttribution(b)),
 								openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),

@@ -53,11 +53,11 @@ type AgentStatus struct {
 }
 
 type RestartResume struct {
-	Required  bool   `json:"required"`
-	Sent      bool   `json:"sent"`
-	SessionID string `json:"session_id,omitempty"`
-	TurnID    string `json:"turn_id,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Required bool   `json:"required"`
+	Sent     bool   `json:"sent"`
+	ThreadID string `json:"thread_id,omitempty"`
+	TurnID   string `json:"turn_id,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 type RestartResult struct {
@@ -219,7 +219,7 @@ type spawnedProcess struct {
 }
 
 type restartActivity struct {
-	SessionID     string
+	ThreadID      string
 	TurnID        string
 	State         statusapi.ActivityState
 	TurnState     statusapi.TurnState

@@ -34,15 +34,15 @@ func TestPolicyTraceMessageIsUIOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var trace *llm.Message
-	for i := range eng.Session.History {
-		message := &eng.Session.History[i]
+	for i := range eng.Thread.History {
+		message := &eng.Thread.History[i]
 		if message.Kind == llm.MessageKindPolicyEvent {
 			trace = message
 			break
 		}
 	}
 	if trace == nil {
-		t.Fatalf("missing policy trace message in history: %+v", eng.Session.History)
+		t.Fatalf("missing policy trace message in history: %+v", eng.Thread.History)
 	}
 	if trace.Role != llm.RoleSystem || !strings.Contains(trace.FirstText(), "policy hooks/UserPromptSubmit/fake completed turn_input") {
 		t.Fatalf("policy trace message = %+v", *trace)
@@ -100,7 +100,7 @@ func TestBuiltinPolicyTraceMessageRequiresPolicy(t *testing.T) {
 	if len(traces) != 0 {
 		t.Fatalf("builtin trace should be hidden by default: %+v", traces)
 	}
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindPolicyEvent {
 			t.Fatalf("builtin trace leaked without policy: %+v", message)
 		}
@@ -112,12 +112,12 @@ func TestBuiltinPolicyTraceMessageRequiresPolicy(t *testing.T) {
 		t.Fatalf("builtin trace event with policy = %+v", traces)
 	}
 	var policyEvents int
-	for _, message := range eng.Session.History {
+	for _, message := range eng.Thread.History {
 		if message.Kind == llm.MessageKindPolicyEvent {
 			policyEvents++
 		}
 	}
 	if policyEvents != 1 {
-		t.Fatalf("policy event messages = %d, history = %+v", policyEvents, eng.Session.History)
+		t.Fatalf("policy event messages = %d, history = %+v", policyEvents, eng.Thread.History)
 	}
 }

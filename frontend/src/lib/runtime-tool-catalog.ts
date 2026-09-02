@@ -11,8 +11,8 @@ const groupLabels: Record<string, string> = {
   shell: "Shell",
   search: "Search",
   skill: "Skill",
-  session_state: "Session State",
-  side_session: "Side Session",
+  thread_state: "Thread State",
+  worker_thread: "Worker Thread",
   observable: "Observable",
 };
 

@@ -3,19 +3,19 @@
 > [English](2026-08-31-thread-domain-model-design.md) | 中文
 
 日期：2026-08-31
-状态：提案
+更新：2026-09-01
+状态：已确认，等待实现
 范围：完全替换现有 Session 领域模型，不兼容旧运行时数据
 
 ## 目的
 
-用“一个持久 Agent、一个明确的 Main Thread、任意数量的普通 Worker
-Thread”替换现有 Primary/Side/Active Session 模型。新模型必须同时支持长期
-交互、委派工作、显式上下文代、持久输入接纳、结果订阅、归档和高效查看，
-并且不能把 Main Thread 伪装成 RPC 接口。
+用一个持久 Agent、一个固定的 Main Thread 和任意数量的 Worker Thread，替换
+Primary、Side 与 Active Session。新模型支持长期交互、委派工作、显式 Context
+Generation、持久输入接纳、订阅方拥有的结果投递、归档、删除与高效查看，同时不把
+Main 伪装成 RPC 接口。
 
 这是首发前的 clean break。旧 Session 运行时数据不读取、不迁移，也不重写。
-Agent 身份、Workspace 配置、Fleet 配置、Extensions、Provider 配置和凭据继续
-有效。
+Agent 身份、Workspace 与 Fleet 配置、Extensions、Provider 配置和凭据继续有效。
 
 ## 规范术语
 
@@ -23,147 +23,176 @@ Agent 身份、Workspace 配置、Fleet 配置、Extensions、Provider 配置和
 | --- | --- |
 | Agent | 绑定一个 Workspace、拥有运行时生成状态的持久身份。 |
 | Agent Runtime | 加载 Agent 级资源并承载 Thread 执行的一次服务进程实例。 |
-| Thread | 持久、有序的执行和对话容器，拥有身份、Generations、Turns、已接纳输入、消息、Events、用量和单写者。 |
-| Main Thread | `Agent.main_thread_id` 指向的唯一 Thread。它是用户、MCP Notifications 和 Observations 的默认目标。Main 是关系，不是 Thread 上保存的 kind。 |
-| Worker Thread | id 不等于 `Agent.main_thread_id` 的任意 Thread。Worker 使用相同 Thread 模型，但不接收 Agent Observe 流量。 |
-| Parent Thread | Worker 的不可变 `parent_thread_id` 指向的 Thread。它只表示 Thread 树，不表示创建者、结果所有者或订阅关系。 |
-| Context Generation | 一个 Thread 中不可变的 Provider 可见上下文和持久历史分段。活跃 Thread 恰好有一个当前 Generation。 |
-| Generation bootstrap | 带入新 Generation 的可选 Provider 可见上下文。Compact 转换带一份总结，New 转换不带。 |
-| Turn | 消费一个或多个已接纳输入，经由 Provider 迭代和 Tool Calls 运行到终态的一次执行边界。 |
-| Accepted input | 带稳定 `input_id` 的持久用户或外部消息。它被接纳时，消费它的 Turn 可能尚未确定。 |
-| Subscription | 调用者拥有的 Thread 或 Turn 事件关注关系。Thread 不保存谁创建了它，也不保存结果要投递到哪里。 |
-| Archived Thread | 从日常活跃工作中移除的持久只读 Thread。其历史仍可查看，之后可以取消归档。 |
+| Thread | 持久、有序的执行与对话容器，拥有身份、Context Generations、Turns、已接纳 Inputs、消息、系统活动、用量、Goal、Notes、Scratchpad 和一个写者。 |
+| Main Thread | 固定 `thread_id = "0"`、保留 alias 为 `main` 的 Thread，也是环境 Observation 的唯一目标。 |
+| Worker Thread | 使用六位 Worker id 的任意 Thread。它与 Main 使用相同执行模型，但不接收环境 Observation。 |
+| Parent Thread | Worker 的不可变 `parent_thread_id` 指向的 Thread。它只表达结构，不表示创建者、结果所有者或投递目标。 |
+| Context Generation | 同一 Thread Journal 内的逻辑 Provider Context 分段。恰好一个 Generation 为当前分段，旧分段仍可查看。 |
+| Turn | 消费一个或多个已接纳 Inputs，经由 Provider 迭代和 Tool Calls 运行到终态的一次执行边界。 |
+| Accepted Input | 带稳定 `input_id`、已经持久接纳的直接消息或 Observation；消费它的 Turn 可能尚未确定。 |
+| Input attempt | 处理一个 Accepted Input 的一次有标识尝试。重试会创建新 attempt，而不是重写旧结果。 |
+| System activity | `context.renewed` 等供用户查看的持久 Runtime 事实，不自动成为 Provider 对话消息。 |
+| Observable | 产生标准化 Observation 的来源或来源机制；Command、Schedule 和 MCP adapter 都属于该子系统。 |
+| Observation | 由 `observable` 子系统拥有、标准化后作为 Input 投递给 Main 的外部自动信号。 |
+| Subscription | 订阅方拥有的 Thread 事件或 Worker settlement 关注关系。目标 Thread 不保存谁创建了它，也不保存结果送到哪里。 |
+| Archived Thread | 移出活跃 Thread namespace、保持当前 Generation 不变的持久只读 Worker。 |
 
 ## 身份
 
 ### Thread id
 
-`thread_id` 是 Agent 内局部、不可变、可安全用于路由的字符串：
+`thread_id` 是 Agent 内局部、不可变的字符串，只有两种有效格式：
 
-- 使用密码学随机字节生成六位小写 Crockford Base32 字符。
-- 在 Agent 级 Thread 创建锁内检查所有活跃和归档 Thread 目录是否冲突。
-- 冲突时重试；归档后的 id 永不复用。
-- id 不编码时间、角色、父节点或创建顺序。
-- 即使 UI 显示为 `#<tid>`，程序仍必须把它视为不透明值。
+- `"0"` 是保留的 Main Thread id。
+- Worker id 是用密码学随机字节生成的六位小写 Crockford Base32 字符。
+- Worker 创建在 Agent creation lock 内检查活跃和归档 namespace，并在碰撞时重试。
+- Worker id 不编码时间、角色、parent 或创建顺序。
+- 路由、目录、API、Journal 和 parent reference 始终把 id 当字符串保存。界面可以
+  显示 `#<tid>`，调用方仍必须把它当作不透明值。
 
-六位 Base32 大约提供十亿个值，同时保持 socket、路由、目录和终端输出简短。
-它不是全局 id，完整身份是 `(agent_id, thread_id)`。
+完整身份是 `(agent_id, thread_id)`。系统不再保存 `Agent.main_thread_id`；
+`ThreadID("0").IsMain()` 是唯一 Main 判断，Worker 生成器不可能产生这个保留值。
 
 ### Alias
 
-- Main Thread 初始 alias 为 `main`。
-- Worker 创建者可以指定 alias。
-- 未指定时，创建流程在生成 Thread id 后，将 `worker_#<tid>` 持久化为默认 alias。
-- Alias 是可修改的展示元数据，持久引用永远使用 `thread_id`。
-- 同一 Agent 的所有活跃和归档 Thread 中，alias 大小写不敏感地唯一，保证
-  CLI 和 Web 选择器没有歧义。
+- Main 使用保留且不可修改的 alias `main`。
+- Worker 创建者可以提供 alias。
+- 未提供时，持久化为 `worker_#<tid>`。
+- Worker alias 是可修改的展示元数据，不能替代持久引用中的 `thread_id`。
+- 同一 Agent 的活跃与归档 Thread 中，alias 大小写不敏感地唯一；Worker 不能使用
+  `main`。
 
 ### Parent 关系
 
-- Main Thread 没有 parent。
-- 每个 Worker 都有一个指向同一 Agent 内 Thread 的不可变
-  `parent_thread_id`。
-- Parent 自身可以是 Worker，为以后 Worker 创建子 Thread 留出空间。
+- Main 没有 parent。
+- 每个 Worker 都有一个不可变、同 Agent 的 `parent_thread_id`。
+- Worker 可以成为 parent，从而支持嵌套委派。
 - 创建时校验 parent 存在且活跃。
-- Thread 树不得有环。
-- 归档不会重写子 Thread 的 parent id。
+- Thread 树不得有环；archive 不重写 child parent id。
+- 模型调用 `thread_create` 时，parent 从调用方 Thread 自动推导，模型不能通过
+  Tool 参数伪造 parent。
 
-Parent 只表示结构。Thread 元数据刻意不包含 creator、subscriber 和结果目标。
+Parent 仍然只表示结构。目标 Thread 元数据刻意不包含 creator、subscriber 或结果
+目标。
 
 ## Main 与 Worker 语义
 
-Main 和 Worker Thread 共享完全相同的持久化、Turn、Pending Input、Generation、
-上下文、Tool、Goal、Notes 和 Event 模型。两者唯一内在行为差异是 Observe 路由：
+Main 与 Worker 共享持久化、Pending Inputs、Turns、Generations、Tools、Goal、
+Notes、Scratchpad、usage 和事件契约。两者唯一内在行为差异是环境 Observation
+路由：
 
-- 用户/API 直接输入可以发送到任意活跃 Thread。
-- MCP Notifications 和 Observations 只发送到当前 Main Thread。
-- Worker 可以接收直接输入和订阅结果，但不能接收环境 Observe 流量。
-- Provider health、Tool catalog、MCP clients、sandbox resolution 和不可变运行时
-  环境由同一 Agent 下的所有 Threads 共享。
+- CLI、Web、API、Tool 或 parent 的直接输入可以发送到任意活跃 Thread。
+- MCP 业务通知、Command 输出批次、Schedule 和其他外部自动信号，统一标准化为
+  `observable.Observation`，并只投递给 Main。
+- MCP keepalive、progress 和诊断日志等协议遥测不会自动成为 Observation；只有
+  adapter 明确提升为业务信号时才会投递。
+- Worker 结果只通过显式 Subscription 投递。
+- Provider health、Tool catalog、MCP clients、sandbox policy、shell manager 和
+  不可变运行环境属于 Agent，由所有 Threads 共享。
 
-Observe 差异由 `Agent.main_thread_id` 推导，不在每个 Thread 上保存 `kind`、
-`observe_enabled` 或 `worker` flag。
+无需持久化 `kind`、`observe_enabled`、`worker` 或 `main_thread_id` 字段。
 
 ## Context Generations
 
-每个活跃 Thread 都有一个当前 Generation。序号从一开始，在 Thread 内格式化为
-`g000001`、`g000002` 等。Generation 转换受 Thread 写锁串行化，因此不需要
-随机 Generation id。
+Generation 是 append-only Thread Journal 中的逻辑分段，序号从一开始，格式为
+`g000001`、`g000002` 等。`/new` 与 `/compact` 追加一个有序边界 commit 并推进
+当前 Generation；它们不创建 Generation 目录，也不重写旧字节。
 
-`/new` 和 `/compact` 都创建 Generation 边界：
-
-| 转换 | 旧 Generation | 新 Generation bootstrap |
+| 转换 | 新 Generation 的 Provider Context | 跨边界保留的 Thread 状态 |
 | --- | --- | --- |
-| 初始创建 Thread | 无 | 无 |
-| `/new` | 关闭并保留 | 无 |
-| 手动或自动 `/compact` | 关闭并保留 | 一份 compact 总结 |
-| 已关闭的归档 Thread 取消归档 | 保留 | 无 |
+| 初始创建 Thread | 只有基础 Prompt | 空 Goal、Notes 与 Scratchpad |
+| `/new` | 只有基础 Prompt | Scratchpad 文件；Goal 与 Notes 被清除 |
+| `/compact` | 基础 Prompt 加 compact summary bootstrap | Goal、Notes、Scratchpad 与当前 Runtime 的活跃结果订阅 |
+| Archive/unarchive | 不改变 Generation | 保留当前 Generation、Journal、Goal、Notes 与 Scratchpad；archive 清空执行态，unarchive 重置为 `idle` |
 
-转换不会重写或删除旧 Generation。当前 Provider 上下文由新 Generation 的可选
-bootstrap，加上该 Generation 内写入的消息重新构建。Compact 总结是领域内容，
-不是 Thread 列表标题，也不是通用 `summary` 元数据字段。
+`context.renewed` 与 `context.compacted` 是显示在历史边界上的持久 System
+activity。二者都不投影为 User 或 Assistant Message。Prompt Assembler 只从
+`context.compacted` 提取 compact summary 作为 bootstrap context；
+`context.renewed` 不进入 Provider Context。
 
-Generation 转换控制记录之前接纳的输入属于旧 Generation；之后接纳的输入保持
-持久并由新 Generation 消费。因此转换必须经过同一个 Thread 输入边界排序，
-不能通过另一条管理路径与输入竞争。
+Goal 与 Notes 是 Thread-owned 模型状态。Compact 保留，New 清除。Scratchpad
+是 Thread-owned working material，不自动 recite，并且跨越 New、Compact、
+archive 与 unarchive。Runtime 管理的超长 Input 与 Tool payload 属于独立 Spool，
+不属于 Scratchpad。
 
-## Turns 与输入
+模型侧 `context_compact` 与 `context_new` Tools 请求和 slash input 相同的有序
+转换。Tool Call 必须先持久化 Tool Result，再把边界延迟到下一个协议安全点。
+
+## Turns 与 Inputs
 
 - 一个 Turn 只属于一个 Thread 和一个 Context Generation。
-- Pending Input 可以在安全的 Provider 迭代边界加入活跃 Turn，因此一个 Turn
-  可以消费多个已接纳输入。
-- Assistant 输出属于 Turn，不自动属于某一条输入。
-- `input_id` 跟踪接纳、排队、admission、处理、过期或拒绝。
-- 等待执行的调用者先跟踪 `input_id`，找到消费它的 `turn_id`，再跟踪该 Turn
-  到终态。
-- 订阅者断开不会取消 Turn。
+- Pending work 可以在安全 Provider iteration boundary 加入，因此一个 Turn 可以
+  消费多个 Accepted Inputs。
+- Assistant 输出属于 Turn，不自动属于某一个 Input。
+- 每个 Accepted Input 都有完整的持久生命周期，包括 attempt、assignment、成功、
+  失败、中断、重试、取消、过期或 dead-letter 结果。
+- 跟随 Input 的调用方可以发现消费它的 Turn，但通用事件 Subscription 不要求
+  `input_id` 或 `turn_id`。
+- Subscriber 断开不会取消工作。
 
-这保证 Main Thread 是事件流，而不是伪装成请求/响应 RPC。
+客户端收到成功前，acceptance 必须持久化。重启时，从 Journal 重建没有 Input
+终态的 Accepted Inputs。外部副作用如果没有持久 outcome，就保持明确 unknown；
+Juex 不能承诺 exactly-once effect，也不能盲目重试。
+
+因此 Main 始终是异步事件流，而不是伪装的 request/response API。
 
 ## Subscriptions 与 Worker 结果
 
-- Thread 发布持久 Turn 生命周期事件和终态结果。
-- Subscriber 拥有订阅状态和结果投递策略。
-- Main Generation 的订阅可以把 Worker 终态结果适配成 Main 的持久 Pending
-  Input。
-- CLI 和 API 调用者可以建立只向自己输出结果的临时订阅。
-- Worker 不记录 `created_by`、`owner_thread_id` 或 `deliver_to`。
-- 订阅在终态事件到达时采样一次；之后 unsubscribe 不会撤销已经接纳的投递。
+- 通用 Thread Event Subscription 只接收可选 replay cursor。显式 cursor 表示先
+  replay 再跟随 live event；空 cursor 会在当前 tail 原子定位，只跟随新事件。
+- 高层 Input watcher 可以为 `juex send --wait` 将 `input_id` 关联到消费 Turn；
+  这种 filter 不属于通用 Subscription contract。
+- Worker-result Subscription 属于 subscriber 的活跃 Thread Runtime，观察注册后
+  目标 Worker 的下一次 `thread.settled`；目标 Thread 不拥有或持久化它。
+- `thread.settled` 表示 working 转为 idle 或 failed，并且没有可立即消费的
+  Pending Input。
+- Main 可以把订阅到的 Worker 结果适配成自己的持久 Input；CLI 和 API 也可以用
+  只向本地 stream 的临时 Subscription。
+- Compact 保留当前 Runtime 的 result subscriptions。New 与 archive 会清除它们，
+  避免隐藏投递状态跨越任务；已经 admitted 的结果是普通持久 Input，继续遵循
+  Input lifecycle。
+- 目标 Worker 不保存 `created_by`、`owner_thread_id` 或 `deliver_to`。
 
-模型工作创建的订阅默认属于 Generation。`/new` 终止这些订阅；`/compact` 只
-携带总结 bootstrap，不暗中继承活跃订阅所有权。将来如需 Agent 级订阅，应另行
-明确设计。
+## Archive、Unarchive 与 Delete
 
-## 归档
+- Main 不能 archive 或 delete。
+- Worker 只有在没有 active Turn、transition、Pending Input 或进行中的 Journal
+  commit 时才能 archive。
+- Archive 把完整 Thread 目录移动到 Agent archive namespace 并设为只读，不关闭
+  或创建 Generation。
+- Unarchive 把同一目录移回，校验 Journal tail，保留当前 Generation，把执行态
+  重置为 `idle`；发布成功后才能接收新工作。
+- Archive/unarchive 都只作用于当前 Thread；descendant 不移动，parent id 不重写。
+- Permanent delete 只允许作用于没有 child 的 Archived Worker；archive 已保证
+  当前 Runtime 的 subscription 与 result handoff 已 settled。删除先原子移动到
+  Agent trash，再物理移除。
+- 将来的 archive retention policy 必须调用同一个带校验的 delete service，不能
+  绕过生命周期规则。
 
-- Main 不能归档。
-- Worker 只有在没有活跃 Turn、Generation 转换和已接纳 Pending Input 时才能
-  归档。
-- 归档以 `archived` 原因关闭当前 Generation，并让 Thread 变成只读。
-- 归档 Thread 拒绝直接输入、创建子 Thread、`/new` 和 `/compact`。
-- 取消归档会创建一个全新 Generation，并让 Thread 回到 `idle`。
-- 每个 Thread 独立归档；不会递归归档后代，也不会重写其不可变 parent link。
-
-Thread 执行状态为 `idle`、`working` 或 `failed`。`archived` 是独立生命周期
-属性，不是第四种执行状态。
+Thread lifecycle 是两个正交投影。`retention_state` 是 `active` 或 `archived`；
+`execution_state` 是 `idle`、`working` 或 `failed`，且只在 retention 为 active 时
+存在。Archive 清空执行态。永久 delete 会移除 Thread，因此 `deleted` 是操作结果
+以及从 index 消失，不是继续持久化在存活 Thread 上的值。
 
 ## 领域不变量
 
-1. 初始化后，每个 Agent 恰好有一个 Main Thread。
-2. Main 身份只来自 `Agent.main_thread_id`。
-3. 每个非 Main Thread 都有一个有效、同 Agent、不可变的 parent。
-4. Thread id 不可变、Agent 内局部且永不复用。
-5. 每个 Thread 都有非空 alias，但 alias 永远不成为持久身份。
-6. 每个活跃 Thread 恰好有一个打开的当前 Generation。
-7. Generation 发布后只追加，关闭后不可变。
-8. `/new` 和 `/compact` 总是创建新 Generation，永不重写旧 Generation。
-9. Compact 边界只携带 compact bootstrap；`/new` 不携带任何上下文。
-10. 已接纳输入是持久事实，并且始终与 Turn 身份分开。
-11. 输出与 Turn 关联，不假定回答某一条输入。
-12. 只有 Main 接收 MCP Notification 和 Observation 路由。
-13. Subscription 所有权在目标 Thread 之外。
-14. 归档 Thread 持久且只读。
-15. Fleet 管理 Agent 生命周期和路由，但不拥有 Thread 执行。
+1. 初始化后的每个 Agent 恰好有一个 id 为 `"0"`、alias 为 `main` 的 Main。
+2. 每个 Worker 都有六位 id 和一个有效、不可变的 parent。
+3. Thread identity、alias 与 parent reference 都是字符串；Main 不需要 Agent 级
+   pointer 或持久 kind。
+4. 每个活跃 Thread 恰好有一个当前逻辑 Generation。
+5. Thread Journal 只追加，并统一排序 Inputs、attempts、Turns、Messages、activities、
+   state changes 与 Generation boundaries。
+6. `/new` 与 `/compact` 总是推进 Generation；archive/unarchive 永不推进。
+7. Compact 携带一份 summary bootstrap；New 不携带。
+8. Goal 与 Notes 跨 Compact 保留、在 New 清除；Scratchpad 跨两者保留。
+9. Accepted Input 是持久事实，并始终与 Turn identity 分开。
+10. Output 与 Turn 关联，不假设回答某一个 Input。
+11. 只有 Main 接收环境 Observations。
+12. Subscription ownership 在目标 Thread 之外。
+13. Archived Thread 持久且只读；delete 必须显式且经过校验。
+14. Fleet 拥有 Agent lifecycle 与 routing，不拥有 Thread execution。
+15. Active Thread 有一个执行态；Archived Thread 没有执行态。
 
 ## 删除的概念
 
@@ -172,18 +201,18 @@ Clean break 删除：
 - Session、Primary Session、Side Session 和 Active Session。
 - `history.active`、Session activate 和多个 Primary Session。
 - Session replacement transaction，以及通过 `/new` 创建另一个 Session。
-- Session `kind`、`active`、preview 和通用 summary 字段。
-- 子 Thread 内嵌 creator 或结果目标。
-- 把 CLI `run` 或 REPL 当成独立 Runtime 模型。
+- Session `kind`、`active`、preview、title 和通用 summary 字段。
+- Child 保存的 creator 或 result-destination metadata。
+- `juex run`、`juex repl` 和任何 worker-only CLI Runtime 模型。
+- 旧 Session runtime data 的兼容 alias、dual read、legacy format marker 和 migration。
 
-Turn、Pending Input、Goal、Notes、Compaction、Event、Artifact、Observable、MCP
-Notification、Agent、Runtime Instance、Workspace 和 Fleet 保留；其所有权按需要从
-Session 调整到 Thread 或 Generation。
+Turn、Pending Input、Goal、Notes、Context Compaction、Event、Artifact、Observable、
+Observation、MCP、Agent、Runtime Instance、Workspace 与 Fleet 保留，但改为面向
+Thread 的 ownership。
 
 ## 范围外
 
-- Workflow 定义和 Workflow RPC 执行。
-- 跨 Agent Thread parent。
-- 在 Agent 之间移动 Thread。
-- 向 Worker 投递环境 Observe。
-- 旧 Session 运行时数据的兼容别名、双读或迁移。
+- Workflow 定义与 Workflow RPC 执行。
+- 跨 Agent parent 或在 Agent 间移动 Thread。
+- 向 Worker 投递环境 Observation。
+- 外部副作用的通用 exactly-once execution。

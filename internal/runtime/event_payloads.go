@@ -263,6 +263,7 @@ type GoalContinuedPayload struct {
 }
 
 type PendingInputQueuedPayload struct {
+	InputID          string `json:"input_id,omitempty"`
 	Input            string `json:"input"`
 	Kind             string `json:"kind"`
 	MessageID        string `json:"message_id,omitempty"`
@@ -271,20 +272,23 @@ type PendingInputQueuedPayload struct {
 }
 
 type PendingInputDrainingPayload struct {
-	Count            int `json:"count"`
-	PendingCount     int `json:"pending_count"`
-	MaxPendingInputs int `json:"max_pending_inputs"`
+	InputIDs         []string `json:"input_ids,omitempty"`
+	Count            int      `json:"count"`
+	PendingCount     int      `json:"pending_count"`
+	MaxPendingInputs int      `json:"max_pending_inputs"`
 }
 
 type PendingInputPromotedPayload struct {
-	PendingCount     int `json:"pending_count"`
-	MaxPendingInputs int `json:"max_pending_inputs"`
+	InputIDs         []string `json:"input_ids,omitempty"`
+	PendingCount     int      `json:"pending_count"`
+	MaxPendingInputs int      `json:"max_pending_inputs"`
 }
 
 type PendingInputDrainedPayload struct {
-	Count            int `json:"count"`
-	PendingCount     int `json:"pending_count"`
-	MaxPendingInputs int `json:"max_pending_inputs"`
+	InputIDs         []string `json:"input_ids,omitempty"`
+	Count            int      `json:"count"`
+	PendingCount     int      `json:"pending_count"`
+	MaxPendingInputs int      `json:"max_pending_inputs"`
 }
 
 type PendingInputDroppedPayload struct {

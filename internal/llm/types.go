@@ -3,7 +3,7 @@
 //
 // Provider implementations translate between this canonical form and whatever
 // the backend wire format requires. Higher layers (turn loop, prompt builder,
-// session) only ever see the types defined here.
+// Thread) only ever see the types defined here.
 package llm
 
 import "github.com/juex-ai/juex/internal/chunkedwrite"
@@ -41,9 +41,9 @@ const (
 	MessageKindMCPEvent = "mcp_event"
 	// MessageKindObservation marks user-visible Observable observations.
 	MessageKindObservation = "observation"
-	// MessageKindSideSession marks a managed Side Session turn result delivered
-	// to its owning Primary Session.
-	MessageKindSideSession = "side_session"
+	// MessageKindWorkerThread marks a managed Worker Thread settlement delivered
+	// to an explicit subscriber.
+	MessageKindWorkerThread = "worker_thread"
 	// MessageKindPolicyEvent marks user-visible typed-policy traces. These are
 	// UI-only runtime diagnostics and must not be sent back to providers.
 	MessageKindPolicyEvent = "policy_event"
@@ -110,7 +110,7 @@ type ContextArtifactProjection struct {
 	ToolUseID     string `json:"tool_use_id,omitempty"`
 	ToolName      string `json:"tool_name,omitempty"`
 	OriginalBytes int    `json:"original_bytes"`
-	StoredPath    string `json:"stored_path"` // path relative to the current Agent Artifact root
+	StoredPath    string `json:"stored_path"` // path relative to the owning Thread spool
 	SHA256        string `json:"sha256"`
 	HeadBytes     int    `json:"head_bytes"`
 	TailBytes     int    `json:"tail_bytes"`
@@ -128,7 +128,7 @@ type Message struct {
 	PolicyBlocked bool `json:"policy_blocked,omitempty"`
 	// Model is the provider:model name responsible for producing this
 	// message. Only set on assistant messages (provider-stamped at
-	// generation time so resuming a session under a different config
+	// generation time so resuming a Thread under a different config
 	// preserves the original attribution).
 	Model      string              `json:"model,omitempty"`
 	Compaction *CompactionMetadata `json:"compaction,omitempty"`

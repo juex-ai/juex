@@ -15,13 +15,13 @@ import (
 	"testing"
 )
 
-func TestStoreUploadStoresSessionScopedImage(t *testing.T) {
+func TestStoreUploadStoresThreadScopedImage(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 	data := testPNG(t)
 	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}
 
-	ref, err := StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), limits)
+	ref, err := StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,12 +36,12 @@ func TestStoreUploadStoresSessionScopedImage(t *testing.T) {
 	if ref.OriginalBytes != len(data) || ref.Width != 2 || ref.Height != 3 {
 		t.Fatalf("media metadata = bytes:%d size:%dx%d", ref.OriginalBytes, ref.Width, ref.Height)
 	}
-	wantPrefix := filepath.ToSlash(filepath.Join("sessions", "session-1", "media")) + "/"
+	wantPrefix := filepath.ToSlash(filepath.Join("threads", "123456", "media")) + "/"
 	if !strings.HasPrefix(ref.ArtifactPath, wantPrefix) || !strings.HasSuffix(ref.ArtifactPath, ".png") {
 		t.Fatalf("artifact path = %q, want under %q with .png", ref.ArtifactPath, wantPrefix)
 	}
 
-	stored, err := os.ReadFile(filepath.Join(artifactDir, filepath.FromSlash(ref.ArtifactPath)))
+	stored, err := os.ReadFile(filepath.Join(mediaDir, filepath.FromSlash(ref.ArtifactPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestStoreUploadStoresSessionScopedImage(t *testing.T) {
 		t.Fatalf("stored bytes changed")
 	}
 
-	duplicate, err := StoreUpload(artifactDir, "session-1", "other-name.png", bytes.NewReader(data), limits)
+	duplicate, err := StoreUpload(mediaDir, "123456", "other-name.png", bytes.NewReader(data), limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,21 +60,21 @@ func TestStoreUploadStoresSessionScopedImage(t *testing.T) {
 
 func TestStoreUploadRejectsUnsupportedAndOversizedFiles(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 
-	if _, err := StoreUpload(artifactDir, "session-1", "note.txt", strings.NewReader("not an image"), Limits{MaxBytes: 1024, MaxCount: 8}); err == nil {
+	if _, err := StoreUpload(mediaDir, "123456", "note.txt", strings.NewReader("not an image"), Limits{MaxBytes: 1024, MaxCount: 8}); err == nil {
 		t.Fatalf("StoreUpload accepted non-image content")
 	}
 
 	data := testPNG(t)
-	if _, err := StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), Limits{MaxBytes: int64(len(data) - 1), MaxCount: 8}); err == nil {
+	if _, err := StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), Limits{MaxBytes: int64(len(data) - 1), MaxCount: 8}); err == nil {
 		t.Fatalf("StoreUpload accepted oversized content")
 	}
 }
 
 func TestInspectFilesAndStoreFilesResolveLocalPaths(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 	data := testPNG(t)
 	relativePath := filepath.Join("inputs", "screen one.png")
 	if err := os.MkdirAll(filepath.Join(workDir, "inputs"), 0o755); err != nil {
@@ -104,18 +104,18 @@ func TestInspectFilesAndStoreFilesResolveLocalPaths(t *testing.T) {
 			t.Fatalf("info %d path = %q, want absolute", i, info.Path)
 		}
 	}
-	if _, err := os.Stat(artifactDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(mediaDir); !os.IsNotExist(err) {
 		t.Fatalf("InspectFiles wrote artifacts: %v", err)
 	}
 
-	refs, err := StoreFiles(workDir, artifactDir, "session-1", []string{relativePath, absolutePath}, limits)
+	refs, err := StoreFiles(workDir, mediaDir, "123456", []string{relativePath, absolutePath}, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(refs) != 2 || refs[0].ArtifactPath != refs[1].ArtifactPath {
 		t.Fatalf("refs = %+v, want two deduplicated content references", refs)
 	}
-	if err := ValidateSessionMediaRefs(artifactDir, "session-1", refs, limits); err != nil {
+	if err := ValidateThreadMediaRefs(mediaDir, "123456", refs, limits); err != nil {
 		t.Fatalf("stored refs failed validation: %v", err)
 	}
 }
@@ -159,7 +159,7 @@ func TestInspectFilesRejectsInvalidPathsAndCount(t *testing.T) {
 
 func TestStoreFilesValidatesEveryInputBeforeWriting(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	mediaDir := filepath.Join(t.TempDir(), "media")
 	if err := os.WriteFile(filepath.Join(workDir, "screen.png"), testPNG(t), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -167,17 +167,17 @@ func TestStoreFilesValidatesEveryInputBeforeWriting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := StoreFiles(workDir, artifactDir, "session-1", []string{"screen.png", "note.txt"}, Limits{}); !errors.Is(err, ErrInvalidInput) {
+	if _, err := StoreFiles(workDir, mediaDir, "123456", []string{"screen.png", "note.txt"}, Limits{}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("StoreFiles error = %v, want ErrInvalidInput", err)
 	}
-	if _, err := os.Stat(artifactDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(mediaDir); !os.IsNotExist(err) {
 		t.Fatalf("StoreFiles wrote before validating every input: %v", err)
 	}
 }
 
 func TestPreparedFilesStoresCapturedBytesAfterSourceRemoval(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 	data := testPNG(t)
 	imagePath := filepath.Join(workDir, "screen.png")
 	if err := os.WriteFile(imagePath, data, 0o644); err != nil {
@@ -190,14 +190,14 @@ func TestPreparedFilesStoresCapturedBytesAfterSourceRemoval(t *testing.T) {
 	if err := os.Remove(imagePath); err != nil {
 		t.Fatal(err)
 	}
-	refs, err := prepared.Store(artifactDir, "session-1")
+	refs, err := prepared.Store(mediaDir, "123456")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(refs) != 1 || refs[0].SHA256 != sha256Hex(data) {
 		t.Fatalf("refs = %+v", refs)
 	}
-	stored, err := os.ReadFile(filepath.Join(artifactDir, filepath.FromSlash(refs[0].ArtifactPath)))
+	stored, err := os.ReadFile(filepath.Join(mediaDir, filepath.FromSlash(refs[0].ArtifactPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestPreparedFilesStoresCapturedBytesAfterSourceRemoval(t *testing.T) {
 
 func TestStoreUploadConcurrentSameImage(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 	data := testPNG(t)
 	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}
 
@@ -220,7 +220,7 @@ func TestStoreUploadConcurrentSameImage(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			refs[i], errs[i] = StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), limits)
+			refs[i], errs[i] = StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), limits)
 		}(i)
 	}
 	wg.Wait()
@@ -233,7 +233,7 @@ func TestStoreUploadConcurrentSameImage(t *testing.T) {
 			t.Fatalf("upload %d path = %q, want %q", i, refs[i].ArtifactPath, refs[0].ArtifactPath)
 		}
 	}
-	stored, err := os.ReadFile(filepath.Join(artifactDir, filepath.FromSlash(refs[0].ArtifactPath)))
+	stored, err := os.ReadFile(filepath.Join(mediaDir, filepath.FromSlash(refs[0].ArtifactPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,19 +244,19 @@ func TestStoreUploadConcurrentSameImage(t *testing.T) {
 
 func TestStoreUploadRepairsCorruptContentAddressedImage(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 	data := testPNG(t)
 	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}
-	ref, err := StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), limits)
+	ref, err := StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), limits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifactPath := filepath.Join(artifactDir, filepath.FromSlash(ref.ArtifactPath))
+	artifactPath := filepath.Join(mediaDir, filepath.FromSlash(ref.ArtifactPath))
 	if err := os.WriteFile(artifactPath, []byte("corrupt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), limits); err != nil {
+	if _, err := StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), limits); err != nil {
 		t.Fatal(err)
 	}
 	repaired, err := os.ReadFile(artifactPath)
@@ -272,15 +272,15 @@ func TestStoreUploadRejectsSymlinkedMediaRoots(t *testing.T) {
 	data := testPNG(t)
 	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}
 	cases := []string{
-		"artifacts",
-		filepath.Join("artifacts", "sessions"),
-		filepath.Join("artifacts", "sessions", "session-1"),
-		filepath.Join("artifacts", "sessions", "session-1", "media"),
+		"media",
+		filepath.Join("media", "threads"),
+		filepath.Join("media", "threads", "123456"),
+		filepath.Join("media", "threads", "123456", "media"),
 	}
 	for _, linkRel := range cases {
 		t.Run(linkRel, func(t *testing.T) {
 			workDir := t.TempDir()
-			artifactDir := filepath.Join(workDir, "artifacts")
+			mediaDir := filepath.Join(workDir, "media")
 			outside := t.TempDir()
 			linkPath := filepath.Join(workDir, linkRel)
 			if err := os.MkdirAll(filepath.Dir(linkPath), 0o700); err != nil {
@@ -290,7 +290,7 @@ func TestStoreUploadRejectsSymlinkedMediaRoots(t *testing.T) {
 				t.Skipf("symlink unavailable: %v", err)
 			}
 
-			_, err := StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), limits)
+			_, err := StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), limits)
 			if err == nil {
 				t.Fatalf("StoreUpload accepted symlinked media root %s", linkRel)
 			}
@@ -305,27 +305,27 @@ func TestStoreUploadRejectsSymlinkedMediaRoots(t *testing.T) {
 	}
 }
 
-func TestValidateSessionMediaRefsAcceptsStoredImage(t *testing.T) {
+func TestValidateThreadMediaRefsAcceptsStoredImage(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 	data := testPNG(t)
 	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}
-	ref, err := StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), limits)
+	ref, err := StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), limits)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := ValidateSessionMediaRefs(artifactDir, "session-1", []MediaRef{ref}, limits); err != nil {
-		t.Fatalf("ValidateSessionMediaRefs rejected stored image: %v", err)
+	if err := ValidateThreadMediaRefs(mediaDir, "123456", []MediaRef{ref}, limits); err != nil {
+		t.Fatalf("ValidateThreadMediaRefs rejected stored image: %v", err)
 	}
 }
 
-func TestValidateSessionMediaRefsRejectsUnsafeOrTamperedRefs(t *testing.T) {
+func TestValidateThreadMediaRefsRejectsUnsafeOrTamperedRefs(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 	data := testPNG(t)
 	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}
-	ref, err := StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), limits)
+	ref, err := StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestValidateSessionMediaRefsRejectsUnsafeOrTamperedRefs(t *testing.T) {
 		name string
 		ref  MediaRef
 	}{
-		{name: "cross session", ref: withPath(ref, strings.Replace(ref.ArtifactPath, "session-1", "session-2", 1))},
+		{name: "cross Thread", ref: withPath(ref, strings.Replace(ref.ArtifactPath, "123456", "654321", 1))},
 		{name: "traversal", ref: withPath(ref, "../secret.png")},
 		{name: "absolute", ref: withPath(ref, filepath.Join(workDir, filepath.FromSlash(ref.ArtifactPath)))},
 		{name: "media type mismatch", ref: withMediaType(ref, "text/plain")},
@@ -342,24 +342,24 @@ func TestValidateSessionMediaRefsRejectsUnsafeOrTamperedRefs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := ValidateSessionMediaRefs(artifactDir, "session-1", []MediaRef{tc.ref}, limits); err == nil {
-				t.Fatalf("ValidateSessionMediaRefs accepted unsafe ref: %+v", tc.ref)
+			if err := ValidateThreadMediaRefs(mediaDir, "123456", []MediaRef{tc.ref}, limits); err == nil {
+				t.Fatalf("ValidateThreadMediaRefs accepted unsafe ref: %+v", tc.ref)
 			}
 		})
 	}
 }
 
-func TestValidateSessionMediaRefsRejectsTooManyImages(t *testing.T) {
+func TestValidateThreadMediaRefsRejectsTooManyImages(t *testing.T) {
 	workDir := t.TempDir()
-	artifactDir := filepath.Join(workDir, "artifacts")
+	mediaDir := filepath.Join(workDir, "media")
 	data := testPNG(t)
-	ref, err := StoreUpload(artifactDir, "session-1", "screen.png", bytes.NewReader(data), Limits{MaxBytes: int64(len(data) + 1), MaxCount: 1})
+	ref, err := StoreUpload(mediaDir, "123456", "screen.png", bytes.NewReader(data), Limits{MaxBytes: int64(len(data) + 1), MaxCount: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := ValidateSessionMediaRefs(artifactDir, "session-1", []MediaRef{ref, ref}, Limits{MaxBytes: int64(len(data) + 1), MaxCount: 1}); err == nil {
-		t.Fatalf("ValidateSessionMediaRefs accepted too many refs")
+	if err := ValidateThreadMediaRefs(mediaDir, "123456", []MediaRef{ref, ref}, Limits{MaxBytes: int64(len(data) + 1), MaxCount: 1}); err == nil {
+		t.Fatalf("ValidateThreadMediaRefs accepted too many refs")
 	}
 }
 

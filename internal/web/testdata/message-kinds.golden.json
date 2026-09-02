@@ -4,7 +4,7 @@
   "tool_result",
   "mcp_event",
   "observation",
-  "side_session",
+  "worker_thread",
   "policy_event",
   "compact",
   "runtime_context",

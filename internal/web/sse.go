@@ -58,7 +58,7 @@ func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 //
 // Each frame ends with a blank line. Durable events use the event's bus id
 // directly; clients send it back as Last-Event-ID (or ?since=) on reconnect
-// so the server can replay missed events from events.jsonl. Transient events
+// so the server can replay missed facts from the Thread Journal. Transient events
 // omit the id field so they cannot replace the browser's durable replay cursor.
 // The data field is a single line of JSON; embedded newlines in
 // payloads stay encoded as \n inside the JSON string so the wire format

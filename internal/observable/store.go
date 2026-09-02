@@ -64,7 +64,7 @@ type ObservationRecord struct {
 	Truncated        bool                       `json:"truncated,omitempty"`
 	ArtifactPath     string                     `json:"artifact_path,omitempty"`
 	State            string                     `json:"state"`
-	TargetSession    string                     `json:"target_session,omitempty"`
+	TargetThread     string                     `json:"target_thread,omitempty"`
 	PendingInputID   string                     `json:"pending_input_id,omitempty"`
 	CreatedAt        time.Time                  `json:"created_at"`
 	DeliveredAt      time.Time                  `json:"delivered_at,omitempty"`
@@ -89,7 +89,7 @@ type observationRecordJSON struct {
 	Truncated        bool                       `json:"truncated,omitempty"`
 	ArtifactPath     string                     `json:"artifact_path,omitempty"`
 	State            string                     `json:"state"`
-	TargetSession    string                     `json:"target_session,omitempty"`
+	TargetThread     string                     `json:"target_thread,omitempty"`
 	PendingInputID   string                     `json:"pending_input_id,omitempty"`
 	CreatedAt        int64                      `json:"created_at"`
 	DeliveredAt      *int64                     `json:"delivered_at,omitempty"`
@@ -114,7 +114,7 @@ type observationRecordDecodeJSON struct {
 	Truncated        bool                       `json:"truncated,omitempty"`
 	ArtifactPath     string                     `json:"artifact_path,omitempty"`
 	State            string                     `json:"state"`
-	TargetSession    string                     `json:"target_session,omitempty"`
+	TargetThread     string                     `json:"target_thread,omitempty"`
 	PendingInputID   string                     `json:"pending_input_id,omitempty"`
 	CreatedAt        observationJSONTime        `json:"created_at"`
 	DeliveredAt      observationJSONTime        `json:"delivered_at,omitempty"`
@@ -149,7 +149,7 @@ func (r ObservationRecord) MarshalJSON() ([]byte, error) {
 		Truncated:        r.Truncated,
 		ArtifactPath:     r.ArtifactPath,
 		State:            r.State,
-		TargetSession:    r.TargetSession,
+		TargetThread:     r.TargetThread,
 		PendingInputID:   r.PendingInputID,
 		CreatedAt:        observationUnixMilli(r.CreatedAt),
 		DeliveredAt:      deliveredAt,
@@ -180,7 +180,7 @@ func (r *ObservationRecord) UnmarshalJSON(data []byte) error {
 		Truncated:        raw.Truncated,
 		ArtifactPath:     raw.ArtifactPath,
 		State:            raw.State,
-		TargetSession:    raw.TargetSession,
+		TargetThread:     raw.TargetThread,
 		PendingInputID:   raw.PendingInputID,
 		CreatedAt:        raw.CreatedAt.Time,
 		DeliveredAt:      raw.DeliveredAt.Time,

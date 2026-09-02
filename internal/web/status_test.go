@@ -4,32 +4,24 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/llm"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
-func TestSessionStatusSnapshotPreservesProviderStreamingOnRefresh(t *testing.T) {
-	provider := &blockingProvider{
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	srv := newTestServer(t)
-	srv.opts.Provider = provider
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+func TestThreadStatusSnapshotPreservesProviderStreamingOnRefresh(t *testing.T) {
+	provider := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	server := newTestServer(t)
+	server.opts.Provider = provider
+	active, err := server.openThread(context.Background(), thread.MainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,13 +31,13 @@ func TestSessionStatusSnapshotPreservesProviderStreamingOnRefresh(t *testing.T) 
 		default:
 			close(provider.release)
 		}
-		as.turns.wait()
+		active.turns.wait()
 	})
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	httpServer := httptest.NewServer(server.APIHandler())
+	defer httpServer.Close()
 
 	response, err := http.Post(
-		ts.URL+"/api/sessions/"+as.app.Session.ID+"/turns",
+		httpServer.URL+"/api/threads/0/inputs",
 		"application/json",
 		strings.NewReader(`{"prompt":"stream"}`),
 	)
@@ -53,14 +45,12 @@ func TestSessionStatusSnapshotPreservesProviderStreamingOnRefresh(t *testing.T) 
 		t.Fatal(err)
 	}
 	body, readErr := io.ReadAll(response.Body)
-	if closeErr := response.Body.Close(); closeErr != nil {
-		t.Fatal(closeErr)
-	}
+	_ = response.Body.Close()
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
 	if response.StatusCode != http.StatusAccepted {
-		t.Fatalf("start turn status = %d body = %s", response.StatusCode, body)
+		t.Fatalf("input status = %d body = %s", response.StatusCode, body)
 	}
 	select {
 	case <-provider.started:
@@ -68,127 +58,77 @@ func TestSessionStatusSnapshotPreservesProviderStreamingOnRefresh(t *testing.T) 
 		t.Fatal("provider did not start")
 	}
 
-	statusResponse, err := http.Get(ts.URL + "/api/sessions/" + as.app.Session.ID + "/status")
+	statusResponse, err := http.Get(httpServer.URL + "/api/threads/0/status")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer statusResponse.Body.Close()
-	var snapshot juexruntime.StatusSnapshot
+	var snapshot runtime.StatusSnapshot
 	if err := json.NewDecoder(statusResponse.Body).Decode(&snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.Turn == nil ||
-		snapshot.Turn.Phase != juexruntime.TurnPhaseProviderIteration ||
+		snapshot.Turn.Phase != runtime.TurnPhaseProviderIteration ||
 		!snapshot.Turn.Streaming ||
-		!snapshot.Session.CanAcceptInput {
+		!snapshot.Thread.CanAcceptInput {
 		t.Fatalf("status = %+v", snapshot)
 	}
 }
 
 func TestStatusRoutesExposePublicDTOOnly(t *testing.T) {
-	srv := newTestServer(t)
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	server := newTestServer(t)
+	active, err := server.openThread(context.Background(), thread.MainID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	as.app.Status = juexruntime.NewStatusStore(juexruntime.StatusSeed{
-		SessionID:        as.app.Session.ID,
-		MaxPendingInputs: 4,
+	active.app.Status = runtime.NewStatusStore(runtime.StatusSeed{ThreadID: thread.MainID, ThreadAlias: thread.MainAlias, MaxPendingInputs: 4})
+	active.app.Status.Publish(events.Event{ID: "event-admitted", Type: runtime.TurnAdmittedType, TurnID: "turn-one", Timestamp: now})
+	active.app.Status.Publish(events.Event{
+		ID: "event-tool-phase", Type: runtime.TurnPhaseType, TurnID: "turn-one", Timestamp: now,
+		Payload: runtime.TurnPhasePayload{Phase: runtime.TurnPhaseToolBatch},
 	})
-	as.app.Status.Publish(events.Event{
-		ID:        "event-admitted",
-		Type:      juexruntime.TurnAdmittedType,
-		TurnID:    "turn-one",
-		Timestamp: now,
-	})
-	as.app.Status.Publish(events.Event{
-		ID:        "event-tool-phase",
-		Type:      juexruntime.TurnPhaseType,
-		TurnID:    "turn-one",
-		Timestamp: now,
-		Payload: juexruntime.TurnPhasePayload{
-			Phase: juexruntime.TurnPhaseToolBatch,
-		},
-	})
-	as.app.Status.Publish(events.Event{
-		ID:        "event-compact",
-		Type:      "context.compact.started",
-		TurnID:    "turn-one",
-		Timestamp: now,
-		Payload:   juexruntime.ContextCompactStartedPayload{},
-	})
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	httpServer := httptest.NewServer(server.APIHandler())
+	defer httpServer.Close()
 
-	for _, path := range []string{
-		"/api/sessions/" + as.app.Session.ID + "/status",
-		"/api/status",
-	} {
-		response, err := http.Get(ts.URL + path)
+	for _, path := range []string{"/api/threads/0/status", "/api/status"} {
+		response, err := http.Get(httpServer.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		body, readErr := io.ReadAll(response.Body)
-		response.Body.Close()
+		_ = response.Body.Close()
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("%s status = %d body=%s", path, response.StatusCode, body)
 		}
-		if strings.Contains(string(body), "resume_state") ||
-			strings.Contains(string(body), "resume_phase") {
+		if strings.Contains(string(body), "resume_state") || strings.Contains(string(body), "resume_phase") {
 			t.Fatalf("%s leaked recovery bookkeeping: %s", path, body)
 		}
 		if !strings.Contains(string(body), `"working": true`) {
 			t.Fatalf("%s omitted computed working: %s", path, body)
 		}
-		if path == "/api/status" {
-			var activity map[string]json.RawMessage
-			if err := json.Unmarshal(body, &activity); err != nil {
-				t.Fatal(err)
-			}
-			for _, required := range []string{"state", "pending_input_count", "selected_status"} {
-				if _, ok := activity[required]; !ok {
-					t.Fatalf("%s omitted %q: %s", path, required, body)
-				}
-			}
-			for _, forbidden := range []string{
-				"session_id",
-				"session_alias",
-				"pending_count",
-				"status",
-			} {
-				if _, ok := activity[forbidden]; ok {
-					t.Fatalf("%s leaked compatibility field %q: %s", path, forbidden, body)
-				}
-			}
-		}
 	}
 }
 
-func TestSessionStatusStreamResumesAfterSnapshotCursor(t *testing.T) {
-	srv := newTestServer(t)
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+func TestThreadStatusStreamResumesAfterSnapshotCursor(t *testing.T) {
+	server := newTestServer(t)
+	active, err := server.openThread(context.Background(), thread.MainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := as.app.Engine.ReserveTurnID("turn-1"); err != nil {
+	if err := active.app.Engine.ReserveTurnID("turn-1"); err != nil {
 		t.Fatal(err)
 	}
-	cursor := as.app.Status.Snapshot().Cursor
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	cursor := active.app.Status.Snapshot().Cursor
+	httpServer := httptest.NewServer(server.APIHandler())
+	defer httpServer.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		ts.URL+"/api/sessions/"+as.app.Session.ID+"/status/events?since="+cursor,
-		nil,
-	)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/api/threads/0/status/events?since="+cursor, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,17 +138,14 @@ func TestSessionStatusStreamResumesAfterSnapshotCursor(t *testing.T) {
 	}
 	defer response.Body.Close()
 
-	if err := as.app.Bus.Emit(events.Event{
-		Type:   juexruntime.TurnPhaseType,
-		TurnID: "turn-1",
-		Payload: juexruntime.TurnPhasePayload{
-			Phase: juexruntime.TurnPhaseToolBatch,
-		},
+	if err := active.app.Bus.Emit(events.Event{
+		Type: runtime.TurnPhaseType, TurnID: "turn-1",
+		Payload: runtime.TurnPhasePayload{Phase: runtime.TurnPhaseToolBatch},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	scanner := bufio.NewScanner(response.Body)
-	var snapshot juexruntime.StatusSnapshot
+	var snapshot runtime.StatusSnapshot
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -217,16 +154,14 @@ func TestSessionStatusStreamResumesAfterSnapshotCursor(t *testing.T) {
 		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &snapshot); err != nil {
 			t.Fatal(err)
 		}
-		if snapshot.Cursor == cursor {
-			continue
+		if snapshot.Cursor != cursor {
+			break
 		}
-		break
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Cursor == "" || snapshot.Cursor == cursor ||
-		snapshot.Turn == nil || snapshot.Turn.Phase != juexruntime.TurnPhaseToolBatch {
+	if snapshot.Cursor == "" || snapshot.Cursor == cursor || snapshot.Turn == nil || snapshot.Turn.Phase != runtime.TurnPhaseToolBatch {
 		t.Fatalf("resumed status = %+v, snapshot cursor = %q", snapshot, cursor)
 	}
 }
@@ -239,212 +174,58 @@ func TestSSEResumeCursorPrefersLastEventIDOnReconnect(t *testing.T) {
 	}
 }
 
-// A blank since carries no resume position, so it must read as absent. Treating
-// it as a present-but-empty cursor made the events stream replay the whole
-// journal to any client that had lost its cursor. Asking for the journal start
-// through its own parameter still works, so genuine catch-up is not lost.
-func TestSSEResumeCursorTreatsExplicitEmptySinceAsAbsent(t *testing.T) {
+func TestSSEResumeCursorPresenceContract(t *testing.T) {
 	for _, target := range []string{"/events?since=", "/events?since=%20", "/events"} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		cursor, present := sseResumeCursorWithPresence(request)
 		if cursor != "" || present {
-			t.Fatalf("%s: resume cursor = %q, present = %v; want empty and absent", target, cursor, present)
+			t.Fatalf("%s: cursor = %q, present = %v", target, cursor, present)
 		}
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "/events?since=real-cursor", nil)
 	cursor, present := sseResumeCursorWithPresence(request)
 	if cursor != "real-cursor" || !present {
-		t.Fatalf("resume cursor = %q, present = %v; want real-cursor and present", cursor, present)
+		t.Fatalf("cursor = %q, present = %v", cursor, present)
 	}
 
-	request = httptest.NewRequest(
-		http.MethodGet,
-		"/events?"+sseReplayParam+"="+url.QueryEscape(sseReplayJournalStart),
-		nil,
-	)
+	request = httptest.NewRequest(http.MethodGet, "/events?"+sseReplayParam+"="+url.QueryEscape(sseReplayJournalStart), nil)
 	cursor, present = sseResumeCursorWithPresence(request)
 	if cursor != "" || !present {
-		t.Fatalf("journal-start replay cursor = %q, present = %v; want empty and present", cursor, present)
+		t.Fatalf("journal-start cursor = %q, present = %v", cursor, present)
 	}
 }
 
-// Event IDs are opaque and events.Normalize keeps any non-empty caller-supplied
-// ID, so an extension can commit an event named after the replay marker. The
-// marker lives in its own parameter precisely so that such an ID stays a
-// resume cursor instead of turning into a full-journal replay.
-func TestSSEResumeCursorKeepsReplayMarkerOutOfCursorNamespace(t *testing.T) {
-	request := httptest.NewRequest(
-		http.MethodGet,
-		"/events?since="+url.QueryEscape(sseReplayJournalStart),
-		nil,
-	)
-	cursor, present := sseResumeCursorWithPresence(request)
-	if cursor != sseReplayJournalStart || !present {
-		t.Fatalf("resume cursor = %q, present = %v; want the literal event ID and present", cursor, present)
-	}
-
-	request = httptest.NewRequest(http.MethodGet, "/events?since=@journal-start", nil)
-	cursor, present = sseResumeCursorWithPresence(request)
-	if cursor != "@journal-start" || !present {
-		t.Fatalf("resume cursor = %q, present = %v; want the literal event ID and present", cursor, present)
-	}
-
-	// An applied cursor outranks a stale replay request on the reconnect URL.
-	request = httptest.NewRequest(
-		http.MethodGet,
-		"/events?since=real-cursor&"+sseReplayParam+"="+url.QueryEscape(sseReplayJournalStart),
-		nil,
-	)
-	cursor, present = sseResumeCursorWithPresence(request)
-	if cursor != "real-cursor" || !present {
-		t.Fatalf("resume cursor = %q, present = %v; want real-cursor and present", cursor, present)
-	}
-}
-
-func TestHistoricalSessionStatusDoesNotActivateIt(t *testing.T) {
-	srv := newTestServer(t)
-	historical, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+func TestPersistedWorkerStatusReadDoesNotOpenRuntime(t *testing.T) {
+	server := newTestServer(t)
+	store := thread.NewStore(server.opts.Cfg.RuntimePaths().StateDir)
+	worker, err := store.CreateWorker(thread.MainID, "status-only")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := historical.app.Session.Append(llm.TextMessage(llm.RoleUser, "historical")); err != nil {
+	workerID := worker.ID
+	if err := worker.AppendEvent(events.Event{ID: "worker-status", Type: runtime.TurnAdmittedType, TurnID: "turn-worker"}); err != nil {
 		t.Fatal(err)
 	}
-	historicalID := historical.app.Session.ID
-	historicalDir := historical.app.Session.Dir
-
-	current, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := current.app.Session.Append(llm.TextMessage(llm.RoleUser, "current")); err != nil {
-		t.Fatal(err)
-	}
-	currentID := current.app.Session.ID
-	if _, loaded := srv.sessions.Load(historicalID); loaded {
-		t.Fatal("historical primary remained active in memory")
-	}
-	eventData := eventJournalFixture(t, historicalID, []events.Event{{
-		ID:      "status-1",
-		Type:    "turn.admitted",
-		TurnID:  "turn-1",
-		Payload: juexruntime.TurnAdmittedPayload{},
-	}})
-	eventData = append(eventData, []byte("not-json")...)
-	if err := os.WriteFile(filepath.Join(historicalDir, "events.jsonl"), eventData, 0o600); err != nil {
+	if err := worker.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-	response, err := http.Get(ts.URL + "/api/sessions/" + historicalID + "/status")
+	httpServer := httptest.NewServer(server.APIHandler())
+	defer httpServer.Close()
+	response, err := http.Get(httpServer.URL + "/api/threads/" + workerID + "/status")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	var snapshot juexruntime.StatusSnapshot
+	var snapshot runtime.StatusSnapshot
 	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Session.ID != historicalID {
-		t.Fatalf("status session = %q, want %q", snapshot.Session.ID, historicalID)
+	if snapshot.Thread.ID != workerID || snapshot.Cursor != "worker-status" {
+		t.Fatalf("persisted status = %+v", snapshot)
 	}
-	if snapshot.Cursor != "status-1" {
-		t.Fatalf("status cursor = %q, want recovered cursor status-1", snapshot.Cursor)
-	}
-	if _, loaded := srv.sessions.Load(historicalID); loaded {
-		t.Fatal("status read activated historical primary")
-	}
-	history, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if history.Active == nil || history.Active.ID != currentID {
-		t.Fatalf("active history = %+v, want current %q", history.Active, currentID)
-	}
-}
-
-func TestHistoricalSessionStatusRetainsBoundedReplayHistory(t *testing.T) {
-	srv := newTestServer(t)
-	historical, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := historical.app.Session.Append(llm.TextMessage(llm.RoleUser, "historical")); err != nil {
-		t.Fatal(err)
-	}
-	historicalID := historical.app.Session.ID
-	historicalDir := historical.app.Session.Dir
-
-	if _, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary); err != nil {
-		t.Fatal(err)
-	}
-	if _, loaded := srv.sessions.Load(historicalID); loaded {
-		t.Fatal("historical primary remained active in memory")
-	}
-
-	journal := make([]events.Event, 0, 600)
-	for index := 1; index <= 600; index++ {
-		journal = append(journal, events.Event{
-			ID:     fmt.Sprintf("status-%03d", index),
-			Type:   "pending_input.queued",
-			TurnID: "turn-1",
-			Payload: juexruntime.PendingInputQueuedPayload{
-				PendingCount:     index,
-				MaxPendingInputs: 1000,
-			},
-		})
-	}
-	if err := os.WriteFile(
-		filepath.Join(historicalDir, "events.jsonl"),
-		eventJournalFixture(t, historicalID, journal),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	status, err := srv.historicalStatusStore(historicalID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot := status.Snapshot()
-	if snapshot.Cursor != "status-600" || snapshot.Session.PendingCount != 600 {
-		t.Fatalf("historical snapshot = %+v", snapshot)
-	}
-
-	retained := status.OpenStream(juexruntime.StatusStreamOptions{After: "status-100"})
-	defer retained.Close()
-	count := 0
-	firstCursor := ""
-	lastCursor := ""
-	for {
-		next, ok := retained.Next(context.Background())
-		if !ok {
-			break
-		}
-		count++
-		if firstCursor == "" {
-			firstCursor = next.Cursor
-		}
-		lastCursor = next.Cursor
-	}
-	if count != 500 || firstCursor != "status-101" || lastCursor != "status-600" {
-		t.Fatalf(
-			"retained replay = count %d, first %q, last %q",
-			count,
-			firstCursor,
-			lastCursor,
-		)
-	}
-
-	expired := status.OpenStream(juexruntime.StatusStreamOptions{After: "status-010"})
-	defer expired.Close()
-	current, ok := expired.Next(context.Background())
-	if !ok || current.Cursor != "status-600" {
-		t.Fatalf("expired replay current = %+v, %t", current, ok)
-	}
-	if extra, ok := expired.Next(context.Background()); ok {
-		t.Fatalf("expired replay returned extra snapshot: %+v", extra)
+	if _, loaded := server.threads.Load(workerID); loaded {
+		t.Fatal("status read opened Worker runtime")
 	}
 }

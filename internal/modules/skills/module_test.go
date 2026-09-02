@@ -74,7 +74,7 @@ func TestModuleContributesContextOnlyForProviderIteration(t *testing.T) {
 	}
 	mod := NewWithLoader(loader, t.TempDir(), sandbox.Policy{})
 	for _, purpose := range []runtimemodule.ContextPurpose{
-		runtimemodule.ContextPurposeSessionStart,
+		runtimemodule.ContextPurposeThreadStart,
 		runtimemodule.ContextPurposeTurnPreparation,
 	} {
 		sections, err := mod.Context(context.Background(), runtimemodule.ContextRequest{Purpose: purpose})

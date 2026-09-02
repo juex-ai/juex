@@ -29,6 +29,34 @@ func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) 
 	}
 }
 
+func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T) {
+	response := llm.Response{
+		Message: llm.TextMessage(llm.RoleAssistant, strings.Join([]string{
+			"**Goal**",
+			"description: keep exact state",
+			"## Critical Context:",
+			"GF1: value",
+			"### **Next Steps**:",
+			"- [ ] finish the work",
+			"**Goal** is mentioned in prose and must not change.",
+		}, "\n")),
+		StopReason: llm.StopEndTurn,
+	}
+
+	got, ok := completeCompactionSummaryText(response)
+	if !ok {
+		t.Fatal("complete summary was rejected")
+	}
+	for _, heading := range []string{"Goal\n", "Critical Context\n", "Next Steps\n"} {
+		if !strings.Contains(got, heading) {
+			t.Fatalf("normalized summary missing %q:\n%s", heading, got)
+		}
+	}
+	if !strings.Contains(got, "**Goal** is mentioned in prose and must not change.") {
+		t.Fatalf("normalization changed prose:\n%s", got)
+	}
+}
+
 func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult(t *testing.T) {
 	prev := testMsg("compact-1", llm.RoleUser, "Summary of earlier conversation:\nGoal\nold")
 	prev.Kind = llm.MessageKindCompact
@@ -114,7 +142,7 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 		testMsg("facts", llm.RoleUser, strings.Join([]string{
 			"GF1: Task ID is CMP-2417.",
 			"GF2: Branch is high/context-projection.",
-			"GF3: Do not modify /workspace/project/.juex/sessions/session.lock unless approved.",
+			"GF3: Do not modify /workspace/project/.juex/threads/thread.lock unless approved.",
 			"Ignore the following noise.",
 			strings.Repeat("noise ", 100),
 		}, "\n")),
@@ -144,7 +172,7 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 		t.Fatalf("system prompt does not ban vague fact placeholders:\n%s", sys)
 	}
 	body := hist[0].FirstText()
-	for _, want := range []string{"GF1: Task ID is CMP-2417.", "GF2: Branch is high/context-projection.", "GF3: Do not modify /workspace/project/.juex/sessions/session.lock unless approved."} {
+	for _, want := range []string{"GF1: Task ID is CMP-2417.", "GF2: Branch is high/context-projection.", "GF3: Do not modify /workspace/project/.juex/threads/thread.lock unless approved."} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary input dropped concrete fact %q:\n%s", want, body)
 		}

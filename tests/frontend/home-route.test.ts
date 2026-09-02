@@ -1,20 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { homeActiveSessionHref } from "../../frontend/src/lib/home-route.ts";
+import { homeActiveThreadHref } from "../../frontend/src/lib/home-route.ts";
 
-test("homeActiveSessionHref routes to the active primary session", () => {
+test("homeActiveThreadHref routes to the active primary thread", () => {
   assert.equal(
-    homeActiveSessionHref("primary/session 1", "/agents/agent%201"),
-    "/agents/agent%201/sessions/primary%2Fsession%201",
+    homeActiveThreadHref("primary/thread 1", "/agents/agent%201"),
+    "/agents/agent%201/threads/primary%2Fthread%201",
   );
 });
 
-test("homeActiveSessionHref stays on home when no active primary exists", () => {
-  assert.equal(homeActiveSessionHref(""), null);
+test("homeActiveThreadHref stays on home when no active primary exists", () => {
+  assert.equal(homeActiveThreadHref(""), null);
 });
 
-test("homeActiveSessionHref handles missing active session ids", () => {
-  assert.equal(homeActiveSessionHref(null), null);
-  assert.equal(homeActiveSessionHref(undefined), null);
+test("homeActiveThreadHref handles missing active thread ids", () => {
+  assert.equal(homeActiveThreadHref(null), null);
+  assert.equal(homeActiveThreadHref(undefined), null);
 });

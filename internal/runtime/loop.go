@@ -5,13 +5,13 @@
 // Behaviour highlights:
 //
 //   - System prompt sections are rebuilt every turn so dynamic guidance and
-//     Session state changes propagate immediately.
+//     Thread state changes propagate immediately.
 //   - Context projection externalizes oversized user inputs and tool results
-//     before provider submission while preserving recoverable session history.
+//     before provider submission while preserving recoverable thread history.
 //   - Automatic and manual compaction keep active context bounded with compact
 //     summary markers and retained recent tail messages.
 //   - independent tool_use blocks within one LLM response run in parallel;
-//     model-owned session-state tools run in provider order, and all results
+//     model-owned thread-state tools run in provider order, and all results
 //     are reattached to history in the original order.
 //   - Pending input lets transports queue user or critical external messages
 //     while preserving assistant tool-use / user tool-result adjacency.
@@ -40,7 +40,7 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -67,23 +67,23 @@ type Engine struct {
 	RuntimeModules       *runtimemodule.Set
 	RuntimeContext       runtimemodule.RuntimeContext
 	Bus                  *events.Bus
-	// Session, Prompt, and PendingInputQueue seed the first session runtime
+	// Thread, Prompt, and PendingInputQueue seed the first thread runtime
 	// bundle during bootstrap. Concurrent production code must use the
-	// synchronized session-runtime methods after publication instead of reading
+	// synchronized thread-runtime methods after publication instead of reading
 	// or replacing these fields directly.
-	Session *session.Session
-	Prompt  *prompt.Builder
+	Thread *thread.Thread
+	Prompt *prompt.Builder
 	// WorkDir is the workspace root. Runtime state may live outside it, so
-	// workspace-relative tools and artifacts must not infer it from Session.
+	// workspace-relative tools and artifacts must not infer it from Thread.
 	WorkDir string
-	// ArtifactDir is the current Agent's managed Artifact root.
-	ArtifactDir string
+	// MediaDir is the current Agent's managed Media root.
+	MediaDir string
 	// MaxPendingInputs caps user or external event messages that can be
 	// queued while a turn is active. When omitted, DefaultMaxPendingInput is
 	// used. A full queue rejects new input instead of silently dropping it.
 	MaxPendingInputs int
-	// PendingInputQueue persists pending input records in the session
-	// directory. When omitted, the engine creates a session-local queue on
+	// PendingInputQueue persists pending input records in the thread
+	// directory. When omitted, the engine creates a thread-local queue on
 	// first use.
 	PendingInputQueue *PendingInputQueue
 	// ShowBuiltinPolicyTraces includes built-in runtime gates in UI-only policy
@@ -107,12 +107,12 @@ type Engine struct {
 	ToolOutput      ToolOutputPolicy
 
 	// mu serializes turns for one Engine. MCP notifications can arrive while
-	// a user turn is running, and both paths append to the same session
+	// a user turn is running, and both paths append to the same thread
 	// history; queuing them preserves the provider-facing transcript order.
 	mu sync.Mutex
 
-	sessionRuntimeMu sync.RWMutex
-	sessionRuntime   *sessionRuntimeState
+	threadRuntimeMu sync.RWMutex
+	threadRuntime   *threadRuntimeState
 
 	pendingLifecycleMu sync.Mutex
 	pendingMu          sync.Mutex
@@ -148,6 +148,11 @@ type Engine struct {
 
 	tokenCalibrationMu sync.RWMutex
 	tokenCalibration   tokenEstimateCalibration
+
+	contextControlMu         sync.Mutex
+	pendingContextTransition *contextTransitionRequest
+	contextPromptMu          sync.Mutex
+	contextPromptInputs      contextPromptInputs
 }
 
 var (
@@ -459,6 +464,7 @@ func (e *Engine) enqueuePersistedPendingMessage(ctx context.Context, record Pend
 	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 	status.PendingCount = len(e.pendingInput)
 	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
+		InputID:          record.ID,
 		Input:            record.Message.FirstText(),
 		Kind:             record.Message.Kind,
 		MessageID:        record.Message.ID,
@@ -556,6 +562,7 @@ func (e *Engine) enqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg, Origin: PendingInputOriginQueued})
 	status.PendingCount = len(e.pendingInput)
 	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
+		InputID:          recordID,
 		Input:            userMsg.FirstText(),
 		Kind:             userMsg.Kind,
 		MessageID:        userMsg.ID,
@@ -669,6 +676,7 @@ func (e *Engine) promotePendingInputTurn(currentTurnID, nextTurnID string) (queu
 	}
 	e.pendingMu.Unlock()
 	_ = e.emitPendingLifecycleEvent(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
+		InputIDs:         nonEmptyInputIDs(item.RecordID),
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}}, true)
@@ -677,6 +685,16 @@ func (e *Engine) promotePendingInputTurn(currentTurnID, nextTurnID string) (queu
 	}
 	e.flushPendingEvents(true)
 	return item, status, true, nil
+}
+
+func nonEmptyInputIDs(ids ...string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (e *Engine) preservePendingInputAfterFailedPromotionLocked(turnID string) error {
@@ -752,6 +770,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		}
 	}
 	defer e.finishTurnExecution(turnID)
+	defer e.clearContextTransition()
 	ctx, _, finishOperation := e.beginActiveOperation(ctx)
 	previousFailures := e.toolFailures
 	e.toolFailures = newToolFailureLedger(e.WorkDir)
@@ -867,7 +886,7 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 	original := userMsg
 	policyMessage, err := runtimemodule.ApplyTurnInputPolicies(ctx, runtimemodule.TurnInputRequest{
 		Runtime:  e.policyRuntimeContext(),
-		Session:  e.policySessionContext(),
+		Thread:   e.policyThreadContext(),
 		TurnID:   turnID,
 		Message:  userMsg,
 		Observer: e.policyObserver(turnID),
@@ -905,6 +924,7 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 	}
 	prepared.promptSections = promptSections
 	prepared.systemPrompt = prompt.JoinSections(prepared.promptSections)
+	e.setContextPromptInputs(prepared.systemPrompt, prepared.tools)
 
 	if err := e.maybeCompact(ctx, turnID, prepared.systemPrompt, prepared.tools, prepared.userMessage); err != nil {
 		if !canContinueAfterAutoCompactError(ctx, prepared.userMessage) {
@@ -922,9 +942,9 @@ func (e *Engine) persistAcceptedInputAfterPreparationFailureLocked(turnID string
 }
 
 func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {
-	persisted, err := e.currentSession().AppendAssigned(userMsg)
+	persisted, err := e.currentThread().AppendAssigned(userMsg)
 	if err != nil {
-		return fmt.Errorf("session append user: %w", err)
+		return fmt.Errorf("thread append user: %w", err)
 	}
 	if err := e.markPendingInputMessageProcessed(persisted); err != nil {
 		return fmt.Errorf("mark pending input user processed: %w", err)
@@ -940,25 +960,20 @@ func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error
 }
 
 func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
-	repairs, err := e.currentSession().RepairTranscript(reason)
+	repairs, err := e.currentThread().RepairProtocolTail(reason)
 	if err != nil {
-		return fmt.Errorf("session repair transcript: %w", err)
+		return fmt.Errorf("thread repair provider protocol tail: %w", err)
 	}
-	if len(repairs) > 0 {
-		for _, event := range session.ProjectTranscriptRepairEvents(turnID, reason, repairs) {
-			if err := e.emit(event); err != nil {
-				if event.Type != "transcript.repaired" {
-					return fmt.Errorf("commit unknown tool outcome: %w", err)
-				}
-				return fmt.Errorf("commit transcript repair: %w", err)
-			}
+	for _, event := range thread.ProjectProtocolRepairEvents(turnID, reason, repairs) {
+		if err := e.emit(event); err != nil {
+			return fmt.Errorf("commit protocol repair: %w", err)
 		}
 	}
 	return nil
 }
 
-// RecoverTranscript repairs an attached Session while routing recovery facts
-// through the configured Event Bus. The caller must hold the Session lifetime
+// RecoverTranscript repairs an attached Thread while routing recovery facts
+// through the configured Event Bus. The caller must hold the Thread lifetime
 // lock, as App does for the full attachment lifetime.
 func (e *Engine) RecoverTranscript(reason string) error {
 	if e == nil {
@@ -998,7 +1013,8 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		refs[i] = candidates[i].Ref
 	}
 	attempted := map[string]struct{}{}
-	previousModel := previousAssistantModel(e.currentSession().History)
+	_, currentHistory := e.currentThread().Snapshot()
+	previousModel := previousAssistantModel(currentHistory)
 	var failures []modelAttemptFailure
 	var skipped []llm.ModelHealthSkip
 	var pending *modelFallbackTransition
@@ -1213,10 +1229,10 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		messages = append(messages, *result.notice)
 	}
 	messages = append(messages, msg)
-	sess := e.currentSession()
+	sess := e.currentThread()
 	persisted, err := sess.AppendBatchAssigned(messages)
 	if err != nil {
-		return recordedProviderResponse{}, fmt.Errorf("session append provider response: %w", err)
+		return recordedProviderResponse{}, fmt.Errorf("thread append provider response: %w", err)
 	}
 	msg = persisted[len(persisted)-1]
 	var notice *llm.Message
@@ -1320,8 +1336,8 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, recor
 	if fatalErr != nil || outcomeErr != nil {
 		return errors.Join(fatalErr, outcomeErr)
 	}
-	if appendErr := e.currentSession().Append(projectedToolResultMsg); appendErr != nil {
-		return fmt.Errorf("session append tool result: %w", appendErr)
+	if appendErr := e.currentThread().Append(projectedToolResultMsg); appendErr != nil {
+		return fmt.Errorf("thread append tool result: %w", appendErr)
 	}
 	e.recordToolFailureBatch(turnID, toolResults)
 	if emitErr := e.emitProjectionApplied(turnID, projection); emitErr != nil {
@@ -1334,7 +1350,7 @@ func (e *Engine) recordTurnCompletionForPublication(turnID string, start time.Ti
 	event := events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
 		DurationMS: time.Since(start).Milliseconds(),
 		OutputLen:  len(lastText),
-		TokenUsage: e.currentSession().TokenUsageSnapshot(),
+		TokenUsage: e.currentThread().TokenUsageSnapshot(),
 	}}
 	if e.Bus == nil {
 		return events.Normalize(event), func() {}, nil
@@ -1418,11 +1434,11 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []toolEx
 		index int
 		call  toolExecutionCall
 	}
-	var sessionStateCalls []indexedToolCall
+	var threadStateCalls []indexedToolCall
 	var wg sync.WaitGroup
 	for i, tc := range calls {
 		if e.isSerializedToolCall(tc.call.ToolName) {
-			sessionStateCalls = append(sessionStateCalls, indexedToolCall{index: i, call: tc})
+			threadStateCalls = append(threadStateCalls, indexedToolCall{index: i, call: tc})
 			continue
 		}
 		wg.Add(1)
@@ -1431,11 +1447,11 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []toolEx
 			results[idx] = e.runToolCall(ctx, turnID, call)
 		}(i, tc)
 	}
-	if len(sessionStateCalls) > 0 {
+	if len(threadStateCalls) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for _, item := range sessionStateCalls {
+			for _, item := range threadStateCalls {
 				results[item.index] = e.runToolCall(ctx, turnID, item.call)
 			}
 		}()
@@ -1452,7 +1468,7 @@ func (e *Engine) isSerializedToolCall(name string) bool {
 	if !ok {
 		return false
 	}
-	return tool.Group == tools.ToolGroupSessionState || tool.Group == tools.ToolGroupSideSession
+	return tool.Group == tools.ToolGroupThreadState || tool.Group == tools.ToolGroupWorkerThread
 }
 
 func toolResultBlocks(results []toolCallResult) []llm.Block {
@@ -1513,7 +1529,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	}
 	prePolicy, err := runtimemodule.ApplyToolPoliciesWithInputCheckpoint(ctx, runtimemodule.ToolPolicyRequest{
 		Runtime:  e.policyRuntimeContext(),
-		Session:  e.policySessionContext(),
+		Thread:   e.policyThreadContext(),
 		TurnID:   turnID,
 		Stage:    runtimemodule.ToolPolicyBeforeExecution,
 		ToolName: call.ToolName,
@@ -1572,7 +1588,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	}
 	postPolicy, postErr := runtimemodule.ApplyToolPolicies(ctx, runtimemodule.ToolPolicyRequest{
 		Runtime:  e.policyRuntimeContext(),
-		Session:  e.policySessionContext(),
+		Thread:   e.policyThreadContext(),
 		TurnID:   turnID,
 		Stage:    runtimemodule.ToolPolicyAfterExecution,
 		ToolName: call.ToolName,
@@ -1785,7 +1801,7 @@ func (e *Engine) hasPendingRecordLocked(id string) bool {
 	return false
 }
 
-func sessionHasMessageID(sess *session.Session, id string) bool {
+func threadHasMessageID(sess *thread.Thread, id string) bool {
 	return sess != nil && id != "" && sess.HasMessageID(id)
 }
 
@@ -1834,7 +1850,7 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
 	queue := e.currentPendingInputQueue()
-	sess := e.currentSession()
+	sess := e.currentThread()
 	if queue == nil {
 		return nil
 	}
@@ -1885,14 +1901,14 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 			continue
 		}
 		if reachedCurrentInput {
-			if sessionHasMessageID(sess, record.MessageID) {
+			if threadHasMessageID(sess, record.MessageID) {
 				alreadyProcessed = append(alreadyProcessed, record.ID)
 				continue
 			}
 			afterCurrent = append(afterCurrent, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 			continue
 		}
-		if sessionHasMessageID(sess, record.MessageID) {
+		if threadHasMessageID(sess, record.MessageID) {
 			alreadyProcessed = append(alreadyProcessed, record.ID)
 			continue
 		}
@@ -1919,7 +1935,7 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	return nil
 }
 
-func (e *Engine) mergeRecoveredPendingInputAfterCurrent(sess *session.Session, recovered []queuedPendingInput) {
+func (e *Engine) mergeRecoveredPendingInputAfterCurrent(sess *thread.Thread, recovered []queuedPendingInput) {
 	if len(recovered) == 0 {
 		return
 	}
@@ -1936,7 +1952,7 @@ func (e *Engine) mergeRecoveredPendingInputAfterCurrent(sess *session.Session, r
 		if _, ok := mergedIDs[item.RecordID]; ok && item.RecordID != "" {
 			continue
 		}
-		if sessionHasMessageID(sess, item.Message.ID) {
+		if threadHasMessageID(sess, item.Message.ID) {
 			continue
 		}
 		merged = append(merged, item)
@@ -1997,7 +2013,7 @@ func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID stri
 	original := record.Message
 	policyMessage, err := runtimemodule.ApplyTurnInputPolicies(ctx, runtimemodule.TurnInputRequest{
 		Runtime:  e.policyRuntimeContext(),
-		Session:  e.policySessionContext(),
+		Thread:   e.policyThreadContext(),
 		TurnID:   turnID,
 		Message:  original,
 		Observer: e.policyObserver(turnID),
@@ -2027,9 +2043,9 @@ func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID stri
 }
 
 func (e *Engine) appendRecoveredTurnInputLocked(message llm.Message) error {
-	persisted, err := e.currentSession().AppendAssigned(message)
+	persisted, err := e.currentThread().AppendAssigned(message)
 	if err != nil {
-		return fmt.Errorf("session append recovered user: %w", err)
+		return fmt.Errorf("thread append recovered user: %w", err)
 	}
 	if err := e.markPendingInputMessageProcessed(persisted); err != nil {
 		return fmt.Errorf("mark recovered user input processed: %w", err)
@@ -2103,8 +2119,9 @@ func (e *Engine) commitPendingInputSequenceLocked(ctx context.Context, turnID st
 		if err := flushQueued(i); err != nil {
 			return err
 		}
-		max := e.beginPendingInputDrain(turnID, 1)
-		if sessionHasMessageID(e.currentSession(), item.Message.ID) {
+		recordIDs := pendingRecordIDs([]queuedPendingInput{item})
+		max := e.beginPendingInputDrain(turnID, 1, recordIDs)
+		if threadHasMessageID(e.currentThread(), item.Message.ID) {
 			if queue := e.currentPendingInputQueue(); queue != nil && item.RecordID != "" {
 				if err := queue.MarkProcessed([]string{item.RecordID}); err != nil {
 					e.prependPendingInput(pending[i:])
@@ -2122,7 +2139,7 @@ func (e *Engine) commitPendingInputSequenceLocked(ctx context.Context, turnID st
 				return err
 			}
 		}
-		e.finishPendingInputDrain(turnID, 1, max)
+		e.finishPendingInputDrain(turnID, 1, max, recordIDs)
 	}
 	return flushQueued(len(pending))
 }
@@ -2132,9 +2149,9 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 		return nil
 	}
 	queue := e.currentPendingInputQueue()
-	sess := e.currentSession()
-	max := e.beginPendingInputDrain(turnID, len(pending))
+	sess := e.currentThread()
 	recordIDs := pendingRecordIDs(pending)
+	max := e.beginPendingInputDrain(turnID, len(pending), recordIDs)
 	if queue != nil {
 		if err := queue.MarkAdmitted(recordIDs, turnID); err != nil {
 			return fmt.Errorf("mark pending input admitted: %w", err)
@@ -2144,7 +2161,7 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 	var processedIDs []string
 	for _, item := range pending {
 		msg := item.Message
-		if sessionHasMessageID(sess, msg.ID) {
+		if threadHasMessageID(sess, msg.ID) {
 			if item.RecordID != "" {
 				processedIDs = append(processedIDs, item.RecordID)
 			}
@@ -2160,7 +2177,7 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 			return fmt.Errorf("commit pending input projection: %w", err)
 		}
 		if err := sess.Append(msg); err != nil {
-			return fmt.Errorf("session append pending input: %w", err)
+			return fmt.Errorf("thread append pending input: %w", err)
 		}
 		if item.RecordID != "" {
 			processedIDs = append(processedIDs, item.RecordID)
@@ -2171,17 +2188,18 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 			return fmt.Errorf("mark pending input processed: %w", err)
 		}
 	}
-	e.finishPendingInputDrain(turnID, len(pending), max)
+	e.finishPendingInputDrain(turnID, len(pending), max, recordIDs)
 	return nil
 }
 
-func (e *Engine) beginPendingInputDrain(turnID string, count int) int {
+func (e *Engine) beginPendingInputDrain(turnID string, count int, inputIDs []string) int {
 	e.pendingMu.Lock()
 	remaining := len(e.pendingInput)
 	max := e.effectiveMaxPendingInputs()
 	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
 	_ = e.emitPendingLifecycleEvent(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
+		InputIDs:         append([]string(nil), inputIDs...),
 		Count:            count,
 		PendingCount:     remaining,
 		MaxPendingInputs: max,
@@ -2190,11 +2208,12 @@ func (e *Engine) beginPendingInputDrain(turnID string, count int) int {
 	return max
 }
 
-func (e *Engine) finishPendingInputDrain(turnID string, count, max int) {
+func (e *Engine) finishPendingInputDrain(turnID string, count, max int, inputIDs []string) {
 	e.pendingMu.Lock()
 	remaining := len(e.pendingInput)
 	e.pendingMu.Unlock()
 	e.publishPendingEvent(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
+		InputIDs:         append([]string(nil), inputIDs...),
 		Count:            count,
 		PendingCount:     remaining,
 		MaxPendingInputs: max,
@@ -2207,7 +2226,7 @@ func (e *Engine) notifyPendingInputsAdmitted(ctx context.Context, turnID string,
 	}
 	runtimemodule.NotifyPendingInputsAdmitted(ctx, runtimemodule.PendingInputAdmission{
 		Runtime:   e.policyRuntimeContext(),
-		Session:   e.policySessionContext(),
+		Thread:    e.policyThreadContext(),
 		TurnID:    turnID,
 		RecordIDs: recordIDs,
 	}, e.policySets()...)
@@ -2337,7 +2356,7 @@ func (e *Engine) cachePolicyLocked() llm.CachePolicy {
 	if e == nil {
 		return llm.CachePolicy{}
 	}
-	sess := e.currentSession()
+	sess := e.currentThread()
 	if sess == nil || sess.ID == "" {
 		return llm.CachePolicy{}
 	}
@@ -2441,6 +2460,9 @@ func (e *Engine) publishTerminalEvent(turnID string, event events.Event, complet
 	}
 	if e.Bus != nil {
 		e.Bus.PublishCommitted(event)
+	}
+	if tracker := e.requestProvenanceTracker(); tracker != nil {
+		_ = tracker.ReplayEvent(event)
 	}
 }
 
@@ -2560,7 +2582,7 @@ func canContinueAfterAutoCompactError(ctx context.Context, msg llm.Message) bool
 		return false
 	}
 	switch msg.Kind {
-	case llm.MessageKindMCPEvent, llm.MessageKindSideSession:
+	case llm.MessageKindMCPEvent, llm.MessageKindWorkerThread:
 		return true
 	default:
 		return false

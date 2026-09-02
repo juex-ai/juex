@@ -17,8 +17,8 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/sandbox"
-	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
+	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -36,7 +36,7 @@ type constructedRuntimeModules struct {
 	skills       *skillsmodule.Module
 }
 
-type sessionModuleOptions struct {
+type threadModuleOptions struct {
 	hookRunner               hooks.PolicyRunner
 	hookBaseRequest          hooks.Request
 	goalState                *workmem.GoalStateStore
@@ -59,7 +59,7 @@ func prepareRuntimeModules(
 		ID:            cfg.AgentAddress.ID(),
 		WorkDir:       runtimePaths.WorkDir,
 		AgentStateDir: runtimePaths.StateDir,
-		ArtifactDir:   runtimePaths.ArtifactDir,
+		MediaDir:      runtimePaths.MediaDir,
 	}
 	constructed := &constructedRuntimeModules{}
 	composition := runtimeModuleComposition{runtimeContext: runtimeContext, constructed: constructed}
@@ -77,7 +77,7 @@ func prepareRuntimeModules(
 					ToolTimeoutSeconds: toolTimeoutSeconds,
 					ChunkedWrites:      chunkedWrites,
 					AgentStateDir:      runtimePaths.StateDir,
-					ArtifactDir:        runtimePaths.ArtifactDir,
+					MediaDir:           runtimePaths.MediaDir,
 				})
 				constructed.builtinTools = mod
 				return mod, nil
@@ -119,10 +119,11 @@ func compiledModuleIDs() []string {
 		string(builtintools.ModuleID),
 		string(promptcontext.GuidanceModuleID),
 		string(skillsmodule.ModuleID),
-		string(sideSessionModuleID),
+		string(workerThreadModuleID),
 		string(observable.ModuleID),
 		string(mcp.ModuleID),
-		string(promptcontext.SessionContextModuleID),
+		string(promptcontext.ThreadContextModuleID),
+		string(juexruntime.ContextControlModuleID),
 		string(juexruntime.GoalModuleID),
 		string(juexruntime.NotesModuleID),
 		string(hooks.ModuleID),
@@ -149,17 +150,17 @@ func (c *runtimeModuleComposition) sealAndStart(ctx context.Context, extra ...ru
 	return nil
 }
 
-func buildSessionModules(
+func buildThreadModules(
 	ctx context.Context,
 	cfg config.Config,
-	specs []runtimemodule.SessionFactorySpec,
+	specs []runtimemodule.ThreadFactorySpec,
 	runtimeContext runtimemodule.RuntimeContext,
-	sess *session.Session,
+	sess *thread.Thread,
 	engine *juexruntime.Engine,
 	workDir string,
 	shell promptcontext.ShellProfile,
 	shellSessions *tools.ShellSessionManager,
-	opts sessionModuleOptions,
+	opts threadModuleOptions,
 ) (*runtimemodule.Set, error) {
 	goalState := opts.goalState
 	if goalState == nil && cfg.ModuleEnabled(string(juexruntime.GoalModuleID)) {
@@ -181,18 +182,25 @@ func buildSessionModules(
 		}
 		return engine.PendingInputStatus().TurnID
 	}
-	builtinSpecs := []runtimemodule.SessionFactorySpec{
+	builtinSpecs := []runtimemodule.ThreadFactorySpec{
 		{
-			ID:      promptcontext.SessionContextModuleID,
-			Enabled: cfg.ModuleEnabled(string(promptcontext.SessionContextModuleID)),
-			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-				return &promptcontext.SessionContextModule{WorkDir: workDir, Shell: shell, ShellSessions: shellSessions}, nil
+			ID:      juexruntime.ContextControlModuleID,
+			Enabled: cfg.ModuleEnabled(string(juexruntime.ContextControlModuleID)),
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				return juexruntime.NewContextControlModule(engine), nil
+			},
+		},
+		{
+			ID:      promptcontext.ThreadContextModuleID,
+			Enabled: cfg.ModuleEnabled(string(promptcontext.ThreadContextModuleID)),
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				return &promptcontext.ThreadContextModule{WorkDir: workDir, Shell: shell, ShellSessions: shellSessions}, nil
 			},
 		},
 		{
 			ID:      juexruntime.GoalModuleID,
 			Enabled: cfg.ModuleEnabled(string(juexruntime.GoalModuleID)),
-			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				return juexruntime.NewGoalModuleWithOptions(goalState, juexruntime.GoalModuleOptions{
 					EnableContinuation:   opts.goalContinuation,
 					ContinuationDeferrer: opts.goalContinuationDeferrer,
@@ -204,7 +212,7 @@ func buildSessionModules(
 		{
 			ID:      juexruntime.NotesModuleID,
 			Enabled: cfg.ModuleEnabled(string(juexruntime.NotesModuleID)),
-			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				return juexruntime.NewNotesModuleWithOptions(notes, juexruntime.NotesModuleOptions{
 					EventSink:     eventSink,
 					CurrentTurnID: currentTurnID,
@@ -214,14 +222,13 @@ func buildSessionModules(
 	}
 	var set *runtimemodule.Set
 	if opts.hookRunner != nil && cfg.ModuleEnabled(string(hooks.ModuleID)) {
-		builtinSpecs = append(builtinSpecs, runtimemodule.SessionFactorySpec{
+		builtinSpecs = append(builtinSpecs, runtimemodule.ThreadFactorySpec{
 			ID:      hooks.ModuleID,
 			Enabled: true,
-			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				base := opts.hookBaseRequest
-				base.SessionID = sess.ID
-				base.ConversationPath = filepath.Join(sess.Dir, "conversation.jsonl")
-				base.EventsPath = filepath.Join(sess.Dir, "events.jsonl")
+				base.ThreadID = sess.ID
+				base.JournalPath = filepath.Join(sess.Dir, "journal.jsonl")
 				return hooks.NewModule(opts.hookRunner, hooks.ModuleOptions{
 					BaseRequest: base,
 					GoalState:   func() []byte { return juexruntime.HookGoalStateFromModules(set) },
@@ -230,11 +237,11 @@ func buildSessionModules(
 		})
 	}
 	specs = append(builtinSpecs, specs...)
-	sessionContext := sessionModuleContext(sess)
+	threadContext := threadModuleContext(sess)
 	var err error
-	set, err = runtimemodule.BuildAndStartSessionSet(ctx, specs, sessionContext, runtimemodule.ToolContext{
+	set, err = runtimemodule.BuildAndStartThreadSet(ctx, specs, threadContext, runtimemodule.ToolContext{
 		Runtime: runtimeContext,
-		Session: &sessionContext,
+		Thread:  &threadContext,
 	})
 	if err != nil {
 		return nil, err
@@ -242,27 +249,27 @@ func buildSessionModules(
 	return set, nil
 }
 
-func validateSessionModuleContext(
+func validateThreadModuleContext(
 	ctx context.Context,
 	runtimeSet *runtimemodule.Set,
-	sessionSet *runtimemodule.Set,
+	threadSet *runtimemodule.Set,
 	runtimeContext runtimemodule.RuntimeContext,
-	sess *session.Session,
+	sess *thread.Thread,
 ) error {
-	sessionContext := sessionModuleContext(sess)
+	threadContext := threadModuleContext(sess)
 	_, err := runtimemodule.CollectContext(ctx, runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 		Runtime: runtimeContext,
-		Session: &sessionContext,
-	}, runtimeSet, sessionSet)
+		Thread:  &threadContext,
+	}, runtimeSet, threadSet)
 	return err
 }
 
-func sessionModuleContext(sess *session.Session) runtimemodule.SessionContext {
+func threadModuleContext(sess *thread.Thread) runtimemodule.ThreadContext {
 	if sess == nil {
-		return runtimemodule.SessionContext{}
+		return runtimemodule.ThreadContext{}
 	}
-	return runtimemodule.SessionContext{
+	return runtimemodule.ThreadContext{
 		ID:            sess.ID,
 		Dir:           sess.Dir,
 		ScratchpadDir: sess.ScratchpadDir(),

@@ -28,7 +28,7 @@ func (e *Engine) appendPolicyTraceMessage(turnID, text string) {
 	if e == nil || strings.TrimSpace(text) == "" {
 		return
 	}
-	sess := e.currentSession()
+	sess := e.currentThread()
 	if sess == nil {
 		return
 	}

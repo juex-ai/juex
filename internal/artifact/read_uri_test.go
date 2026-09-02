@@ -3,7 +3,7 @@ package artifact
 import "testing"
 
 func TestReadURIFormatsAndParsesRootRelativeArtifactPath(t *testing.T) {
-	want := "sessions/session-1/tool-results/call-1.txt"
+	want := "threads/123456/spool/call-1.txt"
 	uri, err := FormatReadURI(want)
 	if err != nil {
 		t.Fatal(err)

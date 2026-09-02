@@ -2,28 +2,28 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  sessionComposerClearance,
-  sessionConversationScrollOptions,
+  threadComposerClearance,
+  threadConversationScrollOptions,
 } from "../../frontend/src/lib/conversation-scroll.ts";
 
-test("sessionConversationScrollOptions jumps through initial hydration", () => {
-  assert.deepEqual(sessionConversationScrollOptions(), {
+test("threadConversationScrollOptions jumps through initial hydration", () => {
+  assert.deepEqual(threadConversationScrollOptions(), {
     initial: "instant",
     resize: "instant",
   });
 });
 
-test("sessionConversationScrollOptions smooths live follow-up resize", () => {
-  assert.deepEqual(sessionConversationScrollOptions("live"), {
+test("threadConversationScrollOptions smooths live follow-up resize", () => {
+  assert.deepEqual(threadConversationScrollOptions("live"), {
     initial: "instant",
     resize: "smooth",
   });
 });
 
-test("sessionComposerClearance keeps a 150px floor and reserves the 48px fade", () => {
-  assert.equal(sessionComposerClearance(0), 150);
-  assert.equal(sessionComposerClearance(Number.NaN), 150);
-  assert.equal(sessionComposerClearance(80), 150);
-  assert.equal(sessionComposerClearance(124), 172);
-  assert.equal(sessionComposerClearance(180.2), 229);
+test("threadComposerClearance keeps a 150px floor and reserves the 48px fade", () => {
+  assert.equal(threadComposerClearance(0), 150);
+  assert.equal(threadComposerClearance(Number.NaN), 150);
+  assert.equal(threadComposerClearance(80), 150);
+  assert.equal(threadComposerClearance(124), 172);
+  assert.equal(threadComposerClearance(180.2), 229);
 });

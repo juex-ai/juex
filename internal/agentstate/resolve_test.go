@@ -32,7 +32,8 @@ func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
 	}
 	for _, path := range []string{
 		first.Address.StateDir(),
-		filepath.Join(first.Address.StateDir(), "sessions"),
+		filepath.Join(first.Address.StateDir(), "threads"),
+		filepath.Join(first.Address.StateDir(), "archive", "threads"),
 		filepath.Join(first.Address.StateDir(), "logs"),
 	} {
 		assertDir(t, path)
@@ -45,12 +46,11 @@ func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
-	if got, want := strings.Join(names, ","), "agent.json,history.json,logs,sessions"; got != want {
+	if got, want := strings.Join(names, ","), "agent.json,archive,logs,threads"; got != want {
 		t.Fatalf("new Agent state entries = %q, want %q", got, want)
 	}
 	for _, path := range []string{
 		filepath.Join(first.Address.StateDir(), "agent.json"),
-		filepath.Join(first.Address.StateDir(), "history.json"),
 		first.MarkerPath,
 	} {
 		assertFile(t, path)
@@ -201,10 +201,9 @@ func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 	home, workDir := prepareResolveTest(t)
 	workspaceStateDir := filepath.Join(workDir, ".juex")
 	files := map[string]string{
-		filepath.Join("sessions", "s1", "conversation.jsonl"): "{\"id\":\"m1\",\"role\":\"user\"}\n",
-		"history.json":                                     "{\"sessions\":[{\"id\":\"s1\"}]}\n",
-		filepath.Join("logs", "listen.log"):                "ready\n",
-		filepath.Join("observables", "observations.jsonl"): "{\"id\":\"o1\"}\n",
+		filepath.Join("threads", "123456", "journal.jsonl"): "{\"seq\":1}\n",
+		filepath.Join("logs", "listen.log"):                 "ready\n",
+		filepath.Join("observables", "observations.jsonl"):  "{\"id\":\"o1\"}\n",
 		"juex.yaml":        "models: [local:test]\n",
 		"observables.json": "[]\n",
 	}
@@ -220,7 +219,7 @@ func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 		assertText(t, filepath.Join(workspaceStateDir, rel), body)
 	}
 	for _, rel := range []string{
-		filepath.Join("sessions", "s1", "conversation.jsonl"),
+		filepath.Join("threads", "123456", "journal.jsonl"),
 		filepath.Join("logs", "listen.log"),
 		filepath.Join("observables", "observations.jsonl"),
 	} {
@@ -228,7 +227,6 @@ func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 			t.Fatalf("agent state unexpectedly contains %s: %v", rel, err)
 		}
 	}
-	assertText(t, filepath.Join(resolved.Address.StateDir(), "history.json"), "{\"sessions\":[]}\n")
 	if len(resolved.Notices) != 0 {
 		t.Fatalf("resolution notices = %v, want none", resolved.Notices)
 	}

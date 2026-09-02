@@ -360,7 +360,7 @@ func TestUpdateConfigUsesRestartContinuationPolicy(t *testing.T) {
 				resumeCalls.Load() != test.wantResumeCall {
 				t.Fatalf("resume = %+v, calls = %d", restarted.Resume, resumeCalls.Load())
 			}
-			if test.wantSent && (restarted.Resume.SessionID != "session-one" ||
+			if test.wantSent && (restarted.Resume.ThreadID != "session-one" ||
 				restarted.Resume.TurnID != "turn-resume") {
 				t.Fatalf("resume = %+v", restarted.Resume)
 			}
@@ -440,12 +440,12 @@ func configRestartTestManager(
 			}
 			if turnState == statusapi.TurnErrored {
 				return restartActivity{
-					SessionID: "session-one", TurnID: "turn-original", State: activity,
+					ThreadID: "session-one", TurnID: "turn-original", State: activity,
 					TurnState: statusapi.TurnErrored, TurnErrorKind: statusapi.StatusErrorAuth,
 				}, nil
 			}
 			return restartActivity{
-				SessionID: "session-one",
+				ThreadID:  "session-one",
 				TurnID:    "turn-original",
 				State:     activity,
 				TurnState: statusapi.TurnActive,
@@ -456,12 +456,12 @@ func configRestartTestManager(
 		}
 		if turnState == statusapi.TurnErrored {
 			return restartActivity{
-				SessionID: "session-one", TurnID: "turn-original", State: statusapi.ActivityIdle,
+				ThreadID: "session-one", TurnID: "turn-original", State: statusapi.ActivityIdle,
 				TurnState: statusapi.TurnErrored, TurnErrorKind: statusapi.StatusErrorAuth,
 			}, nil
 		}
 		return restartActivity{
-			SessionID:     "session-one",
+			ThreadID:      "session-one",
 			TurnID:        "turn-original",
 			State:         statusapi.ActivityIdle,
 			TurnState:     statusapi.TurnCancelled,

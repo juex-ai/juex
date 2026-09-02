@@ -38,7 +38,7 @@ export function agentSwitchPath(agentID: string, pathname: string): string {
   if (!currentBase) return base;
 
   const suffix = pathname.slice(currentBase.length);
-  if (suffix === "/runtime" || suffix === "/history") {
+  if (suffix === "/runtime" || suffix === "/threads") {
     return `${base}${suffix}`;
   }
   if (suffix === "/runtime/observables" || suffix.startsWith("/runtime/observables/")) {
