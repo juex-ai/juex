@@ -459,6 +459,67 @@ func TestReadersRejectCompleteMalformedRecordWithoutRepairingIt(t *testing.T) {
 	}
 }
 
+func TestReadersRejectBatchPositionGapAcrossPageBoundary(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	first := mustEncodeDiskRecord(t, diskRecord{
+		Version: diskVersion,
+		Index:   0,
+		Count:   3,
+		Data:    json.RawMessage(`{"id":1}`),
+	})
+	last := mustEncodeDiskRecord(t, diskRecord{
+		Version: diskVersion,
+		Index:   2,
+		Count:   3,
+		Data:    json.RawMessage(`{"id":3}`),
+	})
+	tail := mustEncodeBatch(t, json.RawMessage(`{"id":4}`))
+	body := append(append(append([]byte(nil), first...), last...), tail...)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+
+	_, err = file.ReadForward(0, func(Record) error { return nil })
+	assertCorruptionOffset(t, err, int64(len(first)))
+	_, err = file.ReadForward(int64(len(first)), func(Record) error { return nil })
+	assertCorruptionOffset(t, err, int64(len(first)))
+	_, err = file.ReadReverse(file.Size(), 2)
+	assertCorruptionOffset(t, err, int64(len(first)))
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("file was changed: %q", got)
+	}
+}
+
+func TestReadersRejectBatchThatStartsMidSequence(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	body := mustEncodeDiskRecord(t, diskRecord{
+		Version: diskVersion,
+		Index:   1,
+		Count:   2,
+		Data:    json.RawMessage(`{"id":2}`),
+	})
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Open(path)
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("Open error = nil, want interrupted leading batch corruption")
+	}
+	assertCorruptionOffset(t, err, 0)
+}
+
 func TestReadReversePagesFromEOFWithBoundedReads(t *testing.T) {
 	t.Parallel()
 	file, err := Open(filepath.Join(t.TempDir(), "events.jsonl"))
@@ -738,4 +799,13 @@ func mustEncodeBatch(t *testing.T, records ...json.RawMessage) []byte {
 		t.Fatal(err)
 	}
 	return payload
+}
+
+func mustEncodeDiskRecord(t *testing.T, record diskRecord) []byte {
+	t.Helper()
+	line, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(line, '\n')
 }

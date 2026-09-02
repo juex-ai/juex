@@ -80,6 +80,11 @@ type diskRecord struct {
 	Data    json.RawMessage `json:"data"`
 }
 
+type decodedRecord struct {
+	Record Record
+	Disk   diskRecord
+}
+
 type fileOps struct {
 	write    func(*os.File, []byte) (int, error)
 	sync     func(*os.File) error
@@ -247,6 +252,20 @@ func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error)
 	reader := bufio.NewReaderSize(io.NewSectionReader(f.file, start, f.size-start), defaultReadBlockSize)
 	committed := start
 	offset := start
+	var previous *diskRecord
+	if start > 0 && start < f.size {
+		line, previousStart, err := f.previousLineLocked(start)
+		if err != nil {
+			return committed, err
+		}
+		value, err := decodeDiskRecord(line, previousStart)
+		if err != nil {
+			return committed, err
+		}
+		previous = &value
+	}
+	visited := false
+	lastOffset := start
 	for offset < f.size {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
@@ -257,12 +276,27 @@ func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error)
 		if err != nil {
 			return committed, err
 		}
+		if previous == nil {
+			if err := validateBatchStart(disk, offset); err != nil {
+				return committed, err
+			}
+		} else if err := validateBatchAdjacent(*previous, disk, offset); err != nil {
+			return committed, err
+		}
 		record := Record{Start: offset, End: end, Data: append(json.RawMessage(nil), disk.Data...)}
 		if err := visit(record); err != nil {
 			return committed, err
 		}
 		committed = end
 		offset = end
+		previous = &disk
+		visited = true
+		lastOffset = record.Start
+	}
+	if visited {
+		if err := validateBatchEnd(*previous, lastOffset); err != nil {
+			return committed, err
+		}
 	}
 	return committed, nil
 }
@@ -328,9 +362,16 @@ func (f *File) ReadReverse(end int64, limit int) (Page, error) {
 		}
 	}
 	base := position + int64(cut)
-	records, err := decodePage(suffix[cut:], base)
+	decoded, err := decodePage(suffix[cut:], base)
 	if err != nil {
 		return Page{}, err
+	}
+	if err := f.validatePageBoundariesLocked(decoded, base, end); err != nil {
+		return Page{}, err
+	}
+	records := make([]Record, len(decoded))
+	for index := range decoded {
+		records[index] = decoded[index].Record
 	}
 	page := Page{Records: records, HasPrevious: base > 0}
 	if page.HasPrevious {
@@ -385,11 +426,11 @@ func encodeBatch(records []json.RawMessage) ([]byte, error) {
 	return payload.Bytes(), nil
 }
 
-func decodePage(data []byte, base int64) ([]Record, error) {
+func decodePage(data []byte, base int64) ([]decodedRecord, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	records := make([]Record, 0, bytes.Count(data, []byte{'\n'}))
+	records := make([]decodedRecord, 0, bytes.Count(data, []byte{'\n'}))
 	offset := base
 	for len(data) > 0 {
 		newline := bytes.IndexByte(data, '\n')
@@ -402,10 +443,13 @@ func decodePage(data []byte, base int64) ([]Record, error) {
 			return nil, err
 		}
 		end := offset + int64(newline) + 1
-		records = append(records, Record{
-			Start: offset,
-			End:   end,
-			Data:  append(json.RawMessage(nil), disk.Data...),
+		records = append(records, decodedRecord{
+			Record: Record{
+				Start: offset,
+				End:   end,
+				Data:  append(json.RawMessage(nil), disk.Data...),
+			},
+			Disk: disk,
 		})
 		data = data[newline+1:]
 		offset = end
@@ -440,6 +484,51 @@ func decodeDiskRecord(data []byte, offset int64) (diskRecord, error) {
 		return diskRecord{}, &CorruptionError{Offset: offset, Err: errors.New("invalid JSON data")}
 	}
 	return record, nil
+}
+
+func validateBatchStart(record diskRecord, offset int64) error {
+	if record.Index == 0 {
+		return nil
+	}
+	return &CorruptionError{
+		Offset: offset,
+		Err:    fmt.Errorf("batch starts at position %d of %d", record.Index, record.Count),
+	}
+}
+
+func validateBatchAdjacent(previous, current diskRecord, currentOffset int64) error {
+	if previous.Index == previous.Count-1 {
+		if current.Index == 0 {
+			return nil
+		}
+		return &CorruptionError{
+			Offset: currentOffset,
+			Err: fmt.Errorf(
+				"batch position %d of %d follows completed position %d of %d",
+				current.Index, current.Count, previous.Index, previous.Count,
+			),
+		}
+	}
+	if current.Count == previous.Count && current.Index == previous.Index+1 {
+		return nil
+	}
+	return &CorruptionError{
+		Offset: currentOffset,
+		Err: fmt.Errorf(
+			"batch position %d of %d follows position %d of %d",
+			current.Index, current.Count, previous.Index, previous.Count,
+		),
+	}
+}
+
+func validateBatchEnd(record diskRecord, offset int64) error {
+	if record.Index == record.Count-1 {
+		return nil
+	}
+	return &CorruptionError{
+		Offset: offset,
+		Err:    fmt.Errorf("batch ends at position %d of %d", record.Index, record.Count),
+	}
 }
 
 func (f *File) ensureOpenLocked() error {
@@ -593,11 +682,15 @@ func (f *File) repairIncompleteBatchLocked() error {
 	if err != nil {
 		return err
 	}
-	if last.Index == last.Count-1 {
-		return nil
-	}
+	complete := last.Index == last.Count-1
 	batchStart := start
 	for want := last.Index - 1; want >= 0; want-- {
+		if batchStart == 0 {
+			return &CorruptionError{
+				Offset: batchStart,
+				Err:    fmt.Errorf("batch is missing position %d of %d", want, last.Count),
+			}
+		}
 		line, previousStart, err := f.previousLineLocked(batchStart)
 		if err != nil {
 			return err
@@ -617,6 +710,9 @@ func (f *File) repairIncompleteBatchLocked() error {
 		}
 		batchStart = previousStart
 	}
+	if complete {
+		return nil
+	}
 	if err := f.ops.truncateFile(f.file, batchStart); err != nil {
 		return fmt.Errorf("jsonl: truncate interrupted batch at %d: %w", batchStart, err)
 	}
@@ -625,6 +721,48 @@ func (f *File) repairIncompleteBatchLocked() error {
 	}
 	f.size = batchStart
 	return nil
+}
+
+func (f *File) validatePageBoundariesLocked(records []decodedRecord, start, end int64) error {
+	if len(records) == 0 {
+		return nil
+	}
+	for index := 1; index < len(records); index++ {
+		if err := validateBatchAdjacent(records[index-1].Disk, records[index].Disk, records[index].Record.Start); err != nil {
+			return err
+		}
+	}
+	first := records[0]
+	if start == 0 {
+		if err := validateBatchStart(first.Disk, first.Record.Start); err != nil {
+			return err
+		}
+	} else {
+		line, previousStart, err := f.previousLineLocked(start)
+		if err != nil {
+			return err
+		}
+		previous, err := decodeDiskRecord(line, previousStart)
+		if err != nil {
+			return err
+		}
+		if err := validateBatchAdjacent(previous, first.Disk, first.Record.Start); err != nil {
+			return err
+		}
+	}
+	last := records[len(records)-1]
+	if end == f.size {
+		return validateBatchEnd(last.Disk, last.Record.Start)
+	}
+	line, err := f.nextLineLocked(end)
+	if err != nil {
+		return err
+	}
+	next, err := decodeDiskRecord(line, end)
+	if err != nil {
+		return err
+	}
+	return validateBatchAdjacent(last.Disk, next, end)
 }
 
 func (f *File) previousLineLocked(end int64) ([]byte, int64, error) {
@@ -667,6 +805,31 @@ func (f *File) previousLineLocked(end int64) ([]byte, int64, error) {
 		next += copy(line[next:], chunks[index])
 	}
 	return line, startOffset, nil
+}
+
+func (f *File) nextLineLocked(start int64) ([]byte, error) {
+	if start < 0 || start >= f.size {
+		return nil, fmt.Errorf("%w: %d outside 0..%d", ErrInvalidOffset, start, f.size-1)
+	}
+	position := start
+	var line []byte
+	for position < f.size {
+		end := position + int64(f.readBlockSize)
+		if end > f.size {
+			end = f.size
+		}
+		chunk := make([]byte, int(end-position))
+		if err := f.readFullAtLocked(chunk, position); err != nil {
+			return nil, fmt.Errorf("jsonl: read next line at %d: %w", position, err)
+		}
+		if index := bytes.IndexByte(chunk, '\n'); index >= 0 {
+			line = append(line, chunk[:index]...)
+			return line, nil
+		}
+		line = append(line, chunk...)
+		position = end
+	}
+	return nil, &CorruptionError{Offset: start, Err: errors.New("incomplete record")}
 }
 
 func (f *File) rollbackLocked(offset int64, cause error) error {
