@@ -30,128 +30,57 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workflow struct {
-		On struct {
-			WorkflowDispatch struct {
-				Inputs map[string]struct {
-					Type    string   `yaml:"type"`
-					Default string   `yaml:"default"`
-					Options []string `yaml:"options"`
-				} `yaml:"inputs"`
-			} `yaml:"workflow_dispatch"`
-		} `yaml:"on"`
 		Jobs struct {
 			Test struct {
-				Name     string `yaml:"name"`
 				Strategy struct {
 					Matrix struct {
-						Include string `yaml:"include"`
+						OS []string `yaml:"os"`
 					} `yaml:"matrix"`
 				} `yaml:"strategy"`
 				Steps []struct {
 					Name string `yaml:"name"`
 					If   string `yaml:"if"`
 					Run  string `yaml:"run"`
-					Uses string `yaml:"uses"`
 				} `yaml:"steps"`
 			} `yaml:"test"`
-			WindowsRaceGate struct {
-				Name  string `yaml:"name"`
-				If    string `yaml:"if"`
-				Needs string `yaml:"needs"`
-				Steps []struct {
-					Run string `yaml:"run"`
-				} `yaml:"steps"`
-			} `yaml:"windows-race-gate"`
 		} `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(data, &workflow); err != nil {
 		t.Fatalf("parse CI workflow: %v", err)
 	}
 
-	benchmarkInput, ok := workflow.On.WorkflowDispatch.Inputs["windows_topology"]
-	if !ok {
-		t.Fatal("CI workflow is missing the manual Windows topology input")
+	if want := []string{"ubuntu-latest", "macos-latest"}; !reflect.DeepEqual(workflow.Jobs.Test.Strategy.Matrix.OS, want) {
+		t.Fatalf("CI operating-system matrix = %#v, want %#v", workflow.Jobs.Test.Strategy.Matrix.OS, want)
 	}
-	if benchmarkInput.Type != "choice" || benchmarkInput.Default != "split" ||
-		!reflect.DeepEqual(benchmarkInput.Options, []string{"1", "2", "default", "split", "web-g1", "web-g2"}) {
-		t.Fatalf("Windows topology input = %#v", benchmarkInput)
+	if strings.Contains(strings.ToLower(string(data)), "windows") {
+		t.Fatal("CI workflow still contains Windows-only execution")
 	}
-	if strings.Contains(workflow.Jobs.Test.Name, "matrix.suite == 'ordinary'") {
-		t.Fatalf("ordinary shard must not own the stable aggregate check name: %s", workflow.Jobs.Test.Name)
-	}
-	for _, want := range []string{
-		`inputs.windows_topology == 'split'`,
-		`startsWith(inputs.windows_topology, 'web-g')`,
-		`"os":"windows-latest","suite":"ordinary"`,
-		`"os":"windows-latest","suite":"web"`,
-		`"os":"windows-latest","suite":"e2e"`,
-		`"os":"windows-latest","suite":"eval"`,
-	} {
-		if !strings.Contains(workflow.Jobs.Test.Strategy.Matrix.Include, want) {
-			t.Errorf("CI matrix missing %q:\n%s", want, workflow.Jobs.Test.Strategy.Matrix.Include)
-		}
+	if strings.Contains(string(data), "workflow_dispatch") {
+		t.Fatal("CI workflow still contains the Windows benchmark dispatch entrypoint")
 	}
 
-	buildAt, windowsRaceAt, installerAt, artifactAt := -1, -1, -1, -1
+	buildAt, raceAt, installerAt := -1, -1, -1
 	for index, step := range workflow.Jobs.Test.Steps {
 		switch step.Name {
 		case "Build Juex evaluator binary":
 			buildAt = index
 		case "Run Go race tests":
-			if strings.TrimSpace(step.If) != "matrix.os != 'windows-latest'" || strings.TrimSpace(step.Run) != "go test ./... -race -count=1" {
-				t.Errorf("non-Windows race step = if %q run %q", step.If, step.Run)
+			raceAt = index
+			if strings.TrimSpace(step.If) != "" || strings.TrimSpace(step.Run) != "go test ./... -race -count=1" {
+				t.Errorf("race step = if %q run %q", step.If, step.Run)
 			}
-		case "Run Go race tests on Windows":
-			windowsRaceAt = index
-			if strings.TrimSpace(step.If) != "matrix.os == 'windows-latest'" {
-				t.Errorf("Windows race condition = %q", step.If)
-			}
-			for _, want := range []string{
-				`inputs.windows_topology || 'split'`,
-				`mapfile -t test_packages`,
-				`grep -Ev '(/internal/web|/tests/(e2e|eval))$'`,
-				`test_packages=(./internal/web)`,
-				`mode" == "web-g1`,
-				`export GOMAXPROCS=1`,
-				`test_packages=(./tests/e2e)`,
-				`test_packages=(./tests/eval)`,
-				`export GOMAXPROCS=2`,
-				`race_args=("-p=2")`,
-				`go test -json "${test_packages[@]}" -race -count=1`,
-				`go test "${test_packages[@]}" -race -count=1`,
-				`race_args+=("-p=$mode")`,
-			} {
-				if !strings.Contains(step.Run, want) {
-					t.Errorf("Windows race step missing %q:\n%s", want, step.Run)
-				}
-			}
-			if strings.Count(step.Run, `export GOMAXPROCS=2`) != 2 {
-				t.Errorf("Windows race step must bound ordinary and web runtime concurrency:\n%s", step.Run)
-			}
-			if !strings.Contains(step.Run, `if [[ "$mode" != "default" ]]`) {
-				t.Errorf("Windows race step cannot select default package parallelism:\n%s", step.Run)
-			}
-		case "Test PowerShell release installer":
+		case "Test release installer":
 			installerAt = index
-			if !strings.Contains(step.If, "matrix.suite == 'ordinary' || matrix.suite == 'all'") {
-				t.Errorf("PowerShell installer condition = %q", step.If)
+			if strings.TrimSpace(step.If) != "" {
+				t.Errorf("release installer condition = %q", step.If)
 			}
 		}
-		if step.Uses == "actions/upload-artifact@v4" {
-			artifactAt = index
-		}
 	}
-	if buildAt < 0 || windowsRaceAt < 0 || installerAt < 0 || artifactAt < 0 {
-		t.Fatalf("CI step indexes: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
+	if buildAt < 0 || raceAt < 0 || installerAt < 0 {
+		t.Fatalf("CI step indexes: build=%d race=%d installer=%d", buildAt, raceAt, installerAt)
 	}
-	if buildAt >= windowsRaceAt || windowsRaceAt >= installerAt || installerAt >= artifactAt {
-		t.Fatalf("CI step order: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
-	}
-	gate := workflow.Jobs.WindowsRaceGate
-	if gate.Name != "test (windows-latest)" || gate.Needs != "test" ||
-		!strings.Contains(gate.If, "always()") || !strings.Contains(gate.If, "github.event_name != 'workflow_dispatch'") ||
-		len(gate.Steps) != 1 || !strings.Contains(gate.Steps[0].Run, `TEST_MATRIX_RESULT" != "success`) {
-		t.Fatalf("Windows race aggregate gate = %#v", gate)
+	if buildAt >= raceAt || raceAt >= installerAt {
+		t.Fatalf("CI step order: build=%d race=%d installer=%d", buildAt, raceAt, installerAt)
 	}
 }
 

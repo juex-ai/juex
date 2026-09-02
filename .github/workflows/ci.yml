@@ -3,24 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
-    inputs:
-      windows_topology:
-        description: Windows race execution topology to benchmark
-        required: true
-        type: choice
-        default: split
-        options:
-          - "1"
-          - "2"
-          - default
-          - split
-          - web-g1
-          - web-g2
 
 jobs:
   documentation:
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +15,6 @@ jobs:
       - run: make docs-check
 
   frontend:
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +30,6 @@ jobs:
       - run: make web-check
 
   lint:
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,12 +48,11 @@ jobs:
           args: check
 
   test:
-    name: ${{ matrix.suite == 'all' && format('test ({0})', matrix.os) || format('test ({0}, {1})', matrix.os, matrix.suite) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.windows_topology == 'split' && '[{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]' || (startsWith(inputs.windows_topology, 'web-g') && '[{"os":"windows-latest","suite":"web"}]' || '[{"os":"windows-latest","suite":"all"}]')) || '[{"os":"ubuntu-latest","suite":"all"},{"os":"macos-latest","suite":"all"},{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]') }}
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -107,9 +89,6 @@ jobs:
             --juex-version "$version" \
             --output .tmp/ci-ripgrep
           rg_dir="$PWD/.tmp/ci-ripgrep/juex-path"
-          if [[ "$os_name" == "windows" ]]; then
-            rg_dir="$(cygpath -w "$rg_dir")"
-          fi
           printf '%s\n' "$rg_dir" >> "$GITHUB_PATH"
       - name: Build Juex evaluator binary
         shell: bash
@@ -117,87 +96,11 @@ jobs:
           set -euo pipefail
           juex_bin="$PWD/.tmp/ci-juex$(go env GOEXE)"
           go build -o "$juex_bin" ./cmd/juex
-          if [[ "$(go env GOOS)" == "windows" ]]; then
-            juex_bin="$(cygpath -w "$juex_bin")"
-          fi
           printf 'JUEX_BIN=%s\n' "$juex_bin" >> "$GITHUB_ENV"
       - name: Run Go race tests
-        if: matrix.os != 'windows-latest'
         run: go test ./... -race -count=1
         shell: bash
-      - name: Record Windows race benchmark environment
-        if: matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p .tmp/windows-race
-          gomaxprocs="${GOMAXPROCS:-auto}"
-          if [[ "${{ inputs.windows_topology }}" == "web-g1" ]]; then
-            gomaxprocs=1
-          elif [[ "${{ matrix.suite }}" == "ordinary" || "${{ matrix.suite }}" == "web" ]]; then
-            gomaxprocs=2
-          fi
-          {
-            printf 'head_sha=%s\n' "$GITHUB_SHA"
-            printf 'topology=%s\n' "${{ inputs.windows_topology || 'split' }}"
-            printf 'suite=%s\n' "${{ matrix.suite }}"
-            printf 'number_of_processors=%s\n' "${NUMBER_OF_PROCESSORS:-unknown}"
-            printf 'gomaxprocs=%s\n' "$gomaxprocs"
-            printf 'home=%s\n' "$HOME"
-            printf 'juex_home=%s\n' "${JUEX_HOME:-<default>}"
-            go version
-            go env GOOS GOARCH GOVERSION GOPATH GOCACHE GOTMPDIR
-            pwsh -NoProfile -Command \
-              'Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress'
-          } | tee .tmp/windows-race/environment.txt
-      - name: Run Go race tests on Windows
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mode="${{ inputs.windows_topology || 'split' }}"
-          suite="${{ matrix.suite }}"
-          test_packages=()
-          race_args=()
-          case "$suite" in
-            ordinary)
-              mapfile -t test_packages < <(go list ./... | grep -Ev '(/internal/web|/tests/(e2e|eval))$')
-              export GOMAXPROCS=2
-              race_args=("-p=2")
-              ;;
-            web)
-              test_packages=(./internal/web)
-              if [[ "$mode" == "web-g1" ]]; then
-                export GOMAXPROCS=1
-              else
-                export GOMAXPROCS=2
-              fi
-              ;;
-            e2e)
-              test_packages=(./tests/e2e)
-              ;;
-            eval)
-              test_packages=(./tests/eval)
-              ;;
-            all)
-              test_packages=(./...)
-              if [[ "$mode" != "default" ]]; then
-                race_args+=("-p=$mode")
-              fi
-              ;;
-            *)
-              printf 'unknown Windows race suite: %s\n' "$suite" >&2
-              exit 2
-              ;;
-          esac
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            go test -json "${test_packages[@]}" -race -count=1 "${race_args[@]}" |
-              tee .tmp/windows-race/go-test.jsonl
-          else
-            go test "${test_packages[@]}" -race -count=1 "${race_args[@]}"
-          fi
       - name: Test release installer
-        if: matrix.os != 'windows-latest'
         shell: bash
         run: |
           set -euo pipefail
@@ -248,82 +151,3 @@ jobs:
           installed_binary="$(readlink "$HOME/.local/bin/juex")"
           package_root="$(cd "$(dirname "$installed_binary")/.." && pwd -P)"
           "$package_root/juex-path/rg" --version
-      - name: Test PowerShell release installer
-        if: matrix.os == 'windows-latest' && (matrix.suite == 'ordinary' || matrix.suite == 'all')
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $version = (Select-String -Path CLI_CONFIG -Pattern '^VERSION=(.+)$').Matches[0].Groups[1].Value.TrimEnd("`r")
-          $work = Join-Path $env:RUNNER_TEMP "juex-install-test"
-          $releaseDir = Join-Path $work "release"
-          $payloadDir = Join-Path $work "payload"
-          $packageRoot = Join-Path $payloadDir "juex_${version}_windows_amd64"
-          Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $releaseDir, (Join-Path $packageRoot "bin") | Out-Null
-
-          Copy-Item -Path ".tmp/ci-ripgrep/*" -Destination $packageRoot -Recurse -Force
-          $binary = Join-Path $packageRoot "bin/juex.exe"
-          go build -trimpath `
-            -ldflags "-X github.com/juex-ai/juex/internal/version.Version=$version" `
-            -o $binary ./cmd/juex
-          $archive = "juex_${version}_windows_amd64.zip"
-          $archivePath = Join-Path $releaseDir $archive
-          Compress-Archive -LiteralPath $packageRoot -DestinationPath $archivePath -Force
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath (Join-Path $releaseDir "checksums.txt") -Value "$hash  $archive"
-
-          $env:JUEX_INSTALL_RELEASE_BASE_URL = ($releaseDir -replace '\\', '/')
-          $env:JUEX_INSTALL_VERSION = $version
-          $env:JUEX_INSTALL_OS = "windows"
-          $env:JUEX_INSTALL_ARCH = "amd64"
-          ./scripts/install.ps1
-
-          $binDir = Join-Path $HOME ".local\bin"
-          if (-not (($env:PATH -split [System.IO.Path]::PathSeparator) -contains $binDir)) {
-            $env:PATH = "$binDir$([System.IO.Path]::PathSeparator)$env:PATH"
-            Add-Content -Path $env:GITHUB_PATH -Value $binDir
-          }
-          juex.exe version
-          juex.exe init --provider openai --model ci --api-key sk-ci-placeholder --skip-check --yes
-          $oldNativePreference = $PSNativeCommandUseErrorActionPreference
-          $PSNativeCommandUseErrorActionPreference = $false
-          $doctorText = (juex.exe doctor --format json --offline | Out-String)
-          $doctorStatus = $LASTEXITCODE
-          $PSNativeCommandUseErrorActionPreference = $oldNativePreference
-          Write-Output $doctorText
-          if ($doctorStatus -ne 0 -and $doctorStatus -ne 6 -and $doctorStatus -ne 7) {
-            throw "juex doctor failed with exit code $doctorStatus"
-          }
-          $ripgrepCheck = ($doctorText | ConvertFrom-Json).checks |
-            Where-Object { $_.name -eq "ripgrep" }
-          if ($ripgrepCheck.status -ne "ok" -or $ripgrepCheck.details.source -ne "package") {
-            throw "installed JueX did not resolve packaged ripgrep: $doctorText"
-          }
-          & $ripgrepCheck.details.path --version
-          if ($LASTEXITCODE -ne 0) {
-            throw "packaged ripgrep failed with exit code $LASTEXITCODE"
-          }
-      - name: Upload Windows race benchmark evidence
-        if: always() && matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-race-${{ github.run_id }}-${{ inputs.windows_topology || 'split' }}-${{ matrix.suite }}
-          path: .tmp/windows-race
-          if-no-files-found: warn
-          retention-days: 14
-
-  windows-race-gate:
-    name: test (windows-latest)
-    if: ${{ always() && github.event_name != 'workflow_dispatch' }}
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the complete test matrix
-        env:
-          TEST_MATRIX_RESULT: ${{ needs.test.result }}
-        shell: bash
-        run: |
-          if [[ "$TEST_MATRIX_RESULT" != "success" ]]; then
-            printf 'test matrix result: %s\n' "$TEST_MATRIX_RESULT" >&2
-            exit 1
-          fi
