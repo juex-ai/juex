@@ -149,7 +149,7 @@ func TestAppStartupReplaysDurablePendingInputWithoutNewUserTurn(t *testing.T) {
 	t.Cleanup(func() { _ = restarted.CloseAndWait() })
 	select {
 	case <-provider.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not call provider")
 	}
 	if err := restarted.waitPendingInputRecovery(); err != nil {
@@ -200,10 +200,13 @@ func TestAppRunWaitsForStartupPendingInputRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = restarted.CloseAndWait() })
+	t.Cleanup(func() {
+		provider.Release()
+		_ = restarted.CloseAndWait()
+	})
 	select {
 	case <-provider.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not reach provider")
 	}
 
@@ -227,7 +230,7 @@ func TestAppRunWaitsForStartupPendingInputRecovery(t *testing.T) {
 		t.Fatalf("synchronous Run completed during startup recovery: %+v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
-	close(provider.release)
+	provider.Release()
 	select {
 	case result := <-done:
 		if result.err != nil || result.out != "handled queued event" {
@@ -271,10 +274,13 @@ func TestAppExternalDeliveryWaitsForStartupPendingInputRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = restarted.CloseAndWait() })
+	t.Cleanup(func() {
+		provider.Release()
+		_ = restarted.CloseAndWait()
+	})
 	select {
 	case <-provider.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not reach provider")
 	}
 
@@ -292,7 +298,7 @@ func TestAppExternalDeliveryWaitsForStartupPendingInputRecovery(t *testing.T) {
 		t.Fatalf("external delivery completed during startup recovery: %+v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
-	close(provider.release)
+	provider.Release()
 	select {
 	case result := <-done:
 		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered {
@@ -330,9 +336,13 @@ func TestAppBeginCloseCancelsTurnWaitingForStartupPendingInputRecovery(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		provider.Release()
+		_ = restarted.CloseAndWait()
+	})
 	select {
 	case <-provider.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not reach provider")
 	}
 
@@ -354,7 +364,7 @@ func TestAppBeginCloseCancelsTurnWaitingForStartupPendingInputRecovery(t *testin
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Run after BeginClose error = %v, want context.Canceled", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("Run did not stop when the App began closing")
 	}
 	if err := restarted.CloseAndWait(); err != nil {
@@ -428,10 +438,13 @@ func TestAppExternalDeliveryTransfersToAppAfterRecoveryWaitTimeout(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = restarted.CloseAndWait() })
+	t.Cleanup(func() {
+		provider.Release()
+		_ = restarted.CloseAndWait()
+	})
 	select {
 	case <-provider.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not reach provider")
 	}
 
@@ -446,8 +459,8 @@ func TestAppExternalDeliveryTransfersToAppAfterRecoveryWaitTimeout(t *testing.T)
 		t.Fatalf("delivery outcome = %+v, want queued durable input", outcome)
 	}
 
-	close(provider.release)
-	deadline := time.Now().Add(2 * time.Second)
+	provider.Release()
+	deadline := time.Now().Add(pendingRecoveryTestTimeout)
 	for {
 		provider.mu.Lock()
 		calls := provider.calls
@@ -498,7 +511,7 @@ func TestAppExternalDeliveryHandsOffAcceptedInputWhenResumeIsCanceled(t *testing
 	}()
 
 	recordID := observationPendingInputID(record)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(pendingRecoveryTestTimeout)
 	for {
 		pending, ok, stateErr := a.Engine.PersistedPendingMessage(recordID)
 		if stateErr != nil {
@@ -523,7 +536,7 @@ func TestAppExternalDeliveryHandsOffAcceptedInputWhenResumeIsCanceled(t *testing
 	if delivery.outcome.State != observable.ObservationStateQueued || delivery.outcome.PendingInputID != recordID {
 		t.Fatalf("delivery outcome = %+v, want queued durable input %q", delivery.outcome, recordID)
 	}
-	deadline = time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(pendingRecoveryTestTimeout)
 	for {
 		calls, _ := provider.snapshot()
 		if calls == 1 {
@@ -550,7 +563,10 @@ func TestAppExternalDeliveryRetriesDurableInputAfterLiveQueueFull(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.CloseAndWait() })
+	t.Cleanup(func() {
+		provider.Release()
+		_ = a.CloseAndWait()
+	})
 	a.Engine.MaxPendingInputs = 1
 
 	turnDone := make(chan error, 1)
@@ -560,7 +576,7 @@ func TestAppExternalDeliveryRetriesDurableInputAfterLiveQueueFull(t *testing.T) 
 	}()
 	select {
 	case <-provider.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("active turn did not reach provider")
 	}
 
@@ -578,7 +594,7 @@ func TestAppExternalDeliveryRetriesDurableInputAfterLiveQueueFull(t *testing.T) 
 		t.Fatalf("second delivery = %+v, want durable queued outcome", secondOutcome)
 	}
 
-	close(provider.release)
+	provider.Release()
 	select {
 	case err := <-turnDone:
 		if err != nil {
@@ -629,7 +645,7 @@ func TestAppExternalDeliveryRetriesReplayableAdmissionCommitFailure(t *testing.T
 	if outcome.State != observable.ObservationStateQueued || outcome.PendingInputID != observationPendingInputID(record) {
 		t.Fatalf("delivery outcome = %+v, want replayable queued record", outcome)
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(pendingRecoveryTestTimeout)
 	for {
 		pending, ok, stateErr := a.Engine.PersistedPendingMessage(outcome.PendingInputID)
 		if stateErr != nil {
@@ -740,7 +756,7 @@ func TestAppStartupRecoveryRetriesReplayableAdmissionFailure(t *testing.T) {
 	})
 	a.startPendingInputRecovery([]runtime.PendingInputRecovery{{RecordID: record.ID}})
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(pendingRecoveryTestTimeout)
 	for {
 		pending, ok, stateErr := a.Engine.PersistedPendingMessage(record.ID)
 		if stateErr != nil {
@@ -793,7 +809,7 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 
 	select {
 	case <-failed:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not attempt admission")
 	}
 	select {
@@ -866,7 +882,7 @@ func TestAppExternalDeliveryHandoffKeepsOriginThreadThroughRetry(t *testing.T) {
 	}
 	select {
 	case <-retrying:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("App-owned handoff did not retry admission")
 	}
 
@@ -900,7 +916,10 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.CloseAndWait() })
+	t.Cleanup(func() {
+		provider.Release()
+		_ = a.CloseAndWait()
+	})
 	record, err := a.Engine.PersistPendingMessageWithOptions(
 		context.Background(),
 		llm.TextMessage(llm.RoleUser, "oldest durable input"),
@@ -954,7 +973,7 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	close(provider.release)
+	provider.Release()
 	select {
 	case <-activated:
 	case <-time.After(pendingRecoveryTestTimeout):
@@ -991,7 +1010,10 @@ func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.CloseAndWait() })
+	t.Cleanup(func() {
+		provider.Release()
+		_ = a.CloseAndWait()
+	})
 	record, err := a.Engine.PersistPendingMessageWithOptions(
 		context.Background(),
 		llm.TextMessage(llm.RoleUser, "oldest before observable startup"),
@@ -1043,7 +1065,7 @@ func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	close(provider.release)
+	provider.Release()
 	select {
 	case <-activated:
 	case <-time.After(pendingRecoveryTestTimeout):
@@ -1104,12 +1126,12 @@ func TestAppCompactWaitsForStartupPendingInputRecovery(t *testing.T) {
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("compaction did not continue after startup recovery")
 	}
 	select {
 	case <-admitted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("compaction admission was not committed after startup recovery")
 	}
 }
@@ -1142,7 +1164,7 @@ func TestAppBeginCompactAdmissionWaitsForStartupPendingInputRecovery(t *testing.
 			t.Fatal(result.err)
 		}
 		compactTurnID = result.turnID
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("admitted compaction did not continue after startup recovery")
 	}
 	if compactTurnID == "" {
@@ -1210,7 +1232,7 @@ func TestAppCloseCancelsAndWaitsForStartupPendingInputRecovery(t *testing.T) {
 	}
 	select {
 	case <-provider.called:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery provider did not start")
 	}
 	done := make(chan error, 1)
@@ -1220,7 +1242,7 @@ func TestAppCloseCancelsAndWaitsForStartupPendingInputRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("CloseAndWait did not cancel and drain startup recovery")
 	}
 }

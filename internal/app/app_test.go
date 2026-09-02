@@ -26,11 +26,12 @@ type stubProvider struct {
 }
 
 type blockingAppProvider struct {
-	started   chan struct{}
-	release   chan struct{}
-	mu        sync.Mutex
-	calls     int
-	histories [][]llm.Message
+	started     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+	mu          sync.Mutex
+	calls       int
+	histories   [][]llm.Message
 }
 
 type failOnceEventCommitter struct {
@@ -50,6 +51,10 @@ func (c *failOnceEventCommitter) Commit(event events.Event) (events.Event, error
 
 func newBlockingAppProvider() *blockingAppProvider {
 	return &blockingAppProvider{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (p *blockingAppProvider) Release() {
+	p.releaseOnce.Do(func() { close(p.release) })
 }
 
 func (p *blockingAppProvider) Name() string { return "blocking" }
