@@ -48,6 +48,7 @@ var foundationDirs = []string{
 	"internal/events",
 	"internal/frontmatter",
 	"internal/homestore",
+	"internal/jsonl",
 	"internal/llm",
 	"internal/netbootstrap",
 	"internal/provenance",
