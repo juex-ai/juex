@@ -296,7 +296,7 @@ func toAnthropicMessages(history []Message, profile ProviderProfile, cachePrompt
 				if imageBlock, ok := anthropicImageBlock(profile.MediaDir, b.Media); ok {
 					block = imageBlock
 				} else {
-					block = anthropic.NewTextBlock(mediaReferenceText("image", b.Media))
+					block = anthropic.NewTextBlock(unavailableMediaReferenceText("image", b.Media))
 				}
 			case BlockReasoning:
 				if b.Redacted {
@@ -357,7 +357,7 @@ func anthropicToolResultBlock(workDir string, b Block) anthropic.ContentBlockPar
 		})
 	} else {
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{
-			OfText: &anthropic.TextBlockParam{Text: mediaReferenceText("tool_result_image", b.Media)},
+			OfText: &anthropic.TextBlockParam{Text: unavailableMediaReferenceText("tool_result_image", b.Media)},
 		})
 	}
 	return anthropic.ContentBlockParamUnion{
