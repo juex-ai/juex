@@ -148,6 +148,115 @@ func TestWeb_TranscriptPageReadsLatestItemsFromEOF(t *testing.T) {
 	}
 }
 
+func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	server := web.NewServer(web.Options{Cfg: cfg, Provider: &webProvider{}})
+	httpServer := httptest.NewServer(server.Handler())
+
+	var created thread.Info
+	e2eThreadJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{"alias":"before"}`, http.StatusCreated, &created)
+	store := thread.NewStore(cfg.RuntimePaths().StateDir)
+	target, err := store.OpenActive(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.BeginNewGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Append(llm.TextMessage(llm.RoleUser, "survives restart")); err != nil {
+		t.Fatal(err)
+	}
+	scratchFile := filepath.Join(target.ScratchpadDir(), "state.txt")
+	if err := os.WriteFile(scratchFile, []byte("preserved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := target.Projection()
+	journalPath := filepath.Join(target.Dir, "journal.jsonl")
+	journalBefore, err := os.Stat(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var renamed thread.Info
+	e2eThreadJSON(t, http.MethodPatch, httpServer.URL+"/api/threads/"+created.ID, `{"alias":"after"}`, http.StatusOK, &renamed)
+	if renamed.Alias != "after" {
+		t.Fatalf("renamed Thread = %+v", renamed)
+	}
+	e2eThreadJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/archive", "", http.StatusOK, nil)
+	httpServer.Close()
+	server.Close()
+
+	restarted := web.NewServer(web.Options{Cfg: cfg, Provider: &webProvider{}})
+	t.Cleanup(restarted.Close)
+	restartedHTTP := httptest.NewServer(restarted.Handler())
+	defer restartedHTTP.Close()
+	var listed struct {
+		Active   []thread.IndexEntry `json:"active_threads"`
+		Archived []thread.IndexEntry `json:"archived_threads"`
+	}
+	e2eThreadJSON(t, http.MethodGet, restartedHTTP.URL+"/api/threads", "", http.StatusOK, &listed)
+	if len(listed.Archived) != 1 || listed.Archived[0].ThreadID != created.ID || listed.Archived[0].Alias != "after" {
+		t.Fatalf("restarted archived list = %+v", listed.Archived)
+	}
+
+	var restored thread.Info
+	e2eThreadJSON(t, http.MethodPost, restartedHTTP.URL+"/api/threads/"+created.ID+"/unarchive", "", http.StatusOK, &restored)
+	if restored.RetentionState != thread.RetentionActive || restored.ExecutionState != thread.ExecutionIdle ||
+		restored.GenerationID != before.CurrentGeneration.ID || restored.Alias != "after" {
+		t.Fatalf("restored Thread = %+v, before = %+v", restored, before)
+	}
+	reopened, err := thread.NewStore(cfg.RuntimePaths().StateDir).OpenActive(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if len(reopened.History) != 1 || reopened.History[0].FirstText() != "survives restart" {
+		t.Fatalf("restored history = %+v", reopened.History)
+	}
+	if data, err := os.ReadFile(filepath.Join(reopened.ScratchpadDir(), "state.txt")); err != nil || string(data) != "preserved" {
+		t.Fatalf("restored Scratchpad = %q, %v", data, err)
+	}
+	journalAfter, err := os.Stat(filepath.Join(reopened.Dir, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journalAfter.Size() != journalBefore.Size() {
+		t.Fatalf("metadata lifecycle changed Journal size from %d to %d", journalBefore.Size(), journalAfter.Size())
+	}
+}
+
+func e2eThreadJSON(t *testing.T, method, target, body string, wantStatus int, result any) {
+	t.Helper()
+	request, err := http.NewRequest(method, target, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != wantStatus {
+		t.Fatalf("%s %s status = %d, want %d, body = %s", method, target, response.StatusCode, wantStatus, payload)
+	}
+	if result != nil && len(payload) != 0 {
+		if err := json.Unmarshal(payload, result); err != nil {
+			t.Fatalf("decode %s %s response: %v; body = %s", method, target, err, payload)
+		}
+	}
+}
+
 func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutOpeningThread(t *testing.T) {
 	work := t.TempDir()
 	projectAgents := filepath.Join(work, ".agents")

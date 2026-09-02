@@ -11,9 +11,15 @@ import (
 const checkpointInterval = uint64(256)
 
 func checkpointFromState(state ReplayState) ReplayCheckpoint {
+	projection := cloneProjection(state.Projection)
+	// The complete Generation registry is authoritative in thread.json. A
+	// checkpoint needs only the current Generation and aggregate count to replay
+	// its suffix; retaining every historical entry would make boundary-triggered
+	// checkpoints grow quadratically.
+	projection.Generations = nil
 	checkpoint := ReplayCheckpoint{
 		Version:          ProjectionVersion,
-		Projection:       cloneProjection(state.Projection),
+		Projection:       projection,
 		ProviderMessages: append([]llm.Message(nil), state.ProviderMessages...),
 		Inputs:           map[string]InputProjection{},
 		InputRecords:     map[string]json.RawMessage{},

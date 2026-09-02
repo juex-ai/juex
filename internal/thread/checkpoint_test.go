@@ -102,6 +102,9 @@ func TestCheckpointPreservesCumulativeCompactionCount(t *testing.T) {
 	if replay.CompactionCount != 2 {
 		t.Fatalf("reopened compaction count = %d, want 2", replay.CompactionCount)
 	}
+	if len(replay.Projection.Generations) != 3 || replay.Projection.Generations[2] != replay.Projection.CurrentGeneration {
+		t.Fatalf("authoritative Generation registry = %+v, current = %+v", replay.Projection.Generations, replay.Projection.CurrentGeneration)
+	}
 	if len(replay.Activities) != 1 || replay.Activities[0].Summary == nil || replay.Activities[0].Summary.FirstText() != "summary two" {
 		t.Fatalf("bounded latest activity = %+v", replay.Activities)
 	}
@@ -151,6 +154,9 @@ func TestCheckpointPayloadIsBoundedToActiveContextAndOpenInputs(t *testing.T) {
 	}
 	if len(checkpoint.StatusEvents) != 1 || checkpoint.StatusEvents[0].Type != "turn.completed" || checkpoint.StatusEvents[0].TurnID != "turn-1" {
 		t.Fatalf("checkpoint status events = %+v, want one terminal event", checkpoint.StatusEvents)
+	}
+	if len(checkpoint.Projection.Generations) != 0 {
+		t.Fatalf("checkpoint retained complete Generation registry: %+v", checkpoint.Projection.Generations)
 	}
 }
 

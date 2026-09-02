@@ -129,7 +129,6 @@ func applyAuthoritativeProjection(state *ReplayState, metadata Projection) error
 	replayed := state.Projection
 	if !replayed.CreatedAt.Equal(metadata.CreatedAt.Time) ||
 		!replayed.LastActivityAt.Equal(metadata.LastActivityAt.Time) ||
-		!reflect.DeepEqual(replayed.Generations, metadata.Generations) ||
 		replayed.CurrentGeneration != metadata.CurrentGeneration ||
 		replayed.Counts != metadata.Counts ||
 		!rawJSONEqual(replayed.Goal, metadata.Goal) ||
