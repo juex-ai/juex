@@ -93,7 +93,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 	}
 	if err == nil {
-		if summary, ok := completeCompactionSummaryText(resp); ok {
+		if summary, ok := completeCompactionSummaryText(resp, state.Notes); ok {
 			health.Complete(ticket, llm.ModelHealthSuccess, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 		}
@@ -131,7 +131,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 		}
 		if err == nil {
-			if summary, ok := completeCompactionSummaryText(resp); ok {
+			if summary, ok := completeCompactionSummaryText(resp, state.Notes); ok {
 				health.Complete(ticket, llm.ModelHealthSuccess, "")
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 			}
@@ -202,7 +202,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 		}
 		if err == nil {
-			if summary, ok := completeCompactionSummaryText(resp); ok {
+			if summary, ok := completeCompactionSummaryText(resp, state.Notes); ok {
 				health.Complete(ticket, llm.ModelHealthSuccess, "")
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 			}
@@ -240,7 +240,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 					return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 				}
 				if err == nil {
-					if summary, ok := completeCompactionSummaryText(resp); ok {
+					if summary, ok := completeCompactionSummaryText(resp, state.Notes); ok {
 						health.Complete(ticket, llm.ModelHealthSuccess, "")
 						return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 					}
@@ -417,9 +417,122 @@ func compactionSummaryText(resp llm.Response) string {
 	return strings.TrimSpace(responseText(resp.Message))
 }
 
-func completeCompactionSummaryText(resp llm.Response) (string, bool) {
+func completeCompactionSummaryText(resp llm.Response, authoritativeNotes string) (string, bool) {
 	summary := normalizeCompactionSummaryHeadings(compactionSummaryText(resp))
-	return summary, summary != "" && resp.StopReason != llm.StopMaxTokens
+	if summary == "" || resp.StopReason == llm.StopMaxTokens {
+		return summary, false
+	}
+	return restoreUnfinishedCompactionNotes(summary, authoritativeNotes), true
+}
+
+func restoreUnfinishedCompactionNotes(summary, notes string) string {
+	// The summary model is advisory for module state. Keep unfinished Notes
+	// deterministic even when a provider returns an incomplete heading set.
+	items := unfinishedCompactionNotes(notes)
+	if len(items) == 0 {
+		return summary
+	}
+	lines := strings.Split(summary, "\n")
+	start, end, ok := compactionSummarySectionBounds(lines, "Next Steps")
+	if ok {
+		section := strings.Join(lines[start:end], "\n")
+		missing := missingCompactionNotes(section, items)
+		nextIsRelevant := false
+		if end < len(lines) {
+			next, _ := canonicalCompactionSummaryHeading(lines[end])
+			nextIsRelevant = next == "Relevant Files"
+		}
+		if len(missing) == 0 && nextIsRelevant {
+			return summary
+		}
+		insertion := make([]string, 0, len(missing)+3)
+		if len(missing) > 0 && end > start && strings.TrimSpace(lines[end-1]) != "" {
+			insertion = append(insertion, "")
+		}
+		insertion = append(insertion, missing...)
+		if !nextIsRelevant {
+			if len(insertion) > 0 && insertion[len(insertion)-1] != "" {
+				insertion = append(insertion, "")
+			}
+			insertion = append(insertion, "Relevant Files", "")
+		}
+		lines = append(lines[:end], append(insertion, lines[end:]...)...)
+		return strings.TrimSpace(strings.Join(lines, "\n"))
+	}
+
+	relevantStart, _, hasRelevant := compactionSummarySectionBounds(lines, "Relevant Files")
+	insertAt := len(lines)
+	if hasRelevant {
+		insertAt = relevantStart - 1
+	}
+	block := make([]string, 0, len(items)+3)
+	if insertAt > 0 && strings.TrimSpace(lines[insertAt-1]) != "" {
+		block = append(block, "")
+	}
+	block = append(block, "Next Steps")
+	block = append(block, items...)
+	block = append(block, "")
+	if !hasRelevant {
+		block = append(block, "Relevant Files")
+	}
+	lines = append(lines[:insertAt], append(block, lines[insertAt:]...)...)
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func unfinishedCompactionNotes(notes string) []string {
+	var items []string
+	seen := make(map[string]struct{})
+	for _, line := range strings.Split(notes, "\n") {
+		line = strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(line, "- [ ] ") && !strings.HasPrefix(line, "- [ ]\t") {
+			continue
+		}
+		line = strings.TrimRight(line, " \t\r")
+		text := normalizedCompactionNoteText(line)
+		if text == "" {
+			continue
+		}
+		if _, ok := seen[text]; ok {
+			continue
+		}
+		seen[text] = struct{}{}
+		items = append(items, line)
+	}
+	return items
+}
+
+func missingCompactionNotes(section string, items []string) []string {
+	normalizedSection := strings.Join(strings.Fields(strings.ToLower(section)), " ")
+	missing := make([]string, 0, len(items))
+	for _, item := range items {
+		if !strings.Contains(normalizedSection, normalizedCompactionNoteText(item)) {
+			missing = append(missing, item)
+		}
+	}
+	return missing
+}
+
+func normalizedCompactionNoteText(item string) string {
+	item = strings.TrimSpace(strings.TrimPrefix(item, "- [ ]"))
+	return strings.Join(strings.Fields(strings.ToLower(item)), " ")
+}
+
+func compactionSummarySectionBounds(lines []string, heading string) (int, int, bool) {
+	for index, line := range lines {
+		canonical, ok := canonicalCompactionSummaryHeading(line)
+		if !ok || canonical != heading {
+			continue
+		}
+		end := len(lines)
+		for candidate := index + 1; candidate < len(lines); candidate++ {
+			if _, ok := canonicalCompactionSummaryHeading(lines[candidate]); ok {
+				end = candidate
+				break
+			}
+		}
+		return index + 1, end, true
+	}
+	return 0, 0, false
 }
 
 var compactionSummaryHeadings = []string{

@@ -63,6 +63,18 @@ func (m *NotesModule) Context(_ context.Context, request runtimemodule.ContextRe
 	}}, nil
 }
 
+func (m *NotesModule) ClearContextForRenewal(context.Context) (func() error, error) {
+	if m == nil || m.store == nil {
+		return func() error { return nil }, nil
+	}
+	rollback, err := m.store.ClearWithRollback()
+	if err != nil {
+		return nil, err
+	}
+	m.clearNotesContextError()
+	return rollback, nil
+}
+
 func NotesToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{
 		Name:        NotesToolUpdate,

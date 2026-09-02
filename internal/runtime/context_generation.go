@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -35,8 +36,12 @@ func (e *Engine) newContextLocked(ctx context.Context, allowActive bool) error {
 	if !allowActive && (e.activeTurnID != "" || len(e.pendingInput) > 0) {
 		return ErrThreadRuntimeBusy
 	}
-	if _, err := current.Thread.BeginNewGeneration(); err != nil {
+	rollback, err := runtimemodule.ClearContextForRenewal(ctx, current.Modules)
+	if err != nil {
 		return err
+	}
+	if _, err := current.Thread.BeginNewGeneration(); err != nil {
+		return errors.Join(err, rollback())
 	}
 	e.policyRuntimeContextMu.Lock()
 	e.pendingPolicyRuntimeContext = nil

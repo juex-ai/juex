@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/juex-ai/juex/internal/thread"
 )
 
 const goalStateFile = "goal_state.json"
@@ -57,16 +56,8 @@ type GoalStateStore struct {
 	ThreadDir string
 	Path      string
 	Now       func() time.Time
-	Thread    *thread.Thread
 
 	mu sync.Mutex
-}
-
-func NewThreadGoalStateStore(target *thread.Thread, opts GoalStateOptions) *GoalStateStore {
-	store := NewGoalStateStore(target.Dir, opts)
-	store.Thread = target
-	store.Path = ""
-	return store
 }
 
 type GoalGateDecision struct {
@@ -99,19 +90,35 @@ func NewGoalStateStore(threadDir string, opts GoalStateOptions) *GoalStateStore 
 }
 
 func (s *GoalStateStore) Clear() error {
-	if s != nil && s.Thread != nil {
-		_, err := s.Thread.AppendFacts(thread.Fact{Type: thread.FactGoalCleared})
-		return err
-	}
 	if s == nil || strings.TrimSpace(s.Path) == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.Remove(s.Path); err != nil && !os.IsNotExist(err) {
+	if _, err := clearFileWithRollback(s.Path); err != nil {
 		return fmt.Errorf("goal state clear: %w", err)
 	}
 	return nil
+}
+
+func (s *GoalStateStore) ClearWithRollback() (func() error, error) {
+	if s == nil || strings.TrimSpace(s.Path) == "" {
+		return func() error { return nil }, nil
+	}
+	s.mu.Lock()
+	rollback, err := clearFileWithRollback(s.Path)
+	s.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("goal state clear: %w", err)
+	}
+	return func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := rollback(); err != nil {
+			return fmt.Errorf("goal state restore: %w", err)
+		}
+		return nil
+	}, nil
 }
 
 func (s *GoalStateStore) Snapshot() (GoalState, error) {
@@ -285,16 +292,6 @@ func (s GoalState) RawMessage() json.RawMessage {
 
 func (s *GoalStateStore) loadLocked() (GoalState, error) {
 	state := GoalState{Version: 1}
-	if s != nil && s.Thread != nil {
-		raw := s.Thread.Projection().Goal
-		if len(bytes.TrimSpace(raw)) == 0 {
-			return state, nil
-		}
-		if err := json.Unmarshal(raw, &state); err != nil {
-			return state, fmt.Errorf("goal state parse: %w", err)
-		}
-		return normalizeGoalState(state), nil
-	}
 	if s == nil || s.Path == "" {
 		return state, nil
 	}
@@ -308,41 +305,55 @@ func (s *GoalStateStore) loadLocked() (GoalState, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return state, nil
 	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		return state, fmt.Errorf("goal state parse: %w", err)
+	return decodeGoalState(data)
+}
+
+func decodeGoalState(data []byte) (GoalState, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var state GoalState
+	if err := decoder.Decode(&state); err != nil {
+		return GoalState{Version: 1}, fmt.Errorf("goal state parse: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("multiple JSON values")
+		}
+		return GoalState{Version: 1}, fmt.Errorf("goal state parse: %w", err)
+	}
+	if state.Version != 1 {
+		return GoalState{Version: 1}, fmt.Errorf("goal state: unsupported version %d", state.Version)
+	}
+	if state.ContinuationCount < 0 {
+		return GoalState{Version: 1}, fmt.Errorf("goal state: continuation_count cannot be negative")
+	}
+	if state.Status != "" {
+		if err := validateGoalStatus(state.Status); err != nil {
+			return GoalState{Version: 1}, fmt.Errorf("goal state: %w", err)
+		}
 	}
 	state = normalizeGoalState(state)
+	if state.present() && strings.TrimSpace(state.Description) == "" {
+		return GoalState{Version: 1}, fmt.Errorf("goal state: description is required")
+	}
+	if state.present() && state.UpdatedAt.IsZero() {
+		return GoalState{Version: 1}, fmt.Errorf("goal state: updated_at is required")
+	}
 	return state, nil
 }
 
 func (s *GoalStateStore) saveLocked(state GoalState) error {
-	if s != nil && s.Thread != nil {
-		state = normalizeGoalState(state)
-		data, err := json.Marshal(redactGoalState(state))
-		if err != nil {
-			return fmt.Errorf("goal state encode: %w", err)
-		}
-		_, err = s.Thread.AppendFacts(thread.Fact{Type: thread.FactGoalUpdated, Goal: data})
-		return err
-	}
 	if s == nil || s.Path == "" {
 		return nil
 	}
 	state = normalizeGoalState(state)
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
-		return fmt.Errorf("goal state mkdir: %w", err)
-	}
 	data, err := json.MarshalIndent(redactGoalState(state), "", "  ")
 	if err != nil {
 		return fmt.Errorf("goal state encode: %w", err)
 	}
 	data = append(data, '\n')
-	tmp := s.Path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("goal state write: %w", err)
-	}
-	defer func() { _ = os.Remove(tmp) }()
-	if err := os.Rename(tmp, s.Path); err != nil {
+	if err := replaceFileAtomic(s.Path, data, 0o600); err != nil {
 		return fmt.Errorf("goal state replace: %w", err)
 	}
 	return nil

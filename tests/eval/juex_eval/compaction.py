@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import datetime
 import json
 import os
 import pathlib
@@ -30,6 +29,7 @@ AUTHORITATIVE_GOAL = {
     "description": "Ship authoritative compaction state fidelity for task CMP-2417.",
     "acceptance": "The compact Goal matches goal_state and Notes survive unchanged.",
     "status": "success",
+    "updated_at": "2026-09-01T00:00:00Z",
 }
 AUTHORITATIVE_COMPLETED_NOTE = "Map the compaction runtime."
 AUTHORITATIVE_OPEN_NOTE = "Run the live compaction evaluation and inspect its scorecard."
@@ -566,70 +566,9 @@ def seed_authoritative_state(work: pathlib.Path) -> None:
     journals = thread_files(work, "journal.jsonl")
     if len(journals) != 1:
         raise ValueError(f"expected one active Thread after turn1, found {len(journals)}")
-    journal = journals[0]
-    commits = [
-        json.loads(line)
-        for line in journal.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    if not commits or not isinstance(commits[-1].get("seq"), int):
-        raise ValueError("Thread Journal has no valid commit sequence")
-    metadata_path = journal.with_name("thread.json")
-    try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("Thread metadata is unavailable for authoritative state seed") from exc
-    if not isinstance(metadata, dict) or not isinstance(metadata.get("journal"), dict):
-        raise ValueError("Thread metadata has no Journal cursor")
-    projected = metadata["journal"]
-    journal_size = journal.stat().st_size
-    if projected.get("projected_seq") != commits[-1]["seq"] or projected.get("projected_offset") != journal_size:
-        raise ValueError("Thread metadata Journal cursor is stale before authoritative state seed")
-
-    now = metadata_timestamp_after(metadata.get("updated_at"), metadata.get("last_activity_at"))
-    commit = {
-        "v": 1,
-        "seq": commits[-1]["seq"] + 1,
-        "at": now,
-        "facts": [
-            {"type": "goal.updated", "goal": AUTHORITATIVE_GOAL},
-            {
-                "type": "notes.updated",
-                "notes": AUTHORITATIVE_NOTES,
-                "notes_updated_at": now,
-            },
-        ],
-    }
-    line = (json.dumps(commit, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-    with journal.open("ab") as output:
-        output.write(line)
-        output.flush()
-        os.fsync(output.fileno())
-
-    metadata["goal"] = AUTHORITATIVE_GOAL
-    metadata["notes"] = AUTHORITATIVE_NOTES
-    metadata["notes_updated_at"] = now
-    metadata["updated_at"] = now
-    metadata["last_activity_at"] = now
-    metadata["revision"] = int(metadata.get("revision") or 0) + 1
-    projected["projected_seq"] = commit["seq"]
-    projected["projected_offset"] = journal_size + len(line)
-    write_json_atomic(metadata_path, metadata)
-
-
-def metadata_timestamp_after(*values: object) -> str:
-    candidates = [datetime.datetime.now(datetime.timezone.utc)]
-    for value in values:
-        if not isinstance(value, str):
-            raise ValueError("Thread metadata timestamp is missing")
-        try:
-            parsed = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=datetime.timezone.utc)
-        except ValueError as exc:
-            raise ValueError(f"invalid Thread metadata timestamp {value!r}") from exc
-        candidates.append(parsed + datetime.timedelta(milliseconds=1))
-    selected = max(candidates)
-    selected = selected.replace(microsecond=(selected.microsecond // 1000) * 1000)
-    return selected.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    thread_dir = journals[0].parent
+    write_json_atomic(thread_dir / "goal_state.json", AUTHORITATIVE_GOAL)
+    write_text_atomic(thread_dir / "notes.md", AUTHORITATIVE_NOTES)
 
 
 def write_json_atomic(path: pathlib.Path, value: object) -> None:
@@ -648,10 +587,24 @@ def write_json_atomic(path: pathlib.Path, value: object) -> None:
             temp_path.unlink(missing_ok=True)
 
 
+def write_text_atomic(path: pathlib.Path, value: str) -> None:
+    temp_path: pathlib.Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as output:
+            temp_path = pathlib.Path(output.name)
+            output.write(value)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 def score_authoritative_state(work: pathlib.Path, answer: str) -> dict:
-    projection = read_latest_json(work, "thread.json")
-    goal = projection.get("goal") if isinstance(projection.get("goal"), dict) else {}
-    notes = projection.get("notes") if isinstance(projection.get("notes"), str) else ""
+    goal = read_latest_json(work, "goal_state.json")
+    notes = read_latest_text(work, "notes.md")
     summary = latest_compact_summary(work)
     goal_section = summary_section(summary, "Goal", "Critical Context")
     next_steps = summary_section(summary, "Next Steps", "Relevant Files")
@@ -760,7 +713,7 @@ def match_int(text: str, pattern: str) -> int:
 
 
 def copy_runtime_artifacts(work: pathlib.Path, out_dir: pathlib.Path) -> None:
-    for name in ["journal.jsonl", "thread.json"]:
+    for name in ["journal.jsonl", "thread.json", "goal_state.json", "notes.md"]:
         for path in thread_files(work, name):
             shutil.copy2(path, out_dir / name)
 

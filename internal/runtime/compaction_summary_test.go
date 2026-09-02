@@ -43,7 +43,7 @@ func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T
 		StopReason: llm.StopEndTurn,
 	}
 
-	got, ok := completeCompactionSummaryText(response)
+	got, ok := completeCompactionSummaryText(response, "")
 	if !ok {
 		t.Fatal("complete summary was rejected")
 	}
@@ -54,6 +54,32 @@ func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T
 	}
 	if !strings.Contains(got, "**Goal** is mentioned in prose and must not change.") {
 		t.Fatalf("normalization changed prose:\n%s", got)
+	}
+}
+
+func TestCompleteCompactionSummaryTextRestoresUnfinishedAuthoritativeNotes(t *testing.T) {
+	response := llm.Response{
+		Message: llm.TextMessage(llm.RoleAssistant, strings.Join([]string{
+			"Goal",
+			"description: keep exact state",
+			"Critical Context",
+			"GF1: value",
+		}, "\n")),
+		StopReason: llm.StopEndTurn,
+	}
+
+	got, ok := completeCompactionSummaryText(response, strings.Join([]string{
+		"- [x] completed item",
+		"- [ ] Run the live compaction evaluation and inspect its scorecard.",
+	}, "\n"))
+	if !ok {
+		t.Fatal("complete summary was rejected")
+	}
+	if !strings.Contains(got, "Next Steps\n- [ ] Run the live compaction evaluation and inspect its scorecard.\n\nRelevant Files") {
+		t.Fatalf("summary did not restore the unfinished Notes item:\n%s", got)
+	}
+	if strings.Contains(got, "completed item") {
+		t.Fatalf("summary promoted completed Notes into Next Steps:\n%s", got)
 	}
 }
 

@@ -562,14 +562,9 @@ func cloneReplayState(source ReplayState) ReplayState {
 func cloneProjection(source Projection) Projection {
 	clone := source
 	clone.Generations = append([]GenerationProjection(nil), source.Generations...)
-	clone.Goal = append(json.RawMessage(nil), source.Goal...)
 	if source.ArchivedAt != nil {
 		archivedAt := *source.ArchivedAt
 		clone.ArchivedAt = &archivedAt
-	}
-	if source.NotesUpdatedAt != nil {
-		updatedAt := *source.NotesUpdatedAt
-		clone.NotesUpdatedAt = &updatedAt
 	}
 	if source.ContextUsage != nil {
 		context := *source.ContextUsage

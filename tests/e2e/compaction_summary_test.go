@@ -25,6 +25,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 	const acceptance = "Keep the exact branch and pending check."
 	const note = "Run the live compaction evaluation."
 	const summary = "Goal\n" + goal + "\n" + acceptance + "\nStatus: success\nCritical Context\nhigh/context-projection\nNext Steps\n" + note
+	const committedSummary = summary + "\nRelevant Files"
 	var mu sync.Mutex
 	var budgets []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +150,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 	for _, message := range a.Thread.History {
 		if message.Kind == llm.MessageKindCompact {
 			markers++
-			if message.Compaction == nil || message.Compaction.SummaryChars != len(summary) || !strings.Contains(message.FirstText(), "Summary of earlier conversation:\n"+summary) || strings.Contains(message.FirstText(), "prepare the summary") {
+			if message.Compaction == nil || message.Compaction.SummaryChars != len(committedSummary) || !strings.Contains(message.FirstText(), "Summary of earlier conversation:\n"+committedSummary) || strings.Contains(message.FirstText(), "prepare the summary") {
 				t.Fatalf("compact marker = %+v, want complete text without reasoning", message)
 			}
 		}

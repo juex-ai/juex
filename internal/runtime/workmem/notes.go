@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"github.com/juex-ai/juex/internal/thread"
 )
 
 const (
@@ -24,34 +22,44 @@ type NotesSnapshot struct {
 
 type NotesStore struct {
 	ThreadDir string
-	Thread    *thread.Thread
-	Now       func() time.Time
 	mu        sync.Mutex
 }
 
 func NewNotesStore(threadDir string) *NotesStore {
-	return &NotesStore{ThreadDir: threadDir, Now: func() time.Time { return time.Now().UTC() }}
-}
-
-func NewThreadNotesStore(target *thread.Thread) *NotesStore {
-	return &NotesStore{ThreadDir: target.Dir, Thread: target, Now: func() time.Time { return time.Now().UTC() }}
+	return &NotesStore{ThreadDir: threadDir}
 }
 
 func (s *NotesStore) Clear() error {
-	if s != nil && s.Thread != nil {
-		_, err := s.Thread.AppendFacts(thread.Fact{Type: thread.FactNotesCleared})
-		return err
-	}
 	if s == nil || strings.TrimSpace(s.ThreadDir) == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := filepath.Join(s.ThreadDir, NotesFileName)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if _, err := clearFileWithRollback(path); err != nil {
 		return fmt.Errorf("notes clear: %w", err)
 	}
 	return nil
+}
+
+func (s *NotesStore) ClearWithRollback() (func() error, error) {
+	if s == nil || strings.TrimSpace(s.ThreadDir) == "" {
+		return func() error { return nil }, nil
+	}
+	s.mu.Lock()
+	rollback, err := clearFileWithRollback(filepath.Join(s.ThreadDir, NotesFileName))
+	s.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("notes clear: %w", err)
+	}
+	return func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := rollback(); err != nil {
+			return fmt.Errorf("notes restore: %w", err)
+		}
+		return nil
+	}, nil
 }
 
 func (s *NotesStore) Snapshot() (NotesSnapshot, error) {
@@ -91,47 +99,10 @@ func (s *NotesStore) Update(content string) (NotesSnapshot, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.Thread != nil {
-		now := thread.NewTimestamp(s.Now())
-		if _, err := s.Thread.AppendFacts(thread.Fact{Type: thread.FactNotesUpdated, Notes: &content, NotesUpdatedAt: &now}); err != nil {
-			return NotesSnapshot{}, err
-		}
-		return NotesSnapshot{Content: content, UpdatedAt: now.Time}, nil
-	}
-	if err := os.MkdirAll(s.ThreadDir, 0o700); err != nil {
-		return NotesSnapshot{}, fmt.Errorf("notes mkdir: %w", err)
-	}
-	tmp, err := os.CreateTemp(s.ThreadDir, ".notes.md-*")
-	if err != nil {
-		return NotesSnapshot{}, fmt.Errorf("notes create temp: %w", err)
-	}
-	tmpPath := tmp.Name()
-	keepTemp := true
-	defer func() {
-		if keepTemp {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return NotesSnapshot{}, fmt.Errorf("notes chmod temp: %w", err)
-	}
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-		return NotesSnapshot{}, fmt.Errorf("notes write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return NotesSnapshot{}, fmt.Errorf("notes sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return NotesSnapshot{}, fmt.Errorf("notes close temp: %w", err)
-	}
 	path := filepath.Join(s.ThreadDir, NotesFileName)
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replaceFileAtomic(path, []byte(content), 0o600); err != nil {
 		return NotesSnapshot{}, fmt.Errorf("notes replace: %w", err)
 	}
-	keepTemp = false
 	info, err := os.Stat(path)
 	if err != nil {
 		return NotesSnapshot{}, fmt.Errorf("notes stat: %w", err)
@@ -140,17 +111,6 @@ func (s *NotesStore) Update(content string) (NotesSnapshot, error) {
 }
 
 func (s *NotesStore) snapshotLocked() (NotesSnapshot, bool, error) {
-	if s != nil && s.Thread != nil {
-		projection := s.Thread.Projection()
-		if strings.TrimSpace(projection.Notes) == "" {
-			return NotesSnapshot{}, false, nil
-		}
-		updatedAt := time.Time{}
-		if projection.NotesUpdatedAt != nil {
-			updatedAt = projection.NotesUpdatedAt.Time
-		}
-		return NotesSnapshot{Content: projection.Notes, UpdatedAt: updatedAt}, true, nil
-	}
 	if strings.TrimSpace(s.ThreadDir) == "" {
 		return NotesSnapshot{}, false, nil
 	}

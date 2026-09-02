@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/thread"
 )
@@ -74,6 +75,16 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(before.ScratchpadDir, "durable.txt"), []byte("retained"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	goal, notes := runtime.ThreadStateStoresFromModules(before.Modules)
+	if goal == nil || notes == nil {
+		t.Fatal("Goal and Notes Modules did not expose their stores")
+	}
+	if _, err := goal.Create("finish the current context", "new Generation is empty"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := notes.Update("- [x] preserve Scratchpad\n- [ ] start fresh"); err != nil {
+		t.Fatal(err)
+	}
 	if err := application.NewContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +97,17 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	}
 	if data, err := os.ReadFile(filepath.Join(after.ScratchpadDir, "durable.txt")); err != nil || string(data) != "retained" {
 		t.Fatalf("scratchpad after /new = %q, %v", data, err)
+	}
+	if snapshot, err := goal.StatusSnapshot(); err != nil || snapshot != nil {
+		t.Fatalf("Goal after /new = %+v, %v", snapshot, err)
+	}
+	if snapshot, err := notes.StatusSnapshot(); err != nil || snapshot != nil {
+		t.Fatalf("Notes after /new = %+v, %v", snapshot, err)
+	}
+	for _, path := range []string{goal.Path, filepath.Join(after.Thread.Dir, "notes.md")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("module state file survived /new: %s: %v", path, err)
+		}
 	}
 
 	threadContext := runtimemodule.ThreadContext{ID: after.Thread.ID, Dir: after.Thread.Dir, ScratchpadDir: after.ScratchpadDir}
@@ -103,5 +125,83 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 		if section.ModuleID == "" || section.Scope != runtimemodule.ScopeThread || strings.TrimSpace(section.Source) == "" {
 			t.Errorf("Thread context lacks provenance: %+v", section)
 		}
+	}
+}
+
+func TestModuleLifecycle_DisabledGoalAndNotesSurviveNewAndReloadWhenEnabled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e is slow")
+	}
+	work := t.TempDir()
+	stateDir := filepath.Join(work, ".juex")
+	cfg := config.Config{WorkDir: work, AgentStateDir: stateDir}
+
+	first, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal, notes := runtime.ThreadStateStoresFromModules(first.Engine.ThreadRuntimeSnapshot().Modules)
+	if goal == nil || notes == nil {
+		t.Fatal("Goal and Notes Modules did not expose their stores")
+	}
+	if _, err := goal.Create("retain while disabled", "reload the exact file"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := notes.Update("- [ ] retained while disabled"); err != nil {
+		t.Fatal(err)
+	}
+	goalBefore, err := os.ReadFile(goal.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notesPath := filepath.Join(first.Thread.Dir, "notes.md")
+	notesBefore, err := os.ReadFile(notesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+
+	disabled := cfg
+	disabled.Modules = config.ModulePolicy{
+		"goal":  {Enabled: false},
+		"notes": {Enabled: false},
+	}
+	second, err := app.New(app.Options{Config: disabled, Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goalStatus, notesStatus := second.ThreadStateStatus()
+	if goalStatus != nil || notesStatus != nil {
+		t.Fatalf("disabled module state leaked through status: Goal=%+v Notes=%+v", goalStatus, notesStatus)
+	}
+	if err := second.NewContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(goal.Path); err != nil || string(got) != string(goalBefore) {
+		t.Fatalf("disabled Goal file changed across /new: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(notesPath); err != nil || string(got) != string(notesBefore) {
+		t.Fatalf("disabled Notes file changed across /new: %q, %v", got, err)
+	}
+
+	third, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = third.CloseAndWait() })
+	goalStatus, notesStatus = third.ThreadStateStatus()
+	if goalStatus == nil || goalStatus.Description != "retain while disabled" {
+		t.Fatalf("re-enabled Goal = %+v", goalStatus)
+	}
+	if notesStatus == nil || notesStatus.Content != "- [ ] retained while disabled" {
+		t.Fatalf("re-enabled Notes = %+v", notesStatus)
+	}
+	if got := third.Thread.Info().GenerationID; got != "g000002" {
+		t.Fatalf("Generation after disabled /new = %q", got)
 	}
 }

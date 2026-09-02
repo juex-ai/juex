@@ -702,14 +702,14 @@ func goalStateStore(threadState *thread.Thread) *workmem.GoalStateStore {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewThreadGoalStateStore(threadState, workmem.GoalStateOptions{})
+	return workmem.NewGoalStateStore(threadState.Dir, workmem.GoalStateOptions{})
 }
 
 func notesStore(threadState *thread.Thread) *workmem.NotesStore {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewThreadNotesStore(threadState)
+	return workmem.NewNotesStore(threadState.Dir)
 }
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {

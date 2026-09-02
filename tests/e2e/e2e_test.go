@@ -856,8 +856,12 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 			t.Fatalf("post-compaction provider history missing %q:\n%s", want, afterCompact)
 		}
 	}
-	if got := a.Thread.Projection().Notes; !strings.Contains(got, "bind local services") || !strings.Contains(got, "confirm CI status") {
-		t.Fatalf("Thread notes projection = %q", got)
+	notesSnapshot, err := notes.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := notesSnapshot.Content; !strings.Contains(got, "bind local services") || !strings.Contains(got, "confirm CI status") {
+		t.Fatalf("Notes store content = %q", got)
 	}
 	eventsText := strings.Join(readLines(t, filepath.Join(a.Thread.Dir, "journal.jsonl")), "\n")
 	if !strings.Contains(eventsText, `"type":"notes.updated"`) {
@@ -1926,10 +1930,13 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 		!strings.Contains(goalContext.FirstText(), "ship goal state") {
 		t.Fatalf("goal runtime context = %+v", goalContext)
 	}
-	goalData := a.Thread.Projection().Goal
-	var goal workmem.GoalState
-	if err := json.Unmarshal(goalData, &goal); err != nil {
-		t.Fatalf("decode Thread goal: %v: %s", err, goalData)
+	goalStore, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	if goalStore == nil {
+		t.Fatal("Goal Module store is unavailable")
+	}
+	goal, err := goalStore.Snapshot()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if goal.Description != "ship goal state" || goal.ContinuationCount != 1 || goal.Status != workmem.GoalStatusSuccess ||
 		goal.StatusReason != "continuation gate fired and final answer was verified" || !strings.Contains(goal.Acceptance, "goal.continued") {
@@ -2019,10 +2026,13 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 		t.Fatalf("new input should reach the model with unchanged waiting goal:\n%s", got)
 	}
 
-	goalData := a.Thread.Projection().Goal
-	var goal workmem.GoalState
-	if err := json.Unmarshal(goalData, &goal); err != nil {
-		t.Fatalf("decode Thread goal: %v: %s", err, goalData)
+	goalStore, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	if goalStore == nil {
+		t.Fatal("Goal Module store is unavailable")
+	}
+	goal, err := goalStore.Snapshot()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if goal.Status != workmem.GoalStatusSuccess || goal.StatusReason != "user approved the healthy deployment" {
 		t.Fatalf("Thread goal = %+v", goal)

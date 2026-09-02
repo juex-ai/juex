@@ -95,6 +95,22 @@ type contextRenewalModule struct {
 	log *[]string
 }
 
+type contextRenewalCleanerModule struct {
+	id  ID
+	log *[]string
+	err error
+}
+
+func (m *contextRenewalCleanerModule) ID() ID { return m.id }
+
+func (m *contextRenewalCleanerModule) ClearContextForRenewal(context.Context) (func() error, error) {
+	*m.log = append(*m.log, "clear:"+string(m.id))
+	return func() error {
+		*m.log = append(*m.log, "restore:"+string(m.id))
+		return nil
+	}, m.err
+}
+
 func (m *contextRenewalModule) ID() ID { return m.id }
 
 func (m *contextRenewalModule) ContextRenewed(context.Context) {
@@ -423,6 +439,25 @@ func TestNotifyContextRenewedUsesSetAndRegistrationOrder(t *testing.T) {
 	want := []string{"renew:first-a", "renew:first-b", "renew:second"}
 	if !reflect.DeepEqual(log, want) {
 		t.Fatalf("renewal log = %#v, want %#v", log, want)
+	}
+}
+
+func TestClearContextForRenewalStopsOnOwnerError(t *testing.T) {
+	var log []string
+	clearErr := errors.New("clear failed")
+	set := buildRuntimeLifecycleSet(t,
+		&contextRenewalCleanerModule{id: "goal", log: &log},
+		&contextRenewalCleanerModule{id: "notes", log: &log, err: clearErr},
+		&contextRenewalCleanerModule{id: "later", log: &log},
+	)
+
+	_, err := ClearContextForRenewal(context.Background(), set)
+	if !errors.Is(err, clearErr) || !strings.Contains(err.Error(), `module "notes"`) {
+		t.Fatalf("ClearContextForRenewal() error = %v", err)
+	}
+	want := []string{"clear:goal", "clear:notes", "restore:goal"}
+	if !reflect.DeepEqual(log, want) {
+		t.Fatalf("clear order = %#v, want %#v", log, want)
 	}
 }
 

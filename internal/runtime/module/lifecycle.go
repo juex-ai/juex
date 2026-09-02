@@ -31,6 +31,48 @@ type ThreadQuiescer interface {
 	QuiesceThread(context.Context) error
 }
 
+// ContextRenewalCleaner owns module state that must be cleared before a new
+// Context Generation is committed. Only enabled modules exist in the Set, so
+// disabled module files remain untouched.
+type ContextRenewalCleaner interface {
+	ClearContextForRenewal(context.Context) (rollback func() error, err error)
+}
+
+// ClearContextForRenewal invokes enabled Thread modules in registration order
+// and stops before the Generation boundary if any owner cannot clear its state.
+func ClearContextForRenewal(ctx context.Context, set *Set) (func() error, error) {
+	if set == nil {
+		return func() error { return nil }, nil
+	}
+	ctx = nonNilContext(ctx)
+	rollbacks := make([]func() error, 0)
+	for _, mod := range set.Modules() {
+		cleaner, ok := mod.(ContextRenewalCleaner)
+		if !ok {
+			continue
+		}
+		rollback, err := cleaner.ClearContextForRenewal(ctx)
+		if err != nil {
+			return nil, errors.Join(
+				fmt.Errorf("runtime module %q clear context state: %w", mod.ID(), err),
+				runContextRenewalRollbacks(rollbacks),
+			)
+		}
+		rollbacks = append(rollbacks, rollback)
+	}
+	return func() error { return runContextRenewalRollbacks(rollbacks) }, nil
+}
+
+func runContextRenewalRollbacks(rollbacks []func() error) error {
+	var err error
+	for index := len(rollbacks) - 1; index >= 0; index-- {
+		if rollbacks[index] != nil {
+			err = errors.Join(err, rollbacks[index]())
+		}
+	}
+	return err
+}
+
 // ContextRenewalObserver receives the post-commit boundary created by New.
 // It is intentionally notification-only: the Journal transition is already
 // durable, so observers must update derived or transient state without trying

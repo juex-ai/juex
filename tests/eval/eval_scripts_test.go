@@ -3444,7 +3444,8 @@ func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 		"    marker.write_text(json.dumps({'agent_id': 'abcd23'}), encoding='utf-8')",
 		"    thread = work / 'home' / '.juex' / 'agents' / 'abcd23' / 'threads' / '0'",
 		"    thread.mkdir(parents=True)",
-		"    (thread / 'thread.json').write_text(json.dumps({'goal': compaction.AUTHORITATIVE_GOAL, 'notes': compaction.AUTHORITATIVE_NOTES}), encoding='utf-8')",
+		"    (thread / 'goal_state.json').write_text(json.dumps(compaction.AUTHORITATIVE_GOAL), encoding='utf-8')",
+		"    (thread / 'notes.md').write_text(compaction.AUTHORITATIVE_NOTES, encoding='utf-8')",
 		"    goal = compaction.AUTHORITATIVE_GOAL",
 		"    summary = '\\n'.join([",
 		"        'Goal',",
@@ -3467,7 +3468,7 @@ func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
-func TestCompactionEvalSeedsMetadataWithJournalCommit(t *testing.T) {
+func TestCompactionEvalSeedsModuleOwnedFilesWithoutChangingThreadStores(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
@@ -3495,18 +3496,13 @@ func TestCompactionEvalSeedsMetadataWithJournalCommit(t *testing.T) {
 		"    metadata = {'updated_at': '2026-09-01T00:00:00.000Z', 'last_activity_at': '2026-09-01T00:00:00.000Z', 'revision': 3, 'journal': {'projected_seq': 1, 'projected_offset': len(journal_line.encode('utf-8'))}}",
 		"    metadata_path = thread / 'thread.json'",
 		"    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')",
+		"    before_journal = journal.read_bytes()",
+		"    before_metadata = metadata_path.read_bytes()",
 		"    compaction.seed_authoritative_state(work)",
-		"    commits = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines()]",
-		"    seeded = json.loads(metadata_path.read_text(encoding='utf-8'))",
-		"    assert len(commits) == 2 and commits[-1]['seq'] == 2, commits",
-		"    assert [fact['type'] for fact in commits[-1]['facts']] == ['goal.updated', 'notes.updated'], commits[-1]",
-		"    assert seeded['goal'] == compaction.AUTHORITATIVE_GOAL, seeded",
-		"    assert seeded['notes'] == compaction.AUTHORITATIVE_NOTES, seeded",
-		"    assert seeded['notes_updated_at'] == commits[-1]['at'], seeded",
-		"    assert seeded['updated_at'] == commits[-1]['at'] and seeded['last_activity_at'] == commits[-1]['at'], seeded",
-		"    assert seeded['revision'] == 4, seeded",
-		"    assert seeded['journal']['projected_seq'] == 2, seeded",
-		"    assert seeded['journal']['projected_offset'] == journal.stat().st_size, seeded",
+		"    assert journal.read_bytes() == before_journal",
+		"    assert metadata_path.read_bytes() == before_metadata",
+		"    assert json.loads((thread / 'goal_state.json').read_text(encoding='utf-8')) == compaction.AUTHORITATIVE_GOAL",
+		"    assert (thread / 'notes.md').read_text(encoding='utf-8') == compaction.AUTHORITATIVE_NOTES",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

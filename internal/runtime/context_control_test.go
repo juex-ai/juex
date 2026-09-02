@@ -2,13 +2,52 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
 )
+
+func TestNewContextStopsBeforeGenerationWhenModuleStateCannotClear(t *testing.T) {
+	engine, _ := newEngine(t, &mockProvider{}, false)
+	goal := workmem.NewGoalStateStore(engine.Thread.Dir, workmem.GoalStateOptions{})
+	if _, err := goal.Create("finish the migration", "module files remain authoritative"); err != nil {
+		t.Fatal(err)
+	}
+	goalBefore, err := os.ReadFile(goal.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notesPath := filepath.Join(engine.Thread.Dir, workmem.NotesFileName)
+	if err := os.Mkdir(notesPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notesPath, "block"), []byte("keep directory non-empty"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installThreadStateModulesWithStores(t, engine, goal, workmem.NewNotesStore(engine.Thread.Dir))
+
+	err = engine.NewContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `module "notes" clear context state`) {
+		t.Fatalf("NewContext() error = %v", err)
+	}
+	goalAfter, err := os.ReadFile(goal.Path)
+	if err != nil {
+		t.Fatalf("read restored Goal state: %v", err)
+	}
+	if string(goalAfter) != string(goalBefore) {
+		t.Fatalf("restored Goal state = %q, want %q", goalAfter, goalBefore)
+	}
+	projection := engine.Thread.Projection()
+	if projection.CurrentGeneration.ID != thread.InitialGeneration || projection.Counts.GenerationCount != 1 {
+		t.Fatalf("failed clear created Generation: %+v", projection.CurrentGeneration)
+	}
+}
 
 func TestContextNewToolCreatesGenerationAndEndsTurn(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{

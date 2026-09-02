@@ -1,11 +1,19 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 )
+
+func (m *GoalModule) ClearContextForRenewal(context.Context) (func() error, error) {
+	if m == nil || m.store == nil {
+		return func() error { return nil }, nil
+	}
+	return m.store.ClearWithRollback()
+}
 
 func (m *GoalModule) GoalStateStore() *workmem.GoalStateStore {
 	if m == nil {
