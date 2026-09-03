@@ -1133,7 +1133,15 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			if contextErr := cancellation.ContextError(ctx); contextErr != nil {
 				health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
 				discardErr := fmt.Errorf("provider response discarded: %w", contextErr)
-				if emitErr := e.emitProviderTurnErrored(turnID, request, candidate.Ref, discardErr); emitErr != nil {
+				if emitErr := e.emitProviderTurnErrored(
+					turnID,
+					request,
+					candidate.Ref,
+					discardErr,
+					resp.Usage,
+					totalUsage,
+					contextUsage,
+				); emitErr != nil {
 					return result, fmt.Errorf("commit discarded provider response: %w", emitErr)
 				}
 				return result, context.Canceled
@@ -1141,7 +1149,15 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
 			return result, nil
 		}
-		if emitErr := e.emitProviderTurnErrored(turnID, request, candidate.Ref, err); emitErr != nil {
+		if emitErr := e.emitProviderTurnErrored(
+			turnID,
+			request,
+			candidate.Ref,
+			err,
+			resp.Usage,
+			totalUsage,
+			contextUsage,
+		); emitErr != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			return result, &modelRequestError{
 				err:           errors.Join(err, fmt.Errorf("commit provider error: %w", emitErr)),
@@ -1209,12 +1225,23 @@ func (e *Engine) recordProviderTurnUsageLocked(
 	return totalUsage, contextUsage, nil
 }
 
-func (e *Engine) emitProviderTurnErrored(turnID string, request providerTurnRequest, model string, cause error) error {
+func (e *Engine) emitProviderTurnErrored(
+	turnID string,
+	request providerTurnRequest,
+	model string,
+	cause error,
+	usage llm.Usage,
+	totalUsage llm.Usage,
+	contextUsage *llm.ContextUsage,
+) error {
 	return e.emit(events.Event{Type: "llm.errored", TurnID: turnID, Payload: LLMErroredPayload{
 		Iter:          request.iter,
 		Purpose:       "turn",
 		Model:         model,
 		Error:         cause.Error(),
+		Usage:         usage,
+		TokenUsage:    totalUsage,
+		ContextUsage:  contextUsage,
 		EpochID:       request.epochID,
 		RequestDigest: request.requestDigest,
 	}})

@@ -144,12 +144,15 @@ type LLMRespondedPayload struct {
 }
 
 type LLMErroredPayload struct {
-	Iter          int    `json:"iter"`
-	Purpose       string `json:"purpose"`
-	Model         string `json:"model,omitempty"`
-	Error         string `json:"error"`
-	EpochID       string `json:"epoch_id"`
-	RequestDigest string `json:"request_digest"`
+	Iter          int               `json:"iter"`
+	Purpose       string            `json:"purpose"`
+	Model         string            `json:"model,omitempty"`
+	Error         string            `json:"error"`
+	Usage         llm.Usage         `json:"usage"`
+	TokenUsage    llm.Usage         `json:"token_usage"`
+	ContextUsage  *llm.ContextUsage `json:"context_usage,omitempty"`
+	EpochID       string            `json:"epoch_id"`
+	RequestDigest string            `json:"request_digest"`
 }
 
 type LLMOutputDeltaPayload struct {

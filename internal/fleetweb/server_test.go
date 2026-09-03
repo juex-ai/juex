@@ -286,6 +286,11 @@ func TestStoppedAgentReusesPreparedReadOnlyHandler(t *testing.T) {
 	if err := main.Close(); err != nil {
 		t.Fatal(err)
 	}
+	metadataPath := filepath.Join(stateDir, "threads", thread.MainID, "thread.json")
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	backend := &fakeBackend{
 		endpointErr: errors.New("agent is stopped"),
 		readOnly: fleet.ReadOnlyAgentState{
@@ -308,12 +313,31 @@ func TestStoppedAgentReusesPreparedReadOnlyHandler(t *testing.T) {
 	if response := requestList(); response.Code != http.StatusOK {
 		t.Fatalf("first stopped list status = %d body=%s", response.Code, response.Body.String())
 	}
-	metadataPath := filepath.Join(stateDir, "threads", thread.MainID, "thread.json")
 	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if response := requestList(); response.Code != http.StatusOK {
 		t.Fatalf("cached stopped list status = %d body=%s", response.Code, response.Body.String())
+	}
+	stateGeneration := time.Now().Add(time.Hour)
+	if err := os.Chtimes(stateDir, stateGeneration, stateGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if response := requestList(); response.Code != http.StatusInternalServerError {
+		t.Fatalf("new state generation list status = %d body=%s, want fresh recovery failure", response.Code, response.Body.String())
+	}
+	if err := os.WriteFile(metadataPath, metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateGeneration = stateGeneration.Add(time.Hour)
+	if err := os.Chtimes(stateDir, stateGeneration, stateGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if response := requestList(); response.Code != http.StatusOK {
+		t.Fatalf("restored state generation list status = %d body=%s", response.Code, response.Body.String())
+	}
+	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

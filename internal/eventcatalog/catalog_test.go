@@ -141,7 +141,7 @@ func TestDefaultCatalogValidatesProviderRequestProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if errored.SchemaVersion != 1 || errored.ReplayPolicy != events.ReplayRequired {
+	if errored.SchemaVersion != 2 || errored.ReplayPolicy != events.ReplayRequired {
 		t.Fatalf("llm.errored schema = v%d/%q", errored.SchemaVersion, errored.ReplayPolicy)
 	}
 	if _, err := Default().Prepare(events.Event{Type: "llm.errored", Payload: juexruntime.LLMErroredPayload{

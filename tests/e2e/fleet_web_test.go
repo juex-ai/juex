@@ -165,6 +165,19 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	if disabled.Enabled || disabled.RuntimeHealth != fleet.RuntimeStopped {
 		t.Fatalf("disabled agent = %+v", disabled)
 	}
+	var enabled fleet.AgentStatus
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/agents/"+added.Agent.ID+"/enable",
+		"",
+		http.StatusOK,
+		&enabled,
+	)
+	if !enabled.Enabled || enabled.RuntimeHealth != fleet.RuntimeStopped {
+		t.Fatalf("enabled agent = %+v", enabled)
+	}
 	var stoppedThreads struct {
 		Active []struct {
 			ThreadID string `json:"thread_id"`
@@ -206,44 +219,14 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	if err := os.WriteFile(metadataPath, metadata, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var enabled fleet.AgentStatus
-	fleetWebJSON(
-		t,
-		client,
-		http.MethodPost,
-		baseURL+"/api/agents/"+added.Agent.ID+"/enable",
-		"",
-		http.StatusOK,
-		&enabled,
-	)
-	if !enabled.Enabled || enabled.RuntimeHealth != fleet.RuntimeStopped {
-		t.Fatalf("enabled agent = %+v", enabled)
+	if stdout, stderr, err := runFleetE2E(binary, environment, "", "start", added.Agent.ID); err != nil {
+		t.Fatalf("external fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	fleetWebJSON(
-		t,
-		client,
-		http.MethodPost,
-		baseURL+"/api/agents/"+added.Agent.ID+"/start",
-		"",
-		http.StatusOK,
-		&enabled,
-	)
-	if enabled.RuntimeHealth != fleet.RuntimeHealthy {
-		t.Fatalf("restarted agent = %+v", enabled)
+	waitFleetHealth(t, binary, environment, added.Agent.ID, fleet.RuntimeHealthy)
+	if stdout, stderr, err := runFleetE2E(binary, environment, "", "stop", added.Agent.ID); err != nil {
+		t.Fatalf("external fleet stop: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	var stopped fleet.AgentStatus
-	fleetWebJSON(
-		t,
-		client,
-		http.MethodPost,
-		baseURL+"/api/agents/"+added.Agent.ID+"/stop",
-		"",
-		http.StatusOK,
-		&stopped,
-	)
-	if stopped.RuntimeHealth != fleet.RuntimeStopped {
-		t.Fatalf("stopped agent = %+v", stopped)
-	}
+	waitFleetHealth(t, binary, environment, added.Agent.ID, fleet.RuntimeStopped)
 	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

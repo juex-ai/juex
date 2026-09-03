@@ -777,6 +777,22 @@ func TestWeb_ProviderErrorUsageSurvivesRestartAndReachesAPI(t *testing.T) {
 		state, _, stateErr := fetchWebTurnState(http.DefaultClient, httpServer.URL, threadID, turn.TurnID)
 		return stateErr == nil && state == "errored"
 	})
+	var liveStatus juexruntime.StatusSnapshot
+	e2eThreadJSON(
+		t,
+		http.MethodGet,
+		httpServer.URL+"/api/threads/"+threadID+"/status",
+		"",
+		http.StatusOK,
+		&liveStatus,
+	)
+	if liveStatus.TokenUsage != wantUsage ||
+		liveStatus.ContextUsage == nil ||
+		liveStatus.ContextUsage.Model != "web-test" ||
+		liveStatus.ContextUsage.InputTokens != wantUsage.InputTokens ||
+		liveStatus.ContextUsage.OutputTokens != wantUsage.OutputTokens {
+		t.Fatalf("live failed-response Usage = %+v / %+v", liveStatus.TokenUsage, liveStatus.ContextUsage)
+	}
 	httpServer.Close()
 	server.Close()
 

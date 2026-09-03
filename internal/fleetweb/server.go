@@ -57,8 +57,9 @@ type readOnlyStateBackend interface {
 }
 
 type cachedReadOnlyAgentHandler struct {
-	state   fleet.ReadOnlyAgentState
-	handler http.Handler
+	state              fleet.ReadOnlyAgentState
+	stateDirModifiedAt time.Time
+	handler            http.Handler
 }
 
 type Server struct {
@@ -502,9 +503,13 @@ func (s *Server) serveReadOnlyAgent(
 }
 
 func (s *Server) readOnlyAgentHandler(state fleet.ReadOnlyAgentState) http.Handler {
+	stateDirInfo, stateDirErr := os.Stat(state.StateDir)
 	s.readOnlyMu.Lock()
 	defer s.readOnlyMu.Unlock()
-	if cached, ok := s.readOnlyAgents[state.ID]; ok && cached.state == state {
+	if cached, ok := s.readOnlyAgents[state.ID]; ok &&
+		stateDirErr == nil &&
+		cached.state == state &&
+		cached.stateDirModifiedAt.Equal(stateDirInfo.ModTime()) {
 		return cached.handler
 	}
 	handler := web.NewReadOnlyAPIHandler(config.Config{
@@ -513,7 +518,16 @@ func (s *Server) readOnlyAgentHandler(state fleet.ReadOnlyAgentState) http.Handl
 		AgentName:     state.Name,
 		AgentStateDir: state.StateDir,
 	})
-	s.readOnlyAgents[state.ID] = cachedReadOnlyAgentHandler{state: state, handler: handler}
+	stateDirInfo, stateDirErr = os.Stat(state.StateDir)
+	if stateDirErr != nil {
+		delete(s.readOnlyAgents, state.ID)
+		return handler
+	}
+	s.readOnlyAgents[state.ID] = cachedReadOnlyAgentHandler{
+		state:              state,
+		stateDirModifiedAt: stateDirInfo.ModTime(),
+		handler:            handler,
+	}
 	return handler
 }
 
