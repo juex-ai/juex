@@ -28,6 +28,7 @@ web-check:
 	cd frontend && pnpm test
 	cd frontend && pnpm lint
 	cd frontend && pnpm build
+	cd frontend && pnpm test:browser
 	$(MAKE) web-sync
 
 web-dev:

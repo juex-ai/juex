@@ -19,6 +19,9 @@ pnpm --dir frontend dev
 Vite 把 Fleet 与 selected-Agent API 请求代理到本地 Fleet server。生产输出
 从 `frontend/dist/` 复制到 `internal/web/dist/`，不要直接编辑 embedded output。
 
+前端验证门禁会针对生产构建运行浏览器交互测试，因此需要本地 Chrome 可执行文件。
+如果 Chrome 不在平台标准位置，请设置 `CHROME_PATH`。
+
 ## 所有权
 
 - `src/pages/` 负责 route 级 Fleet、Thread 和 Runtime view。

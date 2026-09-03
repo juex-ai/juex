@@ -20,6 +20,10 @@ Vite proxies Fleet and selected-Agent API requests to the local Fleet server.
 Production output is copied from `frontend/dist/` into `internal/web/dist/`;
 do not edit embedded output directly.
 
+The frontend verification gate runs browser interactions against the production
+build and requires a local Chrome executable. Set `CHROME_PATH` when Chrome is
+not installed in its standard platform location.
+
 ## Ownership
 
 - `src/pages/` owns route-level Fleet, Thread, and Runtime views.

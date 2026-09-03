@@ -90,11 +90,15 @@ test("Thread usage disclosure is keyboard-focusable and replaces inline row deta
   );
   const explorerSource = source("../../frontend/src/pages/ThreadExplorer.tsx");
 
-  assert.match(componentSource, /<TooltipProvider>/);
-  assert.match(componentSource, /<TooltipTrigger asChild>/);
+  assert.match(componentSource, /<Popover>/);
+  assert.match(componentSource, /<PopoverTrigger asChild>/);
   assert.match(componentSource, /<button[\s\S]*type="button"/);
   assert.match(componentSource, /aria-label=\{`\$\{view\.summaryLabel\}\. Show token usage details`\}/);
   assert.match(componentSource, /focus-visible:ring-2/);
+  assert.match(componentSource, /aria-label="Token usage details"/);
+  assert.match(componentSource, /tabIndex=\{0\}/);
+  assert.match(componentSource, /max-h-\[calc\(100svh-2rem\)\]/);
+  assert.match(componentSource, /overflow-y-auto/);
   assert.match(explorerSource, /<ThreadUsageSummary usage=\{thread\.token_usage\} \/>/);
   assert.doesNotMatch(explorerSource, /cached ·/);
   assert.doesNotMatch(explorerSource, /getThread\(/);
