@@ -41,15 +41,9 @@ func (q turnAdmissionQueue) admitUserWithRetry(ctx context.Context, message llm.
 	if phase == turnAdmissionCommand {
 		return conflictResult("Thread busy", errTurnAdmissionBusy, q.engine.PendingInputStatus())
 	}
-	if retryTurnID != "" {
-		if _, err := q.engine.RetryPendingInputsForTurn(retryTurnID); err != nil {
-			if errors.Is(err, runtime.ErrActiveTurnExists) {
-				return conflictResult("Thread busy", err, q.engine.PendingInputStatus())
-			}
-			return errorResult(fmt.Errorf("retry interrupted turn inputs: %w", err), nil)
-		}
-	}
-	return admissionResultFromPendingInput(q.engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{Message: message}))
+	return admissionResultFromPendingInput(q.engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{
+		Message: message, RetryTurnID: retryTurnID,
+	}))
 }
 
 func admissionResultFromPendingInput(result runtime.PendingInputResult, err error) TurnAdmissionResult {

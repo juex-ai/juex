@@ -21,6 +21,7 @@ import (
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -601,6 +602,45 @@ func TestTurn_DurableProviderRequestFailurePreventsProviderCall(t *testing.T) {
 	}
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
+	}
+}
+
+func TestTurn_SurfacesTerminalPendingStatePersistenceFailure(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	wantErr := errors.New("pending terminal write failed")
+	eng.PendingInputQueue = NewPendingInputQueue(eng.Thread.Dir, PendingInputQueueOptions{
+		Thread: eng.Thread,
+		WriteFile: func(path string, data []byte, fileMode, parentMode os.FileMode) error {
+			var document pendingInputDocument
+			if json.Unmarshal(data, &document) == nil && len(document.Records) == 0 {
+				return wantErr
+			}
+			return homestore.WriteFileAtomic(path, data, fileMode, parentMode)
+		},
+	})
+
+	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, wantErr) {
+		t.Fatalf("Turn() error = %v, want terminal persistence failure", err)
+	}
+	eventsList, err := eng.Thread.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := 0
+	errored := 0
+	for _, event := range eventsList {
+		switch event.Type {
+		case "turn.completed":
+			completed++
+		case "turn.errored":
+			errored++
+		}
+	}
+	if completed != 1 || errored != 0 {
+		t.Fatalf("terminal events: completed=%d errored=%d", completed, errored)
 	}
 }
 

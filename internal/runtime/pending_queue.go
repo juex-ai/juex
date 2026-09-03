@@ -67,18 +67,19 @@ type PendingInputRecoveryFacts struct {
 }
 
 type PendingInputRecord struct {
-	ID          string             `json:"id"`
-	TurnID      string             `json:"turn_id,omitempty"`
-	MessageID   string             `json:"message_id"`
-	Message     llm.Message        `json:"message"`
-	Summary     string             `json:"summary,omitempty"`
-	Origin      PendingInputOrigin `json:"origin,omitempty"`
-	State       PendingInputState  `json:"state"`
-	CreatedAt   time.Time          `json:"created_at"`
-	ExpiresAt   time.Time          `json:"expires_at,omitempty"`
-	Attempts    int                `json:"attempts"`
-	ProcessedAt *time.Time         `json:"processed_at,omitempty"`
-	LastError   string             `json:"last_error,omitempty"`
+	ID            string             `json:"id"`
+	TurnID        string             `json:"turn_id,omitempty"`
+	MessageID     string             `json:"message_id"`
+	Message       llm.Message        `json:"message"`
+	Summary       string             `json:"summary,omitempty"`
+	Origin        PendingInputOrigin `json:"origin,omitempty"`
+	State         PendingInputState  `json:"state"`
+	CreatedAt     time.Time          `json:"created_at"`
+	ExpiresAt     time.Time          `json:"expires_at,omitempty"`
+	Attempts      int                `json:"attempts"`
+	ProcessedAt   *time.Time         `json:"processed_at,omitempty"`
+	LastError     string             `json:"last_error,omitempty"`
+	LastErrorKind string             `json:"last_error_kind,omitempty"`
 }
 
 func (r PendingInputRecord) Expired(now time.Time) bool {
@@ -246,6 +247,7 @@ func (q *PendingInputQueue) promoteTurnInputLocked(record PendingInputRecord, tu
 	record.Attempts++
 	record.ProcessedAt = nil
 	record.LastError = ""
+	record.LastErrorKind = ""
 	if err := q.upsertLocked(record); err != nil {
 		return PendingInputRecord{}, err
 	}
@@ -285,6 +287,7 @@ func (q *PendingInputQueue) CommitTurnInput(id, turnID string) error {
 	}
 	record.ProcessedAt = nil
 	record.LastError = ""
+	record.LastErrorKind = ""
 	return q.upsertLocked(record)
 }
 
@@ -316,7 +319,8 @@ func (q *PendingInputQueue) Replayable(turnID string, limit int) ([]PendingInput
 	out := make([]PendingInputRecord, 0, len(q.order))
 	for _, id := range q.order {
 		record := q.records[id]
-		if !isReplayablePendingState(record.State) || record.State == PendingInputStateRetryable || record.State == PendingInputStateDeadLettered {
+		if !isReplayablePendingState(record.State) || record.State == PendingInputStateDeadLettered ||
+			(record.State == PendingInputStateRetryable && record.LastErrorKind == "runtime_restart") {
 			continue
 		}
 		if limit > 0 && len(out) >= limit {
@@ -341,6 +345,7 @@ func (q *PendingInputQueue) MarkAdmitted(ids []string, turnID string) error {
 		record.Attempts++
 		record.ProcessedAt = nil
 		record.LastError = ""
+		record.LastErrorKind = ""
 		return record, true, false
 	})
 }
@@ -360,6 +365,7 @@ func (q *PendingInputQueue) PromoteToTurnInput(ids []string, turnID string) erro
 		record.Attempts++
 		record.ProcessedAt = nil
 		record.LastError = ""
+		record.LastErrorKind = ""
 		return record, true, false
 	})
 }
@@ -411,6 +417,7 @@ func (q *PendingInputQueue) Retry(id string) error {
 		record.TurnID = ""
 		record.ProcessedAt = nil
 		record.LastError = ""
+		record.LastErrorKind = ""
 		return record, true, false
 	})
 }
@@ -419,35 +426,61 @@ func (q *PendingInputQueue) Retry(id string) error {
 // Turn to pending state in a single document replacement. Fleet uses this
 // explicit handoff before admitting its restart continuation.
 func (q *PendingInputQueue) RetryTurnInputs(turnID string) (int, error) {
+	retried, err := q.retryTurnInputs(turnID)
+	return len(retried), err
+}
+
+func (q *PendingInputQueue) retryTurnInputs(turnID string) ([]PendingInputRecord, error) {
 	if q == nil || strings.TrimSpace(turnID) == "" {
-		return 0, nil
+		return nil, nil
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := q.ensureLoadedLocked(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	records, order := q.cloneStateLocked()
-	retried := 0
+	retried := make([]PendingInputRecord, 0)
 	for _, id := range order {
 		record := records[id]
 		if record.State != PendingInputStateRetryable || record.TurnID != turnID {
 			continue
 		}
+		retried = append(retried, record)
 		record.State = PendingInputStatePending
 		record.TurnID = ""
 		record.ProcessedAt = nil
 		record.LastError = ""
+		record.LastErrorKind = ""
 		records[id] = record
-		retried++
 	}
-	if retried == 0 {
-		return 0, nil
+	if len(retried) == 0 {
+		return nil, nil
 	}
 	if err := q.persistLocked(records, order); err != nil {
-		return 0, err
+		return retried, err
 	}
 	return retried, nil
+}
+
+func (q *PendingInputQueue) restoreRetriedInputs(retried []PendingInputRecord) error {
+	if q == nil || len(retried) == 0 {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
+		return err
+	}
+	records, order := q.cloneStateLocked()
+	for _, previous := range retried {
+		current, ok := records[previous.ID]
+		if !ok || current.State != PendingInputStatePending || current.TurnID != "" {
+			return fmt.Errorf("pending input queue: cannot roll back retry for %q from state %q", previous.ID, current.State)
+		}
+		records[previous.ID] = previous
+	}
+	return q.persistLocked(records, order)
 }
 
 func (q *PendingInputQueue) Cancel(id string) error { return q.remove([]string{id}) }
@@ -500,7 +533,7 @@ func (q *PendingInputQueue) ApplyTerminalEvent(event events.Event) error {
 	if q == nil {
 		return nil
 	}
-	disposition, ids, message := pendingDispositionFromEvent(event)
+	disposition, ids, message, errorKind := pendingDispositionFromEvent(event)
 	if disposition == pendingTerminalNone || len(ids) == 0 {
 		return nil
 	}
@@ -509,7 +542,7 @@ func (q *PendingInputQueue) ApplyTerminalEvent(event events.Event) error {
 	if err := q.ensureLoadedLocked(); err != nil {
 		return err
 	}
-	return q.applyTerminalLocked(disposition, ids, message)
+	return q.applyTerminalLocked(disposition, ids, message, errorKind)
 }
 
 // ReconcileRecoveryFacts converts interrupted admission/attempt state into a
@@ -649,7 +682,7 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 			return fmt.Errorf("pending input queue: read Generation events: %w", readErr)
 		}
 		for _, event := range eventsList {
-			disposition, ids, message := pendingDispositionFromEvent(event)
+			disposition, ids, message, errorKind := pendingDispositionFromEvent(event)
 			if disposition != pendingTerminalNone {
 				for _, id := range ids {
 					q.handled[id] = struct{}{}
@@ -660,7 +693,7 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 					q.completed[id] = struct{}{}
 				}
 			}
-			if q.applyTerminalStateLocked(disposition, ids, message) {
+			if q.applyTerminalStateLocked(disposition, ids, message, errorKind) {
 				changed = true
 			}
 		}
@@ -748,6 +781,15 @@ func validatePendingInputRecord(record PendingInputRecord) error {
 	default:
 		return fmt.Errorf("state %q is not persistable", record.State)
 	}
+	if record.State == PendingInputStateRetryable {
+		switch record.LastErrorKind {
+		case "runtime_restart", "interrupted", "terminated":
+		default:
+			return fmt.Errorf("retryable input has invalid error kind %q", record.LastErrorKind)
+		}
+	} else if record.LastErrorKind != "" && record.State != PendingInputStateDeadLettered {
+		return fmt.Errorf("%s input must not retain an error kind", record.State)
+	}
 	return nil
 }
 
@@ -811,7 +853,7 @@ func (q *PendingInputQueue) synchronizePendingCountLocked(force bool) error {
 	return nil
 }
 
-func (q *PendingInputQueue) applyTerminalLocked(disposition pendingTerminalDisposition, ids []string, message string) error {
+func (q *PendingInputQueue) applyTerminalLocked(disposition pendingTerminalDisposition, ids []string, message, errorKind string) error {
 	for _, id := range ids {
 		q.handled[id] = struct{}{}
 		if record, ok := q.records[id]; ok {
@@ -823,13 +865,13 @@ func (q *PendingInputQueue) applyTerminalLocked(disposition pendingTerminalDispo
 			q.completed[id] = struct{}{}
 		}
 	}
-	if !q.applyTerminalStateLocked(disposition, ids, message) {
+	if !q.applyTerminalStateLocked(disposition, ids, message, errorKind) {
 		return nil
 	}
 	return q.persistCurrentLocked()
 }
 
-func (q *PendingInputQueue) applyTerminalStateLocked(disposition pendingTerminalDisposition, ids []string, message string) bool {
+func (q *PendingInputQueue) applyTerminalStateLocked(disposition pendingTerminalDisposition, ids []string, message, errorKind string) bool {
 	if disposition == pendingTerminalNone || len(ids) == 0 {
 		return false
 	}
@@ -845,16 +887,18 @@ func (q *PendingInputQueue) applyTerminalStateLocked(disposition pendingTerminal
 			q.order = removePendingInputID(q.order, id)
 			changed = true
 		case pendingTerminalRetryable:
-			if record.State != PendingInputStateRetryable || record.LastError != message {
+			if record.State != PendingInputStateRetryable || record.LastError != message || record.LastErrorKind != errorKind {
 				record.State = PendingInputStateRetryable
 				record.LastError = message
+				record.LastErrorKind = errorKind
 				q.records[id] = record
 				changed = true
 			}
 		case pendingTerminalDeadLettered:
-			if record.State != PendingInputStateDeadLettered || record.LastError != message {
+			if record.State != PendingInputStateDeadLettered || record.LastError != message || record.LastErrorKind != errorKind {
 				record.State = PendingInputStateDeadLettered
 				record.LastError = message
+				record.LastErrorKind = errorKind
 				q.records[id] = record
 				changed = true
 			}
@@ -866,13 +910,13 @@ func (q *PendingInputQueue) applyTerminalStateLocked(disposition pendingTerminal
 	return changed
 }
 
-func pendingDispositionFromEvent(event events.Event) (pendingTerminalDisposition, []string, string) {
+func pendingDispositionFromEvent(event events.Event) (pendingTerminalDisposition, []string, string, string) {
 	if event.Type != "turn.completed" && event.Type != "turn.errored" && event.Type != "turn.cancelled" {
-		return pendingTerminalNone, nil, ""
+		return pendingTerminalNone, nil, "", ""
 	}
 	data, err := json.Marshal(event.Payload)
 	if err != nil {
-		return pendingTerminalNone, nil, ""
+		return pendingTerminalNone, nil, "", ""
 	}
 	var payload struct {
 		InputIDs  []string `json:"input_ids"`
@@ -880,24 +924,24 @@ func pendingDispositionFromEvent(event events.Event) (pendingTerminalDisposition
 		ErrorKind string   `json:"error_kind"`
 	}
 	if json.Unmarshal(data, &payload) != nil || len(payload.InputIDs) == 0 {
-		return pendingTerminalNone, nil, ""
+		return pendingTerminalNone, nil, "", ""
 	}
 	switch event.Type {
 	case "turn.completed":
-		return pendingTerminalCompleted, payload.InputIDs, ""
+		return pendingTerminalCompleted, payload.InputIDs, "", ""
 	case "turn.cancelled":
-		return pendingTerminalCancelled, payload.InputIDs, payload.Error
+		return pendingTerminalCancelled, payload.InputIDs, payload.Error, payload.ErrorKind
 	case "turn.errored":
 		switch payload.ErrorKind {
 		case "cancelled":
-			return pendingTerminalCancelled, payload.InputIDs, payload.Error
+			return pendingTerminalCancelled, payload.InputIDs, payload.Error, payload.ErrorKind
 		case "runtime_restart", "interrupted", "terminated":
-			return pendingTerminalRetryable, payload.InputIDs, payload.Error
+			return pendingTerminalRetryable, payload.InputIDs, payload.Error, payload.ErrorKind
 		default:
-			return pendingTerminalDeadLettered, payload.InputIDs, payload.Error
+			return pendingTerminalDeadLettered, payload.InputIDs, payload.Error, payload.ErrorKind
 		}
 	}
-	return pendingTerminalNone, nil, ""
+	return pendingTerminalNone, nil, "", ""
 }
 
 func (q *PendingInputQueue) rebuildIndexesLocked() {

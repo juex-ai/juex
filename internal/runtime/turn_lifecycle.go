@@ -238,6 +238,10 @@ func (l *turnLifecycle) finishOrContinueLocked(output string) (turnFinishOutcome
 		}
 		return turnFinishOutcome{}, completionErr
 	}
-	l.engine.publishTerminalEvent(l.turnID, completion, completeCommit)
+	publishErr := l.engine.publishTerminalEvent(l.turnID, completion, completeCommit)
+	l.activeClosed = true
+	if publishErr != nil {
+		return turnFinishOutcome{activeClosed: true}, publishErr
+	}
 	return turnFinishOutcome{action: turnFinishComplete, output: output, activeClosed: true}, nil
 }

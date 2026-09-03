@@ -2485,13 +2485,14 @@ func (e *Engine) pendingTerminalPublicationStatus() (PendingInputStatus, <-chan 
 	return status, e.terminalPublishDone, e.terminalPublishing != ""
 }
 
-func (e *Engine) publishTerminalEvent(turnID string, event events.Event, completeCommit func()) {
+func (e *Engine) publishTerminalEvent(turnID string, event events.Event, completeCommit func()) error {
 	defer e.finishTerminalPublication(turnID)
 	if completeCommit != nil {
 		completeCommit()
 	}
+	var pendingErr error
 	if queue := e.currentPendingInputQueue(); queue != nil {
-		_ = queue.ApplyTerminalEvent(event)
+		pendingErr = queue.ApplyTerminalEvent(event)
 	}
 	if e.Bus != nil {
 		e.Bus.PublishCommitted(event)
@@ -2499,6 +2500,10 @@ func (e *Engine) publishTerminalEvent(turnID string, event events.Event, complet
 	if tracker := e.requestProvenanceTracker(); tracker != nil {
 		_ = tracker.ReplayEvent(event)
 	}
+	if pendingErr != nil {
+		return fmt.Errorf("settle consumed pending Inputs: %w", pendingErr)
+	}
+	return nil
 }
 
 func (e *Engine) pendingInputIDsForTurn(turnID string) ([]string, error) {
@@ -2515,8 +2520,7 @@ func (e *Engine) commitAndPublishTurnError(turnID string, cause error) error {
 		e.finishTerminalPublication(turnID)
 		return fmt.Errorf("commit turn error: %w", commitErr)
 	}
-	e.publishTerminalEvent(turnID, committed, completeCommit)
-	return nil
+	return e.publishTerminalEvent(turnID, committed, completeCommit)
 }
 
 func (e *Engine) emit(ev events.Event) error {

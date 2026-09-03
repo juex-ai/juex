@@ -192,6 +192,46 @@ func TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts(t *testing.T)
 	}
 }
 
+func TestRecoverPendingInputsReturnsNonFleetInterruptions(t *testing.T) {
+	for _, errorKind := range []string{"interrupted", "terminated"} {
+		t.Run(errorKind, func(t *testing.T) {
+			root := t.TempDir()
+			threadState := newThreadRuntimeTestThread(t, root)
+			queue := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState})
+			record, err := queue.AdmitTurnInput(
+				"turn-interrupted",
+				llm.TextMessage(llm.RoleUser, "unfinished work"),
+				false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := queue.MarkProcessed([]string{record.ID}); err != nil {
+				t.Fatal(err)
+			}
+			if err := threadState.AppendEvent(events.Normalize(events.Event{
+				Type:   "turn.errored",
+				TurnID: "turn-interrupted",
+				Payload: TurnErroredPayload{
+					Error: "stopped", ErrorKind: errorKind, InputIDs: []string{record.ID},
+				},
+			})); err != nil {
+				t.Fatal(err)
+			}
+
+			restarted := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState})
+			engine := &Engine{Thread: threadState, PendingInputQueue: restarted, Prompt: &prompt.Builder{}}
+			replayable, err := engine.RecoverPendingInputs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(replayable) != 1 || replayable[0].RecordID != record.ID {
+				t.Fatalf("replayable interrupted Inputs = %+v", replayable)
+			}
+		})
+	}
+}
+
 func TestRestoreThreadRuntimeCheckpointDoesNotReplayJournal(t *testing.T) {
 	root := t.TempDir()
 	first := newThreadRuntimeTestThread(t, root)

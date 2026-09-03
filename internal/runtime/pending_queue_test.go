@@ -422,8 +422,11 @@ func TestPendingInputQueueTerminalDispositionControlsRecovery(t *testing.T) {
 		errorKind string
 		wantState PendingInputState
 		wantCount int
+		explicit  bool
 	}{
-		{name: "runtime restart", eventType: "turn.errored", errorKind: "runtime_restart", wantState: PendingInputStateRetryable, wantCount: 1},
+		{name: "runtime restart", eventType: "turn.errored", errorKind: "runtime_restart", wantState: PendingInputStateRetryable, wantCount: 1, explicit: true},
+		{name: "interrupt", eventType: "turn.errored", errorKind: "interrupted", wantState: PendingInputStateRetryable, wantCount: 1},
+		{name: "termination", eventType: "turn.errored", errorKind: "terminated", wantState: PendingInputStateRetryable, wantCount: 1},
 		{name: "cancellation", eventType: "turn.cancelled", errorKind: "cancelled", wantCount: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -449,26 +452,31 @@ func TestPendingInputQueueTerminalDispositionControlsRecovery(t *testing.T) {
 				t.Fatalf("records = %+v, want count %d", records, tc.wantCount)
 			}
 			if tc.wantCount == 1 {
-				if current := records[record.ID]; current.State != tc.wantState || current.TurnID != "turn-1" || current.LastError != tc.name {
+				if current := records[record.ID]; current.State != tc.wantState || current.TurnID != "turn-1" || current.LastError != tc.name || current.LastErrorKind != tc.errorKind {
 					t.Fatalf("recoverable record = %+v", current)
 				}
 				replayable, err := queue.Replayable("", 0)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(replayable) != 0 {
+				if tc.explicit && len(replayable) != 0 {
 					t.Fatalf("terminally interrupted record replayed without explicit retry: %+v", replayable)
 				}
-				retried, err := queue.RetryTurnInputs("turn-1")
-				if err != nil {
-					t.Fatal(err)
+				if !tc.explicit && (len(replayable) != 1 || replayable[0].ID != record.ID) {
+					t.Fatalf("automatically recoverable records = %+v", replayable)
 				}
-				if retried != 1 {
-					t.Fatalf("retried inputs = %d, want 1", retried)
-				}
-				replayable, err = queue.Replayable("", 0)
-				if err != nil || len(replayable) != 1 || replayable[0].ID != record.ID {
-					t.Fatalf("explicitly retried records = %+v, err=%v", replayable, err)
+				if tc.explicit {
+					retried, err := queue.RetryTurnInputs("turn-1")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if retried != 1 {
+						t.Fatalf("retried inputs = %d, want 1", retried)
+					}
+					replayable, err = queue.Replayable("", 0)
+					if err != nil || len(replayable) != 1 || replayable[0].ID != record.ID {
+						t.Fatalf("explicitly retried records = %+v, err=%v", replayable, err)
+					}
 				}
 			}
 		})

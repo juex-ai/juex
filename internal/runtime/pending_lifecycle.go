@@ -37,6 +37,9 @@ type PendingInputRequest struct {
 	Message  llm.Message
 	Options  *PendingInputOptions
 	RecordID string
+	// RetryTurnID atomically transfers runtime-interrupted Inputs from one
+	// prior Turn into this system-notice continuation admission.
+	RetryTurnID string
 	// RequireStart preserves synchronous all-or-error semantics by rejecting a
 	// new input before durable acceptance when another Turn is already active.
 	RequireStart bool
@@ -76,12 +79,36 @@ func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRe
 	}
 
 	e.pendingLifecycleMu.Lock()
+	var retried []PendingInputRecord
+	var retryQueue *PendingInputQueue
 	defer func() {
+		if retryQueue != nil && len(retried) > 0 && (err != nil || result.Disposition != PendingInputStarted) {
+			if rollbackErr := retryQueue.restoreRetriedInputs(retried); rollbackErr != nil {
+				result.Retry = PendingInputRetryAfterStorage
+				err = errors.Join(err, fmt.Errorf("roll back interrupted input retry: %w", rollbackErr))
+			}
+		}
 		e.pendingLifecycleMu.Unlock()
 		err = e.publishStagedTerminalError(err)
 	}()
 	if err := ctx.Err(); err != nil {
 		return PendingInputResult{RecordID: request.RecordID}, err
+	}
+	if request.RetryTurnID != "" {
+		if request.Message.Kind != llm.MessageKindSystemNotice {
+			return PendingInputResult{}, errors.New("runtime: retry turn id requires a system notice")
+		}
+		if status := e.PendingInputStatus(); status.TurnID != "" {
+			return PendingInputResult{Retry: PendingInputRetryAfterTurn, Status: status}, ErrActiveTurnExists
+		}
+		retryQueue = e.currentPendingInputQueue()
+		if retryQueue != nil {
+			var retryErr error
+			retried, retryErr = retryQueue.retryTurnInputs(request.RetryTurnID)
+			if retryErr != nil {
+				return PendingInputResult{Retry: PendingInputRetryAfterStorage, Status: e.PendingInputStatus()}, retryErr
+			}
+		}
 	}
 	if request.RecordID == "" && request.Options != nil {
 		record, err := e.PersistPendingMessageWithOptions(ctx, request.Message, *request.Options)
@@ -249,9 +276,17 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 				Status:      e.PendingInputStatus(),
 			}, fmt.Errorf("commit discarded turn error: %w", commitErr)
 		}
-		e.publishTerminalEvent(previous.TurnID, committed, completeCommit)
+		publishErr := e.publishTerminalEvent(previous.TurnID, committed, completeCommit)
 		e.pendingLifecycleMu.Lock()
 		status = e.PendingInputStatus()
+		if publishErr != nil {
+			return PendingInputResult{
+				Disposition: PendingInputDropped,
+				Retry:       PendingInputRetryAfterStorage,
+				RecordID:    recordID,
+				Status:      status,
+			}, publishErr
+		}
 	}
 	record, ok, err := e.PersistedPendingMessage(recordID)
 	if err != nil {
@@ -278,25 +313,6 @@ func (e *Engine) pendingInputCompleted(recordID string) (bool, error) {
 		return false, nil
 	}
 	return queue.Completed(recordID)
-}
-
-// RetryPendingInputsForTurn transfers runtime-interrupted Inputs into the next
-// explicit continuation admission. It does not retry provider dead letters.
-func (e *Engine) RetryPendingInputsForTurn(turnID string) (int, error) {
-	if e == nil || turnID == "" {
-		return 0, nil
-	}
-	e.pendingLifecycleMu.Lock()
-	defer e.pendingLifecycleMu.Unlock()
-	status, _, publishing := e.pendingTerminalPublicationStatus()
-	if publishing || status.TurnID != "" {
-		return 0, ErrActiveTurnExists
-	}
-	queue := e.currentPendingInputQueue()
-	if queue == nil {
-		return 0, nil
-	}
-	return queue.RetryTurnInputs(turnID)
 }
 
 // ReservePendingInputCompaction establishes the exclusive runtime Turn used by
