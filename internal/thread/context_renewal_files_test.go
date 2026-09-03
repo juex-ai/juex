@@ -2,6 +2,7 @@ package thread
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,9 +28,7 @@ func TestStoreOpenRecoversContextRenewalFilesFromJournalGeneration(t *testing.T)
 			if err := os.WriteFile(statePath, before, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := StageContextRenewalFileClear(statePath, target.Projection().CurrentGeneration.ID); err != nil {
-				t.Fatal(err)
-			}
+			stageContextRenewalCrashFixture(t, statePath, target.Projection().CurrentGeneration.ID)
 			if test.commit {
 				if _, err := target.BeginNewGeneration(); err != nil {
 					t.Fatal(err)
@@ -79,9 +78,7 @@ func TestRecoverLayoutRestoresInactiveWorkerContextRenewalFiles(t *testing.T) {
 	if err := os.WriteFile(statePath, []byte("restore me"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StageContextRenewalFileClear(statePath, worker.Projection().CurrentGeneration.ID); err != nil {
-		t.Fatal(err)
-	}
+	stageContextRenewalCrashFixture(t, statePath, worker.Projection().CurrentGeneration.ID)
 	if err := worker.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -115,9 +112,7 @@ func TestRecoverLayoutUsesJournalGenerationForContextRenewalFiles(t *testing.T) 
 	if err := os.WriteFile(statePath, []byte("do not restore"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StageContextRenewalFileClear(statePath, worker.Projection().CurrentGeneration.ID); err != nil {
-		t.Fatal(err)
-	}
+	stageContextRenewalCrashFixture(t, statePath, worker.Projection().CurrentGeneration.ID)
 	if _, err := worker.BeginNewGeneration(); err != nil {
 		t.Fatal(err)
 	}
@@ -187,9 +182,7 @@ func TestDeleteArchivedUsesJournalGenerationForContextRenewalFiles(t *testing.T)
 	if err := os.WriteFile(statePath, []byte("do not restore"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StageContextRenewalFileClear(statePath, before.CurrentGeneration.ID); err != nil {
-		t.Fatal(err)
-	}
+	stageContextRenewalCrashFixture(t, statePath, before.CurrentGeneration.ID)
 	if _, err := worker.BeginNewGeneration(); err != nil {
 		t.Fatal(err)
 	}
@@ -235,5 +228,81 @@ func TestDeleteArchivedUsesJournalGenerationForContextRenewalFiles(t *testing.T)
 	}
 	if len(backups) != 0 {
 		t.Fatalf("delete recovery retained committed backups: %v", backups)
+	}
+}
+
+func TestStoreOpenDoesNotRecoverActiveContextRenewal(t *testing.T) {
+	store := NewStore(t.TempDir())
+	target, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(target.Dir, "module.state")
+	if err := os.WriteFile(statePath, []byte("old state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clear, err := StageContextRenewalFileClear(statePath, target.Projection().CurrentGeneration.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if opened, err := store.OpenActive(MainID); !errors.Is(err, errContextRenewalInProgress) {
+		if opened != nil {
+			_ = opened.Close()
+		}
+		t.Fatalf("OpenActive() error = %v, want Context renewal in progress", err)
+	}
+	if _, err := os.Lstat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("concurrent open restored staged state: %v", err)
+	}
+	if _, err := target.BeginNewGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	if err := clear.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.OpenActive(MainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("committed renewal retained old state: %v", err)
+	}
+}
+
+func TestStageContextRenewalFileClearRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "target")
+	if err := os.WriteFile(targetPath, []byte("state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "module.state")
+	if err := os.Symlink(targetPath, statePath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := StageContextRenewalFileClear(statePath, InitialGeneration); err == nil {
+		t.Fatal("StageContextRenewalFileClear() accepted a symlink")
+	}
+	info, err := os.Lstat(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("state path mode = %v, want symlink", info.Mode())
+	}
+	if _, err := os.Stat(contextRenewalBackupPath(statePath, InitialGeneration)); !os.IsNotExist(err) {
+		t.Fatalf("symlink staging created a backup: %v", err)
+	}
+}
+
+func stageContextRenewalCrashFixture(t *testing.T, path, generationID string) {
+	t.Helper()
+	if err := os.Rename(path, contextRenewalBackupPath(path, generationID)); err != nil {
+		t.Fatal(err)
 	}
 }

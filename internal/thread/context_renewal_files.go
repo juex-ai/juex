@@ -6,12 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juex-ai/juex/internal/homestore"
 )
 
 const contextRenewalBackupMarker = ".context-renewal-"
+
+var (
+	errContextRenewalInProgress = errors.New("thread: Context renewal is in progress")
+	contextRenewalTransactions  = struct {
+		sync.Mutex
+		active map[string]int
+	}{active: make(map[string]int)}
+)
 
 // ContextRenewalFileClear is a durable staged file removal associated with a
 // Context Generation. The Thread layer owns only the generic file transaction;
@@ -31,10 +40,17 @@ func StageContextRenewalFileClear(path, generationID string) (ContextRenewalFile
 	if strings.TrimSpace(path) == "" || filepath.Base(path) == "." {
 		return ContextRenewalFileClear{}, fmt.Errorf("thread: Context renewal state path is required")
 	}
-	if err := recoverContextRenewalFile(path, generationID); err != nil {
+	release, err := beginContextRenewalFileClear(path, generationID)
+	if err != nil {
 		return ContextRenewalFileClear{}, err
 	}
-	info, err := os.Stat(path)
+	keepActive := false
+	defer func() {
+		if !keepActive {
+			release()
+		}
+	}()
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return noOpContextRenewalFileClear(), nil
 	}
@@ -60,10 +76,8 @@ func StageContextRenewalFileClear(path, generationID string) (ContextRenewalFile
 		}
 		return ContextRenewalFileClear{}, errors.Join(err, rollbackErr)
 	}
-	return ContextRenewalFileClear{
-		Finalize: func() error { return removeContextRenewalBackup(backupPath) },
-		Rollback: func() error { return restoreContextRenewalBackup(path, backupPath) },
-	}, nil
+	keepActive = true
+	return contextRenewalFileClearWithRelease(path, backupPath, release), nil
 }
 
 func noOpContextRenewalFileClear() ContextRenewalFileClear {
@@ -73,11 +87,55 @@ func noOpContextRenewalFileClear() ContextRenewalFileClear {
 	}
 }
 
+func contextRenewalFileClearWithRelease(path, backupPath string, release func()) ContextRenewalFileClear {
+	return ContextRenewalFileClear{
+		Finalize: func() error {
+			err := removeContextRenewalBackup(backupPath)
+			release()
+			return err
+		},
+		Rollback: func() error {
+			err := restoreContextRenewalBackup(path, backupPath)
+			release()
+			return err
+		},
+	}
+}
+
+func beginContextRenewalFileClear(path, generationID string) (func(), error) {
+	threadDir := filepath.Clean(filepath.Dir(path))
+	contextRenewalTransactions.Lock()
+	defer contextRenewalTransactions.Unlock()
+	if err := recoverContextRenewalFile(path, generationID); err != nil {
+		return nil, err
+	}
+	contextRenewalTransactions.active[threadDir]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			contextRenewalTransactions.Lock()
+			defer contextRenewalTransactions.Unlock()
+			remaining := contextRenewalTransactions.active[threadDir] - 1
+			if remaining > 0 {
+				contextRenewalTransactions.active[threadDir] = remaining
+			} else {
+				delete(contextRenewalTransactions.active, threadDir)
+			}
+		})
+	}, nil
+}
+
 // recoverContextRenewalFiles resolves every module-staged file in threadDir.
 // Matching the current Generation means the boundary did not commit and the
 // backup is restored; a different Generation means it committed and the
 // backup is discarded.
 func recoverContextRenewalFiles(threadDir, currentGenerationID string) error {
+	threadDir = filepath.Clean(threadDir)
+	contextRenewalTransactions.Lock()
+	defer contextRenewalTransactions.Unlock()
+	if contextRenewalTransactions.active[threadDir] > 0 {
+		return errContextRenewalInProgress
+	}
 	if _, err := parseGenerationID(currentGenerationID); err != nil {
 		return err
 	}

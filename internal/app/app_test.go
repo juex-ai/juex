@@ -386,11 +386,10 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 				t.Fatal(err)
 			}
 			generationID := first.Thread.Projection().CurrentGeneration.ID
-			if _, _, err := goal.StageClearForContextRenewal(generationID); err != nil {
-				t.Fatal(err)
-			}
-			if _, _, err := notes.StageClearForContextRenewal(generationID); err != nil {
-				t.Fatal(err)
+			for _, path := range []string{goal.Path, filepath.Join(first.Thread.Dir, workmem.NotesFileName)} {
+				if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if test.committed {
 				if _, err := first.Thread.BeginNewGeneration(); err != nil {

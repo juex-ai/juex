@@ -235,11 +235,10 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	generationID := worker.Projection().CurrentGeneration.ID
-	if _, _, err := goal.StageClearForContextRenewal(generationID); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := notes.StageClearForContextRenewal(generationID); err != nil {
-		t.Fatal(err)
+	for _, path := range []string{goal.Path, filepath.Join(worker.Dir, workmem.NotesFileName)} {
+		if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := worker.Close(); err != nil {
 		t.Fatal(err)
