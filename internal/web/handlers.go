@@ -69,6 +69,10 @@ func (s *Server) handleListThreads(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listThreads(w http.ResponseWriter) {
+	if s.threadIndexErr != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", s.threadIndexErr.Error())
+		return
+	}
 	store := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir)
 	entries, err := store.List()
 	if err != nil {

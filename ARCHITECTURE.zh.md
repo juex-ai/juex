@@ -119,9 +119,11 @@ CLI / Web / Observation
 
 `runtime.Engine.ReceivePendingInput` 是唯一 Framework admission 入口，负责
 start-or-queue 决策；更低层的 queue mutation 保留在 runtime 内部。Input 先持久
-接受，再进入 admission。Runtime 先提交消费它的 Turn terminal Generation record，
-再删除 completed、cancelled 或 expired Input 状态。Recovery 在该 crash window
-中通过 `input_id` 关联记录，避免重复执行；pending 文档不复制长期历史。
+接受，再进入 admission。Input 一旦 admission，Runtime 先提交消费它的 Turn
+terminal Generation record，再删除其状态。若 Input 在 admission 前过期，或仍处于
+pending 时被显式取消或丢弃，则直接离开当前状态。Recovery 在 admission 后的
+crash window 中通过 `input_id` 关联记录，避免重复执行；pending 文档不复制长期
+历史。
 
 持久 Generation fact 遵循 commit-before-publish：fact 先 commit，再发布给
 status、transcript 或 subscriber。Thread metadata 先于 Agent index refresh

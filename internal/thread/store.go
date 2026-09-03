@@ -245,9 +245,12 @@ func (s *Store) openLocked(dir, id string) (*Thread, error) {
 func (s *Store) List() ([]IndexEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	index, err := s.loadOrRebuildIndexLocked()
+	index, err := readIndexFile(s.IndexPath())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("thread: read Agent index: %w", err)
+	}
+	if index.Version != IndexVersion || !validIndexLifecycle(index) || !indexIsSorted(index) {
+		return nil, fmt.Errorf("%w: invalid Agent Thread index", ErrInvalidMetadata)
 	}
 	return append([]IndexEntry(nil), index.Threads...), nil
 }
@@ -344,6 +347,12 @@ func validIndexLifecycle(index Index) bool {
 		}
 	}
 	return true
+}
+
+func indexIsSorted(index Index) bool {
+	entries := append([]IndexEntry(nil), index.Threads...)
+	sortIndexEntries(entries)
+	return reflect.DeepEqual(entries, index.Threads)
 }
 
 func (s *Store) rebuildIndexLocked() (Index, error) {

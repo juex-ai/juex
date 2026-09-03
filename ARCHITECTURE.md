@@ -129,10 +129,12 @@ CLI / Web / Observation
 `runtime.Engine.ReceivePendingInput` is the single Framework admission seam.
 It owns the start-or-queue decision; lower-level queue mutation stays private
 to runtime. Accepted Inputs are persisted before admission. Runtime commits the
-consuming Turn's terminal Generation record before removing completed,
-cancelled, or expired Input state. Recovery correlates `input_id` across that
-crash window so a completed Input is not executed again; long-term history is
-not duplicated in the pending document.
+consuming Turn's terminal Generation record before removing Input state once it
+has been admitted. Inputs that expire before admission, or are explicitly
+cancelled or discarded while pending, leave current state directly. Recovery
+correlates `input_id` across the post-admission crash window so a completed
+Input is not executed again; long-term history is not duplicated in the
+pending document.
 
 Durable Generation facts follow commit-before-publish: a fact is committed
 before it is published to status, transcript, or subscribers. Thread metadata
