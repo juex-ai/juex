@@ -32,7 +32,16 @@ type liveSendResult struct {
 func sendAndWait(t *testing.T, bin, home, work string, args ...string) liveSendResult {
 	t.Helper()
 	commandArgs := append([]string{"send", "--wait", "--json"}, args...)
-	stdout, stderr, err := runAgentStateCommand(bin, home, work, commandArgs...)
+	deadline := time.Now().Add(5 * time.Second)
+	var stdout, stderr string
+	var err error
+	for {
+		stdout, stderr, err = runAgentStateCommand(bin, home, work, commandArgs...)
+		if err == nil || !strings.Contains(stderr, "HTTP 409") || !strings.Contains(stderr, "Thread busy") || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("juex %s: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(commandArgs, " "), err, stdout, stderr)
 	}
