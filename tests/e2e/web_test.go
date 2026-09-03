@@ -180,6 +180,44 @@ func TestWeb_ThreadListReadsOnlyAgentIndex(t *testing.T) {
 	}
 }
 
+func TestWeb_ThreadListRetriesFailedStartupIndexRecovery(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	store := thread.NewStore(cfg.RuntimePaths().StateDir)
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(store.ThreadsDir(), thread.MainID, "thread.json")
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := web.NewServer(web.Options{Cfg: cfg, Provider: &webProvider{}})
+	handler := server.Handler()
+	t.Cleanup(server.Close)
+	if err := os.WriteFile(metadataPath, metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(handler)
+	defer httpServer.Close()
+
+	var listed struct {
+		Active []thread.IndexEntry `json:"active_threads"`
+	}
+	e2eThreadJSON(t, http.MethodGet, httpServer.URL+"/api/threads", "", http.StatusOK, &listed)
+	if len(listed.Active) != 1 || listed.Active[0].ThreadID != thread.MainID {
+		t.Fatalf("recovered Thread list = %+v", listed.Active)
+	}
+}
+
 func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}

@@ -72,6 +72,7 @@ type Server struct {
 	agentRuntime     app.AgentRuntimeResolution
 	agentRuntimeErr  error
 	threadIndexOnce  sync.Once
+	threadIndexMu    sync.Mutex
 	threadIndexErr   error
 
 	endpointMu       sync.RWMutex
@@ -159,6 +160,21 @@ func (s *Server) prepareThreadIndex() {
 			s.threadIndexErr = thread.NewStore(stateDir).RecoverLayout()
 		}
 	})
+}
+
+func (s *Server) ensureThreadIndexReady() error {
+	s.prepareThreadIndex()
+	s.threadIndexMu.Lock()
+	defer s.threadIndexMu.Unlock()
+	if s.threadIndexErr == nil {
+		return nil
+	}
+	stateDir := s.opts.Cfg.RuntimePaths().StateDir
+	if stateDir == "" {
+		return s.threadIndexErr
+	}
+	s.threadIndexErr = thread.NewStore(stateDir).RecoverLayout()
+	return s.threadIndexErr
 }
 
 func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
