@@ -187,6 +187,9 @@ func (s *Store) RollbackWorkerCreation(id string) error {
 func (s *Store) RecoverLayout() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.removeInterruptedCreationsLocked(); err != nil {
+		return err
+	}
 	for _, root := range []string{s.ThreadsDir(), s.ArchiveDir()} {
 		entries, err := os.ReadDir(root)
 		if err != nil {
@@ -222,6 +225,29 @@ func (s *Store) RecoverLayout() error {
 		return err
 	}
 	return s.finishTrashOperationsLocked()
+}
+
+func (s *Store) removeInterruptedCreationsLocked() error {
+	threadsDir := s.ThreadsDir()
+	entries, err := os.ReadDir(threadsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !isInterruptedCreationDir(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(threadsDir, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("thread: remove interrupted creation %s: %w", entry.Name(), err)
+		}
+	}
+	// Sync even when a previous recovery already removed the entries but failed
+	// to sync the directory, so a retry closes the durability gap.
+	return s.syncDirectory(threadsDir)
 }
 
 func (s *Store) finishTrashOperationsLocked() error {

@@ -17,7 +17,10 @@ import (
 	"github.com/juex-ai/juex/internal/homestore"
 )
 
-const indexFile = "threads.index.json"
+const (
+	indexFile             = "threads.index.json"
+	creationDirNameMarker = ".creating-"
+)
 
 type Store struct {
 	mu              *sync.Mutex
@@ -177,7 +180,7 @@ func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 	if err := os.MkdirAll(threadsDir, 0o755); err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp(threadsDir, "."+id+".creating-")
+	dir, err := os.MkdirTemp(threadsDir, creationDirPattern(id))
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +254,18 @@ func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 		return nil, err
 	}
 	return created, nil
+}
+
+func creationDirPattern(id string) string {
+	return "." + id + creationDirNameMarker
+}
+
+func isInterruptedCreationDir(name string) bool {
+	if !strings.HasPrefix(name, ".") {
+		return false
+	}
+	id, suffix, ok := strings.Cut(strings.TrimPrefix(name, "."), creationDirNameMarker)
+	return ok && suffix != "" && ValidID(id)
 }
 
 func (s *Store) openPublishedThreadLocked(dir, id string) (*Thread, error) {

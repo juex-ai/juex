@@ -256,6 +256,70 @@ func TestRecoverLayoutFinishesInterruptedTrashOperation(t *testing.T) {
 	}
 }
 
+func TestRecoverLayoutRemovesInterruptedCreationDirectories(t *testing.T) {
+	stateDir := t.TempDir()
+	store := NewStore(stateDir)
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{MainID, "000000"} {
+		dir, err := os.MkdirTemp(store.ThreadsDir(), creationDirPattern(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, journalFile), []byte("complete but unpublished\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unrelated := filepath.Join(store.ThreadsDir(), ".keep")
+	if err := os.Mkdir(unrelated, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewStore(stateDir)
+	injected := errors.New("injected recovery sync failure")
+	threadsDirSyncs := 0
+	restarted.syncDir = func(path string) error {
+		if path == restarted.ThreadsDir() {
+			threadsDirSyncs++
+			if threadsDirSyncs == 1 {
+				return injected
+			}
+		}
+		return nil
+	}
+	if err := restarted.RecoverLayout(); !errors.Is(err, injected) {
+		t.Fatalf("first recovery error = %v, want injected sync failure", err)
+	}
+	if err := restarted.RecoverLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if threadsDirSyncs != 2 {
+		t.Fatalf("active Threads directory syncs = %d, want retry after failure", threadsDirSyncs)
+	}
+	entries, err := os.ReadDir(restarted.ThreadsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if isInterruptedCreationDir(entry.Name()) {
+			t.Fatalf("interrupted creation remains after restart recovery: %s", entry.Name())
+		}
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("unrelated hidden directory was removed: %v", err)
+	}
+	reopened, err := restarted.OpenActive(MainID)
+	if err != nil {
+		t.Fatalf("published Main was damaged by recovery: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+}
+
 func TestRecoverLayoutUsesMetadataWithoutOpeningJournal(t *testing.T) {
 	store := NewStore(t.TempDir())
 	main, err := store.EnsureMain()
