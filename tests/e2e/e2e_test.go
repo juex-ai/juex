@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ import (
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
+	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
@@ -1208,6 +1210,147 @@ func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {
 	conversation := withoutWindowRecitation(provider.history)
 	if len(conversation) != 1 || conversation[0].Kind != llm.MessageKindObservation {
 		t.Fatalf("startup notification history = %+v", provider.history)
+	}
+}
+
+func TestObservableRecoveryRedeliveryStaysIdempotentDuringLiveTurn(t *testing.T) {
+	const observableID = "schedule-recovery-e2e"
+	work := t.TempDir()
+	provider := newPendingWebProvider()
+	releaseOnce := sync.Once{}
+	release := func() { releaseOnce.Do(func() { close(provider.release) }) }
+	cfg := config.Config{
+		ProviderID:       "openai",
+		ProviderProtocol: "openai/chat",
+		APIKey:           "x",
+		Model:            "m",
+		WorkDir:          work,
+	}
+	runtimeApp, err := app.New(app.Options{Config: cfg, Provider: provider, WorkDir: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var managers []*observable.Manager
+	t.Cleanup(func() {
+		release()
+		for _, manager := range managers {
+			if err := manager.Close(); err != nil {
+				t.Errorf("close observable manager: %v", err)
+			}
+		}
+		if err := runtimeApp.CloseAndWait(); err != nil {
+			t.Errorf("close App: %v", err)
+		}
+	})
+
+	adapterRoot := t.TempDir()
+	configPath := filepath.Join(adapterRoot, "observables.json")
+	stateDir := filepath.Join(adapterRoot, "state")
+	spec, err := observable.NewScheduleSpec(observableID, "", observable.ScheduleSourceSpec{
+		Interval:    &observable.IntervalSchedule{EverySeconds: 3600},
+		Observation: observable.ScheduleObservationSpec{Content: "recover the same observation"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := observable.SaveConfig(configPath, observable.FileConfig{Observables: []observable.Spec{spec}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	store := observable.NewStore(stateDir, observable.StoreOptions{})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:           observableID,
+		LastEvaluatedAt:        now,
+		LastEmittedScheduledAt: now.Add(-time.Minute),
+		UpdatedAt:              now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.RecordObservation(observable.ObservationRecord{
+		ObservableID:  observableID,
+		SourceEventID: "schedule:" + observableID + ":2026-09-04T00:00:00Z",
+		Kind:          "reminder",
+		Severity:      "info",
+		WindowStart:   now.Add(-time.Minute),
+		WindowEnd:     now.Add(-time.Minute),
+		Content:       "recover the same observation",
+		State:         observable.ObservationStateRecorded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type deliveryResult struct {
+		outcome observable.DeliveryOutcome
+		err     error
+	}
+	outcomes := make(chan deliveryResult, 2)
+	deliver := func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+		outcome, deliverErr := runtimeApp.DeliverObservation(ctx, record)
+		outcomes <- deliveryResult{outcome: outcome, err: deliverErr}
+		return outcome, deliverErr
+	}
+	newManager := func() *observable.Manager {
+		manager, managerErr := observable.NewManager(observable.ManagerOptions{
+			ConfigPath:    configPath,
+			StateDir:      stateDir,
+			WorkDir:       work,
+			AgentStateDir: cfg.RuntimePaths().StateDir,
+			MediaDir:      cfg.RuntimePaths().MediaDir,
+			Deliver:       deliver,
+		})
+		if managerErr != nil {
+			t.Fatal(managerErr)
+		}
+		managers = append(managers, manager)
+		return manager
+	}
+	firstManager := newManager()
+	secondManager := newManager()
+	if err := firstManager.Start(context.Background(), observableID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first recovered observation did not reach Provider")
+	}
+	if err := secondManager.Start(context.Background(), observableID); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case result := <-outcomes:
+		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered ||
+			result.outcome.PendingInputID == "" {
+			t.Fatalf("recovered duplicate outcome = %+v error=%v", result.outcome, result.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovered duplicate did not finish while the original Turn was active")
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		records, recordsErr := secondManager.Observations(observable.ObservationFilter{ObservableID: observableID})
+		return recordsErr == nil && len(records) == 1 && records[0].ID == stored.ID &&
+			records[0].State == observable.ObservationStateDelivered
+	})
+	if calls := provider.callCount(); calls != 1 {
+		t.Fatalf("Provider calls during recovered duplicate = %d, want 1", calls)
+	}
+
+	release()
+	select {
+	case result := <-outcomes:
+		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered {
+			t.Fatalf("original delivery outcome = %+v error=%v", result.outcome, result.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("original delivery did not finish")
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		return runtimeApp.PendingInputStatus().TurnID == ""
+	})
+	if calls := provider.callCount(); calls != 1 {
+		t.Fatalf("Provider calls after recovered duplicate = %d, want 1", calls)
 	}
 }
 

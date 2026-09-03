@@ -1091,6 +1091,12 @@ func (p *pendingWebProvider) secondHistory() []llm.Message {
 	return append([]llm.Message(nil), p.histories[1]...)
 }
 
+func (p *pendingWebProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
 func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 	work := t.TempDir()
 	prov := newPendingWebProvider()
