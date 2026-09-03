@@ -81,6 +81,10 @@ func Load(dir string) (*Thread, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := recoverContextRenewalFiles(dir, state.Projection.CurrentGeneration.ID); err != nil {
+		_ = journal.Close()
+		return nil, fmt.Errorf("thread: recover Context renewal files for %s: %w", id, err)
+	}
 	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
 		_ = journal.Close()
 		return nil, err
@@ -110,6 +114,9 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 	}
 	if closeErr != nil {
 		return Info{}, nil, closeErr
+	}
+	if err := recoverContextRenewalFiles(dir, state.Projection.CurrentGeneration.ID); err != nil {
+		return Info{}, nil, fmt.Errorf("thread: recover Context renewal files for %s: %w", id, err)
 	}
 	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
 		return Info{}, nil, err

@@ -114,6 +114,9 @@ func (s *Store) DeleteArchived(id string) error {
 		return os.ErrNotExist
 	}
 	source := filepath.Join(s.ArchiveDir(), id)
+	if err := recoverContextRenewalFilesFromJournal(source, id, s.now); err != nil {
+		return fmt.Errorf("thread: recover Context renewal files before delete %s: %w", id, err)
+	}
 	trash := filepath.Join(s.TrashDir(), id+"."+newRecordID("delete_"))
 	if err := durableRename(source, trash); err != nil {
 		return err
@@ -206,15 +209,18 @@ func (s *Store) RecoverLayout() error {
 			}
 			archivedNamespace := root == s.ArchiveDir()
 			shouldArchive := projection.RetentionState == RetentionArchived
-			if shouldArchive == archivedNamespace {
-				continue
+			if shouldArchive != archivedNamespace {
+				destinationRoot := s.ThreadsDir()
+				if shouldArchive {
+					destinationRoot = s.ArchiveDir()
+				}
+				path = filepath.Join(destinationRoot, entry.Name())
+				if err := durableRename(filepath.Join(root, entry.Name()), path); err != nil {
+					return err
+				}
 			}
-			destinationRoot := s.ThreadsDir()
-			if shouldArchive {
-				destinationRoot = s.ArchiveDir()
-			}
-			if err := durableRename(path, filepath.Join(destinationRoot, entry.Name())); err != nil {
-				return err
+			if err := recoverContextRenewalFilesFromJournal(path, entry.Name(), s.now); err != nil {
+				return fmt.Errorf("thread: recover Context renewal files for %s: %w", entry.Name(), err)
 			}
 		}
 	}

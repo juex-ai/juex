@@ -398,12 +398,6 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 		createdApp = nil
 	}()
-	if err := workmem.RecoverContextRenewalFiles(
-		threadState.Dir,
-		threadState.Projection().CurrentGeneration.ID,
-	); err != nil {
-		return nil, fmt.Errorf("app: recover Context renewal module state: %w", err)
-	}
 	eventCatalog := eventcatalog.Default()
 	eventSink = events.NewDurableSink(threadState)
 	eventSink.SetCatalog(eventCatalog)

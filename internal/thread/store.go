@@ -226,6 +226,10 @@ func (s *Store) openLocked(dir, id string) (*Thread, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := recoverContextRenewalFiles(dir, state.Projection.CurrentGeneration.ID); err != nil {
+		_ = journal.Close()
+		return nil, fmt.Errorf("thread: recover Context renewal files for %s: %w", id, err)
+	}
 	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
 		_ = journal.Close()
 		return nil, err

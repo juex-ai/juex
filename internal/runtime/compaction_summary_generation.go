@@ -520,8 +520,6 @@ func missingCompactionNotes(section string, items []string) []string {
 func normalizedCompactionNextStepText(line string) string {
 	line = strings.TrimSpace(line)
 	line = strings.TrimSpace(strings.TrimPrefix(line, "- [ ]"))
-	line = strings.TrimSpace(strings.TrimPrefix(line, "- [x]"))
-	line = strings.TrimSpace(strings.TrimPrefix(line, "- [X]"))
 	line = strings.TrimSpace(strings.TrimPrefix(line, "- "))
 	line = strings.TrimSpace(strings.TrimPrefix(line, "* "))
 	return strings.Join(strings.Fields(strings.ToLower(line)), " ")
