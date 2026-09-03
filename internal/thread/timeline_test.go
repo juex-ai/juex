@@ -165,6 +165,7 @@ func TestTimelineBoundsNonDisplayScanAndResumesFromCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = closeCapturedGenerations(generations) }()
 	first, err := loadTimelinePageWithScanLimit(main.ID, generations, latest, "", 1, 2)
 	if err != nil {
 		t.Fatal(err)

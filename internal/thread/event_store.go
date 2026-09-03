@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -249,24 +248,50 @@ func (s *EventStore) GenerationJournalPaths(generations []GenerationProjection) 
 }
 
 func (s *EventStore) captureGenerations(generations []GenerationProjection) ([]capturedGeneration, error) {
-	paths := s.GenerationJournalPaths(generations)
+	return captureGenerationHandles(s.threadDir, generations, s.currentID, s.size)
+}
+
+func captureGenerationHandles(
+	threadDir string,
+	generations []GenerationProjection,
+	currentID string,
+	currentEnd int64,
+) ([]capturedGeneration, error) {
+	paths := generationJournalPaths(threadDir, generations)
 	captured := make([]capturedGeneration, len(paths))
 	for index, path := range paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, wrapGenerationError(generations[index].ID, err)
+		end := currentEnd
+		if generations[index].ID != currentID {
+			info, err := os.Stat(path)
+			if err != nil {
+				_ = closeCapturedGenerations(captured[:index])
+				return nil, wrapGenerationError(generations[index].ID, err)
+			}
+			end = info.Size()
 		}
-		end := info.Size()
-		if generations[index].ID == s.currentID {
-			end = s.size
+		file, err := jsonl.OpenSnapshot(path, end)
+		if err != nil {
+			_ = closeCapturedGenerations(captured[:index])
+			return nil, wrapGenerationError(generations[index].ID, err)
 		}
 		captured[index] = capturedGeneration{
 			GenerationProjection: generations[index],
 			Path:                 path,
 			End:                  end,
+			file:                 file,
 		}
 	}
 	return captured, nil
+}
+
+func closeCapturedGenerations(generations []capturedGeneration) error {
+	var result error
+	for index := range generations {
+		if generations[index].file != nil {
+			result = errors.Join(result, generations[index].file.Close())
+		}
+	}
+	return result
 }
 
 func (s *EventStore) generationPath(generationID string) string {
@@ -315,16 +340,14 @@ func generationJournalPaths(threadDir string, generations []GenerationProjection
 }
 
 func readGenerationPrefix(generation capturedGeneration) ([]byte, error) {
-	file, err := os.Open(generation.Path)
-	if err != nil {
-		return nil, wrapGenerationError(generation.ID, err)
-	}
-	defer file.Close()
 	if generation.End < 0 {
 		return nil, fmt.Errorf("%w in %s: invalid captured offset %d", ErrCorruptJournal, generation.ID, generation.End)
 	}
-	data := make([]byte, generation.End)
-	if _, err := io.ReadFull(file, data); err != nil {
+	if generation.file == nil {
+		return nil, fmt.Errorf("thread: Generation snapshot %s is closed", generation.ID)
+	}
+	data, err := generation.file.ReadBytesTo(generation.End)
+	if err != nil {
 		return nil, wrapGenerationError(generation.ID, err)
 	}
 	return data, nil
@@ -336,11 +359,10 @@ func visitCapturedGeneration(
 	wantSeq *uint64,
 	visit func(Commit),
 ) error {
-	file, err := jsonl.Open(generation.Path)
-	if err != nil {
-		return wrapGenerationError(generation.ID, err)
+	if generation.file == nil {
+		return fmt.Errorf("thread: Generation snapshot %s is closed", generation.ID)
 	}
-	_, readErr := file.ReadForwardTo(0, generation.End, func(record jsonl.Record) error {
+	_, err := generation.file.ReadForwardTo(0, generation.End, func(record jsonl.Record) error {
 		commit, err := decodeGenerationCommit(generation.ID, record)
 		if err != nil {
 			return err
@@ -355,7 +377,7 @@ func visitCapturedGeneration(
 		*wantSeq = *wantSeq + 1
 		return nil
 	})
-	return errors.Join(wrapGenerationError(generation.ID, readErr), file.Close())
+	return wrapGenerationError(generation.ID, err)
 }
 
 func readGenerationReverse(
@@ -365,19 +387,17 @@ func readGenerationReverse(
 	limit int,
 	expectedBefore uint64,
 ) ([]scannedCommit, int64, uint64, error) {
-	file, err := jsonl.Open(generation.Path)
-	if err != nil {
-		return nil, position, expectedBefore, wrapGenerationError(generation.ID, err)
+	if generation.file == nil {
+		return nil, position, expectedBefore, fmt.Errorf("thread: Generation snapshot %s is closed", generation.ID)
 	}
 	if position < 0 {
-		position = file.Size()
+		position = generation.file.Size()
 	}
 	if position == 0 {
-		return nil, 0, expectedBefore, file.Close()
+		return nil, 0, expectedBefore, nil
 	}
-	batch, readErr := file.ReadReverse(position, limit)
-	closeErr := file.Close()
-	if err := errors.Join(readErr, closeErr); err != nil {
+	batch, err := generation.file.ReadReverse(position, limit)
+	if err != nil {
 		return nil, position, expectedBefore, wrapGenerationError(generation.ID, err)
 	}
 	if len(batch.Records) == 0 {

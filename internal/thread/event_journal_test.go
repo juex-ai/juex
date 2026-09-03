@@ -62,3 +62,45 @@ func TestEventStoreSnapshotIncludesEveryGenerationAndExcludesLaterCommits(t *tes
 		}
 	}
 }
+
+func TestEventStoreSnapshotSurvivesThreadDirectoryMove(t *testing.T) {
+	t.Parallel()
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := store.CreateWorker(main.ID, "snapshot-move")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.AppendEvent(events.Event{ID: "before-move", Type: "turn.started", TurnID: "turn-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.AppendEvent(events.Event{ID: "completed-before-move", Type: "turn.completed", TurnID: "turn-1"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := worker.CaptureEventStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = snapshot.Close() }()
+
+	if err := store.Archive(worker); err != nil {
+		t.Fatal(err)
+	}
+	got, err := snapshot.Events()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "before-move" || got[1].ID != "completed-before-move" {
+		t.Fatalf("captured events after move = %#v", got)
+	}
+	journals, err := snapshot.GenerationJournals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journals) != 1 || len(journals[0].Data) == 0 {
+		t.Fatalf("captured journals after move = %#v", journals)
+	}
+}

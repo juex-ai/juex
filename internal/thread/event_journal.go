@@ -4,14 +4,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/jsonl"
 )
 
 type capturedGeneration struct {
 	GenerationProjection
 	Path string
 	End  int64
+	file *jsonl.File
 }
 
 // EventStoreSnapshot is a stable all-Generation view. Historical files are
@@ -45,6 +48,32 @@ func (t *Thread) CaptureEventStore() (*EventStoreSnapshot, error) {
 	return &EventStoreSnapshot{
 		threadID: t.ID, generations: generations,
 		lastSeq: t.state.Projection.EventCursor.Seq,
+	}, nil
+}
+
+// CaptureEventStoreSnapshot captures the metadata-registered Generation
+// journals without opening a mutable Thread or running lifecycle recovery.
+// Read-only adapters such as debug bundles use it so observation cannot remove
+// a writer's staged rollover file.
+func CaptureEventStoreSnapshot(threadDir string) (*EventStoreSnapshot, error) {
+	threadDir = filepath.Clean(threadDir)
+	threadID := filepath.Base(threadDir)
+	metadata, err := readProjectionFile(threadDir, threadID)
+	if err != nil {
+		return nil, err
+	}
+	generations, err := captureGenerationHandles(
+		threadDir,
+		metadata.Generations,
+		metadata.CurrentGeneration.ID,
+		metadata.EventCursor.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &EventStoreSnapshot{
+		threadID: threadID, generations: generations,
+		lastSeq: metadata.EventCursor.Seq,
 	}, nil
 }
 
@@ -91,10 +120,11 @@ func (s *EventStoreSnapshot) Events() ([]events.Event, error) {
 }
 
 func (s *EventStoreSnapshot) Close() error {
-	if s != nil {
-		s.closed = true
+	if s == nil || s.closed {
+		return nil
 	}
-	return nil
+	s.closed = true
+	return closeCapturedGenerations(s.generations)
 }
 
 func (t *Thread) ReadEvents() ([]events.Event, error) {

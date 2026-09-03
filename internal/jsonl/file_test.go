@@ -91,6 +91,49 @@ func TestFileAppendsBatchesAndReadsForward(t *testing.T) {
 	}
 }
 
+func TestOpenSnapshotRetainsCapturedPrefixAcrossAppendAndRename(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	file, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	first, err := file.Append(json.RawMessage(`{"id":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := OpenSnapshot(path, first.End)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = snapshot.Close() }()
+	if _, err := file.Append(json.RawMessage(`{"id":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(dir, "moved.jsonl")
+	if err := os.Rename(path, moved); err != nil {
+		t.Fatal(err)
+	}
+
+	var records []Record
+	if _, err := snapshot.ReadForward(0, func(record Record) error {
+		records = append(records, record)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertRecordData(t, records, `{"id":1}`)
+	data, err := snapshot.ReadBytesTo(first.End)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := mustEncodeBatch(t, json.RawMessage(`{"id":1}`)); !bytes.Equal(data, want) {
+		t.Fatalf("snapshot bytes = %q, want %q", data, want)
+	}
+}
+
 func TestFileReadsCapturedForwardBoundaryAfterLaterAppend(t *testing.T) {
 	t.Parallel()
 	file, err := Open(filepath.Join(t.TempDir(), "events.jsonl"))

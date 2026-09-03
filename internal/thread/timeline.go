@@ -39,7 +39,8 @@ func (t *Thread) Timeline(cursor string, limit int) (TimelinePage, error) {
 	last := t.state.Projection.EventCursor
 	id := t.ID
 	t.mu.Unlock()
-	return loadTimelinePage(id, generations, last, cursor, limit)
+	page, readErr := loadTimelinePage(id, generations, last, cursor, limit)
+	return page, errors.Join(readErr, closeCapturedGenerations(generations))
 }
 
 func loadTimelinePage(threadID string, generations []capturedGeneration, latest EventCursor, cursor string, limit int) (TimelinePage, error) {

@@ -68,6 +68,32 @@ func TestCreateReadsArchivedThread(t *testing.T) {
 	}
 }
 
+func TestCreateDoesNotRepairUnregisteredGeneration(t *testing.T) {
+	cfg, target := bundleThreadFixture(t)
+	stagedPath := filepath.Join(
+		cfg.AgentStateDir,
+		"threads",
+		target.ID,
+		"generations",
+		"g000002.jsonl",
+	)
+	if err := os.WriteFile(stagedPath, []byte("staged generation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: target.ID, OutPath: out, Config: cfg}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(stagedPath)
+	if err != nil {
+		t.Fatalf("bundle removed staged Generation: %v", err)
+	}
+	if string(data) != "staged generation" {
+		t.Fatalf("staged Generation changed to %q", data)
+	}
+}
+
 func TestCreateRejectsMissingThreadAndExistingOutput(t *testing.T) {
 	cfg, target := bundleThreadFixture(t)
 	out := filepath.Join(t.TempDir(), "bundle.tar.gz")

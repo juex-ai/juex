@@ -138,6 +138,7 @@ type File struct {
 	readBlockSize int
 	ops           fileOps
 	closed        bool
+	snapshot      bool
 }
 
 // Open opens or creates path, durably removes an incomplete final line, and
@@ -145,6 +146,55 @@ type File struct {
 // otherwise preserved and validated when read.
 func Open(path string) (*File, error) {
 	return open(path, fileOps{})
+}
+
+// OpenSnapshot opens a read-only handle whose visible size is fixed at end.
+// The handle remains usable if the path is renamed or unlinked, and ignores
+// bytes appended beyond the captured boundary.
+func OpenSnapshot(path string, end int64) (*File, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("jsonl: path is required")
+	}
+	if end < 0 {
+		return nil, fmt.Errorf("%w: negative snapshot end %d", ErrInvalidOffset, end)
+	}
+	path = filepath.Clean(path)
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("jsonl: inspect snapshot %s: %w", path, err)
+	}
+	if !pathInfo.Mode().IsRegular() || pathInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%w: snapshot path is not a regular file: %s", ErrCorrupt, path)
+	}
+	target, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("jsonl: open snapshot %s: %w", path, err)
+	}
+	targetInfo, err := target.Stat()
+	if err != nil {
+		_ = target.Close()
+		return nil, fmt.Errorf("jsonl: stat snapshot %s: %w", path, err)
+	}
+	if !os.SameFile(pathInfo, targetInfo) {
+		_ = target.Close()
+		return nil, fmt.Errorf("%w: snapshot path changed while opening: %s", ErrCorrupt, path)
+	}
+	file := &File{
+		path:          path,
+		file:          target,
+		size:          end,
+		readBlockSize: defaultReadBlockSize,
+		snapshot:      true,
+	}
+	if err := file.checkSizeLocked(); err != nil {
+		_ = target.Close()
+		return nil, err
+	}
+	if err := file.validateBoundaryLocked(end); err != nil {
+		_ = target.Close()
+		return nil, err
+	}
+	return file, nil
 }
 
 func open(path string, ops fileOps) (*File, error) {
@@ -206,6 +256,9 @@ func (f *File) Append(records ...json.RawMessage) (Batch, error) {
 	if err := f.ensureOpenLocked(); err != nil {
 		return Batch{}, err
 	}
+	if f.snapshot {
+		return Batch{}, errors.New("jsonl: snapshot is read-only")
+	}
 	if err := f.checkSizeLocked(); err != nil {
 		return Batch{}, err
 	}
@@ -229,6 +282,26 @@ func (f *File) Append(records ...json.RawMessage) (Batch, error) {
 	}
 	f.size += int64(len(payload))
 	return Batch{Start: start, End: f.size, Count: len(records)}, nil
+}
+
+// ReadBytesTo returns an exact copy of the file prefix through end.
+func (f *File) ReadBytesTo(end int64) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.ensureOpenLocked(); err != nil {
+		return nil, err
+	}
+	if err := f.checkSizeLocked(); err != nil {
+		return nil, err
+	}
+	if err := f.validateBoundaryLocked(end); err != nil {
+		return nil, err
+	}
+	data := make([]byte, end)
+	if err := f.readFullAtLocked(data, 0); err != nil {
+		return nil, fmt.Errorf("jsonl: read prefix through %d: %w", end, err)
+	}
+	return data, nil
 }
 
 // ReadForward visits records from start through the committed file boundary.
@@ -557,6 +630,9 @@ func (f *File) checkSizeLocked() error {
 	info, err := f.file.Stat()
 	if err != nil {
 		return fmt.Errorf("jsonl: stat %s: %w", f.path, err)
+	}
+	if f.snapshot && info.Size() >= f.size {
+		return nil
 	}
 	if info.Size() != f.size {
 		return fmt.Errorf("%w: size changed from %d to %d", ErrCorrupt, f.size, info.Size())

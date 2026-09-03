@@ -231,13 +231,8 @@ func collectEntries(opts Options, workDir, threadDir string, now time.Time) ([]a
 		runtimeBytes = redactBytes(runtimeBytes)
 	}
 	entries = append(entries, newEntry(pathInBundle("runtime.json"), "", runtimeBytes, opts.Redact, true))
-	target, err := thread.Load(threadDir)
+	eventSnapshot, err := thread.CaptureEventStoreSnapshot(threadDir)
 	if err != nil {
-		return nil, err
-	}
-	eventSnapshot, err := target.CaptureEventStore()
-	closeErr := target.Close()
-	if err = errors.Join(err, closeErr); err != nil {
 		return nil, err
 	}
 	journals, journalErr := eventSnapshot.GenerationJournals()
