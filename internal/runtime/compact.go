@@ -235,8 +235,17 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	simulated = append(simulated, msg)
 	tokensAfter := e.estimateContextTokens(systemPrompt, tools, assembleActiveContext(simulated, nil).Messages)
 	msg.Compaction.TokensAfter = tokensAfter
+	contextUsage := llm.ContextUsage{
+		Model:         model,
+		ContextWindow: contextWindow,
+		InputTokens:   tokensAfter,
+		TotalTokens:   tokensAfter,
+		Breakdown: []llm.ContextUsagePart{
+			{Key: "active_context", Label: "active context after compaction", Tokens: tokensAfter},
+		},
+	}
 	if err := e.commitCompactionMarker(ctx, operationGeneration, func() error {
-		if _, err := threadState.BeginCompactedGeneration(msg, auto); err != nil {
+		if _, err := threadState.BeginCompactedGeneration(msg, auto, &contextUsage); err != nil {
 			return fmt.Errorf("thread begin compacted generation: %w", err)
 		}
 		return nil
@@ -262,16 +271,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 		TailStartMessageID: selection.TailStartMessageID,
 		FirstKeptMessageID: selection.FirstKeptMessageID,
 	}
-	contextUsage := llm.ContextUsage{
-		Model:         model,
-		ContextWindow: contextWindow,
-		InputTokens:   tokensAfter,
-		TotalTokens:   tokensAfter,
-		Breakdown: []llm.ContextUsagePart{
-			{Key: "active_context", Label: "active context after compaction", Tokens: tokensAfter},
-		},
-	}
-	threadState.RecordResponseUsage(generation.Usage, &contextUsage)
+	threadState.RecordResponseUsage(generation.Usage, nil)
 	if err := e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,
 		Reason:             result.Reason,

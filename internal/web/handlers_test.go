@@ -130,6 +130,9 @@ func TestThreadAPIListCreateShowAndEOFPagination(t *testing.T) {
 	if !thread.ValidWorkerID(created.ID) || created.Alias != "reviewer" || created.ParentThreadID != thread.MainID {
 		t.Fatalf("created Thread = %+v", created)
 	}
+	if !strings.HasSuffix(created.GenerationJournalPath, filepath.Join("generations", "g000001.jsonl")) {
+		t.Fatalf("created Generation Journal path = %q", created.GenerationJournalPath)
+	}
 
 	store := thread.NewStore(server.opts.Cfg.RuntimePaths().StateDir)
 	target, err := store.OpenActive(created.ID)
@@ -211,7 +214,11 @@ func TestThreadAPICreatesNestedWorkerWithExplicitParent(t *testing.T) {
 func TestThreadAPIListUsesIndexWithoutOpeningJournals(t *testing.T) {
 	server := newTestServer(t)
 	stateDir := server.opts.Cfg.RuntimePaths().StateDir
-	journalPath := filepath.Join(stateDir, "threads", thread.MainID, "journal.jsonl")
+	journals, err := thread.InspectGenerationJournals(filepath.Join(stateDir, "threads", thread.MainID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalPath := journals[len(journals)-1].Path
 	file, err := os.OpenFile(journalPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)

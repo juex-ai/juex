@@ -28,7 +28,7 @@ func bundleThreadFixture(t *testing.T) (config.Config, *thread.Thread) {
 	return cfg, target
 }
 
-func TestCreateIncludesThreadJournalAndRedacts(t *testing.T) {
+func TestCreateIncludesGenerationJournalsAndRedacts(t *testing.T) {
 	cfg, target := bundleThreadFixture(t)
 	if err := target.Append(llm.TextMessage(llm.RoleUser, "api_key=sk-bundle-secret")); err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestCreateIncludesThreadJournalAndRedacts(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	files := readBundle(t, out)
-	journal := files["juex-debug-bundle/thread/journal.jsonl"]
+	journal := files["juex-debug-bundle/thread/generations/g000001.jsonl"]
 	if len(journal) == 0 {
 		t.Fatalf("journal missing: %v", files)
 	}
@@ -65,6 +65,32 @@ func TestCreateReadsArchivedThread(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "archived.tar.gz")
 	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: id, OutPath: out, Config: cfg}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCreateDoesNotRepairUnregisteredGeneration(t *testing.T) {
+	cfg, target := bundleThreadFixture(t)
+	stagedPath := filepath.Join(
+		cfg.AgentStateDir,
+		"threads",
+		target.ID,
+		"generations",
+		"g000002.jsonl",
+	)
+	if err := os.WriteFile(stagedPath, []byte("staged generation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: target.ID, OutPath: out, Config: cfg}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(stagedPath)
+	if err != nil {
+		t.Fatalf("bundle removed staged Generation: %v", err)
+	}
+	if string(data) != "staged generation" {
+		t.Fatalf("staged Generation changed to %q", data)
 	}
 }
 

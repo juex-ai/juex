@@ -7,86 +7,146 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 )
 
-const reverseReadBlock = int64(64 * 1024)
+const (
+	timelineCursorVersion  = 1
+	maxTimelineScanRecords = 4096
+)
 
 type pageCursor struct {
-	Offset int64  `json:"o"`
-	Seq    uint64 `json:"s"`
+	Version      int    `json:"v"`
+	ThreadID     string `json:"t"`
+	GenerationID string `json:"g"`
+	EndOffset    int64  `json:"o"`
+	BeforeSeq    uint64 `json:"s"`
 }
 
-func LoadTimelinePage(dir, cursor string, limit int) (TimelinePage, error) {
+func (t *Thread) Timeline(cursor string, limit int) (TimelinePage, error) {
+	if t == nil {
+		return TimelinePage{}, fmt.Errorf("thread: nil Thread")
+	}
+	t.mu.Lock()
+	if t.closed || t.eventStore == nil {
+		t.mu.Unlock()
+		return TimelinePage{}, fmt.Errorf("thread: closed")
+	}
+	generations, err := t.eventStore.captureGenerations(t.state.Projection.Generations)
+	if err != nil {
+		t.mu.Unlock()
+		return TimelinePage{}, err
+	}
+	last := t.state.Projection.EventCursor
+	id := t.ID
+	t.mu.Unlock()
+	page, readErr := loadTimelinePage(id, generations, last, cursor, limit)
+	return page, errors.Join(readErr, closeCapturedGenerations(generations))
+}
+
+func loadTimelinePage(threadID string, generations []capturedGeneration, latest EventCursor, cursor string, limit int) (TimelinePage, error) {
+	return loadTimelinePageWithScanLimit(threadID, generations, latest, cursor, limit, maxTimelineScanRecords)
+}
+
+func loadTimelinePageWithScanLimit(
+	threadID string,
+	generations []capturedGeneration,
+	latest EventCursor,
+	cursor string,
+	limit int,
+	scanLimit int,
+) (TimelinePage, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	if limit > 500 {
 		limit = 500
 	}
-	threadID := filepath.Base(dir)
-	if !ValidID(threadID) {
-		return TimelinePage{}, fmt.Errorf("%w: %q", ErrInvalidID, threadID)
+	if scanLimit <= 0 {
+		return TimelinePage{}, fmt.Errorf("thread: timeline scan limit must be positive")
 	}
-	file, err := os.Open(filepath.Join(dir, journalFile))
-	if err != nil {
-		return TimelinePage{}, err
+	if len(generations) == 0 {
+		return TimelinePage{}, fmt.Errorf("%w: missing Generation registry", ErrInvalidMetadata)
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return TimelinePage{}, err
-	}
-	position := info.Size()
-	expectedBefore := uint64(0)
+	generationIndex := len(generations) - 1
+	position := latest.Offset
+	expectedBefore := latest.Seq + 1
 	if cursor != "" {
 		decoded, err := decodePageCursor(cursor)
 		if err != nil {
 			return TimelinePage{}, err
 		}
-		if decoded.Offset < 0 || decoded.Offset > position {
-			return TimelinePage{}, fmt.Errorf("thread: invalid page cursor offset")
+		if decoded.ThreadID != threadID {
+			return TimelinePage{}, fmt.Errorf("thread: page cursor belongs to another Thread")
 		}
-		position = decoded.Offset
-		expectedBefore = decoded.Seq
+		generationIndex = -1
+		for index := range generations {
+			if generations[index].ID == decoded.GenerationID {
+				generationIndex = index
+				break
+			}
+		}
+		if generationIndex < 0 {
+			return TimelinePage{}, fmt.Errorf("thread: page cursor names an unknown Generation")
+		}
+		position = decoded.EndOffset
+		expectedBefore = decoded.BeforeSeq
 	}
+
 	var groups [][]TimelineItem
-	oldestSeq := uint64(0)
 	itemCount := 0
-	for position > 0 && itemCount < limit {
-		line, start, err := previousJournalLine(file, position)
+	scannedRecords := 0
+	oldestSeq := expectedBefore
+	for generationIndex >= 0 && itemCount < limit && scannedRecords < scanLimit {
+		generation := generations[generationIndex]
+		if position == 0 {
+			generationIndex--
+			if generationIndex >= 0 {
+				position = generations[generationIndex].End
+			}
+			continue
+		}
+		readLimit := limit - itemCount
+		if readLimit < 1 {
+			readLimit = 1
+		}
+		remainingBudget := scanLimit - scannedRecords
+		if readLimit > remainingBudget {
+			readLimit = remainingBudget
+		}
+		commits, nextPosition, nextExpected, err := readGenerationReverse(
+			threadID, generation, position, readLimit, expectedBefore,
+		)
 		if err != nil {
 			return TimelinePage{}, err
 		}
-		position = start
-		var commit Commit
-		if err := decodeCommit(line, &commit); err != nil {
-			return TimelinePage{}, fmt.Errorf("%w at offset %d: %v", ErrCorruptJournal, start, err)
-		}
-		if err := validateCommit(threadID, commit); err != nil {
-			return TimelinePage{}, fmt.Errorf("%w at sequence %d: %v", ErrCorruptJournal, commit.Seq, err)
-		}
-		if expectedBefore != 0 && commit.Seq >= expectedBefore {
-			return TimelinePage{}, fmt.Errorf("thread: stale or invalid page cursor sequence")
-		}
-		expectedBefore = commit.Seq
-		oldestSeq = commit.Seq
-		items := timelineItems(commit)
-		if len(items) > 0 {
-			groups = append(groups, items)
-			itemCount += len(items)
+		position = nextPosition
+		expectedBefore = nextExpected
+		oldestSeq = nextExpected
+		for _, commit := range commits {
+			scannedRecords++
+			items := timelineItems(commit.Commit)
+			if len(items) > 0 {
+				groups = append(groups, items)
+				itemCount += len(items)
+			}
 		}
 	}
-	page := TimelinePage{Items: make([]TimelineItem, 0), HasMoreBefore: position > 0}
-	for i := len(groups) - 1; i >= 0; i-- {
-		page.Items = append(page.Items, groups[i]...)
+
+	page := TimelinePage{Items: make([]TimelineItem, 0, itemCount)}
+	for index := len(groups) - 1; index >= 0; index-- {
+		page.Items = append(page.Items, groups[index]...)
 	}
+	page.HasMoreBefore = position > 0 || generationIndex > 0
 	if page.HasMoreBefore {
-		page.PreviousCursor, err = encodePageCursor(pageCursor{Offset: position, Seq: oldestSeq})
+		encoded, err := encodePageCursor(pageCursor{
+			Version: timelineCursorVersion, ThreadID: threadID,
+			GenerationID: generations[generationIndex].ID,
+			EndOffset:    position, BeforeSeq: oldestSeq,
+		})
 		if err != nil {
 			return TimelinePage{}, err
 		}
+		page.PreviousCursor = encoded
 	}
 	return page, nil
 }
@@ -100,55 +160,13 @@ func timelineItems(commit Commit) []TimelineItem {
 			items = append(items, TimelineItem{Type: "message", Seq: commit.Seq, At: commit.At, Message: &message})
 		case FactContextRenewed, FactContextCompacted:
 			activity := Activity{
-				Type:             fact.Type,
-				At:               commit.At,
-				FromGenerationID: fact.FromGenerationID,
-				ToGenerationID:   fact.ToGenerationID,
-				Summary:          fact.Summary,
-				Automatic:        fact.Automatic,
+				Type: fact.Type, At: commit.At, FromGenerationID: fact.FromGenerationID,
+				ToGenerationID: fact.ToGenerationID, Summary: fact.Summary, Automatic: fact.Automatic,
 			}
 			items = append(items, TimelineItem{Type: "activity", Seq: commit.Seq, At: commit.At, Activity: &activity})
 		}
 	}
 	return items
-}
-
-func previousJournalLine(file *os.File, end int64) ([]byte, int64, error) {
-	if end <= 0 {
-		return nil, 0, io.EOF
-	}
-	last := make([]byte, 1)
-	if _, err := file.ReadAt(last, end-1); err != nil {
-		return nil, 0, err
-	}
-	if last[0] != '\n' {
-		return nil, 0, fmt.Errorf("%w: page boundary is not newline terminated", ErrCorruptJournal)
-	}
-	searchEnd := end - 1
-	for searchEnd > 0 {
-		start := searchEnd - reverseReadBlock
-		if start < 0 {
-			start = 0
-		}
-		buffer := make([]byte, searchEnd-start)
-		if _, err := file.ReadAt(buffer, start); err != nil && !errors.Is(err, io.EOF) {
-			return nil, 0, err
-		}
-		if index := bytes.LastIndexByte(buffer, '\n'); index >= 0 {
-			lineStart := start + int64(index) + 1
-			line := make([]byte, end-lineStart)
-			if _, err := file.ReadAt(line, lineStart); err != nil && !errors.Is(err, io.EOF) {
-				return nil, 0, err
-			}
-			return line, lineStart, nil
-		}
-		searchEnd = start
-	}
-	line := make([]byte, end)
-	if _, err := file.ReadAt(line, 0); err != nil && !errors.Is(err, io.EOF) {
-		return nil, 0, err
-	}
-	return line, 0, nil
 }
 
 func encodePageCursor(cursor pageCursor) (string, error) {
@@ -168,6 +186,14 @@ func decodePageCursor(encoded string) (pageCursor, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cursor); err != nil {
+		return pageCursor{}, fmt.Errorf("thread: invalid page cursor")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return pageCursor{}, fmt.Errorf("thread: invalid page cursor")
+	}
+	if cursor.Version != timelineCursorVersion || cursor.ThreadID == "" || cursor.GenerationID == "" ||
+		cursor.EndOffset < 0 || cursor.BeforeSeq == 0 {
 		return pageCursor{}, fmt.Errorf("thread: invalid page cursor")
 	}
 	return cursor, nil

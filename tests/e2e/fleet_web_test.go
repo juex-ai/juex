@@ -727,7 +727,7 @@ func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {
 	}
 	waitFleetInterruptedAndContinuationEvents(
 		t,
-		filepath.Join(agentAddress.StateDir(), "threads", threadID, "journal.jsonl"),
+		filepath.Join(agentAddress.StateDir(), "threads", threadID),
 		originalTurnID,
 	)
 }

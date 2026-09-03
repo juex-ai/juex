@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -32,12 +33,11 @@ func applyCommit(threadID string, state *ReplayState, commit scannedCommit) erro
 	if err := validateProjectionLifecycle(state.Projection); err != nil {
 		return err
 	}
-	if len(commit.Facts) != 1 || commit.Facts[0].Type != FactProjectionCheck {
-		state.Projection.LastActivityAt = commit.At
-	}
+	state.Projection.LastActivityAt = commit.At
 	state.Projection.UpdatedAt = commit.At
-	state.Projection.Journal.ProjectedSeq = commit.Seq
-	state.Projection.Journal.ProjectedOffset = commit.EndOffset
+	state.Projection.EventCursor.GenerationID = commit.GenerationID
+	state.Projection.EventCursor.Seq = commit.Seq
+	state.Projection.EventCursor.Offset = commit.EndOffset
 	return nil
 }
 
@@ -83,10 +83,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		p.RetentionState = RetentionActive
 		p.ExecutionState = ExecutionIdle
 		p.CurrentGeneration = GenerationProjection{
-			ID:          InitialGeneration,
-			Ordinal:     1,
-			StartSeq:    commit.Seq,
-			StartOffset: commit.StartOffset,
+			ID: InitialGeneration, Ordinal: 1, BoundarySeq: commit.Seq,
 		}
 		p.Generations = []GenerationProjection{p.CurrentGeneration}
 		p.Counts.GenerationCount = 1
@@ -236,24 +233,20 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 			Summary:          fact.Summary,
 			Automatic:        fact.Automatic,
 		}
-		state.Activities = append(state.Activities, activity)
+		applyGenerationSeed(state, *fact.Seed)
+		state.Activities = []Activity{activity}
 		if fact.Type == FactContextCompacted {
 			state.CompactionCount++
-			state.ProviderMessages = compactProviderMessages(*fact.Summary, state.Messages)
-		} else {
-			state.ProviderMessages = nil
 		}
 		p.CurrentGeneration = GenerationProjection{
-			ID:          fact.ToGenerationID,
-			Ordinal:     nextOrdinal,
-			StartSeq:    commit.Seq,
-			StartOffset: commit.StartOffset,
+			ID: fact.ToGenerationID, Ordinal: nextOrdinal, BoundarySeq: commit.Seq,
 		}
 		p.Generations = append(p.Generations, p.CurrentGeneration)
 		p.Counts.GenerationCount++
-		if fact.Type == FactContextRenewed {
-			state.ContextUsage = nil
+		if state.ContextUsage == nil {
 			p.ContextUsage = nil
+		} else {
+			p.ContextUsage = contextProjection(state.ContextUsage, commit.At)
 		}
 	case FactUsageRecorded:
 		if fact.Usage != nil {
@@ -262,27 +255,45 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		if fact.ContextUsage != nil {
 			usage := fact.ContextUsage
 			state.ContextUsage = cloneContextUsage(usage)
-			percentage := float64(0)
-			if usage.ContextWindow > 0 {
-				percentage = float64(usage.TotalTokens) * 100 / float64(usage.ContextWindow)
-			}
-			p.ContextUsage = &ContextProjection{
-				ContextWindow: usage.ContextWindow,
-				CurrentTokens: usage.TotalTokens,
-				Percentage:    percentage,
-				CalibratedAt:  &commit.At,
-			}
+			p.ContextUsage = contextProjection(usage, commit.At)
 		}
-	case FactProjectionCheck:
-		if fact.Checkpoint == nil || fact.Checkpoint.Projection.ThreadID != threadID ||
-			fact.Checkpoint.Projection.Journal.ProjectedSeq+1 != commit.Seq ||
-			fact.Checkpoint.Projection.Journal.ProjectedOffset != commit.StartOffset {
-			return fmt.Errorf("%w: checkpoint does not describe its Journal prefix", ErrInvalidTransition)
-		}
-		p.Journal.LastCheckpointSeq = commit.Seq
-		p.Journal.LastCheckpointOffset = commit.StartOffset
 	}
 	return nil
+}
+
+func applyGenerationSeed(state *ReplayState, seed GenerationSeed) {
+	state.Messages = nil
+	state.ProviderMessages = append([]llm.Message(nil), seed.ProviderMessages...)
+	state.Events = append([]events.Event(nil), seed.RecoveryEvents...)
+	state.CompactionCount = seed.CompactionCount
+	state.Inputs = make(map[string]*InputProjection, len(seed.Inputs))
+	state.InputOrder = append([]string(nil), seed.InputOrder...)
+	state.InputRecords = make(map[string]json.RawMessage, len(seed.InputRecords))
+	state.ContextUsage = cloneContextUsage(seed.ContextUsage)
+	for id, input := range seed.Inputs {
+		copyInput := input
+		copyInput.Attempts = append([]AttemptProjection(nil), input.Attempts...)
+		state.Inputs[id] = &copyInput
+	}
+	for id, record := range seed.InputRecords {
+		state.InputRecords[id] = append(json.RawMessage(nil), record...)
+	}
+}
+
+func contextProjection(usage *llm.ContextUsage, at Timestamp) *ContextProjection {
+	if usage == nil {
+		return nil
+	}
+	percentage := float64(0)
+	if usage.ContextWindow > 0 {
+		percentage = float64(usage.TotalTokens) * 100 / float64(usage.ContextWindow)
+	}
+	return &ContextProjection{
+		ContextWindow: usage.ContextWindow,
+		CurrentTokens: usage.TotalTokens,
+		Percentage:    percentage,
+		CalibratedAt:  &at,
+	}
 }
 
 func compactProviderMessages(summary llm.Message, history []llm.Message) []llm.Message {

@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 )
 
 var ErrInvalidMetadata = errors.New("thread: invalid metadata")
@@ -85,12 +84,12 @@ func validateProjectionMetadata(projection Projection, id string) error {
 	}
 	for index, generation := range projection.Generations {
 		wantOrdinal := index + 1
-		if generation.ID != generationID(wantOrdinal) || generation.Ordinal != wantOrdinal || generation.StartSeq == 0 || generation.StartOffset < 0 {
+		if generation.ID != generationID(wantOrdinal) || generation.Ordinal != wantOrdinal || generation.BoundarySeq == 0 {
 			return fail("invalid Generation registry entry %d", index)
 		}
 		if index > 0 {
 			previous := projection.Generations[index-1]
-			if generation.StartSeq <= previous.StartSeq || generation.StartOffset <= previous.StartOffset {
+			if generation.BoundarySeq <= previous.BoundarySeq {
 				return fail("Generation registry is not ordered at entry %d", index)
 			}
 		}
@@ -101,41 +100,14 @@ func validateProjectionMetadata(projection Projection, id string) error {
 	if projection.Counts.TurnCount < 0 || projection.Counts.PendingInputCount < 0 {
 		return fail("negative counters")
 	}
-	journal := projection.Journal
-	if journal.ProjectedSeq == 0 || journal.ProjectedOffset <= 0 {
-		return fail("Journal cursor is empty")
-	}
-	if (journal.LastCheckpointSeq == 0) != (journal.LastCheckpointOffset == 0) ||
-		journal.LastCheckpointSeq > journal.ProjectedSeq ||
-		journal.LastCheckpointOffset < 0 || journal.LastCheckpointOffset >= journal.ProjectedOffset {
-		return fail("checkpoint cursor is inconsistent")
+	cursor := projection.EventCursor
+	if cursor.GenerationID != projection.CurrentGeneration.ID || cursor.Seq == 0 || cursor.Offset <= 0 {
+		return fail("EventStore cursor is empty")
 	}
 	for index, generation := range projection.Generations {
-		if generation.StartSeq > journal.ProjectedSeq || generation.StartOffset >= journal.ProjectedOffset {
-			return fail("Generation registry entry %d is beyond the Journal cursor", index)
+		if generation.BoundarySeq > cursor.Seq {
+			return fail("Generation registry entry %d is beyond the EventStore cursor", index)
 		}
 	}
-	return nil
-}
-
-// applyAuthoritativeProjection overlays the durable Thread metadata after the
-// Journal has restored runtime-only state. Fields materialized from Journal
-// commits must still agree so a committed Journal append whose metadata write
-// failed is surfaced instead of silently accepting a stale thread.json.
-func applyAuthoritativeProjection(state *ReplayState, metadata Projection) error {
-	if state == nil {
-		return fmt.Errorf("%w for %s: nil replay state", ErrInvalidMetadata, metadata.ThreadID)
-	}
-	replayed := state.Projection
-	if !replayed.CreatedAt.Equal(metadata.CreatedAt.Time) ||
-		!replayed.LastActivityAt.Equal(metadata.LastActivityAt.Time) ||
-		replayed.CurrentGeneration != metadata.CurrentGeneration ||
-		replayed.Counts != metadata.Counts ||
-		replayed.TokenUsage != metadata.TokenUsage ||
-		!reflect.DeepEqual(replayed.ContextUsage, metadata.ContextUsage) ||
-		replayed.Journal != metadata.Journal {
-		return fmt.Errorf("%w for %s: metadata does not match Journal materialization", ErrInvalidMetadata, metadata.ThreadID)
-	}
-	state.Projection = cloneProjection(metadata)
 	return nil
 }

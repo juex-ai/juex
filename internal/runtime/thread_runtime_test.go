@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -223,7 +222,7 @@ func TestRestoreThreadRuntimeCheckpointDoesNotReplayJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eventPath := filepath.Join(first.Dir, "journal.jsonl")
+	eventPath := first.CurrentGenerationJournalPath()
 	file, err := os.OpenFile(eventPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -275,7 +274,7 @@ func TestRecoverThreadProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	tracker, err := recoverThreadProvenance(threadState.Dir)
+	tracker, err := recoverThreadProvenance(threadState)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -138,6 +138,7 @@ type File struct {
 	readBlockSize int
 	ops           fileOps
 	closed        bool
+	snapshot      bool
 }
 
 // Open opens or creates path, durably removes an incomplete final line, and
@@ -145,6 +146,55 @@ type File struct {
 // otherwise preserved and validated when read.
 func Open(path string) (*File, error) {
 	return open(path, fileOps{})
+}
+
+// OpenSnapshot opens a read-only handle whose visible size is fixed at end.
+// The handle remains usable if the path is renamed or unlinked, and ignores
+// bytes appended beyond the captured boundary.
+func OpenSnapshot(path string, end int64) (*File, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("jsonl: path is required")
+	}
+	if end < 0 {
+		return nil, fmt.Errorf("%w: negative snapshot end %d", ErrInvalidOffset, end)
+	}
+	path = filepath.Clean(path)
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("jsonl: inspect snapshot %s: %w", path, err)
+	}
+	if !pathInfo.Mode().IsRegular() || pathInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%w: snapshot path is not a regular file: %s", ErrCorrupt, path)
+	}
+	target, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("jsonl: open snapshot %s: %w", path, err)
+	}
+	targetInfo, err := target.Stat()
+	if err != nil {
+		_ = target.Close()
+		return nil, fmt.Errorf("jsonl: stat snapshot %s: %w", path, err)
+	}
+	if !os.SameFile(pathInfo, targetInfo) {
+		_ = target.Close()
+		return nil, fmt.Errorf("%w: snapshot path changed while opening: %s", ErrCorrupt, path)
+	}
+	file := &File{
+		path:          path,
+		file:          target,
+		size:          end,
+		readBlockSize: defaultReadBlockSize,
+		snapshot:      true,
+	}
+	if err := file.checkSizeLocked(); err != nil {
+		_ = target.Close()
+		return nil, err
+	}
+	if err := file.validateBoundaryLocked(end); err != nil {
+		_ = target.Close()
+		return nil, err
+	}
+	return file, nil
 }
 
 func open(path string, ops fileOps) (*File, error) {
@@ -206,6 +256,9 @@ func (f *File) Append(records ...json.RawMessage) (Batch, error) {
 	if err := f.ensureOpenLocked(); err != nil {
 		return Batch{}, err
 	}
+	if f.snapshot {
+		return Batch{}, errors.New("jsonl: snapshot is read-only")
+	}
 	if err := f.checkSizeLocked(); err != nil {
 		return Batch{}, err
 	}
@@ -231,11 +284,42 @@ func (f *File) Append(records ...json.RawMessage) (Batch, error) {
 	return Batch{Start: start, End: f.size, Count: len(records)}, nil
 }
 
+// ReadBytesTo returns an exact copy of the file prefix through end.
+func (f *File) ReadBytesTo(end int64) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.ensureOpenLocked(); err != nil {
+		return nil, err
+	}
+	if err := f.checkSizeLocked(); err != nil {
+		return nil, err
+	}
+	if err := f.validateBoundaryLocked(end); err != nil {
+		return nil, err
+	}
+	data := make([]byte, end)
+	if err := f.readFullAtLocked(data, 0); err != nil {
+		return nil, fmt.Errorf("jsonl: read prefix through %d: %w", end, err)
+	}
+	return data, nil
+}
+
 // ReadForward visits records from start through the committed file boundary.
 // Each complete batch is validated before any of its records are visited. It
 // returns the byte boundary after the last record accepted by the visitor. The
 // visitor must not call methods on f.
 func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error) {
+	return f.readForwardTo(start, -1, visit)
+}
+
+// ReadForwardTo visits records from start through the captured end boundary.
+// It is used by higher-level stores that need a stable snapshot while later
+// appends may continue beyond end.
+func (f *File) ReadForwardTo(start, end int64, visit func(Record) error) (int64, error) {
+	return f.readForwardTo(start, end, visit)
+}
+
+func (f *File) readForwardTo(start, end int64, visit func(Record) error) (int64, error) {
 	if visit == nil {
 		return start, errors.New("jsonl: visitor is required")
 	}
@@ -247,15 +331,24 @@ func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error)
 	if err := f.checkSizeLocked(); err != nil {
 		return start, err
 	}
+	if end < 0 {
+		end = f.size
+	}
 	if err := f.validateBoundaryLocked(start); err != nil {
 		return start, err
 	}
-	reader := bufio.NewReaderSize(io.NewSectionReader(f.file, start, f.size-start), defaultReadBlockSize)
+	if err := f.validateBoundaryLocked(end); err != nil {
+		return start, err
+	}
+	if end < start {
+		return start, fmt.Errorf("%w: end %d is before start %d", ErrInvalidOffset, end, start)
+	}
+	reader := bufio.NewReaderSize(io.NewSectionReader(f.file, start, end-start), defaultReadBlockSize)
 	committed := start
 	offset := start
 	var previous *diskRecord
 	var pending []Record
-	for offset < f.size {
+	for offset < end {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			return committed, &CorruptionError{Offset: offset, Err: fmt.Errorf("incomplete record: %w", err)}
@@ -537,6 +630,9 @@ func (f *File) checkSizeLocked() error {
 	info, err := f.file.Stat()
 	if err != nil {
 		return fmt.Errorf("jsonl: stat %s: %w", f.path, err)
+	}
+	if f.snapshot && info.Size() >= f.size {
+		return nil
 	}
 	if info.Size() != f.size {
 		return fmt.Errorf("%w: size changed from %d to %d", ErrCorrupt, f.size, info.Size())

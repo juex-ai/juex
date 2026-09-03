@@ -78,11 +78,16 @@ func TestCaptureCommittedEventReplayReadsBeforeLatestCheckpoint(t *testing.T) {
 	for _, event := range []events.Event{
 		{ID: "before-checkpoint", Type: "turn.started", TurnID: "turn-1", Payload: juexruntime.TurnStartedPayload{}},
 		{ID: "checkpoint-terminal", Type: "turn.completed", TurnID: "turn-1", Payload: juexruntime.TurnCompletedPayload{}},
-		{ID: "after-checkpoint", Type: "turn.started", TurnID: "turn-2", Payload: juexruntime.TurnStartedPayload{}},
 	} {
 		if err := target.AppendEvent(event); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := target.BeginNewGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.AppendEvent(events.Event{ID: "after-checkpoint", Type: "turn.started", TurnID: "turn-2", Payload: juexruntime.TurnStartedPayload{}}); err != nil {
+		t.Fatal(err)
 	}
 	if err := target.Close(); err != nil {
 		t.Fatal(err)

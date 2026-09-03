@@ -143,7 +143,7 @@ func TestWeb_TranscriptPageReadsLatestItemsFromEOF(t *testing.T) {
 		got.Items[2].Message == nil || got.Items[2].Message.Kind != llm.MessageKindPolicyEvent ||
 		got.Items[3].Message == nil || got.Items[3].Message.Blocks[0].ToolUseID != "call-1" ||
 		got.Items[4].Message == nil || got.Items[4].Message.ID != "m5" ||
-		!got.HasMoreBefore {
+		got.HasMoreBefore {
 		t.Fatalf("coherent transcript page = %+v", got)
 	}
 }
@@ -172,7 +172,7 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := target.Projection()
-	journalPath := filepath.Join(target.Dir, "journal.jsonl")
+	journalPath := target.CurrentGenerationJournalPath()
 	journalBefore, err := os.Stat(journalPath)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(reopened.ScratchpadDir(), "state.txt")); err != nil || string(data) != "preserved" {
 		t.Fatalf("restored Scratchpad = %q, %v", data, err)
 	}
-	journalAfter, err := os.Stat(filepath.Join(reopened.Dir, "journal.jsonl"))
+	journalAfter, err := os.Stat(reopened.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -902,7 +902,14 @@ func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 }
 
 func pendingInputFailureContext(threadDir string) string {
-	journalPath := filepath.Join(threadDir, "journal.jsonl")
+	journalPath := filepath.Join(threadDir, "generations", "g000001.jsonl")
+	if entries, readErr := os.ReadDir(filepath.Join(threadDir, "generations")); readErr == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+				journalPath = filepath.Join(threadDir, "generations", entry.Name())
+			}
+		}
+	}
 	var tail []byte
 	file, err := os.Open(journalPath)
 	if err == nil {
@@ -927,7 +934,10 @@ func TestPendingInputFailureContextIncludesJournalTail(t *testing.T) {
 	threadDir := t.TempDir()
 	terminal := `{"type":"turn.errored","payload":{"message":"injected durable write failure"}}`
 	body := strings.Repeat("old diagnostic padding\n", 2048) + terminal + "\n"
-	if err := os.WriteFile(filepath.Join(threadDir, "journal.jsonl"), []byte(body), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(threadDir, "generations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(threadDir, "generations", "g000001.jsonl"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	diagnostic := pendingInputFailureContext(threadDir)
@@ -1084,10 +1094,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	if got.ID != "observable-e2e" {
 		t.Fatalf("observable id = %q", got.ID)
 	}
-	eventsData, err := os.ReadFile(filepath.Join(stateDir, "threads", c.ID, "journal.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	eventsData := []byte(threadJournalText(t, filepath.Join(stateDir, "threads", c.ID)))
 	for _, want := range []string{`"type":"observable.started"`, `"type":"observation.delivered"`} {
 		if !strings.Contains(string(eventsData), want) {
 			t.Fatalf("events missing %s:\n%s", want, eventsData)
@@ -1321,8 +1328,20 @@ func TestWeb_ScheduleCatchUpAutomaticallySurfacesObservation(t *testing.T) {
 		}
 		// Delivered store snapshots alone do not prove journal publication or
 		// Provider execution.
-		eventsData, err = os.ReadFile(filepath.Join(stateDir, "threads", threadInfo.ID, "journal.jsonl"))
-		return err == nil && strings.Contains(string(eventsData), `"type":"observation.delivered"`) &&
+		journals, inspectErr := thread.InspectGenerationJournals(filepath.Join(stateDir, "threads", threadInfo.ID))
+		if inspectErr != nil {
+			return false
+		}
+		var joined strings.Builder
+		for _, journal := range journals {
+			data, readErr := os.ReadFile(journal.Path)
+			if readErr != nil {
+				return false
+			}
+			joined.Write(data)
+		}
+		eventsData = []byte(joined.String())
+		return strings.Contains(string(eventsData), `"type":"observation.delivered"`) &&
 			strings.Contains(messagesText(prov.history(0)), "automatic schedule e2e payload")
 	})
 	if status.LastObservation.State != observable.ObservationStateDelivered {

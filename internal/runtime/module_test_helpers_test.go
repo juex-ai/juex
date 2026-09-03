@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,9 +25,16 @@ func installHookRunner(t *testing.T, engine *Engine, runner hooks.PolicyRunner) 
 	base := hooks.Request{CWD: engine.WorkDir, WorkspaceRoots: []string{engine.WorkDir}}
 	if engine.Thread != nil {
 		base.ThreadID = engine.Thread.ID
-		base.JournalPath = filepath.Join(engine.Thread.Dir, "journal.jsonl")
 	}
-	mod := hooks.NewModule(runner, hooks.ModuleOptions{BaseRequest: base})
+	mod := hooks.NewModule(runner, hooks.ModuleOptions{
+		BaseRequest: base,
+		GenerationJournalPath: func() string {
+			if engine.Thread == nil {
+				return ""
+			}
+			return engine.Thread.CurrentGenerationJournalPath()
+		},
+	})
 	installRuntimeTestModules(t, engine, mod)
 }
 

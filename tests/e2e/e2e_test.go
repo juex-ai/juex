@@ -551,7 +551,7 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 			t.Fatalf("conversation missing %q:\n%s", want, convText)
 		}
 	}
-	if journal := strings.Join(readLines(t, filepath.Join(threadState.Dir, "journal.jsonl")), "\n"); !strings.Contains(journal, "apply_patch") {
+	if journal := threadJournalText(t, threadState.Dir); !strings.Contains(journal, "apply_patch") {
 		t.Fatalf("Thread Journal missing apply_patch call:\n%s", journal)
 	}
 	var toolResultText string
@@ -568,7 +568,7 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 	if strings.Contains(toolResultText, "patch flow complete") || strings.Contains(toolResultText, "*** Begin Patch") {
 		t.Fatalf("tool result should not echo full patch text:\n%s", toolResultText)
 	}
-	eventsText := strings.Join(readLines(t, filepath.Join(threadState.Dir, "journal.jsonl")), "\n")
+	eventsText := threadJournalText(t, threadState.Dir)
 	for _, want := range []string{"tool.requested", "tool.completed", "apply_patch"} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
@@ -656,7 +656,7 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 			t.Fatalf("tool results echoed chunk content")
 		}
 	}
-	eventsText := strings.Join(readLines(t, filepath.Join(threadState.Dir, "journal.jsonl")), "\n")
+	eventsText := threadJournalText(t, threadState.Dir)
 	for _, want := range []string{"tool.requested", "tool.completed", "write_chunk"} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
@@ -782,7 +782,7 @@ func TestEndToEnd_ToolFailureLedgerWithUserAgentsDisabledDoesNotHardBlock(t *tes
 	if observation := messagesText(prov.history[1]); strings.Contains(observation, "Runtime observation") {
 		t.Fatalf("provider should not receive failure-ledger continuation observation:\n%s", observation)
 	}
-	eventsText := strings.Join(readLines(t, filepath.Join(a.Thread.Dir, "journal.jsonl")), "\n")
+	eventsText := threadJournalText(t, a.Thread.Dir)
 	for _, want := range []string{"tool.failure.recorded", "exec_command"} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
@@ -863,7 +863,7 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 	if got := notesSnapshot.Content; !strings.Contains(got, "bind local services") || !strings.Contains(got, "confirm CI status") {
 		t.Fatalf("Notes store content = %q", got)
 	}
-	eventsText := strings.Join(readLines(t, filepath.Join(a.Thread.Dir, "journal.jsonl")), "\n")
+	eventsText := threadJournalText(t, a.Thread.Dir)
 	if !strings.Contains(eventsText, `"type":"notes.updated"`) {
 		t.Fatalf("events missing notes.updated:\n%s", eventsText)
 	}
@@ -1039,22 +1039,6 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 			t.Errorf("history did not grow at call %d (%d vs %d)", i, len(prov.history[i]), len(prov.history[i-1]))
 		}
 	}
-}
-
-func readLines(t *testing.T, path string) []string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	var out []string
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		if line := scanner.Text(); line != "" {
-			out = append(out, line)
-		}
-	}
-	return out
 }
 
 func e2ePromptBuilder(
@@ -1630,7 +1614,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		t.Fatal(err)
 	}
 
-	eventsPath := filepath.Join(threadDir, "journal.jsonl")
+	eventsPath := currentGenerationJournalPath(t, threadDir)
 	appendFile, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -1795,10 +1779,7 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(work, "blocked.txt")); !os.IsNotExist(err) {
 		t.Fatalf("denied write should not create file, stat err=%v", err)
 	}
-	eventsData, err := os.ReadFile(filepath.Join(a.Thread.Dir, "journal.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	eventsData := []byte(threadJournalText(t, a.Thread.Dir))
 	eventsBody := string(eventsData)
 	for _, want := range []string{`"type":"policy.completed"`, `"type":"tool.errored"`} {
 		if !strings.Contains(eventsBody, want) {
@@ -1854,10 +1835,7 @@ func TestEndToEnd_SandboxBlockedPathsStopBuiltinTools(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(work, "private", "secret.txt")); !os.IsNotExist(err) {
 		t.Fatalf("blocked write should not create file, stat err=%v", err)
 	}
-	eventsData, err := os.ReadFile(filepath.Join(a.Thread.Dir, "journal.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	eventsData := []byte(threadJournalText(t, a.Thread.Dir))
 	if !strings.Contains(string(eventsData), `"type":"tool.errored"`) {
 		t.Fatalf("events missing tool.errored:\n%s", eventsData)
 	}
@@ -1942,10 +1920,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 		goal.StatusReason != "continuation gate fired and final answer was verified" || !strings.Contains(goal.Acceptance, "goal.continued") {
 		t.Fatalf("Thread goal = %+v", goal)
 	}
-	eventsData, err := os.ReadFile(filepath.Join(a.Thread.Dir, "journal.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	eventsData := []byte(threadJournalText(t, a.Thread.Dir))
 	for _, want := range []string{`"type":"goal.continued"`, `"type":"goal.updated"`, `"goal-completion-gate"`} {
 		if !strings.Contains(string(eventsData), want) {
 			t.Fatalf("events missing %s:\n%s", want, eventsData)
@@ -2037,10 +2012,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 	if goal.Status != workmem.GoalStatusSuccess || goal.StatusReason != "user approved the healthy deployment" {
 		t.Fatalf("Thread goal = %+v", goal)
 	}
-	eventsData, err := os.ReadFile(filepath.Join(a.Thread.Dir, "journal.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	eventsData := []byte(threadJournalText(t, a.Thread.Dir))
 	if strings.Contains(string(eventsData), `"type":"goal.continued"`) {
 		t.Fatalf("wait_for_user should not force a continuation:\n%s", eventsData)
 	}
@@ -2105,10 +2077,20 @@ func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
 	}
-	if got := rootJSONLFiles(t, threadDir); !slices.Equal(got, []string{"journal.jsonl"}) {
-		t.Fatalf("Thread JSONL files = %v, want the canonical Journal", got)
+	if got := rootJSONLFiles(t, threadDir); len(got) != 0 {
+		t.Fatalf("Thread root JSONL files = %v, want none", got)
 	}
-	journal := readJSONLObjects(t, filepath.Join(threadDir, "journal.jsonl"))
+	journals, err := thread.InspectGenerationJournals(threadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journals) != 2 {
+		t.Fatalf("Generation Journals = %v, want initial and compacted", journals)
+	}
+	var journal []map[string]any
+	for _, generation := range journals {
+		journal = append(journal, readJSONLObjects(t, generation.Path)...)
+	}
 	for _, want := range []string{"tool.completed", "tool.errored", "context.compact.completed", "finish.attempted"} {
 		if !jsonlContainsString(journal, want) {
 			t.Fatalf("event journal missing %q: %+v", want, journal)

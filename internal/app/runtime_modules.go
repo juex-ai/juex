@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
@@ -228,10 +227,10 @@ func buildThreadModules(
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				base := opts.hookBaseRequest
 				base.ThreadID = threadState.ID
-				base.JournalPath = filepath.Join(threadState.Dir, "journal.jsonl")
 				return hooks.NewModule(opts.hookRunner, hooks.ModuleOptions{
-					BaseRequest: base,
-					GoalState:   func() []byte { return juexruntime.HookGoalStateFromModules(set) },
+					BaseRequest:           base,
+					GenerationJournalPath: threadState.CurrentGenerationJournalPath,
+					GoalState:             func() []byte { return juexruntime.HookGoalStateFromModules(set) },
 				}), nil
 			},
 		})

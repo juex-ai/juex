@@ -105,37 +105,56 @@ func stopLiveAgent(t *testing.T, bin, home, work string) {
 	}
 }
 
-func readThreadFacts(t *testing.T, threadDir string) []thread.Fact {
-	t.Helper()
-	var facts []thread.Fact
-	for index, line := range readLines(t, filepath.Join(threadDir, "journal.jsonl")) {
-		var commit thread.Commit
-		if err := json.Unmarshal([]byte(line), &commit); err != nil {
-			t.Fatalf("decode Thread journal line %d: %v", index, err)
-		}
-		facts = append(facts, commit.Facts...)
-	}
-	return facts
-}
-
 func readThreadMessages(t *testing.T, threadDir string) []llm.Message {
 	t.Helper()
+	target, err := thread.Load(threadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = target.Close() }()
+	page, err := target.Timeline("", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var messages []llm.Message
-	for _, fact := range readThreadFacts(t, threadDir) {
-		if fact.Type == thread.FactMessageAppended && fact.Message != nil {
-			messages = append(messages, *fact.Message)
+	for _, item := range page.Items {
+		if item.Message != nil {
+			messages = append(messages, *item.Message)
 		}
+	}
+	if page.HasMoreBefore {
+		t.Fatal("test Thread timeline exceeded one 500-item page")
 	}
 	return messages
 }
 
 func threadJournalText(t *testing.T, threadDir string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(threadDir, "journal.jsonl"))
+	journals, err := thread.InspectGenerationJournals(threadDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(data)
+	var content strings.Builder
+	for _, journal := range journals {
+		data, err := os.ReadFile(journal.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content.Write(data)
+	}
+	return content.String()
+}
+
+func currentGenerationJournalPath(t *testing.T, threadDir string) string {
+	t.Helper()
+	journals, err := thread.InspectGenerationJournals(threadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journals) == 0 {
+		t.Fatal("Thread has no registered Generation Journal")
+	}
+	return journals[len(journals)-1].Path
 }
 
 func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {

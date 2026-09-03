@@ -201,9 +201,9 @@ func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 	home, workDir := prepareResolveTest(t)
 	workspaceStateDir := filepath.Join(workDir, ".juex")
 	files := map[string]string{
-		filepath.Join("threads", "123456", "journal.jsonl"): "{\"seq\":1}\n",
-		filepath.Join("logs", "listen.log"):                 "ready\n",
-		filepath.Join("observables", "observations.jsonl"):  "{\"id\":\"o1\"}\n",
+		filepath.Join("threads", "123456", "generations", "g000001.jsonl"): "{\"seq\":1}\n",
+		filepath.Join("logs", "listen.log"):                                "ready\n",
+		filepath.Join("observables", "observations.jsonl"):                 "{\"id\":\"o1\"}\n",
 		"juex.yaml":        "models: [local:test]\n",
 		"observables.json": "[]\n",
 	}
@@ -219,7 +219,7 @@ func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 		assertText(t, filepath.Join(workspaceStateDir, rel), body)
 	}
 	for _, rel := range []string{
-		filepath.Join("threads", "123456", "journal.jsonl"),
+		filepath.Join("threads", "123456", "generations", "g000001.jsonl"),
 		filepath.Join("logs", "listen.log"),
 		filepath.Join("observables", "observations.jsonl"),
 	} {

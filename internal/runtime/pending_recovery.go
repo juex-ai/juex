@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/thread"
 )
 
 type PendingInputRecovery struct {
@@ -26,16 +25,14 @@ func (e *Engine) RecoverPendingInputs() ([]PendingInputRecovery, error) {
 	}
 
 	admittedMessageIDs := map[string]struct{}{}
-	if err := thread.ReplayEvents(threadState.Dir, func(event events.Event) {
+	threadState.ReplayEvents(func(event events.Event) {
 		if event.Type == TurnAdmittedType {
 			payload := payloadAs[TurnAdmittedPayload](event.Payload)
 			if payload.MessageID != "" {
 				admittedMessageIDs[payload.MessageID] = struct{}{}
 			}
 		}
-	}); err != nil {
-		return nil, fmt.Errorf("runtime: recover pending input admission facts: %w", err)
-	}
+	})
 	records, err := queue.Records()
 	if err != nil {
 		return nil, fmt.Errorf("runtime: recover pending input journal: %w", err)

@@ -34,11 +34,12 @@ type Thread struct {
 	TokenUsage     llm.Usage
 	ContextUsage   *llm.ContextUsage
 
-	mu      sync.Mutex
-	journal *Journal
-	state   ReplayState
-	store   *Store
-	closed  bool
+	mu              sync.Mutex
+	eventStore      *EventStore
+	state           ReplayState
+	store           *Store
+	writeProjection func(string, []byte) error
+	closed          bool
 }
 
 func (t *Thread) ScratchpadDir() string {
@@ -53,6 +54,30 @@ func (t *Thread) SpoolDir() string {
 		return ""
 	}
 	return filepath.Join(t.Dir, "spool")
+}
+
+func (t *Thread) CurrentGenerationJournalPath() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.eventStore == nil {
+		return ""
+	}
+	return t.eventStore.CurrentGenerationJournalPath()
+}
+
+func (t *Thread) GenerationJournalPaths() []string {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.eventStore == nil {
+		return nil
+	}
+	return t.eventStore.GenerationJournalPaths(t.state.Projection.Generations)
 }
 
 func (t *Thread) Projection() Projection {
@@ -103,13 +128,6 @@ func (t *Thread) LatestEventCursor() string {
 	return t.state.Events[len(t.state.Events)-1].ID
 }
 
-func (t *Thread) Timeline(cursor string, limit int) (TimelinePage, error) {
-	if t == nil {
-		return TimelinePage{}, fmt.Errorf("thread: nil Thread")
-	}
-	return LoadTimelinePage(t.Dir, cursor, limit)
-}
-
 func (t *Thread) AppendFacts(facts ...Fact) (Commit, error) {
 	if t == nil {
 		return Commit{}, fmt.Errorf("thread: nil Thread")
@@ -122,12 +140,12 @@ func (t *Thread) AppendFacts(facts ...Fact) (Commit, error) {
 }
 
 // appendFactsStoreLocked commits facts while the Agent-wide Store lock is
-// held. Keeping journal, per-Thread projection, and the list index under the
+// held. Keeping EventStore, per-Thread metadata, and the list index under the
 // same lock prevents independent Store handles from overwriting each other.
 func (t *Thread) appendFactsStoreLocked(facts ...Fact) (Commit, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.journal == nil {
+	if t.closed || t.eventStore == nil {
 		return Commit{}, fmt.Errorf("thread: closed")
 	}
 	if err := t.ensureProjectionCurrentLocked(); err != nil {
@@ -136,16 +154,22 @@ func (t *Thread) appendFactsStoreLocked(facts ...Fact) (Commit, error) {
 	if t.state.Projection.RetentionState != RetentionActive {
 		return Commit{}, fmt.Errorf("%w: archived Thread is read-only", ErrInvalidTransition)
 	}
-	candidate := cloneReplayState(t.state)
-	commit, _, _, err := t.journal.appendValidated(facts, func(scanned scannedCommit) error {
-		if err := applyCommit(t.ID, &candidate, scanned); err != nil {
-			return err
+	for _, fact := range facts {
+		if fact.Type == FactContextRenewed || fact.Type == FactContextCompacted {
+			return Commit{}, fmt.Errorf("%w: context boundaries require Generation rollover", ErrInvalidTransition)
 		}
-		advanceProjectionRevision(&candidate.Projection, scanned.At)
-		return validateProjectionMetadata(candidate.Projection, t.ID)
-	})
+	}
+	commit, candidate, err := t.prepareAppendLocked(facts)
 	if err != nil {
 		return Commit{}, err
+	}
+	scanned, err := t.eventStore.appendCurrent(commit)
+	if err != nil {
+		return Commit{}, err
+	}
+	candidate.Projection.EventCursor.Offset = scanned.EndOffset
+	if err := validateProjectionMetadata(candidate.Projection, t.ID); err != nil {
+		return commit, fmt.Errorf("thread: committed invalid EventStore projection: %w", err)
 	}
 	t.state = candidate
 	t.refreshPublicLocked()
@@ -157,34 +181,27 @@ func (t *Thread) appendFactsStoreLocked(facts ...Fact) (Commit, error) {
 			return commit, &ProjectionPersistError{Commit: commit, Err: err}
 		}
 	}
-	if shouldAppendCheckpoint(t.state, commit) {
-		checkpoint := checkpointFromState(t.state)
-		candidate := cloneReplayState(t.state)
-		checkpointCommit, _, _, checkpointErr := t.journal.appendValidated(
-			[]Fact{{Type: FactProjectionCheck, Checkpoint: &checkpoint}},
-			func(scanned scannedCommit) error {
-				if err := applyCommit(t.ID, &candidate, scanned); err != nil {
-					return err
-				}
-				advanceProjectionRevision(&candidate.Projection, scanned.At)
-				return validateProjectionMetadata(candidate.Projection, t.ID)
-			},
-		)
-		if checkpointErr != nil {
-			return commit, fmt.Errorf("thread: primary sequence %d committed but checkpoint failed: %w", commit.Seq, checkpointErr)
-		}
-		t.state = candidate
-		t.refreshPublicLocked()
-		if err := t.persistProjectionLocked(); err != nil {
-			return checkpointCommit, &ProjectionPersistError{Commit: checkpointCommit, Err: err}
-		}
-		if t.store != nil {
-			if err := t.store.updateProjectionLocked(); err != nil {
-				return checkpointCommit, &ProjectionPersistError{Commit: checkpointCommit, Err: err}
-			}
-		}
-	}
 	return commit, nil
+}
+
+func (t *Thread) prepareAppendLocked(facts []Fact) (Commit, ReplayState, error) {
+	commit, err := t.eventStore.prepareCommit(facts)
+	if err != nil {
+		return Commit{}, ReplayState{}, err
+	}
+	candidate := cloneReplayState(t.state)
+	provisional := scannedCommit{
+		Commit: commit, GenerationID: t.eventStore.currentID,
+		StartOffset: t.eventStore.size, EndOffset: t.eventStore.size + 1,
+	}
+	if err := applyCommit(t.ID, &candidate, provisional); err != nil {
+		return Commit{}, ReplayState{}, err
+	}
+	advanceProjectionRevision(&candidate.Projection, provisional.At)
+	if err := validateProjectionMetadata(candidate.Projection, t.ID); err != nil {
+		return Commit{}, ReplayState{}, err
+	}
+	return commit, candidate, nil
 }
 
 func (t *Thread) Append(message llm.Message) error {
@@ -297,28 +314,84 @@ func eventPayloadError(payload any) string {
 }
 
 func (t *Thread) BeginNewGeneration() (Commit, error) {
-	t.mu.Lock()
-	current := t.state.Projection.CurrentGeneration
-	t.mu.Unlock()
-	return t.AppendFacts(Fact{
-		Type:             FactContextRenewed,
-		FromGenerationID: current.ID,
-		ToGenerationID:   generationID(current.Ordinal + 1),
-	})
+	return t.beginGeneration(false, llm.Message{}, false, nil)
 }
 
-func (t *Thread) BeginCompactedGeneration(summary llm.Message, automatic bool) (Commit, error) {
-	t.mu.Lock()
-	current := t.state.Projection.CurrentGeneration
-	t.mu.Unlock()
+func (t *Thread) BeginCompactedGeneration(summary llm.Message, automatic bool, contextUsage *llm.ContextUsage) (Commit, error) {
 	summary = prepareMessage(summary)
-	return t.AppendFacts(Fact{
-		Type:             FactContextCompacted,
-		FromGenerationID: current.ID,
-		ToGenerationID:   generationID(current.Ordinal + 1),
-		Summary:          &summary,
-		Automatic:        automatic,
-	})
+	return t.beginGeneration(true, summary, automatic, contextUsage)
+}
+
+func (t *Thread) beginGeneration(compacted bool, summary llm.Message, automatic bool, contextUsage *llm.ContextUsage) (Commit, error) {
+	if t == nil {
+		return Commit{}, fmt.Errorf("thread: nil Thread")
+	}
+	if t.store != nil {
+		t.store.mu.Lock()
+		defer t.store.mu.Unlock()
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed || t.eventStore == nil {
+		return Commit{}, fmt.Errorf("thread: closed")
+	}
+	if err := t.ensureProjectionCurrentLocked(); err != nil {
+		return Commit{}, err
+	}
+	if t.state.Projection.RetentionState != RetentionActive {
+		return Commit{}, fmt.Errorf("%w: archived Thread is read-only", ErrInvalidTransition)
+	}
+	current := t.state.Projection.CurrentGeneration
+	nextID := generationID(current.Ordinal + 1)
+	providerMessages := []llm.Message(nil)
+	factType := FactContextRenewed
+	var summaryPointer *llm.Message
+	if compacted {
+		factType = FactContextCompacted
+		providerMessages = compactProviderMessages(summary, t.state.ProviderMessages)
+		summaryPointer = &summary
+	}
+	seed := generationSeedFromState(t.state, providerMessages, contextUsage)
+	fact := Fact{
+		Type: factType, FromGenerationID: current.ID, ToGenerationID: nextID,
+		Summary: summaryPointer, Automatic: automatic, Seed: &seed,
+	}
+	commit, err := t.eventStore.prepareCommit([]Fact{fact})
+	if err != nil {
+		return Commit{}, err
+	}
+	candidate := cloneReplayState(t.state)
+	provisional := scannedCommit{Commit: commit, GenerationID: nextID, StartOffset: 0, EndOffset: 1}
+	if err := applyCommit(t.ID, &candidate, provisional); err != nil {
+		return Commit{}, err
+	}
+	advanceProjectionRevision(&candidate.Projection, provisional.At)
+	if err := validateProjectionMetadata(candidate.Projection, t.ID); err != nil {
+		return Commit{}, err
+	}
+	staged, err := t.eventStore.stageNextGeneration(commit, nextID)
+	if err != nil {
+		return Commit{}, err
+	}
+	candidate.Projection.EventCursor.Offset = staged.commit.EndOffset
+	if err := validateProjectionMetadata(candidate.Projection, t.ID); err != nil {
+		return Commit{}, errors.Join(err, t.eventStore.discard(staged))
+	}
+	if err := t.persistProjectionValueLocked(candidate.Projection); err != nil {
+		return Commit{}, errors.Join(err, t.eventStore.discard(staged))
+	}
+	t.state = candidate
+	t.refreshPublicLocked()
+	activateErr := t.eventStore.activate(staged)
+	if t.store != nil {
+		if err := t.store.updateProjectionLocked(); err != nil {
+			activateErr = errors.Join(activateErr, err)
+		}
+	}
+	if activateErr != nil {
+		return commit, &ProjectionPersistError{Commit: commit, Err: activateErr}
+	}
+	return commit, nil
 }
 
 func (t *Thread) ApplyAlias(alias string) error {
@@ -379,7 +452,7 @@ func (t *Thread) ContextUsageSnapshot() *llm.ContextUsage {
 func (t *Thread) HasMessageID(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, message := range t.state.Messages {
+	for _, message := range t.state.ProviderMessages {
 		if message.ID == id {
 			return true
 		}
@@ -432,48 +505,49 @@ func (t *Thread) Close() error {
 		return nil
 	}
 	t.closed = true
-	if t.journal == nil {
+	if t.eventStore == nil {
 		return nil
 	}
-	err := t.journal.Close()
-	t.journal = nil
+	err := t.eventStore.Close()
 	return err
 }
 
 func (t *Thread) persistProjectionLocked() error {
-	if err := validateProjectionMetadata(t.state.Projection, t.ID); err != nil {
+	return t.persistProjectionValueLocked(t.state.Projection)
+}
+
+func (t *Thread) persistProjectionValueLocked(projection Projection) error {
+	if err := validateProjectionMetadata(projection, t.ID); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(t.state.Projection, "", "  ")
+	data, err := json.MarshalIndent(projection, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
+	if t.writeProjection != nil {
+		return t.writeProjection(filepath.Join(t.Dir, projectionFile), data)
+	}
 	return homestore.WriteFileAtomic(filepath.Join(t.Dir, projectionFile), data, 0o600, 0o755)
 }
 
 func (t *Thread) mutateProjectionLocked(mutate func(*Projection, Timestamp)) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.journal == nil {
+	if t.closed || t.eventStore == nil {
 		return fmt.Errorf("thread: closed")
 	}
 	if err := t.ensureProjectionCurrentLocked(); err != nil {
 		return err
 	}
 	candidate := cloneProjection(t.state.Projection)
-	at := NewTimestamp(t.journal.now())
+	at := NewTimestamp(t.eventStore.now())
 	mutate(&candidate, at)
 	advanceProjectionRevision(&candidate, at)
 	if err := validateProjectionMetadata(candidate, t.ID); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(candidate, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	if err := homestore.WriteFileAtomic(filepath.Join(t.Dir, projectionFile), data, 0o600, 0o755); err != nil {
+	if err := t.persistProjectionValueLocked(candidate); err != nil {
 		return err
 	}
 	t.state.Projection = candidate
@@ -487,15 +561,15 @@ func (t *Thread) ensureProjectionCurrentLocked() error {
 		return err
 	}
 	current := t.state.Projection
-	if metadata.Revision != current.Revision || metadata.Journal != current.Journal {
+	if metadata.Revision != current.Revision || metadata.EventCursor != current.EventCursor {
 		return fmt.Errorf(
 			"%w for %s: metadata revision/cursor changed from %d/%d to %d/%d",
 			ErrStaleHandle,
 			t.ID,
 			current.Revision,
-			current.Journal.ProjectedSeq,
+			current.EventCursor.Seq,
 			metadata.Revision,
-			metadata.Journal.ProjectedSeq,
+			metadata.EventCursor.Seq,
 		)
 	}
 	return nil
@@ -508,22 +582,27 @@ func advanceProjectionRevision(projection *Projection, at Timestamp) {
 
 func (t *Thread) infoLocked() Info {
 	projection := t.state.Projection
+	generationJournalPath := ""
+	if t.eventStore != nil {
+		generationJournalPath = t.eventStore.CurrentGenerationJournalPath()
+	}
 	return Info{
-		ID:             projection.ThreadID,
-		Alias:          projection.Alias,
-		ParentThreadID: projection.ParentThreadID,
-		Dir:            t.Dir,
-		CreatedAt:      projection.CreatedAt,
-		LastActivityAt: projection.LastActivityAt,
-		ArchivedAt:     projection.ArchivedAt,
-		RetentionState: projection.RetentionState,
-		ExecutionState: projection.ExecutionState,
-		Revision:       projection.Revision,
-		GenerationID:   projection.CurrentGeneration.ID,
-		TurnCount:      projection.Counts.TurnCount,
-		PendingInputs:  projection.Counts.PendingInputCount,
-		TokenUsage:     t.TokenUsage,
-		ContextUsage:   cloneContextUsage(t.ContextUsage),
+		ID:                    projection.ThreadID,
+		Alias:                 projection.Alias,
+		ParentThreadID:        projection.ParentThreadID,
+		Dir:                   t.Dir,
+		CreatedAt:             projection.CreatedAt,
+		LastActivityAt:        projection.LastActivityAt,
+		ArchivedAt:            projection.ArchivedAt,
+		RetentionState:        projection.RetentionState,
+		ExecutionState:        projection.ExecutionState,
+		Revision:              projection.Revision,
+		GenerationID:          projection.CurrentGeneration.ID,
+		GenerationJournalPath: generationJournalPath,
+		TurnCount:             projection.Counts.TurnCount,
+		PendingInputs:         projection.Counts.PendingInputCount,
+		TokenUsage:            t.TokenUsage,
+		ContextUsage:          cloneContextUsage(t.ContextUsage),
 	}
 }
 

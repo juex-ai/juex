@@ -584,14 +584,15 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "missing final EVAL_PASS token")
 
     threads = agent_threads_dir(case_dir, case_dir / "home" / ".juex")
-    journal = threads / thread_id / "journal.jsonl"
-    if not journal.is_file():
+    thread_dir = threads / thread_id
+    journals = thread_generation_journals(thread_dir)
+    if not journals:
         return fail_smoke_case(result, case_dir, artifact_dir, "thread", "missing Thread Journal")
     ok, detail = validate_agent_smoke_files(notes_file, case_dir / "tty-result.txt", token)
     if not ok:
         return fail_smoke_case(result, case_dir, artifact_dir, "filesystem", detail)
     result.filesystem_status = "yes"
-    contract_report = contract_oracle.validate_agent_smoke_contract(journal, journal, token)
+    contract_report = contract_oracle.validate_agent_smoke_contract(thread_dir, thread_dir, token)
     if not contract_report.passed:
         return fail_smoke_case(result, case_dir, artifact_dir, "thread", contract_report.message())
     result.tool_status = "yes"
@@ -599,7 +600,7 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     result.tty_status = "yes"
     result.stdin_status = "yes"
     result.event_contract_status = "yes"
-    result.thinking_status = "observed" if file_contains(journal, '"type":"reasoning"') else "not_exposed"
+    result.thinking_status = "observed" if any(file_contains(path, '"type":"reasoning"') for path in journals) else "not_exposed"
     copy_case_artifacts(case_dir, artifact_dir)
     schedule_key = f"{int(time.time())}-{random.randrange(0x1000000):06x}"
     existing_schedule_id = (
@@ -842,9 +843,9 @@ def run_schedule_routing_case(
                 ),
                 attempt,
             )
-        journal = threads / thread_id / "journal.jsonl"
+        thread_dir = threads / thread_id
         observables = case_dir / ".juex" / "observables.json"
-        validation = schedule_routing.validate_outcome(journal, observables, expectation)
+        validation = schedule_routing.validate_outcome(thread_dir, observables, expectation)
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
         write_contract_report(attempt_artifacts, validation.kind, validation.report)
         validation_outcome = (
@@ -1026,8 +1027,12 @@ def copy_case_artifacts(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> N
         return
     if threads.is_dir():
         for path in sorted(threads.rglob("*")):
-            if path.is_file() and path.name in {"journal.jsonl", "thread.json"}:
+            if path.is_file() and (path.name == "thread.json" or (path.parent.name == "generations" and path.suffix == ".jsonl")):
                 shutil.copy2(path, artifact_dir / path.name)
+
+
+def thread_generation_journals(thread_dir: pathlib.Path) -> list[pathlib.Path]:
+    return contract_oracle.thread_journal_paths(thread_dir)
 
 
 def copy_schedule_routing_artifacts(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> None:
