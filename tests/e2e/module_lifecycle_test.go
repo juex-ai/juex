@@ -256,7 +256,7 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archived.Close()
+	defer func() { _ = archived.Close() }()
 	goalSnapshot, goalErr := workmem.NewGoalStateStore(archived.Dir, workmem.GoalStateOptions{}).StatusSnapshot()
 	notesSnapshot, notesErr := workmem.NewNotesStore(archived.Dir).StatusSnapshot()
 	if goalErr != nil || goalSnapshot == nil || goalSnapshot.Description != "preserve interrupted state" {
