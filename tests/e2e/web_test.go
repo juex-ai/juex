@@ -596,13 +596,24 @@ providers:
 	threadID := createWebMainThread(t, httpServer.URL)
 	runTurn := func(prompt, wantReply string) {
 		t.Helper()
-		response, err := http.Post(
-			httpServer.URL+"/api/threads/"+threadID+"/inputs",
-			"application/json",
-			strings.NewReader(`{"prompt":`+strconv.Quote(prompt)+`}`),
-		)
-		if err != nil {
-			t.Fatal(err)
+		deadline := time.Now().Add(5 * time.Second)
+		var response *http.Response
+		for {
+			var err error
+			response, err = http.Post(
+				httpServer.URL+"/api/threads/"+threadID+"/inputs",
+				"application/json",
+				strings.NewReader(`{"prompt":`+strconv.Quote(prompt)+`}`),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusConflict || time.Now().After(deadline) {
+				break
+			}
+			_, _ = io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+			time.Sleep(10 * time.Millisecond)
 		}
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusAccepted {
