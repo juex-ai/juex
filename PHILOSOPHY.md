@@ -67,6 +67,8 @@ to test and explain.
   migration step.
 - Synchronous turn loop with parallel tool calls: simple ordering and tests,
   while still allowing independent tool calls inside one model response.
-- One chronological Thread Journal: durable and append-friendly; rebuildable
-  projections and reverse paging keep common reads bounded, while full audit
-  reads remain proportional to history size.
+- Ownership-based Thread stores over one universal Journal: Generation history
+  stays durable and append-friendly, while metadata, pending execution, and
+  optional Module state follow their own lifecycles. This keeps list and
+  current-context reads bounded at the cost of explicit commit ordering and
+  recovery boundaries.

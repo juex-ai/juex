@@ -44,8 +44,9 @@ locator 发现依赖。原因见
 
 | 模块 | 所有权 |
 | --- | --- |
-| `internal/thread` | Thread 身份、Store、Journal、replay/projection、timeline paging、Generation、archive 和 delete。 |
-| `internal/runtime` | Input/Turn lifecycle、Provider loop、context projection、compaction、status 和 Tool execution。 |
+| `internal/jsonl` | 与领域无关的 JSONL 持久追加、修复、正向遍历和有界反向读取。 |
+| `internal/thread` | Thread metadata、Agent index、Generation EventStore、timeline paging、archive 和 delete。 |
+| `internal/runtime` | Pending Input 状态、Input/Turn lifecycle、Provider loop、context projection、compaction、status 和 Tool execution。 |
 | `internal/runtime/module` | 类型化 Module capability 与 scoped lifecycle contract。 |
 | `internal/app` | Agent 组合、Main/Worker 管理、Observation admission、slash command 和订阅。 |
 | `internal/observable` | Observable 定义、producer、Observation value 和生成状态。 |
@@ -67,7 +68,12 @@ agent.json
 threads.index.json
 threads/<thread-id>/
   thread.json
-  journal.jsonl
+  pending_inputs.json
+  generations/
+    g000001.jsonl
+    g000002.jsonl
+  goal_state.json
+  notes.md
   scratchpad/
   spool/
 archive/threads/<thread-id>/
@@ -77,36 +83,49 @@ observables/
 extensions/
 ```
 
-每个 Thread Journal 是消息与持久 Runtime fact 的权威。`thread.json` 和
-`threads.index.json` 是限制常见读取成本的可替换 projection；缺失或落后时
-从 Journal 重建。
+`thread.json` 是 Thread 身份、拓扑、lifecycle、时间戳与 Context Generation
+registry 的权威。它还物化有界 counter、context status、Pending Input 数量和
+累计 Usage，并记录这些派生值聚合到的 cursor。`threads.index.json` 只包含列表、
+排序、过滤和 tooltip 数据。Thread 列表读取这份 Agent cache；启动时通过扫描
+`thread.json` 修复缺失或落后的条目，不读取 Generation 历史。
 
-Journal commit 按时间顺序 append，每个 commit 是原子的 fact batch，并使用
-Thread 本地 sequence。Reader 从 EOF 向前分页，再按时间正序返回。只有 torn
-final write 可以自动修复，完整但非法的 commit 属于 corruption。
+`internal/thread.EventStore` 是 `generations/*.jsonl` 唯一的生产路径解析和读写
+入口；`internal/jsonl` 负责原始文件的持久性和有界读取机制。Generation commit
+按时间顺序 append，每个 commit 是原子的 fact batch，并共享一条连续的 Thread
+本地 sequence。当前 Provider context 只从当前 Generation 文件重建。Timeline
+与诊断 reader 通过 EventStore snapshot 分页或捕获已注册 Generation，不自行拼接
+存储路径。Torn final write 可以修复，完整但非法的 commit 属于 corruption。
 
-Active 与 archived Thread 目录分离。Scratchpad 是模型管理的 Thread 状态，
-跨 Generation 保留；spool 是系统管理的 Thread 临时数据；Agent media 独立存储。
+`pending_inputs.json` 是 runtime 拥有的原子、有界当前状态文档。Goal 与 Notes
+Module 分别拥有 `goal_state.json` 和 `notes.md`，core Thread storage 不解释其
+schema。Owner 没有持久状态时，对应文件可以不存在。Scratchpad 是模型管理的
+Thread 状态，跨 Generation 保留；spool 是系统管理的 Thread 临时数据。Active
+与 archived Thread 使用不同 root，lifecycle
+操作移动整个 Thread 目录。Agent media 独立存储。
 
 ## 持久 Input 与发布
 
 ```text
 CLI / Web / Observation
   -> App admission
-  -> Journal commit
-  -> pending projection
+  -> pending_inputs.json acceptance
   -> attempt 与 Turn
   -> prompt / Provider / Tool
-  -> terminal Journal fact
+  -> terminal Generation commit
+  -> pending disposition
+  -> Thread metadata / Agent index aggregate
   -> status 与 replay/live subscriber
 ```
 
 `runtime.Engine.ReceivePendingInput` 是唯一 Framework admission 入口，负责
-start-or-queue 决策；更低层的 queue mutation 保留在 runtime 内部。Journal
-已经记录 Input attempt 与 outcome，因此恢复不需要第二份 Input history。
+start-or-queue 决策；更低层的 queue mutation 保留在 runtime 内部。Input 先持久
+接受，再进入 admission。Runtime 先提交消费它的 Turn terminal Generation record，
+再删除 completed、cancelled 或 expired Input 状态。Recovery 在该 crash window
+中通过 `input_id` 关联记录，避免重复执行；pending 文档不复制长期历史。
 
-持久状态遵循 commit-before-project：fact 先 commit，再发布给 status、
-transcript 或 subscriber。仅实时存在的 delta 必须明确为 transient。
+持久 Generation fact 遵循 commit-before-publish：fact 先 commit，再发布给
+status、transcript 或 subscriber。Thread metadata 先于 Agent index refresh
+提交；index 失败不会回滚 Thread 状态。仅实时存在的 delta 必须明确为 transient。
 
 ## Module、Prompt 与共享资源
 
@@ -123,8 +142,12 @@ Tool call 仍属于发起调用的 Thread Turn。Observation producer 同样属�
 
 ## 失败边界
 
-- Journal commit 失败时不发布任何 fact。
-- Stale projection 可以修复，非法 authoritative commit 不可自动忽略。
+- Generation commit 失败时不发布任何 fact。
+- Stale Agent index 条目可以修复；非法 Thread metadata 或完整但非法的
+  Generation commit 不会被静默忽略。
+- Stale Usage aggregate 只重放其 aggregation cursor 之后的 fact。
+- Terminal Generation commit 先于 Pending Input 删除时，通过 `input_id` 对账，
+  不会重复执行。
 - 已记录 Tool outcome 精确重放；没有持久 outcome 的已启动 Tool 标记 unknown，
   不盲目重试。
 - Restart continuation 要求 replacement 健康且 Thread/Turn 身份一致。

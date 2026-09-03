@@ -33,12 +33,17 @@ Active 与 Archived 分开展示。每一行无需打开 Thread 就应说明身�
 - retention state，以及 active 时的 execution state；
 - 创建时间与最近活动时间；
 - Turn 与 Context Generation 数量；
-- pending Input 数量与当前 context usage。
+- pending Input 数量与当前 context usage；
+- 一个累计 Token Usage label。
 
 Main 的视觉表现与普通 Thread 一致，但不能 rename、archive 或 delete。Idle
 Worker 可以 archive；Archived Worker 可以 restore，或在明确确认后永久删除。
 
-列表数据来自 Agent index，渲染列表不能扫描每个 Thread Journal。
+列表数据来自 Agent index，渲染列表不能打开 Thread metadata 或 Generation
+Journal。激活、hover 或 focus Token Usage label 时，显示总 input、cached input、
+output 和按 input 加 output 排序的 `provider:model` 行。Cached input 是 input 的
+子集，不会在 displayed total 中再次相加。Touch 与 keyboard 用户都能使用该
+disclosure，长模型列表限制在可滚动 panel 内。
 
 ## Thread Detail
 
@@ -47,8 +52,9 @@ Transcript 是一条连续时间线。Context 转换显示为系统活动：
 - `context.compacted` 可以复制 compact summary；
 - `context.renewed` 只标记边界，没有 Provider 内容或复制操作。
 
-首次加载显示 Journal 尾部的完整一页。“Load older messages”向前分页，同时
-保持时间正序展示且不拆分原子 commit。
+首次加载显示已注册 Generation Journal 中最新的完整 EventStore page。“Load
+older messages”跨 Generation 向前分页，同时保持时间正序展示且不拆分原子
+commit。
 
 Active Thread 显示 composer；Archived Thread 只读。Agent 或 Runtime 不可用时
 可以禁用 mutation，但要保留可读的 last-known content，并明确显示 stale/error。

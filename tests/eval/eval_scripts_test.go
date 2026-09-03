@@ -3460,6 +3460,7 @@ func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 		"    ])",
 		"    commit = {'v': 1, 'seq': 1, 'at': '2026-09-01T00:00:00.000Z', 'facts': [{'type': 'context.compacted', 'summary': {'role': 'assistant', 'blocks': [{'type': 'text', 'text': summary}]}}]}",
 		"    (generations / 'g000001.jsonl').write_text(json.dumps(commit, separators=(',', ':')) + '\\n', encoding='utf-8')",
+		"    (thread / 'thread.json').write_text(json.dumps({'generations': [{'generation_id': 'g000001'}]}), encoding='utf-8')",
 		"    answer = compaction.AUTHORITATIVE_COMPLETED_NOTE.rstrip('.') + '\\n' + compaction.AUTHORITATIVE_OPEN_NOTE.rstrip('.')",
 		"    result = compaction.score_authoritative_state(work, answer)",
 		"    assert result['score'] == 30, result",
@@ -3627,6 +3628,7 @@ func TestEvalAgentSmokeToolEventContract(t *testing.T) {
 		"    registered = generations / 'g000001.jsonl'",
 		"    registered.write_text('{}\\n', encoding='utf-8')",
 		"    (generations / 'g000002.jsonl').write_text('{}\\n', encoding='utf-8')",
+		"    assert contract_oracle.thread_journal_paths(thread) == []",
 		"    (thread / 'thread.json').write_text(json.dumps({'generations': [{'generation_id': 'g000001'}]}), encoding='utf-8')",
 		"    assert contract_oracle.thread_journal_paths(thread) == [registered]",
 	}, "\n")
@@ -4315,6 +4317,7 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"            duplicate['observables'].append({'id': expect.schedule_id, 'type': 'schedule', 'schedule_config': seed['observables'][0]['schedule_config']})",
 		"            (case_dir / '.juex' / 'observables.json').write_text(json.dumps(duplicate), encoding='utf-8')",
 		"        (generations / 'g000001.jsonl').write_text('\\n'.join(json.dumps(row) for row in conversation_rows) + '\\n', encoding='utf-8')",
+		"        (thread / 'thread.json').write_text(json.dumps({'generations': [{'generation_id': 'g000001'}]}), encoding='utf-8')",
 		"        return 0",
 		"    original_write_config = helper.write_selected_config",
 		"    original_run_turn = helper.run_turn",

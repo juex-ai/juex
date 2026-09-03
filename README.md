@@ -52,10 +52,12 @@ the Turn that consumes that Input settles. Start the Fleet UI with
   state, and subscriptions. A Worker records its parent but not a fixed result
   destination.
 - `/new` and `/compact` begin new Context Generations. Both retain Thread
-  history and Scratchpad; compact carries a summary, while new clears Goal and
-  Notes.
+  history and Scratchpad; compact carries a summary and retains Goal and Notes,
+  while new asks enabled Goal and Notes Modules to clear their state.
 - Active and archived Thread storage are separate. Archived Workers are
   read-only and can be restored or permanently deleted.
+- Token Usage is recorded per Provider call and aggregated per canonical
+  `provider:model` for Thread inspection.
 
 See [DOMAIN.md](DOMAIN.md) for canonical terms and invariants.
 
@@ -80,9 +82,12 @@ live under their respective `.agents/mcp.json` files. Restart a resident Agent
 after changing startup configuration.
 
 Generated Agent state lives under `$JUEX_HOME/agents/<agent-id>/`. The Agent
-owns identity, Thread indexes, active and archived Threads, media, logs,
-Observables, and Extension state. Each Thread owns one chronological,
-append-only Journal plus its Scratchpad and system-managed spool.
+owns identity, the rebuildable Thread index, active and archived Threads,
+media, logs, Observables, and Extension state. Each Thread has authoritative
+metadata, Generation-segmented chronological Event history, bounded pending
+Input state, module-owned Goal and Notes state, Scratchpad, and system-managed
+spool. Current Provider context is reconstructed from the current Generation;
+Thread Explorer lists come from the Agent index.
 
 The exact ownership, storage authority, and runtime data flow are documented
 in [ARCHITECTURE.md](ARCHITECTURE.md). File schemas and CLI/API details remain
