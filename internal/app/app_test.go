@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
@@ -355,6 +356,73 @@ func TestAppUsesStableMainThreadAndReopensItsJournal(t *testing.T) {
 	}
 	if got := len(second.Thread.ReplaySnapshot().Messages); got != 2 {
 		t.Fatalf("persisted messages = %d, want 2", got)
+	}
+}
+
+func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		committed bool
+	}{
+		{name: "before Generation commit"},
+		{name: "after Generation commit", committed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			cfg := config.Config{
+				ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir,
+				AgentStateDir: filepath.Join(workDir, ".juex"),
+			}
+			first, err := New(Options{Config: cfg, Provider: &stubProvider{}, DisableMCP: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			goal := workmem.NewGoalStateStore(first.Thread.Dir, workmem.GoalStateOptions{})
+			notes := workmem.NewNotesStore(first.Thread.Dir)
+			if _, err := goal.Create("recover staged state", "respect the Generation boundary"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := notes.Update("- [ ] recover staged Notes"); err != nil {
+				t.Fatal(err)
+			}
+			generationID := first.Thread.Projection().CurrentGeneration.ID
+			if _, _, err := goal.StageClearForContextRenewal(generationID); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := notes.StageClearForContextRenewal(generationID); err != nil {
+				t.Fatal(err)
+			}
+			if test.committed {
+				if _, err := first.Thread.BeginNewGeneration(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg.Modules = config.ModulePolicy{
+				string(runtime.GoalModuleID):  {Enabled: false},
+				string(runtime.NotesModuleID): {Enabled: false},
+			}
+			restarted, err := New(Options{Config: cfg, Provider: &stubProvider{}, DisableMCP: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = restarted.Close() })
+
+			goalSnapshot, goalErr := workmem.NewGoalStateStore(restarted.Thread.Dir, workmem.GoalStateOptions{}).StatusSnapshot()
+			notesSnapshot, notesErr := workmem.NewNotesStore(restarted.Thread.Dir).StatusSnapshot()
+			if test.committed {
+				if goalErr != nil || goalSnapshot != nil || notesErr != nil || notesSnapshot != nil {
+					t.Fatalf("committed clear recovered old state: Goal=%+v/%v Notes=%+v/%v", goalSnapshot, goalErr, notesSnapshot, notesErr)
+				}
+				return
+			}
+			if goalErr != nil || goalSnapshot == nil || notesErr != nil || notesSnapshot == nil {
+				t.Fatalf("pre-commit clear did not restore state: Goal=%+v/%v Notes=%+v/%v", goalSnapshot, goalErr, notesSnapshot, notesErr)
+			}
+		})
 	}
 }
 

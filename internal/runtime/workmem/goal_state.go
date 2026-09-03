@@ -95,30 +95,33 @@ func (s *GoalStateStore) Clear() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := clearFileWithRollback(s.Path); err != nil {
+	if err := clearFile(s.Path); err != nil {
 		return fmt.Errorf("goal state clear: %w", err)
 	}
 	return nil
 }
 
-func (s *GoalStateStore) ClearWithRollback() (func() error, error) {
+func (s *GoalStateStore) StageClearForContextRenewal(generationID string) (finalize, rollback func() error, err error) {
 	if s == nil || strings.TrimSpace(s.Path) == "" {
-		return func() error { return nil }, nil
+		return func() error { return nil }, func() error { return nil }, nil
 	}
 	s.mu.Lock()
-	rollback, err := clearFileWithRollback(s.Path)
+	finalize, rollback, err = stageFileClearForContextRenewal(s.Path, generationID)
 	s.mu.Unlock()
 	if err != nil {
-		return nil, fmt.Errorf("goal state clear: %w", err)
+		return nil, nil, fmt.Errorf("goal state stage clear: %w", err)
 	}
-	return func() error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if err := rollback(); err != nil {
-			return fmt.Errorf("goal state restore: %w", err)
+	wrap := func(action func() error, label string) func() error {
+		return func() error {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if err := action(); err != nil {
+				return fmt.Errorf("goal state %s: %w", label, err)
+			}
+			return nil
 		}
-		return nil
-	}, nil
+	}
+	return wrap(finalize, "finalize clear"), wrap(rollback, "restore"), nil
 }
 
 func (s *GoalStateStore) Snapshot() (GoalState, error) {

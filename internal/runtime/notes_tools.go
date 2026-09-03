@@ -63,16 +63,19 @@ func (m *NotesModule) Context(_ context.Context, request runtimemodule.ContextRe
 	}}, nil
 }
 
-func (m *NotesModule) ClearContextForRenewal(context.Context) (func() error, error) {
+func (m *NotesModule) ClearContextForRenewal(_ context.Context, generationID string) (runtimemodule.ContextRenewalClear, error) {
 	if m == nil || m.store == nil {
-		return func() error { return nil }, nil
+		return runtimemodule.ContextRenewalClear{
+			Finalize: func() error { return nil },
+			Rollback: func() error { return nil },
+		}, nil
 	}
-	rollback, err := m.store.ClearWithRollback()
+	finalize, rollback, err := m.store.StageClearForContextRenewal(generationID)
 	if err != nil {
-		return nil, err
+		return runtimemodule.ContextRenewalClear{}, err
 	}
 	m.clearNotesContextError()
-	return rollback, nil
+	return runtimemodule.ContextRenewalClear{Finalize: finalize, Rollback: rollback}, nil
 }
 
 func NotesToolDefinitions() []tools.ToolDefinition {

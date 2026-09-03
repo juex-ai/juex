@@ -64,6 +64,9 @@ func TestCompleteCompactionSummaryTextRestoresUnfinishedAuthoritativeNotes(t *te
 			"description: keep exact state",
 			"Critical Context",
 			"GF1: value",
+			"Next Steps",
+			"ship the latest build",
+			"Relevant Files",
 		}, "\n")),
 		StopReason: llm.StopEndTurn,
 	}
@@ -75,8 +78,11 @@ func TestCompleteCompactionSummaryTextRestoresUnfinishedAuthoritativeNotes(t *te
 	if !ok {
 		t.Fatal("complete summary was rejected")
 	}
-	if !strings.Contains(got, "Next Steps\n- [ ] Run the live compaction evaluation and inspect its scorecard.\n\nRelevant Files") {
+	if !strings.Contains(got, "- [ ] Run the live compaction evaluation and inspect its scorecard.") || !strings.Contains(got, "Relevant Files") {
 		t.Fatalf("summary did not restore the unfinished Notes item:\n%s", got)
+	}
+	if got, ok := completeCompactionSummaryText(response, "- [ ] test"); !ok || !strings.Contains(got, "- [ ] test") {
+		t.Fatalf("summary treated a Notes substring as a complete item:\n%s", got)
 	}
 	if strings.Contains(got, "completed item") {
 		t.Fatalf("summary promoted completed Notes into Next Steps:\n%s", got)

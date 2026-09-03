@@ -502,14 +502,29 @@ func unfinishedCompactionNotes(notes string) []string {
 }
 
 func missingCompactionNotes(section string, items []string) []string {
-	normalizedSection := strings.Join(strings.Fields(strings.ToLower(section)), " ")
+	present := make(map[string]struct{})
+	for _, line := range strings.Split(section, "\n") {
+		if text := normalizedCompactionNextStepText(line); text != "" {
+			present[text] = struct{}{}
+		}
+	}
 	missing := make([]string, 0, len(items))
 	for _, item := range items {
-		if !strings.Contains(normalizedSection, normalizedCompactionNoteText(item)) {
+		if _, ok := present[normalizedCompactionNextStepText(item)]; !ok {
 			missing = append(missing, item)
 		}
 	}
 	return missing
+}
+
+func normalizedCompactionNextStepText(line string) string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimSpace(strings.TrimPrefix(line, "- [ ]"))
+	line = strings.TrimSpace(strings.TrimPrefix(line, "- [x]"))
+	line = strings.TrimSpace(strings.TrimPrefix(line, "- [X]"))
+	line = strings.TrimSpace(strings.TrimPrefix(line, "- "))
+	line = strings.TrimSpace(strings.TrimPrefix(line, "* "))
+	return strings.Join(strings.Fields(strings.ToLower(line)), " ")
 }
 
 func normalizedCompactionNoteText(item string) string {

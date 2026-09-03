@@ -36,30 +36,33 @@ func (s *NotesStore) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := filepath.Join(s.ThreadDir, NotesFileName)
-	if _, err := clearFileWithRollback(path); err != nil {
+	if err := clearFile(path); err != nil {
 		return fmt.Errorf("notes clear: %w", err)
 	}
 	return nil
 }
 
-func (s *NotesStore) ClearWithRollback() (func() error, error) {
+func (s *NotesStore) StageClearForContextRenewal(generationID string) (finalize, rollback func() error, err error) {
 	if s == nil || strings.TrimSpace(s.ThreadDir) == "" {
-		return func() error { return nil }, nil
+		return func() error { return nil }, func() error { return nil }, nil
 	}
 	s.mu.Lock()
-	rollback, err := clearFileWithRollback(filepath.Join(s.ThreadDir, NotesFileName))
+	finalize, rollback, err = stageFileClearForContextRenewal(filepath.Join(s.ThreadDir, NotesFileName), generationID)
 	s.mu.Unlock()
 	if err != nil {
-		return nil, fmt.Errorf("notes clear: %w", err)
+		return nil, nil, fmt.Errorf("notes stage clear: %w", err)
 	}
-	return func() error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if err := rollback(); err != nil {
-			return fmt.Errorf("notes restore: %w", err)
+	wrap := func(action func() error, label string) func() error {
+		return func() error {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if err := action(); err != nil {
+				return fmt.Errorf("notes %s: %w", label, err)
+			}
+			return nil
 		}
-		return nil
-	}, nil
+	}
+	return wrap(finalize, "finalize clear"), wrap(rollback, "restore"), nil
 }
 
 func (s *NotesStore) Snapshot() (NotesSnapshot, error) {
