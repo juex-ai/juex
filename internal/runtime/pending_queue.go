@@ -632,13 +632,14 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 	}
 	q.loaded = true
 	if changed {
-		return q.persistCurrentLocked()
-	}
-	if q.thread != nil {
-		if err := q.thread.SetPendingInputCount(q.materializedPendingCountLocked()); err != nil {
-			q.loaded = false
-			return fmt.Errorf("pending input queue: synchronize Thread count: %w", err)
+		if err := q.persistCurrentLocked(); err != nil {
+			return err
 		}
+		return q.synchronizePendingCountLocked(true)
+	}
+	if err := q.synchronizePendingCountLocked(true); err != nil {
+		q.loaded = false
+		return err
 	}
 	return nil
 }
@@ -758,11 +759,23 @@ func (q *PendingInputQueue) persistLocked(records map[string]PendingInputRecord,
 	q.order = append([]string(nil), order...)
 	q.rebuildIndexesLocked()
 	q.loaded = true
-	if q.thread != nil {
-		if err := q.thread.SetPendingInputCount(q.materializedPendingCountLocked()); err != nil {
-			q.loaded = false
-			return fmt.Errorf("pending input queue: update Thread count: %w", err)
-		}
+	if err := q.synchronizePendingCountLocked(false); err != nil {
+		q.loaded = false
+		return err
+	}
+	return nil
+}
+
+func (q *PendingInputQueue) synchronizePendingCountLocked(force bool) error {
+	if q.thread == nil {
+		return nil
+	}
+	count := q.materializedPendingCountLocked()
+	if !force && q.thread.Info().PendingInputs == count {
+		return nil
+	}
+	if err := q.thread.SetPendingInputCount(count); err != nil {
+		return fmt.Errorf("pending input queue: synchronize Thread count: %w", err)
 	}
 	return nil
 }

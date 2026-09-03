@@ -409,7 +409,7 @@ func (t *Thread) SetPendingInputCount(count int) error {
 	if t.state.Projection.Counts.PendingInputCount == count {
 		t.mu.Unlock()
 		if t.store != nil {
-			if err := t.store.updateProjectionLocked(); err != nil {
+			if _, err := t.store.loadOrRebuildIndexLocked(); err != nil {
 				return fmt.Errorf("thread: metadata current but index refresh failed: %w", err)
 			}
 		}

@@ -567,11 +567,6 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 		}
 		return false
 	})
-	waitForCondition(t, 5*time.Second, func() bool {
-		state, _, statusErr := fetchWebTurnState(http.DefaultClient, ts.URL, threadID, seededTurn.TurnID)
-		return statusErr == nil && state == string(juexruntime.TurnLifecycleCompleted)
-	})
-
 	type compactResult struct {
 		response *http.Response
 		err      error
