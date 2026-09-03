@@ -391,6 +391,9 @@ func (e *Engine) completeCompactionSummary(
 	if model == "" && provider != nil {
 		model = provider.Name()
 	}
+	if _, usageErr := e.currentThread().RecordProviderUsage(turnID, modelRef, resp.Usage, nil); usageErr != nil {
+		return resp, epoch, &compactionSummaryJournalError{err: errors.Join(requestErr, fmt.Errorf("record compaction summary Usage: %w", usageErr))}
+	}
 	if requestErr != nil {
 		emitErr := e.emit(events.Event{Type: "context.compact.summary_errored", TurnID: turnID, Payload: ContextCompactSummaryErroredPayload{
 			Attempt: attempt, Model: model, Error: requestErr.Error(), EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
@@ -399,9 +402,6 @@ func (e *Engine) completeCompactionSummary(
 			return resp, epoch, &compactionSummaryJournalError{err: errors.Join(requestErr, fmt.Errorf("commit compaction summary error: %w", emitErr))}
 		}
 		return resp, epoch, requestErr
-	}
-	if _, err := e.currentThread().RecordProviderUsage(turnID, modelRef, resp.Usage, nil); err != nil {
-		return resp, epoch, &compactionSummaryJournalError{err: fmt.Errorf("record compaction summary Usage: %w", err)}
 	}
 	if err := e.emit(events.Event{Type: "context.compact.summary_responded", TurnID: turnID, Payload: ContextCompactSummaryRespondedPayload{
 		Attempt: attempt, Model: model, StopReason: resp.StopReason, Usage: resp.Usage, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,

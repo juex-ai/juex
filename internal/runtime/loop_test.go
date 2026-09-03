@@ -4230,7 +4230,7 @@ func TestCompactFallsBackWhenEmptySummaryRetryFails(t *testing.T) {
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "first thought"}}},
 				Usage:   llm.Usage{InputTokens: 5, OutputTokens: 1},
 			}},
-			{err: errors.New("retry unavailable")},
+			{response: llm.Response{Usage: llm.Usage{InputTokens: 6, OutputTokens: 1}}, err: errors.New("retry unavailable")},
 		},
 	}
 	eng, bus := newEngine(t, main, false)
@@ -4253,8 +4253,11 @@ func TestCompactFallsBackWhenEmptySummaryRetryFails(t *testing.T) {
 	if !strings.Contains(fallback.Error, "retry unavailable") {
 		t.Fatalf("fallback payload = %+v", fallback)
 	}
-	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 12, OutputTokens: 3}) {
-		t.Fatalf("token usage = %+v, want successful attempts only", usage)
+	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 18, OutputTokens: 4}) {
+		t.Fatalf("token usage = %+v, want errored attempt included", usage)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["summary:model"]; got != (llm.Usage{InputTokens: 11, OutputTokens: 2}) {
+		t.Fatalf("summary-model Usage = %+v, want errored retry included", eng.Thread.TokenUsage.ByModel)
 	}
 }
 
