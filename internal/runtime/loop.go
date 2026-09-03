@@ -865,10 +865,12 @@ type ModelCandidate struct {
 }
 
 type providerTurnResult struct {
-	response  llm.Response
-	request   providerTurnRequest
-	candidate ModelCandidate
-	notice    *llm.Message
+	response     llm.Response
+	request      providerTurnRequest
+	candidate    ModelCandidate
+	notice       *llm.Message
+	totalUsage   llm.Usage
+	contextUsage *llm.ContextUsage
 }
 
 type recordedProviderResponse struct {
@@ -1105,21 +1107,43 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 				}})
 			},
 		})
+		totalUsage, contextUsage, usageErr := e.recordProviderTurnUsageLocked(
+			turnID,
+			prepared,
+			request,
+			candidate,
+			resp,
+		)
+		result := providerTurnResult{
+			response:     resp,
+			request:      request,
+			candidate:    candidate,
+			notice:       notice,
+			totalUsage:   totalUsage,
+			contextUsage: contextUsage,
+		}
+		if usageErr != nil {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			if err != nil {
+				usageErr = fmt.Errorf("record Usage after provider error %q: %w", err, usageErr)
+			}
+			return result, usageErr
+		}
 		if err == nil {
 			if contextErr := cancellation.ContextError(ctx); contextErr != nil {
 				health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
 				discardErr := fmt.Errorf("provider response discarded: %w", contextErr)
 				if emitErr := e.emitProviderTurnErrored(turnID, request, candidate.Ref, discardErr); emitErr != nil {
-					return providerTurnResult{request: request}, fmt.Errorf("commit discarded provider response: %w", emitErr)
+					return result, fmt.Errorf("commit discarded provider response: %w", emitErr)
 				}
-				return providerTurnResult{request: request}, context.Canceled
+				return result, context.Canceled
 			}
 			health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
-			return providerTurnResult{response: resp, request: request, candidate: candidate, notice: notice}, nil
+			return result, nil
 		}
 		if emitErr := e.emitProviderTurnErrored(turnID, request, candidate.Ref, err); emitErr != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
-			return providerTurnResult{request: request}, &modelRequestError{
+			return result, &modelRequestError{
 				err:           errors.Join(err, fmt.Errorf("commit provider error: %w", emitErr)),
 				contextWindow: candidateContextWindow(candidate, e.ContextWindow),
 			}
@@ -1127,11 +1151,11 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		reason, eligible := llm.ClassifyFallbackError(err)
 		if !eligible {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
-			return providerTurnResult{request: request}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
+			return result, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
 		}
 		if len(candidates) == 1 {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
-			return providerTurnResult{request: request}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
+			return result, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
 		}
 		transition := health.Complete(selection.Ticket, llm.ModelHealthEligibleFailure, string(reason))
 		failures = append(failures, modelAttemptFailure{ref: candidate.Ref, err: err})
@@ -1148,6 +1172,41 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		}
 		base.history = active.Messages
 	}
+}
+
+func (e *Engine) recordProviderTurnUsageLocked(
+	turnID string,
+	prepared preparedTurnContext,
+	request providerTurnRequest,
+	candidate ModelCandidate,
+	response llm.Response,
+) (llm.Usage, *llm.ContextUsage, error) {
+	model := response.Message.Model
+	if len(e.ModelCandidates) > 0 || model == "" {
+		model = candidate.Ref
+	}
+	var contextUsage *llm.ContextUsage
+	if !response.Usage.IsZero() {
+		snapshot := e.contextUsageSnapshot(
+			model,
+			candidateContextWindow(candidate, e.ContextWindow),
+			response.Usage,
+			prepared.promptSections,
+			prepared.tools,
+			request.history,
+		)
+		contextUsage = &snapshot
+	}
+	totalUsage, err := e.currentThread().RecordProviderUsage(
+		turnID,
+		usageModelRef(candidate),
+		response.Usage,
+		contextUsage,
+	)
+	if err != nil {
+		return llm.Usage{}, contextUsage, fmt.Errorf("thread record provider Usage: %w", err)
+	}
+	return totalUsage, contextUsage, nil
 }
 
 func (e *Engine) emitProviderTurnErrored(turnID string, request providerTurnRequest, model string, cause error) error {
@@ -1209,7 +1268,7 @@ func (e *Engine) continueAfterProviderFailure(ctx context.Context, turnID string
 	return true
 }
 
-func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTurnContext, result providerTurnResult) (recordedProviderResponse, error) {
+func (e *Engine) recordProviderResponseLocked(turnID string, result providerTurnResult) (recordedProviderResponse, error) {
 	request := result.request
 	resp := result.response
 	msg := resp.Message
@@ -1217,16 +1276,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		msg.Model = result.candidate.Ref
 	}
 	msg.Blocks = prepareToolInputs(msg.Blocks, e.Tools)
-	var contextUsage *llm.ContextUsage
-	if !resp.Usage.IsZero() {
-		snapshot := e.contextUsageSnapshot(msg.Model, candidateContextWindow(result.candidate, e.ContextWindow), resp.Usage, prepared.promptSections, prepared.tools, request.history)
-		contextUsage = &snapshot
-	}
 	threadState := e.currentThread()
-	totalUsage, err := threadState.RecordProviderUsage(turnID, usageModelRef(result.candidate), resp.Usage, contextUsage)
-	if err != nil {
-		return recordedProviderResponse{}, fmt.Errorf("thread record provider Usage: %w", err)
-	}
 	messages := make([]llm.Message, 0, 2)
 	if result.notice != nil {
 		messages = append(messages, *result.notice)
@@ -1250,13 +1300,13 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		Iter:          request.iter,
 		StopReason:    resp.StopReason,
 		Usage:         resp.Usage,
-		TokenUsage:    totalUsage,
+		TokenUsage:    result.totalUsage,
 		Blocks:        msg.Blocks,
 		Text:          responseText(msg),
 		Thinking:      responseThinking(msg),
 		ToolCalls:     responseToolCalls(msg, request.iter),
 		Model:         msg.Model,
-		ContextUsage:  contextUsage,
+		ContextUsage:  result.contextUsage,
 		Notice:        notice,
 		MessageID:     msg.ID,
 		EpochID:       request.epochID,

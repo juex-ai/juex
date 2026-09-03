@@ -269,6 +269,37 @@ func TestTurnFallbackBatchFailureRecordsUsageBeforeResponsePersistence(t *testin
 	}
 }
 
+func TestTurnFallbackRecordsUsageFromErroredResponse(t *testing.T) {
+	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{
+		response: llm.Response{Usage: llm.Usage{InputTokens: 7, OutputTokens: 2}},
+		err:      errors.New("status 503: charged failure"),
+	}}}
+	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{response: llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "served by backup"),
+		StopReason: llm.StopEndTurn,
+		Usage:      llm.Usage{InputTokens: 5, OutputTokens: 1},
+	}}}}
+	eng, _ := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
+	}
+
+	if _, err := eng.Turn(context.Background(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	wantTotal := llm.Usage{InputTokens: 12, OutputTokens: 3}
+	if got := eng.Thread.TokenUsageSnapshot(); got != wantTotal {
+		t.Fatalf("aggregate Usage = %+v, want %+v", got, wantTotal)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["primary:model"]; got != (llm.Usage{InputTokens: 7, OutputTokens: 2}) {
+		t.Fatalf("errored primary Usage = %+v", got)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["backup:model"]; got != (llm.Usage{InputTokens: 5, OutputTokens: 1}) {
+		t.Fatalf("backup Usage = %+v", got)
+	}
+}
+
 func TestTurnFallbackChainExhaustionEmitsEmptyDestination(t *testing.T) {
 	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{err: errors.New("status 503")}}}
 	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{err: errors.New("status 403")}}}

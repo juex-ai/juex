@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
@@ -55,6 +56,11 @@ type readOnlyStateBackend interface {
 	ReadOnlyState(string) (fleet.ReadOnlyAgentState, error)
 }
 
+type cachedReadOnlyAgentHandler struct {
+	state   fleet.ReadOnlyAgentState
+	handler http.Handler
+}
+
 type Server struct {
 	manager         backend
 	addr            string
@@ -65,6 +71,8 @@ type Server struct {
 	activityClients *activityClientPool
 	fleetStatus     *fleetStatusHub
 	processMetrics  processmetrics.Provider
+	readOnlyMu      sync.Mutex
+	readOnlyAgents  map[string]cachedReadOnlyAgentHandler
 }
 
 func New(opts Options) (*Server, error) {
@@ -93,6 +101,7 @@ func newServer(manager backend, opts Options) *Server {
 		readActivity:    activityClients.fetch,
 		activityClients: activityClients,
 		processMetrics:  processMetricProvider,
+		readOnlyAgents:  make(map[string]cachedReadOnlyAgentHandler),
 	}
 	server.fleetStatus = newFleetStatusHub(manager, activityClients, processMetricProvider)
 	return server
@@ -234,6 +243,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			writeFleetError(w, err)
 			return
 		}
+		s.invalidateReadOnlyAgentHandlers()
 		status := http.StatusOK
 		if result.Created {
 			status = http.StatusCreated
@@ -275,6 +285,7 @@ func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
 			writeFleetError(w, err)
 			return
 		}
+		s.invalidateReadOnlyAgentHandlers()
 		s.fleetStatus.requestReconcile()
 		writeJSON(w, http.StatusOK, payload)
 	case "enable", "disable":
@@ -287,6 +298,7 @@ func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
 			writeFleetError(w, err)
 			return
 		}
+		s.invalidateReadOnlyAgentHandlers()
 		s.fleetStatus.requestReconcile()
 		writeJSON(w, http.StatusOK, status)
 	case "logs":
@@ -326,6 +338,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request, selector s
 		writeFleetError(w, err)
 		return
 	}
+	s.invalidateReadOnlyAgentHandlers()
 	s.fleetStatus.requestReconcile()
 	writeJSON(w, http.StatusOK, removed)
 }
@@ -402,6 +415,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request, selector s
 			writeFleetError(w, err)
 			return
 		}
+		s.invalidateReadOnlyAgentHandlers()
 		configState, err = fleet.RedactAgentConfig(configState)
 		if err != nil {
 			writeFleetError(w, err)
@@ -438,6 +452,7 @@ func (s *Server) proxyAgent(w http.ResponseWriter, r *http.Request, selector, up
 		writeFleetError(w, err)
 		return
 	}
+	s.invalidateReadOnlyAgentHandler(runtimeState.AgentID)
 	target, err := endpoint.Parse(runtimeState.Endpoint)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "proxy_error", "agent endpoint is invalid")
@@ -482,13 +497,39 @@ func (s *Server) serveReadOnlyAgent(
 	request := r.Clone(r.Context())
 	request.URL.Path = upstreamPath
 	request.URL.RawPath = ""
-	web.NewReadOnlyAPIHandler(config.Config{
+	s.readOnlyAgentHandler(state).ServeHTTP(w, request)
+	return true
+}
+
+func (s *Server) readOnlyAgentHandler(state fleet.ReadOnlyAgentState) http.Handler {
+	s.readOnlyMu.Lock()
+	defer s.readOnlyMu.Unlock()
+	if cached, ok := s.readOnlyAgents[state.ID]; ok && cached.state == state {
+		return cached.handler
+	}
+	handler := web.NewReadOnlyAPIHandler(config.Config{
 		WorkDir:       state.Workspace,
 		AgentID:       state.ID,
 		AgentName:     state.Name,
 		AgentStateDir: state.StateDir,
-	}).ServeHTTP(w, request)
-	return true
+	})
+	s.readOnlyAgents[state.ID] = cachedReadOnlyAgentHandler{state: state, handler: handler}
+	return handler
+}
+
+func (s *Server) invalidateReadOnlyAgentHandler(agentID string) {
+	if agentID == "" {
+		return
+	}
+	s.readOnlyMu.Lock()
+	delete(s.readOnlyAgents, agentID)
+	s.readOnlyMu.Unlock()
+}
+
+func (s *Server) invalidateReadOnlyAgentHandlers() {
+	s.readOnlyMu.Lock()
+	clear(s.readOnlyAgents)
+	s.readOnlyMu.Unlock()
 }
 
 func isReadOnlyAgentRequest(method, path string) bool {

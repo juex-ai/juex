@@ -277,6 +277,65 @@ func TestStoppedAgentServesPersistedThreadHistory(t *testing.T) {
 	}
 }
 
+func TestStoppedAgentReusesPreparedReadOnlyHandler(t *testing.T) {
+	stateDir := t.TempDir()
+	main, err := thread.NewStore(stateDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backend := &fakeBackend{
+		endpointErr: errors.New("agent is stopped"),
+		readOnly: fleet.ReadOnlyAgentState{
+			ID:        "aaaaaa",
+			Name:      "alpha",
+			Workspace: t.TempDir(),
+			StateDir:  stateDir,
+		},
+	}
+	server := newServer(backend, Options{Addr: "127.0.0.1:0"})
+	handler := server.Handler()
+	requestList := func() *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(
+			response,
+			httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/api/threads", http.NoBody),
+		)
+		return response
+	}
+	if response := requestList(); response.Code != http.StatusOK {
+		t.Fatalf("first stopped list status = %d body=%s", response.Code, response.Body.String())
+	}
+	metadataPath := filepath.Join(stateDir, "threads", thread.MainID, "thread.json")
+	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if response := requestList(); response.Code != http.StatusOK {
+		t.Fatalf("cached stopped list status = %d body=%s", response.Code, response.Body.String())
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	backend.endpointErr = nil
+	backend.runtime = tcpRuntime(t, upstream.URL)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(
+		response,
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/api/runtime", http.NoBody),
+	)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("live proxy status = %d body=%s", response.Code, response.Body.String())
+	}
+	backend.endpointErr = errors.New("agent stopped again")
+	if response := requestList(); response.Code != http.StatusInternalServerError {
+		t.Fatalf("post-runtime stopped list status = %d body=%s, want fresh recovery failure", response.Code, response.Body.String())
+	}
+}
+
 func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
 	const threadID = "8f0582"
 	tests := []struct {

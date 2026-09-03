@@ -428,6 +428,14 @@ func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID stri
 		return PendingInputResult{Disposition: PendingInputDropped, RecordID: record.ID}, ErrPendingInputHandled
 	}
 	status := e.PendingInputStatus()
+	if record.State == PendingInputStateProcessed && record.TurnID != "" && record.TurnID == status.TurnID {
+		return PendingInputResult{
+			Disposition: PendingInputProcessed,
+			RecordID:    record.ID,
+			TurnID:      record.TurnID,
+			Status:      status,
+		}, nil
+	}
 	if record.State == PendingInputStateAdmitted && record.TurnID != "" && record.TurnID == status.TurnID {
 		return PendingInputResult{Disposition: PendingInputQueued, RecordID: record.ID, Status: status}, nil
 	}

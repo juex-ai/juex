@@ -131,7 +131,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		return err
 	}
 
-	recorded, err := l.engine.recordProviderResponseLocked(l.turnID, l.prepared, result)
+	recorded, err := l.engine.recordProviderResponseLocked(l.turnID, result)
 	if err != nil {
 		return err
 	}

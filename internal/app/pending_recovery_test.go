@@ -1220,6 +1220,71 @@ func TestAppDeliverObservationReportsTranscriptConsumptionDespiteTurnError(t *te
 	}
 }
 
+func TestAppDeliverObservationTreatsLiveProcessedDuplicateAsDelivered(t *testing.T) {
+	dir := t.TempDir()
+	provider := newBlockingAppProvider()
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		provider.Release()
+		_ = a.CloseAndWait()
+	})
+	record := testObservationRecord("obs-live-processed-duplicate")
+	type deliveryResult struct {
+		outcome observable.DeliveryOutcome
+		err     error
+	}
+	firstDone := make(chan deliveryResult, 1)
+	go func() {
+		outcome, deliveryErr := a.DeliverObservation(context.Background(), record)
+		firstDone <- deliveryResult{outcome: outcome, err: deliveryErr}
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(pendingRecoveryTestTimeout):
+		t.Fatal("first delivery did not reach provider")
+	}
+
+	recordID := observationPendingInputID(record)
+	pending, ok, err := a.Engine.PersistedPendingMessage(recordID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || pending.State != runtime.PendingInputStateProcessed ||
+		pending.TurnID == "" || pending.TurnID != a.PendingInputStatus().TurnID {
+		t.Fatalf("live pending record = %+v ok=%v status=%+v", pending, ok, a.PendingInputStatus())
+	}
+
+	duplicate, duplicateErr := a.DeliverObservation(context.Background(), record)
+	if duplicateErr != nil || duplicate.State != observable.ObservationStateDelivered ||
+		duplicate.PendingInputID != recordID {
+		t.Fatalf("duplicate delivery = %+v error=%v, want idempotent delivered", duplicate, duplicateErr)
+	}
+	provider.mu.Lock()
+	callsBeforeRelease := provider.calls
+	provider.mu.Unlock()
+	if callsBeforeRelease != 1 {
+		t.Fatalf("provider calls before release = %d, want 1", callsBeforeRelease)
+	}
+
+	provider.Release()
+	select {
+	case result := <-firstDone:
+		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered {
+			t.Fatalf("first delivery = %+v error=%v", result.outcome, result.err)
+		}
+	case <-time.After(pendingRecoveryTestTimeout):
+		t.Fatal("first delivery did not finish")
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.calls != 1 {
+		t.Fatalf("provider calls after live duplicate = %d, want 1", provider.calls)
+	}
+}
+
 func TestAppCloseCancelsAndWaitsForStartupPendingInputRecovery(t *testing.T) {
 	dir := t.TempDir()
 	first, err := New(recoveryAppOptions(dir, &recoveryProvider{}))

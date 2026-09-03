@@ -186,6 +186,7 @@ func (p *cancelBeforeToolProvider) Complete(ctx context.Context, sys string, his
 			{Type: llm.BlockToolUse, ToolUseID: "after_cancel", ToolName: "should_not_run", Input: map[string]any{}},
 		}},
 		StopReason: llm.StopToolUse,
+		Usage:      llm.Usage{InputTokens: 12, CachedInputTokens: 3, OutputTokens: 4},
 	}, nil
 }
 
@@ -7918,6 +7919,9 @@ func TestTurn_DoesNotDispatchToolAfterProviderCancelsContext(t *testing.T) {
 	}
 	if errored.EpochID != epoch.EpochID || errored.RequestDigest != epoch.RequestDigest || !strings.Contains(errored.Error, "response discarded") {
 		t.Fatalf("llm.errored = %+v, epoch = %+v", errored, epoch)
+	}
+	if got := eng.Thread.TokenUsageSnapshot(); got != (llm.Usage{InputTokens: 12, CachedInputTokens: 3, OutputTokens: 4}) {
+		t.Fatalf("discarded response Usage = %+v", got)
 	}
 }
 
