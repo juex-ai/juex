@@ -258,8 +258,12 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				if threadID != "234567" {
 					t.Fatalf("resume Thread = %q", threadID)
 				}
-				if retryTurnID != test.confirmTurn && !(test.confirmTurn == "" && retryTurnID == "turn-original") {
-					t.Fatalf("resume retry Turn = %q", retryTurnID)
+				wantRetryTurnID := test.confirmTurn
+				if wantRetryTurnID == "" {
+					wantRetryTurnID = "turn-original"
+				}
+				if retryTurnID != wantRetryTurnID {
+					t.Fatalf("resume retry Turn = %q, want %q", retryTurnID, wantRetryTurnID)
 				}
 				if !strings.Contains(prompt, "System notice") {
 					t.Fatalf("resume prompt = %q", prompt)
