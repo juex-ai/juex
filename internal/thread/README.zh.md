@@ -26,5 +26,6 @@ stage boundary 文件，再由 metadata 选中它。Cold open 把 `thread.json` 
 只修复安全的 interrupted tail 或未注册的未来 Generation 文件，并且只从当前
 Generation 重建 Provider context。
 
-Archive 与 unarchive 移动完整 Thread 目录，不增加 Generation fact。诊断 bundle
-等只读观察不能触发可变 lifecycle recovery。
+Archive 与 unarchive 移动完整 Thread 目录，不增加 Generation fact。打开 Thread
+可能执行恢复，包括 Web 读取时打开 archived Thread。要求不执行恢复的诊断
+consumer 使用 `EventStoreSnapshot`，而不是打开 Thread。

@@ -30,5 +30,6 @@ repairs only safe interrupted tails or unregistered future Generation files,
 and reconstructs Provider context from the current Generation alone.
 
 Archive and unarchive move the complete Thread directory without adding
-Generation facts. Read-only observation, including diagnostic bundles, must not
-run mutable lifecycle recovery.
+Generation facts. Opening a Thread is recovery-capable, including an archived
+Thread opened for Web reads. Consumers that require a nonrecovering diagnostic
+view use `EventStoreSnapshot` instead of opening the Thread.

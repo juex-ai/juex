@@ -41,10 +41,13 @@ delivery routing.
 
 ## Input, Attempt, Turn, And Subscription
 
-An Input is durably accepted before execution. Current nonterminal or
-recoverable Inputs are ordered in bounded pending state. An Input may be
-claimed by multiple attempts across retryable failures, but it remains
-recoverable or reaches an explicit terminal record in its Context Generation.
+An Input is durably accepted before execution. Inputs that still require
+execution or recovery are ordered in bounded pending state. Once admitted to a
+Turn, an Input may be claimed by multiple attempts across retryable failures,
+but remains recoverable until the Turn has an explicit terminal record in its
+Context Generation. An Input that expires before admission, or is explicitly
+cancelled or discarded while pending, leaves current state without requiring a
+Generation terminal record.
 
 A Turn is one Provider/Tool execution episode in one Context Generation. One
 Turn may consume multiple pending Inputs. Main is asynchronous dialogue rather
@@ -114,8 +117,8 @@ nonexistent Thread.
 5. One Event sequence spans all Generation Journals; sequence, not timestamp,
    defines fact order.
 6. Persisted absolute timestamps use canonical UTC millisecond precision.
-7. Every accepted Input remains in bounded recoverable state or has an explicit
-   terminal Generation record.
+7. Every admitted Input remains recoverable until its consuming Turn has an
+   explicit terminal Generation record.
 8. Durable Generation facts commit before replay/live publication.
 9. Recorded Tool outcomes replay exactly; unknown outcomes are not retried blindly.
 10. Observations route only to Main.

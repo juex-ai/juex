@@ -39,9 +39,11 @@ Parent 只表达拓扑，不表示投递路由。
 
 ## Input、Attempt、Turn 与订阅
 
-Input 在执行前先被持久接受。当前非 terminal 或可恢复的 Input 按顺序保存在
-有界 pending 状态中。它可能在可重试失败后被多次 attempt claim，但最终要么
-保持可恢复，要么在所属 Context Generation 中形成显式 terminal record。
+Input 在执行前先被持久接受。仍需执行或恢复的 Input 按顺序保存在有界 pending
+状态中。Input 一旦被 admission 到 Turn，可能在可重试失败后被多次 attempt
+claim，但在 Turn 于所属 Context Generation 中形成显式 terminal record 前始终
+保持可恢复。若 Input 在 admission 前过期，或仍处于 pending 时被显式取消或
+丢弃，则可以离开当前状态，无需 Generation terminal record。
 
 Turn 是一个 Context Generation 内的一次 Provider/Tool 执行过程，一个 Turn
 可以消费多条 pending Input。Main 是异步对话而不是 RPC，不能仅按位置将
@@ -104,8 +106,8 @@ Archive/unarchive 针对整个 idle Worker，不创建 Generation。Archived Thr
 5. 一条 Event sequence 跨越所有 Generation Journal；Fact 顺序由 sequence
    决定，而不是 timestamp。
 6. 持久绝对时间统一使用 UTC 毫秒精度。
-7. 每条已接受 Input 要么保留在有界可恢复状态中，要么有显式 terminal
-   Generation record。
+7. 每条已 admission 的 Input 都保持可恢复，直到消费它的 Turn 形成显式
+   terminal Generation record。
 8. 持久 Generation fact 先 commit，再发布 replay/live。
 9. 已记录 Tool outcome 精确重放；未知 outcome 不盲目重试。
 10. Observation 只路由 Main。
