@@ -173,38 +173,38 @@ func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "spool"), 0o700); err != nil {
 		return nil, err
 	}
-	journal, commits, err := openJournal(filepath.Join(dir, journalFile), id, s.now)
+	eventStore, created, err := createEventStore(dir, id, alias, parentID, s.now)
 	if err != nil {
-		return nil, err
+		return nil, cleanupCreatedThreadDir(dir, nil, err)
 	}
-	if len(commits) != 0 {
-		_ = journal.Close()
-		return nil, fmt.Errorf("%w: create target is not empty", ErrCorruptJournal)
-	}
-	fact := Fact{Type: FactThreadCreated, ThreadID: id, Alias: alias, ParentThreadID: parentID, GenerationID: InitialGeneration}
-	commit, start, err := journal.Append(fact)
+	state, err := replay(id, []scannedCommit{created})
 	if err != nil {
-		_ = journal.Close()
-		return nil, err
-	}
-	lineEnd := journal.size
-	state, err := replay(id, []scannedCommit{{Commit: commit, StartOffset: start, EndOffset: lineEnd}})
-	if err != nil {
-		_ = journal.Close()
-		return nil, err
+		return nil, cleanupCreatedThreadDir(dir, eventStore, err)
 	}
 	state.Projection.Revision = 1
-	thread := &Thread{ID: id, Dir: dir, journal: journal, state: state, store: s}
+	thread := &Thread{ID: id, Dir: dir, eventStore: eventStore, state: state, store: s}
 	thread.refreshPublicLocked()
 	if err := thread.persistProjectionLocked(); err != nil {
-		_ = thread.Close()
-		return nil, err
+		return nil, cleanupCreatedThreadDir(dir, eventStore, err)
 	}
 	if err := s.updateProjectionLocked(); err != nil {
 		_ = thread.Close()
 		return nil, err
 	}
 	return thread, nil
+}
+
+func cleanupCreatedThreadDir(dir string, eventStore *EventStore, cause error) error {
+	var closeErr error
+	if eventStore != nil {
+		closeErr = eventStore.Close()
+	}
+	removeErr := os.RemoveAll(dir)
+	var syncErr error
+	if removeErr == nil {
+		syncErr = homestore.SyncDir(filepath.Dir(dir))
+	}
+	return errors.Join(cause, closeErr, removeErr, syncErr)
 }
 
 func (s *Store) openLocked(dir, id string) (*Thread, error) {
@@ -219,22 +219,15 @@ func (s *Store) openLocked(dir, id string) (*Thread, error) {
 	if (metadata.RetentionState == RetentionArchived) != archivedNamespace {
 		return nil, fmt.Errorf("%w for %s: retention state does not match directory namespace", ErrInvalidMetadata, id)
 	}
-	if _, err := os.Stat(filepath.Join(dir, journalFile)); err != nil {
-		return nil, err
-	}
-	journal, state, err := openJournalForReplay(filepath.Join(dir, journalFile), id, s.now)
+	eventStore, state, err := openEventStore(dir, id, metadata, s.now)
 	if err != nil {
 		return nil, err
 	}
-	if err := recoverContextRenewalFiles(dir, state.Projection.CurrentGeneration.ID); err != nil {
-		_ = journal.Close()
+	if err := recoverContextRenewalFiles(dir, metadata.CurrentGeneration.ID); err != nil {
+		_ = eventStore.Close()
 		return nil, fmt.Errorf("thread: recover Context renewal files for %s: %w", id, err)
 	}
-	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
-		_ = journal.Close()
-		return nil, err
-	}
-	thread := &Thread{ID: id, Dir: dir, journal: journal, state: state, store: s}
+	thread := &Thread{ID: id, Dir: dir, eventStore: eventStore, state: state, store: s}
 	thread.refreshPublicLocked()
 	if _, err := s.loadOrRebuildIndexLocked(); err != nil {
 		_ = thread.Close()

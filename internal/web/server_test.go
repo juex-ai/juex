@@ -520,16 +520,16 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live event")
 	}
-	data, err := os.ReadFile(filepath.Join(as.app.Thread.Dir, "journal.jsonl"))
+	data, err := os.ReadFile(as.app.Thread.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), `"id":"evt-committed"`) {
-		t.Fatalf("journal.jsonl does not contain committed event:\n%s", data)
+		t.Fatalf("Generation Journal does not contain committed event:\n%s", data)
 	}
 	if !strings.Contains(string(data), `"schema_version":1`) ||
 		!strings.Contains(string(data), `"replay_policy":"required"`) {
-		t.Fatalf("journal.jsonl does not contain the Catalog replay contract:\n%s", data)
+		t.Fatalf("Generation Journal does not contain the Catalog replay contract:\n%s", data)
 	}
 }
 

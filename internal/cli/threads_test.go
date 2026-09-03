@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/thread"
@@ -108,5 +109,24 @@ func TestThreadsCreateExposesExplicitParentSelector(t *testing.T) {
 	flag := command.Flags().Lookup("parent")
 	if flag == nil || flag.DefValue != "0" {
 		t.Fatalf("--parent flag = %+v", flag)
+	}
+}
+
+func TestRenderThreadShowReportsCurrentGenerationJournal(t *testing.T) {
+	info := thread.Info{
+		ID: "abc123", Alias: "worker", Dir: "/state/threads/abc123",
+		RetentionState: thread.RetentionActive, ExecutionState: thread.ExecutionIdle,
+		GenerationID: "g000002", GenerationJournalPath: "/state/threads/abc123/generations/g000002.jsonl",
+		CreatedAt:      thread.NewTimestamp(time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)),
+		LastActivityAt: thread.NewTimestamp(time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)),
+	}
+	for _, jsonOut := range []bool{false, true} {
+		var output bytes.Buffer
+		cmd := newThreadsShowCmd(&persistentFlags{})
+		cmd.SetOut(&output)
+		renderThreadShow(cmd, info, jsonOut)
+		if !strings.Contains(output.String(), "generation_journal") || !strings.Contains(output.String(), info.GenerationJournalPath) {
+			t.Fatalf("json=%t output omitted current Generation Journal:\n%s", jsonOut, output.String())
+		}
 	}
 }

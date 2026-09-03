@@ -231,6 +231,32 @@ func collectEntries(opts Options, workDir, threadDir string, now time.Time) ([]a
 		runtimeBytes = redactBytes(runtimeBytes)
 	}
 	entries = append(entries, newEntry(pathInBundle("runtime.json"), "", runtimeBytes, opts.Redact, true))
+	target, err := thread.Load(threadDir)
+	if err != nil {
+		return nil, err
+	}
+	eventSnapshot, err := target.CaptureEventStore()
+	closeErr := target.Close()
+	if err = errors.Join(err, closeErr); err != nil {
+		return nil, err
+	}
+	journals, journalErr := eventSnapshot.GenerationJournals()
+	snapshotCloseErr := eventSnapshot.Close()
+	if err := errors.Join(journalErr, snapshotCloseErr); err != nil {
+		return nil, err
+	}
+	for _, journal := range journals {
+		name := filepath.Join("generations", journal.GenerationID+".jsonl")
+		data := journal.Data
+		redacted := opts.Redact
+		if redacted {
+			data = redactBytes(data)
+		}
+		entries = append(entries, newEntry(
+			pathInBundle(filepath.Join("thread", filepath.ToSlash(name))),
+			journal.Path, data, redacted, true,
+		))
+	}
 
 	for _, item := range threadBundleFiles() {
 		source := filepath.Join(threadDir, item.name)
@@ -522,8 +548,7 @@ type threadBundleFile struct {
 
 func threadBundleFiles() []threadBundleFile {
 	return []threadBundleFile{
-		{name: "journal.jsonl", required: true},
-		{name: "thread.json"},
+		{name: "thread.json", required: true},
 	}
 }
 

@@ -91,6 +91,34 @@ func TestFileAppendsBatchesAndReadsForward(t *testing.T) {
 	}
 }
 
+func TestFileReadsCapturedForwardBoundaryAfterLaterAppend(t *testing.T) {
+	t.Parallel()
+	file, err := Open(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	first, err := file.Append(json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Append(json.RawMessage(`{"id":3}`)); err != nil {
+		t.Fatal(err)
+	}
+	var records []Record
+	end, err := file.ReadForwardTo(0, first.End, func(record Record) error {
+		records = append(records, record)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end != first.End {
+		t.Fatalf("end = %d, want %d", end, first.End)
+	}
+	assertRecordData(t, records, `{"id":1}`, `{"id":2}`)
+}
+
 func TestFileRejectsInvalidAppendBeforeWriting(t *testing.T) {
 	t.Parallel()
 	file, err := Open(filepath.Join(t.TempDir(), "events.jsonl"))

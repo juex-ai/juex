@@ -75,7 +75,7 @@ func (e *Engine) ReplaceThreadRuntimeBundle(threadState *thread.Thread, replacem
 	if e.activeTurnID != "" || len(e.pendingInput) > 0 {
 		return ErrThreadRuntimeBusy
 	}
-	tracker, err := recoverThreadProvenance(threadState.Dir)
+	tracker, err := recoverThreadProvenance(threadState)
 	if err != nil {
 		return fmt.Errorf("runtime: recover provider provenance: %w", err)
 	}
@@ -91,16 +91,17 @@ func (e *Engine) ReplaceThreadRuntimeBundle(threadState *thread.Thread, replacem
 	return nil
 }
 
-func recoverThreadProvenance(dir string) (*provenance.Tracker, error) {
+func recoverThreadProvenance(threadState *thread.Thread) (*provenance.Tracker, error) {
 	tracker := provenance.NewTracker()
+	if threadState == nil {
+		return tracker, nil
+	}
 	var replayErr error
-	if err := thread.ReplayEvents(dir, func(event events.Event) {
+	threadState.ReplayEvents(func(event events.Event) {
 		if replayErr == nil {
 			replayErr = tracker.ReplayEvent(event)
 		}
-	}); err != nil {
-		return nil, err
-	}
+	})
 	if replayErr != nil {
 		return nil, replayErr
 	}

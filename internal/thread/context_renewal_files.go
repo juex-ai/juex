@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/juex-ai/juex/internal/homestore"
 )
@@ -183,19 +182,16 @@ func recoverContextRenewalFiles(threadDir, currentGenerationID string) error {
 	return nil
 }
 
-func recoverContextRenewalFilesFromJournal(threadDir, threadID string, now func() time.Time) error {
+func recoverContextRenewalFilesFromMetadata(threadDir, threadID string) error {
 	present, err := contextRenewalFilesPresent(threadDir)
 	if err != nil || !present {
 		return err
 	}
-	journal, state, err := openJournalForReplay(filepath.Join(threadDir, journalFile), threadID, now)
+	metadata, err := readProjectionFile(threadDir, threadID)
 	if err != nil {
 		return err
 	}
-	if err := journal.Close(); err != nil {
-		return err
-	}
-	return recoverContextRenewalFiles(threadDir, state.Projection.CurrentGeneration.ID)
+	return recoverContextRenewalFiles(threadDir, metadata.CurrentGeneration.ID)
 }
 
 func contextRenewalFilesPresent(threadDir string) (bool, error) {

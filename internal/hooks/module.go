@@ -16,16 +16,18 @@ type PolicyRunner interface {
 }
 
 type ModuleOptions struct {
-	BaseRequest Request
-	GoalState   func() []byte
+	BaseRequest           Request
+	GenerationJournalPath func() string
+	GoalState             func() []byte
 }
 
 // Module adapts trusted command Hooks to Framework-owned typed policy seams.
 // The Runner remains responsible only for command execution and matching.
 type Module struct {
-	runner    PolicyRunner
-	base      Request
-	goalState func() []byte
+	runner                PolicyRunner
+	base                  Request
+	goalState             func() []byte
+	generationJournalPath func() string
 }
 
 func NewModule(runner PolicyRunner, opts ModuleOptions) *Module {
@@ -33,7 +35,10 @@ func NewModule(runner PolicyRunner, opts ModuleOptions) *Module {
 	base.WorkspaceRoots = append([]string(nil), base.WorkspaceRoots...)
 	base.GoalState = append([]byte(nil), base.GoalState...)
 	base.Observer = nil
-	return &Module{runner: runner, base: base, goalState: opts.GoalState}
+	return &Module{
+		runner: runner, base: base, goalState: opts.GoalState,
+		generationJournalPath: opts.GenerationJournalPath,
+	}
 }
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
@@ -193,6 +198,9 @@ func (m *Module) request(event EventName) Request {
 	req.Observer = nil
 	if m.goalState != nil {
 		req.GoalState = append([]byte(nil), m.goalState()...)
+	}
+	if m.generationJournalPath != nil {
+		req.GenerationJournalPath = m.generationJournalPath()
 	}
 	return req
 }

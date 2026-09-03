@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"path/filepath"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-func TestIncrementalProjectionMatchesFullReplayAcrossGeneratedHistory(t *testing.T) {
+func TestIncrementalProjectionMatchesCurrentGenerationReplayAcrossGeneratedHistory(t *testing.T) {
 	for seed := int64(1); seed <= 8; seed++ {
 		t.Run(fmt.Sprintf("seed-%d", seed), func(t *testing.T) {
 			store := NewStore(t.TempDir())
@@ -32,7 +31,7 @@ func TestIncrementalProjectionMatchesFullReplayAcrossGeneratedHistory(t *testing
 						t.Fatal(err)
 					}
 				case 2:
-					if _, err := target.BeginCompactedGeneration(llm.TextMessage(llm.RoleUser, fmt.Sprintf("summary-%d", operation)), operation%2 == 0); err != nil {
+					if _, err := target.BeginCompactedGeneration(llm.TextMessage(llm.RoleUser, fmt.Sprintf("summary-%d", operation)), operation%2 == 0, nil); err != nil {
 						t.Fatal(err)
 					}
 				case 3:
@@ -60,22 +59,16 @@ func TestIncrementalProjectionMatchesFullReplayAcrossGeneratedHistory(t *testing
 			}
 
 			want := target.ReplaySnapshot()
-			journal, commits, err := openJournal(filepath.Join(target.Dir, journalFile), MainID, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := replay(MainID, commits)
-			if closeErr := journal.Close(); err == nil {
-				err = closeErr
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := applyAuthoritativeProjection(&got, want.Projection); err != nil {
-				t.Fatal(err)
-			}
-			assertReplayStateJSONEqual(t, got, want)
 			if err := target.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := store.OpenActive(MainID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := reopened.ReplaySnapshot()
+			assertReplayStateJSONEqual(t, got, want)
+			if err := reopened.Close(); err != nil {
 				t.Fatal(err)
 			}
 		})

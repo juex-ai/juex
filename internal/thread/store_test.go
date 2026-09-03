@@ -95,7 +95,7 @@ func TestInputLifecycleAndGenerationProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary := llm.TextMessage(llm.RoleUser, "compact bootstrap")
-	if _, err := main.BeginCompactedGeneration(summary, false); err != nil {
+	if _, err := main.BeginCompactedGeneration(summary, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	afterCompact := main.ReplaySnapshot()
@@ -109,8 +109,8 @@ func TestInputLifecycleAndGenerationProjection(t *testing.T) {
 	if afterNew.Projection.CurrentGeneration.ID != "g000003" || afterNew.Projection.Counts.GenerationCount != 3 {
 		t.Fatalf("Generation = %#v", afterNew.Projection.CurrentGeneration)
 	}
-	if afterNew.Inputs["in_1"].State != InputCompleted || afterNew.Projection.Counts.PendingInputCount != 0 {
-		t.Fatalf("Input projection = %#v", afterNew.Inputs["in_1"])
+	if afterNew.Inputs["in_1"] != nil || afterNew.Projection.Counts.PendingInputCount != 0 {
+		t.Fatalf("terminal Input crossed Generation boundary: %#v", afterNew.Inputs["in_1"])
 	}
 }
 
@@ -141,10 +141,10 @@ func TestListUsesIndexWithoutOpeningJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	journalPath := main.CurrentGenerationJournalPath()
 	if err := main.Close(); err != nil {
 		t.Fatal(err)
 	}
-	journalPath := filepath.Join(store.ThreadsDir(), MainID, journalFile)
 	if err := os.Chmod(journalPath, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,8 @@ func TestListRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, id := range []string{MainID, workerID} {
-				path := filepath.Join(store.ThreadsDir(), id, journalFile)
+				projection := mustReadProjection(t, filepath.Join(store.ThreadsDir(), id, projectionFile))
+				path := filepath.Join(store.ThreadsDir(), id, generationsDirectory, projection.CurrentGeneration.ID+".jsonl")
 				if err := os.Rename(path, path+".unavailable"); err != nil {
 					t.Fatal(err)
 				}
@@ -361,11 +362,11 @@ func TestListRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.T) {
 			projection.Counts.GenerationCount++
 			mustWriteJSON(t, path, projection)
 		}},
-		{name: "empty-journal-cursor", mutate: func(t *testing.T, path string) {
+		{name: "empty-event-cursor", mutate: func(t *testing.T, path string) {
 			t.Helper()
 			projection := mustReadProjection(t, path)
-			projection.Journal.ProjectedSeq = 0
-			projection.Journal.ProjectedOffset = 0
+			projection.EventCursor.Seq = 0
+			projection.EventCursor.Offset = 0
 			mustWriteJSON(t, path, projection)
 		}},
 		{name: "unknown-field", mutate: func(t *testing.T, path string) {
@@ -503,7 +504,7 @@ func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
 	}
 	defer func() { _ = worker.Close() }()
 	before := worker.Projection()
-	journalInfo, err := os.Stat(filepath.Join(worker.Dir, journalFile))
+	journalInfo, err := os.Stat(worker.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +517,7 @@ func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
 	if metadata.Alias != "after" || metadata.Revision != before.Revision+1 || !metadata.UpdatedAt.After(before.UpdatedAt.Time) {
 		t.Fatalf("committed metadata = %#v, before = %#v", metadata, before)
 	}
-	afterJournalInfo, err := os.Stat(filepath.Join(worker.Dir, journalFile))
+	afterJournalInfo, err := os.Stat(worker.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,14 +585,14 @@ func TestStaleStoreHandleCannotOverwriteAuthoritativeMetadata(t *testing.T) {
 
 			test.mutateFresh(t, fresh)
 			want := fresh.Projection()
-			journalBefore, err := os.Stat(filepath.Join(fresh.Dir, journalFile))
+			journalBefore, err := os.Stat(fresh.CurrentGenerationJournalPath())
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := test.mutateStale(stale); !errors.Is(err, ErrStaleHandle) {
 				t.Fatalf("stale mutation error = %v, want stale handle", err)
 			}
-			journalAfter, err := os.Stat(filepath.Join(fresh.Dir, journalFile))
+			journalAfter, err := os.Stat(fresh.CurrentGenerationJournalPath())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -599,7 +600,7 @@ func TestStaleStoreHandleCannotOverwriteAuthoritativeMetadata(t *testing.T) {
 				t.Fatalf("stale mutation changed Journal size from %d to %d", journalBefore.Size(), journalAfter.Size())
 			}
 			metadata := mustReadProjection(t, filepath.Join(fresh.Dir, projectionFile))
-			if metadata.Revision != want.Revision || metadata.Alias != want.Alias || metadata.Journal != want.Journal {
+			if metadata.Revision != want.Revision || metadata.Alias != want.Alias || metadata.EventCursor != want.EventCursor {
 				t.Fatalf("stale mutation overwrote metadata: got %+v want %+v", metadata, want)
 			}
 		})
@@ -621,7 +622,7 @@ func TestBackwardClockRejectsJournalCommitBeforeWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := worker.Projection()
-	journalPath := filepath.Join(worker.Dir, journalFile)
+	journalPath := worker.CurrentGenerationJournalPath()
 	journalBefore, err := os.Stat(journalPath)
 	if err != nil {
 		t.Fatal(err)

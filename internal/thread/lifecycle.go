@@ -42,7 +42,10 @@ func (s *Store) Archive(target *Thread) error {
 	if err := durableRename(source, destination); err != nil {
 		return errors.Join(closeErr, fmt.Errorf("thread: archive %s: %w", target.ID, err))
 	}
+	target.mu.Lock()
 	target.Dir = destination
+	target.eventStore.relocate(destination)
+	target.mu.Unlock()
 	indexErr := s.updateProjectionLocked()
 	if indexErr != nil {
 		indexErr = fmt.Errorf("thread: metadata committed but index refresh failed: %w", indexErr)
@@ -114,7 +117,7 @@ func (s *Store) DeleteArchived(id string) error {
 		return os.ErrNotExist
 	}
 	source := filepath.Join(s.ArchiveDir(), id)
-	if err := recoverContextRenewalFilesFromJournal(source, id, s.now); err != nil {
+	if err := recoverContextRenewalFilesFromMetadata(source, id); err != nil {
 		return fmt.Errorf("thread: recover Context renewal files before delete %s: %w", id, err)
 	}
 	trash := filepath.Join(s.TrashDir(), id+"."+newRecordID("delete_"))
@@ -219,7 +222,7 @@ func (s *Store) RecoverLayout() error {
 					return err
 				}
 			}
-			if err := recoverContextRenewalFilesFromJournal(path, entry.Name(), s.now); err != nil {
+			if err := recoverContextRenewalFilesFromMetadata(path, entry.Name()); err != nil {
 				return fmt.Errorf("thread: recover Context renewal files for %s: %w", entry.Name(), err)
 			}
 		}

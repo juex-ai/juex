@@ -91,7 +91,7 @@ func TestRecoverLayoutRestoresInactiveWorkerContextRenewalFiles(t *testing.T) {
 	}
 }
 
-func TestRecoverLayoutUsesJournalGenerationForContextRenewalFiles(t *testing.T) {
+func TestRecoverLayoutUsesCommittedMetadataForContextRenewalFiles(t *testing.T) {
 	stateDir := t.TempDir()
 	store := NewStore(stateDir)
 	main, err := store.EnsureMain()
@@ -126,8 +126,8 @@ func TestRecoverLayoutUsesJournalGenerationForContextRenewalFiles(t *testing.T) 
 	if err := NewStore(stateDir).RecoverLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
-		t.Fatalf("recovery restored state cleared by a committed Journal boundary: %v", err)
+	if got, err := os.ReadFile(statePath); err != nil || string(got) != "do not restore" {
+		t.Fatalf("recovery did not restore state for uncommitted metadata boundary: %q, %v", got, err)
 	}
 	backups, err := filepath.Glob(filepath.Join(worker.Dir, "*.context-renewal-*"))
 	if err != nil {
@@ -201,7 +201,7 @@ func TestDeleteArchivedUsesJournalGenerationForContextRenewalFiles(t *testing.T)
 	metadata.TokenUsage = before.TokenUsage
 	metadata.ContextUsage = before.ContextUsage
 	metadata.LastActivityAt = before.LastActivityAt
-	metadata.Journal = before.Journal
+	metadata.EventCursor = before.EventCursor
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		t.Fatal(err)

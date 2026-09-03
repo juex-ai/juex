@@ -451,7 +451,7 @@ only: TURN1 STORED.
 
 GF1: Task ID is CMP-2417.
 GF2: Branch is high/context-projection.
-GF3: Do not modify /workspace/project/.juex/threads/0/journal.jsonl unless the user explicitly approves.
+GF3: Do not modify /workspace/project/.juex/threads/0/generations/g000001.jsonl unless the user explicitly approves.
 GF4: The failing error string is compact context: openai codex responses: codex SSE read: context deadline exceeded.
 GF5: The selected design is sidecar externalization plus frozen provider-visible replacement.
 GF6: The next command is go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1.
@@ -539,7 +539,7 @@ def score_answer(answer: str) -> int:
     checks = [
         ("CMP-2417", 6),
         ("high/context-projection", 6),
-        ("/workspace/project/.juex/threads/0/journal.jsonl", 6),
+        ("/workspace/project/.juex/threads/0/generations/g000001.jsonl", 6),
         ("compact context: openai codex responses: codex SSE read: context deadline exceeded", 6),
         ("go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1", 6),
     ]
@@ -563,10 +563,10 @@ def score_answer(answer: str) -> int:
 
 
 def seed_authoritative_state(work: pathlib.Path) -> None:
-    journals = thread_files(work, "journal.jsonl")
+    journals = generation_journal_files(work)
     if len(journals) != 1:
         raise ValueError(f"expected one active Thread after turn1, found {len(journals)}")
-    thread_dir = journals[0].parent
+    thread_dir = journals[0].parent.parent
     write_json_atomic(thread_dir / "goal_state.json", AUTHORITATIVE_GOAL)
     write_text_atomic(thread_dir / "notes.md", AUTHORITATIVE_NOTES)
 
@@ -647,12 +647,14 @@ def read_latest_text(work: pathlib.Path, name: str) -> str:
 
 def latest_compact_summary(work: pathlib.Path) -> str:
     latest = ""
-    for path in thread_files(work, "journal.jsonl"):
+    for path in generation_journal_files(work):
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 commit = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(commit.get("data"), dict):
+                commit = commit["data"]
             for fact in commit.get("facts") or []:
                 if fact.get("type") != "context.compacted":
                     continue
@@ -679,16 +681,29 @@ def thread_files(work: pathlib.Path, name: str) -> list[pathlib.Path]:
     return sorted(threads.rglob(name)) if threads.is_dir() else []
 
 
+def generation_journal_files(work: pathlib.Path) -> list[pathlib.Path]:
+    try:
+        threads = thread_root(work)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
+    if not threads.is_dir():
+        return []
+    journals: list[pathlib.Path] = []
+    for thread_dir in sorted(path for path in threads.iterdir() if path.is_dir()):
+        journals.extend(helper.thread_generation_journals(thread_dir))
+    return journals
+
+
 def thread_root(work: pathlib.Path) -> pathlib.Path:
     return helper.agent_threads_dir(work, work / "home" / ".juex")
 
 
 def has_compaction(work: pathlib.Path) -> bool:
-    return any('"type":"context.compacted"' in path.read_text(encoding="utf-8", errors="replace") for path in thread_files(work, "journal.jsonl"))
+    return any('"type":"context.compacted"' in path.read_text(encoding="utf-8", errors="replace") for path in generation_journal_files(work))
 
 
 def cache_ratio_from_work(work: pathlib.Path) -> str:
-    for path in thread_files(work, "journal.jsonl"):
+    for path in generation_journal_files(work):
         ratio = cache_ratio_from_events(path)
         if ratio != "not captured":
             return ratio
@@ -713,9 +728,11 @@ def match_int(text: str, pattern: str) -> int:
 
 
 def copy_runtime_artifacts(work: pathlib.Path, out_dir: pathlib.Path) -> None:
-    for name in ["journal.jsonl", "thread.json", "goal_state.json", "notes.md"]:
+    for name in ["thread.json", "goal_state.json", "notes.md"]:
         for path in thread_files(work, name):
             shutil.copy2(path, out_dir / name)
+    for path in generation_journal_files(work):
+        shutil.copy2(path, out_dir / path.name)
 
 
 def write_scorecard(

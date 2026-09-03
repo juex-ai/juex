@@ -37,33 +37,19 @@ func createStandalone(dir, id, alias, parentID string, now func() time.Time) (*T
 	if err := os.MkdirAll(filepath.Join(dir, "spool"), 0o700); err != nil {
 		return nil, err
 	}
-	journal, commits, err := openJournal(filepath.Join(dir, journalFile), id, now)
+	eventStore, created, err := createEventStore(dir, id, alias, parentID, now)
 	if err != nil {
-		return nil, err
+		return nil, cleanupCreatedThreadDir(dir, nil, err)
 	}
-	if len(commits) != 0 {
-		_ = journal.Close()
-		return nil, fmt.Errorf("%w: create target is not empty", ErrCorruptJournal)
-	}
-	commit, start, err := journal.Append(Fact{
-		Type: FactThreadCreated, ThreadID: id, Alias: alias,
-		ParentThreadID: parentID, GenerationID: InitialGeneration,
-	})
+	state, err := replay(id, []scannedCommit{created})
 	if err != nil {
-		_ = journal.Close()
-		return nil, err
-	}
-	state, err := replay(id, []scannedCommit{{Commit: commit, StartOffset: start, EndOffset: journal.size}})
-	if err != nil {
-		_ = journal.Close()
-		return nil, err
+		return nil, cleanupCreatedThreadDir(dir, eventStore, err)
 	}
 	state.Projection.Revision = 1
-	target := &Thread{ID: id, Dir: dir, journal: journal, state: state}
+	target := &Thread{ID: id, Dir: dir, eventStore: eventStore, state: state}
 	target.refreshPublicLocked()
 	if err := target.persistProjectionLocked(); err != nil {
-		_ = target.Close()
-		return nil, err
+		return nil, cleanupCreatedThreadDir(dir, eventStore, err)
 	}
 	return target, nil
 }
@@ -74,22 +60,15 @@ func Load(dir string) (*Thread, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, journalFile)); err != nil {
-		return nil, err
-	}
-	journal, state, err := openJournalForReplay(filepath.Join(dir, journalFile), id, time.Now)
+	eventStore, state, err := openEventStore(dir, id, metadata, time.Now)
 	if err != nil {
 		return nil, err
 	}
-	if err := recoverContextRenewalFiles(dir, state.Projection.CurrentGeneration.ID); err != nil {
-		_ = journal.Close()
+	if err := recoverContextRenewalFiles(dir, metadata.CurrentGeneration.ID); err != nil {
+		_ = eventStore.Close()
 		return nil, fmt.Errorf("thread: recover Context renewal files for %s: %w", id, err)
 	}
-	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
-		_ = journal.Close()
-		return nil, err
-	}
-	target := &Thread{ID: id, Dir: dir, journal: journal, state: state}
+	target := &Thread{ID: id, Dir: dir, eventStore: eventStore, state: state}
 	target.refreshPublicLocked()
 	return target, nil
 }
@@ -100,28 +79,20 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 	if err != nil {
 		return Info{}, nil, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, journalFile)); err != nil {
-		return Info{}, nil, err
-	}
-	journal, commits, err := openJournal(filepath.Join(dir, journalFile), id, time.Now)
+	eventStore, state, err := openEventStore(dir, id, metadata, time.Now)
 	if err != nil {
 		return Info{}, nil, err
 	}
-	state, replayErr := replay(id, commits)
-	closeErr := journal.Close()
-	if replayErr != nil {
-		return Info{}, nil, replayErr
-	}
-	if closeErr != nil {
-		return Info{}, nil, closeErr
-	}
-	if err := recoverContextRenewalFiles(dir, state.Projection.CurrentGeneration.ID); err != nil {
+	if err := recoverContextRenewalFiles(dir, metadata.CurrentGeneration.ID); err != nil {
+		_ = eventStore.Close()
 		return Info{}, nil, fmt.Errorf("thread: recover Context renewal files for %s: %w", id, err)
 	}
-	if err := applyAuthoritativeProjection(&state, metadata); err != nil {
+	target := &Thread{ID: id, Dir: dir, eventStore: eventStore, state: state}
+	target.refreshPublicLocked()
+	info := target.infoLocked()
+	messages := append([]llm.Message(nil), target.state.Messages...)
+	if err := eventStore.Close(); err != nil {
 		return Info{}, nil, err
 	}
-	target := &Thread{ID: id, Dir: dir, state: state}
-	target.refreshPublicLocked()
-	return target.infoLocked(), append([]llm.Message(nil), target.state.Messages...), nil
+	return info, messages, nil
 }

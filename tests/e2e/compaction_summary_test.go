@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -161,9 +160,27 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 	if usage := a.Thread.TokenUsageSnapshot(); usage.OutputTokens != 1718 {
 		t.Fatalf("summary usage = %+v, want both attempts counted", usage)
 	}
-	eventText := strings.Join(readLines(t, filepath.Join(a.Thread.Dir, "journal.jsonl")), "\n")
-	if strings.Count(eventText, `"type":"context.compact.summary_retry"`) != 1 || !strings.Contains(eventText, `"reasoning_only":true`) {
-		t.Fatalf("missing single reasoning-only retry: %s", eventText)
+	events, err := a.Thread.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retries []runtime.ContextCompactSummaryRetryPayload
+	for _, event := range events {
+		if event.Type != "context.compact.summary_retry" {
+			continue
+		}
+		raw, err := json.Marshal(event.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload runtime.ContextCompactSummaryRetryPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+		retries = append(retries, payload)
+	}
+	if len(retries) != 1 || !retries[0].ReasoningOnly {
+		t.Fatalf("summary retries = %+v, want one reasoning-only retry", retries)
 	}
 	if out, err := a.Run(ctx, "Continue from the summary."); err != nil || out != "continued" {
 		t.Fatalf("continuation = %q, %v", out, err)

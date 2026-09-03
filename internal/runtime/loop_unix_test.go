@@ -13,7 +13,6 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -257,7 +256,7 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 		t.Fatalf("finalized shell content lost marker/tail: len=%d tail=%q", len(conversation), conversation[len(conversation)-64:])
 	}
 
-	journal, err := thread.ReadEvents(eng.Thread.Dir)
+	journal, err := eng.Thread.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +320,7 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 		!strings.Contains(conversation, "TAIL-HOOK-ERROR-SENTINEL") || strings.Count(conversation, wantMarker) != 1 {
 		t.Fatalf("bounded terminal content does not match conversation: bytes=%d", len(conversation))
 	}
-	journal, err := thread.ReadEvents(eng.Thread.Dir)
+	journal, err := eng.Thread.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}

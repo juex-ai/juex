@@ -36,7 +36,7 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 	if state := worker.Projection().ExecutionState; state != ExecutionFailed {
 		t.Fatalf("execution state before archive = %q, want failed", state)
 	}
-	beforeLifecycle, err := os.Stat(filepath.Join(worker.Dir, journalFile))
+	beforeLifecycle, err := os.Stat(worker.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,10 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 	if err := store.Archive(worker); err != nil {
 		t.Fatal(err)
 	}
-	archivedJournal, err := os.Stat(filepath.Join(store.ArchiveDir(), worker.ID, journalFile))
+	if got, want := worker.Info().GenerationJournalPath, filepath.Join(store.ArchiveDir(), worker.ID, generationsDirectory, beforeArchive.CurrentGeneration.ID+".jsonl"); got != want {
+		t.Fatalf("archived Generation Journal path = %q, want %q", got, want)
+	}
+	archivedJournal, err := os.Stat(filepath.Join(store.ArchiveDir(), worker.ID, generationsDirectory, beforeArchive.CurrentGeneration.ID+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +96,7 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = restored.Close() }()
-	restoredJournal, err := os.Stat(filepath.Join(restored.Dir, journalFile))
+	restoredJournal, err := os.Stat(restored.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +283,7 @@ func TestRecoverLayoutUsesMetadataWithoutOpeningJournal(t *testing.T) {
 	if err := worker.Close(); err != nil {
 		t.Fatal(err)
 	}
-	journalPath := filepath.Join(store.ThreadsDir(), workerID, journalFile)
+	journalPath := filepath.Join(store.ThreadsDir(), workerID, generationsDirectory, metadata.CurrentGeneration.ID+".jsonl")
 	if err := os.Rename(journalPath, journalPath+".unavailable"); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +297,7 @@ func TestRecoverLayoutUsesMetadataWithoutOpeningJournal(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(store.ThreadsDir(), workerID)); !os.IsNotExist(err) {
 		t.Fatalf("journal-archived Worker remains active: %v", err)
 	}
-	archivedJournalPath := filepath.Join(store.ArchiveDir(), workerID, journalFile)
+	archivedJournalPath := filepath.Join(store.ArchiveDir(), workerID, generationsDirectory, metadata.CurrentGeneration.ID+".jsonl")
 	if err := os.Rename(archivedJournalPath+".unavailable", archivedJournalPath); err != nil {
 		t.Fatal(err)
 	}

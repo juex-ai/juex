@@ -201,7 +201,7 @@ func TestAppRunAdmittedTurnAfterCloseDoesNotReopenJournal(t *testing.T) {
 	a, provider := newStubApp(t, llm.Response{
 		Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn,
 	})
-	journalPath := filepath.Join(a.Thread.Dir, "journal.jsonl")
+	journalPath := a.Thread.CurrentGenerationJournalPath()
 	if err := a.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
@@ -441,8 +441,21 @@ func TestAppNewContextPreservesJournalAndScratchpad(t *testing.T) {
 	if replay.Projection.CurrentGeneration.ID != "g000002" || len(replay.Activities) != 1 {
 		t.Fatalf("generation/activity = %s/%+v", replay.Projection.CurrentGeneration.ID, replay.Activities)
 	}
-	if len(replay.Messages) != 1 || len(app.Thread.History) != 0 {
-		t.Fatalf("full/active messages = %d/%d", len(replay.Messages), len(app.Thread.History))
+	if len(replay.Messages) != 0 || len(app.Thread.History) != 0 {
+		t.Fatalf("current Generation messages = %d/%d, want empty", len(replay.Messages), len(app.Thread.History))
+	}
+	page, err := app.Thread.Timeline("", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundHistorical := false
+	for _, item := range page.Items {
+		if item.Message != nil && item.Message.FirstText() == "old context" {
+			foundHistorical = true
+		}
+	}
+	if !foundHistorical {
+		t.Fatalf("timeline omitted previous Generation message: %#v", page.Items)
 	}
 	if body, err := os.ReadFile(scratch); err != nil || string(body) != "keep" {
 		t.Fatalf("scratchpad = %q, %v", body, err)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,7 +30,7 @@ def validate_agent_smoke_contract(conversation: pathlib.Path, events: pathlib.Pa
 
 
 def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[bool, str]:
-    if not path.is_file():
+    if not path.is_file() and not path.is_dir():
         return False, "missing Thread Journal"
     tool_uses: dict[str, str] = {}
     seen_tools: set[str] = set()
@@ -84,7 +85,7 @@ def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[
 
 
 def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> tuple[bool, str]:
-    if not path.is_file():
+    if not path.is_file() and not path.is_dir():
         return False, "missing Thread Journal"
     delta_count = 0
     saw_install = False
@@ -153,42 +154,78 @@ def load_thread_journal_records(
     field: str,
     issues: list[str],
 ) -> list[dict[str, Any]]:
-    """Read messages or events from the canonical Thread Journal.
+    """Read messages or events from registered Generation Journals.
 
     Direct JSONL records remain accepted for the deterministic eval harness,
     which builds in-memory oracle views rather than runtime persistence.
     """
-    if not path.is_file():
+    paths = thread_journal_paths(path)
+    if not paths:
         issues.append(f"missing Thread Journal: {path}")
         return []
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError as exc:
-        issues.append(f"read Thread Journal: {exc}")
-        return []
     records: list[dict[str, Any]] = []
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
-            continue
+    for journal in paths:
         try:
-            value = json.loads(line)
-        except json.JSONDecodeError as exc:
-            issues.append(f"Thread Journal line {line_number} is invalid JSON: {exc}")
+            lines = journal.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            issues.append(f"read Thread Journal: {exc}")
             continue
-        if not isinstance(value, dict):
-            issues.append(f"Thread Journal line {line_number} must be a JSON object")
-            continue
-        facts = value.get("facts")
-        if not isinstance(facts, list):
-            records.append(value)
-            continue
-        for fact in facts:
-            if not isinstance(fact, dict):
+        for line_number, line in enumerate(lines, start=1):
+            if not line.strip():
                 continue
-            record = fact.get(field)
-            if isinstance(record, dict):
-                records.append(record)
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                issues.append(f"Thread Journal {journal.name} line {line_number} is invalid JSON: {exc}")
+                continue
+            if not isinstance(value, dict):
+                issues.append(f"Thread Journal {journal.name} line {line_number} must be a JSON object")
+                continue
+            framed = value.get("data")
+            if isinstance(framed, dict):
+                value = framed
+            facts = value.get("facts")
+            if not isinstance(facts, list):
+                records.append(value)
+                continue
+            for fact in facts:
+                if not isinstance(fact, dict):
+                    continue
+                record = fact.get(field)
+                if isinstance(record, dict):
+                    records.append(record)
     return records
+
+
+def thread_journal_paths(path: pathlib.Path) -> list[pathlib.Path]:
+    if path.is_file():
+        return [path]
+    generation_dir = path / "generations"
+    if not generation_dir.is_dir():
+        return []
+    metadata_path = path / "thread.json"
+    if metadata_path.is_file():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            generations = metadata.get("generations")
+            if isinstance(generations, list):
+                registered: list[pathlib.Path] = []
+                for generation in generations:
+                    if not isinstance(generation, dict):
+                        return []
+                    generation_id = generation.get("generation_id")
+                    if (
+                        not isinstance(generation_id, str)
+                        or re.fullmatch(r"g[0-9]{6}", generation_id) is None
+                    ):
+                        return []
+                    registered.append(generation_dir / f"{generation_id}.jsonl")
+                return registered
+        except (OSError, json.JSONDecodeError):
+            return []
+    # Deterministic oracle fixtures may provide direct Generation files
+    # without production Thread metadata.
+    return sorted(generation_dir.glob("g[0-9][0-9][0-9][0-9][0-9][0-9].jsonl"))
 
 
 def _terminal_content(payload: dict[str, Any]) -> str:

@@ -70,10 +70,7 @@ providers:
 	if err := json.Unmarshal(data, &marker); err != nil || marker.AgentID == "" {
 		t.Fatalf("workspace marker = %s, err=%v", data, err)
 	}
-	journal, err := os.ReadFile(filepath.Join(home, "agents", marker.AgentID, "threads", "0", "journal.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	journal := []byte(threadJournalText(t, filepath.Join(home, "agents", marker.AgentID, "threads", "0")))
 	for _, want := range []string{"hello Main", "send wait complete", `"thread_id":"0"`} {
 		if !strings.Contains(string(journal), want) {
 			t.Fatalf("Main Thread journal missing %q:\n%s", want, journal)

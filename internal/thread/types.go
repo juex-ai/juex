@@ -41,7 +41,6 @@ const (
 	FactContextRenewed     = "context.renewed"
 	FactContextCompacted   = "context.compacted"
 	FactUsageRecorded      = "usage.recorded"
-	FactProjectionCheck    = "projection.checkpoint"
 )
 
 type RetentionState string
@@ -93,18 +92,15 @@ type Fact struct {
 	Error            string            `json:"error,omitempty"`
 	Usage            *llm.Usage        `json:"usage,omitempty"`
 	ContextUsage     *llm.ContextUsage `json:"context_usage,omitempty"`
-	Checkpoint       *ReplayCheckpoint `json:"checkpoint,omitempty"`
+	Seed             *GenerationSeed   `json:"seed,omitempty"`
 }
 
-// ReplayCheckpoint is a bounded recovery projection. It carries the current
-// provider-visible context and nonterminal Inputs, never the full presentation
-// transcript or terminal Input history.
-type ReplayCheckpoint struct {
+// GenerationSeed is the bounded runtime state needed to continue from a
+// Generation boundary. Authoritative Thread metadata stays in thread.json.
+type GenerationSeed struct {
 	Version          int                        `json:"v"`
-	Projection       Projection                 `json:"projection"`
 	ProviderMessages []llm.Message              `json:"provider_messages,omitempty"`
-	StatusEvents     []events.Event             `json:"status_events,omitempty"`
-	LatestActivity   *Activity                  `json:"latest_activity,omitempty"`
+	RecoveryEvents   []events.Event             `json:"recovery_events,omitempty"`
 	CompactionCount  int                        `json:"compaction_count,omitempty"`
 	Inputs           map[string]InputProjection `json:"inputs,omitempty"`
 	InputOrder       []string                   `json:"input_order,omitempty"`
@@ -115,8 +111,7 @@ type ReplayCheckpoint struct {
 type GenerationProjection struct {
 	ID          string `json:"generation_id"`
 	Ordinal     int    `json:"ordinal"`
-	StartSeq    uint64 `json:"start_seq"`
-	StartOffset int64  `json:"start_offset"`
+	BoundarySeq uint64 `json:"boundary_seq"`
 }
 
 type Counts struct {
@@ -132,11 +127,10 @@ type ContextProjection struct {
 	CalibratedAt  *Timestamp `json:"calibrated_at,omitempty"`
 }
 
-type JournalProjection struct {
-	ProjectedSeq         uint64 `json:"projected_seq"`
-	ProjectedOffset      int64  `json:"projected_offset"`
-	LastCheckpointSeq    uint64 `json:"last_checkpoint_seq,omitempty"`
-	LastCheckpointOffset int64  `json:"last_checkpoint_offset,omitempty"`
+type EventCursor struct {
+	GenerationID string `json:"generation_id"`
+	Seq          uint64 `json:"seq"`
+	Offset       int64  `json:"offset"`
 }
 
 type Projection struct {
@@ -156,7 +150,7 @@ type Projection struct {
 	TokenUsage        llm.Usage              `json:"token_usage"`
 	ContextUsage      *ContextProjection     `json:"context_usage,omitempty"`
 	LastActivityAt    Timestamp              `json:"last_activity_at"`
-	Journal           JournalProjection      `json:"journal"`
+	EventCursor       EventCursor            `json:"event_cursor"`
 }
 
 type IndexEntry struct {
@@ -187,21 +181,22 @@ type Index struct {
 // Info is a lightweight Thread snapshot for adapters that already hold a
 // Thread handle. Agent-wide lists use IndexEntry instead.
 type Info struct {
-	ID             string            `json:"thread_id"`
-	Alias          string            `json:"alias"`
-	ParentThreadID string            `json:"parent_thread_id,omitempty"`
-	Dir            string            `json:"dir"`
-	CreatedAt      Timestamp         `json:"created_at"`
-	LastActivityAt Timestamp         `json:"last_activity_at"`
-	ArchivedAt     *Timestamp        `json:"archived_at,omitempty"`
-	RetentionState RetentionState    `json:"retention_state"`
-	ExecutionState ExecutionState    `json:"execution_state,omitempty"`
-	Revision       uint64            `json:"revision"`
-	GenerationID   string            `json:"generation_id"`
-	TurnCount      int               `json:"turn_count"`
-	PendingInputs  int               `json:"pending_input_count"`
-	TokenUsage     llm.Usage         `json:"token_usage"`
-	ContextUsage   *llm.ContextUsage `json:"context_usage,omitempty"`
+	ID                    string            `json:"thread_id"`
+	Alias                 string            `json:"alias"`
+	ParentThreadID        string            `json:"parent_thread_id,omitempty"`
+	Dir                   string            `json:"dir"`
+	CreatedAt             Timestamp         `json:"created_at"`
+	LastActivityAt        Timestamp         `json:"last_activity_at"`
+	ArchivedAt            *Timestamp        `json:"archived_at,omitempty"`
+	RetentionState        RetentionState    `json:"retention_state"`
+	ExecutionState        ExecutionState    `json:"execution_state,omitempty"`
+	Revision              uint64            `json:"revision"`
+	GenerationID          string            `json:"generation_id"`
+	GenerationJournalPath string            `json:"generation_journal_path"`
+	TurnCount             int               `json:"turn_count"`
+	PendingInputs         int               `json:"pending_input_count"`
+	TokenUsage            llm.Usage         `json:"token_usage"`
+	ContextUsage          *llm.ContextUsage `json:"context_usage,omitempty"`
 }
 
 type InputState string

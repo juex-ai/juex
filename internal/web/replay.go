@@ -12,7 +12,7 @@ import (
 )
 
 type committedEventReplay struct {
-	journal       *thread.EventJournalSnapshot
+	eventStore    *thread.EventStoreSnapshot
 	seed          runtime.StatusSeed
 	authoritative *runtime.StatusSnapshot
 }
@@ -21,7 +21,7 @@ func captureCommittedEventReplay(runtimeApp *app.App, threadID string) (*committ
 	var replay *committedEventReplay
 	err := runtimeApp.ReadThreadID(threadID, func(target *thread.Thread) error {
 		return runtimeApp.ReadCommittedEvents(func() error {
-			journal, err := target.CaptureEventJournal()
+			eventStore, err := target.CaptureEventStore()
 			if err != nil {
 				return err
 			}
@@ -31,7 +31,7 @@ func captureCommittedEventReplay(runtimeApp *app.App, threadID string) (*committ
 				authoritative = &snapshot
 			}
 			replay = &committedEventReplay{
-				journal: journal,
+				eventStore: eventStore,
 				seed: runtime.StatusSeed{
 					ThreadID: target.ID, ThreadAlias: target.Alias,
 					MaxPendingInputs: runtime.DefaultMaxPendingInput,
@@ -45,18 +45,18 @@ func captureCommittedEventReplay(runtimeApp *app.App, threadID string) (*committ
 }
 
 func (r *committedEventReplay) readJournal() ([]events.Event, error) {
-	if r == nil || r.journal == nil {
+	if r == nil || r.eventStore == nil {
 		return nil, nil
 	}
-	return r.journal.Events()
+	return r.eventStore.Events()
 }
 
 func (r *committedEventReplay) Close() error {
-	if r == nil || r.journal == nil {
+	if r == nil || r.eventStore == nil {
 		return nil
 	}
-	err := r.journal.Close()
-	r.journal = nil
+	err := r.eventStore.Close()
+	r.eventStore = nil
 	return err
 }
 
@@ -103,7 +103,7 @@ func (d *browserReplayDeduplicator) skip(event BrowserEvent) bool {
 }
 
 // replaySince remains a transport helper for imported event streams. Thread
-// persistence replays event facts directly from journal.jsonl.
+// persistence replays event facts through the Thread EventStore.
 func replaySince(reader io.Reader, since string) ([]events.Event, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)

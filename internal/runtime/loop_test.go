@@ -630,7 +630,7 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 	if pending := eng.pendingPolicyRuntimeContextSnapshot(); len(pending) != 1 || pending[0].ID == "" {
 		t.Fatalf("pending policy context = %+v", pending)
 	}
-	journal, err := thread.ReadEvents(eng.Thread.Dir)
+	journal, err := eng.Thread.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -760,7 +760,7 @@ func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 
 func assertRecoveredPolicyContextCount(t *testing.T, threadState *thread.Thread, want int) {
 	t.Helper()
-	journal, err := thread.ReadEvents(threadState.Dir)
+	journal, err := threadState.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1591,11 +1591,20 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 	if !strings.Contains(secondSummaryRequest, "first summary without references") {
 		t.Fatalf("second summary request lost first model summary:\n%s", secondSummaryRequest)
 	}
-	replay := eng.Thread.ReplaySnapshot()
-	if len(replay.Activities) != 2 {
-		t.Fatalf("compact activities = %d, want 2", len(replay.Activities))
+	page, err := eng.Thread.Timeline("", 100)
+	if err != nil {
+		t.Fatal(err)
 	}
-	latest := replay.Activities[1].Summary
+	var compactActivities []thread.Activity
+	for _, item := range page.Items {
+		if item.Activity != nil && item.Activity.Type == thread.FactContextCompacted {
+			compactActivities = append(compactActivities, *item.Activity)
+		}
+	}
+	if len(compactActivities) != 2 {
+		t.Fatalf("compact activities = %d, want 2", len(compactActivities))
+	}
+	latest := compactActivities[1].Summary
 	if latest == nil {
 		t.Fatal("latest compact activity has no summary")
 	}
@@ -2808,8 +2817,8 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 		t.Fatalf("provider calls = %d, want compact + answer", prov.called)
 	}
 	replay := eng.Thread.ReplaySnapshot()
-	if len(replay.Messages) != 4 {
-		t.Fatalf("persisted messages = %d, want old history plus user/assistant", len(replay.Messages))
+	if len(replay.Messages) != 2 {
+		t.Fatalf("current Generation messages = %d, want user/assistant", len(replay.Messages))
 	}
 	if len(replay.Activities) != 1 || replay.Activities[0].Summary == nil {
 		t.Fatalf("compact activities = %+v", replay.Activities)
@@ -5020,7 +5029,7 @@ func TestTurn_PostExecutionTransformOwnsTerminalObservation(t *testing.T) {
 	if completed.Preview != filteredResult || completed.Len != len(filteredResult) {
 		t.Fatalf("completed payload = %+v, want filtered terminal observation", completed)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
+	data, err := os.ReadFile(eng.Thread.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5072,7 +5081,7 @@ func TestTurn_PostExecutionTransformSuppressesRawOutputDelta(t *testing.T) {
 	if result.Content != filteredResult || result.IsError {
 		t.Fatalf("tool result = %+v, want filtered success", result)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
+	data, err := os.ReadFile(eng.Thread.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6084,7 +6093,7 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 	compact := llm.TextMessage(llm.RoleUser, "summary")
 	compact.ID = "compact-1"
 	compact.Kind = llm.MessageKindCompact
-	if _, err := threadState.BeginCompactedGeneration(compact, false); err != nil {
+	if _, err := threadState.BeginCompactedGeneration(compact, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := threadState.Close(); err != nil {
@@ -8063,12 +8072,12 @@ func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
 	if !deltaEvent.Transient {
 		t.Fatalf("tool output delta event = %+v, want transient", deltaEvent)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
+	data, err := os.ReadFile(eng.Thread.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), toolevents.OutputDeltaType) || strings.Contains(string(data), "live bytes") {
-		t.Fatalf("transient tool output persisted in journal.jsonl:\n%s", data)
+		t.Fatalf("transient tool output persisted in the Generation Journal:\n%s", data)
 	}
 }
 
@@ -8084,7 +8093,7 @@ func TestTurn_ToolOutputDeltaCannotAmplifyActiveJournal(t *testing.T) {
 		Name:   "read_journal",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			path := filepath.Join(eng.Thread.Dir, "journal.jsonl")
+			path := eng.Thread.CurrentGenerationJournalPath()
 			for range 20 {
 				data, err := os.ReadFile(path)
 				if err != nil {
@@ -8099,7 +8108,7 @@ func TestTurn_ToolOutputDeltaCannotAmplifyActiveJournal(t *testing.T) {
 	if _, err := eng.Turn(context.Background(), "inspect the active journal"); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
+	data, err := os.ReadFile(eng.Thread.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8150,7 +8159,7 @@ func TestTurn_BuiltinShellCompletedEventCarriesAuthoritativeContentWithoutStruct
 	if completedPayload.Outcome == nil || !strings.Contains(completedPayload.Outcome.Block.Content, "structured-shell") {
 		t.Fatalf("shell event outcome = %+v, want authoritative output", completedPayload.Outcome)
 	}
-	data, err := os.ReadFile(filepath.Join(eng.Thread.Dir, "journal.jsonl"))
+	data, err := os.ReadFile(eng.Thread.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8424,7 +8433,7 @@ func TestTurn_CompletionCommitFailureReturnsErrorAndPreservesTranscript(t *testi
 	if len(eng.Thread.History) != 2 || eng.Thread.History[0].FirstText() != "first input" || eng.Thread.History[1].FirstText() != "answer before completion failure" {
 		t.Fatalf("transcript after completion failure = %+v", eng.Thread.History)
 	}
-	journal, err := thread.ReadEvents(eng.Thread.Dir)
+	journal, err := eng.Thread.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8441,7 +8450,7 @@ func TestTurn_CompletionCommitFailureReturnsErrorAndPreservesTranscript(t *testi
 	if prov.called != 2 || !strings.Contains(messagesText(prov.histories[1]), "answer before completion failure") {
 		t.Fatalf("recovery provider history = %+v, want prior durable assistant response", prov.histories)
 	}
-	journal, err = thread.ReadEvents(eng.Thread.Dir)
+	journal, err = eng.Thread.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}

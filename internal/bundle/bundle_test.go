@@ -28,7 +28,7 @@ func bundleThreadFixture(t *testing.T) (config.Config, *thread.Thread) {
 	return cfg, target
 }
 
-func TestCreateIncludesThreadJournalAndRedacts(t *testing.T) {
+func TestCreateIncludesGenerationJournalsAndRedacts(t *testing.T) {
 	cfg, target := bundleThreadFixture(t)
 	if err := target.Append(llm.TextMessage(llm.RoleUser, "api_key=sk-bundle-secret")); err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestCreateIncludesThreadJournalAndRedacts(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	files := readBundle(t, out)
-	journal := files["juex-debug-bundle/thread/journal.jsonl"]
+	journal := files["juex-debug-bundle/thread/generations/g000001.jsonl"]
 	if len(journal) == 0 {
 		t.Fatalf("journal missing: %v", files)
 	}

@@ -166,10 +166,10 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 	}
 	if hookRunner != nil {
 		hookModule := hooks.NewModule(hookRunner, hooks.ModuleOptions{BaseRequest: hooks.Request{
-			ThreadID:       worker.ID,
-			CWD:            workDir,
-			WorkspaceRoots: []string{workDir},
-			JournalPath:    filepath.Join(worker.Dir, "journal.jsonl"),
+			ThreadID:              worker.ID,
+			CWD:                   workDir,
+			WorkspaceRoots:        []string{workDir},
+			GenerationJournalPath: worker.CurrentGenerationJournalPath(),
 		}})
 		engine.RuntimeModules, err = runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{{
 			ID: hooks.ModuleID, Enabled: true,

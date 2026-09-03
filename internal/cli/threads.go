@@ -165,28 +165,32 @@ func newThreadsShowCmd(flags *persistentFlags) *cobra.Command {
 				if err := client.doJSON(cmd.Context(), http.MethodGet, "/api/threads/"+entry.ThreadID+"?limit=1", nil, &response); err != nil {
 					return err
 				}
-				view := map[string]any{
-					"thread":     response.Info,
-					"journal":    filepath.Join(response.Dir, "journal.jsonl"),
-					"scratchpad": filepath.Join(response.Dir, "scratchpad"),
-				}
-				if jsonOut {
-					cmdPrintln(cmd, mustJSON(view))
-					return nil
-				}
-				execution := string(response.ExecutionState)
-				if execution == "" {
-					execution = "-"
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "thread_id:      %s\nalias:          %s\nparent:         %s\nretention:      %s\nexecution:      %s\ngeneration:     %s\nturns:          %d\npending:        %d\njournal:        %s\nscratchpad:     %s\n",
-					response.ID, response.Alias, response.ParentThreadID, response.RetentionState, execution, response.GenerationID,
-					response.TurnCount, response.PendingInputs, view["journal"], view["scratchpad"])
+				renderThreadShow(cmd, response.Info, jsonOut)
 				return nil
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSON")
 	return cmd
+}
+
+func renderThreadShow(cmd *cobra.Command, info thread.Info, jsonOut bool) {
+	view := map[string]any{
+		"thread":             info,
+		"generation_journal": info.GenerationJournalPath,
+		"scratchpad":         filepath.Join(info.Dir, "scratchpad"),
+	}
+	if jsonOut {
+		cmdPrintln(cmd, mustJSON(view))
+		return
+	}
+	execution := string(info.ExecutionState)
+	if execution == "" {
+		execution = "-"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "thread_id:          %s\nalias:              %s\nparent:             %s\nretention:          %s\nexecution:          %s\ngeneration:         %s\nturns:              %d\npending:            %d\ngeneration_journal: %s\nscratchpad:         %s\n",
+		info.ID, info.Alias, info.ParentThreadID, info.RetentionState, execution, info.GenerationID,
+		info.TurnCount, info.PendingInputs, view["generation_journal"], view["scratchpad"])
 }
 
 func newThreadsRenameCmd(flags *persistentFlags) *cobra.Command {

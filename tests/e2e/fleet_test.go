@@ -24,6 +24,7 @@ import (
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 func processExitCode(err error) int {
@@ -106,9 +107,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 			case err := <-providerErrors:
 				t.Fatalf("provider request: %v", err)
 			case <-time.After(5 * time.Second):
-				eventsBody, _ := os.ReadFile(
-					filepath.Join(agentAddress.StateDir(), "threads", threadID, "journal.jsonl"),
-				)
+				eventsBody := []byte(threadJournalText(t, filepath.Join(agentAddress.StateDir(), "threads", threadID)))
 				logBody, _ := os.ReadFile(filepath.Join(agentAddress.StateDir(), "logs", "fleet.log"))
 				t.Fatalf(
 					"original provider request did not start\nevents:\n%s\nfleet log:\n%s",
@@ -179,7 +178,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 			}
 			waitFleetInterruptedAndContinuationEvents(
 				t,
-				filepath.Join(agentAddress.StateDir(), "threads", threadID, "journal.jsonl"),
+				filepath.Join(agentAddress.StateDir(), "threads", threadID),
 				originalTurnID,
 			)
 		})
@@ -1117,14 +1116,26 @@ func startFleetBlockingTurn(
 
 func waitFleetInterruptedAndContinuationEvents(
 	t *testing.T,
-	path string,
+	threadDir string,
 	originalTurnID string,
 ) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	var body []byte
 	for time.Now().Before(deadline) {
-		body, _ = os.ReadFile(path)
+		journals, err := thread.InspectGenerationJournals(threadDir)
+		if err == nil {
+			var joined strings.Builder
+			for _, journal := range journals {
+				data, readErr := os.ReadFile(journal.Path)
+				if readErr != nil {
+					joined.Reset()
+					break
+				}
+				joined.Write(data)
+			}
+			body = []byte(joined.String())
+		}
 		text := string(body)
 		if strings.Contains(text, `"type":"turn.errored"`) &&
 			strings.Contains(text, `"turn_id":"`+originalTurnID+`"`) &&
@@ -1136,7 +1147,7 @@ func waitFleetInterruptedAndContinuationEvents(
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("restart events did not settle in %s:\n%s", path, body)
+	t.Fatalf("restart events did not settle in %s:\n%s", threadDir, body)
 }
 
 func shutdownFleetAgent(t *testing.T, agentAddress agentstate.AgentAddress) {

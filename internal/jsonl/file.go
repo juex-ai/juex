@@ -236,6 +236,17 @@ func (f *File) Append(records ...json.RawMessage) (Batch, error) {
 // returns the byte boundary after the last record accepted by the visitor. The
 // visitor must not call methods on f.
 func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error) {
+	return f.readForwardTo(start, -1, visit)
+}
+
+// ReadForwardTo visits records from start through the captured end boundary.
+// It is used by higher-level stores that need a stable snapshot while later
+// appends may continue beyond end.
+func (f *File) ReadForwardTo(start, end int64, visit func(Record) error) (int64, error) {
+	return f.readForwardTo(start, end, visit)
+}
+
+func (f *File) readForwardTo(start, end int64, visit func(Record) error) (int64, error) {
 	if visit == nil {
 		return start, errors.New("jsonl: visitor is required")
 	}
@@ -247,15 +258,24 @@ func (f *File) ReadForward(start int64, visit func(Record) error) (int64, error)
 	if err := f.checkSizeLocked(); err != nil {
 		return start, err
 	}
+	if end < 0 {
+		end = f.size
+	}
 	if err := f.validateBoundaryLocked(start); err != nil {
 		return start, err
 	}
-	reader := bufio.NewReaderSize(io.NewSectionReader(f.file, start, f.size-start), defaultReadBlockSize)
+	if err := f.validateBoundaryLocked(end); err != nil {
+		return start, err
+	}
+	if end < start {
+		return start, fmt.Errorf("%w: end %d is before start %d", ErrInvalidOffset, end, start)
+	}
+	reader := bufio.NewReaderSize(io.NewSectionReader(f.file, start, end-start), defaultReadBlockSize)
 	committed := start
 	offset := start
 	var previous *diskRecord
 	var pending []Record
-	for offset < f.size {
+	for offset < end {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			return committed, &CorruptionError{Offset: offset, Err: fmt.Errorf("incomplete record: %w", err)}

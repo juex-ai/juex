@@ -14,7 +14,6 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/thread"
 )
 
 type observedContext struct {
@@ -805,7 +804,7 @@ func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
 	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.ID != started.TurnID || snapshot.Turn.State != TurnLifecycleErrored {
 		t.Fatalf("live status = %+v, want discarded turn errored", snapshot.Turn)
 	}
-	journal, err := thread.ReadEvents(eng.Thread.Dir)
+	journal, err := eng.Thread.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -951,7 +950,7 @@ func TestDiscardPendingInputRetriesStartedTurnTerminalCommit(t *testing.T) {
 	if status := eng.PendingInputStatus(); status.TurnID != "" {
 		t.Fatalf("pending status = %+v, want released after terminal retry", status)
 	}
-	journal, err := thread.ReadEvents(eng.Thread.Dir)
+	journal, err := eng.Thread.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
