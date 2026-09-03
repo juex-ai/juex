@@ -204,28 +204,27 @@ def thread_journal_paths(path: pathlib.Path) -> list[pathlib.Path]:
     if not generation_dir.is_dir():
         return []
     metadata_path = path / "thread.json"
-    if metadata_path.is_file():
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            generations = metadata.get("generations")
-            if isinstance(generations, list):
-                registered: list[pathlib.Path] = []
-                for generation in generations:
-                    if not isinstance(generation, dict):
-                        return []
-                    generation_id = generation.get("generation_id")
-                    if (
-                        not isinstance(generation_id, str)
-                        or re.fullmatch(r"g[0-9]{6}", generation_id) is None
-                    ):
-                        return []
-                    registered.append(generation_dir / f"{generation_id}.jsonl")
-                return registered
-        except (OSError, json.JSONDecodeError):
+    if not metadata_path.is_file():
+        return []
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        generations = metadata.get("generations")
+        if not isinstance(generations, list):
             return []
-    # Deterministic oracle fixtures may provide direct Generation files
-    # without production Thread metadata.
-    return sorted(generation_dir.glob("g[0-9][0-9][0-9][0-9][0-9][0-9].jsonl"))
+        registered: list[pathlib.Path] = []
+        for generation in generations:
+            if not isinstance(generation, dict):
+                return []
+            generation_id = generation.get("generation_id")
+            if (
+                not isinstance(generation_id, str)
+                or re.fullmatch(r"g[0-9]{6}", generation_id) is None
+            ):
+                return []
+            registered.append(generation_dir / f"{generation_id}.jsonl")
+        return registered
+    except (OSError, json.JSONDecodeError):
+        return []
 
 
 def _terminal_content(payload: dict[str, Any]) -> str:

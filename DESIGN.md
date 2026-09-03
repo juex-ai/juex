@@ -37,14 +37,19 @@ operability understandable without opening the Thread:
 - retention state and, when active, execution state;
 - created and last-active time;
 - Turn and Context Generation counts;
-- pending Input count and current context usage.
+- pending Input count and current context usage;
+- one cumulative Token Usage label.
 
 Main appears like a normal Thread but cannot be renamed, archived, or deleted.
 An idle Worker can be archived. An archived Worker can be restored or
 permanently deleted after explicit confirmation.
 
-List data comes from the Agent index. Rendering the list must not scan every
-Thread Journal.
+List data comes from the Agent index. Rendering the list must not open Thread
+metadata or Generation Journals. Activating, hovering, or focusing the Token
+Usage label reveals total input, cached input, output, and per-`provider:model`
+rows sorted by input plus output. Cached input is a subset of input and is not
+added again to the displayed total. The disclosure remains available to touch
+and keyboard users and bounds long model lists inside a scrollable panel.
 
 ## Thread Detail
 
@@ -54,9 +59,9 @@ appear as system activity rows:
 - `context.compacted` exposes its compact summary for copying;
 - `context.renewed` marks the boundary without Provider content or copy action.
 
-The first load shows the latest complete Journal page. “Load older messages”
-pages backward while preserving chronological display order and atomic commit
-boundaries.
+The first load shows the latest complete EventStore page from the registered
+Generation Journals. “Load older messages” pages backward across Generations
+while preserving chronological display order and atomic commit boundaries.
 
 Active Threads expose the composer. Archived Threads are read-only. Agent or
 Runtime unavailability may disable mutation while preserving readable

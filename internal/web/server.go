@@ -71,6 +71,9 @@ type Server struct {
 	agentRuntimeOnce sync.Once
 	agentRuntime     app.AgentRuntimeResolution
 	agentRuntimeErr  error
+	threadIndexOnce  sync.Once
+	threadIndexMu    sync.Mutex
+	threadIndexErr   error
 
 	endpointMu       sync.RWMutex
 	endpointRuntime  endpoint.Runtime
@@ -110,6 +113,7 @@ func NewServer(opts Options) *Server {
 
 // Handler returns the TCP agent API with a pointer for non-API browser routes.
 func (s *Server) Handler() http.Handler {
+	s.prepareThreadIndex()
 	mux := http.NewServeMux()
 	s.registerAPIRoutes(mux)
 	mux.HandleFunc("/", s.handleAgentAPIPointer)
@@ -118,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 
 // APIHandler returns the canonical local agent API without a browser fallback.
 func (s *Server) APIHandler() http.Handler {
+	s.prepareThreadIndex()
 	mux := http.NewServeMux()
 	s.registerAPIRoutes(mux)
 	return mux
@@ -128,6 +133,7 @@ func (s *Server) APIHandler() http.Handler {
 // inspect stopped agents through the fleet UI.
 func NewReadOnlyAPIHandler(cfg config.Config) http.Handler {
 	server := NewServer(Options{Cfg: cfg})
+	server.prepareThreadIndex()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/threads", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -145,6 +151,30 @@ func NewReadOnlyAPIHandler(cfg config.Config) http.Handler {
 		server.handleMedia(w, r)
 	})
 	return mux
+}
+
+func (s *Server) prepareThreadIndex() {
+	s.threadIndexOnce.Do(func() {
+		stateDir := s.opts.Cfg.RuntimePaths().StateDir
+		if stateDir != "" {
+			s.threadIndexErr = thread.NewStore(stateDir).RecoverLayout()
+		}
+	})
+}
+
+func (s *Server) ensureThreadIndexReady() error {
+	s.prepareThreadIndex()
+	s.threadIndexMu.Lock()
+	defer s.threadIndexMu.Unlock()
+	if s.threadIndexErr == nil {
+		return nil
+	}
+	stateDir := s.opts.Cfg.RuntimePaths().StateDir
+	if stateDir == "" {
+		return s.threadIndexErr
+	}
+	s.threadIndexErr = thread.NewStore(stateDir).RecoverLayout()
+	return s.threadIndexErr
 }
 
 func (s *Server) registerAPIRoutes(mux *http.ServeMux) {

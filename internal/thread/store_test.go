@@ -69,7 +69,7 @@ func TestStoreCreatesAndReplaysMainAndWorker(t *testing.T) {
 	}
 }
 
-func TestListUsesIndexWithoutOpeningJournal(t *testing.T) {
+func TestListUsesIndexWithoutOpeningThreadFiles(t *testing.T) {
 	t.Parallel()
 	store := NewStore(t.TempDir())
 	store.now = fixedNow()
@@ -85,6 +85,9 @@ func TestListUsesIndexWithoutOpeningJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(journalPath, 0o600) })
+	if err := os.WriteFile(filepath.Join(store.ThreadsDir(), MainID, projectionFile), []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	entries, err := store.List()
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +97,7 @@ func TestListUsesIndexWithoutOpeningJournal(t *testing.T) {
 	}
 }
 
-func TestListRebuildsIndexWithInvalidLifecycleProjection(t *testing.T) {
+func TestRecoverLayoutRebuildsIndexWithInvalidLifecycleEntry(t *testing.T) {
 	t.Parallel()
 	store := NewStore(t.TempDir())
 	main, err := store.EnsureMain()
@@ -122,6 +125,12 @@ func TestListRebuildsIndexWithInvalidLifecycleProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := store.List(); !errors.Is(err, ErrInvalidMetadata) {
+		t.Fatalf("List error = %v, want invalid index error", err)
+	}
+	if err := store.RecoverLayout(); err != nil {
+		t.Fatal(err)
+	}
 	entries, err := store.List()
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +140,7 @@ func TestListRebuildsIndexWithInvalidLifecycleProjection(t *testing.T) {
 	}
 }
 
-func TestListRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing.T) {
+func TestRecoverLayoutRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		breakIndex func(*testing.T, *Store)
@@ -248,7 +257,11 @@ func TestListRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing.T) {
 			}
 			test.breakIndex(t, store)
 
-			entries, err := NewStore(store.AgentStateDir()).List()
+			recovery := NewStore(store.AgentStateDir())
+			if err := recovery.RecoverLayout(); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := recovery.List()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -268,7 +281,7 @@ func TestListRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing.T) {
 	}
 }
 
-func TestListRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.T) {
+func TestRecoverLayoutRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		mutate func(*testing.T, string)
@@ -374,14 +387,14 @@ func TestListRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.T) {
 			if err := os.Remove(store.IndexPath()); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := NewStore(store.AgentStateDir()).List(); err == nil {
-				t.Fatal("List error = nil, want authoritative metadata failure")
+			if err := NewStore(store.AgentStateDir()).RecoverLayout(); err == nil {
+				t.Fatal("RecoverLayout error = nil, want authoritative metadata failure")
 			}
 		})
 	}
 }
 
-func TestListRejectsAgentWideMetadataConflicts(t *testing.T) {
+func TestRecoverLayoutRejectsAgentWideMetadataConflicts(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		mutate func(first, second *Projection)
@@ -435,8 +448,8 @@ func TestListRejectsAgentWideMetadataConflicts(t *testing.T) {
 			if err := os.Remove(store.IndexPath()); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := NewStore(store.AgentStateDir()).List(); !errors.Is(err, ErrInvalidMetadata) {
-				t.Fatalf("List error = %v, want invalid metadata", err)
+			if err := NewStore(store.AgentStateDir()).RecoverLayout(); !errors.Is(err, ErrInvalidMetadata) {
+				t.Fatalf("RecoverLayout error = %v, want invalid metadata", err)
 			}
 		})
 	}
@@ -495,7 +508,11 @@ func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
 	if afterJournalInfo.Size() != journalInfo.Size() {
 		t.Fatalf("rename changed Journal size from %d to %d", journalInfo.Size(), afterJournalInfo.Size())
 	}
-	entries, err := NewStore(store.AgentStateDir()).List()
+	recovery := NewStore(store.AgentStateDir())
+	if err := recovery.RecoverLayout(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := recovery.List()
 	if err != nil {
 		t.Fatal(err)
 	}

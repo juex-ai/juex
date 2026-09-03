@@ -49,8 +49,11 @@ juex send --wait "implement the next task"
 - Worker 使用相同执行模型，但拥有独立的历史、上下文、状态和订阅。它记录
   parent，但不记录固定的结果目的地。
 - `/new` 与 `/compact` 都会开始新的 Context Generation。两者都保留
-  Thread 历史和 Scratchpad；compact 携带 summary，new 清除 Goal 与 Notes。
+  Thread 历史和 Scratchpad；compact 携带 summary 并保留 Goal 与 Notes，
+  new 则要求已启用的 Goal 与 Notes Module 清除自己的状态。
 - Active 与 archived Thread 分开存储。Archived Worker 只读，可以恢复或永久删除。
+- Token Usage 按每次 Provider 调用记录，并使用规范的 `provider:model` 按模型聚合，
+  供 Thread 检查。
 
 规范词汇与不变量见 [DOMAIN.zh.md](DOMAIN.zh.md)。
 
@@ -74,9 +77,11 @@ juex send --wait "implement the next task"
 `.agents/mcp.json`。修改启动配置后需要重启常驻 Agent。
 
 生成的 Agent 状态位于 `$JUEX_HOME/agents/<agent-id>/`。Agent 拥有身份、
-Thread index、active 与 archived Thread、media、日志、Observable 和
-Extension 状态。每个 Thread 拥有一个按时间顺序 append-only 的 Journal，
-以及自己的 Scratchpad 和系统管理的 spool。
+可重建的 Thread index、active 与 archived Thread、media、日志、Observable 和
+Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event
+历史、有界 pending Input 状态、由 Module 拥有的 Goal 与 Notes 状态、Scratchpad
+和系统管理的 spool。当前 Provider context 只从当前 Generation 重建；Thread
+Explorer 列表来自 Agent index。
 
 具体所有权、存储权威和 Runtime 数据流见
 [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)。文件 schema、CLI/API 细节以代码、
