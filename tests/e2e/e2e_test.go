@@ -1041,22 +1041,6 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	}
 }
 
-func readLines(t *testing.T, path string) []string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	var out []string
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		if line := scanner.Text(); line != "" {
-			out = append(out, line)
-		}
-	}
-	return out
-}
-
 func e2ePromptBuilder(
 	t *testing.T,
 	globalAgentsMDPath string,
