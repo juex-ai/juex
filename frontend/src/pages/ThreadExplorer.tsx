@@ -6,6 +6,7 @@ import { archiveThread, createThread, deleteThread, listThreads, unarchiveThread
 import { useShellTitle } from "@/components/AppShell";
 import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
 import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
+import { ThreadUsageSummary } from "@/components/thread/ThreadUsageSummary";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -193,7 +194,6 @@ function ThreadRow({ thread, archived, busy, mutationsEnabled, onAction, onDelet
   onDelete?: () => void;
 }) {
   const main = thread.thread_id === "0";
-  const usage = thread.token_usage.total;
   return (
     <div className="group/thread-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 hover:bg-muted/60">
       <Link to={threadHref(thread.thread_id)} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md px-1 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/35">
@@ -201,19 +201,21 @@ function ThreadRow({ thread, archived, busy, mutationsEnabled, onAction, onDelet
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium text-foreground">{threadListTitle(thread)}</span>
           <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
-            <span>{thread.retention_state === "archived" ? "archived" : thread.execution_state}</span><span>{thread.turn_count} turns</span><span>Gen {thread.generation_count}</span><span>{thread.pending_input_count} pending</span><span>{thread.current_context_tokens.toLocaleString()} context</span>
-            <span>{(usage.input_tokens ?? 0).toLocaleString()} in · {(usage.cached_input_tokens ?? 0).toLocaleString()} cached · {(usage.output_tokens ?? 0).toLocaleString()} out</span><span>{humanAgo(thread.last_activity_at)}</span>
+            <span>{thread.retention_state === "archived" ? "archived" : thread.execution_state}</span><span>{thread.turn_count} turns</span><span>Gen {thread.generation_count}</span><span>{thread.pending_input_count} pending</span><span>{thread.current_context_tokens.toLocaleString()} context</span><span>{humanAgo(thread.last_activity_at)}</span>
           </span>
         </span>
       </Link>
-      {!main ? (
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon-sm" disabled={busy || !mutationsEnabled} onClick={onAction} title={archived ? "Unarchive thread" : "Archive thread"} aria-label={archived ? "Unarchive thread" : "Archive thread"}>
-            {archived ? <ArchiveRestore className="size-3.5" /> : <Archive className="size-3.5" />}
-          </Button>
-          {archived && onDelete ? <Button variant="ghost" size="icon-sm" disabled={busy || !mutationsEnabled} onClick={onDelete} title="Delete thread permanently" aria-label="Delete thread permanently" className="text-muted-foreground hover:text-destructive"><Trash2 className="size-3.5" /></Button> : null}
-        </div>
-      ) : null}
+      <div className="flex items-center gap-1">
+        <ThreadUsageSummary usage={thread.token_usage} />
+        {!main ? (
+          <>
+            <Button variant="ghost" size="icon-sm" disabled={busy || !mutationsEnabled} onClick={onAction} title={archived ? "Unarchive thread" : "Archive thread"} aria-label={archived ? "Unarchive thread" : "Archive thread"}>
+              {archived ? <ArchiveRestore className="size-3.5" /> : <Archive className="size-3.5" />}
+            </Button>
+            {archived && onDelete ? <Button variant="ghost" size="icon-sm" disabled={busy || !mutationsEnabled} onClick={onDelete} title="Delete thread permanently" aria-label="Delete thread permanently" className="text-muted-foreground hover:text-destructive"><Trash2 className="size-3.5" /></Button> : null}
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }

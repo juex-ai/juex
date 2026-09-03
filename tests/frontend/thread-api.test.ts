@@ -69,6 +69,45 @@ test("agent API calls use the selected fleet route prefix", async () => {
   assert.deepEqual(calls, ["/agents/agent%20one/api/threads"]);
 });
 
+test("listThreads preserves aggregate and per-model usage from the Agent index", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  const tokenUsage = {
+    total: {
+      input_tokens: 1_200,
+      cached_input_tokens: 400,
+      output_tokens: 300,
+    },
+    by_model: {
+      "openai:gpt-5": {
+        input_tokens: 1_200,
+        cached_input_tokens: 400,
+        output_tokens: 300,
+      },
+    },
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return new Response(
+      JSON.stringify({
+        active_threads: [{ thread_id: "worker1", token_usage: tokenUsage }],
+        archived_threads: [{ thread_id: "worker2", token_usage: tokenUsage }],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const result = await listThreads();
+    assert.deepEqual(result.active_threads[0].token_usage, tokenUsage);
+    assert.deepEqual(result.archived_threads[0].token_usage, tokenUsage);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(calls, ["/api/threads"]);
+});
+
 test("getThread encodes optional transcript pagination params", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
