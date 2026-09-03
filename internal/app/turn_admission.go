@@ -26,6 +26,7 @@ type TurnAdmissionRequest struct {
 	Prompt      string
 	Kind        string
 	Attachments []llm.MediaRef
+	RetryTurnID string
 }
 
 type AdmittedTurn struct {
@@ -83,17 +84,21 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 		return errorResult(err, nil)
 	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
+	req.RetryTurnID = strings.TrimSpace(req.RetryTurnID)
 	if req.Prompt == "" && len(req.Attachments) == 0 {
 		return rejectedResult("bad_request", "expected non-empty prompt or attachment", "", false, nil, runtime.PendingInputStatus{})
 	}
 	if req.Kind != "" && req.Kind != llm.MessageKindSystemNotice {
 		return rejectedResult("bad_request", "unsupported turn kind", "", false, nil, runtime.PendingInputStatus{})
 	}
+	if req.RetryTurnID != "" && req.Kind != llm.MessageKindSystemNotice {
+		return rejectedResult("bad_request", "retry turn id requires a system notice", "", false, nil, runtime.PendingInputStatus{})
+	}
 	if req.Kind == llm.MessageKindSystemNotice {
 		if len(req.Attachments) > 0 {
 			return rejectedResult("bad_request", "system notices cannot include attachments", "", false, nil, runtime.PendingInputStatus{})
 		}
-		return a.admitUserTurn(ctx, userTurnMessageWithKind(req.Prompt, nil, req.Kind))
+		return a.admissionQueue().admitUserWithRetry(ctx, userTurnMessageWithKind(req.Prompt, nil, req.Kind), req.RetryTurnID)
 	}
 
 	if len(req.Attachments) > 0 {

@@ -567,22 +567,37 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 		}
 		return false
 	})
-
 	type compactResult struct {
 		response *http.Response
 		err      error
 	}
 	compactDone := make(chan compactResult, 1)
 	go func() {
-		response, requestErr := http.Post(
-			ts.URL+"/api/threads/"+threadID+"/inputs",
-			"application/json",
-			strings.NewReader(`{"prompt":"/compact"}`),
-		)
-		compactDone <- compactResult{response: response, err: requestErr}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			response, requestErr := http.Post(
+				ts.URL+"/api/threads/"+threadID+"/inputs",
+				"application/json",
+				strings.NewReader(`{"prompt":"/compact"}`),
+			)
+			if requestErr != nil || response.StatusCode != http.StatusConflict || time.Now().After(deadline) {
+				compactDone <- compactResult{response: response, err: requestErr}
+				return
+			}
+			_, _ = io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+			time.Sleep(10 * time.Millisecond)
+		}
 	}()
 	select {
 	case <-prov.compactStarted:
+	case result := <-compactDone:
+		if result.err != nil {
+			t.Fatalf("compaction request failed before provider start: %v", result.err)
+		}
+		defer result.response.Body.Close()
+		body, _ := io.ReadAll(result.response.Body)
+		t.Fatalf("compaction finished before provider start: status=%d body=%s", result.response.StatusCode, body)
 	case <-time.After(5 * time.Second):
 		t.Fatal("compaction provider did not start")
 	}

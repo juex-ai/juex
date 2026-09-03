@@ -1,7 +1,6 @@
 package thread
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -18,29 +17,17 @@ const (
 )
 
 const (
-	FactThreadCreated      = "thread.created"
-	FactMessageAppended    = "message.appended"
-	FactEventRecorded      = "event.recorded"
-	FactInputAccepted      = "input.accepted"
-	FactInputAttemptStart  = "input.attempt.started"
-	FactInputAttemptDone   = "input.attempt.succeeded"
-	FactInputAttemptFailed = "input.attempt.failed"
-	FactInputAttemptCancel = "input.attempt.cancelled"
-	FactInputAttemptStop   = "input.attempt.interrupted"
-	FactInputRequeued      = "input.requeued"
-	FactInputCompleted     = "input.completed"
-	FactInputDeadLettered  = "input.dead_lettered"
-	FactInputCancelled     = "input.cancelled"
-	FactInputExpired       = "input.expired"
-	FactInputRecorded      = "input.recorded"
-	FactTurnStarted        = "turn.started"
-	FactTurnCompleted      = "turn.completed"
-	FactTurnFailed         = "turn.failed"
-	FactTurnCancelled      = "turn.cancelled"
-	FactThreadSettled      = "thread.settled"
-	FactContextRenewed     = "context.renewed"
-	FactContextCompacted   = "context.compacted"
-	FactUsageRecorded      = "usage.recorded"
+	FactThreadCreated    = "thread.created"
+	FactMessageAppended  = "message.appended"
+	FactEventRecorded    = "event.recorded"
+	FactTurnStarted      = "turn.started"
+	FactTurnCompleted    = "turn.completed"
+	FactTurnFailed       = "turn.failed"
+	FactTurnCancelled    = "turn.cancelled"
+	FactThreadSettled    = "thread.settled"
+	FactContextRenewed   = "context.renewed"
+	FactContextCompacted = "context.compacted"
+	FactUsageRecorded    = "usage.recorded"
 )
 
 type RetentionState string
@@ -81,9 +68,6 @@ type Fact struct {
 	GenerationID     string            `json:"generation_id,omitempty"`
 	FromGenerationID string            `json:"from_generation_id,omitempty"`
 	ToGenerationID   string            `json:"to_generation_id,omitempty"`
-	InputID          string            `json:"input_id,omitempty"`
-	InputRecord      json.RawMessage   `json:"input_record,omitempty"`
-	AttemptID        string            `json:"attempt_id,omitempty"`
 	TurnID           string            `json:"turn_id,omitempty"`
 	Message          *llm.Message      `json:"message,omitempty"`
 	Event            *events.Event     `json:"event,omitempty"`
@@ -98,14 +82,11 @@ type Fact struct {
 // GenerationSeed is the bounded runtime state needed to continue from a
 // Generation boundary. Authoritative Thread metadata stays in thread.json.
 type GenerationSeed struct {
-	Version          int                        `json:"v"`
-	ProviderMessages []llm.Message              `json:"provider_messages,omitempty"`
-	RecoveryEvents   []events.Event             `json:"recovery_events,omitempty"`
-	CompactionCount  int                        `json:"compaction_count,omitempty"`
-	Inputs           map[string]InputProjection `json:"inputs,omitempty"`
-	InputOrder       []string                   `json:"input_order,omitempty"`
-	InputRecords     map[string]json.RawMessage `json:"input_records,omitempty"`
-	ContextUsage     *llm.ContextUsage          `json:"context_usage,omitempty"`
+	Version          int               `json:"v"`
+	ProviderMessages []llm.Message     `json:"provider_messages,omitempty"`
+	RecoveryEvents   []events.Event    `json:"recovery_events,omitempty"`
+	CompactionCount  int               `json:"compaction_count,omitempty"`
+	ContextUsage     *llm.ContextUsage `json:"context_usage,omitempty"`
 }
 
 type GenerationProjection struct {
@@ -199,41 +180,6 @@ type Info struct {
 	ContextUsage          *llm.ContextUsage `json:"context_usage,omitempty"`
 }
 
-type InputState string
-
-const (
-	InputAccepted     InputState = "accepted"
-	InputRunning      InputState = "running"
-	InputRetryable    InputState = "retryable"
-	InputCompleted    InputState = "completed"
-	InputDeadLettered InputState = "dead_lettered"
-	InputCancelled    InputState = "cancelled"
-	InputExpired      InputState = "expired"
-)
-
-func (state InputState) Terminal() bool {
-	switch state {
-	case InputCompleted, InputDeadLettered, InputCancelled, InputExpired:
-		return true
-	default:
-		return false
-	}
-}
-
-type AttemptProjection struct {
-	ID           string `json:"attempt_id"`
-	GenerationID string `json:"generation_id"`
-	TurnID       string `json:"turn_id"`
-	State        string `json:"state"`
-	Error        string `json:"error,omitempty"`
-}
-
-type InputProjection struct {
-	ID       string              `json:"input_id"`
-	State    InputState          `json:"state"`
-	Attempts []AttemptProjection `json:"attempts,omitempty"`
-}
-
 type Activity struct {
 	Type             string       `json:"type"`
 	At               Timestamp    `json:"at"`
@@ -250,9 +196,6 @@ type ReplayState struct {
 	Events           []events.Event
 	Activities       []Activity
 	CompactionCount  int
-	Inputs           map[string]*InputProjection
-	InputOrder       []string
-	InputRecords     map[string]json.RawMessage
 	ContextUsage     *llm.ContextUsage
 }
 

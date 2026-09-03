@@ -72,6 +72,102 @@ func TestAdmitTurnSystemNoticeUsesOrdinaryLifecycleWithoutSlashParsing(t *testin
 	}
 }
 
+func TestAdmitTurnSystemNoticeRetriesInterruptedTurnInputs(t *testing.T) {
+	a, provider := newStubApp(t, llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "resumed"), StopReason: llm.StopEndTurn})
+	interrupted, err := a.Engine.PendingInputQueue.AdmitTurnInput(
+		"turn-interrupted",
+		llm.TextMessage(llm.RoleUser, "unfinished work"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Engine.PendingInputQueue.MarkProcessed([]string{interrupted.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Engine.PendingInputQueue.ApplyTerminalEvent(events.Event{
+		Type:   "turn.errored",
+		TurnID: "turn-interrupted",
+		Payload: runtime.TurnErroredPayload{
+			Error: "restart", ErrorKind: "runtime_restart", InputIDs: []string{interrupted.ID},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	started := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt:      "continue after restart",
+		Kind:        llm.MessageKindSystemNotice,
+		RetryTurnID: "turn-interrupted",
+	})
+	if started.Kind != TurnAdmissionStarted || started.Start == nil {
+		t.Fatalf("started = %+v", started)
+	}
+	records, err := a.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current := records[interrupted.ID]; current.State != runtime.PendingInputStatePending || current.TurnID != "" || current.Attempts != 1 {
+		t.Fatalf("retried interrupted Input = %+v", current)
+	}
+	if _, err := a.RunAdmittedTurn(context.Background(), started.Start.TurnID, started.Start.Message); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.histories) != 1 || len(provider.histories[0]) < 2 ||
+		provider.histories[0][0].FirstText() != "unfinished work" ||
+		provider.histories[0][1].FirstText() != "continue after restart" {
+		t.Fatalf("continuation history = %+v", provider.histories)
+	}
+	if records, err := a.Engine.PendingInputQueue.Records(); err != nil || len(records) != 0 {
+		t.Fatalf("completed continuation retained pending Inputs = %+v, err=%v", records, err)
+	}
+}
+
+func TestAdmitTurnSystemNoticeRollsBackInterruptedInputsWhenAdmissionFails(t *testing.T) {
+	a, _ := newStubApp(t)
+	interrupted, err := a.Engine.PendingInputQueue.AdmitTurnInput(
+		"turn-interrupted",
+		llm.TextMessage(llm.RoleUser, "unfinished work"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Engine.PendingInputQueue.MarkProcessed([]string{interrupted.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Engine.PendingInputQueue.ApplyTerminalEvent(events.Event{
+		Type:   "turn.errored",
+		TurnID: "turn-interrupted",
+		Payload: runtime.TurnErroredPayload{
+			Error: "restart", ErrorKind: "runtime_restart", InputIDs: []string{interrupted.ID},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("injected continuation admission failure")
+	a.Bus.SetCommitter(&failOnceEventCommitter{
+		delegate: a.eventSink, eventType: runtime.TurnAdmittedType, err: wantErr,
+	})
+
+	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt:      "continue after restart",
+		Kind:        llm.MessageKindSystemNotice,
+		RetryTurnID: "turn-interrupted",
+	})
+	if !errors.Is(result.Err, wantErr) {
+		t.Fatalf("admission error = %v, want %v", result.Err, wantErr)
+	}
+	records, err := a.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := records[interrupted.ID]
+	if current.State != runtime.PendingInputStateRetryable || current.TurnID != "turn-interrupted" || current.LastError != "restart" || current.LastErrorKind != "runtime_restart" {
+		t.Fatalf("rolled-back interrupted Input = %+v", current)
+	}
+}
+
 func TestAdmitTurnRejectsUnsupportedKindsAndSystemNoticeAttachments(t *testing.T) {
 	for _, kind := range []string{
 		llm.MessageKindRuntimeContext,
@@ -96,6 +192,10 @@ func TestAdmitTurnRejectsUnsupportedKindsAndSystemNoticeAttachments(t *testing.T
 	})
 	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
 		t.Fatalf("result = %+v", result)
+	}
+	result = a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "notice", RetryTurnID: "turn-old"})
+	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
+		t.Fatalf("retry without system notice = %+v", result)
 	}
 }
 

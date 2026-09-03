@@ -162,7 +162,10 @@ func waitFleetTurnState(t *testing.T, state endpoint.Runtime, threadID, turnID s
 		}
 		if selected := activity.SelectedStatus; selected != nil && selected.Thread.ID == threadID &&
 			selected.Turn != nil && selected.Turn.State == want && (turnID == "" || selected.Turn.ID == turnID) {
-			return activity
+			if want != statusapi.TurnErrored ||
+				(activity.State == statusapi.ActivityIdle && selected.Thread.State == statusapi.ThreadFailed) {
+				return activity
+			}
 		}
 		time.Sleep(25 * time.Millisecond)
 	}

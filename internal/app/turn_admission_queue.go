@@ -26,6 +26,10 @@ func (a *App) admissionQueue() turnAdmissionQueue {
 }
 
 func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) TurnAdmissionResult {
+	return q.admitUserWithRetry(ctx, message, "")
+}
+
+func (q turnAdmissionQueue) admitUserWithRetry(ctx context.Context, message llm.Message, retryTurnID string) TurnAdmissionResult {
 	if q.state == nil || q.engine == nil {
 		return errorResult(fmt.Errorf("turn admission: app, engine, or Thread is not initialized"), nil)
 	}
@@ -37,7 +41,9 @@ func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) 
 	if phase == turnAdmissionCommand {
 		return conflictResult("Thread busy", errTurnAdmissionBusy, q.engine.PendingInputStatus())
 	}
-	return admissionResultFromPendingInput(q.engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{Message: message}))
+	return admissionResultFromPendingInput(q.engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{
+		Message: message, RetryTurnID: retryTurnID,
+	}))
 }
 
 func admissionResultFromPendingInput(result runtime.PendingInputResult, err error) TurnAdmissionResult {

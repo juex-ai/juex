@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
@@ -36,6 +37,9 @@ type PendingInputRequest struct {
 	Message  llm.Message
 	Options  *PendingInputOptions
 	RecordID string
+	// RetryTurnID atomically transfers runtime-interrupted Inputs from one
+	// prior Turn into this system-notice continuation admission.
+	RetryTurnID string
 	// RequireStart preserves synchronous all-or-error semantics by rejecting a
 	// new input before durable acceptance when another Turn is already active.
 	RequireStart bool
@@ -75,12 +79,36 @@ func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRe
 	}
 
 	e.pendingLifecycleMu.Lock()
+	var retried []PendingInputRecord
+	var retryQueue *PendingInputQueue
 	defer func() {
+		if retryQueue != nil && len(retried) > 0 && (err != nil || result.Disposition != PendingInputStarted) {
+			if rollbackErr := retryQueue.restoreRetriedInputs(retried); rollbackErr != nil {
+				result.Retry = PendingInputRetryAfterStorage
+				err = errors.Join(err, fmt.Errorf("roll back interrupted input retry: %w", rollbackErr))
+			}
+		}
 		e.pendingLifecycleMu.Unlock()
 		err = e.publishStagedTerminalError(err)
 	}()
 	if err := ctx.Err(); err != nil {
 		return PendingInputResult{RecordID: request.RecordID}, err
+	}
+	if request.RetryTurnID != "" {
+		if request.Message.Kind != llm.MessageKindSystemNotice {
+			return PendingInputResult{}, errors.New("runtime: retry turn id requires a system notice")
+		}
+		if status := e.PendingInputStatus(); status.TurnID != "" {
+			return PendingInputResult{Retry: PendingInputRetryAfterTurn, Status: status}, ErrActiveTurnExists
+		}
+		retryQueue = e.currentPendingInputQueue()
+		if retryQueue != nil {
+			var retryErr error
+			retried, retryErr = retryQueue.retryTurnInputs(request.RetryTurnID)
+			if retryErr != nil {
+				return PendingInputResult{Retry: PendingInputRetryAfterStorage, Status: e.PendingInputStatus()}, retryErr
+			}
+		}
 	}
 	if request.RecordID == "" && request.Options != nil {
 		record, err := e.PersistPendingMessageWithOptions(ctx, request.Message, *request.Options)
@@ -126,14 +154,21 @@ func (e *Engine) ResolvePendingInput(recordID string, cause error) (PendingInput
 		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage, Status: e.PendingInputStatus()}, errors.Join(cause, err)
 	}
 	if !ok {
+		completed, completedErr := e.pendingInputCompleted(recordID)
+		if completedErr != nil {
+			return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage, Status: e.PendingInputStatus()}, errors.Join(cause, completedErr)
+		}
+		if completed {
+			return PendingInputResult{Disposition: PendingInputProcessed, RecordID: recordID, Status: e.PendingInputStatus()}, cause
+		}
 		return PendingInputResult{}, errors.Join(cause, fmt.Errorf("runtime: persisted input %q not found", recordID))
 	}
 	result := PendingInputResult{RecordID: record.ID, Status: e.PendingInputStatus()}
 	switch record.State {
-	case PendingInputStateProcessed:
+	case PendingInputStateProcessed, PendingInputStateDeadLettered:
 		result.Disposition = PendingInputProcessed
 		return result, cause
-	case PendingInputStatePending, PendingInputStateAdmitted:
+	case PendingInputStateAccepting, PendingInputStatePending, PendingInputStateAdmitted, PendingInputStateRetryable:
 		result.Disposition = PendingInputQueued
 		if cause != nil {
 			result.Retry = PendingInputRetryAfterTurn
@@ -142,7 +177,7 @@ func (e *Engine) ResolvePendingInput(recordID string, cause error) (PendingInput
 	case PendingInputStateExpired:
 		result.Disposition = PendingInputExpired
 		return result, errors.Join(cause, ErrPendingInputExpired)
-	case PendingInputStateDropped, PendingInputStateAccepting:
+	case PendingInputStateDropped:
 		result.Disposition = PendingInputDropped
 		return result, errors.Join(cause, ErrPendingInputHandled)
 	default:
@@ -171,6 +206,15 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 	if err != nil {
 		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, err
 	}
+	if !existed {
+		completed, completedErr := e.pendingInputCompleted(recordID)
+		if completedErr != nil {
+			return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, completedErr
+		}
+		if completed {
+			return PendingInputResult{Disposition: PendingInputProcessed, RecordID: recordID, Status: e.PendingInputStatus()}, nil
+		}
+	}
 	activeStatus := e.PendingInputStatus()
 	if existed &&
 		previous.Origin == PendingInputOriginTurn &&
@@ -191,8 +235,10 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 		(previous.State == PendingInputStateAdmitted || previous.State == PendingInputStateDropped) &&
 		previous.TurnID != "" &&
 		activeStatus.TurnID == previous.TurnID
-	if err := e.DropPersistedPendingMessage(recordID); err != nil {
-		return PendingInputResult{Retry: PendingInputRetryAfterStorage}, err
+	if !invalidateStarted {
+		if err := e.DropPersistedPendingMessage(recordID); err != nil {
+			return PendingInputResult{Retry: PendingInputRetryAfterStorage}, err
+		}
 	}
 	status, removed := e.removePendingInputRecord(recordID)
 	if removed > 0 {
@@ -215,7 +261,8 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 				Status:      e.PendingInputStatus(),
 			}, fmt.Errorf("preserve pending input after discarded start: %w", preserveErr)
 		}
-		turnErr := fmt.Errorf("pending input %q discarded before execution: %w", recordID, ErrPendingInputHandled)
+		turnErr := errorclass.WithKind(errorclass.KindCancelled,
+			fmt.Errorf("pending input %q discarded before execution: %w", recordID, ErrPendingInputHandled))
 		e.beginTerminalPublication(previous.TurnID)
 		e.pendingLifecycleMu.Unlock()
 		committed, completeCommit, commitErr := e.recordTurnErrorForPublication(previous.TurnID, turnErr)
@@ -229,20 +276,28 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 				Status:      e.PendingInputStatus(),
 			}, fmt.Errorf("commit discarded turn error: %w", commitErr)
 		}
-		e.publishTerminalEvent(previous.TurnID, committed, completeCommit)
+		publishErr := e.publishTerminalEvent(previous.TurnID, committed, completeCommit)
 		e.pendingLifecycleMu.Lock()
 		status = e.PendingInputStatus()
+		if publishErr != nil {
+			return PendingInputResult{
+				Disposition: PendingInputDropped,
+				Retry:       PendingInputRetryAfterStorage,
+				RecordID:    recordID,
+				Status:      status,
+			}, publishErr
+		}
 	}
 	record, ok, err := e.PersistedPendingMessage(recordID)
 	if err != nil {
 		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage, Status: status}, err
 	}
 	if !ok {
-		return PendingInputResult{Status: status}, nil
+		return PendingInputResult{Disposition: PendingInputDropped, RecordID: recordID, Status: status}, nil
 	}
 	result := PendingInputResult{RecordID: record.ID, Status: status}
 	switch record.State {
-	case PendingInputStateProcessed:
+	case PendingInputStateProcessed, PendingInputStateDeadLettered:
 		result.Disposition = PendingInputProcessed
 	case PendingInputStateExpired:
 		result.Disposition = PendingInputExpired
@@ -250,6 +305,14 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 		result.Disposition = PendingInputDropped
 	}
 	return result, nil
+}
+
+func (e *Engine) pendingInputCompleted(recordID string) (bool, error) {
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return false, nil
+	}
+	return queue.Completed(recordID)
 }
 
 // ReservePendingInputCompaction establishes the exclusive runtime Turn used by
@@ -347,14 +410,21 @@ func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID stri
 		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, err
 	}
 	if !ok {
+		completed, completedErr := e.pendingInputCompleted(recordID)
+		if completedErr != nil {
+			return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, completedErr
+		}
+		if completed {
+			return PendingInputResult{Disposition: PendingInputProcessed, RecordID: recordID, Status: e.PendingInputStatus()}, nil
+		}
 		return PendingInputResult{}, fmt.Errorf("runtime: persisted input %q not found", recordID)
 	}
 	switch record.State {
-	case PendingInputStateProcessed:
+	case PendingInputStateDeadLettered:
 		return PendingInputResult{Disposition: PendingInputProcessed, RecordID: record.ID}, nil
 	case PendingInputStateExpired:
 		return PendingInputResult{Disposition: PendingInputExpired, RecordID: record.ID}, ErrPendingInputExpired
-	case PendingInputStateDropped, PendingInputStateAccepting:
+	case PendingInputStateDropped:
 		return PendingInputResult{Disposition: PendingInputDropped, RecordID: record.ID}, ErrPendingInputHandled
 	}
 	status := e.PendingInputStatus()

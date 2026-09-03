@@ -363,6 +363,7 @@ func (m *Manager) restartEntry(
 		resumeCtx,
 		runtimeState,
 		result.Resume.ThreadID,
+		interrupted.TurnID,
 		prompt,
 	)
 	cancel()

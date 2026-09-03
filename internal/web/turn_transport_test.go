@@ -62,8 +62,8 @@ func TestWebTurnTransportInterruptPreservesQueuedInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := records["queued-before-interrupt"].State; got != runtime.PendingInputStateProcessed {
-		t.Fatalf("pending state = %q, want %q", got, runtime.PendingInputStateProcessed)
+	if _, ok := records["queued-before-interrupt"]; ok {
+		t.Fatalf("cancelled input was retained: %+v", records["queued-before-interrupt"])
 	}
 }
 

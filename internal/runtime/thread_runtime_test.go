@@ -176,18 +176,59 @@ func TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(replayable) != 1 || replayable[0].RecordID != committed.ID {
-		t.Fatalf("replayable records = %+v, want committed admission %q", replayable, committed.ID)
+	if len(replayable) != 3 || replayable[0].RecordID != committed.ID ||
+		replayable[1].RecordID != uncommitted.ID || replayable[2].RecordID != transcribed.ID {
+		t.Fatalf("replayable records = %+v, want all nonterminal Inputs in acceptance order", replayable)
 	}
 	records, err := queue.Records()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records[uncommitted.ID].State != PendingInputStateAccepting {
-		t.Fatalf("uncommitted state = %q, want accepting", records[uncommitted.ID].State)
+	if records[uncommitted.ID].State != PendingInputStatePending {
+		t.Fatalf("uncommitted state = %q, want pending", records[uncommitted.ID].State)
 	}
-	if records[transcribed.ID].State != PendingInputStateProcessed {
-		t.Fatalf("transcribed state = %q, want processed", records[transcribed.ID].State)
+	if records[transcribed.ID].State != PendingInputStatePending || records[transcribed.ID].ProcessedAt == nil {
+		t.Fatalf("transcribed state = %+v, want replayable with transcript checkpoint", records[transcribed.ID])
+	}
+}
+
+func TestRecoverPendingInputsReturnsNonFleetInterruptions(t *testing.T) {
+	for _, errorKind := range []string{"interrupted", "terminated"} {
+		t.Run(errorKind, func(t *testing.T) {
+			root := t.TempDir()
+			threadState := newThreadRuntimeTestThread(t, root)
+			queue := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState})
+			record, err := queue.AdmitTurnInput(
+				"turn-interrupted",
+				llm.TextMessage(llm.RoleUser, "unfinished work"),
+				false,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := queue.MarkProcessed([]string{record.ID}); err != nil {
+				t.Fatal(err)
+			}
+			if err := threadState.AppendEvent(events.Normalize(events.Event{
+				Type:   "turn.errored",
+				TurnID: "turn-interrupted",
+				Payload: TurnErroredPayload{
+					Error: "stopped", ErrorKind: errorKind, InputIDs: []string{record.ID},
+				},
+			})); err != nil {
+				t.Fatal(err)
+			}
+
+			restarted := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState})
+			engine := &Engine{Thread: threadState, PendingInputQueue: restarted, Prompt: &prompt.Builder{}}
+			replayable, err := engine.RecoverPendingInputs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(replayable) != 1 || replayable[0].RecordID != record.ID {
+				t.Fatalf("replayable interrupted Inputs = %+v", replayable)
+			}
+		})
 	}
 }
 

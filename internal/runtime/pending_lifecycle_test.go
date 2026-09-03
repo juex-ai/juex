@@ -575,7 +575,7 @@ func TestResolvePendingInputTreatsTranscriptAsDeliveredAfterTerminalFailure(t *t
 	if !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("ResolvePendingInput() error = %v, want provider failure", err)
 	}
-	if resolved.Disposition != PendingInputProcessed || resolved.Retry != PendingInputNoRetry || pendingLifecycleTestRecord(t, eng, resolved.RecordID).State != PendingInputStateProcessed {
+	if resolved.Disposition != PendingInputProcessed || resolved.Retry != PendingInputNoRetry || pendingLifecycleTestRecord(t, eng, resolved.RecordID).State != PendingInputStateDeadLettered {
 		t.Fatalf("resolved input = %+v", resolved)
 	}
 }
@@ -715,8 +715,8 @@ func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
 	if discarded.Disposition != PendingInputDropped || discarded.Status.PendingCount != 0 {
 		t.Fatalf("discarded input = %+v, want inert record removed from live queue", discarded)
 	}
-	if record := pendingLifecycleTestRecord(t, eng, queued.RecordID); record.State != PendingInputStateDropped {
-		t.Fatalf("durable record = %+v, want dropped", record)
+	if _, ok, err := eng.PersistedPendingMessage(queued.RecordID); err != nil || ok {
+		t.Fatalf("discarded record remains, ok=%v err=%v", ok, err)
 	}
 	if snapshot := statusStore.Snapshot(); snapshot.Thread.PendingCount != 0 || !snapshot.Thread.CanAcceptInput {
 		t.Fatalf("discarded status projection = %+v, want available queue", snapshot.Thread)
@@ -798,19 +798,19 @@ func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[started.RecordID].State != PendingInputStateDropped {
-		t.Fatalf("pending records = %+v, want only original dropped record", records)
+	if len(records) != 0 {
+		t.Fatalf("pending records = %+v, want discarded record removed", records)
 	}
-	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.ID != started.TurnID || snapshot.Turn.State != TurnLifecycleErrored {
-		t.Fatalf("live status = %+v, want discarded turn errored", snapshot.Turn)
+	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.ID != started.TurnID || snapshot.Turn.State != TurnLifecycleCancelled {
+		t.Fatalf("live status = %+v, want discarded turn cancelled", snapshot.Turn)
 	}
 	journal, err := eng.Thread.ReadEvents()
 	if err != nil {
 		t.Fatal(err)
 	}
 	replayed := NewStatusStoreFromJournal(StatusSeed{ThreadID: "discard-start"}, journal).Snapshot()
-	if replayed.Turn == nil || replayed.Turn.ID != started.TurnID || replayed.Turn.State != TurnLifecycleErrored {
-		t.Fatalf("replayed status = %+v, want discarded turn errored", replayed.Turn)
+	if replayed.Turn == nil || replayed.Turn.ID != started.TurnID || replayed.Turn.State != TurnLifecycleCancelled {
+		t.Fatalf("replayed status = %+v, want discarded turn cancelled", replayed.Turn)
 	}
 }
 
@@ -842,14 +842,14 @@ func TestDiscardPendingInputPreservesQueuedTailBeforeTerminalError(t *testing.T)
 	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
 		t.Fatalf("pending status = %+v, want discarded start and preserved tail released", status)
 	}
-	if record := pendingLifecycleTestRecord(t, eng, queued.RecordID); record.State != PendingInputStateProcessed {
-		t.Fatalf("queued tail record = %+v, want processed preservation", record)
+	if _, ok, err := eng.PersistedPendingMessage(queued.RecordID); err != nil || ok {
+		t.Fatalf("cancelled queued tail remains, ok=%v err=%v", ok, err)
 	}
 	if len(eng.Thread.History) != 1 || eng.Thread.History[0].ID != queuedRecord.MessageID {
 		t.Fatalf("durable history = %+v, want queued tail preserved once", eng.Thread.History)
 	}
-	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.State != TurnLifecycleErrored || snapshot.Thread.PendingCount != 0 {
-		t.Fatalf("live status = %+v, want terminal error with empty queue", snapshot)
+	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.State != TurnLifecycleCancelled || snapshot.Thread.PendingCount != 0 {
+		t.Fatalf("live status = %+v, want terminal cancellation with empty queue", snapshot)
 	}
 }
 
@@ -935,8 +935,8 @@ func TestDiscardPendingInputRetriesStartedTurnTerminalCommit(t *testing.T) {
 	if status := eng.PendingInputStatus(); status.TurnID != started.TurnID {
 		t.Fatalf("pending status = %+v, want active Turn retained for terminal retry", status)
 	}
-	if record := pendingLifecycleTestRecord(t, eng, started.RecordID); record.State != PendingInputStateDropped {
-		t.Fatalf("durable record = %+v, want dropped before terminal retry", record)
+	if record := pendingLifecycleTestRecord(t, eng, started.RecordID); record.State != PendingInputStateAdmitted {
+		t.Fatalf("durable record = %+v, want admitted until terminal retry", record)
 	}
 
 	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread})
@@ -955,8 +955,8 @@ func TestDiscardPendingInputRetriesStartedTurnTerminalCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	replayed := NewStatusStoreFromJournal(StatusSeed{ThreadID: "discard-retry"}, journal).Snapshot()
-	if replayed.Turn == nil || replayed.Turn.ID != started.TurnID || replayed.Turn.State != TurnLifecycleErrored {
-		t.Fatalf("replayed status = %+v, want retried terminal error", replayed.Turn)
+	if replayed.Turn == nil || replayed.Turn.ID != started.TurnID || replayed.Turn.State != TurnLifecycleCancelled {
+		t.Fatalf("replayed status = %+v, want retried terminal cancellation", replayed.Turn)
 	}
 }
 

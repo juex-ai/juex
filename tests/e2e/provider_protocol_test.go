@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/thread"
@@ -1261,10 +1262,23 @@ func TestLiveBinary_ProviderErrorPersistsThreadFailure(t *testing.T) {
 	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
 	result := sendAndWaitFailure(t, bin, home, work, "hello")
 	journal := threadJournalText(t, result.ThreadDir)
-	for _, want := range []string{`"type":"turn.errored"`, `"type":"input.attempt.failed"`, `"type":"input.dead_lettered"`} {
-		if !strings.Contains(journal, want) {
-			t.Fatalf("Thread journal missing %q after provider failure:\n%s", want, journal)
+	if !strings.Contains(journal, `"type":"turn.errored"`) {
+		t.Fatalf("Thread journal missing terminal failure after provider error:\n%s", journal)
+	}
+	pendingPath := filepath.Join(result.ThreadDir, "pending_inputs.json")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pending, err := os.ReadFile(pendingPath)
+		if err != nil {
+			t.Fatal(err)
 		}
+		if strings.Contains(string(pending), `"state": "dead_lettered"`) && strings.Contains(string(pending), "provider unavailable") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending input did not retain the failed attempt:\n%s", pending)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

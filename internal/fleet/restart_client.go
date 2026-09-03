@@ -85,6 +85,7 @@ func postRestartResume(
 	ctx context.Context,
 	state endpoint.Runtime,
 	threadID string,
+	retryTurnID string,
 	prompt string,
 ) (string, error) {
 	target, err := endpoint.Parse(state.Endpoint)
@@ -92,11 +93,13 @@ func postRestartResume(
 		return "", fmt.Errorf("parse agent endpoint: %w", err)
 	}
 	body, err := json.Marshal(struct {
-		Prompt string `json:"prompt"`
-		Kind   string `json:"kind"`
+		Prompt      string `json:"prompt"`
+		Kind        string `json:"kind"`
+		RetryTurnID string `json:"retry_turn_id,omitempty"`
 	}{
-		Prompt: prompt,
-		Kind:   llm.MessageKindSystemNotice,
+		Prompt:      prompt,
+		Kind:        llm.MessageKindSystemNotice,
+		RetryTurnID: retryTurnID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode restart continuation: %w", err)

@@ -162,19 +162,19 @@ func TestAppStartupReplaysDurablePendingInputWithoutNewUserTurn(t *testing.T) {
 	if len(histories) != 1 || len(histories[0]) < 2 || histories[0][0].ID != record.MessageID || histories[0][1].ID != later.MessageID {
 		t.Fatalf("provider histories = %+v, want recovered messages %q then %q once", histories, record.MessageID, later.MessageID)
 	}
-	recovered, ok, err := restarted.Engine.PersistedPendingMessage(record.ID)
+	_, ok, err := restarted.Engine.PersistedPendingMessage(record.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || recovered.State != runtime.PendingInputStateProcessed {
-		t.Fatalf("recovered pending record = %+v ok=%v", recovered, ok)
+	if ok {
+		t.Fatalf("completed pending record %q was retained", record.ID)
 	}
-	recoveredLater, ok, err := restarted.Engine.PersistedPendingMessage(later.ID)
+	_, ok, err = restarted.Engine.PersistedPendingMessage(later.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || recoveredLater.State != runtime.PendingInputStateProcessed {
-		t.Fatalf("later pending record = %+v ok=%v", recoveredLater, ok)
+	if ok {
+		t.Fatalf("completed pending record %q was retained", later.ID)
 	}
 }
 
@@ -608,15 +608,27 @@ func TestAppExternalDeliveryRetriesDurableInputAfterLiveQueueFull(t *testing.T) 
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		pending, ok, stateErr := a.Engine.PersistedPendingMessage(secondOutcome.PendingInputID)
+		_, ok, stateErr := a.Engine.PersistedPendingMessage(secondOutcome.PendingInputID)
 		if stateErr != nil {
 			t.Fatal(stateErr)
 		}
-		if ok && pending.State == runtime.PendingInputStateProcessed && a.Thread.HasMessageID(pending.MessageID) {
+		provider.mu.Lock()
+		histories := append([][]llm.Message(nil), provider.histories...)
+		provider.mu.Unlock()
+		processed := false
+		for _, history := range histories {
+			for _, message := range history {
+				if strings.Contains(message.FirstText(), second.ID) {
+					processed = true
+					break
+				}
+			}
+		}
+		if !ok && processed {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("overflow input = %+v ok=%v, want App-owned retry to process it", pending, ok)
+			t.Fatalf("overflow input retained=%v histories=%+v, want App-owned retry to process and remove it", ok, histories)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1196,7 +1208,7 @@ func TestAppDeliverObservationReportsTranscriptConsumptionDespiteTurnError(t *te
 	if stateErr != nil {
 		t.Fatal(stateErr)
 	}
-	if !ok || pending.State != runtime.PendingInputStateProcessed || !a.Thread.HasMessageID(pending.MessageID) {
+	if !ok || pending.State != runtime.PendingInputStateDeadLettered || !a.Thread.HasMessageID(pending.MessageID) {
 		t.Fatalf("pending after failed turn = %+v ok=%v", pending, ok)
 	}
 	duplicate, duplicateErr := a.DeliverObservation(context.Background(), record)
@@ -1291,19 +1303,13 @@ func TestAppStartupDoesNotReplayExpiredOrExplicitlyDroppedInput(t *testing.T) {
 	if calls, _ := provider.snapshot(); calls != 0 {
 		t.Fatalf("provider calls = %d, want 0", calls)
 	}
-	for _, want := range []struct {
-		id    string
-		state runtime.PendingInputState
-	}{
-		{id: expired.ID, state: runtime.PendingInputStateExpired},
-		{id: dropped.ID, state: runtime.PendingInputStateDropped},
-	} {
-		current, ok, err := restarted.Engine.PersistedPendingMessage(want.id)
+	for _, id := range []string{expired.ID, dropped.ID} {
+		_, ok, err := restarted.Engine.PersistedPendingMessage(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !ok || current.State != want.state {
-			t.Fatalf("record %q = %+v ok=%v, want state %q", want.id, current, ok, want.state)
+		if ok {
+			t.Fatalf("expired or dropped record %q was retained", id)
 		}
 	}
 }
@@ -1345,19 +1351,13 @@ func TestAppStartupRecoveryAdvancesPastOldestRecordThatExpiresBeforeWorker(t *te
 	if !providerHistoryContains(histories[0], later.MessageID, "recover after expired oldest") {
 		t.Fatalf("recovered history = %+v, want later message %q", histories[0], later.MessageID)
 	}
-	for _, want := range []struct {
-		id    string
-		state runtime.PendingInputState
-	}{
-		{id: oldest.ID, state: runtime.PendingInputStateExpired},
-		{id: later.ID, state: runtime.PendingInputStateProcessed},
-	} {
-		record, ok, err := a.Engine.PersistedPendingMessage(want.id)
+	for _, id := range []string{oldest.ID, later.ID} {
+		_, ok, err := a.Engine.PersistedPendingMessage(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !ok || record.State != want.state {
-			t.Fatalf("record %q = %+v ok=%v, want %q", want.id, record, ok, want.state)
+		if ok {
+			t.Fatalf("expired or completed record %q was retained", id)
 		}
 	}
 }

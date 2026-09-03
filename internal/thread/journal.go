@@ -92,26 +92,6 @@ func validateFactShape(threadID string, fact Fact) error {
 		if fact.Event == nil || fact.Event.Type == "" {
 			return fmt.Errorf("%w: invalid event.recorded", ErrInvalidFact)
 		}
-	case FactInputAccepted:
-		if fact.InputID == "" {
-			return fmt.Errorf("%w: input id required", ErrInvalidFact)
-		}
-	case FactInputRecorded:
-		if fact.InputID == "" || len(fact.InputRecord) == 0 {
-			return fmt.Errorf("%w: input record required", ErrInvalidFact)
-		}
-	case FactInputAttemptStart:
-		if fact.InputID == "" || fact.AttemptID == "" || fact.GenerationID == "" || fact.TurnID == "" {
-			return fmt.Errorf("%w: attempt identity required", ErrInvalidFact)
-		}
-	case FactInputAttemptDone, FactInputAttemptFailed, FactInputAttemptCancel, FactInputAttemptStop:
-		if fact.InputID == "" || fact.AttemptID == "" {
-			return fmt.Errorf("%w: attempt identity required", ErrInvalidFact)
-		}
-	case FactInputRequeued, FactInputCompleted, FactInputDeadLettered, FactInputCancelled, FactInputExpired:
-		if fact.InputID == "" {
-			return fmt.Errorf("%w: input id required", ErrInvalidFact)
-		}
 	case FactContextRenewed, FactContextCompacted:
 		if fact.FromGenerationID == "" || fact.ToGenerationID == "" {
 			return fmt.Errorf("%w: generation boundary required", ErrInvalidFact)

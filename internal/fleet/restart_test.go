@@ -251,11 +251,19 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				_ context.Context,
 				_ endpoint.Runtime,
 				threadID string,
+				retryTurnID string,
 				prompt string,
 			) (string, error) {
 				*events = append(*events, "resume")
 				if threadID != "234567" {
 					t.Fatalf("resume Thread = %q", threadID)
+				}
+				wantRetryTurnID := test.confirmTurn
+				if wantRetryTurnID == "" {
+					wantRetryTurnID = "turn-original"
+				}
+				if retryTurnID != wantRetryTurnID {
+					t.Fatalf("resume retry Turn = %q, want %q", retryTurnID, wantRetryTurnID)
 				}
 				if !strings.Contains(prompt, "System notice") {
 					t.Fatalf("resume prompt = %q", prompt)
@@ -319,7 +327,7 @@ func TestStopNeverDetectsOrPostsResume(t *testing.T) {
 		t.Fatal("Stop called readRestartActivity")
 		return restartActivity{}, nil
 	}
-	manager.deps.postRestartResume = func(context.Context, endpoint.Runtime, string, string) (string, error) {
+	manager.deps.postRestartResume = func(context.Context, endpoint.Runtime, string, string, string) (string, error) {
 		t.Fatal("Stop called postRestartResume")
 		return "", nil
 	}
@@ -367,7 +375,7 @@ func TestRestartWithoutIntentAcknowledgementDoesNotResume(t *testing.T) {
 					TurnErrorKind: statusapi.StatusErrorCancelled,
 				}, nil
 			}
-			manager.deps.postRestartResume = func(context.Context, endpoint.Runtime, string, string) (string, error) {
+			manager.deps.postRestartResume = func(context.Context, endpoint.Runtime, string, string, string) (string, error) {
 				t.Fatal("restart without acknowledgement posted a continuation")
 				return "", nil
 			}

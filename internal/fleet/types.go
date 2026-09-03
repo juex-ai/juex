@@ -242,7 +242,7 @@ type dependencies struct {
 	requestShutdown     func(context.Context, endpoint.Runtime) error
 	requestRestart      func(context.Context, endpoint.Runtime) (bool, error)
 	readRestartActivity func(context.Context, endpoint.Runtime) (restartActivity, error)
-	postRestartResume   func(context.Context, endpoint.Runtime, string, string) (string, error)
+	postRestartResume   func(context.Context, endpoint.Runtime, string, string, string) (string, error)
 	spawn               func(string, string, agentstate.RegistryEntry) (spawnedProcess, error)
 }
 

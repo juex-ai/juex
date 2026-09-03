@@ -340,6 +340,7 @@ type turnRequest struct {
 	Prompt      string         `json:"prompt"`
 	Kind        string         `json:"kind,omitempty"`
 	Attachments []llm.MediaRef `json:"attachments,omitempty"`
+	RetryTurnID string         `json:"retry_turn_id,omitempty"`
 }
 
 type startTurnResponse struct {
@@ -376,6 +377,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	admissionCursor := latestDurableEventCursor(active)
 	result := active.app.AdmitTurn(r.Context(), app.TurnAdmissionRequest{
 		Prompt: request.Prompt, Kind: request.Kind, Attachments: request.Attachments,
+		RetryTurnID: request.RetryTurnID,
 	})
 	if result.Start != nil {
 		active.turns.start(result.Start.TurnID, result.Start.Message)

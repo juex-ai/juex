@@ -58,6 +58,7 @@ func TestRestartClientReadsFailedTurnAndRequiresIdentity(t *testing.T) {
 func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 	var gotPrompt string
 	var gotKind string
+	var gotRetryTurnID string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/status":
@@ -76,14 +77,16 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 				}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/threads/123456/inputs":
 			var body struct {
-				Prompt string `json:"prompt"`
-				Kind   string `json:"kind"`
+				Prompt      string `json:"prompt"`
+				Kind        string `json:"kind"`
+				RetryTurnID string `json:"retry_turn_id"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode continuation body: %v", err)
 			}
 			gotPrompt = body.Prompt
 			gotKind = body.Kind
+			gotRetryTurnID = body.RetryTurnID
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"turn_id":"turn-resume"}`))
@@ -111,6 +114,7 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 		context.Background(),
 		state,
 		activity.ThreadID,
+		activity.TurnID,
 		restartResumePrompt,
 	)
 	if err != nil {
@@ -118,8 +122,9 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 	}
 	if turnID != "turn-resume" ||
 		gotPrompt != restartResumePrompt ||
-		gotKind != "system_notice" {
-		t.Fatalf("turn id/prompt/kind = %q/%q/%q", turnID, gotPrompt, gotKind)
+		gotKind != "system_notice" ||
+		gotRetryTurnID != "turn-original" {
+		t.Fatalf("turn id/prompt/kind/retry turn = %q/%q/%q/%q", turnID, gotPrompt, gotKind, gotRetryTurnID)
 	}
 }
 

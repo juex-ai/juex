@@ -37,15 +37,6 @@ func TestIncrementalProjectionMatchesCurrentGenerationReplayAcrossGeneratedHisto
 				case 3:
 					turnOrdinal++
 					turnID := fmt.Sprintf("turn-%d", turnOrdinal)
-					inputID := fmt.Sprintf("input-%d", turnOrdinal)
-					attemptID := fmt.Sprintf("attempt-%d", turnOrdinal)
-					generationID := target.Projection().CurrentGeneration.ID
-					if _, err := target.AppendFacts(
-						Fact{Type: FactInputAccepted, InputID: inputID},
-						Fact{Type: FactInputAttemptStart, InputID: inputID, AttemptID: attemptID, GenerationID: generationID, TurnID: turnID},
-					); err != nil {
-						t.Fatal(err)
-					}
 					if err := target.AppendEvent(events.Event{Type: "turn.started", TurnID: turnID}); err != nil {
 						t.Fatal(err)
 					}
