@@ -11,6 +11,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
@@ -203,5 +204,72 @@ func TestModuleLifecycle_DisabledGoalAndNotesSurviveNewAndReloadWhenEnabled(t *t
 	}
 	if got := third.Thread.Info().GenerationID; got != "g000002" {
 		t.Fatalf("Generation after disabled /new = %q", got)
+	}
+}
+
+func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e is slow")
+	}
+	work := t.TempDir()
+	application, err := app.New(app.Options{
+		Config:   config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
+		Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.CloseAndWait() })
+
+	worker, err := application.ThreadStore.CreateWorker(thread.MainID, "recover-before-archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerID := worker.ID
+	goal := workmem.NewGoalStateStore(worker.Dir, workmem.GoalStateOptions{})
+	notes := workmem.NewNotesStore(worker.Dir)
+	if _, err := goal.Create("preserve interrupted state", "archive after recovery"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := notes.Update("- [ ] preserve before archive"); err != nil {
+		t.Fatal(err)
+	}
+	generationID := worker.Projection().CurrentGeneration.ID
+	if _, _, err := goal.StageClearForContextRenewal(generationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := notes.StageClearForContextRenewal(generationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := application.ThreadStore.OpenActive(workerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.ThreadStore.Archive(reopened); err != nil {
+		t.Fatal(err)
+	}
+	archived, err := application.ThreadStore.OpenArchived(workerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archived.Close()
+	goalSnapshot, goalErr := workmem.NewGoalStateStore(archived.Dir, workmem.GoalStateOptions{}).StatusSnapshot()
+	notesSnapshot, notesErr := workmem.NewNotesStore(archived.Dir).StatusSnapshot()
+	if goalErr != nil || goalSnapshot == nil || goalSnapshot.Description != "preserve interrupted state" {
+		t.Fatalf("archived Goal = %+v, %v", goalSnapshot, goalErr)
+	}
+	if notesErr != nil || notesSnapshot == nil || notesSnapshot.Content != "- [ ] preserve before archive" {
+		t.Fatalf("archived Notes = %+v, %v", notesSnapshot, notesErr)
+	}
+	backups, err := filepath.Glob(filepath.Join(archived.Dir, "*.context-renewal-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("archive retained recovery backups: %v", backups)
 	}
 }

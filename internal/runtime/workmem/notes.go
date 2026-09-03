@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 const (
@@ -47,8 +49,9 @@ func (s *NotesStore) StageClearForContextRenewal(generationID string) (finalize,
 		return func() error { return nil }, func() error { return nil }, nil
 	}
 	s.mu.Lock()
-	finalize, rollback, err = stageFileClearForContextRenewal(filepath.Join(s.ThreadDir, NotesFileName), generationID)
+	clear, stageErr := thread.StageContextRenewalFileClear(filepath.Join(s.ThreadDir, NotesFileName), generationID)
 	s.mu.Unlock()
+	finalize, rollback, err = clear.Finalize, clear.Rollback, stageErr
 	if err != nil {
 		return nil, nil, fmt.Errorf("notes stage clear: %w", err)
 	}

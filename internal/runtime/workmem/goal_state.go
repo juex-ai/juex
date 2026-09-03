@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 const goalStateFile = "goal_state.json"
@@ -106,8 +108,9 @@ func (s *GoalStateStore) StageClearForContextRenewal(generationID string) (final
 		return func() error { return nil }, func() error { return nil }, nil
 	}
 	s.mu.Lock()
-	finalize, rollback, err = stageFileClearForContextRenewal(s.Path, generationID)
+	clear, stageErr := thread.StageContextRenewalFileClear(s.Path, generationID)
 	s.mu.Unlock()
+	finalize, rollback, err = clear.Finalize, clear.Rollback, stageErr
 	if err != nil {
 		return nil, nil, fmt.Errorf("goal state stage clear: %w", err)
 	}

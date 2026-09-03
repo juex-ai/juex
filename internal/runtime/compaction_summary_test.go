@@ -84,6 +84,16 @@ func TestCompleteCompactionSummaryTextRestoresUnfinishedAuthoritativeNotes(t *te
 	if got, ok := completeCompactionSummaryText(response, "- [ ] test"); !ok || !strings.Contains(got, "- [ ] test") {
 		t.Fatalf("summary treated a Notes substring as a complete item:\n%s", got)
 	}
+	checkedResponse := llm.Response{
+		Message: llm.TextMessage(llm.RoleAssistant, strings.Join([]string{
+			"Goal", "description: keep exact state", "Critical Context", "GF1: value",
+			"Next Steps", "- [x] deploy", "Relevant Files",
+		}, "\n")),
+		StopReason: llm.StopEndTurn,
+	}
+	if got, ok := completeCompactionSummaryText(checkedResponse, "- [ ] deploy"); !ok || !strings.Contains(got, "- [ ] deploy") {
+		t.Fatalf("summary treated a checked item as authoritative unfinished work:\n%s", got)
+	}
 	if strings.Contains(got, "completed item") {
 		t.Fatalf("summary promoted completed Notes into Next Steps:\n%s", got)
 	}
