@@ -1,7 +1,6 @@
 package thread
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/juex-ai/juex/internal/events"
@@ -9,7 +8,7 @@ import (
 )
 
 func replay(threadID string, commits []scannedCommit) (ReplayState, error) {
-	state := ReplayState{Inputs: map[string]*InputProjection{}, InputRecords: map[string]json.RawMessage{}}
+	state := ReplayState{}
 	for _, commit := range commits {
 		if err := applyCommit(threadID, &state, commit); err != nil {
 			return ReplayState{}, fmt.Errorf("%w at sequence %d: %v", ErrCorruptJournal, commit.Seq, err)
@@ -97,113 +96,6 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 	case FactEventRecorded:
 		event := *fact.Event
 		state.Events = append(state.Events, event)
-	case FactInputAccepted:
-		if _, exists := state.Inputs[fact.InputID]; exists {
-			return fmt.Errorf("%w: duplicate accepted input %q", ErrInvalidTransition, fact.InputID)
-		}
-		state.Inputs[fact.InputID] = &InputProjection{ID: fact.InputID, State: InputAccepted}
-		p.Counts.PendingInputCount++
-	case FactInputRecorded:
-		var recorded struct {
-			ID    string `json:"id"`
-			State string `json:"state"`
-		}
-		if err := json.Unmarshal(fact.InputRecord, &recorded); err != nil || recorded.ID != fact.InputID {
-			return fmt.Errorf("%w: invalid input record %q", ErrInvalidTransition, fact.InputID)
-		}
-		if _, recordedBefore := state.InputRecords[fact.InputID]; !recordedBefore {
-			state.InputOrder = append(state.InputOrder, fact.InputID)
-		}
-		if state.Inputs[fact.InputID] == nil {
-			previousPending := inputRecordPending(state.InputRecords[fact.InputID])
-			currentPending := recorded.State == "pending"
-			if !previousPending && currentPending {
-				p.Counts.PendingInputCount++
-			} else if previousPending && !currentPending {
-				p.Counts.PendingInputCount--
-			}
-		}
-		state.InputRecords[fact.InputID] = append(json.RawMessage(nil), fact.InputRecord...)
-	case FactInputAttemptStart:
-		input, err := requireOpenInput(state, fact.InputID)
-		if err != nil {
-			return err
-		}
-		if fact.GenerationID != p.CurrentGeneration.ID {
-			return fmt.Errorf("%w: attempt generation is not current", ErrInvalidTransition)
-		}
-		for _, attempt := range input.Attempts {
-			if attempt.ID == fact.AttemptID {
-				return fmt.Errorf("%w: duplicate attempt %q", ErrInvalidTransition, fact.AttemptID)
-			}
-		}
-		input.Attempts = append(input.Attempts, AttemptProjection{
-			ID:           fact.AttemptID,
-			GenerationID: fact.GenerationID,
-			TurnID:       fact.TurnID,
-			State:        "running",
-		})
-		input.State = InputRunning
-		if p.Counts.PendingInputCount > 0 {
-			p.Counts.PendingInputCount--
-		}
-		p.ExecutionState = ExecutionWorking
-	case FactInputAttemptDone, FactInputAttemptFailed, FactInputAttemptCancel, FactInputAttemptStop:
-		input, attempt, err := requireRunningAttempt(state, fact.InputID, fact.AttemptID)
-		if err != nil {
-			return err
-		}
-		switch fact.Type {
-		case FactInputAttemptDone:
-			attempt.State = "succeeded"
-		case FactInputAttemptFailed:
-			attempt.State = "failed"
-			input.State = InputRetryable
-			p.Counts.PendingInputCount++
-		case FactInputAttemptCancel:
-			attempt.State = "cancelled"
-			input.State = InputRetryable
-			p.Counts.PendingInputCount++
-		case FactInputAttemptStop:
-			attempt.State = "interrupted"
-			input.State = InputRetryable
-			p.Counts.PendingInputCount++
-		}
-		attempt.Error = fact.Error
-	case FactInputRequeued:
-		input, err := requireOpenInput(state, fact.InputID)
-		if err != nil {
-			return err
-		}
-		if input.State != InputRetryable {
-			return fmt.Errorf("%w: input %q is not retryable", ErrInvalidTransition, fact.InputID)
-		}
-		input.State = InputAccepted
-	case FactInputCompleted, FactInputDeadLettered, FactInputCancelled, FactInputExpired:
-		input, err := requireOpenInput(state, fact.InputID)
-		if err != nil {
-			return err
-		}
-		wasPending := input.State == InputAccepted || input.State == InputRetryable
-		switch fact.Type {
-		case FactInputCompleted:
-			if input.State == InputRunning {
-				last := &input.Attempts[len(input.Attempts)-1]
-				if last.State != "succeeded" {
-					return fmt.Errorf("%w: input completion requires succeeded attempt", ErrInvalidTransition)
-				}
-			}
-			input.State = InputCompleted
-		case FactInputDeadLettered:
-			input.State = InputDeadLettered
-		case FactInputCancelled:
-			input.State = InputCancelled
-		case FactInputExpired:
-			input.State = InputExpired
-		}
-		if wasPending {
-			p.Counts.PendingInputCount--
-		}
 	case FactTurnStarted:
 		p.ExecutionState = ExecutionWorking
 	case FactTurnCompleted:
@@ -266,18 +158,7 @@ func applyGenerationSeed(state *ReplayState, seed GenerationSeed) {
 	state.ProviderMessages = append([]llm.Message(nil), seed.ProviderMessages...)
 	state.Events = append([]events.Event(nil), seed.RecoveryEvents...)
 	state.CompactionCount = seed.CompactionCount
-	state.Inputs = make(map[string]*InputProjection, len(seed.Inputs))
-	state.InputOrder = append([]string(nil), seed.InputOrder...)
-	state.InputRecords = make(map[string]json.RawMessage, len(seed.InputRecords))
 	state.ContextUsage = cloneContextUsage(seed.ContextUsage)
-	for id, input := range seed.Inputs {
-		copyInput := input
-		copyInput.Attempts = append([]AttemptProjection(nil), input.Attempts...)
-		state.Inputs[id] = &copyInput
-	}
-	for id, record := range seed.InputRecords {
-		state.InputRecords[id] = append(json.RawMessage(nil), record...)
-	}
 }
 
 func contextProjection(usage *llm.ContextUsage, at Timestamp) *ContextProjection {
@@ -311,42 +192,4 @@ func compactProviderMessages(summary llm.Message, history []llm.Message) []llm.M
 		}
 	}
 	return provider
-}
-
-func inputRecordPending(raw json.RawMessage) bool {
-	if len(raw) == 0 {
-		return false
-	}
-	var record struct {
-		State string `json:"state"`
-	}
-	return json.Unmarshal(raw, &record) == nil && record.State == "pending"
-}
-
-func requireOpenInput(state *ReplayState, id string) (*InputProjection, error) {
-	input := state.Inputs[id]
-	if input == nil {
-		return nil, fmt.Errorf("%w: input %q was not accepted", ErrInvalidTransition, id)
-	}
-	if input.State.Terminal() {
-		return nil, fmt.Errorf("%w: input %q is terminal", ErrInvalidTransition, id)
-	}
-	return input, nil
-}
-
-func requireRunningAttempt(state *ReplayState, inputID, attemptID string) (*InputProjection, *AttemptProjection, error) {
-	input, err := requireOpenInput(state, inputID)
-	if err != nil {
-		return nil, nil, err
-	}
-	for i := range input.Attempts {
-		attempt := &input.Attempts[i]
-		if attempt.ID == attemptID {
-			if attempt.State != "running" {
-				return nil, nil, fmt.Errorf("%w: attempt %q is not running", ErrInvalidTransition, attemptID)
-			}
-			return input, attempt, nil
-		}
-	}
-	return nil, nil, fmt.Errorf("%w: attempt %q does not exist", ErrInvalidTransition, attemptID)
 }

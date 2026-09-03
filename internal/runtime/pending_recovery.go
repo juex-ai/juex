@@ -10,7 +10,7 @@ type PendingInputRecovery struct {
 	RecordID string
 }
 
-// RecoverPendingInputs reconciles the pending journal against committed
+// RecoverPendingInputs reconciles the pending document against committed
 // admission events and the complete transcript, then returns opaque recovery
 // handles in stable acceptance order. App executes them behind its startup
 // barrier; ReceivePendingInput owns all state and retry classification.

@@ -586,10 +586,7 @@ func replayCurrentGeneration(threadID string, metadata Projection, commits []sca
 		last.GenerationID != metadata.EventCursor.GenerationID {
 		return ReplayState{}, fmt.Errorf("%w for %s: current Generation exceeds or trails metadata cursor", ErrInvalidMetadata, threadID)
 	}
-	state := ReplayState{
-		Projection: cloneProjection(metadata), Inputs: map[string]*InputProjection{},
-		InputRecords: map[string]json.RawMessage{},
-	}
+	state := ReplayState{Projection: cloneProjection(metadata)}
 	for index, commit := range commits {
 		if err := applyRuntimeCommit(threadID, metadata.CurrentGeneration.ID, &state, commit, index == 0); err != nil {
 			return ReplayState{}, fmt.Errorf("%w in %s at sequence %d: %v", ErrCorruptJournal, commit.GenerationID, commit.Seq, err)
@@ -627,88 +624,6 @@ func applyRuntimeCommit(threadID, generationID string, state *ReplayState, commi
 			state.ProviderMessages = append(state.ProviderMessages, message)
 		case FactEventRecorded:
 			state.Events = append(state.Events, *fact.Event)
-		case FactInputAccepted:
-			if _, exists := state.Inputs[fact.InputID]; exists {
-				return fmt.Errorf("%w: duplicate accepted input %q", ErrInvalidTransition, fact.InputID)
-			}
-			state.Inputs[fact.InputID] = &InputProjection{ID: fact.InputID, State: InputAccepted}
-		case FactInputRecorded:
-			var recorded struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal(fact.InputRecord, &recorded); err != nil || recorded.ID != fact.InputID {
-				return fmt.Errorf("%w: invalid input record %q", ErrInvalidTransition, fact.InputID)
-			}
-			if _, exists := state.InputRecords[fact.InputID]; !exists {
-				state.InputOrder = append(state.InputOrder, fact.InputID)
-			}
-			state.InputRecords[fact.InputID] = append(json.RawMessage(nil), fact.InputRecord...)
-		case FactInputAttemptStart:
-			input, err := requireOpenInput(state, fact.InputID)
-			if err != nil {
-				return err
-			}
-			if fact.GenerationID != generationID {
-				return fmt.Errorf("%w: attempt Generation is not current", ErrInvalidTransition)
-			}
-			for _, attempt := range input.Attempts {
-				if attempt.ID == fact.AttemptID {
-					return fmt.Errorf("%w: duplicate attempt %q", ErrInvalidTransition, fact.AttemptID)
-				}
-			}
-			input.Attempts = append(input.Attempts, AttemptProjection{
-				ID: fact.AttemptID, GenerationID: fact.GenerationID, TurnID: fact.TurnID, State: "running",
-			})
-			input.State = InputRunning
-		case FactInputAttemptDone, FactInputAttemptFailed, FactInputAttemptCancel, FactInputAttemptStop:
-			input, attempt, err := requireRunningAttempt(state, fact.InputID, fact.AttemptID)
-			if err != nil {
-				return err
-			}
-			switch fact.Type {
-			case FactInputAttemptDone:
-				attempt.State = "succeeded"
-			case FactInputAttemptFailed:
-				attempt.State = "failed"
-				input.State = InputRetryable
-			case FactInputAttemptCancel:
-				attempt.State = "cancelled"
-				input.State = InputRetryable
-			case FactInputAttemptStop:
-				attempt.State = "interrupted"
-				input.State = InputRetryable
-			}
-			attempt.Error = fact.Error
-		case FactInputRequeued:
-			input, err := requireOpenInput(state, fact.InputID)
-			if err != nil {
-				return err
-			}
-			if input.State != InputRetryable {
-				return fmt.Errorf("%w: input %q is not retryable", ErrInvalidTransition, fact.InputID)
-			}
-			input.State = InputAccepted
-		case FactInputCompleted, FactInputDeadLettered, FactInputCancelled, FactInputExpired:
-			input, err := requireOpenInput(state, fact.InputID)
-			if err != nil {
-				return err
-			}
-			switch fact.Type {
-			case FactInputCompleted:
-				if input.State == InputRunning {
-					last := &input.Attempts[len(input.Attempts)-1]
-					if last.State != "succeeded" {
-						return fmt.Errorf("%w: input completion requires succeeded attempt", ErrInvalidTransition)
-					}
-				}
-				input.State = InputCompleted
-			case FactInputDeadLettered:
-				input.State = InputDeadLettered
-			case FactInputCancelled:
-				input.State = InputCancelled
-			case FactInputExpired:
-				input.State = InputExpired
-			}
 		case FactUsageRecorded:
 			if fact.ContextUsage != nil {
 				state.ContextUsage = cloneContextUsage(fact.ContextUsage)

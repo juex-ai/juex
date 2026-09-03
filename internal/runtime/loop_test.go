@@ -466,13 +466,8 @@ func TestAdmitTurnMessage_DurableAdmissionEventFailureDropsAcceptedInput(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 {
-		t.Fatalf("pending records = %+v, want one dropped admission", records)
-	}
-	for _, record := range records {
-		if record.State != PendingInputStateDropped {
-			t.Fatalf("failed admission record = %+v, want state %q", record, PendingInputStateDropped)
-		}
+	if len(records) != 0 {
+		t.Fatalf("pending records = %+v, want failed admission removed", records)
 	}
 
 	eng.Thread.SubscribeBus(bus)
@@ -5605,8 +5600,8 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := records["pending-provider-failure"].State; got != PendingInputStateProcessed {
-		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	if _, exists := records["pending-provider-failure"]; exists {
+		t.Fatalf("successfully consumed pending Input remains: %+v", records["pending-provider-failure"])
 	}
 }
 
@@ -5669,13 +5664,8 @@ func TestTurn_PreRestoreCancellationTerminallyPersistsAcceptedInput(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 {
-		t.Fatalf("pending records = %+v, want one processed admission", records)
-	}
-	for _, record := range records {
-		if record.State != PendingInputStateProcessed {
-			t.Fatalf("cancelled admission record = %+v, want state %q", record, PendingInputStateProcessed)
-		}
+	if len(records) != 0 {
+		t.Fatalf("pending records = %+v, want cancelled admission removed", records)
 	}
 }
 
@@ -5719,8 +5709,8 @@ func TestTurn_CancellationPreservesPendingInputWithoutContinuing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := records["pending-after-cancel"].State; got != PendingInputStateProcessed {
-		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	if _, exists := records["pending-after-cancel"]; exists {
+		t.Fatalf("cancelled pending Input remains: %+v", records["pending-after-cancel"])
 	}
 	if atomic.LoadInt32(&drained) != 1 || atomic.LoadInt32(&dropped) != 0 {
 		t.Fatalf("pending events drained=%d dropped=%d, want 1/0", drained, dropped)
@@ -5764,8 +5754,8 @@ func TestTurn_AuthFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := records["pending-auth-failure"].State; got != PendingInputStateProcessed {
-		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	if got := records["pending-auth-failure"].State; got != PendingInputStateDeadLettered {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateDeadLettered)
 	}
 }
 
@@ -5814,8 +5804,8 @@ func TestTurn_NonRetryableProviderFailurePreservesPendingInputWithoutContinuing(
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := records[pendingID].State; got != PendingInputStateProcessed {
-				t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+			if got := records[pendingID].State; got != PendingInputStateDeadLettered {
+				t.Fatalf("pending state = %q, want %q", got, PendingInputStateDeadLettered)
 			}
 		})
 	}
@@ -6068,8 +6058,8 @@ func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records[record.ID].State != PendingInputStateProcessed {
-		t.Fatalf("state = %q, want processed", records[record.ID].State)
+	if _, exists := records[record.ID]; exists {
+		t.Fatalf("completed record remains: %+v", records[record.ID])
 	}
 }
 
@@ -6135,8 +6125,8 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records[record.ID].State != PendingInputStateProcessed {
-		t.Fatalf("state = %q, want processed", records[record.ID].State)
+	if _, exists := records[record.ID]; exists {
+		t.Fatalf("completed record remains: %+v", records[record.ID])
 	}
 }
 
@@ -6221,8 +6211,8 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records["event-1"].State != PendingInputStateProcessed {
-		t.Fatalf("state = %q, want processed", records["event-1"].State)
+	if _, exists := records["event-1"]; exists {
+		t.Fatalf("completed promoted record remains: %+v", records["event-1"])
 	}
 }
 
@@ -6276,8 +6266,8 @@ func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records[record.ID].State != PendingInputStateProcessed {
-		t.Fatalf("pending state = %q, want processed", records[record.ID].State)
+	if _, exists := records[record.ID]; exists {
+		t.Fatalf("completed transformed record remains: %+v", records[record.ID])
 	}
 }
 
@@ -6333,8 +6323,8 @@ func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records[accepted.ID].State != PendingInputStateProcessed {
-		t.Fatalf("accepted input state = %q, want processed", records[accepted.ID].State)
+	if _, exists := records[accepted.ID]; exists {
+		t.Fatalf("completed accepted Input remains: %+v", records[accepted.ID])
 	}
 }
 
@@ -6367,8 +6357,8 @@ func TestTurn_ProjectionFailurePersistsAcceptedInputOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, record := range records {
-		if record.Message.FirstText() == input && record.State != PendingInputStateProcessed {
-			t.Fatalf("accepted input record = %+v, want processed", record)
+		if record.Message.FirstText() == input && record.State != PendingInputStateDeadLettered {
+			t.Fatalf("accepted input record = %+v, want dead letter", record)
 		}
 	}
 
@@ -6525,8 +6515,8 @@ func TestTurn_RecoveryPreservesQueuedAndTurnInputAcceptanceOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{queued.ID, accepted.ID} {
-		if records[id].State != PendingInputStateProcessed {
-			t.Fatalf("recovered record %q state = %q, want processed", id, records[id].State)
+		if _, exists := records[id]; exists {
+			t.Fatalf("completed recovered record %q remains: %+v", id, records[id])
 		}
 	}
 	if status := recovered.PendingInputStatus(); status.PendingCount != 0 {
@@ -6618,8 +6608,8 @@ func TestTurn_PersistedInputsAfterCurrentTriggerRestoreInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{current.ID, later.ID} {
-		if records[id].State != PendingInputStateProcessed {
-			t.Fatalf("persisted record %q state = %q, want processed", id, records[id].State)
+		if _, exists := records[id]; exists {
+			t.Fatalf("completed persisted record %q remains: %+v", id, records[id])
 		}
 	}
 	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
@@ -6806,7 +6796,7 @@ func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, record := range records {
-		if (record.MessageID == accepted.ID || record.MessageID == later.ID || record.Message.FirstText() == "new trigger") && record.State != PendingInputStateProcessed {
+		if (record.MessageID == accepted.ID || record.MessageID == later.ID || record.Message.FirstText() == "new trigger") && record.State != PendingInputStateDeadLettered {
 			t.Fatalf("accepted record after terminal policy failure = %+v", record)
 		}
 	}
@@ -6832,18 +6822,11 @@ func TestTurn_ReusedTurnIDGetsFreshAcceptedInputIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("accepted records = %+v, want distinct records for reused turn id", records)
+	if len(records) != 0 {
+		t.Fatalf("completed records = %+v, want bounded state empty", records)
 	}
-	messageIDs := map[string]bool{}
-	for _, record := range records {
-		if record.State != PendingInputStateProcessed {
-			t.Fatalf("accepted record = %+v, want processed", record)
-		}
-		messageIDs[record.MessageID] = true
-	}
-	if len(messageIDs) != 2 {
-		t.Fatalf("accepted message ids = %+v, want two", messageIDs)
+	if len(threadState.History) != 4 || threadState.History[0].ID == threadState.History[2].ID {
+		t.Fatalf("history = %+v, want two distinct input/response pairs", threadState.History)
 	}
 }
 
@@ -7191,8 +7174,8 @@ func TestEngine_EnqueuePersistedPendingMessageExpiresBeforeIdleAdmission(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := records[record.ID].State; got != PendingInputStateExpired {
-		t.Fatalf("record state = %q, want %q", got, PendingInputStateExpired)
+	if _, exists := records[record.ID]; exists {
+		t.Fatalf("expired record remains: %+v", records[record.ID])
 	}
 }
 
@@ -7216,8 +7199,8 @@ func TestEngine_DropPersistedPendingMessagePreventsReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := records[record.ID].State; got != PendingInputStateDropped {
-		t.Fatalf("record state = %q, want %q", got, PendingInputStateDropped)
+	if _, exists := records[record.ID]; exists {
+		t.Fatalf("discarded record remains: %+v", records[record.ID])
 	}
 }
 

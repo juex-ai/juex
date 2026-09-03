@@ -176,18 +176,19 @@ func TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(replayable) != 1 || replayable[0].RecordID != committed.ID {
-		t.Fatalf("replayable records = %+v, want committed admission %q", replayable, committed.ID)
+	if len(replayable) != 3 || replayable[0].RecordID != committed.ID ||
+		replayable[1].RecordID != uncommitted.ID || replayable[2].RecordID != transcribed.ID {
+		t.Fatalf("replayable records = %+v, want all nonterminal Inputs in acceptance order", replayable)
 	}
 	records, err := queue.Records()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if records[uncommitted.ID].State != PendingInputStateAccepting {
-		t.Fatalf("uncommitted state = %q, want accepting", records[uncommitted.ID].State)
+	if records[uncommitted.ID].State != PendingInputStatePending {
+		t.Fatalf("uncommitted state = %q, want pending", records[uncommitted.ID].State)
 	}
-	if records[transcribed.ID].State != PendingInputStateProcessed {
-		t.Fatalf("transcribed state = %q, want processed", records[transcribed.ID].State)
+	if records[transcribed.ID].State != PendingInputStatePending || records[transcribed.ID].ProcessedAt == nil {
+		t.Fatalf("transcribed state = %+v, want replayable with transcript checkpoint", records[transcribed.ID])
 	}
 }
 

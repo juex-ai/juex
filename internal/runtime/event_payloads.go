@@ -40,16 +40,18 @@ type TurnCompletedPayload struct {
 	DurationMS int64     `json:"duration_ms"`
 	OutputLen  int       `json:"output_len"`
 	TokenUsage llm.Usage `json:"token_usage"`
+	InputIDs   []string  `json:"input_ids,omitempty"`
 }
 
 type TurnErroredPayload struct {
-	Error        string `json:"error"`
-	ErrorKind    string `json:"error_kind,omitempty"`
-	TimedOut     bool   `json:"timed_out,omitempty"`
-	RawCause     string `json:"raw_cause,omitempty"`
-	Signal       string `json:"signal,omitempty"`
-	SignalNumber int    `json:"signal_number,omitempty"`
-	Interrupted  bool   `json:"interrupted,omitempty"`
+	Error        string   `json:"error"`
+	ErrorKind    string   `json:"error_kind,omitempty"`
+	TimedOut     bool     `json:"timed_out,omitempty"`
+	RawCause     string   `json:"raw_cause,omitempty"`
+	Signal       string   `json:"signal,omitempty"`
+	SignalNumber int      `json:"signal_number,omitempty"`
+	Interrupted  bool     `json:"interrupted,omitempty"`
+	InputIDs     []string `json:"input_ids,omitempty"`
 }
 
 func NewTurnErroredPayload(err error) TurnErroredPayload {

@@ -431,6 +431,8 @@ func (e *Engine) enqueuePersistedPendingMessage(ctx context.Context, record Pend
 	}
 	if current, ok := records[record.ID]; ok {
 		record = current
+	} else {
+		return PendingInputStatus{}, ErrPendingInputHandled
 	}
 	if record.Expired(queue.now().UTC()) {
 		if err := queue.MarkExpired([]string{record.ID}); err != nil {
@@ -1343,10 +1345,15 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, recor
 }
 
 func (e *Engine) recordTurnCompletionForPublication(turnID string, start time.Time, lastText string) (events.Event, func(), error) {
+	inputIDs, err := e.pendingInputIDsForTurn(turnID)
+	if err != nil {
+		return events.Event{}, nil, fmt.Errorf("load consuming pending Inputs: %w", err)
+	}
 	event := events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
 		DurationMS: time.Since(start).Milliseconds(),
 		OutputLen:  len(lastText),
 		TokenUsage: e.currentThread().TokenUsageSnapshot(),
+		InputIDs:   inputIDs,
 	}}
 	if e.Bus == nil {
 		return events.Normalize(event), func() {}, nil
@@ -1355,7 +1362,13 @@ func (e *Engine) recordTurnCompletionForPublication(turnID string, start time.Ti
 }
 
 func (e *Engine) recordTurnErrorForPublication(turnID string, err error) (events.Event, func(), error) {
-	event := events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)}
+	payload := NewTurnErroredPayload(err)
+	inputIDs, inputErr := e.pendingInputIDsForTurn(turnID)
+	if inputErr != nil {
+		return events.Event{}, nil, fmt.Errorf("load consuming pending Inputs: %w", inputErr)
+	}
+	payload.InputIDs = inputIDs
+	event := events.Event{Type: "turn.errored", TurnID: turnID, Payload: payload}
 	if e.Bus == nil {
 		return events.Normalize(event), func() {}, nil
 	}
@@ -1818,7 +1831,13 @@ func pendingRecordIDs(pending []queuedPendingInput) []string {
 }
 
 func isReplayablePendingState(state PendingInputState) bool {
-	return state == PendingInputStatePending || state == PendingInputStateAdmitted
+	switch state {
+	case PendingInputStateAccepting, PendingInputStatePending, PendingInputStateAdmitted,
+		PendingInputStateProcessed, PendingInputStateRetryable:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Engine) beginActiveTurn(turnID string) string {
@@ -1859,6 +1878,13 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	markAlreadyProcessed := func(restoreErr error) error {
 		if len(alreadyProcessed) == 0 {
 			return restoreErr
+		}
+		if err := queue.MarkAdmitted(alreadyProcessed, turnID); err != nil {
+			markErr := fmt.Errorf("mark recovered input admitted: %w", err)
+			if restoreErr != nil {
+				return errors.Join(restoreErr, markErr)
+			}
+			return markErr
 		}
 		if err := queue.MarkProcessed(alreadyProcessed); err != nil {
 			markErr := fmt.Errorf("mark recovered input processed: %w", err)
@@ -1911,6 +1937,10 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 		if record.Origin == PendingInputOriginTurn {
 			if err := flushQueued(records[i:]); err != nil {
 				return markAlreadyProcessed(err)
+			}
+			if err := queue.MarkAdmitted([]string{record.ID}, turnID); err != nil {
+				e.prependPendingInput(queuedPendingInputsFromRecords(records[i:]))
+				return markAlreadyProcessed(fmt.Errorf("mark recovered turn input admitted: %w", err))
 			}
 			if err := e.restoreAcceptedTurnInputLocked(ctx, turnID, record); err != nil {
 				e.prependPendingInput(queuedPendingInputsFromRecords(records[i:]))
@@ -2117,6 +2147,12 @@ func (e *Engine) commitPendingInputSequenceLocked(ctx context.Context, turnID st
 		}
 		recordIDs := pendingRecordIDs([]queuedPendingInput{item})
 		max := e.beginPendingInputDrain(turnID, 1, recordIDs)
+		if queue := e.currentPendingInputQueue(); queue != nil && item.RecordID != "" {
+			if err := queue.MarkAdmitted([]string{item.RecordID}, turnID); err != nil {
+				e.prependPendingInput(pending[i:])
+				return fmt.Errorf("mark recovered turn input admitted: %w", err)
+			}
+		}
 		if threadHasMessageID(e.currentThread(), item.Message.ID) {
 			if queue := e.currentPendingInputQueue(); queue != nil && item.RecordID != "" {
 				if err := queue.MarkProcessed([]string{item.RecordID}); err != nil {
@@ -2454,12 +2490,23 @@ func (e *Engine) publishTerminalEvent(turnID string, event events.Event, complet
 	if completeCommit != nil {
 		completeCommit()
 	}
+	if queue := e.currentPendingInputQueue(); queue != nil {
+		_ = queue.ApplyTerminalEvent(event)
+	}
 	if e.Bus != nil {
 		e.Bus.PublishCommitted(event)
 	}
 	if tracker := e.requestProvenanceTracker(); tracker != nil {
 		_ = tracker.ReplayEvent(event)
 	}
+}
+
+func (e *Engine) pendingInputIDsForTurn(turnID string) ([]string, error) {
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return nil, nil
+	}
+	return queue.InputIDsForTurn(turnID)
 }
 
 func (e *Engine) commitAndPublishTurnError(turnID string, cause error) error {

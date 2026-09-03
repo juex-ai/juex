@@ -69,70 +69,6 @@ func TestStoreCreatesAndReplaysMainAndWorker(t *testing.T) {
 	}
 }
 
-func TestInputLifecycleAndGenerationProjection(t *testing.T) {
-	t.Parallel()
-	store := NewStore(t.TempDir())
-	store.now = fixedNow()
-	main, err := store.EnsureMain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = main.Close() }()
-	if _, err := main.AppendFacts(Fact{Type: FactInputAccepted, InputID: "in_1"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := main.AppendFacts(Fact{
-		Type: FactInputAttemptStart, InputID: "in_1", AttemptID: "ia_1",
-		GenerationID: InitialGeneration, TurnID: "turn_1",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := main.AppendFacts(
-		Fact{Type: FactInputAttemptDone, InputID: "in_1", AttemptID: "ia_1"},
-		Fact{Type: FactInputCompleted, InputID: "in_1"},
-		Fact{Type: FactThreadSettled},
-	); err != nil {
-		t.Fatal(err)
-	}
-	summary := llm.TextMessage(llm.RoleUser, "compact bootstrap")
-	if _, err := main.BeginCompactedGeneration(summary, false, nil); err != nil {
-		t.Fatal(err)
-	}
-	afterCompact := main.ReplaySnapshot()
-	if len(afterCompact.Messages) != 0 || len(afterCompact.Activities) != 1 || afterCompact.Activities[0].Summary == nil {
-		t.Fatalf("Compact projection = %#v", afterCompact)
-	}
-	if _, err := main.BeginNewGeneration(); err != nil {
-		t.Fatal(err)
-	}
-	afterNew := main.ReplaySnapshot()
-	if afterNew.Projection.CurrentGeneration.ID != "g000003" || afterNew.Projection.Counts.GenerationCount != 3 {
-		t.Fatalf("Generation = %#v", afterNew.Projection.CurrentGeneration)
-	}
-	if afterNew.Inputs["in_1"] != nil || afterNew.Projection.Counts.PendingInputCount != 0 {
-		t.Fatalf("terminal Input crossed Generation boundary: %#v", afterNew.Inputs["in_1"])
-	}
-}
-
-func TestInvalidInputTransitionIsRejectedBeforeJournalCommit(t *testing.T) {
-	t.Parallel()
-	store := NewStore(t.TempDir())
-	store.now = fixedNow()
-	main, err := store.EnsureMain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = main.Close() }()
-	before := main.Projection().Revision
-	_, err = main.AppendFacts(Fact{Type: FactInputCompleted, InputID: "missing"})
-	if !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("error = %v", err)
-	}
-	if after := main.Projection().Revision; after != before {
-		t.Fatalf("revision changed from %d to %d", before, after)
-	}
-}
-
 func TestListUsesIndexWithoutOpeningJournal(t *testing.T) {
 	t.Parallel()
 	store := NewStore(t.TempDir())
@@ -533,6 +469,40 @@ func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
 			t.Fatalf("repaired entry = %#v, metadata = %#v", entry, metadata)
 		}
 	}
+}
+
+func TestPendingInputCountRefreshRepairsIndexAfterMetadataCommit(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	injected := errors.New("injected index write failure")
+	store.writeIndex = func(string, []byte) error { return injected }
+	if err := main.SetPendingInputCount(1); !errors.Is(err, injected) {
+		t.Fatalf("SetPendingInputCount() error = %v, want %v", err, injected)
+	}
+	if got := mustReadProjection(t, filepath.Join(main.Dir, projectionFile)).Counts.PendingInputCount; got != 1 {
+		t.Fatalf("committed metadata count = %d, want 1", got)
+	}
+	store.writeIndex = nil
+	if err := main.SetPendingInputCount(1); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := NewStore(store.AgentStateDir()).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.ThreadID == main.ID {
+			if entry.PendingInputCount != 1 {
+				t.Fatalf("repaired index count = %d, want 1", entry.PendingInputCount)
+			}
+			return
+		}
+	}
+	t.Fatalf("Thread %q missing from repaired index", main.ID)
 }
 
 func TestStaleStoreHandleCannotOverwriteAuthoritativeMetadata(t *testing.T) {

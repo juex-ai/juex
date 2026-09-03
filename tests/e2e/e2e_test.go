@@ -1499,14 +1499,25 @@ func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testi
 	if len(provider.history) < 2 || provider.history[0].ID != oldest.MessageID || provider.history[1].ID != later.MessageID {
 		t.Fatalf("recovery provider history = %+v, want %q then %q", provider.history, oldest.MessageID, later.MessageID)
 	}
-	for _, record := range []runtime.PendingInputRecord{oldest, later} {
-		current, ok, err := resumed.Engine.PersistedPendingMessage(record.ID)
-		if err != nil {
-			t.Fatal(err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		retained := make([]string, 0, 2)
+		for _, record := range []runtime.PendingInputRecord{oldest, later} {
+			_, ok, err := resumed.Engine.PersistedPendingMessage(record.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok {
+				retained = append(retained, record.ID)
+			}
 		}
-		if !ok || current.State != runtime.PendingInputStateProcessed {
-			t.Fatalf("recovered record %q = %+v ok=%v", record.ID, current, ok)
+		if len(retained) == 0 {
+			break
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("completed recovered records were retained: %v", retained)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

@@ -1,28 +1,44 @@
 package runtime
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"sort"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
-const pendingInputSummaryLength = 200
+const (
+	pendingInputSummaryLength   = 200
+	pendingInputDocumentVersion = 1
+	pendingInputFile            = "pending_inputs.json"
+)
+
+var ErrCorruptPendingInputs = errors.New("runtime: corrupt pending input state")
 
 type PendingInputState string
 
 const (
-	PendingInputStateAccepting PendingInputState = "accepting"
-	PendingInputStatePending   PendingInputState = "pending"
-	PendingInputStateAdmitted  PendingInputState = "admitted"
-	PendingInputStateProcessed PendingInputState = "processed"
-	PendingInputStateExpired   PendingInputState = "expired"
-	PendingInputStateDropped   PendingInputState = "dropped"
+	PendingInputStateAccepting    PendingInputState = "accepting"
+	PendingInputStatePending      PendingInputState = "pending"
+	PendingInputStateAdmitted     PendingInputState = "admitted"
+	PendingInputStateProcessed    PendingInputState = "processed"
+	PendingInputStateRetryable    PendingInputState = "retryable"
+	PendingInputStateDeadLettered PendingInputState = "dead_lettered"
+	// Expired and dropped are transient dispositions. They are never retained
+	// in the bounded pending document.
+	PendingInputStateExpired PendingInputState = "expired"
+	PendingInputStateDropped PendingInputState = "dropped"
 )
 
 type PendingInputOrigin string
@@ -38,14 +54,13 @@ type PendingInputOptions struct {
 }
 
 type PendingInputQueueOptions struct {
-	Now    func() time.Time
-	Thread *thread.Thread
+	Now       func() time.Time
+	Thread    *thread.Thread
+	WriteFile func(string, []byte, os.FileMode, os.FileMode) error
 }
 
-// PendingInputRecoveryFacts are durable facts that can close a journal update
-// interrupted by process termination. Admission-event message IDs prove that
-// the exact accepting Turn input crossed the Framework boundary; transcript
-// message IDs prove that accepted input was already consumed.
+// PendingInputRecoveryFacts close admission and transcript crash windows that
+// do not yet have a terminal Generation event.
 type PendingInputRecoveryFacts struct {
 	AdmittedMessageIDs   map[string]struct{}
 	TranscriptMessageIDs map[string]struct{}
@@ -60,37 +75,61 @@ type PendingInputRecord struct {
 	Origin      PendingInputOrigin `json:"origin,omitempty"`
 	State       PendingInputState  `json:"state"`
 	CreatedAt   time.Time          `json:"created_at"`
-	ExpiresAt   time.Time          `json:"expires_at"`
+	ExpiresAt   time.Time          `json:"expires_at,omitempty"`
 	Attempts    int                `json:"attempts"`
 	ProcessedAt *time.Time         `json:"processed_at,omitempty"`
+	LastError   string             `json:"last_error,omitempty"`
 }
 
 func (r PendingInputRecord) Expired(now time.Time) bool {
-	return r.Origin != PendingInputOriginTurn && isReplayablePendingState(r.State) && !r.ExpiresAt.IsZero() && !r.ExpiresAt.After(now)
+	return r.Origin != PendingInputOriginTurn && isReplayablePendingState(r.State) &&
+		!r.ExpiresAt.IsZero() && !r.ExpiresAt.After(now)
 }
+
+type pendingInputDocument struct {
+	Version int                  `json:"v"`
+	Records []PendingInputRecord `json:"records"`
+}
+
+type pendingTerminalDisposition uint8
+
+const (
+	pendingTerminalNone pendingTerminalDisposition = iota
+	pendingTerminalCompleted
+	pendingTerminalCancelled
+	pendingTerminalRetryable
+	pendingTerminalDeadLettered
+)
 
 type PendingInputQueue struct {
-	thread            *thread.Thread
-	now               func() time.Time
-	mu                sync.Mutex
-	loaded            bool
-	records           map[string]PendingInputRecord
-	replayable        map[string]struct{}
-	messageIndex      map[string]string
-	admittedTurnIndex map[string]string
-	acceptanceOrder   map[string]uint64
-	nextAcceptance    uint64
+	thread       *thread.Thread
+	dir          string
+	now          func() time.Time
+	writeFile    func(string, []byte, os.FileMode, os.FileMode) error
+	mu           sync.Mutex
+	loaded       bool
+	records      map[string]PendingInputRecord
+	order        []string
+	messageIndex map[string]string
+	turnIndex    map[string]string
+	completed    map[string]struct{}
+	handled      map[string]struct{}
+	handledMsgs  map[string]struct{}
 }
 
-func NewPendingInputQueue(_ string, opts PendingInputQueueOptions) *PendingInputQueue {
+func NewPendingInputQueue(dir string, opts PendingInputQueueOptions) *PendingInputQueue {
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &PendingInputQueue{
-		thread: opts.Thread,
-		now:    now,
+	writeFile := opts.WriteFile
+	if writeFile == nil {
+		writeFile = homestore.WriteFileAtomic
 	}
+	if opts.Thread != nil {
+		dir = opts.Thread.Dir
+	}
+	return &PendingInputQueue{thread: opts.Thread, dir: filepath.Clean(dir), now: now, writeFile: writeFile}
 }
 
 func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, turnID string) (PendingInputRecord, error) {
@@ -99,7 +138,6 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if err := q.ensureLoadedLocked(); err != nil {
 		return PendingInputRecord{}, err
 	}
@@ -107,6 +145,12 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 	if id != "" {
 		if existing, ok := q.records[id]; ok {
 			return existing, nil
+		}
+		if _, completed := q.completed[id]; completed {
+			return PendingInputRecord{}, ErrPendingInputHandled
+		}
+		if _, handled := q.handled[id]; handled {
+			return PendingInputRecord{}, ErrPendingInputHandled
 		}
 	} else {
 		id = nextUniquePendingInputID(q.records, newPendingInputID)
@@ -121,31 +165,21 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 		msg.Blocks = []llm.Block{}
 	}
 	record := PendingInputRecord{
-		ID:        id,
-		TurnID:    turnID,
-		MessageID: msg.ID,
-		Message:   msg,
-		Summary:   truncate(msg.FirstText(), pendingInputSummaryLength),
-		Origin:    PendingInputOriginQueued,
-		State:     PendingInputStatePending,
-		CreatedAt: now,
-		ExpiresAt: now.Add(ttl),
+		ID: id, TurnID: turnID, MessageID: msg.ID, Message: msg,
+		Summary: truncate(msg.FirstText(), pendingInputSummaryLength),
+		Origin:  PendingInputOriginQueued, State: PendingInputStatePending,
+		CreatedAt: now, ExpiresAt: now.Add(ttl),
 	}
-	if err := q.appendLocked(record); err != nil {
+	if err := q.upsertLocked(record); err != nil {
 		return PendingInputRecord{}, err
 	}
-	q.indexRecordLocked(record)
 	return record, nil
 }
 
-// AdmitTurnInput records the main input in one append before any Turn policy
-// runs. Main inputs do not inherit the expiry of queued steering messages.
 func (q *PendingInputQueue) AdmitTurnInput(turnID string, msg llm.Message, reuseTurnRecord bool) (PendingInputRecord, error) {
 	return q.storeTurnInput(turnID, msg, reuseTurnRecord, PendingInputStateAdmitted)
 }
 
-// StageTurnInput writes a non-replayable intent for a new input. An existing
-// durable pending record stays replayable until the caller commits admission.
 func (q *PendingInputQueue) StageTurnInput(turnID string, msg llm.Message, reuseTurnRecord bool) (PendingInputRecord, error) {
 	return q.storeTurnInput(turnID, msg, reuseTurnRecord, PendingInputStateAccepting)
 }
@@ -160,16 +194,17 @@ func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuse
 		return PendingInputRecord{}, err
 	}
 	if reuseTurnRecord {
-		if id := q.admittedTurnIndex[turnID]; id != "" {
+		if id := q.turnIndex[turnID]; id != "" {
 			return q.records[id], nil
 		}
 	}
 	if msg.ID != "" {
+		if _, handled := q.handledMsgs[msg.ID]; handled {
+			return PendingInputRecord{}, ErrPendingInputHandled
+		}
 		if id := q.messageIndex[msg.ID]; id != "" {
 			record := q.records[id]
 			if isReplayablePendingState(record.State) {
-				// A persisted pending input was already accepted by the Framework.
-				// Keep it replayable until the new Turn admission commits.
 				if state == PendingInputStateAccepting {
 					return record, nil
 				}
@@ -185,21 +220,18 @@ func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuse
 	if msg.Blocks == nil {
 		msg.Blocks = []llm.Block{}
 	}
-	record := PendingInputRecord{
-		ID:        id,
-		TurnID:    turnID,
-		MessageID: msg.ID,
-		Message:   msg,
-		Summary:   truncate(msg.FirstText(), pendingInputSummaryLength),
-		Origin:    PendingInputOriginTurn,
-		State:     state,
-		CreatedAt: now,
-		Attempts:  1,
+	attempts := 0
+	if state == PendingInputStateAdmitted {
+		attempts = 1
 	}
-	if err := q.appendLocked(record); err != nil {
+	record := PendingInputRecord{
+		ID: id, TurnID: turnID, MessageID: msg.ID, Message: msg,
+		Summary: truncate(msg.FirstText(), pendingInputSummaryLength),
+		Origin:  PendingInputOriginTurn, State: state, CreatedAt: now, Attempts: attempts,
+	}
+	if err := q.upsertLocked(record); err != nil {
 		return PendingInputRecord{}, err
 	}
-	q.indexRecordLocked(record)
 	return record, nil
 }
 
@@ -212,10 +244,11 @@ func (q *PendingInputQueue) promoteTurnInputLocked(record PendingInputRecord, tu
 	record.TurnID = turnID
 	record.ExpiresAt = time.Time{}
 	record.Attempts++
-	if err := q.appendLocked(record); err != nil {
+	record.ProcessedAt = nil
+	record.LastError = ""
+	if err := q.upsertLocked(record); err != nil {
 		return PendingInputRecord{}, err
 	}
-	q.indexRecordLocked(record)
 	return record, nil
 }
 
@@ -238,22 +271,21 @@ func (q *PendingInputQueue) CommitTurnInput(id, turnID string) error {
 	if record.State == PendingInputStateAccepting && record.TurnID != turnID {
 		return fmt.Errorf("pending input queue: admission intent %q has state %q for turn %q", id, record.State, record.TurnID)
 	}
-	if record.State != PendingInputStateAccepting && !isReplayablePendingState(record.State) {
+	if !isReplayablePendingState(record.State) {
 		return fmt.Errorf("pending input queue: admission intent %q has state %q for turn %q", id, record.State, record.TurnID)
 	}
 	wasAccepting := record.State == PendingInputStateAccepting
+	previousTurnID := record.TurnID
 	record.Origin = PendingInputOriginTurn
 	record.State = PendingInputStateAdmitted
 	record.TurnID = turnID
 	record.ExpiresAt = time.Time{}
-	if !wasAccepting {
+	if wasAccepting || record.Attempts == 0 || previousTurnID != turnID {
 		record.Attempts++
 	}
-	if err := q.appendLocked(record); err != nil {
-		return err
-	}
-	q.indexRecordLocked(record)
-	return nil
+	record.ProcessedAt = nil
+	record.LastError = ""
+	return q.upsertLocked(record)
 }
 
 func (q *PendingInputQueue) Replayable(turnID string, limit int) ([]PendingInputRecord, error) {
@@ -262,22 +294,29 @@ func (q *PendingInputQueue) Replayable(turnID string, limit int) ([]PendingInput
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if err := q.ensureLoadedLocked(); err != nil {
 		return nil, err
 	}
 	now := q.nowMillis()
-	ordered := q.orderedReplayableLocked()
-	out := make([]PendingInputRecord, 0, len(ordered))
-	var expiredRecords []PendingInputRecord
-	for _, record := range ordered {
-		if record.State != PendingInputStatePending && record.State != PendingInputStateAdmitted {
-			continue
-		}
+	records, order := q.cloneStateLocked()
+	changed := false
+	for _, id := range append([]string(nil), order...) {
+		record := records[id]
 		if record.Expired(now) {
-			record.State = PendingInputStateExpired
-			record.TurnID = turnID
-			expiredRecords = append(expiredRecords, record)
+			delete(records, id)
+			order = removePendingInputID(order, id)
+			changed = true
+		}
+	}
+	if changed {
+		if err := q.persistLocked(records, order); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]PendingInputRecord, 0, len(q.order))
+	for _, id := range q.order {
+		record := q.records[id]
+		if !isReplayablePendingState(record.State) || record.State == PendingInputStateRetryable || record.State == PendingInputStateDeadLettered {
 			continue
 		}
 		if limit > 0 && len(out) >= limit {
@@ -285,52 +324,54 @@ func (q *PendingInputQueue) Replayable(turnID string, limit int) ([]PendingInput
 		}
 		out = append(out, record)
 	}
-	if err := q.appendManyLocked(expiredRecords); err != nil {
-		return nil, err
-	}
-	for _, record := range expiredRecords {
-		q.indexRecordLocked(record)
-	}
 	return out, nil
 }
 
 func (q *PendingInputQueue) MarkAdmitted(ids []string, turnID string) error {
-	return q.updateStates(ids, func(record PendingInputRecord, now time.Time) (PendingInputRecord, bool) {
-		if record.State == PendingInputStatePending || record.State == PendingInputStateAdmitted {
-			record.State = PendingInputStateAdmitted
-			record.TurnID = turnID
-			record.Attempts++
-			return record, true
+	return q.updateStates(ids, func(record PendingInputRecord, _ time.Time) (PendingInputRecord, bool, bool) {
+		if !isReplayablePendingState(record.State) || record.State == PendingInputStateDeadLettered {
+			return record, false, false
 		}
-		return record, false
+		if record.State == PendingInputStateAdmitted && record.TurnID == turnID {
+			return record, false, false
+		}
+		record.State = PendingInputStateAdmitted
+		record.TurnID = turnID
+		record.ExpiresAt = time.Time{}
+		record.Attempts++
+		record.ProcessedAt = nil
+		record.LastError = ""
+		return record, true, false
 	})
 }
 
 func (q *PendingInputQueue) PromoteToTurnInput(ids []string, turnID string) error {
-	return q.updateStates(ids, func(record PendingInputRecord, now time.Time) (PendingInputRecord, bool) {
-		if !isReplayablePendingState(record.State) {
-			return record, false
+	return q.updateStates(ids, func(record PendingInputRecord, _ time.Time) (PendingInputRecord, bool, bool) {
+		if !isReplayablePendingState(record.State) || record.State == PendingInputStateDeadLettered {
+			return record, false, false
 		}
 		if record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAdmitted && record.TurnID == turnID {
-			return record, false
+			return record, false, false
 		}
 		record.Origin = PendingInputOriginTurn
 		record.State = PendingInputStateAdmitted
 		record.TurnID = turnID
 		record.ExpiresAt = time.Time{}
 		record.Attempts++
-		return record, true
+		record.ProcessedAt = nil
+		record.LastError = ""
+		return record, true, false
 	})
 }
 
 func (q *PendingInputQueue) MarkProcessed(ids []string) error {
-	return q.updateStates(ids, func(record PendingInputRecord, now time.Time) (PendingInputRecord, bool) {
-		if record.State == PendingInputStatePending || record.State == PendingInputStateAdmitted {
-			record.State = PendingInputStateProcessed
-			record.ProcessedAt = &now
-			return record, true
+	return q.updateStates(ids, func(record PendingInputRecord, now time.Time) (PendingInputRecord, bool, bool) {
+		if !isReplayablePendingState(record.State) || record.State == PendingInputStateDeadLettered || record.State == PendingInputStateProcessed {
+			return record, false, false
 		}
-		return record, false
+		record.State = PendingInputStateProcessed
+		record.ProcessedAt = &now
+		return record, true, false
 	})
 }
 
@@ -348,38 +389,33 @@ func (q *PendingInputQueue) MarkMessageProcessed(messageID string) error {
 		return nil
 	}
 	record := q.records[id]
-	if !isReplayablePendingState(record.State) {
+	if record.State == PendingInputStateProcessed || record.State == PendingInputStateDeadLettered {
 		return nil
 	}
 	now := q.nowMillis()
 	record.State = PendingInputStateProcessed
 	record.ProcessedAt = &now
-	if err := q.appendLocked(record); err != nil {
-		return err
-	}
-	q.indexRecordLocked(record)
-	return nil
+	return q.upsertLocked(record)
 }
 
-func (q *PendingInputQueue) MarkDropped(ids []string) error {
-	return q.updateStates(ids, func(record PendingInputRecord, now time.Time) (PendingInputRecord, bool) {
-		if record.State == PendingInputStateAccepting || record.State == PendingInputStatePending || record.State == PendingInputStateAdmitted {
-			record.State = PendingInputStateDropped
-			return record, true
+func (q *PendingInputQueue) MarkDropped(ids []string) error { return q.remove(ids) }
+
+func (q *PendingInputQueue) MarkExpired(ids []string) error { return q.remove(ids) }
+
+func (q *PendingInputQueue) Retry(id string) error {
+	return q.updateStates([]string{id}, func(record PendingInputRecord, _ time.Time) (PendingInputRecord, bool, bool) {
+		if record.State != PendingInputStateDeadLettered && record.State != PendingInputStateRetryable {
+			return record, false, false
 		}
-		return record, false
+		record.State = PendingInputStatePending
+		record.TurnID = ""
+		record.ProcessedAt = nil
+		record.LastError = ""
+		return record, true, false
 	})
 }
 
-func (q *PendingInputQueue) MarkExpired(ids []string) error {
-	return q.updateStates(ids, func(record PendingInputRecord, _ time.Time) (PendingInputRecord, bool) {
-		if isReplayablePendingState(record.State) {
-			record.State = PendingInputStateExpired
-			return record, true
-		}
-		return record, false
-	})
-}
+func (q *PendingInputQueue) Cancel(id string) error { return q.remove([]string{id}) }
 
 func (q *PendingInputQueue) Records() (map[string]PendingInputRecord, error) {
 	if q == nil {
@@ -393,9 +429,56 @@ func (q *PendingInputQueue) Records() (map[string]PendingInputRecord, error) {
 	return clonePendingInputRecords(q.records), nil
 }
 
-// ReconcileRecoveryFacts advances only states proven by more authoritative
-// durable facts. An accepting intent without a committed admission event stays
-// inert, while explicit expired or dropped states are never resurrected.
+func (q *PendingInputQueue) Completed(id string) (bool, error) {
+	if q == nil || id == "" {
+		return false, nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
+		return false, err
+	}
+	_, ok := q.completed[id]
+	return ok, nil
+}
+
+func (q *PendingInputQueue) InputIDsForTurn(turnID string) ([]string, error) {
+	if q == nil || turnID == "" {
+		return nil, nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, id := range q.order {
+		record := q.records[id]
+		if record.TurnID == turnID && (record.State == PendingInputStateAdmitted || record.State == PendingInputStateProcessed) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (q *PendingInputQueue) ApplyTerminalEvent(event events.Event) error {
+	if q == nil {
+		return nil
+	}
+	disposition, ids, message := pendingDispositionFromEvent(event)
+	if disposition == pendingTerminalNone || len(ids) == 0 {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
+		return err
+	}
+	return q.applyTerminalLocked(disposition, ids, message)
+}
+
+// ReconcileRecoveryFacts converts interrupted admission/attempt state into a
+// replayable state after terminal Generation events have already been applied.
 func (q *PendingInputQueue) ReconcileRecoveryFacts(facts PendingInputRecoveryFacts) error {
 	if q == nil {
 		return nil
@@ -405,78 +488,107 @@ func (q *PendingInputQueue) ReconcileRecoveryFacts(facts PendingInputRecoveryFac
 	if err := q.ensureLoadedLocked(); err != nil {
 		return err
 	}
-
-	now := q.nowMillis()
-	ordered := make([]PendingInputRecord, 0, len(q.records))
-	for _, record := range q.records {
-		ordered = append(ordered, record)
-	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		left := q.acceptanceOrder[ordered[i].ID]
-		right := q.acceptanceOrder[ordered[j].ID]
-		if left != right {
-			return left < right
+	records, order := q.cloneStateLocked()
+	changed := false
+	for _, id := range order {
+		record := records[id]
+		if record.State == PendingInputStateDeadLettered {
+			continue
 		}
-		return ordered[i].ID < ordered[j].ID
-	})
-
-	updates := make([]PendingInputRecord, 0)
-	for _, record := range ordered {
-		if _, ok := facts.TranscriptMessageIDs[record.MessageID]; ok &&
-			(record.State == PendingInputStateAccepting || isReplayablePendingState(record.State)) {
-			record.State = PendingInputStateProcessed
+		_, transcribed := facts.TranscriptMessageIDs[record.MessageID]
+		_, admitted := facts.AdmittedMessageIDs[record.MessageID]
+		switch record.State {
+		case PendingInputStateAccepting:
+			if admitted {
+				record.State = PendingInputStateAdmitted
+			} else {
+				record.State = PendingInputStatePending
+				record.Origin = PendingInputOriginQueued
+				record.TurnID = ""
+			}
+			changed = true
+		case PendingInputStateAdmitted, PendingInputStateProcessed:
+			const interrupted = "process ended before a terminal Turn record"
+			if record.LastError != interrupted {
+				record.LastError = interrupted
+				changed = true
+			}
+		}
+		if transcribed && record.ProcessedAt == nil {
+			now := q.nowMillis()
 			record.ProcessedAt = &now
-			updates = append(updates, record)
-			continue
+			changed = true
 		}
-		if record.State != PendingInputStateAccepting || record.MessageID == "" {
-			continue
-		}
-		if _, ok := facts.AdmittedMessageIDs[record.MessageID]; !ok {
-			continue
-		}
-		record.Origin = PendingInputOriginTurn
-		record.State = PendingInputStateAdmitted
-		record.ExpiresAt = time.Time{}
-		updates = append(updates, record)
+		records[id] = record
 	}
-	if err := q.appendManyLocked(updates); err != nil {
-		return err
+	if !changed {
+		return nil
 	}
-	for _, record := range updates {
-		q.indexRecordLocked(record)
-	}
-	return nil
+	return q.persistLocked(records, order)
 }
 
-func (q *PendingInputQueue) updateStates(ids []string, update func(PendingInputRecord, time.Time) (PendingInputRecord, bool)) error {
+func (q *PendingInputQueue) updateStates(ids []string, update func(PendingInputRecord, time.Time) (PendingInputRecord, bool, bool)) error {
 	if q == nil || len(ids) == 0 {
 		return nil
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if err := q.ensureLoadedLocked(); err != nil {
 		return err
 	}
+	records, order := q.cloneStateLocked()
 	now := q.nowMillis()
-	var updatedRecords []PendingInputRecord
+	changed := false
 	for _, id := range ids {
-		record, ok := q.records[id]
+		record, ok := records[id]
 		if !ok {
 			continue
 		}
-		updated, changed := update(record, now)
-		if !changed {
-			continue
+		updated, mutate, remove := update(record, now)
+		if remove {
+			delete(records, id)
+			order = removePendingInputID(order, id)
+			changed = true
+		} else if mutate {
+			records[id] = updated
+			changed = true
 		}
-		updatedRecords = append(updatedRecords, updated)
 	}
-	if err := q.appendManyLocked(updatedRecords); err != nil {
+	if !changed {
+		return nil
+	}
+	return q.persistLocked(records, order)
+}
+
+func (q *PendingInputQueue) remove(ids []string) error {
+	if q == nil || len(ids) == 0 {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
 		return err
 	}
-	for _, record := range updatedRecords {
-		q.indexRecordLocked(record)
+	records, order := q.cloneStateLocked()
+	removed := make([]PendingInputRecord, 0, len(ids))
+	for _, id := range ids {
+		record, ok := records[id]
+		if !ok {
+			continue
+		}
+		removed = append(removed, record)
+		delete(records, id)
+		order = removePendingInputID(order, id)
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	if err := q.persistLocked(records, order); err != nil {
+		return err
+	}
+	for _, record := range removed {
+		q.handled[record.ID] = struct{}{}
+		q.handledMsgs[record.MessageID] = struct{}{}
 	}
 	return nil
 }
@@ -485,87 +597,306 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 	if q.loaded {
 		return nil
 	}
-	if q.thread == nil {
-		return fmt.Errorf("pending input queue: Thread journal is required")
-	}
-	q.acceptanceOrder = map[string]uint64{}
-	q.nextAcceptance = 0
-	records, err := q.loadLatestLocked()
+	records, order, err := q.loadDocumentLocked()
 	if err != nil {
 		return err
 	}
 	q.records = records
-	q.replayable = map[string]struct{}{}
-	q.messageIndex = map[string]string{}
-	q.admittedTurnIndex = map[string]string{}
-	for _, record := range records {
-		q.indexRecordLocked(record)
+	q.order = order
+	q.completed = map[string]struct{}{}
+	q.handled = map[string]struct{}{}
+	q.handledMsgs = map[string]struct{}{}
+	q.rebuildIndexesLocked()
+	changed := false
+	if q.thread != nil {
+		eventsList, readErr := q.thread.ReadEvents()
+		if readErr != nil {
+			return fmt.Errorf("pending input queue: read Generation events: %w", readErr)
+		}
+		for _, event := range eventsList {
+			disposition, ids, message := pendingDispositionFromEvent(event)
+			if disposition != pendingTerminalNone {
+				for _, id := range ids {
+					q.handled[id] = struct{}{}
+				}
+			}
+			if disposition == pendingTerminalCompleted {
+				for _, id := range ids {
+					q.completed[id] = struct{}{}
+				}
+			}
+			if q.applyTerminalStateLocked(disposition, ids, message) {
+				changed = true
+			}
+		}
 	}
 	q.loaded = true
+	if changed {
+		return q.persistCurrentLocked()
+	}
+	if q.thread != nil {
+		if err := q.thread.SetPendingInputCount(q.materializedPendingCountLocked()); err != nil {
+			q.loaded = false
+			return fmt.Errorf("pending input queue: synchronize Thread count: %w", err)
+		}
+	}
 	return nil
 }
 
-func (q *PendingInputQueue) indexRecordLocked(record PendingInputRecord) {
-	if q.records == nil {
-		q.records = map[string]PendingInputRecord{}
+func (q *PendingInputQueue) loadDocumentLocked() (map[string]PendingInputRecord, []string, error) {
+	records := map[string]PendingInputRecord{}
+	data, err := os.ReadFile(q.pathLocked())
+	if errors.Is(err, os.ErrNotExist) {
+		return records, nil, nil
 	}
-	if q.replayable == nil {
-		q.replayable = map[string]struct{}{}
+	if err != nil {
+		return nil, nil, fmt.Errorf("pending input queue: read state: %w", err)
 	}
-	if q.messageIndex == nil {
-		q.messageIndex = map[string]string{}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var document pendingInputDocument
+	if err := decoder.Decode(&document); err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrCorruptPendingInputs, err)
 	}
-	if q.admittedTurnIndex == nil {
-		q.admittedTurnIndex = map[string]string{}
-	}
-	q.trackAcceptanceLocked(record.ID)
-	if previous, ok := q.records[record.ID]; ok {
-		delete(q.replayable, previous.ID)
-		if q.messageIndex[previous.MessageID] == previous.ID {
-			delete(q.messageIndex, previous.MessageID)
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
 		}
-		if previous.Origin == PendingInputOriginTurn && q.admittedTurnIndex[previous.TurnID] == previous.ID {
-			delete(q.admittedTurnIndex, previous.TurnID)
+		return nil, nil, fmt.Errorf("%w: %v", ErrCorruptPendingInputs, err)
+	}
+	if document.Version != pendingInputDocumentVersion {
+		return nil, nil, fmt.Errorf("%w: unsupported version %d", ErrCorruptPendingInputs, document.Version)
+	}
+	order := make([]string, 0, len(document.Records))
+	messages := map[string]string{}
+	for index, record := range document.Records {
+		if err := validatePendingInputRecord(record); err != nil {
+			return nil, nil, fmt.Errorf("%w: record %d: %v", ErrCorruptPendingInputs, index, err)
+		}
+		if _, exists := records[record.ID]; exists {
+			return nil, nil, fmt.Errorf("%w: duplicate id %q", ErrCorruptPendingInputs, record.ID)
+		}
+		if previous := messages[record.MessageID]; previous != "" {
+			return nil, nil, fmt.Errorf("%w: message %q belongs to %q and %q", ErrCorruptPendingInputs, record.MessageID, previous, record.ID)
+		}
+		records[record.ID] = record
+		order = append(order, record.ID)
+		messages[record.MessageID] = record.ID
+	}
+	return records, order, nil
+}
+
+func validatePendingInputRecord(record PendingInputRecord) error {
+	if strings.TrimSpace(record.ID) == "" || strings.TrimSpace(record.ID) != record.ID ||
+		strings.TrimSpace(record.MessageID) == "" || strings.TrimSpace(record.MessageID) != record.MessageID ||
+		record.Message.ID != record.MessageID || record.Message.Role != llm.RoleUser || record.Message.Blocks == nil {
+		return errors.New("invalid input or message identity")
+	}
+	if record.CreatedAt.IsZero() || record.Attempts < 0 {
+		return errors.New("invalid creation time or attempt count")
+	}
+	if record.Origin != PendingInputOriginQueued && record.Origin != PendingInputOriginTurn {
+		return fmt.Errorf("invalid origin %q", record.Origin)
+	}
+	switch record.State {
+	case PendingInputStateAccepting:
+		if record.Origin != PendingInputOriginTurn || record.TurnID == "" {
+			return errors.New("accepting input must identify its Turn")
+		}
+	case PendingInputStatePending:
+	case PendingInputStateAdmitted, PendingInputStateProcessed, PendingInputStateDeadLettered:
+		if record.TurnID == "" {
+			return fmt.Errorf("%s input must identify its Turn", record.State)
+		}
+	case PendingInputStateRetryable:
+		if record.TurnID != "" {
+			return errors.New("retryable input must not retain a Turn")
+		}
+	default:
+		return fmt.Errorf("state %q is not persistable", record.State)
+	}
+	return nil
+}
+
+func (q *PendingInputQueue) upsertLocked(record PendingInputRecord) error {
+	records, order := q.cloneStateLocked()
+	if _, exists := records[record.ID]; !exists {
+		order = append(order, record.ID)
+	}
+	records[record.ID] = record
+	return q.persistLocked(records, order)
+}
+
+func (q *PendingInputQueue) persistCurrentLocked() error {
+	records, order := q.cloneStateLocked()
+	return q.persistLocked(records, order)
+}
+
+func (q *PendingInputQueue) persistLocked(records map[string]PendingInputRecord, order []string) error {
+	document := pendingInputDocument{Version: pendingInputDocumentVersion, Records: make([]PendingInputRecord, 0, len(order))}
+	for _, id := range order {
+		record, ok := records[id]
+		if !ok {
+			continue
+		}
+		if err := validatePendingInputRecord(record); err != nil {
+			return fmt.Errorf("pending input queue: encode %q: %w", id, err)
+		}
+		document.Records = append(document.Records, record)
+	}
+	data, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := q.writeFile(q.pathLocked(), data, 0o600, 0o700); err != nil {
+		q.loaded = false
+		return fmt.Errorf("pending input queue: write state: %w", err)
+	}
+	q.records = records
+	q.order = append([]string(nil), order...)
+	q.rebuildIndexesLocked()
+	q.loaded = true
+	if q.thread != nil {
+		if err := q.thread.SetPendingInputCount(q.materializedPendingCountLocked()); err != nil {
+			q.loaded = false
+			return fmt.Errorf("pending input queue: update Thread count: %w", err)
 		}
 	}
-	q.records[record.ID] = record
-	q.messageIndex[record.MessageID] = record.ID
-	if isReplayablePendingState(record.State) {
-		q.replayable[record.ID] = struct{}{}
-		if record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAdmitted {
-			q.admittedTurnIndex[record.TurnID] = record.ID
+	return nil
+}
+
+func (q *PendingInputQueue) applyTerminalLocked(disposition pendingTerminalDisposition, ids []string, message string) error {
+	for _, id := range ids {
+		q.handled[id] = struct{}{}
+		if record, ok := q.records[id]; ok {
+			q.handledMsgs[record.MessageID] = struct{}{}
+		}
+	}
+	if disposition == pendingTerminalCompleted {
+		for _, id := range ids {
+			q.completed[id] = struct{}{}
+		}
+	}
+	if !q.applyTerminalStateLocked(disposition, ids, message) {
+		return nil
+	}
+	return q.persistCurrentLocked()
+}
+
+func (q *PendingInputQueue) applyTerminalStateLocked(disposition pendingTerminalDisposition, ids []string, message string) bool {
+	if disposition == pendingTerminalNone || len(ids) == 0 {
+		return false
+	}
+	changed := false
+	for _, id := range ids {
+		record, exists := q.records[id]
+		if !exists {
+			continue
+		}
+		switch disposition {
+		case pendingTerminalCompleted, pendingTerminalCancelled:
+			delete(q.records, id)
+			q.order = removePendingInputID(q.order, id)
+			changed = true
+		case pendingTerminalRetryable:
+			if record.State != PendingInputStateRetryable || record.TurnID != "" || record.LastError != message {
+				record.State = PendingInputStateRetryable
+				record.TurnID = ""
+				record.LastError = message
+				q.records[id] = record
+				changed = true
+			}
+		case pendingTerminalDeadLettered:
+			if record.State != PendingInputStateDeadLettered || record.LastError != message {
+				record.State = PendingInputStateDeadLettered
+				record.LastError = message
+				q.records[id] = record
+				changed = true
+			}
+		}
+	}
+	if changed {
+		q.rebuildIndexesLocked()
+	}
+	return changed
+}
+
+func pendingDispositionFromEvent(event events.Event) (pendingTerminalDisposition, []string, string) {
+	if event.Type != "turn.completed" && event.Type != "turn.errored" && event.Type != "turn.cancelled" {
+		return pendingTerminalNone, nil, ""
+	}
+	data, err := json.Marshal(event.Payload)
+	if err != nil {
+		return pendingTerminalNone, nil, ""
+	}
+	var payload struct {
+		InputIDs  []string `json:"input_ids"`
+		Error     string   `json:"error"`
+		ErrorKind string   `json:"error_kind"`
+	}
+	if json.Unmarshal(data, &payload) != nil || len(payload.InputIDs) == 0 {
+		return pendingTerminalNone, nil, ""
+	}
+	switch event.Type {
+	case "turn.completed":
+		return pendingTerminalCompleted, payload.InputIDs, ""
+	case "turn.cancelled":
+		return pendingTerminalCancelled, payload.InputIDs, payload.Error
+	case "turn.errored":
+		switch payload.ErrorKind {
+		case "cancelled":
+			return pendingTerminalCancelled, payload.InputIDs, payload.Error
+		case "runtime_restart", "interrupted", "terminated":
+			return pendingTerminalRetryable, payload.InputIDs, payload.Error
+		default:
+			return pendingTerminalDeadLettered, payload.InputIDs, payload.Error
+		}
+	}
+	return pendingTerminalNone, nil, ""
+}
+
+func (q *PendingInputQueue) rebuildIndexesLocked() {
+	q.messageIndex = map[string]string{}
+	q.turnIndex = map[string]string{}
+	for _, id := range q.order {
+		record, ok := q.records[id]
+		if !ok {
+			continue
+		}
+		q.messageIndex[record.MessageID] = id
+		if record.Origin == PendingInputOriginTurn &&
+			(record.State == PendingInputStateAdmitted || record.State == PendingInputStateProcessed) && record.TurnID != "" {
+			q.turnIndex[record.TurnID] = id
 		}
 	}
 }
 
-func (q *PendingInputQueue) orderedReplayableLocked() []PendingInputRecord {
-	out := make([]PendingInputRecord, 0, len(q.replayable))
-	for id := range q.replayable {
-		out = append(out, q.records[id])
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		left := q.acceptanceOrder[out[i].ID]
-		right := q.acceptanceOrder[out[j].ID]
-		if left != right {
-			return left < right
+func (q *PendingInputQueue) materializedPendingCountLocked() int {
+	count := 0
+	for _, record := range q.records {
+		switch record.State {
+		case PendingInputStateAccepting, PendingInputStatePending, PendingInputStateRetryable:
+			count++
 		}
-		return out[i].ID < out[j].ID
-	})
-	return out
+	}
+	return count
 }
 
-func (q *PendingInputQueue) trackAcceptanceLocked(id string) {
-	if id == "" {
-		return
+func (q *PendingInputQueue) cloneStateLocked() (map[string]PendingInputRecord, []string) {
+	return clonePendingInputRecords(q.records), append([]string(nil), q.order...)
+}
+
+func (q *PendingInputQueue) pathLocked() string {
+	if q.thread != nil {
+		return filepath.Join(q.thread.Dir, pendingInputFile)
 	}
-	if q.acceptanceOrder == nil {
-		q.acceptanceOrder = map[string]uint64{}
-	}
-	if q.acceptanceOrder[id] != 0 {
-		return
-	}
-	q.nextAcceptance++
-	q.acceptanceOrder[id] = q.nextAcceptance
+	return filepath.Join(q.dir, pendingInputFile)
+}
+
+func (q *PendingInputQueue) nowMillis() time.Time {
+	return q.now().UTC().Truncate(time.Millisecond)
 }
 
 func clonePendingInputRecords(records map[string]PendingInputRecord) map[string]PendingInputRecord {
@@ -574,6 +905,16 @@ func clonePendingInputRecords(records map[string]PendingInputRecord) map[string]
 		out[id] = record
 	}
 	return out
+}
+
+func removePendingInputID(order []string, id string) []string {
+	for index := range order {
+		if order[index] == id {
+			copy(order[index:], order[index+1:])
+			return order[:len(order)-1]
+		}
+	}
+	return order
 }
 
 func nextUniquePendingInputID(records map[string]PendingInputRecord, next func() string) string {
@@ -585,121 +926,7 @@ func nextUniquePendingInputID(records map[string]PendingInputRecord, next func()
 	}
 }
 
-func newPendingInputID() string {
-	return "pending-" + newID()
-}
-
-func (q *PendingInputQueue) loadLatestLocked() (map[string]PendingInputRecord, error) {
-	records := map[string]PendingInputRecord{}
-	replay := q.thread.ReplaySnapshot()
-	for _, id := range replay.InputOrder {
-		raw, ok := replay.InputRecords[id]
-		if !ok {
-			return nil, fmt.Errorf("pending input queue: Thread journal order references missing record %q", id)
-		}
-		var record PendingInputRecord
-		if err := json.Unmarshal(raw, &record); err != nil {
-			return nil, fmt.Errorf("pending input queue: decode Thread journal record %q: %w", id, err)
-		}
-		if record.ID != id {
-			return nil, fmt.Errorf("pending input queue: Thread journal record id mismatch %q", id)
-		}
-		q.trackAcceptanceLocked(id)
-		records[id] = record
-	}
-	if len(records) != len(replay.InputRecords) {
-		return nil, fmt.Errorf("pending input queue: Thread journal input order is incomplete")
-	}
-	return records, nil
-}
-
-func (q *PendingInputQueue) appendLocked(record PendingInputRecord) error {
-	return q.appendManyLocked([]PendingInputRecord{record})
-}
-
-func (q *PendingInputQueue) appendManyLocked(records []PendingInputRecord) error {
-	if len(records) == 0 {
-		return nil
-	}
-	facts := make([]thread.Fact, 0, 64)
-	flush := func() error {
-		if len(facts) == 0 {
-			return nil
-		}
-		if _, err := q.thread.AppendFacts(facts...); err != nil {
-			q.loaded = false
-			return err
-		}
-		facts = facts[:0]
-		return nil
-	}
-	for _, record := range records {
-		body, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-		recordFacts := append(q.inputLifecycleFacts(record), thread.Fact{
-			Type: thread.FactInputRecorded, InputID: record.ID, InputRecord: body,
-		})
-		if len(facts)+len(recordFacts) > 64 {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		facts = append(facts, recordFacts...)
-	}
-	return flush()
-}
-
-func (q *PendingInputQueue) nowMillis() time.Time {
-	return q.now().UTC().Truncate(time.Millisecond)
-}
-
-func (q *PendingInputQueue) inputLifecycleFacts(record PendingInputRecord) []thread.Fact {
-	if q == nil || q.thread == nil || record.ID == "" {
-		return nil
-	}
-	previous, existed := q.records[record.ID]
-	attemptID := fmt.Sprintf("ia_%s_%d", record.ID, max(record.Attempts, 1))
-	generationID := q.thread.Projection().CurrentGeneration.ID
-	var facts []thread.Fact
-	if !existed && record.State == PendingInputStatePending {
-		facts = append(facts, thread.Fact{Type: thread.FactInputAccepted, InputID: record.ID, Message: &record.Message})
-	}
-	starting := record.State == PendingInputStateAdmitted &&
-		(!existed || previous.State == PendingInputStateAccepting || previous.State == PendingInputStatePending)
-	if starting {
-		if !existed || previous.State == PendingInputStateAccepting {
-			facts = append(facts, thread.Fact{Type: thread.FactInputAccepted, InputID: record.ID, Message: &record.Message})
-		}
-		facts = append(facts, thread.Fact{
-			Type: thread.FactInputAttemptStart, InputID: record.ID, AttemptID: attemptID,
-			GenerationID: generationID, TurnID: record.TurnID,
-		})
-	}
-	if !existed {
-		return facts
-	}
-	switch previous.State {
-	case PendingInputStateAdmitted:
-		switch record.State {
-		case PendingInputStateDropped:
-			previousAttemptID := fmt.Sprintf("ia_%s_%d", record.ID, max(previous.Attempts, 1))
-			facts = append(facts,
-				thread.Fact{Type: thread.FactInputAttemptCancel, InputID: record.ID, AttemptID: previousAttemptID},
-				thread.Fact{Type: thread.FactInputCancelled, InputID: record.ID},
-			)
-		}
-	case PendingInputStatePending:
-		switch record.State {
-		case PendingInputStateDropped:
-			facts = append(facts, thread.Fact{Type: thread.FactInputCancelled, InputID: record.ID})
-		case PendingInputStateExpired:
-			facts = append(facts, thread.Fact{Type: thread.FactInputExpired, InputID: record.ID})
-		}
-	}
-	return facts
-}
+func newPendingInputID() string { return "pending-" + newID() }
 
 func pendingInputMessageID(id string, createdAt time.Time) string {
 	return thread.StableMessageID(createdAt, id)

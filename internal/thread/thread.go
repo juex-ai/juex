@@ -262,55 +262,15 @@ func (t *Thread) AppendEvent(event events.Event) error {
 		facts = append(facts, Fact{Type: FactTurnStarted, TurnID: event.TurnID})
 	case "turn.completed":
 		facts = append(facts, Fact{Type: FactTurnCompleted, TurnID: event.TurnID})
-		facts = append(facts, t.inputSettlementFacts(event.TurnID, FactInputAttemptDone, FactInputCompleted, "")...)
 		facts = append(facts, Fact{Type: FactThreadSettled, TurnID: event.TurnID})
 	case "turn.errored":
-		errorText := eventPayloadError(event.Payload)
 		facts = append(facts, Fact{Type: FactTurnFailed, TurnID: event.TurnID})
-		facts = append(facts, t.inputSettlementFacts(event.TurnID, FactInputAttemptFailed, FactInputDeadLettered, errorText)...)
 	case "turn.cancelled":
 		facts = append(facts, Fact{Type: FactTurnCancelled, TurnID: event.TurnID})
-		facts = append(facts, t.inputSettlementFacts(event.TurnID, FactInputAttemptCancel, FactInputCancelled, eventPayloadError(event.Payload))...)
 		facts = append(facts, Fact{Type: FactThreadSettled, TurnID: event.TurnID})
 	}
 	_, err := t.AppendFacts(facts...)
 	return err
-}
-
-func (t *Thread) inputSettlementFacts(turnID, attemptFact, terminalFact, errorText string) []Fact {
-	if t == nil || turnID == "" {
-		return nil
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	var facts []Fact
-	for _, inputID := range t.state.InputOrder {
-		input := t.state.Inputs[inputID]
-		if input == nil || input.State != InputRunning || len(input.Attempts) == 0 {
-			continue
-		}
-		attempt := input.Attempts[len(input.Attempts)-1]
-		if attempt.State != "running" || attempt.TurnID != turnID {
-			continue
-		}
-		facts = append(facts,
-			Fact{Type: attemptFact, InputID: inputID, AttemptID: attempt.ID, Error: errorText},
-			Fact{Type: terminalFact, InputID: inputID, Error: errorText},
-		)
-	}
-	return facts
-}
-
-func eventPayloadError(payload any) string {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return ""
-	}
-	var value struct {
-		Error string `json:"error"`
-	}
-	_ = json.Unmarshal(data, &value)
-	return value.Error
 }
 
 func (t *Thread) BeginNewGeneration() (Commit, error) {
@@ -419,6 +379,61 @@ func (t *Thread) ApplyAlias(alias string) error {
 	}
 	if err := t.store.updateProjectionLocked(); err != nil {
 		return fmt.Errorf("thread: metadata committed but index refresh failed: %w", err)
+	}
+	return nil
+}
+
+// SetPendingInputCount materializes the bounded pending_inputs.json state in
+// Thread metadata and the Agent index. The pending document remains the
+// authority; loading it repairs this value after an interrupted refresh.
+func (t *Thread) SetPendingInputCount(count int) error {
+	if t == nil {
+		return fmt.Errorf("thread: nil Thread")
+	}
+	if count < 0 {
+		return fmt.Errorf("thread: negative pending input count %d", count)
+	}
+	if t.store != nil {
+		t.store.mu.Lock()
+		defer t.store.mu.Unlock()
+	}
+	t.mu.Lock()
+	if t.closed || t.eventStore == nil {
+		t.mu.Unlock()
+		return fmt.Errorf("thread: closed")
+	}
+	if err := t.ensureProjectionCurrentLocked(); err != nil {
+		t.mu.Unlock()
+		return err
+	}
+	if t.state.Projection.Counts.PendingInputCount == count {
+		t.mu.Unlock()
+		if t.store != nil {
+			if err := t.store.updateProjectionLocked(); err != nil {
+				return fmt.Errorf("thread: metadata current but index refresh failed: %w", err)
+			}
+		}
+		return nil
+	}
+	candidate := cloneProjection(t.state.Projection)
+	at := NewTimestamp(t.eventStore.now())
+	candidate.Counts.PendingInputCount = count
+	advanceProjectionRevision(&candidate, at)
+	if err := validateProjectionMetadata(candidate, t.ID); err != nil {
+		t.mu.Unlock()
+		return err
+	}
+	if err := t.persistProjectionValueLocked(candidate); err != nil {
+		t.mu.Unlock()
+		return err
+	}
+	t.state.Projection = candidate
+	t.refreshPublicLocked()
+	t.mu.Unlock()
+	if t.store != nil {
+		if err := t.store.updateProjectionLocked(); err != nil {
+			return fmt.Errorf("thread: metadata committed but index refresh failed: %w", err)
+		}
 	}
 	return nil
 }
@@ -622,18 +637,7 @@ func cloneReplayState(source ReplayState) ReplayState {
 		Events:           append([]events.Event(nil), source.Events...),
 		Activities:       append([]Activity(nil), source.Activities...),
 		CompactionCount:  source.CompactionCount,
-		Inputs:           make(map[string]*InputProjection, len(source.Inputs)),
-		InputOrder:       append([]string(nil), source.InputOrder...),
-		InputRecords:     make(map[string]json.RawMessage, len(source.InputRecords)),
 		ContextUsage:     cloneContextUsage(source.ContextUsage),
-	}
-	for id, input := range source.Inputs {
-		copyInput := *input
-		copyInput.Attempts = append([]AttemptProjection(nil), input.Attempts...)
-		clone.Inputs[id] = &copyInput
-	}
-	for id, record := range source.InputRecords {
-		clone.InputRecords[id] = append(json.RawMessage(nil), record...)
 	}
 	return clone
 }
