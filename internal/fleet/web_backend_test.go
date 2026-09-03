@@ -472,12 +472,14 @@ func configRestartTestManager(
 		_ context.Context,
 		got endpoint.Runtime,
 		threadID string,
+		retryTurnID string,
 		prompt string,
 	) (string, error) {
 		resumeCalls.Add(1)
 		if !got.Matches(newRuntime) || threadID != "234567" ||
+			retryTurnID != "turn-original" ||
 			!strings.Contains(prompt, "System notice") {
-			t.Fatalf("resume runtime/Thread/prompt = %+v/%q/%q", got, threadID, prompt)
+			t.Fatalf("resume runtime/Thread/retry Turn/prompt = %+v/%q/%q/%q", got, threadID, retryTurnID, prompt)
 		}
 		if resumeErr != nil {
 			return "", resumeErr

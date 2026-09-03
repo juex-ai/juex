@@ -449,7 +449,7 @@ func TestPendingInputQueueTerminalDispositionControlsRecovery(t *testing.T) {
 				t.Fatalf("records = %+v, want count %d", records, tc.wantCount)
 			}
 			if tc.wantCount == 1 {
-				if current := records[record.ID]; current.State != tc.wantState || current.TurnID != "" || current.LastError != tc.name {
+				if current := records[record.ID]; current.State != tc.wantState || current.TurnID != "turn-1" || current.LastError != tc.name {
 					t.Fatalf("recoverable record = %+v", current)
 				}
 				replayable, err := queue.Replayable("", 0)
@@ -459,8 +459,12 @@ func TestPendingInputQueueTerminalDispositionControlsRecovery(t *testing.T) {
 				if len(replayable) != 0 {
 					t.Fatalf("terminally interrupted record replayed without explicit retry: %+v", replayable)
 				}
-				if err := queue.Retry(record.ID); err != nil {
+				retried, err := queue.RetryTurnInputs("turn-1")
+				if err != nil {
 					t.Fatal(err)
+				}
+				if retried != 1 {
+					t.Fatalf("retried inputs = %d, want 1", retried)
 				}
 				replayable, err = queue.Replayable("", 0)
 				if err != nil || len(replayable) != 1 || replayable[0].ID != record.ID {

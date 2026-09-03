@@ -1137,12 +1137,21 @@ func waitFleetInterruptedAndContinuationEvents(
 			body = []byte(joined.String())
 		}
 		text := string(body)
+		pendingSettled := false
+		pendingData, pendingErr := os.ReadFile(filepath.Join(threadDir, "pending_inputs.json"))
+		if pendingErr == nil {
+			var pending struct {
+				Records []json.RawMessage `json:"records"`
+			}
+			pendingSettled = json.Unmarshal(pendingData, &pending) == nil && len(pending.Records) == 0
+		}
 		if strings.Contains(text, `"type":"turn.errored"`) &&
 			strings.Contains(text, `"turn_id":"`+originalTurnID+`"`) &&
 			strings.Contains(text, `"error_kind":"runtime_restart"`) &&
 			strings.Count(text, `"type":"turn.started"`) >= 2 &&
 			strings.Contains(text, `"kind":"system_notice"`) &&
-			strings.Contains(text, `"type":"turn.completed"`) {
+			strings.Contains(text, `"type":"turn.completed"`) &&
+			pendingSettled {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)

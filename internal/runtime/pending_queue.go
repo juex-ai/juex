@@ -415,6 +415,41 @@ func (q *PendingInputQueue) Retry(id string) error {
 	})
 }
 
+// RetryTurnInputs returns every runtime-interrupted Input from one consuming
+// Turn to pending state in a single document replacement. Fleet uses this
+// explicit handoff before admitting its restart continuation.
+func (q *PendingInputQueue) RetryTurnInputs(turnID string) (int, error) {
+	if q == nil || strings.TrimSpace(turnID) == "" {
+		return 0, nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
+		return 0, err
+	}
+	records, order := q.cloneStateLocked()
+	retried := 0
+	for _, id := range order {
+		record := records[id]
+		if record.State != PendingInputStateRetryable || record.TurnID != turnID {
+			continue
+		}
+		record.State = PendingInputStatePending
+		record.TurnID = ""
+		record.ProcessedAt = nil
+		record.LastError = ""
+		records[id] = record
+		retried++
+	}
+	if retried == 0 {
+		return 0, nil
+	}
+	if err := q.persistLocked(records, order); err != nil {
+		return 0, err
+	}
+	return retried, nil
+}
+
 func (q *PendingInputQueue) Cancel(id string) error { return q.remove([]string{id}) }
 
 func (q *PendingInputQueue) Records() (map[string]PendingInputRecord, error) {
@@ -706,13 +741,9 @@ func validatePendingInputRecord(record PendingInputRecord) error {
 			return errors.New("accepting input must identify its Turn")
 		}
 	case PendingInputStatePending:
-	case PendingInputStateAdmitted, PendingInputStateProcessed, PendingInputStateDeadLettered:
+	case PendingInputStateAdmitted, PendingInputStateProcessed, PendingInputStateRetryable, PendingInputStateDeadLettered:
 		if record.TurnID == "" {
 			return fmt.Errorf("%s input must identify its Turn", record.State)
-		}
-	case PendingInputStateRetryable:
-		if record.TurnID != "" {
-			return errors.New("retryable input must not retain a Turn")
 		}
 	default:
 		return fmt.Errorf("state %q is not persistable", record.State)
@@ -814,9 +845,8 @@ func (q *PendingInputQueue) applyTerminalStateLocked(disposition pendingTerminal
 			q.order = removePendingInputID(q.order, id)
 			changed = true
 		case pendingTerminalRetryable:
-			if record.State != PendingInputStateRetryable || record.TurnID != "" || record.LastError != message {
+			if record.State != PendingInputStateRetryable || record.LastError != message {
 				record.State = PendingInputStateRetryable
-				record.TurnID = ""
 				record.LastError = message
 				q.records[id] = record
 				changed = true

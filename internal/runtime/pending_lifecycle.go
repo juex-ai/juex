@@ -280,6 +280,25 @@ func (e *Engine) pendingInputCompleted(recordID string) (bool, error) {
 	return queue.Completed(recordID)
 }
 
+// RetryPendingInputsForTurn transfers runtime-interrupted Inputs into the next
+// explicit continuation admission. It does not retry provider dead letters.
+func (e *Engine) RetryPendingInputsForTurn(turnID string) (int, error) {
+	if e == nil || turnID == "" {
+		return 0, nil
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
+	status, _, publishing := e.pendingTerminalPublicationStatus()
+	if publishing || status.TurnID != "" {
+		return 0, ErrActiveTurnExists
+	}
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return 0, nil
+	}
+	return queue.RetryTurnInputs(turnID)
+}
+
 // ReservePendingInputCompaction establishes the exclusive runtime Turn used by
 // manual compaction and returns its Framework-owned identity.
 func (e *Engine) ReservePendingInputCompaction() (string, error) {
