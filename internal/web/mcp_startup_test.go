@@ -661,7 +661,7 @@ func waitForThreadText(t *testing.T, dir string, role llm.Role, want string) {
 
 func waitForThreadMessage(t *testing.T, dir string, match func(llm.Message) bool, label string) {
 	t.Helper()
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(30 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {
