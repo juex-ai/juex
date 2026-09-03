@@ -17,8 +17,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -517,6 +519,155 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func TestWeb_ModelAwareUsageSurvivesRestartAndReachesAPI(t *testing.T) {
+	var primaryCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if primaryCalls.Add(1) == 1 {
+			_, _ = io.WriteString(w, `{
+  "id":"primary-response",
+  "object":"chat.completion",
+  "model":"primary-model",
+  "choices":[{"index":0,"message":{"role":"assistant","content":"primary-ok"},"finish_reason":"stop"}],
+  "usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":3}}
+}`)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"message":"invalid key","type":"authentication_error","code":"invalid_api_key"}}`)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+  "id":"backup-response",
+  "object":"chat.completion",
+  "model":"backup-model",
+  "choices":[{"index":0,"message":{"role":"assistant","content":"backup-ok"},"finish_reason":"stop"}],
+  "usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9}
+}`)
+	}))
+	defer backup.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", "")
+	work := t.TempDir()
+	configPath := filepath.Join(work, "provider.juex.yaml")
+	configBody := fmt.Sprintf(`models:
+  - primary:primary-model
+  - backup:backup-model
+providers:
+  - id: primary
+    protocol: openai/chat
+    base_url: %s
+    api_key: primary-key
+    capabilities:
+      streaming: false
+    models:
+      - id: primary-model
+  - id: backup
+    protocol: openai/chat
+    base_url: %s
+    api_key: backup-key
+    capabilities:
+      streaming: false
+    models:
+      - id: backup-model
+`, primary.URL, backup.URL)
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		ConfigPath: configPath,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentStateDir = filepath.Join(work, "agent-state")
+
+	server := web.NewServer(web.Options{Cfg: cfg})
+	httpServer := httptest.NewServer(server.Handler())
+	threadID := createWebMainThread(t, httpServer.URL)
+	runTurn := func(prompt, wantReply string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		var response *http.Response
+		for {
+			var err error
+			response, err = http.Post(
+				httpServer.URL+"/api/threads/"+threadID+"/inputs",
+				"application/json",
+				strings.NewReader(`{"prompt":`+strconv.Quote(prompt)+`}`),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusConflict || time.Now().After(deadline) {
+				break
+			}
+			_, _ = io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+			time.Sleep(10 * time.Millisecond)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusAccepted {
+			body, _ := io.ReadAll(response.Body)
+			t.Fatalf("turn status = %d body=%s", response.StatusCode, body)
+		}
+		var turn webStartTurnResponse
+		if err := json.NewDecoder(response.Body).Decode(&turn); err != nil {
+			t.Fatal(err)
+		}
+		waitForWebTranscript(t, httpServer.URL, threadID, turn.TurnID, 30*time.Second, wantReply, func(messages []webTranscriptMessage) bool {
+			for _, message := range messages {
+				for _, block := range message.Blocks {
+					if message.Role == "assistant" && block.Type == "text" && block.Text == wantReply {
+						return true
+					}
+				}
+			}
+			return false
+		})
+	}
+	runTurn("first", "primary-ok")
+	runTurn("second", "backup-ok")
+	httpServer.Close()
+	server.Close()
+
+	restarted := web.NewServer(web.Options{Cfg: cfg})
+	t.Cleanup(restarted.Close)
+	restartedHTTP := httptest.NewServer(restarted.Handler())
+	defer restartedHTTP.Close()
+	wantTotal := llm.Usage{InputTokens: 13, CachedInputTokens: 3, OutputTokens: 6}
+	wantPrimary := llm.Usage{InputTokens: 8, CachedInputTokens: 3, OutputTokens: 2}
+	wantBackup := llm.Usage{InputTokens: 5, OutputTokens: 4}
+
+	var list struct {
+		Active []thread.IndexEntry `json:"active_threads"`
+	}
+	e2eThreadJSON(t, http.MethodGet, restartedHTTP.URL+"/api/threads", "", http.StatusOK, &list)
+	if len(list.Active) != 1 || list.Active[0].ThreadID != threadID ||
+		list.Active[0].TokenUsage.Total != wantTotal ||
+		list.Active[0].TokenUsage.ByModel["primary:primary-model"] != wantPrimary ||
+		list.Active[0].TokenUsage.ByModel["backup:backup-model"] != wantBackup {
+		t.Fatalf("restarted Thread index Usage = %+v", list.Active)
+	}
+
+	var detail struct {
+		TokenUsage thread.UsageAggregate `json:"token_usage"`
+	}
+	e2eThreadJSON(t, http.MethodGet, restartedHTTP.URL+"/api/threads/"+threadID, "", http.StatusOK, &detail)
+	if detail.TokenUsage.Total != wantTotal ||
+		detail.TokenUsage.ByModel["primary:primary-model"] != wantPrimary ||
+		detail.TokenUsage.ByModel["backup:backup-model"] != wantBackup {
+		t.Fatalf("restarted Thread detail Usage = %+v", detail.TokenUsage)
+	}
 }
 
 func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {

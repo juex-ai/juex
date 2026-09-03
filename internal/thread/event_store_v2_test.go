@@ -1,14 +1,218 @@
 package thread
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/llm"
 )
+
+func TestUsageProjectionRecoversCommittedTailExactlyOnce(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected usage projection failure")
+	main.writeProjection = func(string, []byte) error { return injected }
+	_, err = main.RecordProviderUsage("turn-1", "openai:gpt-test", llm.Usage{InputTokens: 11, CachedInputTokens: 4, OutputTokens: 3}, nil)
+	var persistErr *ProjectionPersistError
+	if !errors.As(err, &persistErr) || !errors.Is(err, injected) {
+		t.Fatalf("record Usage error = %v, want committed projection failure", err)
+	}
+	main.writeProjection = nil
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.OpenActive(MainID)
+	if err != nil {
+		t.Fatalf("recover committed Usage tail: %v", err)
+	}
+	projection := reopened.Projection()
+	if projection.TokenUsage.Total != (llm.Usage{InputTokens: 11, CachedInputTokens: 4, OutputTokens: 3}) {
+		t.Fatalf("recovered total = %+v", projection.TokenUsage.Total)
+	}
+	if projection.TokenUsage.ByModel["openai:gpt-test"] != projection.TokenUsage.Total {
+		t.Fatalf("recovered by-model Usage = %+v", projection.TokenUsage.ByModel)
+	}
+	if projection.UsageAggregatedThrough != projection.EventCursor {
+		t.Fatalf("recovered cursors = usage %+v event %+v", projection.UsageAggregatedThrough, projection.EventCursor)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err = store.OpenActive(MainID)
+	if err != nil {
+		t.Fatalf("second reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got := reopened.Projection().TokenUsage.Total; got != projection.TokenUsage.Total {
+		t.Fatalf("second reopen double-counted Usage: got %+v want %+v", got, projection.TokenUsage.Total)
+	}
+}
+
+func TestUsageProjectionRecoversOnlyAfterCursorAcrossGenerations(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := main.RecordProviderUsage("turn-1", "openai:gpt-a", llm.Usage{InputTokens: 5, OutputTokens: 2}, nil); err != nil {
+		t.Fatal(err)
+	}
+	throughFirst := main.Projection()
+	accountedGenerationPath := main.CurrentGenerationJournalPath()
+	if _, err := main.BeginNewGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := main.RecordProviderUsage("turn-2", "anthropic:claude-b", llm.Usage{InputTokens: 7, CachedInputTokens: 3, OutputTokens: 4}, nil); err != nil {
+		t.Fatal(err)
+	}
+	final := main.Projection()
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := final
+	stale.TokenUsage = throughFirst.TokenUsage.Clone()
+	stale.UsageAggregatedThrough = throughFirst.UsageAggregatedThrough
+	writeProjectionForTest(t, main.Dir, stale)
+	accountedData, err := os.ReadFile(accountedGenerationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountedData = []byte(strings.Replace(string(accountedData), "thread.created", "thread.brokenx", 1))
+	if err := os.WriteFile(accountedGenerationPath, accountedData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.OpenActive(MainID)
+	if err != nil {
+		t.Fatalf("recover stale aggregate: %v", err)
+	}
+	projection := reopened.Projection()
+	if projection.TokenUsage.Total != (llm.Usage{InputTokens: 12, CachedInputTokens: 3, OutputTokens: 6}) {
+		t.Fatalf("recovered total = %+v", projection.TokenUsage.Total)
+	}
+	if projection.TokenUsage.ByModel["openai:gpt-a"] != (llm.Usage{InputTokens: 5, OutputTokens: 2}) ||
+		projection.TokenUsage.ByModel["anthropic:claude-b"] != (llm.Usage{InputTokens: 7, CachedInputTokens: 3, OutputTokens: 4}) {
+		t.Fatalf("recovered by-model Usage = %+v", projection.TokenUsage.ByModel)
+	}
+	if projection.UsageAggregatedThrough != projection.EventCursor {
+		t.Fatalf("recovered cursors = usage %+v event %+v", projection.UsageAggregatedThrough, projection.EventCursor)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = store.OpenActive(MainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got := reopened.Projection().TokenUsage.Total; got != projection.TokenUsage.Total {
+		t.Fatalf("second reopen double-counted Usage: got %+v want %+v", got, projection.TokenUsage.Total)
+	}
+}
+
+func TestUsageProjectionRecoversStaleCursorInCurrentGeneration(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := main.RecordProviderUsage("turn-1", "openai:gpt-a", llm.Usage{InputTokens: 3, OutputTokens: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	first := main.Projection()
+	if _, err := main.RecordProviderUsage("turn-2", "openai:gpt-a", llm.Usage{InputTokens: 4, CachedInputTokens: 2, OutputTokens: 2}, nil); err != nil {
+		t.Fatal(err)
+	}
+	final := main.Projection()
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	final.TokenUsage = first.TokenUsage.Clone()
+	final.UsageAggregatedThrough = first.UsageAggregatedThrough
+	writeProjectionForTest(t, main.Dir, final)
+
+	reopened, err := store.OpenActive(MainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	want := llm.Usage{InputTokens: 7, CachedInputTokens: 2, OutputTokens: 3}
+	projection := reopened.Projection()
+	if projection.TokenUsage.Total != want || projection.TokenUsage.ByModel["openai:gpt-a"] != want {
+		t.Fatalf("recovered Usage = %+v", projection.TokenUsage)
+	}
+	if projection.UsageAggregatedThrough != projection.EventCursor {
+		t.Fatalf("recovered cursors = usage %+v event %+v", projection.UsageAggregatedThrough, projection.EventCursor)
+	}
+}
+
+func TestEventStoreRejectsNonUsageUnpublishedTail(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected message projection failure")
+	main.writeProjection = func(string, []byte) error { return injected }
+	if err := main.Append(llm.TextMessage(llm.RoleUser, "unpublished")); !errors.Is(err, injected) {
+		t.Fatalf("append error = %v, want injected projection failure", err)
+	}
+	main.writeProjection = nil
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.OpenActive(MainID); !errors.Is(err, ErrInvalidMetadata) {
+		t.Fatalf("reopen error = %v, want invalid metadata", err)
+	}
+}
+
+func TestUsageRecoveryRejectsCursorThatIsNotARecordBoundary(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := main.RecordProviderUsage("turn-1", "openai:gpt-test", llm.Usage{InputTokens: 4, OutputTokens: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	usageProjection := main.Projection()
+	if err := main.Append(llm.TextMessage(llm.RoleUser, "after Usage")); err != nil {
+		t.Fatal(err)
+	}
+	final := main.Projection()
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	final.UsageAggregatedThrough = usageProjection.UsageAggregatedThrough
+	final.UsageAggregatedThrough.Offset--
+	writeProjectionForTest(t, main.Dir, final)
+	if _, err := store.OpenActive(MainID); !errors.Is(err, ErrCorruptJournal) {
+		t.Fatalf("reopen error = %v, want corrupt Journal", err)
+	}
+}
+
+func writeProjectionForTest(t *testing.T, dir string, projection Projection) {
+	t.Helper()
+	data, err := json.MarshalIndent(projection, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(filepath.Join(dir, projectionFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestThreadPersistsCommitsInGenerationJournals(t *testing.T) {
 	t.Parallel()

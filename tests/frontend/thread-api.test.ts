@@ -87,7 +87,7 @@ test("getThread encodes optional transcript pagination params", async () => {
         generation_id: "1",
         turn_count: 1,
         pending_input_count: 0,
-        token_usage: { input_tokens: 0, output_tokens: 0 },
+        token_usage: { total: { input_tokens: 0, output_tokens: 0 }, by_model: {} },
         items: [],
       }),
       {
@@ -101,6 +101,7 @@ test("getThread encodes optional transcript pagination params", async () => {
     const result = await getThread("thread one", { before: "msg/1", limit: 25 });
     assert.equal(result.retention_state, "active");
     assert.equal(result.execution_state, "idle");
+    assert.deepEqual(result.token_usage, { total: { input_tokens: 0, output_tokens: 0 }, by_model: {} });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -126,7 +127,7 @@ test("getThread treats a null empty timeline as no messages", async () => {
         generation_id: "g000001",
         turn_count: 0,
         pending_input_count: 0,
-        token_usage: { input_tokens: 0, output_tokens: 0 },
+        token_usage: { total: { input_tokens: 0, output_tokens: 0 }, by_model: {} },
         items: null,
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },

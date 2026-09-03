@@ -97,6 +97,11 @@ export interface TokenUsage {
   cached_input_tokens?: number;
 }
 
+export interface ThreadTokenUsage {
+  total: TokenUsage;
+  by_model: Record<string, TokenUsage>;
+}
+
 export interface ContextUsagePart {
   key: string;
   label: string;
@@ -143,7 +148,7 @@ export interface ThreadInfo {
   generation_id: string;
   turns: number;
   pending_input_count: number;
-  token_usage: TokenUsage;
+  token_usage: ThreadTokenUsage;
   context_usage?: ContextUsage;
 }
 
@@ -178,7 +183,7 @@ export interface ThreadListItem {
   generation_count: number;
   current_generation_id: string;
   current_context_tokens: number;
-  token_usage: TokenUsage;
+  token_usage: ThreadTokenUsage;
   thread_revision: number;
 }
 

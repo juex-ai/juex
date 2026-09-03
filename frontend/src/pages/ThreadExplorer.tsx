@@ -193,7 +193,7 @@ function ThreadRow({ thread, archived, busy, mutationsEnabled, onAction, onDelet
   onDelete?: () => void;
 }) {
   const main = thread.thread_id === "0";
-  const usage = thread.token_usage;
+  const usage = thread.token_usage.total;
   return (
     <div className="group/thread-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 hover:bg-muted/60">
       <Link to={threadHref(thread.thread_id)} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md px-1 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/35">

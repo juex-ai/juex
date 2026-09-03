@@ -2574,7 +2574,7 @@ func TestCompact_RecordsUsageAndActiveContextStats(t *testing.T) {
 		t.Fatal(err)
 	}
 	info := eng.Thread.Info()
-	if info.TokenUsage.InputTokens != 11 || info.TokenUsage.OutputTokens != 3 {
+	if info.TokenUsage.Total.InputTokens != 11 || info.TokenUsage.Total.OutputTokens != 3 {
 		t.Fatalf("token usage = %+v", info.TokenUsage)
 	}
 	if info.ContextUsage == nil {
@@ -2616,14 +2616,53 @@ func TestTurn_PlainResponse(t *testing.T) {
 	if len(eng.Thread.History) != 2 {
 		t.Fatalf("history len = %d", len(eng.Thread.History))
 	}
-	if got := eng.Thread.Info().TokenUsage; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
+	if got := eng.Thread.Info().TokenUsage.Total; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
 		t.Fatalf("thread token usage = %+v", got)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["mock:mock"]; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
+		t.Fatalf("thread token usage by model = %+v", eng.Thread.TokenUsage.ByModel)
 	}
 	if responded.TokenUsage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
 		t.Fatalf("event usage = %+v", responded.TokenUsage)
 	}
 	if responded.MessageID == "" || responded.MessageID != eng.Thread.History[1].ID {
 		t.Fatalf("responded message id = %q, history id = %q", responded.MessageID, eng.Thread.History[1].ID)
+	}
+}
+
+func TestTurn_RecordsEachIterationUsageForTheServingModel(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type: llm.BlockToolUse, ToolUseID: "tool-1", ToolName: "echo", Input: map[string]any{"value": "first"},
+			}}},
+			StopReason: llm.StopToolUse,
+			Usage:      llm.Usage{InputTokens: 5, CachedInputTokens: 2, OutputTokens: 1},
+		},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 7, OutputTokens: 2}},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{Name: "echo", Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil }})
+
+	if out, err := eng.Turn(context.Background(), "use echo"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	want := llm.Usage{InputTokens: 12, CachedInputTokens: 2, OutputTokens: 3}
+	if got := eng.Thread.TokenUsageSnapshot(); got != want {
+		t.Fatalf("total Usage = %+v, want %+v", got, want)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["mock:mock"]; got != want {
+		t.Fatalf("by-model Usage = %+v, want %+v", eng.Thread.TokenUsage.ByModel, want)
+	}
+	data, err := os.ReadFile(eng.Thread.CurrentGenerationJournalPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), `"type":"usage.recorded"`); got != 2 {
+		t.Fatalf("Usage fact count = %d, want 2", got)
+	}
+	if got := strings.Count(string(data), `"turn_id":"`); got < 2 || strings.Count(string(data), `"model_ref":"mock:mock"`) != 2 {
+		t.Fatalf("Usage facts lack Turn/model identity: %s", data)
 	}
 }
 
@@ -3721,6 +3760,7 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	eng.ContextWindow = 5000
 	eng.Compaction.ReserveTokens = 1000
 	eng.Compaction.SummaryMaxTokens = 1000
+	originalGenerationPath := eng.Thread.CurrentGenerationJournalPath()
 	var retry ContextCompactSummaryRetryPayload
 	bus.Subscribe("context.compact.summary_retry", func(e events.Event) {
 		retry = e.Payload.(ContextCompactSummaryRetryPayload)
@@ -3745,6 +3785,20 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	usage := eng.Thread.TokenUsageSnapshot()
 	if usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["thinking:model"]; got != usage {
+		t.Fatalf("by-model Usage = %+v", eng.Thread.TokenUsage.ByModel)
+	}
+	originalData, err := os.ReadFile(originalGenerationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentData, err := os.ReadFile(eng.Thread.CurrentGenerationJournalPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(originalData), `"type":"usage.recorded"`) != 2 || strings.Contains(string(currentData), `"type":"usage.recorded"`) {
+		t.Fatalf("compaction Usage did not remain in original Generation: old=%s new=%s", originalData, currentData)
 	}
 }
 
@@ -4153,6 +4207,12 @@ func TestCompactFallsBackAfterEmptySummaryRetry(t *testing.T) {
 	if usage != (llm.Usage{InputTokens: 18, OutputTokens: 4}) {
 		t.Fatalf("token usage = %+v, want all summary attempts", usage)
 	}
+	if got := eng.Thread.TokenUsage.ByModel["summary:model"]; got != (llm.Usage{InputTokens: 11, OutputTokens: 2}) {
+		t.Fatalf("summary-model Usage = %+v", eng.Thread.TokenUsage.ByModel)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["main:model"]; got != (llm.Usage{InputTokens: 7, OutputTokens: 2}) {
+		t.Fatalf("fallback-model Usage = %+v", eng.Thread.TokenUsage.ByModel)
+	}
 }
 
 func TestCompactFallsBackWhenEmptySummaryRetryFails(t *testing.T) {
@@ -4170,7 +4230,7 @@ func TestCompactFallsBackWhenEmptySummaryRetryFails(t *testing.T) {
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "first thought"}}},
 				Usage:   llm.Usage{InputTokens: 5, OutputTokens: 1},
 			}},
-			{err: errors.New("retry unavailable")},
+			{response: llm.Response{Usage: llm.Usage{InputTokens: 6, OutputTokens: 1}}, err: errors.New("retry unavailable")},
 		},
 	}
 	eng, bus := newEngine(t, main, false)
@@ -4193,8 +4253,11 @@ func TestCompactFallsBackWhenEmptySummaryRetryFails(t *testing.T) {
 	if !strings.Contains(fallback.Error, "retry unavailable") {
 		t.Fatalf("fallback payload = %+v", fallback)
 	}
-	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 12, OutputTokens: 3}) {
-		t.Fatalf("token usage = %+v, want successful attempts only", usage)
+	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 18, OutputTokens: 4}) {
+		t.Fatalf("token usage = %+v, want errored attempt included", usage)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["summary:model"]; got != (llm.Usage{InputTokens: 11, OutputTokens: 2}) {
+		t.Fatalf("summary-model Usage = %+v, want errored retry included", eng.Thread.TokenUsage.ByModel)
 	}
 }
 

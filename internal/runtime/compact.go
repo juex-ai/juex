@@ -197,7 +197,6 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
 	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions, contextWindow, reservedModelRef)
 	if err != nil {
-		threadState.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
@@ -271,7 +270,6 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 		TailStartMessageID: selection.TailStartMessageID,
 		FirstKeptMessageID: selection.FirstKeptMessageID,
 	}
-	threadState.RecordResponseUsage(generation.Usage, nil)
 	if err := e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,
 		Reason:             result.Reason,

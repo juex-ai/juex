@@ -691,8 +691,8 @@ func TestAnthropic_UsesMessageDeltaInputUsageWhenMessageStartIsZero(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Usage.InputTokens != 178 || resp.Usage.CachedInputTokens != 50 || resp.Usage.OutputTokens != 5 {
-		t.Fatalf("usage = %+v, want input=178 cached=50 output=5", resp.Usage)
+	if resp.Usage.InputTokens != 235 || resp.Usage.CachedInputTokens != 50 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want input=235 cached=50 output=5", resp.Usage)
 	}
 }
 
@@ -712,8 +712,8 @@ func TestAnthropic_UsesMessageDeltaCacheUsageWhenInputIsZero(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Usage.InputTokens != 0 || resp.Usage.CachedInputTokens != 50 || resp.Usage.OutputTokens != 5 {
-		t.Fatalf("usage = %+v, want input=0 cached=50 output=5", resp.Usage)
+	if resp.Usage.InputTokens != 57 || resp.Usage.CachedInputTokens != 50 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want input=57 cached=50 output=5", resp.Usage)
 	}
 }
 
@@ -733,8 +733,8 @@ func TestAnthropic_MessageStartInputUsageTakesPrecedenceOverDelta(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Usage.InputTokens != 1234 || resp.Usage.CachedInputTokens != 64 || resp.Usage.OutputTokens != 5 {
-		t.Fatalf("usage = %+v, want official start usage input=1234 cached=64 output=5", resp.Usage)
+	if resp.Usage.InputTokens != 1298 || resp.Usage.CachedInputTokens != 64 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want official start usage input=1298 cached=64 output=5", resp.Usage)
 	}
 }
 
@@ -754,8 +754,8 @@ func TestAnthropic_MessageStartCacheUsageTakesPrecedenceWhenInputIsZero(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Usage.InputTokens != 0 || resp.Usage.CachedInputTokens != 64 || resp.Usage.OutputTokens != 5 {
-		t.Fatalf("usage = %+v, want official start usage input=0 cached=64 output=5", resp.Usage)
+	if resp.Usage.InputTokens != 71 || resp.Usage.CachedInputTokens != 64 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want official start usage input=71 cached=64 output=5", resp.Usage)
 	}
 }
 
@@ -2078,7 +2078,7 @@ func TestOpenAI_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedTokens(t *test
 		w.Write([]byte(`{
 			"id":"chatcmpl_1","object":"chat.completion","model":"gpt-test",
 			"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],
-			"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":80}}
+			"usage":{"prompt_tokens":0,"completion_tokens":5,"total_tokens":5,"prompt_tokens_details":{"cached_tokens":80}}
 		}`))
 	}))
 	defer srv.Close()
@@ -2096,8 +2096,8 @@ func TestOpenAI_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedTokens(t *test
 	if capturedBody["prompt_cache_key"] != "juex-cache-key" {
 		t.Fatalf("prompt_cache_key = %+v", capturedBody["prompt_cache_key"])
 	}
-	if resp.Usage.CachedInputTokens != 80 {
-		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
+	if resp.Usage.InputTokens != 80 || resp.Usage.CachedInputTokens != 80 {
+		t.Fatalf("usage = %+v, want input=80 cached=80", resp.Usage)
 	}
 }
 
@@ -2669,7 +2669,7 @@ func TestOpenAIResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedToken
 		w.Write([]byte(`{
 			"id":"resp_1","object":"response","model":"gpt-test","status":"completed",
 			"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],
-			"usage":{"input_tokens":120,"output_tokens":6,"total_tokens":126,"input_tokens_details":{"cached_tokens":96}}
+			"usage":{"input_tokens":0,"output_tokens":6,"total_tokens":6,"input_tokens_details":{"cached_tokens":96}}
 		}`))
 	}))
 	defer srv.Close()
@@ -2687,8 +2687,8 @@ func TestOpenAIResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedToken
 	if capturedBody["prompt_cache_key"] != "juex-cache-key" {
 		t.Fatalf("prompt_cache_key = %+v", capturedBody["prompt_cache_key"])
 	}
-	if resp.Usage.CachedInputTokens != 96 {
-		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
+	if resp.Usage.InputTokens != 96 || resp.Usage.CachedInputTokens != 96 {
+		t.Fatalf("usage = %+v, want input=96 cached=96", resp.Usage)
 	}
 }
 
@@ -3103,7 +3103,7 @@ func TestOpenAICodexResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCached
 		buf, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(buf, &capturedBody)
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":140,"output_tokens":7,"total_tokens":147,"input_tokens_details":{"cached_tokens":112}}}}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":0,"output_tokens":7,"total_tokens":7,"input_tokens_details":{"cached_tokens":112}}}}`+"\n\n")
 	}))
 	defer srv.Close()
 
@@ -3123,8 +3123,8 @@ func TestOpenAICodexResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCached
 	if capturedBody["prompt_cache_retention"] != "24h" {
 		t.Fatalf("prompt_cache_retention = %+v", capturedBody["prompt_cache_retention"])
 	}
-	if resp.Usage.CachedInputTokens != 112 {
-		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
+	if resp.Usage.InputTokens != 112 || resp.Usage.CachedInputTokens != 112 {
+		t.Fatalf("usage = %+v, want input=112 cached=112", resp.Usage)
 	}
 }
 

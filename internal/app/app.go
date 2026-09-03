@@ -1379,7 +1379,7 @@ func (a *App) TokenUsage() llm.Usage {
 	if !ok {
 		return llm.Usage{}
 	}
-	return info.TokenUsage
+	return info.TokenUsage.Total
 }
 
 func (a *App) MCPStatus() MCPStatus {

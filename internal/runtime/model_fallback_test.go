@@ -26,6 +26,7 @@ func TestTurnMultiLevelFallbackUsesRealTransitionsAndFinalServingNotice(t *testi
 	last := &fallbackProvider{name: "c:model", results: []fallbackProviderResult{{response: llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "from c"),
 		StopReason: llm.StopEndTurn,
+		Usage:      llm.Usage{InputTokens: 9, OutputTokens: 2},
 	}}}}
 	eng, bus := newEngine(t, primary, false)
 	eng.NotifyModelChanges = true
@@ -68,6 +69,9 @@ func TestTurnMultiLevelFallbackUsesRealTransitionsAndFinalServingNotice(t *testi
 	}
 	if notices != 1 || history[len(history)-1].Model != "c:model" {
 		t.Fatalf("history notices=%d tail=%+v", notices, history[len(history)-1])
+	}
+	if got := eng.Thread.TokenUsage.ByModel; len(got) != 1 || got["c:model"] != (llm.Usage{InputTokens: 9, OutputTokens: 2}) {
+		t.Fatalf("fallback winner Usage = %+v", got)
 	}
 }
 
@@ -225,7 +229,7 @@ func TestTurnFailedRecoveryProbeDoesNotPersistFalseNotice(t *testing.T) {
 	}
 }
 
-func TestTurnFallbackBatchFailureLeavesNoNoticeUsageOrRespondedEvent(t *testing.T) {
+func TestTurnFallbackBatchFailureRecordsUsageBeforeResponsePersistence(t *testing.T) {
 	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{err: errors.New("status 503")}}}
 	invalid := llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 		Type:  llm.BlockToolUse,
@@ -257,8 +261,11 @@ func TestTurnFallbackBatchFailureLeavesNoNoticeUsageOrRespondedEvent(t *testing.
 			t.Fatalf("orphan notice = %+v", message)
 		}
 	}
-	if responded != 0 || !eng.Thread.TokenUsage.IsZero() {
+	if responded != 0 || eng.Thread.TokenUsageSnapshot() != (llm.Usage{InputTokens: 10, OutputTokens: 2}) {
 		t.Fatalf("responded=%d usage=%+v", responded, eng.Thread.TokenUsage)
+	}
+	if got := eng.Thread.TokenUsage.ByModel["backup:model"]; got != (llm.Usage{InputTokens: 10, OutputTokens: 2}) {
+		t.Fatalf("by-model usage = %+v", eng.Thread.TokenUsage.ByModel)
 	}
 }
 

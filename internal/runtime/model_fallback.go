@@ -78,6 +78,20 @@ func candidateMaxOutputTokens(candidate ModelCandidate, fallback int) int {
 	return fallback
 }
 
+func usageModelRef(candidate ModelCandidate) string {
+	ref := strings.TrimSpace(candidate.Ref)
+	if providerID, modelID, ok := strings.Cut(ref, ":"); ok && providerID != "" && modelID != "" {
+		return ref
+	}
+	// Provider-only Engine construction is a test and embedding seam. Production
+	// candidates carry their configured canonical ref explicitly.
+	name := "provider"
+	if candidate.Provider != nil && strings.TrimSpace(candidate.Provider.Name()) != "" {
+		name = strings.TrimSpace(candidate.Provider.Name())
+	}
+	return name + ":" + name
+}
+
 func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID string, prepared preparedTurnContext, base providerTurnRequest, candidate ModelCandidate, notice *llm.Message, allowPreflightCompaction bool) (providerTurnRequest, error) {
 	if err := cancellation.ContextError(ctx); err != nil {
 		return base, err

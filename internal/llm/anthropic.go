@@ -274,11 +274,11 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 	return Response{
 		Message:    out,
 		StopReason: mapAnthropicStop(string(msg.StopReason)),
-		Usage: Usage{
-			InputTokens:       int(msg.Usage.InputTokens),
-			OutputTokens:      int(msg.Usage.OutputTokens),
-			CachedInputTokens: int(msg.Usage.CacheReadInputTokens),
-		},
+		Usage: canonicalUsage(
+			int(msg.Usage.InputTokens+msg.Usage.CacheReadInputTokens+msg.Usage.CacheCreationInputTokens),
+			int(msg.Usage.OutputTokens),
+			int(msg.Usage.CacheReadInputTokens),
+		),
 	}
 }
 

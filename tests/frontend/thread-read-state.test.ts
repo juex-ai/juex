@@ -884,7 +884,7 @@ function thread(id: string, messages: Message[]): ThreadShowResponse {
     last_active_at: "2026-06-15T00:00:00Z",
     turns: 1,
     preview: "preview",
-    token_usage: { input_tokens: 1, output_tokens: 1 },
+    token_usage: { total: { input_tokens: 1, output_tokens: 1 }, by_model: {} },
     event_cursor: "",
     messages,
   };

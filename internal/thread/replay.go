@@ -37,6 +37,7 @@ func applyCommit(threadID string, state *ReplayState, commit scannedCommit) erro
 	state.Projection.EventCursor.GenerationID = commit.GenerationID
 	state.Projection.EventCursor.Seq = commit.Seq
 	state.Projection.EventCursor.Offset = commit.EndOffset
+	state.Projection.UsageAggregatedThrough = state.Projection.EventCursor
 	return nil
 }
 
@@ -86,6 +87,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		}
 		p.Generations = []GenerationProjection{p.CurrentGeneration}
 		p.Counts.GenerationCount = 1
+		p.TokenUsage.ByModel = make(map[string]llm.Usage)
 	case FactMessageAppended:
 		if fact.GenerationID != p.CurrentGeneration.ID {
 			return fmt.Errorf("%w: message generation %q is not current %q", ErrInvalidTransition, fact.GenerationID, p.CurrentGeneration.ID)
@@ -142,7 +144,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		}
 	case FactUsageRecorded:
 		if fact.Usage != nil {
-			p.TokenUsage.Add(*fact.Usage)
+			p.TokenUsage.Add(fact.ModelRef, *fact.Usage)
 		}
 		if fact.ContextUsage != nil {
 			usage := fact.ContextUsage

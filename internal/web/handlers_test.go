@@ -197,6 +197,60 @@ func TestThreadAPIEmptyWorkerTimelineSerializesAsArray(t *testing.T) {
 	}
 }
 
+func TestThreadAPICopiesModelAwareUsageFromMetadataAndIndex(t *testing.T) {
+	server := newTestServer(t)
+	httpServer := httptest.NewServer(server.APIHandler())
+	defer httpServer.Close()
+
+	var created thread.Info
+	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{"alias":"usage-worker"}`, http.StatusCreated, &created)
+	store := thread.NewStore(server.opts.Cfg.RuntimePaths().StateDir)
+	target, err := store.OpenActive(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.RecordProviderUsage("turn-1", "openai:gpt-a", llm.Usage{InputTokens: 8, CachedInputTokens: 3, OutputTokens: 2}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.RecordProviderUsage("turn-2", "anthropic:claude-b", llm.Usage{InputTokens: 5, OutputTokens: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var list threadListResponse
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads", "", http.StatusOK, &list)
+	var indexed *thread.IndexEntry
+	for index := range list.Active {
+		if list.Active[index].ThreadID == created.ID {
+			indexed = &list.Active[index]
+			break
+		}
+	}
+	if indexed == nil {
+		t.Fatalf("worker absent from list: %+v", list.Active)
+	}
+	wantTotal := llm.Usage{InputTokens: 13, CachedInputTokens: 3, OutputTokens: 3}
+	if indexed.TokenUsage.Total != wantTotal ||
+		indexed.TokenUsage.ByModel["openai:gpt-a"] != (llm.Usage{InputTokens: 8, CachedInputTokens: 3, OutputTokens: 2}) ||
+		indexed.TokenUsage.ByModel["anthropic:claude-b"] != (llm.Usage{InputTokens: 5, OutputTokens: 1}) {
+		t.Fatalf("indexed Usage = %+v", indexed.TokenUsage)
+	}
+
+	var detail threadShowResponse
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID, "", http.StatusOK, &detail)
+	if detail.TokenUsage.Total != wantTotal || len(detail.TokenUsage.ByModel) != 2 {
+		t.Fatalf("detail Usage = %+v", detail.TokenUsage)
+	}
+
+	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/archive", "", http.StatusOK, nil)
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads", "", http.StatusOK, &list)
+	if len(list.Archived) != 1 || list.Archived[0].ThreadID != created.ID || list.Archived[0].TokenUsage.Total != wantTotal || len(list.Archived[0].TokenUsage.ByModel) != 2 {
+		t.Fatalf("archived indexed Usage = %+v", list.Archived)
+	}
+}
+
 func TestThreadAPICreatesNestedWorkerWithExplicitParent(t *testing.T) {
 	server := newTestServer(t)
 	httpServer := httptest.NewServer(server.APIHandler())
