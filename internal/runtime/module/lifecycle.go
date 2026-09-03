@@ -31,6 +31,77 @@ type ThreadQuiescer interface {
 	QuiesceThread(context.Context) error
 }
 
+// ContextRenewalClear is a staged module-state clear. Finalize is used after
+// the Generation boundary commits; Rollback is used when it does not.
+type ContextRenewalClear struct {
+	Finalize func() error
+	Rollback func() error
+}
+
+// ContextRenewalCleaner owns module state that must be cleared around a new
+// Context Generation commit. Only enabled modules exist in the Set, so
+// disabled module files remain untouched.
+type ContextRenewalCleaner interface {
+	ClearContextForRenewal(context.Context, string) (ContextRenewalClear, error)
+}
+
+// ClearContextForRenewal invokes enabled Thread modules in registration order
+// and stops before the Generation boundary if any owner cannot stage its clear.
+func ClearContextForRenewal(ctx context.Context, set *Set, generationID string) (ContextRenewalClear, error) {
+	if set == nil {
+		return noOpContextRenewalClear(), nil
+	}
+	ctx = nonNilContext(ctx)
+	finalizers := make([]func() error, 0)
+	rollbacks := make([]func() error, 0)
+	for _, mod := range set.Modules() {
+		cleaner, ok := mod.(ContextRenewalCleaner)
+		if !ok {
+			continue
+		}
+		clear, err := cleaner.ClearContextForRenewal(ctx, generationID)
+		if err != nil {
+			return ContextRenewalClear{}, errors.Join(
+				fmt.Errorf("runtime module %q clear context state: %w", mod.ID(), err),
+				runContextRenewalActionsReverse(rollbacks),
+			)
+		}
+		finalizers = append(finalizers, clear.Finalize)
+		rollbacks = append(rollbacks, clear.Rollback)
+	}
+	return ContextRenewalClear{
+		Finalize: func() error { return runContextRenewalActions(finalizers) },
+		Rollback: func() error { return runContextRenewalActionsReverse(rollbacks) },
+	}, nil
+}
+
+func noOpContextRenewalClear() ContextRenewalClear {
+	return ContextRenewalClear{
+		Finalize: func() error { return nil },
+		Rollback: func() error { return nil },
+	}
+}
+
+func runContextRenewalActions(actions []func() error) error {
+	var err error
+	for _, action := range actions {
+		if action != nil {
+			err = errors.Join(err, action())
+		}
+	}
+	return err
+}
+
+func runContextRenewalActionsReverse(actions []func() error) error {
+	var err error
+	for index := len(actions) - 1; index >= 0; index-- {
+		if actions[index] != nil {
+			err = errors.Join(err, actions[index]())
+		}
+	}
+	return err
+}
+
 // ContextRenewalObserver receives the post-commit boundary created by New.
 // It is intentionally notification-only: the Journal transition is already
 // durable, so observers must update derived or transient state without trying

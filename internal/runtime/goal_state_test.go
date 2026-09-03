@@ -60,6 +60,29 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 	}
 }
 
+func TestGoalStateStoreRejectsInvalidAuthoritativeFile(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "unknown field", body: `{"version":1,"description":"ship","status":"in_progress","updated_at":"2026-09-03T00:00:00Z","extra":true}`, want: "unknown field"},
+		{name: "unsupported version", body: `{"version":2,"description":"ship","status":"in_progress","updated_at":"2026-09-03T00:00:00Z"}`, want: "unsupported version 2"},
+		{name: "unknown status", body: `{"version":1,"description":"ship","status":"paused","updated_at":"2026-09-03T00:00:00Z"}`, want: "invalid goal status"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
+			if err := os.WriteFile(store.Path, []byte(test.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Snapshot(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Snapshot() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestGoalStateStorePreservesAndRedactsLongAcceptance(t *testing.T) {
 	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
 	acceptance := strings.Repeat("required-check ", 100) + "api_key=secret final-check-must-survive"

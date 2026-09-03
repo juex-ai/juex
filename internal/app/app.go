@@ -398,6 +398,12 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 		createdApp = nil
 	}()
+	if err := workmem.RecoverContextRenewalFiles(
+		threadState.Dir,
+		threadState.Projection().CurrentGeneration.ID,
+	); err != nil {
+		return nil, fmt.Errorf("app: recover Context renewal module state: %w", err)
+	}
 	eventCatalog := eventcatalog.Default()
 	eventSink = events.NewDurableSink(threadState)
 	eventSink.SetCatalog(eventCatalog)
@@ -702,14 +708,14 @@ func goalStateStore(threadState *thread.Thread) *workmem.GoalStateStore {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewThreadGoalStateStore(threadState, workmem.GoalStateOptions{})
+	return workmem.NewGoalStateStore(threadState.Dir, workmem.GoalStateOptions{})
 }
 
 func notesStore(threadState *thread.Thread) *workmem.NotesStore {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewThreadNotesStore(threadState)
+	return workmem.NewNotesStore(threadState.Dir)
 }
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {

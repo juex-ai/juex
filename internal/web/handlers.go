@@ -189,7 +189,12 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	goal, notes := threadStateStatus(target, nil)
+	goal, notes := threadStateStatus(
+		target,
+		nil,
+		s.opts.Cfg.ModuleEnabled(string(runtime.GoalModuleID)),
+		s.opts.Cfg.ModuleEnabled(string(runtime.NotesModuleID)),
+	)
 	info := target.Info()
 	if err := target.Close(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -201,12 +206,18 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 	})
 }
 
-func threadStateStatus(target *thread.Thread, active *activeThread) (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
+func threadStateStatus(target *thread.Thread, active *activeThread, goalEnabled, notesEnabled bool) (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
 	if active != nil && active.app != nil {
 		return active.app.ThreadStateStatus()
 	}
-	goal, _ := workmem.NewThreadGoalStateStore(target, workmem.GoalStateOptions{}).StatusSnapshot()
-	notes, _ := workmem.NewThreadNotesStore(target).StatusSnapshot()
+	var goal *workmem.GoalStatusSnapshot
+	var notes *workmem.NotesSnapshot
+	if target != nil && goalEnabled {
+		goal, _ = workmem.NewGoalStateStore(target.Dir, workmem.GoalStateOptions{}).StatusSnapshot()
+	}
+	if target != nil && notesEnabled {
+		notes, _ = workmem.NewNotesStore(target.Dir).StatusSnapshot()
+	}
 	return goal, notes
 }
 

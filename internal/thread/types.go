@@ -40,10 +40,6 @@ const (
 	FactThreadSettled      = "thread.settled"
 	FactContextRenewed     = "context.renewed"
 	FactContextCompacted   = "context.compacted"
-	FactGoalUpdated        = "goal.updated"
-	FactGoalCleared        = "goal.cleared"
-	FactNotesUpdated       = "notes.updated"
-	FactNotesCleared       = "notes.cleared"
 	FactUsageRecorded      = "usage.recorded"
 	FactProjectionCheck    = "projection.checkpoint"
 )
@@ -95,9 +91,6 @@ type Fact struct {
 	Summary          *llm.Message      `json:"summary,omitempty"`
 	Automatic        bool              `json:"automatic,omitempty"`
 	Error            string            `json:"error,omitempty"`
-	Goal             json.RawMessage   `json:"goal,omitempty"`
-	Notes            *string           `json:"notes,omitempty"`
-	NotesUpdatedAt   *Timestamp        `json:"notes_updated_at,omitempty"`
 	Usage            *llm.Usage        `json:"usage,omitempty"`
 	ContextUsage     *llm.ContextUsage `json:"context_usage,omitempty"`
 	Checkpoint       *ReplayCheckpoint `json:"checkpoint,omitempty"`
@@ -160,9 +153,6 @@ type Projection struct {
 	CurrentGeneration GenerationProjection   `json:"current_generation"`
 	Generations       []GenerationProjection `json:"generations"`
 	Counts            Counts                 `json:"counts"`
-	Goal              json.RawMessage        `json:"goal,omitempty"`
-	Notes             string                 `json:"notes,omitempty"`
-	NotesUpdatedAt    *Timestamp             `json:"notes_updated_at,omitempty"`
 	TokenUsage        llm.Usage              `json:"token_usage"`
 	ContextUsage      *ContextProjection     `json:"context_usage,omitempty"`
 	LastActivityAt    Timestamp              `json:"last_activity_at"`

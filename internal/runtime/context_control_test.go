@@ -2,13 +2,99 @@ package runtime
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
 )
+
+func TestNewContextDoesNotRestoreStateAfterJournalCommit(t *testing.T) {
+	engine, _ := newEngine(t, &mockProvider{}, false)
+	store := thread.NewStore(t.TempDir())
+	threadState, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = threadState.Close() })
+	engine.Thread = threadState
+	goal := workmem.NewGoalStateStore(engine.Thread.Dir, workmem.GoalStateOptions{})
+	notes := workmem.NewNotesStore(engine.Thread.Dir)
+	if _, err := goal.Create("finish the committed renewal", "do not restore old state"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := notes.Update("- [ ] clear after the boundary"); err != nil {
+		t.Fatal(err)
+	}
+	installThreadStateModulesWithStores(t, engine, goal, notes)
+
+	indexPath := store.IndexPath()
+	if err := os.Remove(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(indexPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(indexPath, "block"), []byte("prevent index replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = engine.NewContext(context.Background())
+	var persistErr *thread.ProjectionPersistError
+	if !errors.As(err, &persistErr) {
+		t.Fatalf("NewContext() error = %v, want ProjectionPersistError", err)
+	}
+	if got := engine.Thread.Projection().CurrentGeneration.ID; got != "g000002" {
+		t.Fatalf("committed Generation = %q, want g000002", got)
+	}
+	if snapshot, snapshotErr := goal.StatusSnapshot(); snapshotErr != nil || snapshot != nil {
+		t.Fatalf("Goal restored after committed boundary: %+v, %v", snapshot, snapshotErr)
+	}
+	if snapshot, snapshotErr := notes.StatusSnapshot(); snapshotErr != nil || snapshot != nil {
+		t.Fatalf("Notes restored after committed boundary: %+v, %v", snapshot, snapshotErr)
+	}
+}
+
+func TestNewContextStopsBeforeGenerationWhenModuleStateCannotClear(t *testing.T) {
+	engine, _ := newEngine(t, &mockProvider{}, false)
+	goal := workmem.NewGoalStateStore(engine.Thread.Dir, workmem.GoalStateOptions{})
+	if _, err := goal.Create("finish the migration", "module files remain authoritative"); err != nil {
+		t.Fatal(err)
+	}
+	goalBefore, err := os.ReadFile(goal.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notesPath := filepath.Join(engine.Thread.Dir, workmem.NotesFileName)
+	if err := os.Mkdir(notesPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(notesPath, "block"), []byte("keep directory non-empty"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installThreadStateModulesWithStores(t, engine, goal, workmem.NewNotesStore(engine.Thread.Dir))
+
+	err = engine.NewContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `module "notes" clear context state`) {
+		t.Fatalf("NewContext() error = %v", err)
+	}
+	goalAfter, err := os.ReadFile(goal.Path)
+	if err != nil {
+		t.Fatalf("read restored Goal state: %v", err)
+	}
+	if string(goalAfter) != string(goalBefore) {
+		t.Fatalf("restored Goal state = %q, want %q", goalAfter, goalBefore)
+	}
+	projection := engine.Thread.Projection()
+	if projection.CurrentGeneration.ID != thread.InitialGeneration || projection.Counts.GenerationCount != 1 {
+		t.Fatalf("failed clear created Generation: %+v", projection.CurrentGeneration)
+	}
+}
 
 func TestContextNewToolCreatesGenerationAndEndsTurn(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{

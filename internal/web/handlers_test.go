@@ -15,9 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
@@ -243,6 +245,21 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 
 	var created thread.Info
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{}`, http.StatusCreated, &created)
+	activeDir := filepath.Join(server.opts.Cfg.RuntimePaths().StateDir, "threads", created.ID)
+	goalStore := workmem.NewGoalStateStore(activeDir, workmem.GoalStateOptions{})
+	notesStore := workmem.NewNotesStore(activeDir)
+	if _, err := goalStore.Create("preserve worker state", "archive round trip succeeds"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := notesStore.Update("- [ ] verify archived state"); err != nil {
+		t.Fatal(err)
+	}
+	var activeDetail threadShowResponse
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID, "", http.StatusOK, &activeDetail)
+	if activeDetail.Goal == nil || activeDetail.Goal.Description != "preserve worker state" ||
+		activeDetail.Notes == nil || activeDetail.Notes.Content != "- [ ] verify archived state" {
+		t.Fatalf("active module state = Goal:%+v Notes:%+v", activeDetail.Goal, activeDetail.Notes)
+	}
 	var renamed thread.Info
 	doJSON(t, http.MethodPatch, httpServer.URL+"/api/threads/"+created.ID, `{"alias":"renamed"}`, http.StatusOK, &renamed)
 	if renamed.Alias != "renamed" {
@@ -256,6 +273,28 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 		list.Archived[0].RetentionState != thread.RetentionArchived || list.Archived[0].ExecutionState != "" {
 		t.Fatalf("archived list = %+v", list)
 	}
+	var archivedDetail threadShowResponse
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID, "", http.StatusOK, &archivedDetail)
+	if archivedDetail.Goal == nil || archivedDetail.Goal.Description != "preserve worker state" ||
+		archivedDetail.Notes == nil || archivedDetail.Notes.Content != "- [ ] verify archived state" {
+		t.Fatalf("archived module state = Goal:%+v Notes:%+v", archivedDetail.Goal, archivedDetail.Notes)
+	}
+	archivedDir := filepath.Join(server.opts.Cfg.RuntimePaths().StateDir, "archive", "threads", created.ID)
+	for _, name := range []string{"goal_state.json", "notes.md"} {
+		if _, err := os.Stat(filepath.Join(archivedDir, name)); err != nil {
+			t.Fatalf("archived module file %s: %v", name, err)
+		}
+	}
+	server.opts.Cfg.Modules = config.ModulePolicy{
+		"goal":  {Enabled: false},
+		"notes": {Enabled: false},
+	}
+	var disabledDetail threadShowResponse
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID, "", http.StatusOK, &disabledDetail)
+	if disabledDetail.Goal != nil || disabledDetail.Notes != nil {
+		t.Fatalf("disabled archived module state leaked: Goal:%+v Notes:%+v", disabledDetail.Goal, disabledDetail.Notes)
+	}
+	server.opts.Cfg.Modules = nil
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/inputs", `{"prompt":"no"}`, http.StatusConflict, nil)
 	var archivedRenamed thread.Info
 	doJSON(t, http.MethodPatch, httpServer.URL+"/api/threads/"+created.ID, `{"alias":"archived-renamed"}`, http.StatusOK, &archivedRenamed)
@@ -272,6 +311,11 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 	if restored.ArchivedAt != nil || restored.GenerationID != created.GenerationID || restored.Alias != "archived-renamed" ||
 		restored.RetentionState != thread.RetentionActive || restored.ExecutionState != thread.ExecutionIdle {
 		t.Fatalf("unarchived Thread changed generation = %+v", restored)
+	}
+	for _, name := range []string{"goal_state.json", "notes.md"} {
+		if _, err := os.Stat(filepath.Join(activeDir, name)); err != nil {
+			t.Fatalf("unarchived module file %s: %v", name, err)
+		}
 	}
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/archive", "", http.StatusOK, nil)
 	doJSON(t, http.MethodDelete, httpServer.URL+"/api/threads/"+created.ID, "", http.StatusOK, nil)

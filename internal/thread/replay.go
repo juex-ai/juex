@@ -1,7 +1,6 @@
 package thread
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -255,29 +254,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		if fact.Type == FactContextRenewed {
 			state.ContextUsage = nil
 			p.ContextUsage = nil
-			p.Goal = nil
-			p.Notes = ""
-			p.NotesUpdatedAt = nil
 		}
-	case FactGoalUpdated:
-		if len(bytes.TrimSpace(fact.Goal)) == 0 || bytes.Equal(bytes.TrimSpace(fact.Goal), []byte("null")) {
-			return fmt.Errorf("%w: goal is empty", ErrInvalidTransition)
-		}
-		p.Goal = append(json.RawMessage(nil), fact.Goal...)
-	case FactGoalCleared:
-		p.Goal = nil
-	case FactNotesUpdated:
-		p.Notes = *fact.Notes
-		if fact.NotesUpdatedAt != nil {
-			updatedAt := *fact.NotesUpdatedAt
-			p.NotesUpdatedAt = &updatedAt
-		} else {
-			updatedAt := commit.At
-			p.NotesUpdatedAt = &updatedAt
-		}
-	case FactNotesCleared:
-		p.Notes = ""
-		p.NotesUpdatedAt = nil
 	case FactUsageRecorded:
 		if fact.Usage != nil {
 			p.TokenUsage.Add(*fact.Usage)

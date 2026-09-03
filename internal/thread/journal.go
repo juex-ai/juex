@@ -375,10 +375,6 @@ func validateFactShape(threadID string, fact Fact) error {
 		if fact.Type == FactContextCompacted && fact.Summary == nil {
 			return fmt.Errorf("%w: compact summary required", ErrInvalidFact)
 		}
-	case FactNotesUpdated:
-		if fact.Notes == nil {
-			return fmt.Errorf("%w: notes required", ErrInvalidFact)
-		}
 	case FactUsageRecorded:
 		if fact.Usage == nil && fact.ContextUsage == nil {
 			return fmt.Errorf("%w: usage required", ErrInvalidFact)
@@ -387,8 +383,7 @@ func validateFactShape(threadID string, fact Fact) error {
 		if fact.Checkpoint == nil || fact.Checkpoint.Version != ProjectionVersion {
 			return fmt.Errorf("%w: checkpoint required", ErrInvalidFact)
 		}
-	case FactTurnStarted, FactTurnCompleted, FactTurnFailed, FactTurnCancelled, FactThreadSettled,
-		FactGoalUpdated, FactGoalCleared, FactNotesCleared:
+	case FactTurnStarted, FactTurnCompleted, FactTurnFailed, FactTurnCancelled, FactThreadSettled:
 	default:
 		return fmt.Errorf("%w: unknown fact type %q", ErrInvalidFact, fact.Type)
 	}
