@@ -232,7 +232,7 @@ func (u Usage) TotalTokens() int {
 }
 
 func (u Usage) IsZero() bool {
-	return u.InputTokens == 0 && u.OutputTokens == 0
+	return u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedInputTokens == 0
 }
 
 func (u *Usage) Add(v Usage) {
@@ -242,6 +242,17 @@ func (u *Usage) Add(v Usage) {
 	u.InputTokens += v.InputTokens
 	u.OutputTokens += v.OutputTokens
 	u.CachedInputTokens += v.CachedInputTokens
+}
+
+func canonicalUsage(inputTokens, outputTokens, cachedInputTokens int) Usage {
+	if inputTokens < cachedInputTokens {
+		inputTokens = cachedInputTokens
+	}
+	return Usage{
+		InputTokens:       inputTokens,
+		OutputTokens:      outputTokens,
+		CachedInputTokens: cachedInputTokens,
+	}
 }
 
 type StopReason string

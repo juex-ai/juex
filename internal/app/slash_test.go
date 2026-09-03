@@ -40,7 +40,9 @@ func TestNewSlashCreatesGenerationWithoutProviderTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	contextUsage := &llm.ContextUsage{ContextWindow: 100, TotalTokens: 95}
-	app.Thread.RecordResponseUsage(llm.Usage{InputTokens: 10, OutputTokens: 2}, contextUsage)
+	if _, err := app.Thread.RecordProviderUsage("turn-1", "mock:mock", llm.Usage{InputTokens: 10, OutputTokens: 2}, contextUsage); err != nil {
+		t.Fatal(err)
+	}
 	app.Status.Publish(events.Event{ID: "usage-before-new", Type: "llm.responded", Payload: runtime.LLMRespondedPayload{
 		TokenUsage: llm.Usage{InputTokens: 10, OutputTokens: 2}, ContextUsage: contextUsage,
 	}})

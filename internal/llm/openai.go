@@ -161,11 +161,11 @@ func (p *openAIProvider) responseFromChatCompletion(completion *openai.ChatCompl
 	return Response{
 		Message:    out,
 		StopReason: mapOpenAIStop(string(choice.FinishReason)),
-		Usage: Usage{
-			InputTokens:       int(completion.Usage.PromptTokens),
-			OutputTokens:      int(completion.Usage.CompletionTokens),
-			CachedInputTokens: int(completion.Usage.PromptTokensDetails.CachedTokens),
-		},
+		Usage: canonicalUsage(
+			int(completion.Usage.PromptTokens),
+			int(completion.Usage.CompletionTokens),
+			int(completion.Usage.PromptTokensDetails.CachedTokens),
+		),
 	}, nil
 }
 

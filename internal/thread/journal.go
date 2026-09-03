@@ -110,8 +110,14 @@ func validateFactShape(threadID string, fact Fact) error {
 			return fmt.Errorf("%w: compact Generation seed does not begin with its summary", ErrInvalidFact)
 		}
 	case FactUsageRecorded:
-		if fact.Usage == nil && fact.ContextUsage == nil {
+		if fact.Usage == nil || fact.TurnID == "" {
 			return fmt.Errorf("%w: usage required", ErrInvalidFact)
+		}
+		if err := validateModelRef(fact.ModelRef); err != nil {
+			return err
+		}
+		if err := validateUsage(*fact.Usage); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidFact, err)
 		}
 	case FactTurnStarted, FactTurnCompleted, FactTurnFailed, FactTurnCancelled, FactThreadSettled:
 	default:

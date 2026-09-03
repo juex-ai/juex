@@ -29,7 +29,6 @@ type compactionSummaryGeneration struct {
 	Response llm.Response
 	Provider llm.Provider
 	Summary  string
-	Usage    llm.Usage
 	Epoch    provenance.RequestEpoch
 }
 
@@ -84,18 +83,16 @@ func (e *Engine) generateCompactionSummaryLocked(
 		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
 	}
 	if err == nil {
-		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 	}
-	var usage llm.Usage
-	usage.Add(resp.Usage)
 	if isCompactionSummaryJournalError(err) {
 		health.Complete(ticket, llm.ModelHealthNeutral, "")
-		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
+		return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 	}
 	if err == nil {
 		if summary, ok := completeCompactionSummaryText(resp, state.Notes); ok {
 			health.Complete(ticket, llm.ModelHealthSuccess, "")
-			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 		}
 
 		retryReason := compactionSummaryRetryReason(resp)
@@ -111,7 +108,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			RequestDigest:           epoch.RequestDigest,
 		}}); emitErr != nil {
 			health.Complete(ticket, llm.ModelHealthNeutral, "")
-			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
 		}
 		retryPolicy := candidatePolicy
 		retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
@@ -123,24 +120,23 @@ func (e *Engine) generateCompactionSummaryLocked(
 			err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
 		}
 		if err == nil {
-			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 		}
-		usage.Add(resp.Usage)
 		if isCompactionSummaryJournalError(err) {
 			health.Complete(ticket, llm.ModelHealthNeutral, "")
-			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 		}
 		if err == nil {
 			if summary, ok := completeCompactionSummaryText(resp, state.Notes); ok {
 				health.Complete(ticket, llm.ModelHealthSuccess, "")
-				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
+				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 			}
 		}
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		health.Complete(ticket, llm.ModelHealthNeutral, "")
-		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, ctxErr
+		return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, ctxErr
 	}
 	for {
 		failedCandidate := candidate
@@ -166,14 +162,14 @@ func (e *Engine) generateCompactionSummaryLocked(
 			if ok {
 				health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			}
-			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary model fallback: %w", emitErr)
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, fmt.Errorf("commit compaction summary model fallback: %w", emitErr)
 		}
 		e.emitCompactionSummaryHealthSkips(turnID, fallbackRef, selection.Skipped)
 		if !ok {
 			if len(failures) == 1 && len(skipped) == 0 {
-				return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, failureErr
+				return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, failureErr
 			}
-			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, modelChainError(failures, skipped)
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, modelChainError(failures, skipped)
 		}
 		nextCandidate := candidates[selection.Index]
 		attempted[fallbackRef] = struct{}{}
@@ -194,17 +190,16 @@ func (e *Engine) generateCompactionSummaryLocked(
 			err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
 		}
 		if err == nil {
-			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 		}
-		usage.Add(resp.Usage)
 		if isCompactionSummaryJournalError(err) {
 			health.Complete(ticket, llm.ModelHealthNeutral, "")
-			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 		}
 		if err == nil {
 			if summary, ok := completeCompactionSummaryText(resp, state.Notes); ok {
 				health.Complete(ticket, llm.ModelHealthSuccess, "")
-				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
+				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 			}
 			if !useRetryBudget {
 				retryReason := compactionSummaryRetryReason(resp)
@@ -220,7 +215,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 					RequestDigest:           epoch.RequestDigest,
 				}}); emitErr != nil {
 					health.Complete(ticket, llm.ModelHealthNeutral, "")
-					return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
+					return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
 				}
 				retryPolicy := candidatePolicy
 				retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
@@ -232,24 +227,23 @@ func (e *Engine) generateCompactionSummaryLocked(
 					err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
 				}
 				if err == nil {
-					resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+					resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 				}
-				usage.Add(resp.Usage)
 				if isCompactionSummaryJournalError(err) {
 					health.Complete(ticket, llm.ModelHealthNeutral, "")
-					return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
+					return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 				}
 				if err == nil {
 					if summary, ok := completeCompactionSummaryText(resp, state.Notes); ok {
 						health.Complete(ticket, llm.ModelHealthSuccess, "")
-						return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
+						return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 					}
 				}
 			}
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			health.Complete(ticket, llm.ModelHealthNeutral, "")
-			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, ctxErr
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, ctxErr
 		}
 	}
 }
@@ -350,6 +344,7 @@ func (e *Engine) completeCompactionSummary(
 	ctx context.Context,
 	turnID string,
 	provider llm.Provider,
+	modelRef string,
 	system string,
 	history []llm.Message,
 	contextWindow int,
@@ -404,6 +399,9 @@ func (e *Engine) completeCompactionSummary(
 			return resp, epoch, &compactionSummaryJournalError{err: errors.Join(requestErr, fmt.Errorf("commit compaction summary error: %w", emitErr))}
 		}
 		return resp, epoch, requestErr
+	}
+	if _, err := e.currentThread().RecordProviderUsage(turnID, modelRef, resp.Usage, nil); err != nil {
+		return resp, epoch, &compactionSummaryJournalError{err: fmt.Errorf("record compaction summary Usage: %w", err)}
 	}
 	if err := e.emit(events.Event{Type: "context.compact.summary_responded", TurnID: turnID, Payload: ContextCompactSummaryRespondedPayload{
 		Attempt: attempt, Model: model, StopReason: resp.StopReason, Usage: resp.Usage, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,

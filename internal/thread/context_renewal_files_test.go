@@ -202,6 +202,7 @@ func TestDeleteArchivedUsesJournalGenerationForContextRenewalFiles(t *testing.T)
 	metadata.ContextUsage = before.ContextUsage
 	metadata.LastActivityAt = before.LastActivityAt
 	metadata.EventCursor = before.EventCursor
+	metadata.UsageAggregatedThrough = before.UsageAggregatedThrough
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		t.Fatal(err)

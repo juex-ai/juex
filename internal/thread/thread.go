@@ -31,7 +31,7 @@ type Thread struct {
 	Alias          string
 	ParentThreadID string
 	History        []llm.Message
-	TokenUsage     llm.Usage
+	TokenUsage     UsageAggregate
 	ContextUsage   *llm.ContextUsage
 
 	mu              sync.Mutex
@@ -168,6 +168,7 @@ func (t *Thread) appendFactsStoreLocked(facts ...Fact) (Commit, error) {
 		return Commit{}, err
 	}
 	candidate.Projection.EventCursor.Offset = scanned.EndOffset
+	candidate.Projection.UsageAggregatedThrough.Offset = scanned.EndOffset
 	if err := validateProjectionMetadata(candidate.Projection, t.ID); err != nil {
 		return commit, fmt.Errorf("thread: committed invalid EventStore projection: %w", err)
 	}
@@ -334,6 +335,7 @@ func (t *Thread) beginGeneration(compacted bool, summary llm.Message, automatic 
 		return Commit{}, err
 	}
 	candidate.Projection.EventCursor.Offset = staged.commit.EndOffset
+	candidate.Projection.UsageAggregatedThrough.Offset = staged.commit.EndOffset
 	if err := validateProjectionMetadata(candidate.Projection, t.ID); err != nil {
 		return Commit{}, errors.Join(err, t.eventStore.discard(staged))
 	}
@@ -438,12 +440,12 @@ func (t *Thread) SetPendingInputCount(count int) error {
 	return nil
 }
 
-func (t *Thread) RecordResponseUsage(usage llm.Usage, contextUsage *llm.ContextUsage) llm.Usage {
+func (t *Thread) RecordProviderUsage(turnID, modelRef string, usage llm.Usage, contextUsage *llm.ContextUsage) (llm.Usage, error) {
 	if usage.IsZero() && contextUsage == nil {
-		return t.TokenUsageSnapshot()
+		return t.TokenUsageSnapshot(), nil
 	}
-	_, _ = t.AppendFacts(Fact{Type: FactUsageRecorded, Usage: &usage, ContextUsage: contextUsage})
-	return t.TokenUsageSnapshot()
+	_, err := t.AppendFacts(Fact{Type: FactUsageRecorded, TurnID: turnID, ModelRef: modelRef, Usage: &usage, ContextUsage: contextUsage})
+	return t.TokenUsageSnapshot(), err
 }
 
 func (t *Thread) TokenUsageSnapshot() llm.Usage {
@@ -452,7 +454,16 @@ func (t *Thread) TokenUsageSnapshot() llm.Usage {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.TokenUsage
+	return t.TokenUsage.Total
+}
+
+func (t *Thread) TokenUsageAggregateSnapshot() UsageAggregate {
+	if t == nil {
+		return UsageAggregate{ByModel: make(map[string]llm.Usage)}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.TokenUsage.Clone()
 }
 
 func (t *Thread) ContextUsageSnapshot() *llm.ContextUsage {
@@ -616,7 +627,7 @@ func (t *Thread) infoLocked() Info {
 		GenerationJournalPath: generationJournalPath,
 		TurnCount:             projection.Counts.TurnCount,
 		PendingInputs:         projection.Counts.PendingInputCount,
-		TokenUsage:            t.TokenUsage,
+		TokenUsage:            t.TokenUsage.Clone(),
 		ContextUsage:          cloneContextUsage(t.ContextUsage),
 	}
 }
@@ -625,7 +636,7 @@ func (t *Thread) refreshPublicLocked() {
 	t.Alias = t.state.Projection.Alias
 	t.ParentThreadID = t.state.Projection.ParentThreadID
 	t.History = append(t.History[:0], t.state.ProviderMessages...)
-	t.TokenUsage = t.state.Projection.TokenUsage
+	t.TokenUsage = t.state.Projection.TokenUsage.Clone()
 	t.ContextUsage = cloneContextUsage(t.state.ContextUsage)
 }
 
@@ -645,6 +656,7 @@ func cloneReplayState(source ReplayState) ReplayState {
 func cloneProjection(source Projection) Projection {
 	clone := source
 	clone.Generations = append([]GenerationProjection(nil), source.Generations...)
+	clone.TokenUsage = source.TokenUsage.Clone()
 	if source.ArchivedAt != nil {
 		archivedAt := *source.ArchivedAt
 		clone.ArchivedAt = &archivedAt

@@ -60,7 +60,7 @@ func Load(dir string) (*Thread, error) {
 	if err != nil {
 		return nil, err
 	}
-	eventStore, state, err := openEventStore(dir, id, metadata, time.Now)
+	eventStore, state, recovered, err := openEventStore(dir, id, metadata, time.Now)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +70,12 @@ func Load(dir string) (*Thread, error) {
 	}
 	target := &Thread{ID: id, Dir: dir, eventStore: eventStore, state: state}
 	target.refreshPublicLocked()
+	if recovered {
+		if err := target.persistProjectionLocked(); err != nil {
+			_ = eventStore.Close()
+			return nil, fmt.Errorf("thread: persist recovered Usage projection for %s: %w", id, err)
+		}
+	}
 	return target, nil
 }
 
@@ -79,7 +85,7 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 	if err != nil {
 		return Info{}, nil, err
 	}
-	eventStore, state, err := openEventStore(dir, id, metadata, time.Now)
+	eventStore, state, recovered, err := openEventStore(dir, id, metadata, time.Now)
 	if err != nil {
 		return Info{}, nil, err
 	}
@@ -89,6 +95,12 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 	}
 	target := &Thread{ID: id, Dir: dir, eventStore: eventStore, state: state}
 	target.refreshPublicLocked()
+	if recovered {
+		if err := target.persistProjectionLocked(); err != nil {
+			_ = eventStore.Close()
+			return Info{}, nil, fmt.Errorf("thread: persist recovered Usage projection for %s: %w", id, err)
+		}
+	}
 	info := target.infoLocked()
 	messages := append([]llm.Message(nil), target.state.Messages...)
 	if err := eventStore.Close(); err != nil {

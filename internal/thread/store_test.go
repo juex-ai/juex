@@ -230,6 +230,9 @@ func TestListRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing.T) {
 			}
 			workerID := worker.ID
 			workerDir := worker.Dir
+			if _, err := worker.RecordProviderUsage("turn-1", "openai:gpt-test", llm.Usage{InputTokens: 6, CachedInputTokens: 2, OutputTokens: 1}, nil); err != nil {
+				t.Fatal(err)
+			}
 			if err := worker.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -249,7 +252,9 @@ func TestListRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(entries) != 2 || entries[1].ThreadID != workerID || entries[1].Alias != "recover-me" {
+			if len(entries) != 2 || entries[1].ThreadID != workerID || entries[1].Alias != "recover-me" ||
+				entries[1].TokenUsage.Total != (llm.Usage{InputTokens: 6, CachedInputTokens: 2, OutputTokens: 1}) ||
+				entries[1].TokenUsage.ByModel["openai:gpt-test"] != (llm.Usage{InputTokens: 6, CachedInputTokens: 2, OutputTokens: 1}) {
 				t.Fatalf("rebuilt entries = %#v", entries)
 			}
 			projection := mustReadProjection(t, filepath.Join(workerDir, projectionFile))
@@ -303,6 +308,36 @@ func TestListRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.T) {
 			projection := mustReadProjection(t, path)
 			projection.EventCursor.Seq = 0
 			projection.EventCursor.Offset = 0
+			mustWriteJSON(t, path, projection)
+		}},
+		{name: "null-usage-breakdown", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.TokenUsage.ByModel = nil
+			mustWriteJSON(t, path, projection)
+		}},
+		{name: "usage-total-mismatch", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.TokenUsage.Total.InputTokens++
+			mustWriteJSON(t, path, projection)
+		}},
+		{name: "empty-usage-cursor", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.UsageAggregatedThrough = EventCursor{}
+			mustWriteJSON(t, path, projection)
+		}},
+		{name: "unknown-usage-generation", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.UsageAggregatedThrough.GenerationID = "g000099"
+			mustWriteJSON(t, path, projection)
+		}},
+		{name: "usage-cursor-ahead", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			projection := mustReadProjection(t, path)
+			projection.UsageAggregatedThrough.Seq = projection.EventCursor.Seq + 1
 			mustWriteJSON(t, path, projection)
 		}},
 		{name: "unknown-field", mutate: func(t *testing.T, path string) {
@@ -639,10 +674,49 @@ func TestUsageIncludesCachedInputTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	main.RecordResponseUsage(llm.Usage{InputTokens: 10, CachedInputTokens: 7, OutputTokens: 3}, &llm.ContextUsage{ContextWindow: 100, TotalTokens: 40})
+	if _, err := main.RecordProviderUsage("turn-1", "openai:gpt-test", llm.Usage{InputTokens: 10, CachedInputTokens: 7, OutputTokens: 3}, &llm.ContextUsage{ContextWindow: 100, TotalTokens: 40}); err != nil {
+		t.Fatal(err)
+	}
 	projection := main.Projection()
-	if projection.TokenUsage.CachedInputTokens != 7 || projection.ContextUsage.CurrentTokens != 40 || projection.ContextUsage.Percentage != 40 {
+	if projection.TokenUsage.Total.CachedInputTokens != 7 || projection.ContextUsage.CurrentTokens != 40 || projection.ContextUsage.Percentage != 40 {
 		t.Fatalf("usage projection = %#v", projection)
+	}
+	if got := projection.TokenUsage.ByModel["openai:gpt-test"]; got != (llm.Usage{InputTokens: 10, CachedInputTokens: 7, OutputTokens: 3}) {
+		t.Fatalf("usage by model = %+v", projection.TokenUsage.ByModel)
+	}
+	if projection.UsageAggregatedThrough != projection.EventCursor {
+		t.Fatalf("usage cursor = %+v, event cursor = %+v", projection.UsageAggregatedThrough, projection.EventCursor)
+	}
+}
+
+func TestRecordProviderUsageRejectsNoncanonicalOrInvalidUsage(t *testing.T) {
+	t.Parallel()
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	before := main.Projection()
+	for _, test := range []struct {
+		name     string
+		turnID   string
+		modelRef string
+		usage    llm.Usage
+	}{
+		{name: "missing turn", modelRef: "openai:gpt-test", usage: llm.Usage{InputTokens: 1}},
+		{name: "noncanonical model", turnID: "turn-1", modelRef: "gpt-test", usage: llm.Usage{InputTokens: 1}},
+		{name: "negative token", turnID: "turn-1", modelRef: "openai:gpt-test", usage: llm.Usage{InputTokens: -1}},
+		{name: "cached exceeds input", turnID: "turn-1", modelRef: "openai:gpt-test", usage: llm.Usage{InputTokens: 1, CachedInputTokens: 2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := main.RecordProviderUsage(test.turnID, test.modelRef, test.usage, nil); !errors.Is(err, ErrInvalidFact) {
+				t.Fatalf("RecordProviderUsage error = %v, want invalid fact", err)
+			}
+			if got := main.Projection(); !reflect.DeepEqual(got, before) {
+				t.Fatalf("invalid Usage changed projection: got %+v want %+v", got, before)
+			}
+		})
 	}
 }
 
@@ -653,10 +727,14 @@ func TestNewGenerationClearsContextUsageAndPreservesCumulativeTokens(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	main.RecordResponseUsage(
+	if _, err := main.RecordProviderUsage(
+		"turn-1",
+		"anthropic:claude-test",
 		llm.Usage{InputTokens: 10, CachedInputTokens: 7, OutputTokens: 3},
 		&llm.ContextUsage{ContextWindow: 100, TotalTokens: 95},
-	)
+	); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := main.BeginNewGeneration(); err != nil {
 		t.Fatal(err)
 	}
@@ -667,7 +745,7 @@ func TestNewGenerationClearsContextUsageAndPreservesCumulativeTokens(t *testing.
 	if projection.ContextUsage != nil || main.ContextUsageSnapshot() != nil {
 		t.Fatalf("renewed Generation retained Context Usage: projection=%+v runtime=%+v", projection.ContextUsage, main.ContextUsageSnapshot())
 	}
-	if projection.TokenUsage.InputTokens != 10 || projection.TokenUsage.CachedInputTokens != 7 || projection.TokenUsage.OutputTokens != 3 {
+	if projection.TokenUsage.Total != (llm.Usage{InputTokens: 10, CachedInputTokens: 7, OutputTokens: 3}) {
 		t.Fatalf("renewed Generation lost cumulative Token Usage: %+v", projection.TokenUsage)
 	}
 	if err := main.Close(); err != nil {

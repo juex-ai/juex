@@ -18,7 +18,7 @@ function threadPage(
     last_active_at: "2026-05-07T10:10:10Z",
     turns: 1,
     preview: "current",
-    token_usage: { input_tokens: 1, output_tokens: 2 },
+    token_usage: { total: { input_tokens: 1, output_tokens: 2 }, by_model: {} },
     messages: [],
     ...overrides,
   };
@@ -44,7 +44,7 @@ test("mergeOlderThreadPage prepends messages without overwriting live metadata",
   const current = threadPage({
     last_active_at: "2026-05-07T10:20:00Z",
     turns: 5,
-    token_usage: { input_tokens: 50, output_tokens: 60 },
+    token_usage: { total: { input_tokens: 50, output_tokens: 60 }, by_model: {} },
     messages: [
       { id: "m3", role: "user", blocks: [{ type: "text", text: "new" }] },
     ],
@@ -54,7 +54,7 @@ test("mergeOlderThreadPage prepends messages without overwriting live metadata",
   const older = threadPage({
     last_active_at: "2026-05-07T10:10:00Z",
     turns: 2,
-    token_usage: { input_tokens: 10, output_tokens: 20 },
+    token_usage: { total: { input_tokens: 10, output_tokens: 20 }, by_model: {} },
     messages: [
       { id: "m1", role: "user", blocks: [{ type: "text", text: "old" }] },
       {
@@ -71,7 +71,7 @@ test("mergeOlderThreadPage prepends messages without overwriting live metadata",
 
   assert.equal(merged.last_active_at, "2026-05-07T10:20:00Z");
   assert.equal(merged.turns, 5);
-  assert.deepEqual(merged.token_usage, { input_tokens: 50, output_tokens: 60 });
+  assert.deepEqual(merged.token_usage, { total: { input_tokens: 50, output_tokens: 60 }, by_model: {} });
   assert.deepEqual(
     merged.messages.map((message) => message.id),
     ["m1", "m2", "m3"],

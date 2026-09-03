@@ -253,7 +253,7 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 		turns = info.TurnCount
 		startedAt = info.CreatedAt.Time
 		lastActiveAt = replay.Projection.LastActivityAt.Time
-		tokenUsage = info.TokenUsage
+		tokenUsage = info.TokenUsage.Total
 		if info.ContextUsage != nil {
 			copied := *info.ContextUsage
 			copied.Breakdown = append([]llm.ContextUsagePart(nil), info.ContextUsage.Breakdown...)

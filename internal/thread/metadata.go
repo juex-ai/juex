@@ -100,6 +100,12 @@ func validateProjectionMetadata(projection Projection, id string) error {
 	if projection.Counts.TurnCount < 0 || projection.Counts.PendingInputCount < 0 {
 		return fail("negative counters")
 	}
+	if projection.TokenUsage.ByModel == nil {
+		return fail("token_usage.by_model is null")
+	}
+	if err := validateUsageAggregate(projection.TokenUsage); err != nil {
+		return fail("invalid token_usage: %v", err)
+	}
 	cursor := projection.EventCursor
 	if cursor.GenerationID != projection.CurrentGeneration.ID || cursor.Seq == 0 || cursor.Offset <= 0 {
 		return fail("EventStore cursor is empty")
@@ -108,6 +114,33 @@ func validateProjectionMetadata(projection Projection, id string) error {
 		if generation.BoundarySeq > cursor.Seq {
 			return fail("Generation registry entry %d is beyond the EventStore cursor", index)
 		}
+	}
+	usageCursor := projection.UsageAggregatedThrough
+	if usageCursor.GenerationID == "" || usageCursor.Seq == 0 || usageCursor.Offset <= 0 {
+		return fail("Usage aggregation cursor is empty")
+	}
+	usageGenerationFound := false
+	for index, generation := range projection.Generations {
+		if generation.ID != usageCursor.GenerationID {
+			continue
+		}
+		usageGenerationFound = true
+		if usageCursor.Seq < generation.BoundarySeq {
+			return fail("Usage aggregation cursor precedes its Generation")
+		}
+		if index+1 < len(projection.Generations) && usageCursor.Seq >= projection.Generations[index+1].BoundarySeq {
+			return fail("Usage aggregation cursor sequence is outside Generation %q", generation.ID)
+		}
+		break
+	}
+	if !usageGenerationFound {
+		return fail("Usage aggregation cursor has unknown Generation %q", usageCursor.GenerationID)
+	}
+	if usageCursor.Seq > cursor.Seq {
+		return fail("Usage aggregation cursor is beyond the EventStore cursor")
+	}
+	if usageCursor.Seq == cursor.Seq && usageCursor != cursor {
+		return fail("Usage and EventStore cursors disagree at sequence %d", cursor.Seq)
 	}
 	return nil
 }

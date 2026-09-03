@@ -1222,12 +1222,16 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		snapshot := e.contextUsageSnapshot(msg.Model, candidateContextWindow(result.candidate, e.ContextWindow), resp.Usage, prepared.promptSections, prepared.tools, request.history)
 		contextUsage = &snapshot
 	}
+	threadState := e.currentThread()
+	totalUsage, err := threadState.RecordProviderUsage(turnID, usageModelRef(result.candidate), resp.Usage, contextUsage)
+	if err != nil {
+		return recordedProviderResponse{}, fmt.Errorf("thread record provider Usage: %w", err)
+	}
 	messages := make([]llm.Message, 0, 2)
 	if result.notice != nil {
 		messages = append(messages, *result.notice)
 	}
 	messages = append(messages, msg)
-	threadState := e.currentThread()
 	persisted, err := threadState.AppendBatchAssigned(messages)
 	if err != nil {
 		return recordedProviderResponse{}, fmt.Errorf("thread append provider response: %w", err)
@@ -1238,8 +1242,6 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		notice = &persisted[0]
 	}
 	e.updateTokenEstimateCalibration(resp.Usage.InputTokens, request.estimatedInputTokens)
-	totalUsage := threadState.RecordResponseUsage(resp.Usage, contextUsage)
-
 	// Enrich the responded event with the assistant's text + thinking +
 	// tool calls so verbose UIs can render them without subscribing to
 	// the conversation log. Bounded by what the LLM returned in this

@@ -254,11 +254,11 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 	return Response{
 		Message:    out,
 		StopReason: stop,
-		Usage: Usage{
-			InputTokens:       int(resp.Usage.InputTokens),
-			OutputTokens:      int(resp.Usage.OutputTokens),
-			CachedInputTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
-		},
+		Usage: canonicalUsage(
+			int(resp.Usage.InputTokens),
+			int(resp.Usage.OutputTokens),
+			int(resp.Usage.InputTokensDetails.CachedTokens),
+		),
 	}
 }
 

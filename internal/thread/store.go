@@ -219,7 +219,7 @@ func (s *Store) openLocked(dir, id string) (*Thread, error) {
 	if (metadata.RetentionState == RetentionArchived) != archivedNamespace {
 		return nil, fmt.Errorf("%w for %s: retention state does not match directory namespace", ErrInvalidMetadata, id)
 	}
-	eventStore, state, err := openEventStore(dir, id, metadata, s.now)
+	eventStore, state, recovered, err := openEventStore(dir, id, metadata, s.now)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +229,12 @@ func (s *Store) openLocked(dir, id string) (*Thread, error) {
 	}
 	thread := &Thread{ID: id, Dir: dir, eventStore: eventStore, state: state, store: s}
 	thread.refreshPublicLocked()
+	if recovered {
+		if err := thread.persistProjectionLocked(); err != nil {
+			_ = thread.Close()
+			return nil, fmt.Errorf("thread: persist recovered Usage projection for %s: %w", id, err)
+		}
+	}
 	if _, err := s.loadOrRebuildIndexLocked(); err != nil {
 		_ = thread.Close()
 		return nil, err
@@ -485,7 +491,7 @@ func indexEntryFromProjection(projection Projection) IndexEntry {
 		TurnCount:           projection.Counts.TurnCount,
 		GenerationCount:     projection.Counts.GenerationCount,
 		CurrentGenerationID: projection.CurrentGeneration.ID,
-		TokenUsage:          projection.TokenUsage,
+		TokenUsage:          projection.TokenUsage.Clone(),
 		ThreadRevision:      projection.Revision,
 	}
 	if projection.ContextUsage != nil {

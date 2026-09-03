@@ -74,6 +74,7 @@ type Fact struct {
 	Summary          *llm.Message      `json:"summary,omitempty"`
 	Automatic        bool              `json:"automatic,omitempty"`
 	Error            string            `json:"error,omitempty"`
+	ModelRef         string            `json:"model_ref,omitempty"`
 	Usage            *llm.Usage        `json:"usage,omitempty"`
 	ContextUsage     *llm.ContextUsage `json:"context_usage,omitempty"`
 	Seed             *GenerationSeed   `json:"seed,omitempty"`
@@ -114,24 +115,30 @@ type EventCursor struct {
 	Offset       int64  `json:"offset"`
 }
 
+type UsageAggregate struct {
+	Total   llm.Usage            `json:"total"`
+	ByModel map[string]llm.Usage `json:"by_model"`
+}
+
 type Projection struct {
-	Version           int                    `json:"v"`
-	ThreadID          string                 `json:"thread_id"`
-	Alias             string                 `json:"alias"`
-	ParentThreadID    string                 `json:"parent_thread_id,omitempty"`
-	CreatedAt         Timestamp              `json:"created_at"`
-	UpdatedAt         Timestamp              `json:"updated_at"`
-	ArchivedAt        *Timestamp             `json:"archived_at,omitempty"`
-	RetentionState    RetentionState         `json:"retention_state"`
-	ExecutionState    ExecutionState         `json:"execution_state,omitempty"`
-	Revision          uint64                 `json:"revision"`
-	CurrentGeneration GenerationProjection   `json:"current_generation"`
-	Generations       []GenerationProjection `json:"generations"`
-	Counts            Counts                 `json:"counts"`
-	TokenUsage        llm.Usage              `json:"token_usage"`
-	ContextUsage      *ContextProjection     `json:"context_usage,omitempty"`
-	LastActivityAt    Timestamp              `json:"last_activity_at"`
-	EventCursor       EventCursor            `json:"event_cursor"`
+	Version                int                    `json:"v"`
+	ThreadID               string                 `json:"thread_id"`
+	Alias                  string                 `json:"alias"`
+	ParentThreadID         string                 `json:"parent_thread_id,omitempty"`
+	CreatedAt              Timestamp              `json:"created_at"`
+	UpdatedAt              Timestamp              `json:"updated_at"`
+	ArchivedAt             *Timestamp             `json:"archived_at,omitempty"`
+	RetentionState         RetentionState         `json:"retention_state"`
+	ExecutionState         ExecutionState         `json:"execution_state,omitempty"`
+	Revision               uint64                 `json:"revision"`
+	CurrentGeneration      GenerationProjection   `json:"current_generation"`
+	Generations            []GenerationProjection `json:"generations"`
+	Counts                 Counts                 `json:"counts"`
+	TokenUsage             UsageAggregate         `json:"token_usage"`
+	ContextUsage           *ContextProjection     `json:"context_usage,omitempty"`
+	LastActivityAt         Timestamp              `json:"last_activity_at"`
+	EventCursor            EventCursor            `json:"event_cursor"`
+	UsageAggregatedThrough EventCursor            `json:"usage_aggregated_through"`
 }
 
 type IndexEntry struct {
@@ -148,7 +155,7 @@ type IndexEntry struct {
 	GenerationCount      int            `json:"generation_count"`
 	CurrentGenerationID  string         `json:"current_generation_id"`
 	CurrentContextTokens int            `json:"current_context_tokens"`
-	TokenUsage           llm.Usage      `json:"token_usage"`
+	TokenUsage           UsageAggregate `json:"token_usage"`
 	ThreadRevision       uint64         `json:"thread_revision"`
 }
 
@@ -176,7 +183,7 @@ type Info struct {
 	GenerationJournalPath string            `json:"generation_journal_path"`
 	TurnCount             int               `json:"turn_count"`
 	PendingInputs         int               `json:"pending_input_count"`
-	TokenUsage            llm.Usage         `json:"token_usage"`
+	TokenUsage            UsageAggregate    `json:"token_usage"`
 	ContextUsage          *llm.ContextUsage `json:"context_usage,omitempty"`
 }
 

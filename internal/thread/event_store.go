@@ -78,33 +78,186 @@ func createEventStore(threadDir, threadID, alias, parentThreadID string, now fun
 	return store, scanned, nil
 }
 
-func openEventStore(threadDir, threadID string, metadata Projection, now func() time.Time) (*EventStore, ReplayState, error) {
+func openEventStore(threadDir, threadID string, metadata Projection, now func() time.Time) (*EventStore, ReplayState, bool, error) {
 	if now == nil {
 		now = time.Now
 	}
 	if err := recoverGenerationLayout(threadDir, metadata.Generations); err != nil {
-		return nil, ReplayState{}, err
+		return nil, ReplayState{}, false, err
 	}
 	currentID := metadata.CurrentGeneration.ID
 	file, commits, err := openGenerationFile(threadDir, threadID, metadata.CurrentGeneration)
 	if err != nil {
-		return nil, ReplayState{}, err
+		return nil, ReplayState{}, false, err
 	}
-	state, err := replayCurrentGeneration(threadID, metadata, commits)
+	published, tail, err := splitCommitsAtCursor(threadID, commits, metadata.EventCursor)
 	if err != nil {
 		_ = file.Close()
-		return nil, ReplayState{}, err
+		return nil, ReplayState{}, false, err
 	}
+	state, err := replayCurrentGeneration(threadID, metadata, published)
+	if err != nil {
+		_ = file.Close()
+		return nil, ReplayState{}, false, err
+	}
+	last := commits[len(commits)-1]
 	store := &EventStore{
 		threadDir: threadDir,
 		threadID:  threadID,
 		currentID: currentID,
 		current:   file,
 		size:      file.Size(),
-		nextSeq:   metadata.EventCursor.Seq + 1,
+		nextSeq:   last.Seq + 1,
 		now:       now,
 	}
-	return store, state, nil
+	recovered, err := store.recoverUsageAggregate(&state, metadata.EventCursor)
+	if err != nil {
+		_ = file.Close()
+		return nil, ReplayState{}, false, err
+	}
+	if len(tail) == 1 {
+		if err := applyCommit(threadID, &state, tail[0]); err != nil {
+			_ = file.Close()
+			return nil, ReplayState{}, false, fmt.Errorf("%w in %s at sequence %d: %v", ErrCorruptJournal, tail[0].GenerationID, tail[0].Seq, err)
+		}
+		recovered = true
+	}
+	if recovered {
+		at := NewTimestamp(now())
+		if at.Before(state.Projection.UpdatedAt.Time) {
+			at = state.Projection.UpdatedAt
+		}
+		advanceProjectionRevision(&state.Projection, at)
+	}
+	if err := validateProjectionMetadata(state.Projection, threadID); err != nil {
+		_ = file.Close()
+		return nil, ReplayState{}, false, err
+	}
+	return store, state, recovered, nil
+}
+
+func splitCommitsAtCursor(threadID string, commits []scannedCommit, cursor EventCursor) ([]scannedCommit, []scannedCommit, error) {
+	for index, commit := range commits {
+		if commit.GenerationID != cursor.GenerationID || commit.Seq != cursor.Seq || commit.EndOffset != cursor.Offset {
+			continue
+		}
+		tail := commits[index+1:]
+		if len(tail) > 1 {
+			return nil, nil, fmt.Errorf("%w for %s: current Generation has more than one unpublished commit", ErrInvalidMetadata, threadID)
+		}
+		if len(tail) == 1 && !usageOnlyCommit(tail[0]) {
+			return nil, nil, fmt.Errorf("%w for %s: current Generation has a non-Usage unpublished commit", ErrInvalidMetadata, threadID)
+		}
+		return commits[:index+1], tail, nil
+	}
+	return nil, nil, fmt.Errorf("%w for %s: EventStore cursor is not a complete current-Generation record", ErrInvalidMetadata, threadID)
+}
+
+func usageOnlyCommit(commit scannedCommit) bool {
+	if len(commit.Facts) == 0 {
+		return false
+	}
+	for _, fact := range commit.Facts {
+		if fact.Type != FactUsageRecorded {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *EventStore) recoverUsageAggregate(state *ReplayState, through EventCursor) (bool, error) {
+	if state == nil {
+		return false, fmt.Errorf("%w: nil replay state", ErrInvalidTransition)
+	}
+	after := state.Projection.UsageAggregatedThrough
+	if after == through {
+		return false, nil
+	}
+	err := s.visitCommitsAfterCursor(state.Projection.Generations, after, through, func(commit scannedCommit) error {
+		for _, fact := range commit.Facts {
+			if fact.Type == FactUsageRecorded {
+				state.Projection.TokenUsage.Add(fact.ModelRef, *fact.Usage)
+			}
+		}
+		state.Projection.UsageAggregatedThrough = EventCursor{
+			GenerationID: commit.GenerationID,
+			Seq:          commit.Seq,
+			Offset:       commit.EndOffset,
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if state.Projection.UsageAggregatedThrough != through {
+		return false, fmt.Errorf("%w for %s: Usage aggregation scan did not reach EventStore cursor", ErrInvalidMetadata, s.threadID)
+	}
+	return true, nil
+}
+
+func (s *EventStore) visitCommitsAfterCursor(
+	generations []GenerationProjection,
+	after EventCursor,
+	through EventCursor,
+	visit func(scannedCommit) error,
+) error {
+	startIndex, endIndex := -1, -1
+	for index, generation := range generations {
+		if generation.ID == after.GenerationID {
+			startIndex = index
+		}
+		if generation.ID == through.GenerationID {
+			endIndex = index
+		}
+	}
+	if startIndex < 0 || endIndex < startIndex {
+		return fmt.Errorf("%w for %s: invalid Usage cursor Generation range", ErrInvalidMetadata, s.threadID)
+	}
+	selected := generations[startIndex : endIndex+1]
+	captured, err := captureGenerationHandles(s.threadDir, selected, through.GenerationID, through.Offset)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeCapturedGenerations(captured) }()
+	wantSeq := after.Seq + 1
+	for index := range captured {
+		generation := captured[index]
+		start := int64(0)
+		if index == 0 {
+			start = after.Offset
+		}
+		end := generation.End
+		if index == len(captured)-1 {
+			end = through.Offset
+		}
+		committed, err := generation.file.ReadForwardTo(start, end, func(record jsonl.Record) error {
+			commit, err := decodeGenerationCommit(generation.ID, record)
+			if err != nil {
+				return err
+			}
+			if commit.Seq != wantSeq {
+				return fmt.Errorf("%w in %s: commit sequence %d, want %d", ErrCorruptJournal, generation.ID, commit.Seq, wantSeq)
+			}
+			if err := validateCommit(s.threadID, commit.Commit); err != nil {
+				return fmt.Errorf("%w in %s at sequence %d: %v", ErrCorruptJournal, generation.ID, commit.Seq, err)
+			}
+			if err := visit(commit); err != nil {
+				return err
+			}
+			wantSeq++
+			return nil
+		})
+		if err != nil {
+			return wrapGenerationError(generation.ID, err)
+		}
+		if committed != end {
+			return fmt.Errorf("%w in %s: Usage scan stopped at offset %d, want %d", ErrCorruptJournal, generation.ID, committed, end)
+		}
+	}
+	if wantSeq != through.Seq+1 {
+		return fmt.Errorf("%w for %s: Usage scan ended before sequence %d", ErrInvalidMetadata, s.threadID, through.Seq)
+	}
+	return nil
 }
 
 func (s *EventStore) prepareCommit(facts []Fact) (Commit, error) {
