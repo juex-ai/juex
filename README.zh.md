@@ -76,6 +76,10 @@ juex send --wait "implement the next task"
 `<WorkDir>/.juex/juex.yaml`。个人与 Workspace MCP 定义分别位于对应的
 `.agents/mcp.json`。修改启动配置后需要重启常驻 Agent。
 
+可编辑的 Observable 定义位于
+`$JUEX_HOME/agents/<agent-id>/observables.json`；它随 Agent 保存，不出现在
+Workspace 中。
+
 生成的 Agent 状态位于 `$JUEX_HOME/agents/<agent-id>/`。Agent 拥有身份、
 可重建的 Thread index、active 与 archived Thread、media、日志、Observable 和
 Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event

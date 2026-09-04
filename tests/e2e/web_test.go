@@ -1270,10 +1270,14 @@ func TestPendingInputFailureContextReportsUnavailableJournal(t *testing.T) {
 
 func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 	work := t.TempDir()
-	writeE2EObservableConfig(t, work)
+	cfg := config.Config{
+		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work,
+		AgentStateDir: filepath.Join(t.TempDir(), "agent"),
+	}
+	writeE2EObservableConfig(t, cfg)
 	prov := newPendingWebProvider()
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      cfg,
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -1354,12 +1358,13 @@ func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	work := t.TempDir()
 	stateDir := filepath.Join(t.TempDir(), "agent")
-	writeE2EObservableConfig(t, work)
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir}
+	writeE2EObservableConfig(t, cfg)
 	prov := &webProvider{steps: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "observable handled"), StopReason: llm.StopEndTurn},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir},
+		Cfg:      cfg,
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -1451,11 +1456,15 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 
 func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 	work := t.TempDir()
+	cfg := config.Config{
+		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work,
+		AgentStateDir: filepath.Join(t.TempDir(), "agent"),
+	}
 	prov := &webProvider{steps: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "schedule handled"), StopReason: llm.StopEndTurn},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      cfg,
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -1492,6 +1501,10 @@ func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 		t.Fatalf("create schedule status=%d body=%s", resp.StatusCode, respBody)
 	}
 	resp.Body.Close()
+	persisted, err := observable.LoadConfig(cfg.ObservablesConfigPath())
+	if err != nil || len(persisted.Observables) != 1 || persisted.Observables[0].ID != "schedule-e2e" {
+		t.Fatalf("Agent Observable config after create = %+v, err=%v", persisted, err)
+	}
 
 	resp, err = http.Post(ts.URL+"/api/observables/schedule-e2e/stop", "application/json", nil)
 	if err != nil {
@@ -1536,7 +1549,7 @@ func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || len(snapshot.Observables) != 1 {
 		t.Fatalf("list schedules status=%d body=%+v", resp.StatusCode, snapshot)
 	}
-	if got := snapshot.Observables[0]; got.SourceType != observable.SourceTypeSchedule || got.State != observable.RunStateRunning ||
+	if got := snapshot.Observables[0]; got.Source != observable.SourceAgent || got.SourceType != observable.SourceTypeSchedule || got.State != observable.RunStateRunning ||
 		got.Schedule == nil || got.Schedule.NextOccurrence == nil || !got.Schedule.NextOccurrence.Equal(scheduledAt) {
 		t.Fatalf("schedule status = %+v", got)
 	} else if got.ScheduleConfig == nil || got.ScheduleConfig.Observation.Content != "schedule e2e payload" {
@@ -1554,6 +1567,10 @@ func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("delete schedule status=%d body=%s", resp.StatusCode, respBody)
+	}
+	persisted, err = observable.LoadConfig(cfg.ObservablesConfigPath())
+	if err != nil || len(persisted.Observables) != 0 {
+		t.Fatalf("Agent Observable config after delete = %+v, err=%v", persisted, err)
 	}
 }
 
@@ -1868,11 +1885,15 @@ func TestWeb_RunMonthlyScheduleObservableOnce(t *testing.T) {
 
 func TestWeb_OldObservableShapeIsVisibleAndBlocksTaggedEdits(t *testing.T) {
 	work := t.TempDir()
+	cfg := config.Config{
+		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work,
+		AgentStateDir: filepath.Join(t.TempDir(), "agent"),
+	}
 	configBody := `{"observables":[` +
 		`{"id":"invalid-command","command":"echo"},` +
 		`{"id":"valid-schedule","type":"schedule","schedule_config":{"interval":{"every_seconds":3600},"observation":{"content":"valid sibling"}}}` +
 		`]}`
-	configPath := filepath.Join(work, ".juex", "observables.json")
+	configPath := cfg.ObservablesConfigPath()
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1880,7 +1901,7 @@ func TestWeb_OldObservableShapeIsVisibleAndBlocksTaggedEdits(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      cfg,
 		Provider: &webProvider{},
 	})
 	t.Cleanup(srv.Close)
@@ -2121,11 +2142,11 @@ func fetchObservableRecords(baseURL, id string) ([]observable.ObservationRecord,
 	return body.Observations, nil
 }
 
-func writeE2EObservableConfig(t *testing.T, work string) {
+func writeE2EObservableConfig(t *testing.T, cfg config.Config) {
 	t.Helper()
 	attachmentPath := ".juex/inbox/observable-e2e.png"
-	writeE2ETestPNG(t, filepath.Join(work, filepath.FromSlash(attachmentPath)))
-	cfg := map[string]any{
+	writeE2ETestPNG(t, filepath.Join(cfg.WorkDir, filepath.FromSlash(attachmentPath)))
+	definition := map[string]any{
 		"observables": []map[string]any{
 			{
 				"id":   "observable-e2e",
@@ -2153,11 +2174,11 @@ func writeE2EObservableConfig(t *testing.T, work string) {
 			},
 		},
 	}
-	body, err := json.MarshalIndent(cfg, "", "  ")
+	body, err := json.MarshalIndent(definition, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(work, ".juex", "observables.json")
+	path := cfg.ObservablesConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

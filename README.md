@@ -81,6 +81,10 @@ lives at `<WorkDir>/.juex/juex.yaml`. Personal and Workspace MCP definitions
 live under their respective `.agents/mcp.json` files. Restart a resident Agent
 after changing startup configuration.
 
+Editable Observable definitions live at
+`$JUEX_HOME/agents/<agent-id>/observables.json`; they follow the Agent rather
+than appearing in its Workspace.
+
 Generated Agent state lives under `$JUEX_HOME/agents/<agent-id>/`. The Agent
 owns identity, the rebuildable Thread index, active and archived Threads,
 media, logs, Observables, and Extension state. Each Thread has authoritative

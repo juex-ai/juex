@@ -26,8 +26,8 @@ constraints, or examples. Correct tool calls do not require a prior guide load.
   shell loop or command Observable.
 - Use `observable_start` and `observable_stop` for temporary process-lifetime
   changes. Configuration still controls the next JueX startup.
-- Use `observable_delete` only for permanent removal from
-  `.juex/observables.json`; it also stops a running source.
+- Use `observable_delete` only for permanent removal from the Agent-owned
+  `observables.json`; it also stops a running source.
 - Use `observable_observations` to inspect recent durable output. Its optional
   `id` filters by source. Request `limit` from 1 through 100; omission or a
   nonpositive value defaults to 20 and larger values are capped at 100.

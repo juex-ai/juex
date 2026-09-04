@@ -91,10 +91,10 @@ test("Observables table exposes complete truncated content in a bounded tooltip"
 test("Observables display resource source and hide delete for extension definitions", () => {
   assert.match(observablesPageSource, /\{item\.source\}/);
   assert.match(observablesPageSource, /Type: \{item\.source_type \|\| "command"\}/);
-  assert.match(observablesPageSource, /item\.source === "project" \? \(/);
+  assert.match(observablesPageSource, /item\.source === "agent" \? \(/);
   assert.match(observableDetailSource, /\{observable\.source\}/);
   assert.match(observableDetailSource, /<DetailRow label="Type">/);
-  assert.match(observableDetailSource, /observable\?\.source === "project" \? \(/);
+  assert.match(observableDetailSource, /observable\?\.source === "agent" \? \(/);
 });
 
 test("Schedule rows and details offer a distinct Run action", () => {

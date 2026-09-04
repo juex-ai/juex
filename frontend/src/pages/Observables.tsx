@@ -363,7 +363,7 @@ function ObservableRow({
               <Play className="size-3.5" />
             </Button>
           )}
-          {item.source === "project" ? (
+          {item.source === "agent" ? (
             <Button
               type="button"
               variant="ghost"

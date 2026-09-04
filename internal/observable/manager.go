@@ -25,7 +25,7 @@ var (
 	ErrReadOnlyDefinition = errors.New("observable: read-only definition")
 )
 
-const SourceProject = "project"
+const SourceAgent = "agent"
 
 type RuntimeContext struct {
 	ExtensionDir            string
@@ -227,27 +227,27 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		workers:    map[*observableRun]struct{}{},
 		lastStatus: map[string]ObservableStatus{},
 	}
-	projectOrigin := definitionOrigin{Source: SourceProject}
+	agentOrigin := definitionOrigin{Source: SourceAgent}
 	for _, spec := range cfg.Observables {
-		source, sourceErr := newSourceRuntime(spec, m, sourceDependencies{opts: opts, store: m.store, origin: projectOrigin})
+		source, sourceErr := newSourceRuntime(spec, m, sourceDependencies{opts: opts, store: m.store, origin: agentOrigin})
 		if sourceErr != nil {
 			return nil, sourceErr
 		}
 		m.specs[spec.ID] = spec
-		m.origins[spec.ID] = projectOrigin
+		m.origins[spec.ID] = agentOrigin
 		m.sources[spec.ID] = source
 		m.lastStatus[spec.ID] = source.statusSnapshot(baseStatusFromSpec(spec, RunStateStopped))
 	}
 	for _, issue := range issues {
 		status := statusFromSpec(issue.Spec, RunStateErrored)
-		status.ID = configIssueStatusID(SourceProject, issue)
-		status.Source = SourceProject
+		status.ID = configIssueStatusID(SourceAgent, issue)
+		status.Source = SourceAgent
 		status.LastError = issue.Error.Error()
 		m.lastStatus[status.ID] = status
 	}
 	seenReadOnlySources := make(map[string]struct{}, len(opts.ReadOnlyConfigSources))
 	for _, readonly := range opts.ReadOnlyConfigSources {
-		if strings.TrimSpace(readonly.Source) == "" || readonly.Source == SourceProject {
+		if strings.TrimSpace(readonly.Source) == "" || readonly.Source == SourceAgent {
 			return nil, fmt.Errorf("observable: invalid read-only definition source %q", readonly.Source)
 		}
 		if _, duplicate := seenReadOnlySources[readonly.Source]; duplicate {
@@ -429,8 +429,8 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, erro
 	if err != nil {
 		return ObservableStatus{}, err
 	}
-	projectOrigin := definitionOrigin{Source: SourceProject}
-	source, err := newSourceRuntime(normalized, m, sourceDependencies{opts: m.opts, store: m.store, origin: projectOrigin})
+	agentOrigin := definitionOrigin{Source: SourceAgent}
+	source, err := newSourceRuntime(normalized, m, sourceDependencies{opts: m.opts, store: m.store, origin: agentOrigin})
 	if err != nil {
 		return ObservableStatus{}, err
 	}
@@ -454,7 +454,7 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, erro
 	}
 	m.cfg = cfg
 	m.specs[normalized.ID] = normalized
-	m.origins[normalized.ID] = projectOrigin
+	m.origins[normalized.ID] = agentOrigin
 	m.sources[normalized.ID] = source
 	status := source.statusSnapshot(baseStatusFromSpec(normalized, RunStateStopped))
 	m.lastStatus[normalized.ID] = status

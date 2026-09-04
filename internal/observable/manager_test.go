@@ -1208,7 +1208,7 @@ func TestManager_BadConfigDoesNotFailConstruction(t *testing.T) {
 			break
 		}
 	}
-	if status.State != observable.RunStateErrored || status.LastError == "" || status.Source != observable.SourceProject {
+	if status.State != observable.RunStateErrored || status.LastError == "" || status.Source != observable.SourceAgent {
 		t.Fatalf("status = %+v, want source-qualified bad config surfaced as errored", status)
 	}
 	if _, err := mgr.Create(context.Background(), validSpec("new-one")); err == nil || !strings.Contains(err.Error(), "fix invalid entries") {

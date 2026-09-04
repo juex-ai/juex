@@ -78,9 +78,10 @@ func (s *resourceSubscriber) take() agentResourceEvent {
 }
 
 type resourceEventHub struct {
-	workDir      string
-	threadsDir   string
-	runtimeFiles map[string]struct{}
+	workDir               string
+	threadsDir            string
+	observablesConfigPath string
+	runtimeFiles          map[string]struct{}
 
 	mu            sync.Mutex
 	subscribers   map[uint64]*resourceSubscriber
@@ -99,8 +100,8 @@ type resourceSubscription struct {
 	cancel  func()
 }
 
-func newResourceEventHub(workDir, threadsDir string) *resourceEventHub {
-	return &resourceEventHub{
+func newResourceEventHub(workDir, threadsDir, observablesConfigPath string) *resourceEventHub {
+	hub := &resourceEventHub{
 		workDir:      filepath.Clean(workDir),
 		threadsDir:   filepath.Clean(threadsDir),
 		runtimeFiles: map[string]struct{}{},
@@ -109,6 +110,11 @@ func newResourceEventHub(workDir, threadsDir string) *resourceEventHub {
 			return watcher.Add(path)
 		},
 	}
+	if observablesConfigPath != "" {
+		hub.observablesConfigPath = filepath.Clean(observablesConfigPath)
+		hub.runtimeFiles[hub.observablesConfigPath] = struct{}{}
+	}
+	return hub
 }
 
 func (h *resourceEventHub) setRuntimeInputs(files []string) {
@@ -154,18 +160,6 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 				return resourceSubscription{}, err
 			}
 			watchedRuntimeParents[parent] = struct{}{}
-		}
-		observableDir := filepath.Join(h.workDir, ".juex")
-		if info, statErr := os.Stat(observableDir); statErr == nil && info.IsDir() {
-			if err := h.addWatch(watcher, observableDir); err != nil {
-				_ = watcher.Close()
-				h.mu.Unlock()
-				return resourceSubscription{}, fmt.Errorf("watch observable config directory %q: %w", observableDir, err)
-			}
-		} else if statErr != nil && !os.IsNotExist(statErr) {
-			_ = watcher.Close()
-			h.mu.Unlock()
-			return resourceSubscription{}, fmt.Errorf("inspect observable config directory %q: %w", observableDir, statErr)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		h.watcher = watcher
@@ -325,13 +319,7 @@ func (h *resourceEventHub) runWatcher(
 			resources := h.resourcesForPath(event.Name)
 			if event.Op&fsnotify.Create != 0 {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					if filepath.Clean(event.Name) == filepath.Join(h.workDir, ".juex") {
-						if err := h.addWatch(watcher, event.Name); err != nil {
-							h.failWatcher(watcher)
-							return
-						}
-						resources = []string{resourceObservable}
-					} else if h.shouldWatchCreatedDirectory(event.Name) {
+					if h.shouldWatchCreatedDirectory(event.Name) {
 						if err := h.addRoot(watcher, event.Name); err != nil {
 							h.failWatcher(watcher)
 							return
@@ -399,6 +387,9 @@ func (h *resourceEventHub) failWatcher(failed *fsnotify.Watcher) {
 
 func (h *resourceEventHub) resourceForPath(path string) string {
 	path = filepath.Clean(path)
+	if h.observablesConfigPath != "" && path == h.observablesConfigPath {
+		return resourceObservable
+	}
 	if pathWithin(h.threadsDir, path) && strings.Contains(path, string(filepath.Separator)+"scratchpad") {
 		return resourceScratchpad
 	}
@@ -411,9 +402,6 @@ func (h *resourceEventHub) resourceForPath(path string) string {
 	}
 	parts := strings.Split(relative, string(filepath.Separator))
 	if len(parts) > 0 && shouldSkipTreeEntry(parts[0]) {
-		if filepath.Clean(path) == filepath.Clean(filepath.Join(h.workDir, ".juex", "observables.json")) {
-			return resourceObservable
-		}
 		return ""
 	}
 	return resourceWorkspace

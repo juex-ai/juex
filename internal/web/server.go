@@ -99,7 +99,7 @@ type activeThread struct {
 var errThreadInactive = errors.New("web: Thread is archived")
 
 func NewServer(opts Options) *Server {
-	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.ThreadsDir())
+	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.ThreadsDir(), opts.Cfg.ObservablesConfigPath())
 	resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.ThreadIndexPath()})
 	return &Server{
 		opts:          opts,

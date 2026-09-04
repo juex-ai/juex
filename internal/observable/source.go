@@ -95,7 +95,7 @@ type sourceDependencies struct {
 
 func newSourceRuntime(spec Spec, kernel sourceKernel, deps sourceDependencies) (sourceRuntime, error) {
 	if deps.origin.Source == "" {
-		deps.origin.Source = SourceProject
+		deps.origin.Source = SourceAgent
 	}
 	switch spec.SourceType() {
 	case SourceTypeCommand:
@@ -143,7 +143,7 @@ func baseStatusFromSpec(spec Spec, state string) ObservableStatus {
 	return ObservableStatus{
 		ID:         spec.ID,
 		Name:       spec.Name,
-		Source:     SourceProject,
+		Source:     SourceAgent,
 		SourceType: spec.SourceType(),
 		State:      state,
 	}

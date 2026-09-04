@@ -16,7 +16,7 @@ type: builtin-guide
 - `observable_create` 仅用于 stdout 或 stderr 会被解析为持久 Observation 的受管命令。
 - `schedule_create` 用于发出预先编写内容的一次性、每日、每月或间隔触发。不要用轮询 shell loop 或 Command Observable 实现 Schedule。
 - 使用 `observable_start` 和 `observable_stop` 做进程生命周期内的临时改变。配置仍决定 Juex 下次启动时的状态。
-- 仅用 `observable_delete` 从 `.juex/observables.json` 永久删除；它也会停止正在运行的 source。
+- 仅用 `observable_delete` 从 Agent 拥有的 `observables.json` 永久删除；它也会停止正在运行的 source。
 - 使用 `observable_observations` 检查近期持久输出。可选 `id` 按 source 过滤。请求的 `limit` 为 1 到 100；省略或非正值默认为 20，更大值上限为 100。
 
 ## Command Observables
