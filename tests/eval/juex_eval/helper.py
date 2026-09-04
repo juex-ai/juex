@@ -868,12 +868,13 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
     stdout_file = case_dir / f"{label}.stdout.json"
     stderr_file = case_dir / f"{label}.stderr.log"
     env = isolated_provider_environment(ctx, case_dir)
+    home_config = pathlib.Path(env["JUEX_HOME"]) / "juex.yaml"
+    shutil.copyfile(case_config, home_config)
+    home_config.chmod(0o600)
     command = [
         ctx.juex_bin,
         "-C",
         str(case_dir),
-        "--config",
-        str(case_config),
         "--enable-user-agents-resources=false",
         "send",
         "--wait",

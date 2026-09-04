@@ -1590,6 +1590,49 @@ func TestCompactionTurnIsolatesInheritedProviderRuntimeOverrides(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestProviderSmokeTurnUsesIsolatedHomeConfig(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"row = helper.MatrixRow('provider', 'model', 'openai', 'default', 'default', 'unset', 'provider:model')",
+		"captured = {}",
+		"original_run = helper.run_subprocess_with_timeout",
+		"def fake_run(command, timeout, **kwargs):",
+		"    captured['command'] = command",
+		"    captured['env'] = kwargs['env']",
+		"    kwargs['stdout'].write(b'{}\\n')",
+		"    return 0",
+		"helper.run_subprocess_with_timeout = fake_run",
+		"try:",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        case = Path(tmp) / 'case'",
+		"        case.mkdir()",
+		"        source = case / 'provider.juex.yaml'",
+		"        source.write_text('models: [provider:model]\\n', encoding='utf-8')",
+		"        ctx = helper.ProviderSmokeContext(row, '/fake/juex', {}, case, case / 'report', 'unit', 5, 0, str(case / 'codex'))",
+		"        assert helper.run_turn(ctx, case, source, 'turn1', ['hello']) == 0",
+		"        home_config = case / 'home' / '.juex' / 'juex.yaml'",
+		"        assert home_config.read_text(encoding='utf-8') == source.read_text(encoding='utf-8')",
+		"        assert home_config.stat().st_mode & 0o777 == 0o600",
+		"        assert '--config' not in captured['command'], captured['command']",
+		"        assert captured['command'] == ['/fake/juex', '-C', str(case), '--enable-user-agents-resources=false', 'send', '--wait', '--json', 'hello']",
+		"        assert captured['env']['HOME'] == str(case / 'home')",
+		"        assert captured['env']['JUEX_HOME'] == str(case / 'home' / '.juex')",
+		"finally:",
+		"    helper.run_subprocess_with_timeout = original_run",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestJuexSourceConfigValidationUsesCompleteConfigDoctor(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
