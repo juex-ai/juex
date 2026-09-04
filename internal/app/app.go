@@ -1020,7 +1020,7 @@ func (a *App) ObservationFromMCPNotification(n mcp.Notification) observable.Obse
 	attachments := make([]eventmedia.AttachmentRef, 0, len(report.Valid))
 	for _, item := range report.Valid {
 		attachments = append(attachments, eventmedia.AttachmentRef{
-			Path: item.ArtifactPath, MediaType: item.MediaType,
+			Path: item.ArtifactPath, Name: item.Ref.Name, MediaType: item.MediaType,
 			SHA256: item.SHA256, Bytes: item.OriginalBytes,
 		})
 	}
@@ -1162,6 +1162,7 @@ func renderObservationText(record observable.ObservationRecord, report eventmedi
 	if record.ArtifactPath != "" {
 		fmt.Fprintf(&sb, "artifact_path: %s\n", record.ArtifactPath)
 	}
+	fmt.Fprintf(&sb, "content_bytes: %d\n", len(record.Content))
 	sb.WriteString("content:\n")
 	sb.WriteString(record.Content)
 	if !strings.HasSuffix(record.Content, "\n") {
@@ -1191,7 +1192,9 @@ func renderMCPNotificationText(n mcp.Notification, eventType string, report even
 	if value, ok := n.Params["content"].(string); ok && value != "" {
 		content = value
 	}
+	content = strings.TrimRight(content, "\n")
 	if content != "" {
+		fmt.Fprintf(&sb, "content_bytes: %d\n", len(content))
 		sb.WriteString("content:\n")
 		sb.WriteString(content)
 		if !strings.HasSuffix(content, "\n") {
@@ -1223,7 +1226,12 @@ func writeAttachmentSummary(sb *strings.Builder, report eventmedia.ValidationRep
 			if eventmedia.IsImageMediaType(attachment.MediaType) {
 				kind = "image"
 			}
-			fmt.Fprintf(sb, "- %s source=%s artifact=%s (%s, %d bytes", kind, attachment.Ref.Path, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
+			source := attachment.Ref.Name
+			if source == "" {
+				source = attachment.Ref.Path
+			}
+			sourceJSON, _ := json.Marshal(source)
+			fmt.Fprintf(sb, "- %s source=%s artifact=%s (%s, %d bytes", kind, sourceJSON, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
 			if attachment.SHA256 != "" {
 				fmt.Fprintf(sb, ", sha256=%s", attachment.SHA256)
 			}

@@ -5,6 +5,18 @@ export type ExternalEventDisplay = {
   copyText: string;
 };
 
+export type ObservationAttachmentDisplay = {
+  kind: "image" | "file";
+  sourcePath: string;
+  artifactPath: string;
+  mediaType: string;
+  bytes: number;
+};
+
+export type ObservationEventDisplay = ExternalEventDisplay & {
+  attachments: ObservationAttachmentDisplay[];
+};
+
 const FALLBACK_LABEL = "mcp:event";
 
 export type MCPEventDisplay = ExternalEventDisplay;
@@ -18,11 +30,28 @@ export function formatMCPEventForDisplay(text: string): ExternalEventDisplay {
 
 export function formatObservationEventForDisplay(
   text: string,
-): ExternalEventDisplay {
-  return formatExternalEventForDisplay(text, {
-    fallbackLabel: "observation:event",
-    parseColonPrefix: false,
-  });
+): ObservationEventDisplay {
+  const envelope = parseObservationTextEnvelope(text);
+  if (envelope) {
+    return {
+      label: observationLabel(envelope.observableID),
+      content: envelope.detail,
+      preview: oneLinePreview(observationContentPreview(envelope.content)),
+      copyText: text,
+      attachments: parseObservationAttachments(envelope.attachmentFooter),
+    };
+  }
+
+  const json = parseJSONRecord(text);
+  const observableID = stringField(json, "observable_id");
+  const content = stringFieldIncludingEmpty(json, "content") ?? text;
+  return {
+    label: observationLabel(observableID),
+    content: text,
+    preview: oneLinePreview(observationContentPreview(content)),
+    copyText: text,
+    attachments: [],
+  };
 }
 
 export function formatWorkerThreadEventForDisplay(
@@ -121,4 +150,207 @@ function paramsContentPreview(text: string): string | null {
   } catch {
     return null;
   }
+}
+
+function parseObservationTextEnvelope(text: string): {
+  observableID: string | null;
+  content: string;
+  detail: string;
+  attachmentFooter: string;
+} | null {
+  const firstLineEnd = text.search(/\r?\n/);
+  const firstLine = (
+    firstLineEnd < 0 ? text : text.slice(0, firstLineEnd)
+  ).trim();
+  if (firstLine !== "Observable observation") return null;
+
+  const detailStart = firstLineEnd < 0
+    ? text.length
+    : firstLineEnd + (text[firstLineEnd] === "\r" ? 2 : 1);
+  const detail = text.slice(detailStart);
+  const contentMarker = detail.match(/(?:^|\r?\n)content:\r?\n/);
+  const metadata = contentMarker?.index === undefined
+    ? detail
+    : detail.slice(0, contentMarker.index);
+  const contentStart = contentMarker?.index === undefined
+    ? detail.length
+    : contentMarker.index + contentMarker[0].length;
+  const contentBytes = unsignedInteger(lineValue(metadata, "content_bytes"));
+  const contentLength = contentMarker && contentBytes !== null
+    ? utf8PrefixCodeUnits(detail.slice(contentStart), contentBytes)
+    : null;
+  const contentEnd = contentLength === null
+    ? detail.length
+    : contentStart + contentLength;
+
+  return {
+    observableID: lineValue(metadata, "observable_id"),
+    content: detail.slice(contentStart, contentEnd),
+    detail,
+    attachmentFooter: contentLength === null
+      ? ""
+      : observationAttachmentFooter(detail.slice(contentEnd)),
+  };
+}
+
+function observationAttachmentFooter(text: string): string {
+  const footer = text.startsWith("\r\n")
+    ? text.slice(2)
+    : text.startsWith("\n")
+      ? text.slice(1)
+      : text;
+  return /^attachments:\r?\n(?=- (?:image|file) source=)/.test(footer)
+    ? footer
+    : "";
+}
+
+function unsignedInteger(value: string | null): number | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function utf8PrefixCodeUnits(text: string, byteLength: number): number | null {
+  if (byteLength === 0) return 0;
+  let bytes = 0;
+  let codeUnits = 0;
+  for (const character of text) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    bytes += codePoint <= 0x7f
+      ? 1
+      : codePoint <= 0x7ff
+        ? 2
+        : codePoint <= 0xffff
+          ? 3
+          : 4;
+    if (bytes > byteLength) return null;
+    codeUnits += character.length;
+    if (bytes === byteLength) return codeUnits;
+  }
+  return null;
+}
+
+function parseObservationAttachments(text: string): ObservationAttachmentDisplay[] {
+  const attachments: ObservationAttachmentDisplay[] = [];
+  const pattern =
+    /^- (image|file) source=("(?:\\.|[^"\\\r\n])*") artifact=(\S+) \(([^,\r\n]+), (\d+) bytes(?:,[^\r\n)]*)?\)$/;
+  const lines = text.split(/\r?\n/);
+  if (lines[0] !== "attachments:") return attachments;
+
+  for (const line of lines.slice(1)) {
+    const match = pattern.exec(line);
+    if (!match) break;
+    const sourcePath = parseJSONString(match[2]);
+    if (sourcePath === null) break;
+    attachments.push({
+      kind: match[1] as ObservationAttachmentDisplay["kind"],
+      sourcePath,
+      artifactPath: match[3],
+      mediaType: match[4].trim(),
+      bytes: Number(match[5]),
+    });
+  }
+  return attachments;
+}
+
+function observationContentPreview(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return content;
+
+  const mcpContent = content.startsWith("MCP notification")
+    ? boundedTextSection(content, "content", "content_bytes") ??
+      namedTextSection(content, "content", [
+        "meta",
+        "params",
+        "attachments",
+        "attachment_errors",
+      ])
+    : null;
+  const candidate = mcpContent === null ? trimmed : mcpContent.trim();
+  const jsonContent = stringFieldIncludingEmpty(
+    parseJSONRecord(candidate),
+    "content",
+  );
+  return jsonContent === null ? candidate : jsonContent.trim();
+}
+
+function boundedTextSection(
+  text: string,
+  name: string,
+  byteLengthField: string,
+): string | null {
+  const marker = new RegExp(`(?:^|\\r?\\n)${name}:\\r?\\n`);
+  const match = marker.exec(text);
+  if (!match) return null;
+  const byteLength = unsignedInteger(
+    lineValue(text.slice(0, match.index), byteLengthField),
+  );
+  if (byteLength === null) return null;
+  const start = match.index + match[0].length;
+  const codeUnits = utf8PrefixCodeUnits(text.slice(start), byteLength);
+  return codeUnits === null ? null : text.slice(start, start + codeUnits);
+}
+
+function namedTextSection(
+  text: string,
+  name: string,
+  followingSections: string[],
+): string | null {
+  const marker = new RegExp(`(?:^|\\r?\\n)${name}:\\r?\\n`);
+  const match = marker.exec(text);
+  if (!match) return null;
+  const start = match.index + match[0].length;
+  let end = text.length;
+  for (const following of followingSections) {
+    const next = new RegExp(`\\r?\\n${following}:\\r?\\n`, "g");
+    next.lastIndex = start;
+    const nextMatch = next.exec(text);
+    if (nextMatch && nextMatch.index < end) end = nextMatch.index;
+  }
+  return text.slice(start, end);
+}
+
+function lineValue(text: string, name: string): string | null {
+  const match = new RegExp(`(?:^|\\r?\\n)${name}:\\s*([^\\r\\n]+)`).exec(text);
+  return match?.[1]?.trim() || null;
+}
+
+function parseJSONRecord(text: string): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseJSONString(text: string): string | null {
+  try {
+    const value = JSON.parse(text) as unknown;
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringFieldIncludingEmpty(
+  value: Record<string, unknown> | null,
+  name: string,
+): string | null {
+  const field = value?.[name];
+  return typeof field === "string" ? field : null;
+}
+
+function stringField(
+  value: Record<string, unknown> | null,
+  name: string,
+): string | null {
+  const field = value?.[name];
+  return typeof field === "string" && field.trim() ? field : null;
+}
+
+function observationLabel(observableID: string | null): string {
+  return observableID ? `observation:${observableID}` : "observation:event";
 }

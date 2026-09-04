@@ -356,6 +356,170 @@ func TestFilesContentReturnsPreview(t *testing.T) {
 	}
 }
 
+func TestFilesContentReturnsArtifactTextPreview(t *testing.T) {
+	srv := newTestServer(t)
+	store, err := artifact.NewStore(srv.opts.Cfg.MediaDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.PutContentAddressed("event-media", ".txt", []byte("attachment preview\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/files/content?root=artifact&path=" + url.QueryEscape(ref.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+
+	var got FileContent
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != ref.Path || got.Content != "attachment preview\n" || got.Kind != "text" || got.Size != int64(ref.Bytes) || got.Truncated {
+		t.Fatalf("content = %+v", got)
+	}
+}
+
+func TestFilesContentArtifactPreviewIsAvailableReadOnly(t *testing.T) {
+	srv := newTestServer(t)
+	store, err := artifact.NewStore(srv.opts.Cfg.MediaDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.PutContentAddressed("event-media", ".txt", []byte("stopped agent preview"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(NewReadOnlyAPIHandler(srv.opts.Cfg))
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/files/content?root=artifact&path=" + url.QueryEscape(ref.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+}
+
+func TestFilesContentArtifactPreviewRejectsUnsafeAndBinaryContent(t *testing.T) {
+	srv := newTestServer(t)
+	store, err := artifact.NewStore(srv.opts.Cfg.MediaDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryRef, err := store.PutContentAddressed("event-media", ".bin", []byte{0, 1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	for _, tc := range []struct {
+		name string
+		path string
+		want int
+	}{
+		{name: "not content addressed", path: "event-media/message.txt", want: http.StatusForbidden},
+		{name: "other namespace", path: "threads/123/media/" + strings.Repeat("a", 64) + ".txt", want: http.StatusForbidden},
+		{name: "absolute path", path: "/event-media/" + strings.Repeat("a", 64) + ".txt", want: http.StatusForbidden},
+		{name: "path traversal", path: "event-media/../" + strings.Repeat("a", 64) + ".txt", want: http.StatusForbidden},
+		{name: "binary", path: binaryRef.Path, want: http.StatusUnsupportedMediaType},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + "/api/files/content?root=artifact&path=" + url.QueryEscape(tc.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status = %d body = %s, want %d", resp.StatusCode, body, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilesContentArtifactPreviewRejectsPDFAndCorruptedBytes(t *testing.T) {
+	srv := newTestServer(t)
+	store, err := artifact.NewStore(srv.opts.Cfg.MediaDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdfRef, err := store.PutContentAddressed("event-media", ".pdf", []byte("%PDF-1.7\nnot a text preview"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptDigest := strings.Repeat("c", 64)
+	corruptPath := filepath.ToSlash(filepath.Join("event-media", corruptDigest+".txt"))
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.MediaDir(), corruptPath), "corrupted")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	for _, tc := range []struct {
+		name string
+		path string
+		want int
+	}{
+		{name: "pdf", path: pdfRef.Path, want: http.StatusUnsupportedMediaType},
+		{name: "corrupted", path: corruptPath, want: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + "/api/files/content?root=artifact&path=" + url.QueryEscape(tc.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status = %d body = %s, want %d", resp.StatusCode, body, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilesContentArtifactPreviewMarksLargeTextTruncated(t *testing.T) {
+	srv := newTestServer(t)
+	store, err := artifact.NewStore(srv.opts.Cfg.MediaDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(strings.Repeat("a", maxFilePreviewBytes+10))
+	ref, err := store.PutContentAddressed("event-media", ".txt", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/files/content?root=artifact&path=" + url.QueryEscape(ref.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var got FileContent
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Truncated || len(got.Content) != maxFilePreviewBytes || got.Size != int64(len(body)) {
+		t.Fatalf("content = %+v", got)
+	}
+}
+
 func TestFilesContentReturnsImageMetadata(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)

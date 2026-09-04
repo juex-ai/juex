@@ -16,8 +16,10 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/sandbox"
@@ -32,6 +34,7 @@ var errEventAttachmentsTooLarge = errors.New("event attachments exceed byte limi
 
 type AttachmentRef struct {
 	Path      string `json:"path"`
+	Name      string `json:"name,omitempty"`
 	MediaType string `json:"media_type,omitempty"`
 	SHA256    string `json:"sha256,omitempty"`
 	Bytes     int    `json:"bytes,omitempty"`
@@ -186,7 +189,7 @@ func ValidateStoredAttachments(refs []AttachmentRef, opts ValidationOptions) Val
 		sum := sha256.Sum256(data)
 		total += int64(len(data))
 		report.Valid = append(report.Valid, ValidatedAttachment{
-			Ref:           AttachmentRef{Path: ref.Path, MediaType: mediaType, SHA256: ref.SHA256, Bytes: ref.Bytes},
+			Ref:           AttachmentRef{Path: ref.Path, Name: attachmentDisplayName(ref.Name, ref.Path), MediaType: mediaType, SHA256: ref.SHA256, Bytes: ref.Bytes},
 			ArtifactPath:  ref.Path,
 			MediaType:     mediaType,
 			SHA256:        hex.EncodeToString(sum[:]),
@@ -231,6 +234,7 @@ func normalizeAttachmentRefs(refs []AttachmentRef) []AttachmentRef {
 	out := make([]AttachmentRef, 0, len(refs))
 	for _, ref := range refs {
 		ref.Path = strings.TrimSpace(ref.Path)
+		ref.Name = attachmentDisplayName(ref.Name, "")
 		ref.MediaType = normalizeMediaType(ref.MediaType)
 		ref.SHA256 = strings.TrimSpace(ref.SHA256)
 		out = append(out, ref)
@@ -318,6 +322,7 @@ func inspectAttachment(ref AttachmentRef, opts ValidationOptions, remainingEvent
 	validated := ValidatedAttachment{
 		Ref: AttachmentRef{
 			Path:      strings.TrimSpace(ref.Path),
+			Name:      attachmentDisplayName(ref.Path, ""),
 			MediaType: mediaType,
 		},
 		ArtifactPath:  filepath.ToSlash(rel),
@@ -332,6 +337,24 @@ func inspectAttachment(ref AttachmentRef, opts ValidationOptions, remainingEvent
 		data:       data,
 		extension:  artifactExtension(mediaType),
 	}, nil
+}
+
+func attachmentDisplayName(name, fallbackPath string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = strings.TrimSpace(fallbackPath)
+	}
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = path.Base(strings.TrimRight(name, "/"))
+	if name == "." || name == "/" {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name)
 }
 
 func resolvedWorkDir(workDir string) (string, error) {

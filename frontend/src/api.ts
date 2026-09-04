@@ -372,6 +372,20 @@ export async function getFileContent(
   );
 }
 
+export async function getArtifactContent(
+  path: string,
+  signal?: AbortSignal,
+): Promise<FileContentResponse> {
+  return jsonOrThrow(
+    await fetch(
+      agentAPIPath(
+        `/api/files/content?root=artifact&path=${encodeURIComponent(path)}`,
+      ),
+      { signal },
+    ),
+  );
+}
+
 export async function getMediaMetadata(
   path: string,
   signal?: AbortSignal,

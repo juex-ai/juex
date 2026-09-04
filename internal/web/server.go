@@ -143,6 +143,13 @@ func NewReadOnlyAPIHandler(cfg config.Config) http.Handler {
 		server.listThreads(w)
 	})
 	mux.HandleFunc("/api/threads/", server.dispatchReadOnlyThread)
+	mux.HandleFunc("/api/files/content", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("root") != "artifact" {
+			writeErr(w, http.StatusNotFound, "not_found", "read-only API route not found")
+			return
+		}
+		server.handleFilesContent(w, r)
+	})
 	mux.HandleFunc("/api/media", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or HEAD required")

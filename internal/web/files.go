@@ -264,6 +264,15 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
 		return
 	}
+	switch r.URL.Query().Get("root") {
+	case "", "workspace":
+	case "artifact":
+		s.handleArtifactFileContent(w, r)
+		return
+	default:
+		writeErr(w, http.StatusBadRequest, "bad_request", "root must be workspace or artifact")
+		return
+	}
 	file, reqErr := s.resolveFileRequest(r)
 	if reqErr != nil {
 		reqErr.write(w)
@@ -315,6 +324,45 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 		Content:   string(buf),
 		Kind:      "text",
 		Size:      file.info.Size(),
+		Truncated: truncated,
+	})
+}
+
+func (s *Server) handleArtifactFileContent(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasPrefix(strings.TrimSpace(r.URL.Query().Get("path")), "event-media/") {
+		writeErr(w, http.StatusForbidden, "forbidden", "artifact preview is limited to event-media")
+		return
+	}
+	relPath, data, reqErr := s.readContentAddressedArtifact(r)
+	if reqErr != nil {
+		reqErr.write(w)
+		return
+	}
+
+	if mediaType, ok := imagePreviewMediaType(data); ok {
+		writeJSON(w, http.StatusOK, FileContent{
+			Path:      relPath,
+			Kind:      "image",
+			MediaType: mediaType,
+			Size:      int64(len(data)),
+		})
+		return
+	}
+
+	preview := data
+	truncated := len(preview) > maxFilePreviewBytes
+	if truncated {
+		preview = preview[:maxFilePreviewBytes]
+	}
+	if !isTextPreviewData(preview) {
+		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "binary file preview is not supported")
+		return
+	}
+	writeJSON(w, http.StatusOK, FileContent{
+		Path:      relPath,
+		Content:   string(preview),
+		Kind:      "text",
+		Size:      int64(len(data)),
 		Truncated: truncated,
 	})
 }
@@ -412,38 +460,9 @@ func (s *Server) handleWorkspaceMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArtifactMedia(w http.ResponseWriter, r *http.Request) {
-	relPath := strings.TrimSpace(r.URL.Query().Get("path"))
-	if relPath == "" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "missing path parameter")
-		return
-	}
-	name := filepath.Base(filepath.FromSlash(relPath))
-	digest := strings.TrimSuffix(name, filepath.Ext(name))
-	if len(digest) != 64 {
-		writeErr(w, http.StatusForbidden, "forbidden", "artifact media path is not content-addressed")
-		return
-	}
-	if _, err := hex.DecodeString(digest); err != nil {
-		writeErr(w, http.StatusForbidden, "forbidden", "artifact media path is not content-addressed")
-		return
-	}
-	store, err := artifact.NewStore(s.opts.Cfg.MediaDir())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	data, err := store.ReadLimit(artifact.Ref{Path: relPath, SHA256: digest}, usermedia.DefaultMaxBytes)
-	if err != nil {
-		switch {
-		case errors.Is(err, os.ErrNotExist):
-			writeErr(w, http.StatusNotFound, "not_found", "artifact not found")
-		case errors.Is(err, artifact.ErrIntegrity):
-			writeErr(w, http.StatusConflict, "integrity_error", err.Error())
-		case errors.Is(err, artifact.ErrTooLarge):
-			writeErr(w, http.StatusRequestEntityTooLarge, "payload_too_large", err.Error())
-		default:
-			writeErr(w, http.StatusForbidden, "forbidden", err.Error())
-		}
+	relPath, data, reqErr := s.readContentAddressedArtifact(r)
+	if reqErr != nil {
+		reqErr.write(w)
 		return
 	}
 	mediaType, ok := imagePreviewMediaType(data)
@@ -451,11 +470,46 @@ func (s *Server) handleArtifactMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "media is only supported for images")
 		return
 	}
+	name := filepath.Base(filepath.FromSlash(relPath))
+	digest := strings.TrimSuffix(name, filepath.Ext(name))
 	w.Header().Set("Content-Type", mediaType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("ETag", `"`+strings.ToLower(digest)+`"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, relPath, time.Time{}, bytes.NewReader(data))
+}
+
+func (s *Server) readContentAddressedArtifact(r *http.Request) (string, []byte, *fileRequestError) {
+	relPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if relPath == "" {
+		return "", nil, &fileRequestError{status: http.StatusBadRequest, code: "bad_request", message: "missing path parameter"}
+	}
+	name := filepath.Base(filepath.FromSlash(relPath))
+	digest := strings.TrimSuffix(name, filepath.Ext(name))
+	if len(digest) != 64 {
+		return "", nil, &fileRequestError{status: http.StatusForbidden, code: "forbidden", message: "artifact media path is not content-addressed"}
+	}
+	if _, err := hex.DecodeString(digest); err != nil {
+		return "", nil, &fileRequestError{status: http.StatusForbidden, code: "forbidden", message: "artifact media path is not content-addressed"}
+	}
+	store, err := artifact.NewStore(s.opts.Cfg.MediaDir())
+	if err != nil {
+		return "", nil, &fileRequestError{status: http.StatusInternalServerError, code: "general_error", message: err.Error()}
+	}
+	data, err := store.ReadLimit(artifact.Ref{Path: relPath, SHA256: digest}, usermedia.DefaultMaxBytes)
+	if err != nil {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return "", nil, &fileRequestError{status: http.StatusNotFound, code: "not_found", message: "artifact not found"}
+		case errors.Is(err, artifact.ErrIntegrity):
+			return "", nil, &fileRequestError{status: http.StatusConflict, code: "integrity_error", message: err.Error()}
+		case errors.Is(err, artifact.ErrTooLarge):
+			return "", nil, &fileRequestError{status: http.StatusRequestEntityTooLarge, code: "payload_too_large", message: err.Error()}
+		default:
+			return "", nil, &fileRequestError{status: http.StatusForbidden, code: "forbidden", message: err.Error()}
+		}
+	}
+	return relPath, data, nil
 }
 
 type resolvedFileRequest struct {
@@ -617,4 +671,20 @@ func isBinary(data []byte) bool {
 		}
 	}
 	return false
+}
+
+func isTextPreviewData(data []byte) bool {
+	if isBinary(data) {
+		return false
+	}
+	mediaType := mediaTypeBase(http.DetectContentType(data))
+	if strings.HasPrefix(mediaType, "text/") {
+		return true
+	}
+	switch mediaType {
+	case "application/json", "application/xml", "application/yaml", "application/x-yaml", "application/toml":
+		return true
+	default:
+		return false
+	}
 }

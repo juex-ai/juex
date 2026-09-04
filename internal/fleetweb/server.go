@@ -552,7 +552,7 @@ func isReadOnlyAgentRequest(method, path string) bool {
 }
 
 func isReadOnlyAgentPath(path string) bool {
-	if path == "/api/threads" || path == "/api/media" {
+	if path == "/api/threads" || path == "/api/media" || path == "/api/files/content" {
 		return true
 	}
 	const prefix = "/api/threads/"
