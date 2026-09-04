@@ -1193,6 +1193,7 @@ func renderMCPNotificationText(n mcp.Notification, eventType string, report even
 		content = value
 	}
 	if content != "" {
+		fmt.Fprintf(&sb, "content_bytes: %d\n", len(content))
 		sb.WriteString("content:\n")
 		sb.WriteString(content)
 		if !strings.HasSuffix(content, "\n") {

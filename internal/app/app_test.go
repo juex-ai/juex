@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
@@ -310,6 +312,18 @@ func TestRenderObservationTextUsesStoredAttachmentDisplayName(t *testing.T) {
 	text := renderObservationText(record, report)
 	if !strings.Contains(text, "source=deployment-report.txt artifact=event-media/") {
 		t.Fatalf("observation text did not preserve display name:\n%s", text)
+	}
+}
+
+func TestRenderMCPNotificationTextDelimitsContent(t *testing.T) {
+	content := "first line\nmeta:\nstill notification content"
+	text := renderMCPNotificationText(mcp.Notification{
+		ServerName: "wechat-wire",
+		Content:    content,
+	}, "notification", eventmedia.ValidationReport{}, nil)
+	want := fmt.Sprintf("content_bytes: %d\ncontent:\n%s", len(content), content)
+	if !strings.Contains(text, want) {
+		t.Fatalf("MCP notification text missing content boundary %q:\n%s", want, text)
 	}
 }
 

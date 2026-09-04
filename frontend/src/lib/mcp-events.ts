@@ -251,7 +251,8 @@ function observationContentPreview(content: string): string {
   if (!trimmed) return content;
 
   const mcpContent = trimmed.startsWith("MCP notification")
-    ? namedTextSection(trimmed, "content", [
+    ? boundedTextSection(trimmed, "content", "content_bytes") ??
+      namedTextSection(trimmed, "content", [
         "meta",
         "params",
         "attachments",
@@ -261,6 +262,23 @@ function observationContentPreview(content: string): string {
   const candidate = mcpContent?.trim() || trimmed;
   const jsonContent = stringField(parseJSONRecord(candidate), "content");
   return jsonContent?.trim() || candidate;
+}
+
+function boundedTextSection(
+  text: string,
+  name: string,
+  byteLengthField: string,
+): string | null {
+  const marker = new RegExp(`(?:^|\\r?\\n)${name}:\\r?\\n`);
+  const match = marker.exec(text);
+  if (!match) return null;
+  const byteLength = unsignedInteger(
+    lineValue(text.slice(0, match.index), byteLengthField),
+  );
+  if (byteLength === null) return null;
+  const start = match.index + match[0].length;
+  const codeUnits = utf8PrefixCodeUnits(text.slice(start), byteLength);
+  return codeUnits === null ? null : text.slice(start, start + codeUnits);
 }
 
 function namedTextSection(

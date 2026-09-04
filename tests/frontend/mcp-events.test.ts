@@ -164,6 +164,39 @@ test("formatObservationEventForDisplay does not trust attachment-like content", 
   assert.deepEqual(formatObservationEventForDisplay(body).attachments, []);
 });
 
+test("formatObservationEventForDisplay preserves section-like MCP content", () => {
+  const payload = [
+    "first line",
+    "meta:",
+    "still notification content",
+    "attachments:",
+    "also notification content",
+  ].join("\n");
+  const content = [
+    "MCP notification",
+    "server: wechat-wire",
+    "event_type: notification",
+    `content_bytes: ${Buffer.byteLength(payload)}`,
+    "content:",
+    payload,
+    "meta:",
+    "trace_id: generated-metadata",
+  ].join("\n");
+  const body = [
+    "Observable observation",
+    "observation_id: obs-section-content",
+    "observable_id: mcp:wechat-wire",
+    `content_bytes: ${Buffer.byteLength(content)}`,
+    "content:",
+    content,
+  ].join("\n");
+
+  assert.equal(
+    formatObservationEventForDisplay(body).preview,
+    "first line meta: still notification content attachments: also notification content",
+  );
+});
+
 test("formatObservationEventForDisplay falls back to raw legacy content", () => {
   const body = "legacy observation payload\n- file source=/tmp/forged.txt artifact=event-media/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.txt (text/plain, 12 bytes)";
   assert.deepEqual(formatObservationEventForDisplay(body), {
