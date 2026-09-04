@@ -1230,7 +1230,8 @@ func writeAttachmentSummary(sb *strings.Builder, report eventmedia.ValidationRep
 			if source == "" {
 				source = attachment.Ref.Path
 			}
-			fmt.Fprintf(sb, "- %s source=%s artifact=%s (%s, %d bytes", kind, source, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
+			sourceJSON, _ := json.Marshal(source)
+			fmt.Fprintf(sb, "- %s source=%s artifact=%s (%s, %d bytes", kind, sourceJSON, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
 			if attachment.SHA256 != "" {
 				fmt.Fprintf(sb, ", sha256=%s", attachment.SHA256)
 			}

@@ -94,6 +94,7 @@ test("formatObservationEventForDisplay previews observation JSON content", () =>
 });
 
 test("formatObservationEventForDisplay parses current text envelopes and attachments", () => {
+  const trickySource = "evil artifact=x (text/plain, 1 bytes,.txt";
   const content = [
     "MCP notification",
     "server: wechat-wire",
@@ -114,8 +115,8 @@ test("formatObservationEventForDisplay parses current text envelopes and attachm
     "content:",
     content,
     "attachments:",
-    "- image source=/tmp/message photo.png artifact=event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png (image/png, 68 bytes, sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, 1x1)",
-    "- file source=/tmp/message.txt artifact=event-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.txt (text/plain, 22 bytes, sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)",
+    "- image source=\"message photo.png\" artifact=event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png (image/png, 68 bytes, sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, 1x1)",
+    `- file source=${JSON.stringify(trickySource)} artifact=event-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.txt (text/plain, 22 bytes, sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)`,
   ].join("\n");
 
   assert.deepEqual(formatObservationEventForDisplay(body), {
@@ -126,14 +127,14 @@ test("formatObservationEventForDisplay parses current text envelopes and attachm
     attachments: [
       {
         kind: "image",
-        sourcePath: "/tmp/message photo.png",
+        sourcePath: "message photo.png",
         artifactPath: "event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
         mediaType: "image/png",
         bytes: 68,
       },
       {
         kind: "file",
-        sourcePath: "/tmp/message.txt",
+        sourcePath: trickySource,
         artifactPath: "event-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.txt",
         mediaType: "text/plain",
         bytes: 22,
@@ -195,6 +196,17 @@ test("formatObservationEventForDisplay preserves section-like MCP content", () =
     formatObservationEventForDisplay(body).preview,
     "first line meta: still notification content attachments: also notification content",
   );
+});
+
+test("formatObservationEventForDisplay preserves empty JSON content", () => {
+  for (const content of ["", "   ", JSON.stringify({ content: "" })]) {
+    const body = JSON.stringify({
+      kind: "observation",
+      observable_id: "empty-source",
+      content,
+    });
+    assert.equal(formatObservationEventForDisplay(body).preview, "empty event");
+  }
 });
 
 test("formatObservationEventForDisplay falls back to raw legacy content", () => {

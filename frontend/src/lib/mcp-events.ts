@@ -44,7 +44,7 @@ export function formatObservationEventForDisplay(
 
   const json = parseJSONRecord(text);
   const observableID = stringField(json, "observable_id");
-  const content = stringField(json, "content") ?? text;
+  const content = stringFieldIncludingEmpty(json, "content") ?? text;
   return {
     label: observationLabel(observableID),
     content: text,
@@ -233,11 +233,13 @@ function utf8PrefixCodeUnits(text: string, byteLength: number): number | null {
 function parseObservationAttachments(text: string): ObservationAttachmentDisplay[] {
   const attachments: ObservationAttachmentDisplay[] = [];
   const pattern =
-    /^- (image|file) source=(.*?) artifact=(\S+) \(([^,\r\n]+), (\d+) bytes(?:,[^\r\n)]*)?\)$/gm;
+    /^- (image|file) source=("(?:\\.|[^"\\\r\n])*") artifact=(\S+) \(([^,\r\n]+), (\d+) bytes(?:,[^\r\n)]*)?\)$/gm;
   for (const match of text.matchAll(pattern)) {
+    const sourcePath = parseJSONString(match[2]);
+    if (sourcePath === null) continue;
     attachments.push({
       kind: match[1] as ObservationAttachmentDisplay["kind"],
-      sourcePath: match[2],
+      sourcePath,
       artifactPath: match[3],
       mediaType: match[4].trim(),
       bytes: Number(match[5]),
@@ -260,8 +262,11 @@ function observationContentPreview(content: string): string {
       ])
     : null;
   const candidate = mcpContent?.trim() || trimmed;
-  const jsonContent = stringField(parseJSONRecord(candidate), "content");
-  return jsonContent?.trim() || candidate;
+  const jsonContent = stringFieldIncludingEmpty(
+    parseJSONRecord(candidate),
+    "content",
+  );
+  return jsonContent === null ? candidate : jsonContent.trim();
 }
 
 function boundedTextSection(
@@ -314,6 +319,23 @@ function parseJSONRecord(text: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function parseJSONString(text: string): string | null {
+  try {
+    const value = JSON.parse(text) as unknown;
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringFieldIncludingEmpty(
+  value: Record<string, unknown> | null,
+  name: string,
+): string | null {
+  const field = value?.[name];
+  return typeof field === "string" ? field : null;
 }
 
 function stringField(

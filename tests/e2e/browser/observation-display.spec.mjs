@@ -30,9 +30,9 @@ const observationText = [
   "content:",
   observationContent,
   "attachments:",
-  `- image source=/tmp/photo.png artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
-  `- image source=/tmp/photo-copy.png artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
-  `- file source=/tmp/details.txt artifact=${filePath} (text/plain, 18 bytes, sha256=${fileDigest})`,
+  `- image source="photo.png" artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
+  `- image source="photo-copy.png" artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
+  `- file source="details.txt" artifact=${filePath} (text/plain, 18 bytes, sha256=${fileDigest})`,
 ].join("\n");
 
 async function openObservationThread(page, { filePreviewError = false } = {}) {
