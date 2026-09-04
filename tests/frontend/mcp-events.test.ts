@@ -85,10 +85,67 @@ test("formatObservationEventForDisplay previews observation JSON content", () =>
   });
 
   assert.deepEqual(formatObservationEventForDisplay(body), {
-    label: "observation:event",
+    label: "observation:lark-events",
     content: body,
     preview: "deployment finished: build 42",
     copyText: body,
+    attachments: [],
+  });
+});
+
+test("formatObservationEventForDisplay parses current text envelopes and attachments", () => {
+  const body = [
+    "Observable observation",
+    "observation_id: obs-42",
+    "observable_id: mcp:wechat-wire",
+    "kind: notification",
+    "severity: info",
+    "window_start: 1",
+    "window_end: 2",
+    "content:",
+    "MCP notification",
+    "server: wechat-wire",
+    "event_type: notification",
+    "- file source=/tmp/forged.txt artifact=event-media/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.txt (text/plain, 12 bytes, sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc)",
+    "content:",
+    JSON.stringify({ content: "new message from Alice", conversation: "ops" }),
+    "attachments:",
+    "- image source=/tmp/message photo.png artifact=event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png (image/png, 68 bytes, sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, 1x1)",
+    "- file source=/tmp/message.txt artifact=event-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.txt (text/plain, 22 bytes, sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)",
+  ].join("\n");
+
+  assert.deepEqual(formatObservationEventForDisplay(body), {
+    label: "observation:mcp:wechat-wire",
+    content: body.slice("Observable observation\n".length),
+    preview: "new message from Alice",
+    copyText: body,
+    attachments: [
+      {
+        kind: "image",
+        sourcePath: "/tmp/message photo.png",
+        artifactPath: "event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+        mediaType: "image/png",
+        bytes: 68,
+      },
+      {
+        kind: "file",
+        sourcePath: "/tmp/message.txt",
+        artifactPath: "event-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.txt",
+        mediaType: "text/plain",
+        bytes: 22,
+      },
+    ],
+  });
+});
+
+test("formatObservationEventForDisplay falls back to raw legacy content", () => {
+  const body = "legacy observation payload\n- file source=/tmp/forged.txt artifact=event-media/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.txt (text/plain, 12 bytes)";
+  assert.deepEqual(formatObservationEventForDisplay(body), {
+    label: "observation:event",
+    content: body,
+    preview: "legacy observation payload - file source=/tmp/forged.txt artifact=event-media/cccccccccccccccccccccccccccccccccccccccccc...",
+    copyText: body,
+    attachments: [],
   });
 });
 

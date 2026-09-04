@@ -1,10 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  getArtifactContent,
   getFileRawURL,
   getMediaMetadata,
   getMediaURL,
 } from "../../frontend/src/api.ts";
+
+test("getArtifactContent requests an explicit artifact root", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return new Response(
+      JSON.stringify({
+        path: "event-media/message.txt",
+        content: "hello",
+        kind: "text",
+        size: 5,
+        truncated: false,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    assert.equal(
+      (await getArtifactContent("event-media/message.txt")).content,
+      "hello",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(calls, [
+    "/api/files/content?root=artifact&path=event-media%2Fmessage.txt",
+  ]);
+});
 
 test("getFileRawURL encodes workspace paths for image previews", () => {
   assert.equal(

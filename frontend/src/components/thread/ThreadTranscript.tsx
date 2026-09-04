@@ -18,6 +18,7 @@ import {
 
 import { AssistantMarkdown } from "@/components/AssistantMarkdown";
 import { ImageBlock } from "@/components/ImageBlock";
+import { ObservationAttachments } from "@/components/thread/ObservationAttachments";
 import {
   Message,
   MessageAction,
@@ -45,6 +46,7 @@ import {
   formatMCPEventForDisplay,
   formatObservationEventForDisplay,
   formatWorkerThreadEventForDisplay,
+  type ObservationEventDisplay,
 } from "@/lib/mcp-events";
 import {
   COMPACT_COPIED_TOOLTIP,
@@ -658,6 +660,11 @@ function ExternalEventGroup({
   group: MessageGroup;
 }) {
   const isEmpty = group.units.length === 0;
+  const observationMedia = eventKind === "observation"
+    ? group.units.flatMap((unit) =>
+        unit.kind === "image" ? [unit.block.media ?? null] : [],
+      )
+    : [];
   return (
     <div className="flex w-full justify-center px-2 py-0.5">
       <div className="flex w-full max-w-[min(34rem,100%)] flex-col gap-2">
@@ -666,6 +673,7 @@ function ExternalEventGroup({
             <ExternalEventMessage
               key={index}
               eventKind={eventKind}
+              media={observationMedia}
               text={unit.block.text}
             />
           ) : null,
@@ -964,9 +972,11 @@ function CopyTextButton({
 
 function ExternalEventMessage({
   eventKind,
+  media = [],
   text,
 }: {
   eventKind: "mcp" | "observation" | "worker_thread";
+  media?: Array<MediaRef | null>;
   text: string;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -985,6 +995,9 @@ function ExternalEventMessage({
     : eventKind === "worker_thread"
       ? "Worker Thread result"
       : "MCP event";
+  const observationAttachments = eventKind === "observation"
+    ? (event as ObservationEventDisplay).attachments
+    : [];
   const toggleLabel = expanded ? `Collapse ${eventName}` : `Expand ${eventName}`;
 
   return (
@@ -1045,9 +1058,23 @@ function ExternalEventMessage({
               size="icon-sm"
             />
           </span>
+          {eventKind === "observation" ? (
+            <div
+              className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground"
+              data-observation-title
+            >
+              Observation
+            </div>
+          ) : null}
           <MessageResponse className="break-words">
             {event.content}
           </MessageResponse>
+          {eventKind === "observation" ? (
+            <ObservationAttachments
+              attachments={observationAttachments}
+              images={media}
+            />
+          ) : null}
         </div>
       ) : null}
     </details>
