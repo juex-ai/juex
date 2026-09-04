@@ -168,3 +168,40 @@ func TestLoadConfigPriorityEndsWithAgentThenExplicitOverride(t *testing.T) {
 		t.Fatalf("explicit config priority = %s path = %q, want 5s and %q", explicitConfig.ToolTimeout, explicitConfig.ExplicitConfigPath(), explicitPath)
 	}
 }
+
+func TestExplicitWorkspaceConfigOverridesAgentLayer(t *testing.T) {
+	root := t.TempDir()
+	userHome := filepath.Join(root, "user")
+	effectiveHome := filepath.Join(root, "instance")
+	workspace := filepath.Join(root, "workspace")
+	for _, path := range []string{userHome, workspace} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	workspacePath := filepath.Join(workspace, ".juex", "juex.yaml")
+	writeTextFile(t, workspacePath, "runtime:\n  tool_timeout: 3s\n")
+	resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: effectiveHome, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTextFile(t, resolved.Address.ConfigPath(), "runtime:\n  tool_timeout: 4s\n")
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		HomeDir:    effectiveHome,
+		AgentID:    resolved.Agent.ID,
+		ConfigPath: workspacePath,
+		AgentState: AgentStateExisting,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 3*time.Second {
+		t.Fatalf("explicit Workspace config priority = %s, want 3s", cfg.ToolTimeout)
+	}
+	if cfg.ExplicitConfigPath() != workspacePath {
+		t.Fatalf("explicit config path = %q, want %q", cfg.ExplicitConfigPath(), workspacePath)
+	}
+}

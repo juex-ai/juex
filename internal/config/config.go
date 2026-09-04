@@ -822,11 +822,10 @@ func configImportLoaderFor(cfg *Config) *configImportLoader {
 }
 
 func applyExplicitYAMLFile(cfg *Config, path string) error {
-	// A workspace file is already the highest ordinary YAML layer, so naming it
-	// again through --config must not replay append-only values. A loaded Home
-	// file needs ordinary values from both its imports and declaring document
-	// replayed above the workspace, while append-only hooks/sandbox paths,
+	// A loaded file selected again through --config must replay overwrite-style
+	// values above every persistent layer. Append-only hooks/sandbox paths,
 	// durable Extension policy, and import bookkeeping remain single-instance.
+	// The Agent file is already the highest persistent layer and needs no replay.
 	defaultHomeSource := yamlConfigSource{Path: cfg.DefaultHomeConfigPath(), Scope: configScopeDefaultHome}
 	loadedSources := []yamlConfigSource{defaultHomeSource}
 	instanceHomeSource := yamlConfigSource{Path: cfg.HomeConfigPath(), Scope: configScopeInstanceHome}
@@ -881,7 +880,7 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 		}
 	}
 	if selectedSource.Path != "" {
-		if selectedSource.Scope == configScopeWorkspace || selectedSource.Scope == configScopeAgent {
+		if selectedSource.Scope == configScopeAgent {
 			return nil
 		}
 		applyErr := applyYAMLFileWithImportLoaderAndOptions(cfg, selectedSource, configImportLoaderFor(cfg), applyYAMLDataOptions{
