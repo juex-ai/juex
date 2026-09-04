@@ -1,16 +1,27 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/fleetweb"
+	"github.com/juex-ai/juex/internal/processmetrics"
 	"github.com/juex-ai/juex/internal/thread"
 )
+
+type unavailableFleetMetrics struct{}
+
+func (unavailableFleetMetrics) Sample(context.Context, string, int) (processmetrics.Usage, error) {
+	return processmetrics.Usage{}, errors.New("metrics unavailable for test")
+}
 
 func TestManagedCLISelectorsAndResourceBoundaries(t *testing.T) {
 	if testing.Short() {
@@ -177,5 +188,101 @@ func TestManagedCLIResourceLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(workspace); err != nil {
 		t.Fatalf("Agent removal changed Workspace: %v", err)
+	}
+}
+
+func TestManagedCLIManagesOrphanedAgentByExplicitSelector(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary managed CLI orphan lifecycle is slow")
+	}
+	bin := buildJuex(t)
+	home := t.TempDir()
+	workspaceRoot := t.TempDir()
+	workspace := filepath.Join(workspaceRoot, "workspace")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFleetProviderConfig(t, workspace, "http://127.0.0.1:1")
+
+	stdout, stderr, err := runJuexHomeCommand(bin, home, "agent", "add", workspace, "--name", "orphan")
+	if err != nil {
+		t.Fatalf("agent add: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	registered, err := agentstate.ResolveExisting(agentstate.Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _, _ = runJuexHomeCommand(bin, home, "agent", "stop", "--agent", registered.Agent.ID)
+	})
+	if stdout, stderr, err = runJuexHomeCommand(bin, home, "agent", "start", "--agent", "orphan"); err != nil {
+		t.Fatalf("agent start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if err := os.Rename(workspace, filepath.Join(workspaceRoot, "moved-workspace")); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, err = runJuexHomeCommand(bin, home, "agent", "show", "--agent", "orphan", "--json")
+	if err != nil || !strings.Contains(stdout, `"binding": "orphaned"`) {
+		t.Fatalf("show orphaned Agent: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	stdout, stderr, err = runJuexHomeCommand(bin, home, "agent", "stop", "--agent", "orphan")
+	if err != nil || !strings.Contains(stdout, "stopped") {
+		t.Fatalf("stop orphaned Agent: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	stdout, stderr, err = runJuexHomeCommand(bin, home, "agent", "disable", "--agent", "orphan")
+	if err != nil || !strings.Contains(stdout, "enabled=false") {
+		t.Fatalf("disable orphaned Agent: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	stdout, stderr, err = runJuexHomeCommand(bin, home, "agent", "remove", "--agent", "orphan", "--yes")
+	if err != nil || !strings.Contains(stdout, "Removed "+registered.Agent.ID) {
+		t.Fatalf("remove orphaned Agent: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+}
+
+func TestFleetStatusReportsReachableSupervisorWhenMetricsUnavailable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary Fleet status API test is slow")
+	}
+	bin := buildJuex(t)
+	home := t.TempDir()
+	manager, err := fleet.New(fleet.Options{HomeDir: home, Executable: bin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := fleetweb.New(fleetweb.Options{
+		Manager:        manager,
+		ProcessMetrics: unavailableFleetMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := httptest.NewServer(server.Handler())
+	defer api.Close()
+	if err := os.WriteFile(
+		filepath.Join(home, "juex.yaml"),
+		[]byte("fleet:\n  addr: "+strings.TrimPrefix(api.URL, "http://")+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, err := runJuexHomeCommand(bin, home, "fleet", "status", "--format", "json")
+	if err != nil {
+		t.Fatalf("fleet status: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var status struct {
+		Running   bool   `json:"running"`
+		Reachable bool   `json:"reachable"`
+		Problem   string `json:"problem"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Running || !status.Reachable || !strings.Contains(status.Problem, "HTTP 503") {
+		t.Fatalf("status = %+v\nstdout:\n%s", status, stdout)
 	}
 }

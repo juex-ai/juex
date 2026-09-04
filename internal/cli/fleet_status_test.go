@@ -82,3 +82,38 @@ func TestFleetStatusTreatsUnreachableServiceAsState(t *testing.T) {
 		t.Fatalf("status = %+v", status)
 	}
 }
+
+func TestFleetStatusPreservesReachabilityOnAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/fleet/status" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, `{"error":"metrics_unavailable","message":"Fleet process metrics are unavailable"}`, http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	cmd := newFleetStatusCmdWithDeps(fleetStatusCommandDeps{
+		loadHome: func() (string, error) { return "/effective/home", nil },
+		loadConfig: func() (config.FleetConfig, error) {
+			return config.FleetConfig{Addr: strings.TrimPrefix(server.URL, "http://")}, nil
+		},
+		newServiceManager: func() (fleetStatusService, error) {
+			return fakeFleetStatusService{installed: true}, nil
+		},
+		httpClient: server.Client(),
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var status fleetServiceStatus
+	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Running || !status.Reachable || status.Process != nil || !strings.Contains(status.Problem, "HTTP 503") {
+		t.Fatalf("status = %+v", status)
+	}
+}

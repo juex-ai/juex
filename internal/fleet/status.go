@@ -28,6 +28,21 @@ func (m *Manager) Status(ctx context.Context) ([]AgentStatus, error) {
 	return statuses, nil
 }
 
+// ResolveAgent selects one Registry entry without requiring a live Workspace
+// binding. Callers must leave lifecycle and path-safety checks to the operation
+// they invoke with the returned ID.
+func (m *Manager) ResolveAgent(selector string) (AgentReference, error) {
+	entry, err := m.resolve(selector)
+	if err != nil {
+		return AgentReference{}, err
+	}
+	return AgentReference{
+		ID:        entry.ID,
+		Name:      entry.Agent.Name,
+		Workspace: entry.Agent.Workspace,
+	}, nil
+}
+
 // StatusOne resolves and inspects exactly one Agent without scanning the Fleet.
 func (m *Manager) StatusOne(ctx context.Context, selector string) (AgentStatus, error) {
 	entry, err := m.resolve(selector)

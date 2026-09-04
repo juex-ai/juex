@@ -26,42 +26,51 @@ func bindAgentSelectorFlags(cmd *cobra.Command, flags *agentSelectorFlags) {
 	cmd.Flags().StringVarP(&flags.cwd, "cwd", "C", "", "registered Workspace path (default current directory)")
 }
 
-func resolveSelectedAgent(flags *agentSelectorFlags) (*fleet.Manager, fleet.ReadOnlyAgentState, error) {
+func resolveManagedAgent(flags *agentSelectorFlags) (*fleet.Manager, fleet.AgentReference, error) {
 	if flags == nil {
 		flags = &agentSelectorFlags{}
 	}
 	agent := strings.TrimSpace(flags.agent)
 	cwd := strings.TrimSpace(flags.cwd)
 	if agent != "" && cwd != "" {
-		return nil, fleet.ReadOnlyAgentState{}, &usageError{msg: "--agent and --cwd are mutually exclusive"}
+		return nil, fleet.AgentReference{}, &usageError{msg: "--agent and --cwd are mutually exclusive"}
 	}
 	manager, err := newFleetManager()
 	if err != nil {
-		return nil, fleet.ReadOnlyAgentState{}, err
+		return nil, fleet.AgentReference{}, err
 	}
 	if agent != "" {
-		state, err := manager.ReadOnlyState(agent)
+		selected, err := manager.ResolveAgent(agent)
 		var missing *fleet.NotFoundError
 		if errors.As(err, &missing) {
-			return nil, fleet.ReadOnlyAgentState{}, &notFoundError{msg: err.Error() + "; run juex agent list or juex agent add <workspace>"}
+			return nil, fleet.AgentReference{}, &notFoundError{msg: err.Error() + "; run juex agent list or juex agent add <workspace>"}
 		}
-		return manager, state, mapFleetError(err)
+		return manager, selected, mapFleetError(err)
 	}
 	if cwd == "" {
 		cwd, err = os.Getwd()
 		if err != nil {
-			return nil, fleet.ReadOnlyAgentState{}, err
+			return nil, fleet.AgentReference{}, err
 		}
 	}
 	resolution, err := agentstate.ResolveExisting(agentstate.Options{WorkDir: cwd})
 	if err != nil {
 		var missing *agentstate.NoAgentError
 		if strings.TrimSpace(cwd) != "" && (os.IsNotExist(err) || errors.As(err, &missing)) {
-			return nil, fleet.ReadOnlyAgentState{}, &notFoundError{msg: fmt.Sprintf("no managed Agent for Workspace %s; run juex agent add %s or select an existing Agent with --agent", cwd, cwd)}
+			return nil, fleet.AgentReference{}, &notFoundError{msg: fmt.Sprintf("no managed Agent for Workspace %s; run juex agent add %s or select an existing Agent with --agent", cwd, cwd)}
 		}
+		return nil, fleet.AgentReference{}, err
+	}
+	selected, err := manager.ResolveAgent(resolution.Agent.ID)
+	return manager, selected, mapFleetError(err)
+}
+
+func resolveSelectedAgent(flags *agentSelectorFlags) (*fleet.Manager, fleet.ReadOnlyAgentState, error) {
+	manager, selected, err := resolveManagedAgent(flags)
+	if err != nil {
 		return nil, fleet.ReadOnlyAgentState{}, err
 	}
-	state, err := manager.ReadOnlyState(resolution.Agent.ID)
+	state, err := manager.ReadOnlyState(selected.ID)
 	return manager, state, mapFleetError(err)
 }
 
@@ -186,7 +195,7 @@ func newAgentShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "show", Short: "Show one registered Agent and runtime health", Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			manager, state, err := resolveSelectedAgent(selector)
+			manager, state, err := resolveManagedAgent(selector)
 			if err != nil {
 				return err
 			}
@@ -216,7 +225,7 @@ func newAgentEnabledCmd(enabled bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: action, Short: strings.ToUpper(action[:1]) + action[1:] + " the selected Agent", Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			manager, state, err := resolveSelectedAgent(selector)
+			manager, state, err := resolveManagedAgent(selector)
 			if err != nil {
 				return err
 			}
@@ -238,7 +247,7 @@ func newAgentRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "remove", Short: "Permanently delete the selected Agent and its state", Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			manager, state, err := resolveSelectedAgent(selector)
+			manager, state, err := resolveManagedAgent(selector)
 			if err != nil {
 				return err
 			}
@@ -272,7 +281,7 @@ func newAgentLifecycleCmd(action string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: action, Short: strings.ToUpper(action[:1]) + action[1:] + " the selected Agent Runtime", Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			manager, state, err := resolveSelectedAgent(selector)
+			manager, state, err := resolveManagedAgent(selector)
 			if err != nil {
 				return err
 			}
@@ -332,7 +341,7 @@ func newAgentLogsCmd() *cobra.Command {
 			if lines < 1 || lines > 10_000 {
 				return &usageError{msg: "juex agent logs: --lines must be between 1 and 10000"}
 			}
-			manager, state, err := resolveSelectedAgent(selector)
+			manager, state, err := resolveManagedAgent(selector)
 			if err != nil {
 				return err
 			}
@@ -355,7 +364,7 @@ func newAgentConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "config", Short: "Show the selected Agent config path", Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			manager, state, err := resolveSelectedAgent(selector)
+			manager, state, err := resolveManagedAgent(selector)
 			if err != nil {
 				return err
 			}

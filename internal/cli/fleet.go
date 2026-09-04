@@ -510,6 +510,8 @@ func probeFleetStatus(ctx context.Context, client *http.Client, status *fleetSer
 		return
 	}
 	defer response.Body.Close()
+	status.Running = true
+	status.Reachable = true
 	data, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
 		status.Problem = err.Error()
@@ -526,8 +528,6 @@ func probeFleetStatus(ctx context.Context, client *http.Client, status *fleetSer
 		status.Problem = "decode Fleet status: " + err.Error()
 		return
 	}
-	status.Running = true
-	status.Reachable = true
 	status.Process = &payload.Process
 }
 

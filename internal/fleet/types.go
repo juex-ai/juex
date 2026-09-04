@@ -95,6 +95,14 @@ func (e *RestartAgentsError) Error() string {
 	return fmt.Sprintf("fleet: %d agent restart(s) failed", e.Failed)
 }
 
+// AgentReference identifies a registered Agent without asserting that its
+// Workspace binding is currently valid.
+type AgentReference struct {
+	ID        string
+	Name      string
+	Workspace string
+}
+
 // ReadOnlyAgentState identifies the durable workspace and identity-owned state
 // roots that remain safe to inspect while the runtime process is stopped.
 type ReadOnlyAgentState struct {
