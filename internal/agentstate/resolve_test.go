@@ -159,17 +159,6 @@ func writeJSON(t *testing.T, path string, value any) {
 	}
 }
 
-func readJSONTest(t *testing.T, path string, target any) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, target); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func writeText(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

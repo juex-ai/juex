@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -331,19 +330,4 @@ func newRegistrationTestManager(t *testing.T, home string) *Manager {
 		t.Fatal(err)
 	}
 	return manager
-}
-
-func writeFleetTestJSON(t *testing.T, path string, value any) {
-	t.Helper()
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
