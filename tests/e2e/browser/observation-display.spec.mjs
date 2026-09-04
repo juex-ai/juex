@@ -11,6 +11,13 @@ const fileDigest =
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const imagePath = `event-media/${imageDigest}.png`;
 const filePath = `event-media/${fileDigest}.txt`;
+const observationContent = [
+  "MCP notification",
+  "server: wechat-wire",
+  "event_type: notification",
+  "content:",
+  JSON.stringify({ content: "Alice sent a new photo" }),
+].join("\n");
 const observationText = [
   "Observable observation",
   "observation_id: obs-browser",
@@ -19,12 +26,9 @@ const observationText = [
   "severity: info",
   "window_start: 1",
   "window_end: 2",
+  `content_bytes: ${Buffer.byteLength(observationContent)}`,
   "content:",
-  "MCP notification",
-  "server: wechat-wire",
-  "event_type: notification",
-  "content:",
-  JSON.stringify({ content: "Alice sent a new photo" }),
+  observationContent,
   "attachments:",
   `- image source=/tmp/photo.png artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
   `- file source=/tmp/details.txt artifact=${filePath} (text/plain, 18 bytes, sha256=${fileDigest})`,

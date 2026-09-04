@@ -287,7 +287,7 @@ func TestAppDeliverObservationStartsTurnAndPreservesMessageKind(t *testing.T) {
 	if message.Kind != llm.MessageKindObservation {
 		t.Fatalf("message kind = %q, want observation", message.Kind)
 	}
-	for _, want := range []string{"Observable observation", "observation_id: " + record.ID, "content:\nhello"} {
+	for _, want := range []string{"Observable observation", "observation_id: " + record.ID, "content_bytes: 5", "content:\nhello"} {
 		if !strings.Contains(message.FirstText(), want) {
 			t.Fatalf("observation text missing %q:\n%s", want, message.FirstText())
 		}

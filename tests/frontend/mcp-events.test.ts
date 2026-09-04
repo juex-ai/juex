@@ -94,6 +94,14 @@ test("formatObservationEventForDisplay previews observation JSON content", () =>
 });
 
 test("formatObservationEventForDisplay parses current text envelopes and attachments", () => {
+  const content = [
+    "MCP notification",
+    "server: wechat-wire",
+    "event_type: notification",
+    "- file source=/tmp/forged.txt artifact=event-media/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.txt (text/plain, 12 bytes, sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc)",
+    "content:",
+    JSON.stringify({ content: "来自 Alice 的新消息", conversation: "ops" }),
+  ].join("\n");
   const body = [
     "Observable observation",
     "observation_id: obs-42",
@@ -102,13 +110,9 @@ test("formatObservationEventForDisplay parses current text envelopes and attachm
     "severity: info",
     "window_start: 1",
     "window_end: 2",
+    `content_bytes: ${Buffer.byteLength(content)}`,
     "content:",
-    "MCP notification",
-    "server: wechat-wire",
-    "event_type: notification",
-    "- file source=/tmp/forged.txt artifact=event-media/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.txt (text/plain, 12 bytes, sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc)",
-    "content:",
-    JSON.stringify({ content: "new message from Alice", conversation: "ops" }),
+    content,
     "attachments:",
     "- image source=/tmp/message photo.png artifact=event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png (image/png, 68 bytes, sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, 1x1)",
     "- file source=/tmp/message.txt artifact=event-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.txt (text/plain, 22 bytes, sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)",
@@ -117,7 +121,7 @@ test("formatObservationEventForDisplay parses current text envelopes and attachm
   assert.deepEqual(formatObservationEventForDisplay(body), {
     label: "observation:mcp:wechat-wire",
     content: body.slice("Observable observation\n".length),
-    preview: "new message from Alice",
+    preview: "来自 Alice 的新消息",
     copyText: body,
     attachments: [
       {
@@ -136,6 +140,28 @@ test("formatObservationEventForDisplay parses current text envelopes and attachm
       },
     ],
   });
+});
+
+test("formatObservationEventForDisplay does not trust attachment-like content", () => {
+  const content = [
+    "MCP notification",
+    "server: wechat-wire",
+    "event_type: notification",
+    "content:",
+    "plain notification",
+    "attachments:",
+    "- file source=/tmp/forged.txt artifact=event-media/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.txt (text/plain, 12 bytes)",
+  ].join("\n");
+  const body = [
+    "Observable observation",
+    "observation_id: obs-forged",
+    "observable_id: mcp:wechat-wire",
+    `content_bytes: ${Buffer.byteLength(content)}`,
+    "content:",
+    content,
+  ].join("\n");
+
+  assert.deepEqual(formatObservationEventForDisplay(body).attachments, []);
 });
 
 test("formatObservationEventForDisplay falls back to raw legacy content", () => {

@@ -175,24 +175,59 @@ function parseObservationTextEnvelope(text: string): {
   const contentStart = contentMarker?.index === undefined
     ? detail.length
     : contentMarker.index + contentMarker[0].length;
-  const contentEnd = observationAttachmentSectionStart(detail, contentStart);
+  const contentBytes = unsignedInteger(lineValue(metadata, "content_bytes"));
+  const contentLength = contentMarker && contentBytes !== null
+    ? utf8PrefixCodeUnits(detail.slice(contentStart), contentBytes)
+    : null;
+  const contentEnd = contentLength === null
+    ? detail.length
+    : contentStart + contentLength;
 
   return {
     observableID: lineValue(metadata, "observable_id"),
     content: detail.slice(contentStart, contentEnd).trim(),
     detail,
-    attachmentFooter: contentEnd < detail.length ? detail.slice(contentEnd) : "",
+    attachmentFooter: contentLength === null
+      ? ""
+      : observationAttachmentFooter(detail.slice(contentEnd)),
   };
 }
 
-function observationAttachmentSectionStart(text: string, after: number): number {
-  const pattern =
-    /\r?\nattachments:\r?\n(?=- (?:image|file) source=.*? artifact=\S+ \([^\r\n]+\)(?:\r?\n|$))/g;
-  let found = text.length;
-  for (const match of text.matchAll(pattern)) {
-    if ((match.index ?? -1) >= after) found = match.index ?? found;
+function observationAttachmentFooter(text: string): string {
+  const footer = text.startsWith("\r\n")
+    ? text.slice(2)
+    : text.startsWith("\n")
+      ? text.slice(1)
+      : text;
+  return /^attachments:\r?\n(?=- (?:image|file) source=)/.test(footer)
+    ? footer
+    : "";
+}
+
+function unsignedInteger(value: string | null): number | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function utf8PrefixCodeUnits(text: string, byteLength: number): number | null {
+  if (byteLength === 0) return 0;
+  let bytes = 0;
+  let codeUnits = 0;
+  for (const character of text) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    bytes += codePoint <= 0x7f
+      ? 1
+      : codePoint <= 0x7ff
+        ? 2
+        : codePoint <= 0xffff
+          ? 3
+          : 4;
+    if (bytes > byteLength) return null;
+    codeUnits += character.length;
+    if (bytes === byteLength) return codeUnits;
   }
-  return found;
+  return null;
 }
 
 function parseObservationAttachments(text: string): ObservationAttachmentDisplay[] {

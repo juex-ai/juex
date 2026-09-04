@@ -1162,6 +1162,7 @@ func renderObservationText(record observable.ObservationRecord, report eventmedi
 	if record.ArtifactPath != "" {
 		fmt.Fprintf(&sb, "artifact_path: %s\n", record.ArtifactPath)
 	}
+	fmt.Fprintf(&sb, "content_bytes: %d\n", len(record.Content))
 	sb.WriteString("content:\n")
 	sb.WriteString(record.Content)
 	if !strings.HasSuffix(record.Content, "\n") {
