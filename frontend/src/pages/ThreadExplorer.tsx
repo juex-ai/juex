@@ -7,6 +7,7 @@ import { useShellTitle } from "@/components/AppShell";
 import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
 import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { ThreadUsageSummary } from "@/components/thread/ThreadUsageSummary";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,6 +22,9 @@ import { agentPathFromLocation } from "@/lib/fleet-routes";
 import { threadHref, threadListTitle } from "@/lib/thread-list";
 import { cn } from "@/lib/utils";
 import type { ThreadListItem } from "@/types";
+
+const THREAD_METADATA_BADGE_CLASS =
+  "h-5 border-border/70 bg-muted/30 px-2 font-mono text-[11px] font-normal text-muted-foreground";
 
 export function ThreadExplorer() {
   const navigate = useNavigate();
@@ -196,17 +200,22 @@ function ThreadRow({ thread, archived, busy, mutationsEnabled, onAction, onDelet
   const main = thread.thread_id === "0";
   return (
     <div className="group/thread-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 hover:bg-muted/60">
-      <Link to={threadHref(thread.thread_id)} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md px-1 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/35">
-        <span className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary"><MessageSquareText className="size-4" /></span>
-        <span className="min-w-0">
+      <div className="min-w-0 px-1 py-2">
+        <Link to={threadHref(thread.thread_id)} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/35">
+          <span className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary"><MessageSquareText className="size-4" /></span>
           <span className="block truncate text-sm font-medium text-foreground">{threadListTitle(thread)}</span>
-          <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
-            <span>{thread.retention_state === "archived" ? "archived" : thread.execution_state}</span><span>{thread.turn_count} turns</span><span>Gen {thread.generation_count}</span><span>{thread.pending_input_count} pending</span><span>{thread.current_context_tokens.toLocaleString()} context</span><span>{humanAgo(thread.last_activity_at)}</span>
-          </span>
-        </span>
-      </Link>
+        </Link>
+        <div className="ml-11 mt-1 flex flex-wrap gap-1.5">
+          <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>{humanAgo(thread.last_activity_at)}</Badge>
+          <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>{thread.retention_state === "archived" ? "archived" : thread.execution_state}</Badge>
+          <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>{thread.turn_count} turns</Badge>
+          <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>Gen {thread.generation_count}</Badge>
+          <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>{thread.pending_input_count} pending</Badge>
+          <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>{thread.current_context_tokens.toLocaleString()} context</Badge>
+          <ThreadUsageSummary usage={thread.token_usage} className={THREAD_METADATA_BADGE_CLASS} />
+        </div>
+      </div>
       <div className="flex items-center gap-1">
-        <ThreadUsageSummary usage={thread.token_usage} />
         {!main ? (
           <>
             <Button variant="ghost" size="icon-sm" disabled={busy || !mutationsEnabled} onClick={onAction} title={archived ? "Unarchive thread" : "Archive thread"} aria-label={archived ? "Unarchive thread" : "Archive thread"}>
