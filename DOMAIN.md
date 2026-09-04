@@ -9,8 +9,8 @@ storage implementation belong in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Owner | Responsibility |
 | --- | --- |
-| Workspace | User-authored project files, configuration, Skills, Hooks, and Observable definitions. |
-| Agent | Long-lived identity, rebuildable Thread list index, active and archived Threads, media, logs, Observable state, and Extension state. |
+| Workspace | User-authored project files, workspace configuration, Skills, and Hooks. |
+| Agent | Long-lived identity, rebuildable Thread list index, active and archived Threads, media, logs, Observable definitions and state, and Extension state. |
 | Thread | Identity, topology, lifecycle, Context Generation registry, pending Inputs, Turns, messages, Events, Usage, Scratchpad, and spool. |
 | Thread Module | Optional Thread-scoped state such as Goal and Notes, including its load, context, and Generation lifecycle behavior. |
 | Agent Runtime | Replaceable process resources: Providers, MCP clients, Tools, Observables, schedulers, and live subscriptions. |

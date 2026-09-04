@@ -61,7 +61,7 @@ Provider-neutral 消息位于 `internal/llm`。持久 Event transport 与 schema
 
 ## 持久化权威
 
-生成状态位于 `$JUEX_HOME/agents/<agent-id>/`：
+Agent 拥有的持久数据位于 `$JUEX_HOME/agents/<agent-id>/`：
 
 ```text
 agent.json
@@ -79,6 +79,7 @@ threads/<thread-id>/
 archive/threads/<thread-id>/
 media/
 logs/
+observables.json
 observables/
 extensions/
 ```
@@ -102,6 +103,10 @@ schema。Owner 没有持久状态时，对应文件可以不存在。Scratchpad 
 Thread 状态，跨 Generation 保留；spool 是系统管理的 Thread 临时数据。Active
 与 archived Thread 使用不同 root，lifecycle
 操作移动整个 Thread 目录。Agent media 独立存储。
+
+`observables.json` 是 Agent 拥有、可编辑的定义文档；`observables/` 包含生成的
+run、delivery、idempotency 与 schedule 状态。Extension bundle 可以提供额外的
+只读定义。
 
 ## 持久 Input 与发布
 

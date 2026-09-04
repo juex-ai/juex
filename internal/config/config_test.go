@@ -532,12 +532,13 @@ func TestLoadFromFile(t *testing.T) {
 }
 
 func TestConfigObservablesPaths(t *testing.T) {
-	dir := t.TempDir()
-	cfg := Config{WorkDir: dir}
-	if got, want := cfg.ObservablesConfigPath(), filepath.Join(dir, ".juex", "observables.json"); got != want {
+	workDir := t.TempDir()
+	agentStateDir := filepath.Join(t.TempDir(), "agent")
+	cfg := Config{WorkDir: workDir, AgentStateDir: agentStateDir}
+	if got, want := cfg.ObservablesConfigPath(), filepath.Join(agentStateDir, "observables.json"); got != want {
 		t.Fatalf("ObservablesConfigPath() = %q, want %q", got, want)
 	}
-	if got, want := cfg.ObservablesStateDir(), filepath.Join(dir, ".juex", "observables"); got != want {
+	if got, want := cfg.ObservablesStateDir(), filepath.Join(agentStateDir, "observables"); got != want {
 		t.Fatalf("ObservablesStateDir() = %q, want %q", got, want)
 	}
 }
@@ -1681,7 +1682,7 @@ func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
 		cfg.ObservablesStateDir() != filepath.Join(cfg.AgentStateDir, "observables") {
 		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
 	}
-	if cfg.ObservablesConfigPath() != filepath.Join(workDir, ".juex", "observables.json") {
+	if cfg.ObservablesConfigPath() != filepath.Join(cfg.AgentStateDir, "observables.json") {
 		t.Fatalf("observable config path = %q", cfg.ObservablesConfigPath())
 	}
 	if cfg.RuntimeConfigPath() != filepath.Join(workDir, ".juex", "juex.yaml") {

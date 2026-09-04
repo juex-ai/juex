@@ -225,10 +225,11 @@ func (c Config) RuntimePaths() RuntimePaths {
 }
 
 func (c Config) ObservablesConfigPath() string {
-	if c.WorkDir == "" {
+	stateDir := c.RuntimePaths().StateDir
+	if stateDir == "" {
 		return ""
 	}
-	return filepath.Join(c.WorkDir, ".juex", "observables.json")
+	return filepath.Join(stateDir, "observables.json")
 }
 
 func (c Config) ObservablesStateDir() string {

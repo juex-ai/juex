@@ -16,8 +16,8 @@ import (
 
 func TestManagerLoadsReadOnlyExtensionDefinitionsWithSource(t *testing.T) {
 	dir := t.TempDir()
-	project := validSpec("project-observable")
-	writeObservableConfig(t, dir, project)
+	agent := validSpec("agent-observable")
+	writeObservableConfig(t, dir, agent)
 	extensionPath := filepath.Join(dir, "extension", "observables.json")
 	writeObservableConfigPath(t, extensionPath, validSpec("extension-observable"))
 
@@ -35,9 +35,9 @@ func TestManagerLoadsReadOnlyExtensionDefinitionsWithSource(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	projectStatus, ok := mgr.Status().ByID("project-observable")
-	if !ok || projectStatus.Source != "project" {
-		t.Fatalf("project status = %+v ok=%v", projectStatus, ok)
+	agentStatus, ok := mgr.Status().ByID("agent-observable")
+	if !ok || agentStatus.Source != "agent" {
+		t.Fatalf("agent status = %+v ok=%v", agentStatus, ok)
 	}
 	extensionStatus, ok := mgr.Status().ByID("extension-observable")
 	if !ok || extensionStatus.Source != "ext:demo" {
@@ -57,7 +57,7 @@ func TestManagerLoadsReadOnlyExtensionDefinitionsWithSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(after) != string(before) {
-		t.Fatalf("project config changed after extension delete\nbefore=%s\nafter=%s", before, after)
+		t.Fatalf("agent config changed after extension delete\nbefore=%s\nafter=%s", before, after)
 	}
 	if _, ok := mgr.Status().ByID("extension-observable"); !ok {
 		t.Fatal("extension status disappeared after rejected delete")
@@ -84,13 +84,13 @@ func TestManagerRejectsCrossSourceDuplicateDefinitions(t *testing.T) {
 	})
 	if err == nil ||
 		!strings.Contains(err.Error(), `"duplicate"`) ||
-		!strings.Contains(err.Error(), "project") ||
+		!strings.Contains(err.Error(), "agent") ||
 		!strings.Contains(err.Error(), "ext:demo") {
 		t.Fatalf("NewManager() err = %v, want both duplicate sources", err)
 	}
 }
 
-func TestExtensionConfigIssuesAreDistinctAndDoNotBlockProjectCreate(t *testing.T) {
+func TestExtensionConfigIssuesAreDistinctAndDoNotBlockAgentCreate(t *testing.T) {
 	dir := t.TempDir()
 	extensionPath := filepath.Join(dir, "extension", "observables.json")
 	writeRawObservableConfig(t, extensionPath, `{

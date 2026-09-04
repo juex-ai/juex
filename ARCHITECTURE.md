@@ -65,7 +65,7 @@ schemas live in `internal/events`, `internal/eventcatalog`, and
 
 ## Persistence Authority
 
-Generated state is rooted at `$JUEX_HOME/agents/<agent-id>/`:
+Agent-owned persistence is rooted at `$JUEX_HOME/agents/<agent-id>/`:
 
 ```text
 agent.json
@@ -83,6 +83,7 @@ threads/<thread-id>/
 archive/threads/<thread-id>/
 media/
 logs/
+observables.json
 observables/
 extensions/
 ```
@@ -111,6 +112,10 @@ until that owner has durable state. Scratchpad is model-managed Thread
 state and survives Generation changes. Spool is system-managed temporary Thread
 data. Active and archived Thread roots are separate, and lifecycle operations
 move the whole Thread directory. Agent media is stored separately.
+
+`observables.json` is the Agent-owned editable definition document;
+`observables/` contains generated run, delivery, idempotency, and schedule
+state. Extension bundles may contribute additional read-only definitions.
 
 ## Durable Input And Publication
 

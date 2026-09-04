@@ -186,7 +186,7 @@ export function ObservableDetail() {
                 Start
               </Button>
             )}
-            {observable?.source === "project" ? (
+            {observable?.source === "agent" ? (
               <Button
                 type="button"
                 variant="destructive"

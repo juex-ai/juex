@@ -745,7 +745,7 @@ func browserEventFixtureEvents() []events.Event {
 			Timestamp: ts.Add(7500 * time.Millisecond),
 			Payload: observable.ObservableEventPayload{
 				ID:     "lark-events",
-				Source: observable.SourceProject,
+				Source: observable.SourceAgent,
 				State:  observable.RunStateRunning,
 				RunID:  "run-1",
 				PID:    1234,
