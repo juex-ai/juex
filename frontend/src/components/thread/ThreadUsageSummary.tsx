@@ -3,14 +3,22 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { badgeVariants } from "@/components/ui/badge";
 import {
   buildThreadUsageView,
   formatExactThreadTokenCount,
   type ThreadUsageCounts,
 } from "@/lib/thread-usage";
+import { cn } from "@/lib/utils";
 import type { ThreadTokenUsage } from "@/types";
 
-export function ThreadUsageSummary({ usage }: { usage: ThreadTokenUsage }) {
+export function ThreadUsageSummary({
+  usage,
+  className,
+}: {
+  usage: ThreadTokenUsage;
+  className?: string;
+}) {
   const view = buildThreadUsageView(usage);
 
   return (
@@ -18,7 +26,11 @@ export function ThreadUsageSummary({ usage }: { usage: ThreadTokenUsage }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="shrink-0 rounded-sm px-1.5 py-1 font-mono text-[11px] text-muted-foreground underline decoration-dotted underline-offset-4 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35"
+          className={cn(
+            badgeVariants({ variant: "outline" }),
+            "cursor-pointer font-mono text-[11px] font-normal text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35",
+            className,
+          )}
           aria-label={`${view.summaryLabel}. Show token usage details`}
         >
           {view.summaryLabel}

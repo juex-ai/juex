@@ -93,13 +93,26 @@ test("Thread usage disclosure is keyboard-focusable and replaces inline row deta
   assert.match(componentSource, /<Popover>/);
   assert.match(componentSource, /<PopoverTrigger asChild>/);
   assert.match(componentSource, /<button[\s\S]*type="button"/);
+  assert.match(componentSource, /badgeVariants\(\{ variant: "outline" \}\)/);
+  assert.match(componentSource, /cursor-pointer/);
+  assert.match(componentSource, /hover:bg-muted/);
   assert.match(componentSource, /aria-label=\{`\$\{view\.summaryLabel\}\. Show token usage details`\}/);
   assert.match(componentSource, /focus-visible:ring-2/);
   assert.match(componentSource, /aria-label="Token usage details"/);
   assert.match(componentSource, /tabIndex=\{0\}/);
   assert.match(componentSource, /max-h-\[calc\(100svh-2rem\)\]/);
   assert.match(componentSource, /overflow-y-auto/);
-  assert.match(explorerSource, /<ThreadUsageSummary usage=\{thread\.token_usage\} \/>/);
+  assert.match(
+    explorerSource,
+    /thread\.current_context_tokens[\s\S]*?<ThreadUsageSummary usage=\{thread\.token_usage\}/,
+    "Token usage belongs immediately after current context in the metadata flow",
+  );
+  assert.match(explorerSource, /THREAD_METADATA_BADGE_CLASS/);
+  assert.match(
+    explorerSource,
+    /humanAgo\(thread\.last_activity_at\)[\s\S]*?thread\.execution_state/,
+    "recency belongs before execution state",
+  );
   assert.doesNotMatch(explorerSource, /cached ·/);
   assert.doesNotMatch(explorerSource, /getThread\(/);
 });
