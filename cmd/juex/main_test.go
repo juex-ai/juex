@@ -55,8 +55,7 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 	t.Run("help", func(t *testing.T) {
 		out, _ := exec.Command(bin, "help").CombinedOutput()
 		body := string(out)
-		// cobra renders subcommand list under "Available Commands"
-		for _, want := range []string{"init", "doctor", "send", "threads", "listen", "version"} {
+		for _, want := range []string{"agent", "thread", "fleet", "config", "diagnose", "version"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("help output missing %q in:\n%s", want, body)
 			}
@@ -66,9 +65,8 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		out, _ := exec.Command(bin, "--help").CombinedOutput()
 		body := string(out)
 		for _, want := range []string{
-			"Workspace agent (current directory)",
-			"Troubleshooting (current directory)",
-			"Fleet (all agents under $JUEX_HOME)",
+			"Managed resources",
+			"Administration",
 			"About this CLI",
 		} {
 			if !strings.Contains(body, want) {
@@ -85,8 +83,8 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 			t.Fatal("expected non-zero exit")
 		}
 	})
-	t.Run("sendRequiresPromptOrAttachment", func(t *testing.T) {
-		cmd := exec.Command(bin, "send")
+	t.Run("agentSendRequiresPromptOrAttachment", func(t *testing.T) {
+		cmd := exec.Command(bin, "agent", "send")
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err == nil {
@@ -97,9 +95,9 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 			t.Fatalf("stderr: %s", body)
 		}
 	})
-	t.Run("sendFailsCleanlyWithoutEnv", func(t *testing.T) {
+	t.Run("agentSendFailsCleanlyWithoutRegistration", func(t *testing.T) {
 		dir := t.TempDir()
-		cmd := exec.Command(bin, "send", "hi")
+		cmd := exec.Command(bin, "agent", "send", "--cwd", dir, "hi")
 		cmd.Dir = dir
 		cmd.Env = isolatedCLIEnv(dir)
 		var stderr bytes.Buffer
@@ -107,16 +105,13 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		if err := cmd.Run(); err == nil {
 			t.Fatalf("expected error, stderr was: %s", stderr.String())
 		}
-		if !strings.Contains(stderr.String(), "start Agent Runtime") {
+		if !strings.Contains(stderr.String(), "juex agent add") {
 			t.Fatalf("stderr: %s", stderr.String())
 		}
 	})
-	t.Run("cwdFlagAcceptedAtRoot", func(t *testing.T) {
-		// `juex --cwd <dir> send "..."` parses; we just verify the flag is
-		// recognised. The command will fail on missing config, which is fine;
-		// we only care about flag parsing.
+	t.Run("cwdFlagAcceptedOnAgentSend", func(t *testing.T) {
 		dir := t.TempDir()
-		cmd := exec.Command(bin, "--cwd", dir, "send", "hi")
+		cmd := exec.Command(bin, "agent", "send", "--cwd", dir, "hi")
 		cmd.Env = isolatedCLIEnv(dir)
 		out, _ := cmd.CombinedOutput()
 		body := string(out)
