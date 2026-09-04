@@ -8,6 +8,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/bundle"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 func newThreadBundleCmd(selectors *agentSelectorFlags) *cobra.Command {
@@ -39,9 +40,25 @@ func newThreadBundleCmd(selectors *agentSelectorFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			entries, err := thread.NewStore(cfg.RuntimePaths().StateDir).List()
+			if err != nil {
+				return err
+			}
+			var threads threadList
+			for _, entry := range entries {
+				if entry.RetentionState == thread.RetentionArchived {
+					threads.Archived = append(threads.Archived, entry)
+				} else {
+					threads.Active = append(threads.Active, entry)
+				}
+			}
+			selected, err := resolveThreadEntry(args[0], threads, true)
+			if err != nil {
+				return err
+			}
 			result, err := bundle.Create(bundle.Options{
 				WorkDir:                cfg.WorkDir,
-				ThreadID:               args[0],
+				ThreadID:               selected.ThreadID,
 				OutPath:                outPath,
 				Redact:                 redact,
 				Force:                  force,

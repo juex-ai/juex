@@ -137,7 +137,7 @@ func TestManagedCLIResourceLifecycle(t *testing.T) {
 	}
 
 	bundlePath := filepath.Join(t.TempDir(), "worker.tar.gz")
-	stdout, stderr, err = runJuexHomeCommand(bin, home, "thread", "bundle", created.ID, "--cwd", workspace, "--out", bundlePath)
+	stdout, stderr, err = runJuexHomeCommand(bin, home, "thread", "bundle", "reviewer", "--cwd", workspace, "--out", bundlePath)
 	if err != nil {
 		t.Fatalf("thread bundle: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}

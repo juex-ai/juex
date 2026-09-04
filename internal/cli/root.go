@@ -155,8 +155,9 @@ func (e *emittedError) Unwrap() error {
 }
 
 type persistentFlags struct {
-	cwd     string
-	agentID string
+	cwd        string
+	agentID    string
+	configPath string
 }
 
 type agentStatePolicy uint8
@@ -228,6 +229,7 @@ func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (conf
 	cfg, err = config.LoadWithOptions(config.LoadOptions{
 		WorkDir:    flags.cwd,
 		AgentID:    flags.agentID,
+		ConfigPath: flags.configPath,
 		AgentState: mode,
 	})
 	if err != nil {

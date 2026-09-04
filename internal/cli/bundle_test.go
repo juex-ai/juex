@@ -9,14 +9,23 @@ import (
 	"github.com/juex-ai/juex/internal/thread"
 )
 
-func TestBundleCommandUsesThreadIdentity(t *testing.T) {
+func TestBundleCommandResolvesArchivedThreadAlias(t *testing.T) {
 	work := t.TempDir()
 	cfg := ensureTestWorkspaceAgent(t, work)
-	target, err := thread.NewStore(cfg.RuntimePaths().StateDir).EnsureMain()
+	store := thread.NewStore(cfg.RuntimePaths().StateDir)
+	mainThread, err := store.EnsureMain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := target.Close(); err != nil {
+	if err := mainThread.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.CreateWorker(thread.MainID, "reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := target.ID
+	if err := store.Archive(target); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(work, "debug.tar.gz")
@@ -24,7 +33,7 @@ func TestBundleCommandUsesThreadIdentity(t *testing.T) {
 	var stdout bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stdout)
-	root.SetArgs([]string{"thread", "bundle", thread.MainID, "--cwd", work, "--out", out})
+	root.SetArgs([]string{"thread", "bundle", "reviewer", "--cwd", work, "--out", out})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -35,17 +44,24 @@ func TestBundleCommandUsesThreadIdentity(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("output is not JSON: %v\n%s", err, stdout.String())
 	}
-	if result.ThreadID != thread.MainID || result.Path != out {
+	if result.ThreadID != threadID || result.Path != out {
 		t.Fatalf("result = %+v", result)
 	}
 }
 
 func TestBundleCommandReportsUnknownThread(t *testing.T) {
 	work := t.TempDir()
-	ensureTestWorkspaceAgent(t, work)
+	cfg := ensureTestWorkspaceAgent(t, work)
+	target, err := thread.NewStore(cfg.RuntimePaths().StateDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
 	root := newRootCmd()
 	root.SetArgs([]string{"thread", "bundle", "abcdef", "--cwd", work, "--out", filepath.Join(work, "debug.tar.gz")})
-	err := root.Execute()
+	err = root.Execute()
 	if _, ok := err.(*notFoundError); !ok {
 		t.Fatalf("error = %T %v, want notFoundError", err, err)
 	}

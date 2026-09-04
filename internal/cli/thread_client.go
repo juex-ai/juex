@@ -30,7 +30,7 @@ type agentClient struct {
 func connectSelectedAgent(ctx context.Context, manager *fleet.Manager, state fleet.ReadOnlyAgentState) (*agentClient, error) {
 	_, startErr := manager.Start(ctx, state.ID)
 	if startErr != nil {
-		return nil, fmt.Errorf("start Agent Runtime: %w", startErr)
+		return nil, mapFleetError(fmt.Errorf("start Agent Runtime: %w", startErr))
 	}
 	running, err := manager.Endpoint(ctx, state.ID)
 	if err != nil {
@@ -96,13 +96,17 @@ func (c *agentClient) listThreads(ctx context.Context) (threadList, error) {
 }
 
 func (c *agentClient) resolveThread(ctx context.Context, selector string, includeArchived bool) (thread.IndexEntry, error) {
-	selector = strings.TrimSpace(strings.TrimPrefix(selector, "#"))
-	if selector == "" || strings.EqualFold(selector, thread.MainAlias) {
-		selector = thread.MainID
-	}
 	list, err := c.listThreads(ctx)
 	if err != nil {
 		return thread.IndexEntry{}, err
+	}
+	return resolveThreadEntry(selector, list, includeArchived)
+}
+
+func resolveThreadEntry(selector string, list threadList, includeArchived bool) (thread.IndexEntry, error) {
+	selector = strings.TrimSpace(strings.TrimPrefix(selector, "#"))
+	if selector == "" || strings.EqualFold(selector, thread.MainAlias) {
+		selector = thread.MainID
 	}
 	entries := append([]thread.IndexEntry(nil), list.Active...)
 	if includeArchived {

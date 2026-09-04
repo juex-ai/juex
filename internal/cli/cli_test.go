@@ -432,6 +432,29 @@ func TestInitHelloCheckErrorIncludesSuggestion(t *testing.T) {
 	}
 }
 
+func TestDiagnoseConfigValidatesAdHocFileAtExplicitScope(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	explicit := filepath.Join(t.TempDir(), "explicit.yaml")
+	if err := writeTextFile(explicit, "extensions:\n  allow: [demo]\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"diagnose", "--cwd", work, "--config", explicit, "--offline", "--format", "json"})
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusFail {
+		t.Fatalf("error = %T %v, want failed diagnose; output=%s", err, err, out.String())
+	}
+	if !strings.Contains(out.String(), "extensions.allow") || !strings.Contains(out.String(), "workspace config") {
+		t.Fatalf("diagnose did not preserve explicit config scope:\n%s", out.String())
+	}
+}
+
 func TestInitTargetPathUsesJUEXHome(t *testing.T) {
 	home := setHomeForCLITest(t)
 	juexHome := filepath.Join(home, "alternate-home")

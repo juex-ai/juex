@@ -61,9 +61,11 @@ func newDiagnoseCmd() *cobra.Command {
 	cmd.Short = "Check Juex runtime config, credentials, and local resources"
 	cmd.Example = `  juex diagnose
   juex diagnose --offline
+  juex diagnose --config ./juex.yaml --offline
   juex diagnose --agent <id> --format json`
 	cmd.Flags().StringVar(&flags.agentID, "agent", "", "registered Agent id or unique exact name")
 	cmd.Flags().StringVarP(&flags.cwd, "cwd", "C", "", "registered Workspace path (default current directory)")
+	cmd.Flags().StringVar(&flags.configPath, "config", "", "explicit config file to validate without changing a managed Agent")
 	return cmd
 }
 

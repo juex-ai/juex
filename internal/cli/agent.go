@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -109,6 +110,10 @@ func newAgentAddCmd() *cobra.Command {
 		Short: "Register an existing Workspace as an Agent",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			workspace, err := filepath.Abs(args[0])
+			if err != nil {
+				return fmt.Errorf("juex agent add: resolve Workspace: %w", err)
+			}
 			manager, err := newFleetManager()
 			if err != nil {
 				return err
@@ -122,7 +127,7 @@ func newAgentAddCmd() *cobra.Command {
 				autostartOption = &autostart
 			}
 			result, err := manager.Add(cmd.Context(), fleet.AddOptions{
-				Workspace: args[0], Name: nameOption, Autostart: autostartOption,
+				Workspace: workspace, Name: nameOption, Autostart: autostartOption,
 			})
 			if err != nil {
 				return mapFleetError(err)

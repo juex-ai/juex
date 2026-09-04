@@ -240,7 +240,7 @@ func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 func TestAgentAddValidationMapsToUsageError(t *testing.T) {
 	setFleetTestHome(t, t.TempDir())
 	root := newRootCmd()
-	root.SetArgs([]string{"agent", "add", "relative"})
+	root.SetArgs([]string{"agent", "add", filepath.Join(t.TempDir(), "missing")})
 	err := root.Execute()
 	var usage *usageError
 	if !errors.As(err, &usage) {

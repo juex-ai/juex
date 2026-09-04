@@ -1334,14 +1334,18 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="juex-eval-config-check.") as work:
         root = pathlib.Path(work)
         workspace = root / "workspace"
-        workspace_config = workspace / ".juex" / "juex.yaml"
-        workspace_config.parent.mkdir(parents=True, mode=0o700)
-        workspace_config.write_text(
-            dump_yaml({"imports": [{"source": str(config_path)}]}),
-            encoding="utf-8",
-        )
-        workspace_config.chmod(0o600)
-        command = [juex_bin, "diagnose", "--cwd", str(workspace), "--offline", "--format", "json"]
+        workspace.mkdir(parents=True, mode=0o700)
+        command = [
+            juex_bin,
+            "diagnose",
+            "--cwd",
+            str(workspace),
+            "--config",
+            str(config_path),
+            "--offline",
+            "--format",
+            "json",
+        ]
         env = os.environ.copy()
         for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
             env.pop(name, None)
@@ -1369,20 +1373,23 @@ def validate_source_layers(juex_bin: str | list[str], layers: list[SourceConfigL
         root = pathlib.Path(work)
         default_home = root / "home" / ".juex"
         effective_home = root / "juex-home"
+        explicit = root / "explicit"
         workspace = root / "work"
-        workspace_config = workspace / ".juex"
-        for directory in (default_home, effective_home, workspace_config):
+        for directory in (default_home, effective_home, explicit, workspace):
             directory.mkdir(parents=True, mode=0o700)
 
         paths = {
             "default-home": default_home / "juex.yaml",
             "effective-home": effective_home / "juex.yaml",
-            "explicit": workspace_config / "juex.yaml",
+            "explicit": explicit / "juex.yaml",
         }
         for scope, layer in by_scope.items():
             _materialize_source_layer(layer, paths[scope])
 
-        command = [*_juex_validation_command(juex_bin), "diagnose", "--cwd", str(workspace), "--offline", "--format", "json"]
+        command = [*_juex_validation_command(juex_bin), "diagnose", "--cwd", str(workspace)]
+        if "explicit" in by_scope:
+            command.extend(["--config", str(paths["explicit"])])
+        command.extend(["--offline", "--format", "json"])
         env = os.environ.copy()
         for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
             env.pop(name, None)

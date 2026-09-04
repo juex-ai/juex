@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -12,6 +13,9 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/fleet"
 )
 
 func TestManagedCLIExposesResourceScopedCommandTree(t *testing.T) {
@@ -192,6 +196,33 @@ func TestManagedCLIResolvesCanonicalWorkspaceFromDotAndSymlink(t *testing.T) {
 	}
 }
 
+func TestManagedCLIAgentAddAcceptsRelativeWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	t.Chdir(workspace)
+
+	root := newRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"agent", "add", "."})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	resolution, err := agentstate.ResolveExisting(agentstate.Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Agent.Workspace != canonical {
+		t.Fatalf("registered Workspace = %q, want %q", resolution.Agent.Workspace, canonical)
+	}
+}
+
 func TestManagedCLIUnknownExplicitAgentSuggestsDiscoveryOrRegistration(t *testing.T) {
 	t.Setenv("JUEX_HOME", t.TempDir())
 	_, _, err := resolveSelectedAgent(&agentSelectorFlags{agent: "missing"})
@@ -244,6 +275,34 @@ func TestManagedCLIMapsAgentAPIErrorsToStableExitClasses(t *testing.T) {
 		if !strings.Contains(got.Error(), "specific problem") {
 			t.Fatalf("status %d error = %q", test.status, got)
 		}
+	}
+}
+
+func TestManagedCLIMapsDisabledAgentStartupToConflict(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+
+	manager, err := fleet.New(fleet.Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := manager.Add(context.Background(), fleet.AddOptions{Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.SetEnabled(context.Background(), added.Agent.ID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"agent", "send", "--agent", added.Agent.ID, "hello"})
+	err = root.Execute()
+	var conflict *conflictError
+	if !errors.As(err, &conflict) || !strings.Contains(err.Error(), "agent is disabled") {
+		t.Fatalf("error = %T %v, want disabled Agent conflict", err, err)
 	}
 }
 
