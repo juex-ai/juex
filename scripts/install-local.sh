@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build juex for the current machine (output to dist/) and install the
-# binary to ~/.local/bin/juex.
+# Build the web frontend and juex for the current machine (output to dist/),
+# then install the binary to ~/.local/bin/juex.
 #
 # Usage:
 #   scripts/install-local.sh
@@ -170,6 +170,7 @@ scripts/prepare-ripgrep.sh \
   --target "${GOOS}_${TARGET_ARCH}" \
   --juex-version "$VERSION" \
   --output "$PACKAGE_ROOT"
+make web
 mkdir -p "$(dirname "$BUILD_TARGET")"
 
 echo "Building juex ${VERSION} for ${GOOS}/${GOARCH} → ${BUILD_TARGET} ..."
