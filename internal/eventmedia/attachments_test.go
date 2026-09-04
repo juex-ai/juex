@@ -33,6 +33,9 @@ func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 	if !strings.HasPrefix(got.ArtifactPath, "event-media/") || got.MediaType != "image/png" || got.SHA256 == "" {
 		t.Fatalf("validated attachment = %+v", got)
 	}
+	if got.Ref.Name != "pixel.png" {
+		t.Fatalf("validated attachment name = %q, want pixel.png", got.Ref.Name)
+	}
 	if got.OriginalBytes <= 0 || got.Width != 1 || got.Height != 1 {
 		t.Fatalf("validated metadata = %+v, want byte count and 1x1 dimensions", got)
 	}
@@ -90,12 +93,12 @@ func TestValidateStoredAttachmentsUsesArtifactReferenceAndIntegrity(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored := AttachmentRef{Path: ref.Path, MediaType: "image/png", SHA256: ref.SHA256, Bytes: ref.Bytes}
+	stored := AttachmentRef{Path: ref.Path, Name: "source-photo.png", MediaType: "image/png", SHA256: ref.SHA256, Bytes: ref.Bytes}
 	report := ValidateStoredAttachments([]AttachmentRef{stored}, ValidationOptions{MediaDir: mediaDir})
 	if len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("stored report = %+v", report)
 	}
-	if got := report.Valid[0]; got.ArtifactPath != ref.Path || got.AbsolutePath != "" || got.SHA256 != ref.SHA256 {
+	if got := report.Valid[0]; got.ArtifactPath != ref.Path || got.AbsolutePath != "" || got.SHA256 != ref.SHA256 || got.Ref.Name != "source-photo.png" {
 		t.Fatalf("stored attachment = %+v", got)
 	}
 

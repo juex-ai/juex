@@ -28,6 +28,7 @@ func snapshotAttachmentRefs(workDir, agentStateDir, mediaDir string, guard sandb
 	for _, attachment := range report.Valid {
 		stored = append(stored, eventmedia.AttachmentRef{
 			Path:      attachment.ArtifactPath,
+			Name:      attachment.Ref.Name,
 			MediaType: attachment.MediaType,
 			SHA256:    attachment.SHA256,
 			Bytes:     attachment.OriginalBytes,

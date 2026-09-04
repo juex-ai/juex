@@ -1020,7 +1020,7 @@ func (a *App) ObservationFromMCPNotification(n mcp.Notification) observable.Obse
 	attachments := make([]eventmedia.AttachmentRef, 0, len(report.Valid))
 	for _, item := range report.Valid {
 		attachments = append(attachments, eventmedia.AttachmentRef{
-			Path: item.ArtifactPath, MediaType: item.MediaType,
+			Path: item.ArtifactPath, Name: item.Ref.Name, MediaType: item.MediaType,
 			SHA256: item.SHA256, Bytes: item.OriginalBytes,
 		})
 	}
@@ -1224,7 +1224,11 @@ func writeAttachmentSummary(sb *strings.Builder, report eventmedia.ValidationRep
 			if eventmedia.IsImageMediaType(attachment.MediaType) {
 				kind = "image"
 			}
-			fmt.Fprintf(sb, "- %s source=%s artifact=%s (%s, %d bytes", kind, attachment.Ref.Path, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
+			source := attachment.Ref.Name
+			if source == "" {
+				source = attachment.Ref.Path
+			}
+			fmt.Fprintf(sb, "- %s source=%s artifact=%s (%s, %d bytes", kind, source, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
 			if attachment.SHA256 != "" {
 				fmt.Fprintf(sb, ", sha256=%s", attachment.SHA256)
 			}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
@@ -291,6 +292,24 @@ func TestAppDeliverObservationStartsTurnAndPreservesMessageKind(t *testing.T) {
 		if !strings.Contains(message.FirstText(), want) {
 			t.Fatalf("observation text missing %q:\n%s", want, message.FirstText())
 		}
+	}
+}
+
+func TestRenderObservationTextUsesStoredAttachmentDisplayName(t *testing.T) {
+	record := testObservationRecord("obs-attachment-name")
+	report := eventmedia.ValidationReport{Valid: []eventmedia.ValidatedAttachment{{
+		Ref: eventmedia.AttachmentRef{
+			Path: "event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt",
+			Name: "deployment-report.txt",
+		},
+		ArtifactPath:  "event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt",
+		MediaType:     "text/plain",
+		OriginalBytes: 12,
+	}}}
+
+	text := renderObservationText(record, report)
+	if !strings.Contains(text, "source=deployment-report.txt artifact=event-media/") {
+		t.Fatalf("observation text did not preserve display name:\n%s", text)
 	}
 }
 

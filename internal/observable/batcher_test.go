@@ -143,6 +143,9 @@ func TestBatcher_SnapshotsAttachmentsBeforeFlush(t *testing.T) {
 	if !strings.HasPrefix(ref.Path, "event-media/") {
 		t.Fatalf("attachment path = %q, want durable event artifact", ref.Path)
 	}
+	if ref.Name != "pixel.png" {
+		t.Fatalf("attachment name = %q, want original filename", ref.Name)
+	}
 	if report := eventmedia.ValidateStoredAttachments(records[0].Attachments, eventmedia.ValidationOptions{MediaDir: mediaDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("stored attachment validation = %+v", report)
 	}
