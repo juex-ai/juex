@@ -207,6 +207,10 @@ func TestStoppedAgentServesPersistedThreadHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventFileRef, err := store.PutContentAddressed("event-media", ".txt", []byte("persisted attachment\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	backend := &fakeBackend{
 		endpointErr: errors.New("agent is stopped"),
@@ -274,6 +278,20 @@ func TestStoppedAgentServesPersistedThreadHistory(t *testing.T) {
 	}
 	if got := response.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
 		t.Fatalf("offline Artifact cache-control = %q", got)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/agents/aaaaaa/api/files/content?root=artifact&path="+url.QueryEscape(eventFileRef.Path),
+		nil,
+	)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("offline Artifact content status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "persisted attachment") {
+		t.Fatalf("offline Artifact content = %s", response.Body.String())
 	}
 }
 
@@ -371,6 +389,7 @@ func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
 		{path: "/api/threads/" + threadID + "/context", want: true},
 		{path: "/api/threads/" + threadID + "/scratchpad", want: true},
 		{path: "/api/media", want: true},
+		{path: "/api/files/content", want: true},
 		{path: "/api/runtime", want: false},
 		{path: "/api/threads/" + threadID + "/events", want: false},
 		{path: "/api/threads/" + threadID + "/inputs", want: false},
