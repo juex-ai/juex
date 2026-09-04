@@ -237,6 +237,11 @@ test("stage remounts primary pages through tabs and gates offline composers", ()
     assert.match(stageHeaderSource, new RegExp(`label: "${label}"`));
   }
   assert.match(stageHeaderSource, /agentTabPath\(agent\.id, tab\.id\)/);
+  assert.match(
+    stageHeaderSource,
+    /aria-label="Thread Explorer"[\s\S]*?<MessagesSquare className="size-4" \/>/,
+    "Thread Explorer should use a multi-conversation icon",
+  );
   assert.match(stageHeaderSource, /filePanelTitle: string/);
   assert.match(stageHeaderSource, /filePanelActionLabel/);
   assert.match(stateBarSource, /Start agent/);
