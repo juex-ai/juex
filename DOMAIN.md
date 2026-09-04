@@ -10,13 +10,19 @@ storage implementation belong in [ARCHITECTURE.md](ARCHITECTURE.md).
 | Owner | Responsibility |
 | --- | --- |
 | Workspace | User-authored project files, workspace configuration, Skills, and Hooks. |
-| Agent | Long-lived identity, rebuildable Thread list index, active and archived Threads, media, logs, Observable definitions and state, and Extension state. |
+| Agent | Long-lived identity, Workspace ownership, configuration overlay, rebuildable Thread list index, active and archived Threads, media, logs, Observable definitions and state, and Extension state. |
 | Thread | Identity, topology, lifecycle, Context Generation registry, pending Inputs, Turns, messages, Events, Usage, Scratchpad, and spool. |
 | Thread Module | Optional Thread-scoped state such as Goal and Notes, including its load, context, and Generation lifecycle behavior. |
 | Agent Runtime | Replaceable process resources: Providers, MCP clients, Tools, Observables, schedulers, and live subscriptions. |
 
 An Agent is bound to one Workspace. Replacing its Runtime does not replace its
 durable Agent or Thread state.
+
+`agent.json` is authoritative for that binding and for Agent lifecycle
+metadata. Within one JUEX_HOME, a canonical Workspace belongs to at most one
+Agent. Workspace configuration remains user-authored; an Agent's sparse
+`juex.yaml` can specialize the effective Runtime without changing Workspace
+bytes.
 
 ## Main And Worker Threads
 
@@ -128,3 +134,5 @@ nonexistent Thread.
     Generation.
 14. Cached input is never added a second time when computing total Token
     Usage.
+15. Agent identity and Agent configuration are resolved from Agent-owned state;
+    Workspace files are not identity records.

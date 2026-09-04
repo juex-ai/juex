@@ -14,14 +14,14 @@ const (
 )
 
 // RedactAgentConfig replaces environment.variables values with a stable
-// placeholder before a workspace config crosses the Fleet HTTP boundary.
+// placeholder before an Agent config crosses the Fleet HTTP boundary.
 func RedactAgentConfig(state AgentConfig) (AgentConfig, error) {
 	if !state.Exists || state.Content == "" {
 		return state, nil
 	}
 	docs, variables, err := parseEnvironmentVariables([]byte(state.Content))
 	if err != nil {
-		return AgentConfig{}, fmt.Errorf("fleet: redact workspace config: %w", err)
+		return AgentConfig{}, fmt.Errorf("fleet: redact Agent config: %w", err)
 	}
 	if variables == nil {
 		return state, nil
@@ -38,11 +38,11 @@ func RedactAgentConfig(state AgentConfig) (AgentConfig, error) {
 		return nil
 	})
 	if err != nil {
-		return AgentConfig{}, fmt.Errorf("fleet: redact workspace config: %w", err)
+		return AgentConfig{}, fmt.Errorf("fleet: redact Agent config: %w", err)
 	}
 	data, err := marshalYAMLDocuments(docs)
 	if err != nil {
-		return AgentConfig{}, fmt.Errorf("fleet: redact workspace config: %w", err)
+		return AgentConfig{}, fmt.Errorf("fleet: redact Agent config: %w", err)
 	}
 	state.Content = string(data)
 	return state, nil

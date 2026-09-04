@@ -22,6 +22,7 @@ const (
 	SourceUserConfig      Source = "user_config"
 	SourceDotenv          Source = "dotenv"
 	SourceWorkspaceConfig Source = "workspace_config"
+	SourceAgentConfig     Source = "agent_config"
 	SourceExplicitConfig  Source = "explicit_config"
 	SourceInherited       Source = "inherited"
 	SourceChild           Source = "child"

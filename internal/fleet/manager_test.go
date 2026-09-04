@@ -36,6 +36,30 @@ func TestResolveSelectorUsesExactIDOrUniqueExactName(t *testing.T) {
 	}
 }
 
+func TestRegisteredWorkspacesReadsRegistryWithoutRuntimeInspection(t *testing.T) {
+	valid := registryEntry("aaaaaa", "valid")
+	invalid := registryEntry("bbbbbb", "invalid")
+	invalid.Problem = "broken metadata"
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{valid, invalid}, nil
+	}
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		panic("RegisteredWorkspaces inspected runtime binding")
+	}
+	manager := &Manager{homeDir: t.TempDir(), deps: deps}
+	got, err := manager.RegisteredWorkspaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("RegisteredWorkspaces() = %+v, want one valid Workspace", got)
+	}
+	if _, ok := got[filepath.Clean(valid.Agent.Workspace)]; !ok {
+		t.Fatalf("RegisteredWorkspaces() = %+v, missing %q", got, valid.Agent.Workspace)
+	}
+}
+
 func TestInspectStatusRuntimeMatrix(t *testing.T) {
 	runtimeState := endpoint.Runtime{
 		AgentID:       "aaaaaa",
@@ -400,46 +424,6 @@ func TestStartRetriesTransientRuntimeReadErrors(t *testing.T) {
 	}
 	if got := reads.Load(); got < 3 {
 		t.Fatalf("runtime reads = %d, want retry after transient error", got)
-	}
-}
-
-func TestStartWithConfigPersistsLaunchPathBeforeSpawn(t *testing.T) {
-	home := t.TempDir()
-	entry := registryEntryAtHome(home, "aaaaaa", "agent")
-	current := entry
-	configPath := filepath.Join(home, "provider.yaml")
-	spawnErr := errors.New("spawn reached")
-
-	deps := defaultDependencies()
-	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
-		return []agentstate.RegistryEntry{current}, nil
-	}
-	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
-		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
-	}
-	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
-		return endpoint.Runtime{}, os.ErrNotExist
-	}
-	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
-		return noopGuard{}, nil
-	}
-	deps.updateAgent = func(_ string, id string, update agentstate.AgentUpdate) (agentstate.Agent, error) {
-		if id != entry.ID || update.RuntimeConfigPath == nil || *update.RuntimeConfigPath != configPath {
-			t.Fatalf("runtime config update = id=%q update=%+v", id, update)
-		}
-		current.Agent.RuntimeConfigPath = *update.RuntimeConfigPath
-		return current.Agent, nil
-	}
-	deps.spawn = func(_, _ string, spawned agentstate.RegistryEntry) (spawnedProcess, error) {
-		if spawned.Agent.RuntimeConfigPath != configPath {
-			t.Fatalf("spawned Agent config = %q, want %q", spawned.Agent.RuntimeConfigPath, configPath)
-		}
-		return spawnedProcess{}, spawnErr
-	}
-	manager := &Manager{homeDir: home, deps: deps}
-
-	if _, err := manager.StartWithConfig(context.Background(), entry.ID, configPath); !errors.Is(err, spawnErr) {
-		t.Fatalf("StartWithConfig error = %v, want %v", err, spawnErr)
 	}
 }
 

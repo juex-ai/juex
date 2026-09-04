@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -201,10 +202,10 @@ func TestReadOnlyStateRequiresBoundWorkspace(t *testing.T) {
 }
 
 func TestUpdateConfigPreflightsBeforeWriting(t *testing.T) {
-	home, workspace, entry := prepareFleetConfigTest(t)
+	home, _, entry := prepareFleetConfigTest(t)
 	entry.Agent.Enabled = false
 	old := []byte("old: unchanged\n")
-	configPath := filepath.Join(workspace, ".juex", "juex.yaml")
+	configPath := entry.Address.ConfigPath()
 	if err := os.WriteFile(configPath, old, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -242,9 +243,9 @@ func TestUpdateConfigPreflightsBeforeWriting(t *testing.T) {
 }
 
 func TestUpdateConfigRejectsAmbiguousRuntimeBeforeWriting(t *testing.T) {
-	home, workspace, entry := prepareFleetConfigTest(t)
+	home, _, entry := prepareFleetConfigTest(t)
 	old := []byte("old: unchanged\n")
-	configPath := filepath.Join(workspace, ".juex", "juex.yaml")
+	configPath := entry.Address.ConfigPath()
 	if err := os.WriteFile(configPath, old, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +332,7 @@ func TestUpdateConfigUsesRestartContinuationPolicy(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			home, workspace, entry := prepareFleetConfigTest(t)
+			home, _, entry := prepareFleetConfigTest(t)
 			manager, newRuntime, resumeCalls := configRestartTestManager(
 				t,
 				home,
@@ -367,7 +368,7 @@ func TestUpdateConfigUsesRestartContinuationPolicy(t *testing.T) {
 			if !strings.Contains(restarted.Resume.Error, test.wantDiagnostic) {
 				t.Fatalf("resume diagnostic = %q, want %q", restarted.Resume.Error, test.wantDiagnostic)
 			}
-			body, err := os.ReadFile(filepath.Join(workspace, ".juex", "juex.yaml"))
+			body, err := os.ReadFile(entry.Address.ConfigPath())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -519,6 +520,16 @@ func prepareFleetConfigTest(t *testing.T) (string, string, agentstate.RegistryEn
 	entry := registryEntryAtHome(home, "aaaaaa", "agent")
 	entry.Agent.Workspace = workspace
 	entry.Agent.Autostart = false
+	if err := os.MkdirAll(entry.Address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(entry.Agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(entry.Address.StateDir(), "agent.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return home, workspace, entry
 }
 

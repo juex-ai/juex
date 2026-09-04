@@ -105,9 +105,6 @@ runtime:
 	if len(statuses) != 3 || statuses[0].State != "fresh" || statuses[1].State != "fresh" || statuses[2].State != "fresh" {
 		t.Fatalf("import statuses = %+v", statuses)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".juex", "juex.local.json")); !os.IsNotExist(err) {
-		t.Fatalf("validation created agent state: %v", err)
-	}
 }
 
 func writeE2EConfig(t *testing.T, path, content string) {

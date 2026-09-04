@@ -47,11 +47,7 @@ func spawnDetached(executable, homeDir string, entry agentstate.RegistryEntry) (
 }
 
 func runtimeCommandArgs(entry agentstate.RegistryEntry) []string {
-	args := []string{"-C", entry.Agent.Workspace}
-	if entry.Agent.RuntimeConfigPath != "" {
-		args = append(args, "--config", entry.Agent.RuntimeConfigPath)
-	}
-	return append(args, "listen")
+	return []string{"--agent-id", entry.ID, "listen"}
 }
 
 func withEnvironment(environment []string, key, value string) []string {

@@ -10,12 +10,17 @@
 | 所有者 | 职责 |
 | --- | --- |
 | Workspace | 用户维护的项目文件、Workspace 配置、Skill 和 Hook。 |
-| Agent | 长期身份、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、Observable 定义与状态，以及 Extension 状态。 |
+| Agent | 长期身份、Workspace 所有权、配置覆盖、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、Observable 定义与状态，以及 Extension 状态。 |
 | Thread | 身份、拓扑、lifecycle、Context Generation registry、pending Input、Turn、消息、Event、Usage、Scratchpad 和 spool。 |
 | Thread Module | 可选的 Thread scope 状态，例如 Goal 与 Notes，以及其加载、context 和 Generation lifecycle 行为。 |
 | Agent Runtime | 可替换的进程资源：Provider、MCP client、Tool、Observable、scheduler 和实时订阅。 |
 
 Agent 绑定一个 Workspace。替换 Runtime 不会替换持久 Agent 或 Thread 状态。
+
+`agent.json` 是该绑定及 Agent lifecycle metadata 的权威来源。在同一个
+JUEX_HOME 内，一个规范 Workspace 最多属于一个 Agent。Workspace 配置仍由用户
+维护；Agent 自有的稀疏 `juex.yaml` 可以特化有效 Runtime，且不会改写 Workspace
+字节。
 
 ## Main 与 Worker
 
@@ -115,3 +120,4 @@ Archive/unarchive 针对整个 idle Worker，不创建 Generation。Archived Thr
 12. Active Thread 有一个执行态；Archived Thread 没有执行态。
 13. 当前 Provider context 只从一个 Context Generation 重建。
 14. 计算 Token Usage total 时，cached input 不会被再次相加。
+15. Agent 身份与 Agent 配置从 Agent 自有状态解析；Workspace 文件不是身份记录。

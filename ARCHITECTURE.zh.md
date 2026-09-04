@@ -44,6 +44,8 @@ locator 发现依赖。原因见
 
 | 模块 | 所有权 |
 | --- | --- |
+| `internal/agentstate` | Agent registry 身份、规范 Workspace binding、Agent state 寻址与 lifecycle metadata。 |
+| `internal/config` | 分层 YAML 加载、scope 校验、import、environment 投影与受管配置的原子发布。 |
 | `internal/jsonl` | 与领域无关的 JSONL 持久追加、修复、正向遍历和有界反向读取。 |
 | `internal/thread` | Thread metadata、Agent index、Generation EventStore、timeline paging、archive 和 delete。 |
 | `internal/runtime` | Pending Input 状态、Input/Turn lifecycle、Provider loop、context projection、compaction、status 和 Tool execution。 |
@@ -65,6 +67,7 @@ Agent 拥有的持久数据位于 `$JUEX_HOME/agents/<agent-id>/`：
 
 ```text
 agent.json
+juex.yaml
 threads.index.json
 threads/<thread-id>/
   thread.json
@@ -83,6 +86,17 @@ observables.json
 observables/
 extensions/
 ```
+
+`agent.json` 是身份、规范 Workspace 与 lifecycle metadata 的 registry 权威。
+按 Workspace 发现 Agent 时读取该 Registry；Fleet 启动时选择显式 Agent id，并从
+记录中派生 Workspace 与状态路径。Fleet 目录浏览器也只读该 Registry 来标记已
+注册 Workspace。
+
+配置按 built-in、默认 Home、不同的 JUEX_HOME、Workspace、Agent，最后可选的
+临时显式覆盖依次加载。Import 继承声明它的配置层 scope。Agent `juex.yaml`
+使用普通 schema 与 merge 规则，但不能拥有 Fleet 设置。Fleet 配置更新会先校验
+完整配置链，再原子发布 Agent 文件与远程 import cache，之后重启选定 Agent；
+Workspace 配置保持不变。
 
 `thread.json` 是 Thread 身份、拓扑、lifecycle、时间戳与 Context Generation
 registry 的权威。它还物化有界 counter、context status、Pending Input 数量和

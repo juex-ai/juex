@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-func TestRuntimeCommandArgsPreserveAgentConfig(t *testing.T) {
+func TestRuntimeCommandArgsSelectRegisteredAgent(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
-	entry.Agent.RuntimeConfigPath = "/configs/provider.yaml"
-	want := []string{"-C", entry.Agent.Workspace, "--config", "/configs/provider.yaml", "listen"}
+	want := []string{"--agent-id", entry.ID, "listen"}
 	if got := runtimeCommandArgs(entry); !reflect.DeepEqual(got, want) {
 		t.Fatalf("runtime args = %#v, want %#v", got, want)
 	}

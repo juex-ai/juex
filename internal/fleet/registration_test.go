@@ -87,7 +87,7 @@ func TestAddCanonicalizesSymlinkWorkspace(t *testing.T) {
 	}
 }
 
-func TestAddRejectsRelativePathAndUnknownMarker(t *testing.T) {
+func TestAddRejectsRelativePath(t *testing.T) {
 	home := t.TempDir()
 	manager := newRegistrationTestManager(t, home)
 
@@ -95,25 +95,6 @@ func TestAddRejectsRelativePathAndUnknownMarker(t *testing.T) {
 	var invalid *ValidationError
 	if !errors.As(err, &invalid) {
 		t.Fatalf("relative path error = %T %v, want ValidationError", err, err)
-	}
-
-	workspace := t.TempDir()
-	writeFleetTestJSON(
-		t,
-		filepath.Join(workspace, ".juex", "juex.local.json"),
-		agentstate.Marker{AgentID: "aaaaaa"},
-	)
-	_, err = manager.Add(context.Background(), AddOptions{Workspace: workspace})
-	var conflict *ConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("unknown marker error = %T %v, want ConflictError", err, err)
-	}
-	entries, listErr := agentstate.ListRegistry(home)
-	if listErr != nil {
-		t.Fatal(listErr)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("unknown marker minted registry entries: %+v", entries)
 	}
 }
 
@@ -183,7 +164,7 @@ func TestSetEnabledPreservesEnabledFlagWhenStopFails(t *testing.T) {
 	}
 }
 
-func TestRemoveRequiresConfirmationAndCleansMatchingMarker(t *testing.T) {
+func TestRemoveRequiresConfirmationAndDeletesAgentState(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	manager := newRegistrationTestManager(t, home)
@@ -196,17 +177,14 @@ func TestRemoveRequiresConfirmationAndCleansMatchingMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentDir := filepath.Join(home, "agents", added.Agent.ID)
-	markerPath := filepath.Join(workspace, ".juex", "juex.local.json")
 
 	_, err = manager.Remove(context.Background(), added.Agent.ID, RemoveOptions{ConfirmName: "wrong"})
 	var invalid *ValidationError
 	if !errors.As(err, &invalid) {
 		t.Fatalf("confirmation error = %T %v, want ValidationError", err, err)
 	}
-	for _, path := range []string{agentDir, markerPath} {
-		if _, statErr := os.Lstat(path); statErr != nil {
-			t.Fatalf("rejected remove changed %s: %v", path, statErr)
-		}
+	if _, statErr := os.Lstat(agentDir); statErr != nil {
+		t.Fatalf("rejected remove changed %s: %v", agentDir, statErr)
 	}
 
 	removed, err := manager.Remove(
@@ -222,10 +200,11 @@ func TestRemoveRequiresConfirmationAndCleansMatchingMarker(t *testing.T) {
 		removed.Workspace != added.Agent.Workspace {
 		t.Fatalf("removed agent = %+v", removed)
 	}
-	for _, path := range []string{agentDir, markerPath} {
-		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
-			t.Fatalf("removed path still exists %s: %v", path, statErr)
-		}
+	if _, statErr := os.Lstat(agentDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("removed path still exists %s: %v", agentDir, statErr)
+	}
+	if _, statErr := os.Lstat(workspace); statErr != nil {
+		t.Fatalf("removed workspace changed %s: %v", workspace, statErr)
 	}
 }
 

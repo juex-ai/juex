@@ -235,7 +235,6 @@ func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 	}
 
 	agentDir := filepath.Join(home, "agents", agentID)
-	markerPath := filepath.Join(workspace, ".juex", "juex.local.json")
 	root = newRootCmd()
 	output.Reset()
 	root.SetOut(&output)
@@ -245,10 +244,8 @@ func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{agentDir, markerPath} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("cancelled remove changed %s: %v", path, err)
-		}
+	if _, err := os.Stat(agentDir); err != nil {
+		t.Fatalf("cancelled remove changed %s: %v", agentDir, err)
 	}
 
 	root = newRootCmd()
@@ -260,10 +257,11 @@ func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{agentDir, markerPath} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("confirmed remove preserved %s: %v", path, err)
-		}
+	if _, err := os.Stat(agentDir); !os.IsNotExist(err) {
+		t.Fatalf("confirmed remove preserved %s: %v", agentDir, err)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("confirmed remove changed workspace %s: %v", workspace, err)
 	}
 	if !strings.Contains(output.String(), "Removed") {
 		t.Fatalf("remove output = %q", output.String())
@@ -985,16 +983,6 @@ func writeFleetAgentFixture(t *testing.T, home, workspace, id, name string) stri
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(agentDir, "agent.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(workspace, ".juex"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	marker, err := json.Marshal(map[string]string{"agent_id": id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, ".juex", "juex.local.json"), marker, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return agentDir

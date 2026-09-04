@@ -397,7 +397,7 @@ func TestExplicitLoadedHomeConfigReusesLocalImportBytesDuringReplay(t *testing.T
 	workDir := t.TempDir()
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
 
-	cfg, err := loadConfigFilesForWorkDir(workDir, homePath)
+	cfg, err := loadConfigFilesForWorkDir(workDir, "", homePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestExplicitLoadedHomeConfigReusesDeclaringBytesDuringReplay(t *testing.T) 
 	workDir := t.TempDir()
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
 
-	cfg, err := loadConfigFilesForWorkDir(workDir, homePath)
+	cfg, err := loadConfigFilesForWorkDir(workDir, "", homePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1939,15 +1939,15 @@ func resetImportLoaderMemoForTest(loader *configImportLoader) {
 
 func TestConfigImportFailureDoesNotCreateAgentStateOrPublishRemoteCache(t *testing.T) {
 	t.Run("agent state", func(t *testing.T) {
-		prepareConfigTest(t)
+		home := prepareConfigTest(t)
 		workDir := t.TempDir()
 		writeTextFile(t, filepath.Join(workDir, ".juex", "bad.yaml"), "unknown_field: true\n")
 		writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "imports:\n  - source: bad.yaml\n")
 		if _, err := LoadForWorkDir(workDir); err == nil {
 			t.Fatal("LoadForWorkDir() error = nil, want imported config failure")
 		}
-		if _, err := os.Stat(filepath.Join(workDir, ".juex", "juex.local.json")); !os.IsNotExist(err) {
-			t.Fatalf("failed import created agent state: %v", err)
+		if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !os.IsNotExist(err) {
+			t.Fatalf("failed import created Agent registry: %v", err)
 		}
 	})
 
@@ -1992,7 +1992,7 @@ func TestConfigImportsPreserveHomeWorkspaceExplicitPriorityAndProvenance(t *test
 	if cfg.ToolTimeout != 60*time.Second {
 		t.Fatalf("tool timeout = %s, want explicit main 60s", cfg.ToolTimeout)
 	}
-	homeImport = filepath.Join(filepath.Dir(cfg.DefaultHomeRuntimeConfigPath()), "home-import.yaml")
+	homeImport = filepath.Join(filepath.Dir(cfg.DefaultHomeConfigPath()), "home-import.yaml")
 	statuses := cfg.ImportStatuses()
 	if len(statuses) != 3 || statuses[0].Source != homeImport || statuses[1].Source != workspaceImport || statuses[2].Source != explicitImport {
 		t.Fatalf("import statuses = %+v", statuses)

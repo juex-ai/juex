@@ -147,6 +147,7 @@ func (e *emittedError) Unwrap() error {
 type persistentFlags struct {
 	configPath                string
 	cwd                       string
+	agentID                   string
 	models                    string
 	enableUserAgentsResources string
 	debug                     bool
@@ -242,6 +243,8 @@ operate on an agent.`,
 	cmd.Flags().BoolVarP(&showVersion, "version", "v", false, "print version and exit")
 	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
 	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
+	cmd.PersistentFlags().StringVar(&flags.agentID, "agent-id", "", "load an existing Agent from the JUEX_HOME registry")
+	_ = cmd.PersistentFlags().MarkHidden("agent-id")
 	cmd.PersistentFlags().StringVar(&flags.models, "models", "", "ordered model override as comma-separated provider:model refs")
 	cmd.PersistentFlags().StringVar(&flags.enableUserAgentsResources, "enable-user-agents-resources", "", "enable personal ~/.agents resources (true/false or 1/0; default from config)")
 	if flag := cmd.PersistentFlags().Lookup("enable-user-agents-resources"); flag != nil {
@@ -321,6 +324,7 @@ func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (conf
 	}
 	cfg, err = config.LoadWithOptions(config.LoadOptions{
 		WorkDir:    flags.cwd,
+		AgentID:    flags.agentID,
 		ConfigPath: configPath,
 		ModelRefs:  modelsOverride(flags),
 		AgentState: mode,
@@ -355,14 +359,7 @@ func loadConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Co
 	if err != nil {
 		return cfg, err
 	}
-	writeConfigMessages(cmd, cfg)
 	return cfg, nil
-}
-
-func writeConfigMessages(cmd *cobra.Command, cfg config.Config) {
-	for _, notice := range cfg.AgentStateNotices {
-		fmt.Fprintf(cmd.ErrOrStderr(), "juex: notice: %s\n", notice)
-	}
 }
 
 type runtimeConfigLifecycle struct {
@@ -378,7 +375,6 @@ func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (co
 	if err != nil {
 		return cfg, nil, err
 	}
-	writeConfigMessages(cmd, cfg)
 	lifecycle := &runtimeConfigLifecycle{}
 	restore, err := cfg.EnvironmentSnapshot().Activate()
 	if err != nil {

@@ -105,9 +105,6 @@ func TestInspectAgentRuntimeValidatesDefaultsBeforeAgentCreation(t *testing.T) {
 	if inspection.ExtensionsRuntime().RootDir != "" {
 		t.Fatalf("inspection minted Agent extension root %q", inspection.ExtensionsRuntime().RootDir)
 	}
-	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !os.IsNotExist(err) {
-		t.Fatalf("inspection created Agent marker: %v", err)
-	}
 }
 
 func TestResolveAgentRuntimeShadowsAndDeduplicatesWithoutValues(t *testing.T) {

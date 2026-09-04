@@ -62,9 +62,9 @@ to test and explain.
   mental model, at the cost of fewer deployment knobs.
 - Standard library first in Go: less dependency drift, at the cost of writing
   small protocol adapters ourselves.
-- Marker-bound AgentStateDirs: state survives Workspace moves and supports a
-  central fleet registry, at the cost of an explicit identity binding and
-  migration step.
+- Registry-owned Agent identity and configuration: Workspace files stay
+  shareable while per-Agent state and Runtime choices remain independent, at
+  the cost of consulting JUEX_HOME for Agent discovery.
 - Synchronous turn loop with parallel tool calls: simple ordering and tests,
   while still allowing independent tool calls inside one model response.
 - Ownership-based Thread stores over one universal Journal: Generation history

@@ -32,13 +32,10 @@ type WorkspaceBinding struct {
 }
 
 type AgentUpdate struct {
-	Name              *string
-	RuntimeConfigPath *string
-	Enabled           *bool
-	Autostart         *bool
+	Name      *string
+	Enabled   *bool
+	Autostart *bool
 }
-
-var removeWorkspaceMarker = os.Remove
 
 func ListRegistry(homeDir string) ([]RegistryEntry, error) {
 	agentsDir := filepath.Join(homeDir, "agents")
@@ -59,7 +56,7 @@ func ListRegistry(homeDir string) ([]RegistryEntry, error) {
 	}
 	entries := make([]RegistryEntry, 0, len(dirEntries))
 	for _, dirEntry := range dirEntries {
-		if isDeletingTombstone(dirEntry.Name()) {
+		if isDeletingTombstone(dirEntry.Name()) || isCreatingStage(dirEntry.Name()) {
 			continue
 		}
 		entries = append(entries, loadRegistryEntry(agentsDir, dirEntry.Name()))
@@ -92,16 +89,6 @@ func UpdateAgent(homeDir, agentID string, update AgentUpdate) (Agent, error) {
 		}
 		agent.Name = name
 	}
-	if update.RuntimeConfigPath != nil {
-		configPath := strings.TrimSpace(*update.RuntimeConfigPath)
-		if configPath != "" {
-			if !filepath.IsAbs(configPath) {
-				return Agent{}, errors.New("agentstate: runtime config path must be absolute")
-			}
-			configPath = filepath.Clean(configPath)
-		}
-		agent.RuntimeConfigPath = configPath
-	}
 	if update.Enabled != nil {
 		agent.Enabled = *update.Enabled
 	}
@@ -112,21 +99,6 @@ func UpdateAgent(homeDir, agentID string, update AgentUpdate) (Agent, error) {
 		return Agent{}, fmt.Errorf("agentstate: update agent %q: %w", agentID, err)
 	}
 	return agent, nil
-}
-
-func WorkspaceHasMarker(workDir string) (bool, error) {
-	markerPath := filepath.Join(workDir, ".juex", markerName)
-	info, err := os.Lstat(markerPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("agentstate: inspect workspace marker %s: %w", markerPath, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return false, fmt.Errorf("agentstate: workspace marker %s is not a regular file", markerPath)
-	}
-	return true, nil
 }
 
 func InspectBinding(entry RegistryEntry) WorkspaceBinding {
@@ -175,45 +147,9 @@ func InspectBinding(entry RegistryEntry) WorkspaceBinding {
 		}
 	}
 
-	markerPath := filepath.Join(entry.Agent.Workspace, ".juex", markerName)
-	markerInfo, err := os.Lstat(markerPath)
-	if err != nil {
-		return WorkspaceBinding{
-			Kind:   WorkspaceInvalid,
-			Reason: fmt.Sprintf("inspect workspace marker %s: %v", markerPath, err),
-		}
-	}
-	if markerInfo.Mode()&os.ModeSymlink != 0 || !markerInfo.Mode().IsRegular() {
-		return WorkspaceBinding{
-			Kind:   WorkspaceInvalid,
-			Reason: fmt.Sprintf("workspace marker %s is not a regular file", markerPath),
-		}
-	}
-	var marker Marker
-	if err := readJSON(markerPath, &marker); err != nil {
-		return WorkspaceBinding{
-			Kind:   WorkspaceInvalid,
-			Reason: fmt.Sprintf("read workspace marker %s: %v", markerPath, err),
-		}
-	}
-	if !validAgentID.MatchString(marker.AgentID) {
-		return WorkspaceBinding{
-			Kind:   WorkspaceInvalid,
-			Reason: fmt.Sprintf("workspace marker %s contains invalid agent_id %q", markerPath, marker.AgentID),
-		}
-	}
-	if marker.AgentID != entry.ID {
-		return WorkspaceBinding{
-			Kind: WorkspaceOrphaned,
-			Reason: fmt.Sprintf(
-				"workspace marker %s references agent %q instead of %q",
-				markerPath, marker.AgentID, entry.ID,
-			),
-		}
-	}
 	return WorkspaceBinding{
 		Kind:   WorkspaceBound,
-		Reason: fmt.Sprintf("workspace marker %s matches agent %q", markerPath, entry.ID),
+		Reason: fmt.Sprintf("workspace %s exists for agent %q", entry.Agent.Workspace, entry.ID),
 	}
 }
 
@@ -302,10 +238,6 @@ func DeleteRegistered(homeDir, agentID string) error {
 		)
 	}
 
-	removeMarker, markerPath, err := registeredMarkerCleanup(entry)
-	if err != nil {
-		return err
-	}
 	agentsDir := filepath.Join(homeDir, "agents")
 	tombstone, err := renameOrphanToTombstone(agentsDir, entry.Address.StateDir(), agentID)
 	if err != nil {
@@ -324,61 +256,10 @@ func DeleteRegistered(homeDir, agentID string) error {
 		)
 	}
 
-	if removeMarker {
-		if err := removeWorkspaceMarker(markerPath); err != nil {
-			restoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Address.StateDir())
-			return errors.Join(
-				fmt.Errorf("agentstate: remove workspace marker %s: %w", markerPath, err),
-				restoreErr,
-			)
-		}
-		if err := syncRegistryDir(filepath.Dir(markerPath)); err != nil {
-			markerRestoreErr := atomicWriteJSON(markerPath, Marker{AgentID: agentID}, 0o644)
-			registryRestoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Address.StateDir())
-			return errors.Join(
-				fmt.Errorf("agentstate: sync workspace marker directory %s: %w", filepath.Dir(markerPath), err),
-				markerRestoreErr,
-				registryRestoreErr,
-			)
-		}
-	}
 	if err := os.RemoveAll(tombstone); err != nil {
 		return fmt.Errorf("agentstate: remove agent %q tombstone %s: %w", agentID, tombstone, err)
 	}
 	return nil
-}
-
-func registeredMarkerCleanup(entry RegistryEntry) (bool, string, error) {
-	workspaceInfo, err := os.Lstat(entry.Agent.Workspace)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, "", nil
-	}
-	if err != nil {
-		return false, "", fmt.Errorf("agentstate: inspect workspace %s: %w", entry.Agent.Workspace, err)
-	}
-	if workspaceInfo.Mode()&os.ModeSymlink != 0 || !workspaceInfo.IsDir() {
-		return false, "", fmt.Errorf(
-			"agentstate: refuse to delete agent %q because workspace %s is not a real directory",
-			entry.ID,
-			entry.Agent.Workspace,
-		)
-	}
-	markerPath := filepath.Join(entry.Agent.Workspace, ".juex", markerName)
-	marker, exists, err := loadMarker(markerPath)
-	if err != nil {
-		return false, "", err
-	}
-	if !exists {
-		return false, "", nil
-	}
-	if !validAgentID.MatchString(marker.AgentID) {
-		return false, "", fmt.Errorf(
-			"agentstate: marker %s contains invalid agent_id %q",
-			markerPath,
-			marker.AgentID,
-		)
-	}
-	return marker.AgentID == entry.ID, markerPath, nil
 }
 
 func restoreRegistryTombstone(agentsDir, tombstone, agentDir string) error {
@@ -414,6 +295,15 @@ func isDeletingTombstone(name string) bool {
 	}
 	agentID, suffix, ok := strings.Cut(rest, ".deleting-")
 	return ok && validAgentID.MatchString(agentID) && validAgentID.MatchString(suffix)
+}
+
+func isCreatingStage(name string) bool {
+	rest := strings.TrimPrefix(name, ".")
+	if rest == name {
+		return false
+	}
+	agentID, suffix, ok := strings.Cut(rest, ".creating-")
+	return ok && validAgentID.MatchString(agentID) && suffix != "" && filepath.Base(suffix) == suffix
 }
 
 func renameOrphanToTombstone(agentsDir, agentDir, agentID string) (string, error) {

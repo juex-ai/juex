@@ -36,9 +36,6 @@ providers:
 	if cfg.ProviderID != "local" || cfg.Model != "new-model" {
 		t.Fatalf("validated selection = %s:%s", cfg.ProviderID, cfg.Model)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".juex", "juex.local.json")); !os.IsNotExist(err) {
-		t.Fatalf("validation created workspace identity: %v", err)
-	}
 }
 
 func TestWriteWorkspaceConfigPreservesOldFileOnValidationFailure(t *testing.T) {
@@ -57,9 +54,6 @@ func TestWriteWorkspaceConfigPreservesOldFileOnValidationFailure(t *testing.T) {
 	}
 	if string(got) != string(old) {
 		t.Fatalf("config changed after failed validation:\n%s", got)
-	}
-	if _, err := os.Stat(filepath.Join(workDir, ".juex", "juex.local.json")); !os.IsNotExist(err) {
-		t.Fatalf("failed write created workspace identity: %v", err)
 	}
 }
 
@@ -368,7 +362,7 @@ func TestWorkspaceConfigRecoversInterruptedPublicationBeforeLoad(t *testing.T) {
 			if tc.old != nil {
 				writeTextFile(t, path, string(tc.old))
 			}
-			snapshot, err := snapshotWorkspaceConfig(path)
+			snapshot, err := snapshotConfigFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -376,14 +370,14 @@ func TestWorkspaceConfigRecoversInterruptedPublicationBeforeLoad(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := beginConfigImportCachePublicationWithWorkspace(homeDir, nil, &snapshot); err != nil {
+			if _, err := beginConfigImportCachePublicationWithConfig(homeDir, nil, &snapshot); err != nil {
 				t.Fatal(err)
 			}
 			if err := homestore.WriteFileAtomic(path, candidate, 0o600, 0o755); err != nil {
 				t.Fatal(err)
 			}
 
-			cfg, err := loadConfigFilesForWorkDir(workDir)
+			cfg, err := loadConfigFilesForWorkDir(workDir, "")
 			if err != nil {
 				t.Fatal(err)
 			}

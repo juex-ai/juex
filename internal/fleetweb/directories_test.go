@@ -11,8 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/juex-ai/juex/internal/agentstate"
 )
 
 func TestDirectoryAPICreatesOneEmptyDirectory(t *testing.T) {
@@ -189,7 +187,7 @@ func TestDirectoryAPICreateUsesStrictBoundedJSONAndMethods(t *testing.T) {
 	}
 }
 
-func TestDirectoryAPIListsOnlySafeDirectoriesAndMarkers(t *testing.T) {
+func TestDirectoryAPIListsOnlySafeDirectoriesAndRegistryBindings(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"visible", ".hidden", "registered", "restricted"} {
 		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
@@ -202,11 +200,6 @@ func TestDirectoryAPIListsOnlySafeDirectoriesAndMarkers(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "visible"), filepath.Join(root, "linked")); err != nil {
 		t.Fatal(err)
 	}
-	writeDirectoryTestJSON(
-		t,
-		filepath.Join(root, "registered", ".juex", "juex.local.json"),
-		agentstate.Marker{AgentID: "aaaaaa"},
-	)
 	restrictedJuex := filepath.Join(root, "restricted", ".juex")
 	if err := os.MkdirAll(restrictedJuex, 0o755); err != nil {
 		t.Fatal(err)
@@ -218,7 +211,13 @@ func TestDirectoryAPIListsOnlySafeDirectoriesAndMarkers(t *testing.T) {
 		t.Cleanup(func() { _ = os.Chmod(restrictedJuex, 0o755) })
 	}
 
-	server := newServer(&fakeBackend{}, Options{Addr: "127.0.0.1:0"})
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newServer(&fakeBackend{registered: map[string]struct{}{
+		filepath.Join(canonicalRoot, "registered"): {},
+	}}, Options{Addr: "127.0.0.1:0"})
 	path := "/api/fs/dirs?path=" + url.QueryEscape(root)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, http.NoBody))
@@ -240,7 +239,7 @@ func TestDirectoryAPIListsOnlySafeDirectoriesAndMarkers(t *testing.T) {
 	if !got["registered"].Registered ||
 		got["visible"].Registered ||
 		got["restricted"].Registered {
-		t.Fatalf("registered markers = %+v", got)
+		t.Fatalf("registered workspaces = %+v", got)
 	}
 	for _, excluded := range []string{".hidden", "file.txt", "linked"} {
 		if _, ok := got[excluded]; ok {
@@ -289,20 +288,6 @@ func TestDirectoryAPIRejectsRelativeAndSymlinkPaths(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("GET %s status = %d, body = %s", rawPath, recorder.Code, recorder.Body.String())
 		}
-	}
-}
-
-func writeDirectoryTestJSON(t *testing.T, path string, value any) {
-	t.Helper()
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
 	}
 }
 

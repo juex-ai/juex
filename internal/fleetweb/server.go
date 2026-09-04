@@ -40,6 +40,7 @@ type Options struct {
 
 type backend interface {
 	Status(context.Context) ([]fleet.AgentStatus, error)
+	RegisteredWorkspaces() (map[string]struct{}, error)
 	Add(context.Context, fleet.AddOptions) (fleet.AddResult, error)
 	Start(context.Context, string) (fleet.AgentStatus, error)
 	Stop(context.Context, string) (fleet.AgentStatus, error)

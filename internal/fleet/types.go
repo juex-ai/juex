@@ -143,6 +143,23 @@ type RemovedAgent struct {
 	Workspace string `json:"workspace"`
 }
 
+// RegisteredWorkspaces is a read-only canonical Workspace snapshot keyed by
+// absolute path. It does not inspect processes or runtime endpoints.
+func (m *Manager) RegisteredWorkspaces() (map[string]struct{}, error) {
+	entries, err := m.deps.listRegistry(m.homeDir)
+	if err != nil {
+		return nil, err
+	}
+	workspaces := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.Problem != "" || entry.Agent.Workspace == "" {
+			continue
+		}
+		workspaces[filepath.Clean(entry.Agent.Workspace)] = struct{}{}
+	}
+	return workspaces, nil
+}
+
 type Options struct {
 	HomeDir      string
 	Executable   string

@@ -32,12 +32,10 @@ func connectAgent(ctx context.Context, cfg config.Config) (*agentClient, error) 
 	if err != nil {
 		return nil, err
 	}
-	var startErr error
-	if configPath := cfg.ExplicitRuntimeConfigPath(); configPath != "" {
-		_, startErr = manager.StartWithConfig(ctx, cfg.AgentID, configPath)
-	} else {
-		_, startErr = manager.Start(ctx, cfg.AgentID)
+	if cfg.ExplicitConfigPath() != "" {
+		return nil, &usageError{msg: "--config is not supported by commands that connect to a resident Agent; save an Agent config through Fleet or run juex listen --config directly"}
 	}
+	_, startErr := manager.Start(ctx, cfg.AgentID)
 	if startErr != nil {
 		return nil, fmt.Errorf("start Agent Runtime: %w", startErr)
 	}

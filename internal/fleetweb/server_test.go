@@ -30,26 +30,28 @@ import (
 )
 
 type fakeBackend struct {
-	statuses     []fleet.AgentStatus
-	statusErr    error
-	added        fleet.AddResult
-	addErr       error
-	actionStatus fleet.AgentStatus
-	actionErr    error
-	removed      fleet.RemovedAgent
-	removeErr    error
-	logs         []byte
-	logsErr      error
-	config       fleet.AgentConfig
-	configErr    error
-	updated      fleet.AgentConfig
-	updateStatus fleet.RestartResult
-	updateErr    error
-	runtime      endpoint.Runtime
-	endpointErr  error
-	readOnly     fleet.ReadOnlyAgentState
-	readOnlyErr  error
-	statusFn     func(context.Context) ([]fleet.AgentStatus, error)
+	statuses      []fleet.AgentStatus
+	statusErr     error
+	added         fleet.AddResult
+	addErr        error
+	actionStatus  fleet.AgentStatus
+	actionErr     error
+	removed       fleet.RemovedAgent
+	removeErr     error
+	logs          []byte
+	logsErr       error
+	config        fleet.AgentConfig
+	configErr     error
+	updated       fleet.AgentConfig
+	updateStatus  fleet.RestartResult
+	updateErr     error
+	runtime       endpoint.Runtime
+	endpointErr   error
+	readOnly      fleet.ReadOnlyAgentState
+	readOnlyErr   error
+	statusFn      func(context.Context) ([]fleet.AgentStatus, error)
+	registered    map[string]struct{}
+	registeredErr error
 
 	mu            sync.Mutex
 	action        string
@@ -66,6 +68,10 @@ func (f *fakeBackend) Status(ctx context.Context) ([]fleet.AgentStatus, error) {
 		return f.statusFn(ctx)
 	}
 	return f.statuses, f.statusErr
+}
+
+func (f *fakeBackend) RegisteredWorkspaces() (map[string]struct{}, error) {
+	return f.registered, f.registeredErr
 }
 
 func (f *fakeBackend) Add(_ context.Context, opts fleet.AddOptions) (fleet.AddResult, error) {

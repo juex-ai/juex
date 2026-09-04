@@ -1051,12 +1051,23 @@ def write_contract_report(
 
 
 def agent_state_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
-    marker_path = work_dir / ".juex" / "juex.local.json"
-    marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    agent_id = marker.get("agent_id") if isinstance(marker, dict) else None
-    if not isinstance(agent_id, str) or re.fullmatch(r"[a-z2-7]{6}", agent_id) is None:
-        raise ValueError(f"invalid or missing agent_id in {marker_path}")
-    return juex_home / "agents" / agent_id
+    workspace = work_dir.resolve()
+    agents_dir = juex_home / "agents"
+    matches: list[pathlib.Path] = []
+    for state_dir in sorted(agents_dir.iterdir()):
+        if not state_dir.is_dir() or re.fullmatch(r"[a-z2-7]{6}", state_dir.name) is None:
+            continue
+        agent_path = state_dir / "agent.json"
+        agent = json.loads(agent_path.read_text(encoding="utf-8"))
+        agent_id = agent.get("id") if isinstance(agent, dict) else None
+        registered_workspace = agent.get("workspace") if isinstance(agent, dict) else None
+        if agent_id != state_dir.name or not isinstance(registered_workspace, str):
+            raise ValueError(f"invalid Agent identity in {agent_path}")
+        if pathlib.Path(registered_workspace).resolve() == workspace:
+            matches.append(state_dir)
+    if len(matches) != 1:
+        raise ValueError(f"expected one Agent for workspace {workspace}, found {len(matches)}")
+    return matches[0]
 
 
 def agent_threads_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
@@ -1108,12 +1119,8 @@ def prepare_agent_observables_config(ctx: ProviderSmokeContext, case_dir: pathli
 
 def stop_agent_runtime(juex_bin: str, work_dir: pathlib.Path, env: dict[str, str]) -> None:
     """Best-effort cleanup for the resident Runtime started by `juex send`."""
-    marker_path = work_dir / ".juex" / "juex.local.json"
     try:
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
-        agent_id = marker.get("agent_id") if isinstance(marker, dict) else None
-        if not isinstance(agent_id, str) or re.fullmatch(r"[a-z2-7]{6}", agent_id) is None:
-            return
+        agent_id = agent_state_dir(work_dir, pathlib.Path(env["JUEX_HOME"])).name
         subprocess.run(
             [juex_bin, "fleet", "stop", agent_id],
             env=env,

@@ -10,8 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/juex-ai/juex/internal/agentstate"
 )
 
 type DirectoryEntry struct {
@@ -47,7 +45,12 @@ func (s *Server) handleListDirectories(w http.ResponseWriter, r *http.Request) {
 		}
 		showHidden = parsed
 	}
-	listing, err := listDirectories(r.URL.Query().Get("path"), showHidden)
+	registered, err := s.manager.RegisteredWorkspaces()
+	if err != nil {
+		writeFleetError(w, err)
+		return
+	}
+	listing, err := listDirectories(r.URL.Query().Get("path"), showHidden, registered)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
@@ -150,7 +153,7 @@ func createDirectory(parent, name string) (DirectoryEntry, error) {
 	}, nil
 }
 
-func listDirectories(path string, showHidden bool) (DirectoryListing, error) {
+func listDirectories(path string, showHidden bool, registeredWorkspaces map[string]struct{}) (DirectoryListing, error) {
 	if path == "" {
 		var err error
 		path, err = os.UserHomeDir()
@@ -173,6 +176,10 @@ func listDirectories(path string, showHidden bool) (DirectoryListing, error) {
 	if err != nil {
 		return DirectoryListing{}, fmt.Errorf("fleet web: read directory %s: %w", path, err)
 	}
+	registryParent := path
+	if canonicalParent, err := filepath.EvalSymlinks(path); err == nil {
+		registryParent = canonicalParent
+	}
 
 	dirs := make([]DirectoryEntry, 0, len(children))
 	for _, child := range children {
@@ -187,10 +194,7 @@ func listDirectories(path string, showHidden bool) (DirectoryListing, error) {
 			continue
 		}
 		childPath := filepath.Join(path, child.Name())
-		registered, err := agentstate.WorkspaceHasMarker(childPath)
-		if err != nil {
-			registered = false
-		}
+		_, registered := registeredWorkspaces[filepath.Join(registryParent, child.Name())]
 		dirs = append(dirs, DirectoryEntry{
 			Name:       child.Name(),
 			Path:       childPath,

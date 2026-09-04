@@ -115,7 +115,13 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks}
 	}
 	checks = append(checks, doctorAgentCheck(workDir))
-	cfg, err := loadConfigForCommand(cmd, flags)
+	_, agentErr := agentstate.ResolveExisting(agentstate.Options{WorkDir: workDir})
+	agentAvailable := agentErr == nil
+	policy := agentStateNone
+	if agentAvailable {
+		policy = agentStateExisting
+	}
+	cfg, err := loadConfigWithPolicy(flags, policy)
 	if err != nil {
 		checks = append(checks, doctorCheck{
 			Name:       "config",
@@ -125,15 +131,6 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		})
 		checks = append(checks, doctorWorkdirCheck(workDir))
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
-	}
-	cfg.WorkDir = workDir
-	agentAvailable := false
-	if resolution, resolveErr := agentstate.ResolveExisting(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: workDir}); resolveErr == nil {
-		cfg.AgentID = resolution.Agent.ID
-		cfg.AgentName = resolution.Agent.Name
-		cfg.AgentStateDir = resolution.Address.StateDir()
-		cfg.AgentAddress = resolution.Address
-		agentAvailable = true
 	}
 	if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 		checks = append(checks, doctorCheck{
@@ -225,29 +222,11 @@ func doctorAgentCheck(workDir string) doctorCheck {
 			Suggestion: "run juex send or listen to create a durable workspace agent",
 		}
 	}
-	var rebind *agentstate.RebindRequiredError
-	if errors.As(err, &rebind) {
-		return doctorCheck{
-			Name:       "agent",
-			Status:     doctorStatusFail,
-			Message:    rebind.Error(),
-			Suggestion: "run juex send or listen once to automatically rebind the workspace agent",
-		}
-	}
-	var copied *agentstate.WorkspaceCopyError
-	if errors.As(err, &copied) {
-		return doctorCheck{
-			Name:       "agent",
-			Status:     doctorStatusFail,
-			Message:    copied.Error(),
-			Suggestion: "remove the copied workspace marker to mint a new identity",
-		}
-	}
 	return doctorCheck{
 		Name:       "agent",
 		Status:     doctorStatusFail,
 		Message:    err.Error(),
-		Suggestion: "repair the workspace marker or its matching JUEX_HOME registry entry",
+		Suggestion: "repair the Workspace path or its JUEX_HOME registry entry",
 	}
 }
 
@@ -260,8 +239,8 @@ func doctorConfigCheck(cfg config.Config) doctorCheck {
 	if check.Details == nil {
 		check.Details = map[string]any{}
 	}
-	check.Details["default_home_config_path"] = cfg.DefaultHomeRuntimeConfigPath()
-	check.Details["effective_home_config_path"] = cfg.HomeRuntimeConfigPath()
+	check.Details["default_home_config_path"] = cfg.DefaultHomeConfigPath()
+	check.Details["effective_home_config_path"] = cfg.HomeConfigPath()
 	statuses := cfg.ImportStatuses()
 	imports := make([]map[string]any, 0, len(statuses))
 	stale := false

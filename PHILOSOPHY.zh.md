@@ -42,6 +42,7 @@ Web UI 用于检查 Thread、提交 Input、中断工作及管理活跃或归档
 
 - 单一二进制优于多服务架构：安装更简单、心智模型更简单，但部署旋钮更少。
 - Go 标准库优先：依赖漂移更少，但需要自行编写小型协议适配器。
-- Marker 绑定的 AgentStateDir：状态能在 Workspace 移动后保留并支持中央 Fleet registry，代价是显式身份绑定和迁移步骤。
+- Registry 自有的 Agent 身份与配置：Workspace 文件保持可共享，Agent 状态与
+  Runtime 选择彼此独立，代价是发现 Agent 时需要查询 JUEX_HOME。
 - 同步 Turn loop 配合并行 Tool Call：顺序和测试简单，同时仍允许一个模型 response 内的独立 Tool Call 并发执行。
 - 基于所有权的 Thread store 优于一个 universal Journal：Generation 历史仍然持久且便于追加，metadata、pending execution 与可选 Module 状态则遵循各自生命周期。这样能让列表和当前 context 读取保持有界，代价是需要显式的 commit 顺序与 recovery boundary。
