@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -36,6 +37,7 @@ import (
 
 type webProvider struct {
 	steps     []llm.Response
+	errs      []error
 	calls     int
 	histories [][]llm.Message
 	mu        sync.Mutex
@@ -50,8 +52,12 @@ func (p *webProvider) Complete(ctx context.Context, sys string, h []llm.Message,
 	}
 	p.histories = append(p.histories, append([]llm.Message(nil), h...))
 	r := p.steps[p.calls]
+	var err error
+	if p.calls < len(p.errs) {
+		err = p.errs[p.calls]
+	}
 	p.calls++
-	return r, nil
+	return r, err
 }
 
 func (p *webProvider) history(idx int) []llm.Message {
@@ -738,6 +744,72 @@ providers:
 	}
 }
 
+func TestWeb_ProviderErrorUsageSurvivesRestartAndReachesAPI(t *testing.T) {
+	wantUsage := llm.Usage{InputTokens: 9, CachedInputTokens: 2, OutputTokens: 3}
+	provider := &webProvider{
+		steps: []llm.Response{{Usage: wantUsage}},
+		errs:  []error{errors.New("provider failed after reporting Usage")},
+	}
+	work := t.TempDir()
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	server := web.NewServer(web.Options{Cfg: cfg, Provider: provider})
+	httpServer := httptest.NewServer(server.Handler())
+	threadID := createWebMainThread(t, httpServer.URL)
+
+	response, err := http.Post(
+		httpServer.URL+"/api/threads/"+threadID+"/inputs",
+		"application/json",
+		strings.NewReader(`{"prompt":"record failed usage"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("turn status = %d body=%s", response.StatusCode, body)
+	}
+	var turn webStartTurnResponse
+	if err := json.NewDecoder(response.Body).Decode(&turn); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, 10*time.Second, func() bool {
+		state, _, stateErr := fetchWebTurnState(http.DefaultClient, httpServer.URL, threadID, turn.TurnID)
+		return stateErr == nil && state == "errored"
+	})
+	var liveStatus juexruntime.StatusSnapshot
+	e2eThreadJSON(
+		t,
+		http.MethodGet,
+		httpServer.URL+"/api/threads/"+threadID+"/status",
+		"",
+		http.StatusOK,
+		&liveStatus,
+	)
+	if liveStatus.TokenUsage != wantUsage ||
+		liveStatus.ContextUsage == nil ||
+		liveStatus.ContextUsage.Model != "web-test" ||
+		liveStatus.ContextUsage.InputTokens != wantUsage.InputTokens ||
+		liveStatus.ContextUsage.OutputTokens != wantUsage.OutputTokens {
+		t.Fatalf("live failed-response Usage = %+v / %+v", liveStatus.TokenUsage, liveStatus.ContextUsage)
+	}
+	httpServer.Close()
+	server.Close()
+
+	restarted := web.NewServer(web.Options{Cfg: cfg, Provider: &webProvider{}})
+	t.Cleanup(restarted.Close)
+	restartedHTTP := httptest.NewServer(restarted.Handler())
+	defer restartedHTTP.Close()
+	var list struct {
+		Active []thread.IndexEntry `json:"active_threads"`
+	}
+	e2eThreadJSON(t, http.MethodGet, restartedHTTP.URL+"/api/threads", "", http.StatusOK, &list)
+	if len(list.Active) != 1 || list.Active[0].TokenUsage.Total != wantUsage ||
+		list.Active[0].TokenUsage.ByModel["web-test:web-test"] != wantUsage {
+		t.Fatalf("restarted failed-response Usage = %+v", list.Active)
+	}
+}
+
 func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 	work := t.TempDir()
 	prov := &interruptibleCompactWebProvider{
@@ -1033,6 +1105,12 @@ func (p *pendingWebProvider) secondHistory() []llm.Message {
 		return nil
 	}
 	return append([]llm.Message(nil), p.histories[1]...)
+}
+
+func (p *pendingWebProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
 }
 
 func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {

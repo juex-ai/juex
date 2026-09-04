@@ -47,7 +47,7 @@ func builtinDefinitions() []Definition {
 		required("turn.errored", func() any { return &juexruntime.TurnErroredPayload{} }, true),
 		requiredValidated("llm.requested", 3, func() any { return &juexruntime.LLMRequestedPayload{} }, true, validateLLMRequestedPayload),
 		requiredValidated("llm.responded", 3, func() any { return &juexruntime.LLMRespondedPayload{} }, true, validateLLMRespondedPayload),
-		requiredValidated("llm.errored", 1, func() any { return &juexruntime.LLMErroredPayload{} }, true, validateLLMErroredPayload),
+		requiredValidated("llm.errored", 2, func() any { return &juexruntime.LLMErroredPayload{} }, true, validateLLMErroredPayload),
 		requiredValidated(provenance.RequestEpochType, 1, func() any { return &provenance.RequestEpochPayload{} }, true, validateRequestEpochPayload),
 		requiredValidated(provenance.PolicyContextQueuedType, 1, func() any { return &provenance.PolicyContextQueuedPayload{} }, false, validatePolicyContextQueuedPayload),
 		transient("llm.output_delta", func() any { return &juexruntime.LLMOutputDeltaPayload{} }),

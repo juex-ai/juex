@@ -414,10 +414,17 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 			next.ContextUsage = cloneContextUsage(payload.ContextUsage)
 		}
 	case "llm.errored":
+		payload := payloadAs[LLMErroredPayload](event.Payload)
 		turn := ensureTurnStatus(&next, event)
 		turn.State = TurnLifecycleActive
 		turn.Phase = TurnPhaseProviderIteration
 		turn.Streaming = false
+		if !payload.TokenUsage.IsZero() {
+			next.TokenUsage = payload.TokenUsage
+		}
+		if payload.ContextUsage != nil {
+			next.ContextUsage = cloneContextUsage(payload.ContextUsage)
+		}
 	case "context.compact.summary_responded", "context.compact.summary_errored":
 		turn := ensureTurnStatus(&next, event)
 		turn.State = TurnLifecycleActive

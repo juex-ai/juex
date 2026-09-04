@@ -21,6 +21,7 @@ import (
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/fleetweb"
 	"github.com/juex-ai/juex/internal/processmetrics"
+	"github.com/juex-ai/juex/internal/thread"
 )
 
 func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
@@ -177,17 +178,69 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	if !enabled.Enabled || enabled.RuntimeHealth != fleet.RuntimeStopped {
 		t.Fatalf("enabled agent = %+v", enabled)
 	}
+	var stoppedThreads struct {
+		Active []struct {
+			ThreadID string `json:"thread_id"`
+		} `json:"active_threads"`
+	}
 	fleetWebJSON(
 		t,
 		client,
-		http.MethodPost,
-		baseURL+"/api/agents/"+added.Agent.ID+"/start",
+		http.MethodGet,
+		baseURL+"/agents/"+added.Agent.ID+"/api/threads",
 		"",
 		http.StatusOK,
-		&enabled,
+		&stoppedThreads,
 	)
-	if enabled.RuntimeHealth != fleet.RuntimeHealthy {
-		t.Fatalf("restarted agent = %+v", enabled)
+	if len(stoppedThreads.Active) != 1 || stoppedThreads.Active[0].ThreadID != thread.MainID {
+		t.Fatalf("initial stopped Threads = %+v", stoppedThreads)
+	}
+	metadataPath := filepath.Join(agentDir, "threads", thread.MainID, "thread.json")
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stoppedThreads.Active = nil
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/agents/"+added.Agent.ID+"/api/threads",
+		"",
+		http.StatusOK,
+		&stoppedThreads,
+	)
+	if len(stoppedThreads.Active) != 1 || stoppedThreads.Active[0].ThreadID != thread.MainID {
+		t.Fatalf("cached stopped Threads = %+v", stoppedThreads)
+	}
+	if err := os.WriteFile(metadataPath, metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if stdout, stderr, err := runFleetE2E(binary, environment, "", "start", added.Agent.ID); err != nil {
+		t.Fatalf("external fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	waitFleetHealth(t, binary, environment, added.Agent.ID, fleet.RuntimeHealthy)
+	if stdout, stderr, err := runFleetE2E(binary, environment, "", "stop", added.Agent.ID); err != nil {
+		t.Fatalf("external fleet stop: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	waitFleetHealth(t, binary, environment, added.Agent.ID, fleet.RuntimeStopped)
+	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/agents/"+added.Agent.ID+"/api/threads",
+		"",
+		http.StatusInternalServerError,
+		nil,
+	)
+	if err := os.WriteFile(metadataPath, metadata, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	fleetWebJSON(
