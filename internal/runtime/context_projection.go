@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 )
 
 type projectionStats struct {
@@ -79,7 +80,7 @@ func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compa
 			block.Artifact = &artifact
 			stats.UserInputsExternalized++
 			stats.BytesExternalized += artifact.OriginalBytes
-		case block.Type == llm.BlockToolResult && len(block.Content) > toolOutput.InlineMaxBytes:
+		case block.Type == llm.BlockToolResult && contextbudget.TextExceedsBudget(block.Content, toolOutput.ContentMaxTokens, toolOutput.InlineMaxBytes):
 			if clonedBlocks == nil {
 				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
 				copy(clonedBlocks, msg.Blocks[:i])
@@ -87,7 +88,8 @@ func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compa
 			if msg.ID == "" {
 				msg.ID = "msg-" + newID()
 			}
-			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, i, block, block.Content, toolOutput.PreviewHeadBytes, toolOutput.PreviewTailBytes)
+			head, tail := toolResultPreview(block.Content, toolOutput)
+			artifact, text, err := e.writeProjectedArtifactWithPreview("tool_result", msg.ID, i, block, block.Content, head, tail)
 			if err != nil {
 				return msg, stats, err
 			}
@@ -397,12 +399,18 @@ func (e *Engine) tightenProjectedUserInput(block llm.Block, policy compactionPol
 	updated := *projection
 	updated.HeadBytes = len(head)
 	updated.TailBytes = len(tail)
-	block.Text = providerVisibleArtifactText(updated, updated.StoredPath, head, tail)
+	omittedCharacters := utf8.RuneCount(content) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	block.Text = providerVisibleArtifactText(updated, updated.StoredPath, head, tail, omittedCharacters)
 	block.Artifact = &updated
 	return block, true, nil
 }
 
 func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex int, block llm.Block, content string, headBytes, tailBytes int) (llm.ContextArtifactProjection, string, error) {
+	head, tail := previewParts(content, headBytes, tailBytes)
+	return e.writeProjectedArtifactWithPreview(sourceKind, messageID, blockIndex, block, content, head, tail)
+}
+
+func (e *Engine) writeProjectedArtifactWithPreview(sourceKind, messageID string, blockIndex int, block llm.Block, content, head, tail string) (llm.ContextArtifactProjection, string, error) {
 	store, err := e.projectedArtifactStore()
 	if err != nil {
 		return llm.ContextArtifactProjection{}, "", err
@@ -415,7 +423,6 @@ func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex
 	if err != nil {
 		return llm.ContextArtifactProjection{}, "", fmt.Errorf("context artifact: %w", err)
 	}
-	head, tail := previewParts(content, headBytes, tailBytes)
 	projection := llm.ContextArtifactProjection{
 		SourceKind:    sourceKind,
 		MessageID:     messageID,
@@ -428,7 +435,17 @@ func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex
 		TailBytes:     len(tail),
 		Truncated:     true,
 	}
-	return projection, providerVisibleArtifactText(projection, projection.StoredPath, head, tail), nil
+	omittedCharacters := utf8.RuneCountInString(content) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	return projection, providerVisibleArtifactText(projection, projection.StoredPath, head, tail, omittedCharacters), nil
+}
+
+func toolResultPreview(content string, policy effectiveToolOutput) (string, string) {
+	if policy.InlineMaxBytes > 0 {
+		preview := contextbudget.PreviewTextWithByteAllocation(content, policy.ContentMaxTokens, policy.PreviewHeadBytes, policy.PreviewTailBytes)
+		return preview.Head, preview.Tail
+	}
+	preview := contextbudget.PreviewText(content, policy.ContentMaxTokens, 0)
+	return preview.Head, preview.Tail
 }
 
 func (e *Engine) renderProjectedArtifactReadURIs(msg llm.Message) (llm.Message, error) {
@@ -601,23 +618,28 @@ func utf8BoundaryStart(s string, n int) int {
 	return n
 }
 
-func providerVisibleArtifactText(artifact llm.ContextArtifactProjection, readPath, head, tail string) string {
+func providerVisibleArtifactText(artifact llm.ContextArtifactProjection, readPath, head, tail string, omittedCharacters int) string {
 	var b strings.Builder
 	if artifact.SourceKind == "tool_result" {
-		b.WriteString("Tool output stored outside context.\n")
+		b.WriteString("Tool output truncated; use a file-reading tool on path to inspect the full result.\n")
 		fmt.Fprintf(&b, "tool_use_id: %s\n", artifact.ToolUseID)
-		if artifact.ToolName != "" {
-			fmt.Fprintf(&b, "tool_name: %s\n", artifact.ToolName)
-		}
+		fmt.Fprintf(&b, "path: %s\n\n", readPath)
 	} else {
 		b.WriteString("User input stored outside context.\n")
 		fmt.Fprintf(&b, "message_id: %s\n", artifact.MessageID)
+		fmt.Fprintf(&b, "bytes: %d\nsha256: %s\npath: %s\n\n", artifact.OriginalBytes, artifact.SHA256, readPath)
 	}
-	fmt.Fprintf(&b, "bytes: %d\nsha256: %s\npath: %s\n\n", artifact.OriginalBytes, artifact.SHA256, readPath)
 	b.WriteString("Preview:\n")
 	b.WriteString(head)
+	if omittedCharacters > 0 {
+		if artifact.SourceKind == "tool_result" {
+			fmt.Fprintf(&b, "\n...[%d characters omitted]...\n", omittedCharacters)
+		} else {
+			omittedBytes := artifact.OriginalBytes - len(head) - len(tail)
+			fmt.Fprintf(&b, "\n...[%d bytes omitted]...\n", omittedBytes)
+		}
+	}
 	if tail != "" {
-		b.WriteString("\n...\n")
 		b.WriteString(tail)
 	}
 	return b.String()

@@ -110,7 +110,7 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 		t.Fatalf("system prompt missing required headings: %s", sys)
 	}
 	body := hist[0].FirstText()
-	if !strings.Contains(body, "<previous-summary>") || !strings.Contains(body, "truncated") {
+	if !strings.Contains(body, "<previous-summary>") || !strings.Contains(body, "characters omitted") {
 		t.Fatalf("summary request body = %s", body)
 	}
 }
@@ -127,13 +127,13 @@ func TestBuildCompactionSummaryRequest_PreservesAssistantTextAndTruncatesToolUse
 	}
 	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, assistantText) || strings.Contains(body, "bytes omitted") {
+	if !strings.Contains(body, assistantText) {
 		t.Fatalf("assistant text was truncated by the tool-result budget:\n%s", body)
 	}
 	if !strings.Contains(body, reasoningText) {
 		t.Fatalf("assistant reasoning was truncated by the tool-result budget:\n%s", body)
 	}
-	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "truncated") {
+	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "characters omitted") {
 		t.Fatalf("tool use input was not truncated:\n%s", body)
 	}
 	if strings.Contains(body, strings.Repeat("x", 30)) {
@@ -362,9 +362,9 @@ func TestFitCompactionSummaryInputDropsOldestClosedExchange(t *testing.T) {
 	policy := compactionPolicy{ToolResultMaxChars: 500}
 	want := append([]llm.Message{user}, second...)
 	limit := estimateContextTokens(sys, nil, []llm.Message{
-		llm.TextMessage(llm.RoleUser, buildCompactionSummaryBody(llm.Message{}, want, compactionSummaryState{}, policy.ToolResultMaxChars, 2)),
+		llm.TextMessage(llm.RoleUser, buildCompactionSummaryBody(llm.Message{}, want, compactionSummaryState{}, compactionSummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 2)),
 	})
-	if compactionSummaryFits(sys, llm.Message{}, input, compactionSummaryState{}, policy.ToolResultMaxChars, 0, limit) {
+	if compactionSummaryFits(sys, llm.Message{}, input, compactionSummaryState{}, compactionSummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 0, limit) {
 		t.Fatal("test setup invalid: both tool exchanges should not fit")
 	}
 

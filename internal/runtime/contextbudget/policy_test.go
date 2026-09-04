@@ -1,18 +1,21 @@
 package contextbudget
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestEffectiveCompactionPolicyScalesFromThirtyThousandTokenWindow(t *testing.T) {
 	p := EffectivePolicy(DefaultCompactionPolicy(), 30_000, 256_000)
 
-	if p.ContextWindow != 30_000 || p.TriggerTokens != 21_000 || p.ReserveTokens != 9_000 {
-		t.Fatalf("window/trigger/reserve = %d/%d/%d, want 30000/21000/9000", p.ContextWindow, p.TriggerTokens, p.ReserveTokens)
+	if p.ContextWindow != 30_000 || p.TriggerTokens != 24_000 || p.ReserveTokens != 6_000 {
+		t.Fatalf("window/trigger/reserve = %d/%d/%d, want 30000/24000/6000", p.ContextWindow, p.TriggerTokens, p.ReserveTokens)
 	}
-	if p.SummaryRequestTokens != 24_000 || p.SummaryMaxTokens != 150 {
-		t.Fatalf("summary request/output = %d/%d, want 24000/150", p.SummaryRequestTokens, p.SummaryMaxTokens)
+	if p.SummaryRequestTokens != 27_000 || p.SummaryMaxTokens != 1_000 {
+		t.Fatalf("summary request/output = %d/%d, want 27000/1000", p.SummaryRequestTokens, p.SummaryMaxTokens)
 	}
-	if p.ToolResultMaxChars != 150 {
-		t.Fatalf("tool result max chars = %d, want 150", p.ToolResultMaxChars)
+	if p.ToolResultMaxTokens != 500 || p.ToolResultMaxChars != 0 {
+		t.Fatalf("tool result token/char limits = %d/%d, want 500/0", p.ToolResultMaxTokens, p.ToolResultMaxChars)
 	}
 	if p.KeepRecentTokens != 2_343 {
 		t.Fatalf("keep recent = %d, want floor(30000 * 5 / 64) = 2343", p.KeepRecentTokens)
@@ -22,11 +25,11 @@ func TestEffectiveCompactionPolicyScalesFromThirtyThousandTokenWindow(t *testing
 func TestEffectiveCompactionPolicyScalesFromDefaultContextWindow(t *testing.T) {
 	p := EffectivePolicy(DefaultCompactionPolicy(), 256_000, 256_000)
 
-	if p.TriggerTokens != 179_200 || p.ReserveTokens != 76_800 {
-		t.Fatalf("trigger/reserve = %d/%d, want 179200/76800", p.TriggerTokens, p.ReserveTokens)
+	if p.TriggerTokens != 204_800 || p.ReserveTokens != 51_200 {
+		t.Fatalf("trigger/reserve = %d/%d, want 204800/51200", p.TriggerTokens, p.ReserveTokens)
 	}
-	if p.SummaryRequestTokens != 204_800 || p.SummaryMaxTokens != 1_280 || p.ToolResultMaxChars != 1_280 {
-		t.Fatalf("summary/tool budgets = request:%d output:%d tool:%d", p.SummaryRequestTokens, p.SummaryMaxTokens, p.ToolResultMaxChars)
+	if p.SummaryRequestTokens != 230_400 || p.SummaryMaxTokens != 2_000 || p.ToolResultMaxTokens != 2_000 || p.ToolResultMaxChars != 0 {
+		t.Fatalf("summary/tool budgets = request:%d output:%d tool_tokens:%d tool_chars:%d", p.SummaryRequestTokens, p.SummaryMaxTokens, p.ToolResultMaxTokens, p.ToolResultMaxChars)
 	}
 	if p.KeepRecentTokens != 20_000 {
 		t.Fatalf("keep recent = %d, want 20000", p.KeepRecentTokens)
@@ -45,11 +48,33 @@ func TestEffectiveCompactionPolicyTreatsAbsoluteValuesAsStricterCeilings(t *test
 	if p.TriggerTokens != 18_000 || p.ReserveTokens != 12_000 {
 		t.Fatalf("trigger/reserve = %d/%d, want stricter 18000/12000", p.TriggerTokens, p.ReserveTokens)
 	}
-	if p.KeepRecentTokens != 1_000 || p.SummaryMaxTokens != 100 || p.ToolResultMaxChars != 80 {
+	if p.KeepRecentTokens != 1_000 || p.SummaryMaxTokens != 100 || p.ToolResultMaxTokens != 500 || p.ToolResultMaxChars != 80 {
 		t.Fatalf("stricter ceilings not preserved: %+v", p)
 	}
-	if p.SummaryRequestTokens != 24_000 {
-		t.Fatalf("summary request = %d, want candidate ratio 24000", p.SummaryRequestTokens)
+	if p.SummaryRequestTokens != 27_000 {
+		t.Fatalf("summary request = %d, want candidate ratio 27000", p.SummaryRequestTokens)
+	}
+}
+
+func TestEffectiveCompactionPolicyUsesSteppedBudgetsBelowOneMillion(t *testing.T) {
+	tests := []struct {
+		window        int
+		summaryTokens int
+		toolTokens    int
+		toolChars     int
+	}{
+		{window: 99_999, summaryTokens: 1_000, toolTokens: 500},
+		{window: 100_000, summaryTokens: 2_000, toolTokens: 2_000},
+		{window: 999_999, summaryTokens: 2_000, toolTokens: 2_000},
+		{window: 1_000_000, summaryTokens: 5_000, toolChars: 5_000},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprint(tt.window), func(t *testing.T) {
+			p := EffectivePolicy(DefaultCompactionPolicy(), tt.window, 256_000)
+			if p.SummaryMaxTokens != tt.summaryTokens || p.ToolResultMaxTokens != tt.toolTokens || p.ToolResultMaxChars != tt.toolChars {
+				t.Fatalf("window %d budgets = summary:%d tool_tokens:%d tool_chars:%d, want %d/%d/%d", tt.window, p.SummaryMaxTokens, p.ToolResultMaxTokens, p.ToolResultMaxChars, tt.summaryTokens, tt.toolTokens, tt.toolChars)
+			}
+		})
 	}
 }
 

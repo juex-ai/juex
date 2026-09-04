@@ -21,7 +21,7 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 		t.Fatalf("system prompt missing required headings: %s", sys)
 	}
 	body := hist[0].FirstText()
-	if !strings.Contains(body, "<previous-summary>") || !strings.Contains(body, "truncated") {
+	if !strings.Contains(body, "<previous-summary>") || !strings.Contains(body, "characters omitted") {
 		t.Fatalf("summary request body = %s", body)
 	}
 }
@@ -38,17 +38,44 @@ func TestBuildCompactionSummaryRequest_PreservesAssistantTextAndTruncatesToolUse
 	}
 	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, assistantText) || strings.Contains(body, "bytes omitted") {
+	if !strings.Contains(body, assistantText) {
 		t.Fatalf("assistant text was truncated by the tool-result budget:\n%s", body)
 	}
 	if !strings.Contains(body, reasoningText) {
 		t.Fatalf("assistant reasoning was truncated by the tool-result budget:\n%s", body)
 	}
-	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "truncated") {
+	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "characters omitted") {
 		t.Fatalf("tool use input was not truncated:\n%s", body)
 	}
 	if strings.Contains(body, strings.Repeat("x", 30)) {
 		t.Fatalf("tool use input leaked untruncated payload:\n%s", body)
+	}
+}
+
+func TestBuildCompactionSummaryRequestUsesTokenBudgetForMixedToolResult(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("中文abc🚀", 80) + "-TAIL"
+	input := []llm.Message{{
+		ID:   "tool-result",
+		Role: llm.RoleUser,
+		Kind: llm.MessageKindToolResult,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockToolResult,
+			ToolUseID: "call-mixed",
+			Content:   content,
+		}},
+	}}
+
+	_, history := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxTokens: 20}, "")
+	body := history[0].FirstText()
+	preview := PreviewText(content, 20, 0)
+	marker := fmt.Sprintf("...[%d characters omitted]...", preview.OmittedCharacters)
+	for _, want := range []string{preview.Head, marker, preview.Tail} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary body missing token-bounded preview part %q:\n%s", want, body)
+		}
+	}
+	if got := EstimateTextTokens(preview.Head) + EstimateTextTokens(preview.Tail); got > 20 {
+		t.Fatalf("retained summary Tool Result tokens = %d, want <= 20", got)
 	}
 }
 
@@ -62,7 +89,7 @@ func TestBuildCompactionSummaryRequest_DoesNotApplyToolResultLimitToUserText(t *
 
 	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, userText) || strings.Contains(body, "bytes omitted") {
+	if !strings.Contains(body, userText) || strings.Contains(body, "characters omitted") {
 		t.Fatalf("user text was truncated by the tool-result budget:\n%s", body)
 	}
 }
@@ -298,9 +325,9 @@ func TestFitCompactionSummaryInputDropsOldestClosedExchange(t *testing.T) {
 	policy := Policy{ToolResultMaxChars: 500}
 	want := append([]llm.Message{user}, second...)
 	limit := EstimateContextTokens(sys, nil, []llm.Message{
-		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, want, SummaryState{}, policy.ToolResultMaxChars, 2)),
+		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, want, SummaryState{}, SummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 2)),
 	})
-	if CompactionSummaryFits(sys, llm.Message{}, input, SummaryState{}, policy.ToolResultMaxChars, 0, limit) {
+	if CompactionSummaryFits(sys, llm.Message{}, input, SummaryState{}, SummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 0, limit) {
 		t.Fatal("test setup invalid: both tool exchanges should not fit")
 	}
 
@@ -314,6 +341,9 @@ func TestFitCompactionSummaryInputDropsOldestClosedExchange(t *testing.T) {
 	}
 	if selected[0].ID != "user" || selected[1].ID != "tool-call-01" || selected[2].ID != "tool-result-01" {
 		t.Fatalf("selected messages = %+v", selected)
+	}
+	if err := llm.ValidateToolTranscript(selected); err != nil {
+		t.Fatalf("selected summary transcript broke the Tool protocol: %v", err)
 	}
 }
 
@@ -334,9 +364,9 @@ func TestFitCompactionSummaryInputDropsOldestClosedToolExchangeBeforeUserMessage
 	policy := Policy{ToolResultMaxChars: 2000}
 	want := []llm.Message{userBefore, userAfter}
 	limit := EstimateContextTokens(sys, nil, []llm.Message{
-		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, want, SummaryState{}, policy.ToolResultMaxChars, 2)),
+		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, want, SummaryState{}, SummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 2)),
 	})
-	if CompactionSummaryFits(sys, llm.Message{}, input, SummaryState{}, policy.ToolResultMaxChars, 0, limit) {
+	if CompactionSummaryFits(sys, llm.Message{}, input, SummaryState{}, SummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 0, limit) {
 		t.Fatal("test setup invalid: complete input should exceed the candidate limit")
 	}
 
@@ -375,25 +405,25 @@ func TestFitCompactionSummaryInputNeverDropsUserMessagesWhenTheyCannotFit(t *tes
 		testMsg("user-2", llm.RoleUser, strings.Repeat("second ", 200)),
 	}
 
-	selected, omitted, maxChars := FitCompactionSummaryInput("system", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 512}, 1)
+	selected, omitted, toolBudget := FitCompactionSummaryInput("system", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 512}, 1)
 
 	if omitted != 0 || len(selected) != len(input) || selected[0].ID != "user-1" || selected[1].ID != "user-2" {
 		t.Fatalf("user messages were removed: omitted=%d selected=%+v", omitted, selected)
 	}
-	if maxChars != 1 {
-		t.Fatalf("fallback max chars = %d, want 1", maxChars)
+	if toolBudget.MaxChars != 1 {
+		t.Fatalf("fallback max chars = %d, want 1", toolBudget.MaxChars)
 	}
 }
 
 func TestFitCompactionSummaryInputFallbackRespectsSmallCharLimit(t *testing.T) {
 	input := summaryToolExchange(0, 1000)
-	_, omitted, maxChars := FitCompactionSummaryInput("system", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 64}, 1)
+	_, omitted, toolBudget := FitCompactionSummaryInput("system", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 64}, 1)
 
 	if omitted != 2 {
 		t.Fatalf("omitted = %d, want 2", omitted)
 	}
-	if maxChars != 1 {
-		t.Fatalf("fallback max chars = %d, want 1", maxChars)
+	if toolBudget.MaxChars != 1 {
+		t.Fatalf("fallback max chars = %d, want 1", toolBudget.MaxChars)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 type CompactionSummaryState = contextbudget.SummaryState
 type CompactionSummaryGoal = contextbudget.SummaryGoal
+type compactionSummaryToolBudget = contextbudget.SummaryToolBudget
 
 type compactionSummaryState = CompactionSummaryState
 
@@ -55,20 +56,20 @@ func buildProvenanceBoundedCompactionSummaryRequest(base string, previous llm.Me
 	return system, history, nil
 }
 
-func buildCompactionSummaryBody(previous llm.Message, input []llm.Message, state compactionSummaryState, maxChars, omitted int) string {
-	return contextbudget.BuildCompactionSummaryBody(previous, input, state, maxChars, omitted)
+func buildCompactionSummaryBody(previous llm.Message, input []llm.Message, state compactionSummaryState, toolBudget compactionSummaryToolBudget, omitted int) string {
+	return contextbudget.BuildCompactionSummaryBody(previous, input, state, toolBudget, omitted)
 }
 
 func compactionSummaryRequestTokenLimit(policy compactionPolicy) int {
 	return contextbudget.CompactionSummaryRequestTokenLimit(policy)
 }
 
-func fitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state compactionSummaryState, policy compactionPolicy, limit int) ([]llm.Message, int, int) {
+func fitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state compactionSummaryState, policy compactionPolicy, limit int) ([]llm.Message, int, compactionSummaryToolBudget) {
 	return contextbudget.FitCompactionSummaryInput(sys, previous, input, state, policy, limit)
 }
 
-func compactionSummaryFits(sys string, previous llm.Message, input []llm.Message, state compactionSummaryState, maxChars, omitted, limit int) bool {
-	return contextbudget.CompactionSummaryFits(sys, previous, input, state, maxChars, omitted, limit)
+func compactionSummaryFits(sys string, previous llm.Message, input []llm.Message, state compactionSummaryState, toolBudget compactionSummaryToolBudget, omitted, limit int) bool {
+	return contextbudget.CompactionSummaryFits(sys, previous, input, state, toolBudget, omitted, limit)
 }
 
 func (e *Engine) compactionSummaryStateLocked() (compactionSummaryState, error) {

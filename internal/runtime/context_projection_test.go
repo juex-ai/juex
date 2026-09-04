@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 )
 
 func TestProjectedContentStoreUsesThreadSpool(t *testing.T) {
@@ -160,6 +161,76 @@ func TestProjectMessagesForProviderLockedAdvertisesReadOnlyToolResultURI(t *test
 	if filepath.IsAbs(projection.StoredPath) {
 		t.Fatalf("stored path = %q, want Artifact-root-relative metadata", projection.StoredPath)
 	}
+	providerText := projected.Blocks[0].Content
+	for _, unwanted := range []string{"tool_name:", "bytes:", "sha256:"} {
+		if strings.Contains(providerText, unwanted) {
+			t.Fatalf("provider-visible Tool Result contains redundant %q metadata:\n%s", unwanted, providerText)
+		}
+	}
+	for _, want := range []string{
+		"Tool output truncated; use a file-reading tool on path to inspect the full result.",
+		"tool_use_id: call-readable",
+		fmt.Sprintf("...[%d characters omitted]...", utf8.RuneCountInString(original)-8),
+	} {
+		if !strings.Contains(providerText, want) {
+			t.Fatalf("provider-visible Tool Result missing %q:\n%s", want, providerText)
+		}
+	}
+}
+
+func TestProjectMessageLockedUsesTokenBudgetForMixedToolResultPreview(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.ContextWindow = 30_000
+	original := "HEAD-" + strings.Repeat("中文abc🚀", 800) + "-TAIL"
+	msg := llm.Message{ID: "mixed-tool-result", Role: llm.RoleUser, Blocks: []llm.Block{{
+		Type: llm.BlockToolResult, ToolUseID: "call-mixed", Content: original,
+	}}}
+
+	projected, stats, err := eng.projectMessageLocked(msg, effectiveCompactionPolicy(DefaultCompactionPolicy(), eng.ContextWindow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ToolResultsExternalized != 1 || projected.Blocks[0].Artifact == nil {
+		t.Fatalf("projected/stats = %+v / %+v", projected, stats)
+	}
+	artifact := projected.Blocks[0].Artifact
+	head := original[:artifact.HeadBytes]
+	tail := original[len(original)-artifact.TailBytes:]
+	if got := contextbudget.EstimateTextTokens(head) + contextbudget.EstimateTextTokens(tail); got > 500 {
+		t.Fatalf("preview content tokens = %d, want <= 500", got)
+	}
+	omittedCharacters := utf8.RuneCountInString(original) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	if !strings.Contains(projected.Blocks[0].Content, fmt.Sprintf("...[%d characters omitted]...", omittedCharacters)) {
+		t.Fatalf("projected Tool Result has no exact omission count:\n%s", projected.Blocks[0].Content)
+	}
+	if got := string(readProjectedArtifact(t, eng, artifact)); got != original {
+		t.Fatalf("stored artifact = %d bytes, want original %d", len(got), len(original))
+	}
+}
+
+func TestToolResultPreviewPreservesConfiguredAsymmetricAllocation(t *testing.T) {
+	content := strings.Repeat("h", 200) + strings.Repeat("t", 200)
+	tests := []struct {
+		name      string
+		headBytes int
+		tailBytes int
+	}{
+		{name: "asymmetric", headBytes: 10, tailBytes: 90},
+		{name: "tail only", headBytes: 0, tailBytes: 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			head, tail := toolResultPreview(content, effectiveToolOutput{
+				ContentMaxTokens: 500,
+				InlineMaxBytes:   tt.headBytes + tt.tailBytes,
+				PreviewHeadBytes: tt.headBytes,
+				PreviewTailBytes: tt.tailBytes,
+			})
+			if len(head) != tt.headBytes || len(tail) != tt.tailBytes {
+				t.Fatalf("preview head/tail bytes = %d/%d, want %d/%d", len(head), len(tail), tt.headBytes, tt.tailBytes)
+			}
+		})
+	}
 }
 
 func artifactPathFromProviderText(t *testing.T, text string) string {
@@ -203,7 +274,7 @@ func TestProjectMessagesForProviderLockedBoundsPersistedToolResultWhenCompaction
 		t.Fatalf("stats = %+v, want one externalized tool result", stats)
 	}
 	block := projected[0].Blocks[0]
-	if block.Artifact == nil || !strings.Contains(block.Content, "Tool output stored outside context.") || !strings.Contains(block.Content, "tool-hea") || !strings.Contains(block.Content, "ool-tail") {
+	if block.Artifact == nil || !strings.Contains(block.Content, "Tool output truncated;") || !strings.Contains(block.Content, "tool-hea") || !strings.Contains(block.Content, "ool-tail") {
 		t.Fatalf("projected block = %+v", block)
 	}
 	if got := eng.Thread.History[0].Blocks[0]; got.Content != original || got.Artifact != nil {
