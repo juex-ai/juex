@@ -29,14 +29,19 @@ type SummaryGoal struct {
 	StatusReason string `json:"status_reason,omitempty"`
 }
 
+type SummaryToolBudget struct {
+	MaxTokens int
+	MaxChars  int
+}
+
 func BuildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, instructions string) (string, []llm.Message) {
 	sys := buildCompactionSummarySystem(base, instructions)
 	omitted := 0
-	maxChars := policy.ToolResultMaxChars
+	toolBudget := effectiveSummaryToolBudget(policy)
 	if limit := CompactionSummaryRequestTokenLimit(policy); limit > 0 {
-		input, omitted, maxChars = FitCompactionSummaryInput(sys, previous, input, state, policy, limit)
+		input, omitted, toolBudget = FitCompactionSummaryInput(sys, previous, input, state, policy, limit)
 	}
-	body := BuildCompactionSummaryBody(previous, input, state, maxChars, omitted)
+	body := BuildCompactionSummaryBody(previous, input, state, toolBudget, omitted)
 	return sys, []llm.Message{llm.TextMessage(llm.RoleUser, body)}
 }
 
@@ -44,7 +49,7 @@ func BuildCompactionSummaryRequest(base string, previous llm.Message, input []ll
 // additional caller-owned message constraint before returning Provider input.
 func BuildCompactionSummaryRequestWithConstraint(base string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, instructions string, constraint SummaryMessageConstraint) (string, []llm.Message, error) {
 	sys := buildCompactionSummarySystem(base, instructions)
-	input, omitted, maxChars, err := FitCompactionSummaryInputWithConstraint(
+	input, omitted, toolBudget, err := FitCompactionSummaryInputWithConstraint(
 		sys,
 		previous,
 		input,
@@ -56,7 +61,7 @@ func BuildCompactionSummaryRequestWithConstraint(base string, previous llm.Messa
 	if err != nil {
 		return sys, nil, err
 	}
-	body := BuildCompactionSummaryBody(previous, input, state, maxChars, omitted)
+	body := BuildCompactionSummaryBody(previous, input, state, toolBudget, omitted)
 	message := llm.TextMessage(llm.RoleUser, body)
 	if constraint != nil {
 		if err := constraint(message); err != nil {
@@ -97,7 +102,7 @@ Preserve exact file paths, commands, error strings, identifiers, decisions, and 
 	return sys
 }
 
-func BuildCompactionSummaryBody(previous llm.Message, input []llm.Message, state SummaryState, maxChars, omitted int) string {
+func BuildCompactionSummaryBody(previous llm.Message, input []llm.Message, state SummaryState, toolBudget SummaryToolBudget, omitted int) string {
 	var body strings.Builder
 	writeAuthoritativeSummaryState(&body, state)
 	if previous.FirstText() != "" {
@@ -110,7 +115,7 @@ func BuildCompactionSummaryBody(previous llm.Message, input []llm.Message, state
 	}
 	body.WriteString("<transcript-to-summarize>\n")
 	for _, msg := range input {
-		body.WriteString(serializeMessageForSummary(msg, maxChars))
+		body.WriteString(serializeMessageForSummary(msg, toolBudget))
 	}
 	body.WriteString("</transcript-to-summarize>")
 	return body.String()
@@ -157,28 +162,25 @@ func CompactionSummaryRequestTokenLimit(policy Policy) int {
 	return limit
 }
 
-func FitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int) ([]llm.Message, int, int) {
-	selected, omitted, maxChars, _ := fitCompactionSummaryInput(sys, previous, input, state, policy, limit, nil)
-	return selected, omitted, maxChars
+func FitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int) ([]llm.Message, int, SummaryToolBudget) {
+	selected, omitted, toolBudget, _ := fitCompactionSummaryInput(sys, previous, input, state, policy, limit, nil)
+	return selected, omitted, toolBudget
 }
 
 // FitCompactionSummaryInputWithConstraint preserves immutable summary content
 // while tightening Tool serialization and removing only complete Tool exchanges.
-func FitCompactionSummaryInputWithConstraint(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int, constraint SummaryMessageConstraint) ([]llm.Message, int, int, error) {
+func FitCompactionSummaryInputWithConstraint(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int, constraint SummaryMessageConstraint) ([]llm.Message, int, SummaryToolBudget, error) {
 	return fitCompactionSummaryInput(sys, previous, input, state, policy, limit, constraint)
 }
 
-func fitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int, constraint SummaryMessageConstraint) ([]llm.Message, int, int, error) {
-	maxChars := policy.ToolResultMaxChars
-	if maxChars <= 0 {
-		maxChars = 2000
-	}
+func fitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int, constraint SummaryMessageConstraint) ([]llm.Message, int, SummaryToolBudget, error) {
+	initialBudget := effectiveSummaryToolBudget(policy)
 	exchanges := closedToolExchangeStarts(input)
 	var lastConstraintErr error
-	for _, capChars := range compactionSummaryCaps(maxChars) {
-		fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, input, state, capChars, 0, limit, constraint)
+	for _, toolBudget := range compactionSummaryBudgets(initialBudget) {
+		fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, input, state, toolBudget, 0, limit, constraint)
 		if fits {
-			return input, 0, capChars, nil
+			return input, 0, toolBudget, nil
 		}
 		if constraintErr != nil {
 			lastConstraintErr = constraintErr
@@ -188,7 +190,7 @@ func fitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Mes
 			count := low + (high-low)/2
 			trimmed := omitOldestClosedToolExchanges(input, exchanges, count)
 			omitted := count * 2
-			fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, trimmed, state, capChars, omitted, limit, constraint)
+			fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, trimmed, state, toolBudget, omitted, limit, constraint)
 			if fits {
 				best = count
 				high = count - 1
@@ -200,21 +202,21 @@ func fitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Mes
 			}
 		}
 		if best >= 0 {
-			return omitOldestClosedToolExchanges(input, exchanges, best), best * 2, capChars, nil
+			return omitOldestClosedToolExchanges(input, exchanges, best), best * 2, toolBudget, nil
 		}
 	}
-	fallbackCap := 1
+	fallbackBudget := minimumSummaryToolBudget(initialBudget)
 	selected := omitOldestClosedToolExchanges(input, exchanges, len(exchanges))
 	omitted := len(exchanges) * 2
-	if fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, selected, state, fallbackCap, omitted, limit, constraint); fits {
-		return selected, omitted, fallbackCap, nil
+	if fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, selected, state, fallbackBudget, omitted, limit, constraint); fits {
+		return selected, omitted, fallbackBudget, nil
 	} else if constraintErr != nil {
 		lastConstraintErr = constraintErr
 	}
 	if lastConstraintErr != nil {
-		return selected, omitted, fallbackCap, fmt.Errorf("%w: %v", ErrCompactionSummaryMessageCannotFit, lastConstraintErr)
+		return selected, omitted, fallbackBudget, fmt.Errorf("%w: %v", ErrCompactionSummaryMessageCannotFit, lastConstraintErr)
 	}
-	return selected, omitted, fallbackCap, fmt.Errorf("%w: token budget %d", ErrCompactionSummaryMessageCannotFit, limit)
+	return selected, omitted, fallbackBudget, fmt.Errorf("%w: token budget %d", ErrCompactionSummaryMessageCannotFit, limit)
 }
 
 func closedToolExchangeStarts(input []llm.Message) []int {
@@ -292,27 +294,56 @@ func toolResultBatchIDs(msg llm.Message) ([]string, bool) {
 	return ids, true
 }
 
-func compactionSummaryCaps(maxChars int) []int {
-	minCap := 1
-	caps := []int{maxChars}
-	for n := maxChars / 2; n >= minCap; n /= 2 {
-		if n != caps[len(caps)-1] {
-			caps = append(caps, n)
-		}
+func effectiveSummaryToolBudget(policy Policy) SummaryToolBudget {
+	budget := SummaryToolBudget{MaxTokens: policy.ToolResultMaxTokens, MaxChars: policy.ToolResultMaxChars}
+	if budget.MaxTokens <= 0 && budget.MaxChars <= 0 {
+		budget.MaxTokens = mediumToolTokens
 	}
-	if caps[len(caps)-1] != minCap {
-		caps = append(caps, minCap)
-	}
-	return caps
+	return budget
 }
 
-func CompactionSummaryFits(sys string, previous llm.Message, input []llm.Message, state SummaryState, maxChars, omitted, limit int) bool {
-	fits, _ := compactionSummaryFitsWithConstraint(sys, previous, input, state, maxChars, omitted, limit, nil)
+func compactionSummaryBudgets(initial SummaryToolBudget) []SummaryToolBudget {
+	budgets := []SummaryToolBudget{initial}
+	if initial.MaxTokens > 0 {
+		for n := initial.MaxTokens / 2; n >= 1; n /= 2 {
+			candidate := initial
+			candidate.MaxTokens = n
+			if candidate != budgets[len(budgets)-1] {
+				budgets = append(budgets, candidate)
+			}
+		}
+	} else {
+		for n := initial.MaxChars / 2; n >= 1; n /= 2 {
+			candidate := initial
+			candidate.MaxChars = n
+			if candidate != budgets[len(budgets)-1] {
+				budgets = append(budgets, candidate)
+			}
+		}
+	}
+	minimum := minimumSummaryToolBudget(initial)
+	if budgets[len(budgets)-1] != minimum {
+		budgets = append(budgets, minimum)
+	}
+	return budgets
+}
+
+func minimumSummaryToolBudget(initial SummaryToolBudget) SummaryToolBudget {
+	if initial.MaxTokens > 0 {
+		initial.MaxTokens = 1
+		return initial
+	}
+	initial.MaxChars = 1
+	return initial
+}
+
+func CompactionSummaryFits(sys string, previous llm.Message, input []llm.Message, state SummaryState, toolBudget SummaryToolBudget, omitted, limit int) bool {
+	fits, _ := compactionSummaryFitsWithConstraint(sys, previous, input, state, toolBudget, omitted, limit, nil)
 	return fits
 }
 
-func compactionSummaryFitsWithConstraint(sys string, previous llm.Message, input []llm.Message, state SummaryState, maxChars, omitted, limit int, constraint SummaryMessageConstraint) (bool, error) {
-	body := BuildCompactionSummaryBody(previous, input, state, maxChars, omitted)
+func compactionSummaryFitsWithConstraint(sys string, previous llm.Message, input []llm.Message, state SummaryState, toolBudget SummaryToolBudget, omitted, limit int, constraint SummaryMessageConstraint) (bool, error) {
+	body := BuildCompactionSummaryBody(previous, input, state, toolBudget, omitted)
 	message := llm.TextMessage(llm.RoleUser, body)
 	if limit > 0 && EstimateContextTokens(sys, nil, []llm.Message{message}) > limit {
 		return false, nil
@@ -325,7 +356,7 @@ func compactionSummaryFitsWithConstraint(sys string, previous llm.Message, input
 	return true, nil
 }
 
-func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string {
+func serializeMessageForSummary(msg llm.Message, toolBudget SummaryToolBudget) string {
 	var sb strings.Builder
 	id := msg.ID
 	if id == "" {
@@ -361,23 +392,31 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 					input = string(data)
 				}
 			}
-			truncated := truncateForSummary(input, toolResultMaxChars)
-			if truncated != input {
-				fmt.Fprintf(&sb, "tool_use %s %s: %s ...(truncated, total %d bytes)\n", block.ToolUseID, block.ToolName, truncated, len(input))
+			truncated, changed := truncateToolTextForSummary(input, toolBudget)
+			if changed {
+				fmt.Fprintf(&sb, "tool_use %s %s: %s\n", block.ToolUseID, block.ToolName, truncated)
 			} else {
 				fmt.Fprintf(&sb, "tool_use %s %s: %s\n", block.ToolUseID, block.ToolName, input)
 			}
 		case llm.BlockToolResult:
 			content := block.Content
-			truncated := truncateForSummary(content, toolResultMaxChars)
-			if truncated != content {
-				fmt.Fprintf(&sb, "tool_result %s error=%t: %s ...(truncated, total %d bytes)\n", block.ToolUseID, block.IsError, truncated, len(content))
+			truncated, changed := truncateToolTextForSummary(content, toolBudget)
+			if changed {
+				fmt.Fprintf(&sb, "tool_result %s error=%t: %s\n", block.ToolUseID, block.IsError, truncated)
 			} else {
 				fmt.Fprintf(&sb, "tool_result %s error=%t: %s\n", block.ToolUseID, block.IsError, content)
 			}
 		}
 	}
 	return sb.String()
+}
+
+func truncateToolTextForSummary(text string, budget SummaryToolBudget) (string, bool) {
+	preview := PreviewText(text, budget.MaxTokens, budget.MaxChars)
+	if preview.OmittedBytes <= 0 {
+		return text, false
+	}
+	return fmt.Sprintf("%s\n...[%d characters omitted]...\n%s", preview.Head, preview.OmittedCharacters, preview.Tail), true
 }
 
 func writeMediaReferenceForSummary(sb *strings.Builder, media *llm.MediaRef) {

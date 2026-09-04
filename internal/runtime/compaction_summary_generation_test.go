@@ -6,7 +6,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-func TestCompactionSummaryRetryBudgetPreservesGenerationRoomAndExplicitCeilings(t *testing.T) {
+func TestCompactionSummaryRetryBudgetNeverExceedsSteppedOrExplicitCeilings(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		window     int
@@ -14,11 +14,11 @@ func TestCompactionSummaryRetryBudgetPreservesGenerationRoomAndExplicitCeilings(
 		initial    int
 		retry      int
 	}{
-		{name: "small window default", window: 32000, initial: 160, retry: 2048},
-		{name: "configured ceiling above derived budget", window: 32000, configured: 2048, initial: 160, retry: 2048},
-		{name: "explicit retry ceiling below floor", window: 32000, configured: 1000, initial: 160, retry: 2000},
-		{name: "stricter initial ceiling", window: 32000, configured: 100, initial: 100, retry: 200},
-		{name: "large window keeps doubled budget", window: 1000000, initial: 5000, retry: 10000},
+		{name: "small window default", window: 32000, initial: 1000, retry: 1000},
+		{name: "configured ceiling above derived budget", window: 32000, configured: 2048, initial: 1000, retry: 1000},
+		{name: "explicit ceiling at stepped budget", window: 32000, configured: 1000, initial: 1000, retry: 1000},
+		{name: "stricter explicit ceiling", window: 32000, configured: 100, initial: 100, retry: 100},
+		{name: "million-token window keeps legacy ratio", window: 1000000, initial: 5000, retry: 5000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eng := &Engine{Compaction: DefaultCompactionPolicy()}

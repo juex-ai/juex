@@ -321,6 +321,123 @@ func TestLiveConfigs_ToolUse(t *testing.T) {
 	}
 }
 
+func TestLiveConfigs_ExternalizedToolResultRetrieval(t *testing.T) {
+	const toolName = "emit_large_result"
+	for _, lc := range loadLiveConfigs(t) {
+		t.Run(lc.name, func(t *testing.T) {
+			t.Logf("using config %s", lc.path)
+			profile, err := lc.cfg.ProviderProfile()
+			if err != nil {
+				t.Fatalf("provider profile: %v", err)
+			}
+			provider, err := llm.NewProvider(profile)
+			if err != nil {
+				t.Fatalf("provider: %v", err)
+			}
+
+			root := t.TempDir()
+			workDir := filepath.Join(root, "work")
+			agentStateDir := filepath.Join(root, "agent")
+			for _, dir := range []string{workDir, agentStateDir} {
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			threadState, err := thread.New(filepath.Join(agentStateDir, "threads"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer threadState.Close()
+			bus := events.NewBus()
+			threadState.SubscribeBus(bus)
+
+			registry := tools.NewRegistry()
+			tools.RegisterBuiltins(registry, tools.BuiltinOptions{
+				WorkDir: workDir, AgentStateDir: agentStateDir, MediaDir: threadState.SpoolDir(),
+				Shell: cfgShellProfile(lc.cfg),
+			})
+			const secret = "JUEX_OMITTED_42"
+			original := strings.Join([]string{
+				`RECOVERY INSTRUCTION: the only target line starts with "SECRET_TOKEN:" and is in the omitted middle. Use exec_command to run rg '^SECRET_TOKEN:' against the path in the truncation wrapper.`,
+				strings.Repeat("head filler without the target token\n", 4_000),
+				"SECRET_TOKEN: " + secret,
+				strings.Repeat("tail filler without the target token\n", 4_000),
+				"END OF LARGE RESULT",
+			}, "\n")
+			registry.MustRegister(tools.Tool{
+				Name:        toolName,
+				Description: "Return a large diagnostic document whose secret must be recovered from the persisted complete result.",
+				Schema:      map[string]any{"type": "object", "properties": map[string]any{}},
+				Handler: func(context.Context, map[string]any) (string, error) {
+					return original, nil
+				},
+			})
+
+			engine := &runtime.Engine{
+				Provider: provider,
+				Tools:    registry,
+				Bus:      bus,
+				Thread:   threadState,
+				Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, promptcontext.ShellProfileFromConfig(lc.cfg.Shell), func() time.Time {
+					return time.Now().UTC()
+				}, threadState),
+				WorkDir:         workDir,
+				MediaDir:        threadState.SpoolDir(),
+				ContextWindow:   lc.cfg.ContextWindow,
+				MaxOutputTokens: lc.cfg.MaxOutputTokens,
+				Compaction:      lc.cfg.Compaction,
+				ToolOutput:      lc.cfg.ToolOutput,
+			}
+			bus.Subscribe("*", func(event events.Event) {
+				if strings.HasSuffix(event.Type, "delta") {
+					return
+				}
+				t.Logf("[event] %s", event.Type)
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+			defer cancel()
+			out, err := engine.Turn(ctx, "Call emit_large_result exactly once. Do not guess the secret. After its truncated Tool Result gives you a path, call exec_command as instructed in the Preview to inspect the persisted complete result, then reply with the exact SECRET_TOKEN value only.")
+			if err != nil {
+				t.Fatalf("Turn: %v", err)
+			}
+			if !strings.Contains(out, secret) {
+				t.Fatalf("model did not recover omitted secret %q; got %q", secret, out)
+			}
+
+			var projected *llm.ContextArtifactProjection
+			sawProjectedResult := false
+			sawRetrievalCall := false
+			for _, message := range threadState.History {
+				for _, block := range message.Blocks {
+					if block.Type == llm.BlockToolResult && block.Artifact != nil && block.Artifact.ToolName == toolName {
+						projection := *block.Artifact
+						projected = &projection
+						sawProjectedResult = true
+						if strings.Contains(block.Content, secret) || !strings.Contains(block.Content, "characters omitted") {
+							t.Fatalf("provider-visible Tool Result did not hide the secret with an exact omission marker:\n%s", block.Content)
+						}
+						continue
+					}
+					if sawProjectedResult && block.Type == llm.BlockToolUse && (block.ToolName == "exec_command" || block.ToolName == "read" || block.ToolName == "grep") {
+						sawRetrievalCall = true
+					}
+				}
+			}
+			if projected == nil || !sawRetrievalCall {
+				t.Fatalf("history did not prove externalization followed by a retrieval Tool Call: %+v", threadState.History)
+			}
+			stored, err := os.ReadFile(filepath.Join(threadState.SpoolDir(), filepath.FromSlash(projected.StoredPath)))
+			if err != nil {
+				t.Fatalf("read persisted complete Tool Result: %v", err)
+			}
+			if string(stored) != original {
+				t.Fatalf("persisted Tool Result changed: got %d bytes, want %d", len(stored), len(original))
+			}
+		})
+	}
+}
+
 // TestLiveConfigs_MultiStep gives the model a workflow that requires writing,
 // editing, and verifying — at least three tool rounds — to exercise the
 // turn loop's iteration / parallelism paths against a real model.

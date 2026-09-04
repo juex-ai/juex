@@ -530,8 +530,8 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	if primary.calls != 1 || backup.calls != 2 {
 		t.Fatalf("calls primary=%d backup=%d", primary.calls, backup.calls)
 	}
-	if len(backup.opts) != 2 || backup.opts[0].Purpose != "compaction" || backup.opts[0].MaxOutputTokens != 10 {
-		t.Fatalf("backup compaction options = %+v, want 0.5%% of 2000-token context", backup.opts)
+	if len(backup.opts) != 2 || backup.opts[0].Purpose != "compaction" || backup.opts[0].MaxOutputTokens <= 0 || backup.opts[0].MaxOutputTokens > 1000 {
+		t.Fatalf("backup compaction options = %+v, want a positive output budget within the <100k hard cap", backup.opts)
 	}
 	foundCompact := false
 	for _, message := range eng.Thread.History {

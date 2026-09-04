@@ -19,7 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 )
 
-func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *testing.T) {
+func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithinHardLimit(t *testing.T) {
 	const goal = "Preserve task CMP-2417."
 	const acceptance = "Keep the exact branch and pending check."
 	const note = "Run the live compaction evaluation."
@@ -47,14 +47,15 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 		if isSummary {
 			mu.Lock()
 			budgets = append(budgets, request.MaxTokens)
+			summaryAttempt := len(budgets)
 			mu.Unlock()
 			for _, want := range []string{goal, acceptance, note, "high/context-projection"} {
 				if !strings.Contains(string(request.Messages), want) {
 					t.Errorf("summary request missing authoritative value %q", want)
 				}
 			}
-			text, outputTokens = summary, 1558
-			if request.MaxTokens < 2048 {
+			text, outputTokens = summary, 558
+			if summaryAttempt == 1 {
 				text, stopReason, outputTokens = "", "max_tokens", request.MaxTokens
 			}
 		} else if !strings.Contains(string(request.Messages), "high/context-projection") {
@@ -142,8 +143,8 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 	mu.Lock()
 	gotBudgets := slices.Clone(budgets)
 	mu.Unlock()
-	if !slices.Equal(gotBudgets, []int{160, 2048}) {
-		t.Fatalf("summary output budgets = %v, want [160 2048]", gotBudgets)
+	if !slices.Equal(gotBudgets, []int{1000, 1000}) {
+		t.Fatalf("summary output budgets = %v, want both attempts capped at 1000", gotBudgets)
 	}
 	markers := 0
 	for _, message := range a.Thread.History {
@@ -157,7 +158,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustion(t *te
 	if markers != 1 {
 		t.Fatalf("compact markers = %d, want 1", markers)
 	}
-	if usage := a.Thread.TokenUsageSnapshot(); usage.OutputTokens != 1718 {
+	if usage := a.Thread.TokenUsageSnapshot(); usage.OutputTokens != 1558 {
 		t.Fatalf("summary usage = %+v, want both attempts counted", usage)
 	}
 	events, err := a.Thread.ReadEvents()

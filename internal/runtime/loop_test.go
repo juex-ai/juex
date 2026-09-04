@@ -1871,7 +1871,7 @@ func TestTurn_ExternalizesLargeToolResultBeforeNextProviderRequest(t *testing.T)
 	if strings.Contains(providerText, "TOOL-SECRET TOOL-SECRET") {
 		t.Fatalf("provider received unbounded tool output:\n%s", providerText)
 	}
-	for _, want := range []string{"Tool output stored outside context.", "tool-head", "tool-tail", "tool_use_id: call_big", "path:"} {
+	for _, want := range []string{"Tool output truncated;", "tool-head", "tool-tail", "tool_use_id: call_big", "path:"} {
 		if !strings.Contains(providerText, want) {
 			t.Fatalf("provider text missing %q:\n%s", want, providerText)
 		}
@@ -3736,7 +3736,7 @@ func TestCompactReportsRemainingHealthSkipsAfterAttemptFailure(t *testing.T) {
 	}
 }
 
-func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
+func TestCompactRetriesReasoningOnlySummaryWithinHardBudget(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
 		attempts: []scriptedCompactionAttempt{
@@ -3774,10 +3774,10 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	if result.SummaryChars != len("recovered summary") || provider.calls != 2 {
 		t.Fatalf("result/calls = %+v, %d", result, provider.calls)
 	}
-	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 2000 {
-		t.Fatalf("max output tokens = %+v, want [25 2000]", compactionOptionBudgets(provider.options))
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 1000 || provider.options[1].MaxOutputTokens != 1000 {
+		t.Fatalf("max output tokens = %+v, want retries capped at [1000 1000]", compactionOptionBudgets(provider.options))
 	}
-	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 25 || retry.MaxOutputTokens != 2000 {
+	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 1000 || retry.MaxOutputTokens != 1000 {
 		t.Fatalf("retry payload = %+v", retry)
 	}
 	if len(provider.histories) != 2 || provider.histories[0][0].FirstText() == "" || provider.histories[1][0].FirstText() == "" {
@@ -3803,7 +3803,7 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	}
 }
 
-func TestCompactRetriesFirstIncompleteFallbackWithLargerBudget(t *testing.T) {
+func TestCompactRetriesFirstIncompleteFallbackWithinHardBudget(t *testing.T) {
 	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
 	backup := &scriptedCompactionProvider{
 		name: "backup:model",
@@ -3845,8 +3845,8 @@ func TestCompactRetriesFirstIncompleteFallbackWithLargerBudget(t *testing.T) {
 	if result.SummaryModel != "backup:model" || primary.calls != 1 || backup.calls != 2 {
 		t.Fatalf("result/primary/backup = %+v/%d/%d, want recovered backup after retry", result, primary.calls, backup.calls)
 	}
-	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 25 || backup.options[1].MaxOutputTokens != 2000 {
-		t.Fatalf("fallback max output tokens = %+v, want [25 2000]", compactionOptionBudgets(backup.options))
+	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 1000 || backup.options[1].MaxOutputTokens != 1000 {
+		t.Fatalf("fallback max output tokens = %+v, want retries capped at [1000 1000]", compactionOptionBudgets(backup.options))
 	}
 	if len(epochs) != 3 || retry.EpochID != epochs[1].EpochID || retry.RequestDigest != epochs[1].RequestDigest {
 		t.Fatalf("epochs/retry = %+v/%+v, want retry linked to first fallback attempt", epochs, retry)
@@ -3927,8 +3927,8 @@ func TestCompactCheckpointsEachSummaryAttemptAndLinksOutcomes(t *testing.T) {
 			}
 		}
 	}
-	if epochs[0].EpochID == epochs[1].EpochID || epochs[0].RequestDigest == epochs[1].RequestDigest {
-		t.Fatalf("semantic retry reused epoch/digest: %+v", epochs)
+	if epochs[0].EpochID == epochs[1].EpochID || epochs[0].RequestDigest != epochs[1].RequestDigest {
+		t.Fatalf("retry epochs/digests = %+v, want distinct epochs for the same hard-capped request", epochs)
 	}
 	if retry.EpochID != epochs[0].EpochID || retry.RequestDigest != epochs[0].RequestDigest {
 		t.Fatalf("retry link = %+v, first epoch = %+v", retry, epochs[0])
@@ -4000,8 +4000,8 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 	if retry.Reason != "max_tokens" || retry.StopReason != llm.StopMaxTokens || retry.ReasoningOnly {
 		t.Fatalf("retry payload = %+v", retry)
 	}
-	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 2000 {
-		t.Fatalf("max output tokens = %+v, want [25 2000]", compactionOptionBudgets(provider.options))
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 1000 || provider.options[1].MaxOutputTokens != 1000 {
+		t.Fatalf("max output tokens = %+v, want retries capped at [1000 1000]", compactionOptionBudgets(provider.options))
 	}
 	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 1003}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
@@ -4116,12 +4116,12 @@ func TestCompactCapsSummaryRetryToBoundedRequest(t *testing.T) {
 	policy := effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow)
 	initialBudget := provider.options[0].MaxOutputTokens
 	initialInputTokens := estimateContextTokens(provider.systems[0], nil, provider.histories[0])
-	if initialBudget != 6 || initialInputTokens+initialBudget > policy.SummaryRequestTokens {
-		t.Fatalf("initial input + output = %d + %d, want 0.5%% output budget and total <= summary request budget %d", initialInputTokens, initialBudget, policy.SummaryRequestTokens)
+	if initialBudget <= 0 || initialBudget > eng.Compaction.SummaryMaxTokens || initialInputTokens+initialBudget > policy.SummaryRequestTokens {
+		t.Fatalf("initial input + output = %d + %d, want positive hard-capped output and total <= summary request budget %d", initialInputTokens, initialBudget, policy.SummaryRequestTokens)
 	}
 	retryBudget := provider.options[1].MaxOutputTokens
-	if retryBudget <= 12 || retryBudget >= 1200 {
-		t.Fatalf("retry budget = %d, want recovery room capped below the 1200-token configured retry ceiling", retryBudget)
+	if retryBudget != initialBudget {
+		t.Fatalf("retry budget = %d, want the same hard cap %d", retryBudget, initialBudget)
 	}
 	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
 	if retryInputTokens+retryBudget > policy.SummaryRequestTokens {
@@ -4198,8 +4198,8 @@ func TestCompactFallsBackAfterEmptySummaryRetry(t *testing.T) {
 	if summary.calls != 2 || main.calls != 1 || result.SummaryModel != "main:model" {
 		t.Fatalf("summary/main/result = %d/%d/%+v", summary.calls, main.calls, result)
 	}
-	if len(main.options) != 1 || main.options[0].MaxOutputTokens != 200 {
-		t.Fatalf("fallback max output tokens = %+v, want 200", compactionOptionBudgets(main.options))
+	if len(main.options) != 1 || main.options[0].MaxOutputTokens != 100 {
+		t.Fatalf("fallback max output tokens = %+v, want hard cap 100", compactionOptionBudgets(main.options))
 	}
 	if fallback.ConfiguredModel != "summary:model" || fallback.FallbackModel != "main:model" || !strings.Contains(fallback.Error, "empty summary") {
 		t.Fatalf("fallback payload = %+v", fallback)
@@ -7356,7 +7356,7 @@ func TestRecordToolBatchUsesServingCandidateContextWindowForProjection(t *testin
 	eng.Tools.MustRegister(tools.Tool{
 		Name: "large_candidate_output",
 		Handler: func(context.Context, map[string]any) (string, error) {
-			return strings.Repeat("x", 200), nil
+			return strings.Repeat("x", 2_400), nil
 		},
 	})
 	calls := []llm.Block{{
@@ -7374,8 +7374,8 @@ func TestRecordToolBatchUsesServingCandidateContextWindowForProjection(t *testin
 		t.Fatal(err)
 	}
 	result := eng.Thread.History[len(eng.Thread.History)-1].Blocks[0]
-	if result.Artifact == nil || result.Artifact.OriginalBytes != 200 {
-		t.Fatalf("tool result artifact = %+v, want projection at the serving candidate's 5-byte limit", result.Artifact)
+	if result.Artifact == nil || result.Artifact.OriginalBytes != 2_400 {
+		t.Fatalf("tool result artifact = %+v, want projection at the serving candidate's 500-token limit", result.Artifact)
 	}
 }
 

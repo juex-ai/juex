@@ -622,17 +622,6 @@ func compactionSummaryFailure(resp llm.Response, err error) string {
 	return fmt.Sprintf("empty summary (stop_reason=%s, reasoning_only=%t)", resp.StopReason, compactionResponseReasoningOnly(resp.Message))
 }
 
-func doubledSummaryMaxTokens(value int) int {
-	if value <= 0 {
-		return value
-	}
-	maxInt := int(^uint(0) >> 1)
-	if value > maxInt/2 {
-		return maxInt
-	}
-	return value * 2
-}
-
 func (e *Engine) compactionSummaryRetryMaxOutputTokens(
 	baseSystem string,
 	previous llm.Message,
@@ -641,13 +630,7 @@ func (e *Engine) compactionSummaryRetryMaxOutputTokens(
 	policy compactionPolicy,
 	instructions string,
 ) int {
-	// Output includes reasoning as well as visible text. Doubling a small
-	// context-derived budget can still leave no room for a complete summary.
-	desired := max(2048, doubledSummaryMaxTokens(policy.SummaryMaxTokens))
-	if configured := e.Compaction.SummaryMaxTokens; configured > 0 {
-		desired = min(desired, doubledSummaryMaxTokens(configured))
-	}
-	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, desired)
+	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, policy.SummaryMaxTokens)
 }
 
 func (e *Engine) compactionSummaryInitialMaxOutputTokens(
@@ -682,8 +665,8 @@ func (e *Engine) compactionSummaryMaxOutputTokens(
 	}
 
 	minimumSystem, _ := buildCompactionSummaryRequest(baseSystem, previous, nil, state, policy, instructions)
-	minimumInput, omitted, minChars := fitCompactionSummaryInput(minimumSystem, previous, input, state, policy, 1)
-	minimumBody := buildCompactionSummaryBody(previous, minimumInput, state, minChars, omitted)
+	minimumInput, omitted, toolBudget := fitCompactionSummaryInput(minimumSystem, previous, input, state, policy, 1)
+	minimumBody := buildCompactionSummaryBody(previous, minimumInput, state, toolBudget, omitted)
 	minimumHistory := []llm.Message{llm.TextMessage(llm.RoleUser, minimumBody)}
 	maxOutputTokens := requestBudget - estimateContextTokens(minimumSystem, nil, minimumHistory)
 	if maxOutputTokens < 1 {
