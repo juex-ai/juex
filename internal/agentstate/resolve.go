@@ -278,6 +278,23 @@ func acquireAgentLock(homeDir, agentID string) (*homestore.Lock, error) {
 	return guard, nil
 }
 
+// WithAgentLifecycleLock runs fn while the Agent lifecycle lock is held.
+func WithAgentLifecycleLock(homeDir, agentID string, fn func() error) (returnErr error) {
+	if !validAgentID.MatchString(agentID) {
+		return fmt.Errorf("agentstate: invalid agent id %q", agentID)
+	}
+	guard, err := acquireAgentLock(homeDir, agentID)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := guard.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("agentstate: unlock agent %q: %w", agentID, err))
+		}
+	}()
+	return fn()
+}
+
 func randomID() (string, error) {
 	var raw [generatedIDBytes]byte
 	if _, err := rand.Read(raw[:]); err != nil {

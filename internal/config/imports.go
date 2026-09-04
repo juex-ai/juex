@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/hooks"
@@ -926,11 +927,7 @@ func recoverConfigImportCachePublicationAt(path string) error {
 				mode:    os.FileMode(journal.Target.PreviousMode),
 				existed: journal.Target.Existed,
 			}
-			ownerDeleted, inspectErr := agentConfigOwnerDeleted(path, target.path)
-			rollbackErr = errors.Join(rollbackErr, inspectErr)
-			if inspectErr == nil && !ownerDeleted {
-				rollbackErr = errors.Join(rollbackErr, rollbackConfigFile(target))
-			}
+			rollbackErr = errors.Join(rollbackErr, rollbackConfigImportTarget(path, target))
 		}
 		if rollbackErr != nil {
 			return rollbackErr
@@ -939,18 +936,20 @@ func recoverConfigImportCachePublicationAt(path string) error {
 	return clearConfigImportCacheJournal(path)
 }
 
-func agentConfigOwnerDeleted(journalPath, targetPath string) (bool, error) {
+func rollbackConfigImportTarget(journalPath string, target configFileSnapshot) error {
 	homeDir := filepath.Dir(filepath.Dir(filepath.Dir(journalPath)))
-	agentDir := filepath.Dir(targetPath)
+	agentDir := filepath.Dir(target.path)
 	if filepath.Clean(filepath.Dir(agentDir)) != filepath.Join(homeDir, "agents") {
-		return false, nil
+		return rollbackConfigFile(target)
 	}
-	if _, err := os.Stat(agentDir); errors.Is(err, os.ErrNotExist) {
-		return true, nil
-	} else if err != nil {
-		return false, fmt.Errorf("inspect Agent config owner %s: %w", agentDir, err)
-	}
-	return false, nil
+	return agentstate.WithAgentLifecycleLock(homeDir, filepath.Base(agentDir), func() error {
+		if _, err := os.Stat(agentDir); errors.Is(err, os.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("inspect Agent config owner %s: %w", agentDir, err)
+		}
+		return rollbackConfigFile(target)
+	})
 }
 
 func readConfigImportCacheJournal(path string) (configImportCacheJournal, error) {
