@@ -743,6 +743,22 @@ func TestReleaseBuildEntrypointsPrepareEmbeddedWebFrontend(t *testing.T) {
 			t.Errorf("%s does not prepare the embedded web frontend with %q", rel, want)
 		}
 	}
+
+	localInstall, err := os.ReadFile(filepath.Join(root, "scripts/install-local.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	webBuild := bytes.Index(localInstall, []byte("\nmake web\n"))
+	goBuild := bytes.Index(localInstall, []byte("\nCGO_ENABLED=0 go build "))
+	if webBuild < 0 {
+		t.Fatal("scripts/install-local.sh does not rebuild the embedded web frontend")
+	}
+	if goBuild < 0 {
+		t.Fatal("scripts/install-local.sh does not build the Go binary")
+	}
+	if webBuild > goBuild {
+		t.Fatal("scripts/install-local.sh rebuilds the embedded web frontend after the Go binary")
+	}
 }
 
 func TestPowerShellReleaseInstallerSwitchesPointerAfterBinaryCopy(t *testing.T) {
