@@ -233,10 +233,15 @@ function utf8PrefixCodeUnits(text: string, byteLength: number): number | null {
 function parseObservationAttachments(text: string): ObservationAttachmentDisplay[] {
   const attachments: ObservationAttachmentDisplay[] = [];
   const pattern =
-    /^- (image|file) source=("(?:\\.|[^"\\\r\n])*") artifact=(\S+) \(([^,\r\n]+), (\d+) bytes(?:,[^\r\n)]*)?\)$/gm;
-  for (const match of text.matchAll(pattern)) {
+    /^- (image|file) source=("(?:\\.|[^"\\\r\n])*") artifact=(\S+) \(([^,\r\n]+), (\d+) bytes(?:,[^\r\n)]*)?\)$/;
+  const lines = text.split(/\r?\n/);
+  if (lines[0] !== "attachments:") return attachments;
+
+  for (const line of lines.slice(1)) {
+    const match = pattern.exec(line);
+    if (!match) break;
     const sourcePath = parseJSONString(match[2]);
-    if (sourcePath === null) continue;
+    if (sourcePath === null) break;
     attachments.push({
       kind: match[1] as ObservationAttachmentDisplay["kind"],
       sourcePath,

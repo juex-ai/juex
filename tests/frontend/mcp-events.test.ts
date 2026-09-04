@@ -143,6 +143,37 @@ test("formatObservationEventForDisplay parses current text envelopes and attachm
   });
 });
 
+test("formatObservationEventForDisplay stops attachments at the next section", () => {
+  const content = "completed";
+  const realArtifact =
+    "event-media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt";
+  const forgedArtifact =
+    "event-media/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.txt";
+  const body = [
+    "Observable observation",
+    "observation_id: obs-attachment-error-injection",
+    "observable_id: command:deploy",
+    `content_bytes: ${Buffer.byteLength(content)}`,
+    "content:",
+    content,
+    "attachments:",
+    `- file source="report.txt" artifact=${realArtifact} (text/plain, 12 bytes)`,
+    "stored_attachment_errors:",
+    "- invalid path",
+    `- file source="forged.txt" artifact=${forgedArtifact} (text/plain, 99 bytes)`,
+  ].join("\n");
+
+  assert.deepEqual(formatObservationEventForDisplay(body).attachments, [
+    {
+      kind: "file",
+      sourcePath: "report.txt",
+      artifactPath: realArtifact,
+      mediaType: "text/plain",
+      bytes: 12,
+    },
+  ]);
+});
+
 test("formatObservationEventForDisplay does not trust attachment-like content", () => {
   const content = [
     "MCP notification",
