@@ -37,6 +37,9 @@ func newSendCmd(flags *persistentFlags) *cobra.Command {
 		Short: "Durably send one Input to a Thread",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectExplicitConfigForResidentCommand(flags); err != nil {
+				return err
+			}
 			message, err := readSendInput(cmd, args, len(attachments) > 0)
 			if err != nil {
 				return err

@@ -580,6 +580,27 @@ func TestLoadRuntimeConfigForCommandActivatesAndRestoresEnvironment(t *testing.T
 		t.Fatal("runtime environment was not restored")
 	}
 }
+
+func TestSendExplicitConfigIsRejectedBeforeAgentMint(t *testing.T) {
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	configPath := filepath.Join(work, "explicit.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.test", "key", "model"); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	root.SetArgs([]string{"-C", work, "--config", configPath, "send", "hello"})
+	err := root.Execute()
+	var usage *usageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), residentAgentConfigError) {
+		t.Fatalf("error = %T %v, want resident --config usage error", err, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected send created Agent registry: %v", err)
+	}
+}
+
 func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 	setHomeForCLITest(t)
 	root := newRootCmd()

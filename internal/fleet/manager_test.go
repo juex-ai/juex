@@ -60,6 +60,43 @@ func TestRegisteredWorkspacesReadsRegistryWithoutRuntimeInspection(t *testing.T)
 	}
 }
 
+func TestRegisteredWorkspacesCanonicalizesMovedWorkspaceSymlink(t *testing.T) {
+	root := t.TempDir()
+	originalWorkspace := filepath.Join(root, "original")
+	movedWorkspace := filepath.Join(root, "moved")
+	if err := os.MkdirAll(originalWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(originalWorkspace, movedWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(movedWorkspace, originalWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	entry := registryEntry("aaaaaa", "moved")
+	entry.Agent.Workspace = originalWorkspace
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+
+	manager := &Manager{homeDir: t.TempDir(), deps: deps}
+	got, err := manager.RegisteredWorkspaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalMoved, err := filepath.EvalSymlinks(movedWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got[canonicalMoved]; !ok {
+		t.Fatalf("RegisteredWorkspaces() = %+v, missing canonical %q", got, canonicalMoved)
+	}
+	if _, ok := got[originalWorkspace]; ok {
+		t.Fatalf("RegisteredWorkspaces() retained symlink spelling %q", originalWorkspace)
+	}
+}
+
 func TestInspectStatusRuntimeMatrix(t *testing.T) {
 	runtimeState := endpoint.Runtime{
 		AgentID:       "aaaaaa",

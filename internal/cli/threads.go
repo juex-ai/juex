@@ -29,6 +29,9 @@ func newThreadsCmd(flags *persistentFlags) *cobra.Command {
 }
 
 func withAgentClient(cmd *cobra.Command, flags *persistentFlags, run func(*agentClient) error) error {
+	if err := rejectExplicitConfigForResidentCommand(flags); err != nil {
+		return err
+	}
 	cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags)
 	if err != nil {
 		return err

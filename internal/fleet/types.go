@@ -155,7 +155,11 @@ func (m *Manager) RegisteredWorkspaces() (map[string]struct{}, error) {
 		if entry.Problem != "" || entry.Agent.Workspace == "" {
 			continue
 		}
-		workspaces[filepath.Clean(entry.Agent.Workspace)] = struct{}{}
+		workspace := filepath.Clean(entry.Agent.Workspace)
+		if canonical, err := filepath.EvalSymlinks(workspace); err == nil {
+			workspace = canonical
+		}
+		workspaces[workspace] = struct{}{}
 	}
 	return workspaces, nil
 }
