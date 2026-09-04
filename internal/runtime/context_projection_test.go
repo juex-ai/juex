@@ -208,6 +208,31 @@ func TestProjectMessageLockedUsesTokenBudgetForMixedToolResultPreview(t *testing
 	}
 }
 
+func TestToolResultPreviewPreservesConfiguredAsymmetricAllocation(t *testing.T) {
+	content := strings.Repeat("h", 200) + strings.Repeat("t", 200)
+	tests := []struct {
+		name      string
+		headBytes int
+		tailBytes int
+	}{
+		{name: "asymmetric", headBytes: 10, tailBytes: 90},
+		{name: "tail only", headBytes: 0, tailBytes: 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			head, tail := toolResultPreview(content, effectiveToolOutput{
+				ContentMaxTokens: 500,
+				InlineMaxBytes:   tt.headBytes + tt.tailBytes,
+				PreviewHeadBytes: tt.headBytes,
+				PreviewTailBytes: tt.tailBytes,
+			})
+			if len(head) != tt.headBytes || len(tail) != tt.tailBytes {
+				t.Fatalf("preview head/tail bytes = %d/%d, want %d/%d", len(head), len(tail), tt.headBytes, tt.tailBytes)
+			}
+		})
+	}
+}
+
 func artifactPathFromProviderText(t *testing.T, text string) string {
 	t.Helper()
 	for _, line := range strings.Split(text, "\n") {

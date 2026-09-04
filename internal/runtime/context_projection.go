@@ -440,15 +440,12 @@ func (e *Engine) writeProjectedArtifactWithPreview(sourceKind, messageID string,
 }
 
 func toolResultPreview(content string, policy effectiveToolOutput) (string, string) {
-	preview := contextbudget.PreviewText(content, policy.ContentMaxTokens, policy.InlineMaxBytes)
-	head, tail := preview.Head, preview.Tail
-	if policy.PreviewHeadBytes > 0 && len(head) > policy.PreviewHeadBytes {
-		head, _ = previewParts(head, policy.PreviewHeadBytes, 0)
+	if policy.InlineMaxBytes > 0 {
+		preview := contextbudget.PreviewTextWithByteAllocation(content, policy.ContentMaxTokens, policy.PreviewHeadBytes, policy.PreviewTailBytes)
+		return preview.Head, preview.Tail
 	}
-	if policy.PreviewTailBytes > 0 && len(tail) > policy.PreviewTailBytes {
-		_, tail = previewParts(tail, 0, policy.PreviewTailBytes)
-	}
-	return head, tail
+	preview := contextbudget.PreviewText(content, policy.ContentMaxTokens, 0)
+	return preview.Head, preview.Tail
 }
 
 func (e *Engine) renderProjectedArtifactReadURIs(msg llm.Message) (llm.Message, error) {

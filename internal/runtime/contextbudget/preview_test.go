@@ -50,3 +50,26 @@ func TestPreviewTextAppliesStricterByteCeiling(t *testing.T) {
 		t.Fatalf("omitted characters = %d, want exact rune delta", preview.OmittedCharacters)
 	}
 }
+
+func TestPreviewTextWithByteAllocationPreservesAsymmetricSides(t *testing.T) {
+	text := strings.Repeat("h", 200) + strings.Repeat("t", 200)
+	tests := []struct {
+		name      string
+		headBytes int
+		tailBytes int
+	}{
+		{name: "asymmetric", headBytes: 10, tailBytes: 90},
+		{name: "tail only", headBytes: 0, tailBytes: 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview := PreviewTextWithByteAllocation(text, 500, tt.headBytes, tt.tailBytes)
+			if len(preview.Head) != tt.headBytes || len(preview.Tail) != tt.tailBytes {
+				t.Fatalf("preview head/tail bytes = %d/%d, want %d/%d", len(preview.Head), len(preview.Tail), tt.headBytes, tt.tailBytes)
+			}
+			if got := EstimateTextTokens(preview.Head) + EstimateTextTokens(preview.Tail); got > 500 {
+				t.Fatalf("preview tokens = %d, want <= 500", got)
+			}
+		})
+	}
+}

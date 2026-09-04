@@ -24,11 +24,23 @@ func PreviewText(text string, maxTokens, maxBytes int) TextPreview {
 	if !TextExceedsBudget(text, maxTokens, maxBytes) {
 		return TextPreview{Head: text}
 	}
-	tokensLimited := maxTokens > 0
-	bytesLimited := maxBytes > 0
 	headTokens, tailTokens := splitPreviewBudget(maxTokens)
 	headBytes, tailBytes := splitPreviewBudget(maxBytes)
+	return previewTextWithSideBudgets(text, maxTokens > 0, headTokens, tailTokens, maxBytes > 0, headBytes, tailBytes)
+}
 
+// PreviewTextWithByteAllocation retains head and tail content under both the
+// total token ceiling and the caller's explicit per-side byte allocation.
+func PreviewTextWithByteAllocation(text string, maxTokens, headBytes, tailBytes int) TextPreview {
+	maxBytes := headBytes + tailBytes
+	if !TextExceedsBudget(text, maxTokens, maxBytes) {
+		return TextPreview{Head: text}
+	}
+	headTokens, tailTokens := splitPreviewTokenAllocation(maxTokens, headBytes, tailBytes)
+	return previewTextWithSideBudgets(text, maxTokens > 0, headTokens, tailTokens, true, headBytes, tailBytes)
+}
+
+func previewTextWithSideBudgets(text string, tokensLimited bool, headTokens, tailTokens int, bytesLimited bool, headBytes, tailBytes int) TextPreview {
 	headEnd := prefixEndWithinBudget(text, tokensLimited, headTokens, bytesLimited, headBytes)
 	tailStart := headEnd + suffixStartWithinBudget(text[headEnd:], tokensLimited, tailTokens, bytesLimited, tailBytes)
 	if tailStart < headEnd {
@@ -44,6 +56,18 @@ func PreviewText(text string, maxTokens, maxBytes int) TextPreview {
 		return TextPreview{Head: text}
 	}
 	return preview
+}
+
+func splitPreviewTokenAllocation(total, headBytes, tailBytes int) (head, tail int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	byteTotal := headBytes + tailBytes
+	if byteTotal <= 0 {
+		return splitPreviewBudget(total)
+	}
+	head = int(float64(total) * float64(headBytes) / float64(byteTotal))
+	return head, total - head
 }
 
 func splitPreviewBudget(total int) (head, tail int) {
