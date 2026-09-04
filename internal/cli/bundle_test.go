@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -64,5 +66,37 @@ func TestBundleCommandReportsUnknownThread(t *testing.T) {
 	err = root.Execute()
 	if _, ok := err.(*notFoundError); !ok {
 		t.Fatalf("error = %T %v, want notFoundError", err, err)
+	}
+}
+
+func TestBundleCommandAcceptsCanonicalIDWithoutThreadIndex(t *testing.T) {
+	work := t.TempDir()
+	cfg := ensureTestWorkspaceAgent(t, work)
+	store := thread.NewStore(cfg.RuntimePaths().StateDir)
+	target, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.IndexPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(work, "debug.tar.gz")
+	root := newRootCmd()
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stdout)
+	root.SetArgs([]string{"thread", "bundle", thread.MainID, "--cwd", work, "--out", out})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.IndexPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("bundle rebuilt missing Thread index: %v", err)
 	}
 }

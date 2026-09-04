@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -40,25 +42,13 @@ func newThreadBundleCmd(selectors *agentSelectorFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entries, err := thread.NewStore(cfg.RuntimePaths().StateDir).List()
-			if err != nil {
-				return err
-			}
-			var threads threadList
-			for _, entry := range entries {
-				if entry.RetentionState == thread.RetentionArchived {
-					threads.Archived = append(threads.Archived, entry)
-				} else {
-					threads.Active = append(threads.Active, entry)
-				}
-			}
-			selected, err := resolveThreadEntry(args[0], threads, true)
+			selectedID, err := resolveBundleThreadID(thread.NewStore(cfg.RuntimePaths().StateDir), args[0])
 			if err != nil {
 				return err
 			}
 			result, err := bundle.Create(bundle.Options{
 				WorkDir:                cfg.WorkDir,
-				ThreadID:               selected.ThreadID,
+				ThreadID:               selectedID,
 				OutPath:                outPath,
 				Redact:                 redact,
 				Force:                  force,
@@ -95,4 +85,45 @@ func newThreadBundleCmd(selectors *agentSelectorFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&includeMedia, "include-media", false, "include Agent-managed media files")
 	cmd.Flags().BoolVar(&includeWorktreeSummary, "include-worktree-summary", false, "include a worktree summary without file contents")
 	return cmd
+}
+
+func resolveBundleThreadID(store *thread.Store, selector string) (string, error) {
+	selectedID := normalizeThreadSelector(selector)
+	if thread.ValidID(selectedID) {
+		exists, err := bundleThreadDirectoryExists(store, selectedID)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return selectedID, nil
+		}
+	}
+	entries, err := store.List()
+	if err != nil {
+		return "", err
+	}
+	var threads threadList
+	for _, entry := range entries {
+		if entry.RetentionState == thread.RetentionArchived {
+			threads.Archived = append(threads.Archived, entry)
+		} else {
+			threads.Active = append(threads.Active, entry)
+		}
+	}
+	selected, err := resolveThreadEntry(selector, threads, true)
+	if err != nil {
+		return "", err
+	}
+	return selected.ThreadID, nil
+}
+
+func bundleThreadDirectoryExists(store *thread.Store, threadID string) (bool, error) {
+	for _, root := range []string{store.ThreadsDir(), store.ArchiveDir()} {
+		if _, err := os.Stat(filepath.Join(root, threadID)); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	return false, nil
 }

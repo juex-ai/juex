@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -412,8 +413,13 @@ func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 	if cfg.ProviderID != "openai" || cfg.Model != "gpt-4.1" || cfg.APIKey != "sk-test" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
-	if !strings.Contains(out.String(), `juex agent send --wait "say hello"`) {
-		t.Fatalf("quickstart missing from output:\n%s", out.String())
+	for _, want := range []string{
+		fmt.Sprintf("juex agent add %q", work),
+		fmt.Sprintf(`juex agent send --cwd %q --wait "say hello"`, work),
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("quickstart missing %q from output:\n%s", want, out.String())
+		}
 	}
 }
 

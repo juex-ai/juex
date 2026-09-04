@@ -102,8 +102,8 @@ Use --scope workspace to write the current workspace .juex/juex.yaml.`,
 				cmdPrintln(cmd, "Provider hello check passed.")
 			}
 			cmdPrintln(cmd, "Next:")
-			cmdPrintln(cmd, "  juex agent add .")
-			cmdPrintln(cmd, `  juex agent send --wait "say hello"`)
+			cmdPrintln(cmd, fmt.Sprintf("  juex agent add %q", workDir))
+			cmdPrintln(cmd, fmt.Sprintf(`  juex agent send --cwd %q --wait "say hello"`, workDir))
 			return nil
 		},
 	}

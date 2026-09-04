@@ -104,10 +104,7 @@ func (c *agentClient) resolveThread(ctx context.Context, selector string, includ
 }
 
 func resolveThreadEntry(selector string, list threadList, includeArchived bool) (thread.IndexEntry, error) {
-	selector = strings.TrimSpace(strings.TrimPrefix(selector, "#"))
-	if selector == "" || strings.EqualFold(selector, thread.MainAlias) {
-		selector = thread.MainID
-	}
+	selector = normalizeThreadSelector(selector)
 	entries := append([]thread.IndexEntry(nil), list.Active...)
 	if includeArchived {
 		entries = append(entries, list.Archived...)
@@ -132,6 +129,14 @@ func resolveThreadEntry(selector string, list threadList, includeArchived bool) 
 		return thread.IndexEntry{}, &notFoundError{msg: "Thread not found: " + selector}
 	}
 	return *match, nil
+}
+
+func normalizeThreadSelector(selector string) string {
+	selector = strings.TrimSpace(strings.TrimPrefix(selector, "#"))
+	if selector == "" || strings.EqualFold(selector, thread.MainAlias) {
+		selector = thread.MainID
+	}
+	return selector
 }
 
 func (c *agentClient) upload(ctx context.Context, threadID, path string) (map[string]any, error) {
