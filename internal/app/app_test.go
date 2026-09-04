@@ -316,12 +316,13 @@ func TestRenderObservationTextUsesStoredAttachmentDisplayName(t *testing.T) {
 }
 
 func TestRenderMCPNotificationTextDelimitsContent(t *testing.T) {
-	content := "first line\nmeta:\nstill notification content"
+	content := "first line\nmeta:\nstill notification content\n"
 	text := renderMCPNotificationText(mcp.Notification{
 		ServerName: "wechat-wire",
 		Content:    content,
 	}, "notification", eventmedia.ValidationReport{}, nil)
-	want := fmt.Sprintf("content_bytes: %d\ncontent:\n%s", len(content), content)
+	renderedContent := strings.TrimRight(content, "\n")
+	want := fmt.Sprintf("content_bytes: %d\ncontent:\n%s", len(renderedContent), renderedContent)
 	if !strings.Contains(text, want) {
 		t.Fatalf("MCP notification text missing content boundary %q:\n%s", want, text)
 	}

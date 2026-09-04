@@ -1192,6 +1192,7 @@ func renderMCPNotificationText(n mcp.Notification, eventType string, report even
 	if value, ok := n.Params["content"].(string); ok && value != "" {
 		content = value
 	}
+	content = strings.TrimRight(content, "\n")
 	if content != "" {
 		fmt.Fprintf(&sb, "content_bytes: %d\n", len(content))
 		sb.WriteString("content:\n")
