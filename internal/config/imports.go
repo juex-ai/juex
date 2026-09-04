@@ -926,13 +926,31 @@ func recoverConfigImportCachePublicationAt(path string) error {
 				mode:    os.FileMode(journal.Target.PreviousMode),
 				existed: journal.Target.Existed,
 			}
-			rollbackErr = errors.Join(rollbackErr, rollbackConfigFile(target))
+			ownerDeleted, inspectErr := agentConfigOwnerDeleted(path, target.path)
+			rollbackErr = errors.Join(rollbackErr, inspectErr)
+			if inspectErr == nil && !ownerDeleted {
+				rollbackErr = errors.Join(rollbackErr, rollbackConfigFile(target))
+			}
 		}
 		if rollbackErr != nil {
 			return rollbackErr
 		}
 	}
 	return clearConfigImportCacheJournal(path)
+}
+
+func agentConfigOwnerDeleted(journalPath, targetPath string) (bool, error) {
+	homeDir := filepath.Dir(filepath.Dir(filepath.Dir(journalPath)))
+	agentDir := filepath.Dir(targetPath)
+	if filepath.Clean(filepath.Dir(agentDir)) != filepath.Join(homeDir, "agents") {
+		return false, nil
+	}
+	if _, err := os.Stat(agentDir); errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	} else if err != nil {
+		return false, fmt.Errorf("inspect Agent config owner %s: %w", agentDir, err)
+	}
+	return false, nil
 }
 
 func readConfigImportCacheJournal(path string) (configImportCacheJournal, error) {

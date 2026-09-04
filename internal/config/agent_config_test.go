@@ -97,6 +97,92 @@ func TestAgentConfigRejectsFleetAndWriteLeavesWorkspaceUnchanged(t *testing.T) {
 	}
 }
 
+func TestAgentConfigRecoveryDoesNotRecreateDeletedAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		oldConfig string
+	}{
+		{name: "existing config", oldConfig: "runtime:\n  tool_timeout: 40s\n"},
+		{name: "new config"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspace := t.TempDir()
+			resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: workspace})
+			if err != nil {
+				t.Fatal(err)
+			}
+			configPath := resolved.Address.ConfigPath()
+			if tc.oldConfig != "" {
+				writeTextFile(t, configPath, tc.oldConfig)
+			}
+			snapshot, err := snapshotConfigFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loader := newConfigImportLoaderForTest(t, home)
+			source := "https://config.example/agent.yaml"
+			oldCache := configImportCacheRecord{
+				Version:         configImportCacheVersion,
+				Source:          source,
+				SourceSHA256:    sourceDigest(source),
+				DeclaringSHA256: declaringConfigDigest(configPath),
+				ContextSHA256:   loader.cacheContextDigest(),
+				FetchedAt:       time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC),
+				Content:         "runtime:\n  tool_timeout: 39s\n",
+				cachePath:       loader.cachePath(source, configPath),
+			}
+			oldCache.ContentSHA256 = contentDigest([]byte(oldCache.Content))
+			seed := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{oldCache}}
+			if err := commitConfigImportCaches(&seed); err != nil {
+				t.Fatal(err)
+			}
+			oldCacheData, err := os.ReadFile(oldCache.cachePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newCache := oldCache
+			newCache.Content = "runtime:\n  tool_timeout: 42s\n"
+			newCache.ContentSHA256 = contentDigest([]byte(newCache.Content))
+			commits, err := prepareConfigImportCacheCommits([]configImportCacheRecord{newCache})
+			if err != nil {
+				t.Fatal(err)
+			}
+			journalPath, err := beginConfigImportCachePublicationWithConfig(home, commits, &snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeTextFile(t, configPath, "runtime:\n  tool_timeout: 41s\n")
+			if err := os.WriteFile(newCache.cachePath, commits[0].data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := agentstate.DeleteRegistered(home, resolved.Agent.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := recoverConfigImportCachePublicationAt(journalPath); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(resolved.Address.StateDir()); !os.IsNotExist(err) {
+				t.Fatalf("recovery recreated deleted Agent directory: %v", err)
+			}
+			if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+				t.Fatalf("publication journal remains after deleted-Agent recovery: %v", err)
+			}
+			gotCacheData, err := os.ReadFile(oldCache.cachePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotCacheData) != string(oldCacheData) {
+				t.Fatalf("shared import cache was not rolled back after Agent deletion:\n%s", gotCacheData)
+			}
+		})
+	}
+}
+
 func TestAgentConfigsRemainIsolatedAcrossWorkspaces(t *testing.T) {
 	home := t.TempDir()
 	workspaces := []string{t.TempDir(), t.TempDir()}
