@@ -1,8 +1,8 @@
 import {
   Folder,
   FolderOpen,
-  History,
   Menu,
+  MessagesSquare,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -120,7 +120,7 @@ export function FleetStageHeader({
                   to={`${agentTabPath(agent.id, "chat")}/threads`}
                   aria-label="Thread Explorer"
                 >
-                  <History className="size-4" />
+                  <MessagesSquare className="size-4" />
                 </Link>
               </Button>
             </TooltipTrigger>
