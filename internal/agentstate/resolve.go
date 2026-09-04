@@ -104,7 +104,11 @@ func Resolve(opts Options) (Resolution, error) {
 		if err != nil {
 			return Resolution{}, err
 		}
-		if filepath.Clean(current.Agent.Workspace) != workDir {
+		sameWorkspace, err := sameWorkspaceDirectory(current.Agent.Workspace, workDir)
+		if err != nil {
+			return Resolution{}, fmt.Errorf("agentstate: compare workspace registration for %s: %w", workDir, err)
+		}
+		if !sameWorkspace {
 			return Resolution{}, fmt.Errorf("agentstate: workspace registration changed while resolving %s", workDir)
 		}
 		return Resolution{Agent: current.Agent, Address: current.Address}, nil
@@ -224,7 +228,11 @@ func findWorkspaceAgent(homeDir, workDir string) (RegistryEntry, bool, error) {
 		if strings.TrimSpace(entry.Agent.Workspace) == "" {
 			continue
 		}
-		if filepath.Clean(entry.Agent.Workspace) != workDir {
+		sameWorkspace, err := sameWorkspaceDirectory(entry.Agent.Workspace, workDir)
+		if err != nil {
+			return RegistryEntry{}, false, fmt.Errorf("agentstate: compare registered workspace %s with %s: %w", entry.Agent.Workspace, workDir, err)
+		}
+		if !sameWorkspace {
 			continue
 		}
 		if entry.Problem != "" {
@@ -239,6 +247,27 @@ func findWorkspaceAgent(homeDir, workDir string) (RegistryEntry, bool, error) {
 		return RegistryEntry{}, false, nil
 	}
 	return *matched, true, nil
+}
+
+func sameWorkspaceDirectory(left, right string) (bool, error) {
+	if filepath.Clean(left) == filepath.Clean(right) {
+		return true, nil
+	}
+	leftInfo, err := os.Stat(left)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	rightInfo, err := os.Stat(right)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return os.SameFile(leftInfo, rightInfo), nil
 }
 
 func acquireAgentLock(homeDir, agentID string) (*homestore.Lock, error) {

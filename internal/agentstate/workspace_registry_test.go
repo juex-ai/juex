@@ -44,6 +44,42 @@ func TestResolveUsesCanonicalWorkspaceRegistryIdentity(t *testing.T) {
 	}
 }
 
+func TestResolveReusesWorkspaceIdentityThroughMovedDirectorySymlink(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	originalWorkspace := filepath.Join(root, "original")
+	movedWorkspace := filepath.Join(root, "moved")
+	if err := os.MkdirAll(originalWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := Resolve(Options{HomeDir: home, WorkDir: originalWorkspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(originalWorkspace, movedWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(movedWorkspace, originalWorkspace); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Resolve(Options{HomeDir: home, WorkDir: movedWorkspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Created || second.Agent.ID != first.Agent.ID {
+		t.Fatalf("resolutions = first %+v second %+v", first, second)
+	}
+	entries, err := ListRegistry(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("registry entries = %+v, want one", entries)
+	}
+}
+
 func TestResolveCreatesIndependentIdentitiesForDifferentCheckouts(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()

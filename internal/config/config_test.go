@@ -1710,6 +1710,19 @@ func TestLoadForWorkDirDoesNotCreateIdentityBeforeConfigValidation(t *testing.T)
 	}
 }
 
+func TestLoadForWorkDirDoesNotCreateIdentityBeforeSemanticValidation(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [missing:model]\n")
+
+	if _, err := LoadForWorkDir(workDir); err == nil {
+		t.Fatal("expected invalid model reference error")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("agent registry exists before semantic config validation: %v", err)
+	}
+}
+
 func TestLoadWithOptionsAgentStateNoneDoesNotUseWorkspaceFallback(t *testing.T) {
 	home := prepareConfigTest(t)
 	workDir := filepath.Join(home, "workspace")

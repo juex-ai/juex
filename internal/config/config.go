@@ -393,10 +393,12 @@ func Load() (Config, error) {
 }
 
 // LoadWithOptions loads runtime configuration with an explicit Workspace
-// identity policy. AgentStateMint creates a Registry entry when needed.
+// identity policy. AgentStateMint creates a Registry entry only after the
+// effective configuration passes validation.
 func LoadWithOptions(opts LoadOptions) (Config, error) {
 	workDir := opts.WorkDir
 	var selectedAgent *agentstate.Resolution
+	mintAfterValidation := false
 	if strings.TrimSpace(opts.AgentID) != "" {
 		resolution, err := agentstate.ResolveByID(agentstate.Options{HomeDir: opts.HomeDir}, strings.TrimSpace(opts.AgentID))
 		if err != nil {
@@ -429,7 +431,12 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 		} else {
 			switch opts.AgentState {
 			case AgentStateMint:
-				resolution, err = agentstate.Resolve(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: cfg.WorkDir})
+				resolution, err = agentstate.ResolveExisting(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: cfg.WorkDir})
+				var noAgent *agentstate.NoAgentError
+				if errors.As(err, &noAgent) {
+					err = nil
+					mintAfterValidation = true
+				}
 			case AgentStateExisting:
 				resolution, err = agentstate.ResolveExisting(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: cfg.WorkDir})
 			default:
@@ -439,9 +446,11 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 				return cfg, closeConfigImportLoaderAfterError(&cfg, err)
 			}
 		}
-		bindAgentState(&cfg, resolution)
-		if err := applyYAMLFile(&cfg, agentYAMLSource(cfg.AgentConfigPath())); err != nil {
-			return cfg, err
+		if !mintAfterValidation {
+			bindAgentState(&cfg, resolution)
+			if err := applyYAMLFile(&cfg, agentYAMLSource(cfg.AgentConfigPath())); err != nil {
+				return cfg, err
+			}
 		}
 	}
 	if strings.TrimSpace(opts.ConfigPath) != "" {
@@ -456,6 +465,19 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 	}
 	if err := finalizeConfigLoad(&cfg, opts.ModelRefs, true, true, false); err != nil {
 		return cfg, err
+	}
+	if mintAfterValidation {
+		resolution, err := agentstate.Resolve(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: cfg.WorkDir})
+		if err != nil {
+			return cfg, err
+		}
+		if !resolution.Created {
+			reload := opts
+			reload.AgentID = resolution.Agent.ID
+			reload.AgentState = AgentStateExisting
+			return LoadWithOptions(reload)
+		}
+		bindAgentState(&cfg, resolution)
 	}
 	return cfg, nil
 }
