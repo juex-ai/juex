@@ -2569,6 +2569,7 @@ func TestEvalProviderRetryBudgetExcludesContractFailures(t *testing.T) {
 		"            calls.append(label)",
 		"            (case_dir / f'{label}.stdout.json').write_text('{\"thread_id\":\"0\"}\\n', encoding='utf-8')",
 		"            (case_dir / f'{label}.stderr.log').write_text('', encoding='utf-8')",
+		"            (case_dir / '.juex' / 'juex.local.json').write_text('{\"agent_id\":\"abcd23\"}\\n', encoding='utf-8')",
 		"            return 0",
 		"        helper.run_turn = passing_turn",
 		"        helper.write_selected_config = lambda *args, **kwargs: None",
@@ -3418,7 +3419,41 @@ func TestEvalHelpersResolveAgentHomeThreads(t *testing.T) {
 		"    marker.write_text(json.dumps({'agent_id': 'abcd23'}), encoding='utf-8')",
 		"    expected = juex_home / 'agents' / 'abcd23' / 'threads'",
 		"    assert helper.agent_threads_dir(work, juex_home) == expected",
+		"    assert helper.agent_state_dir(work, juex_home) == expected.parent",
+		"    assert helper.agent_observables_config_path(work, juex_home) == expected.parent / 'observables.json'",
 		"    assert compaction.thread_root(work) == expected",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestPrepareAgentObservablesConfigUsesIsolatedAgentState(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    fake = root / 'juex'",
+		"    fake.write_text(\"\"\"#!/bin/sh\nset -eu\ntest \"$1\" = fleet\ntest \"$2\" = add\nwork=$3\ntest \"$JUEX_HOME\" = \"$work/home/.juex\"\nmkdir -p \"$work/.juex\" \"$JUEX_HOME/agents/abcd23\"\nprintf '{\\\"agent_id\\\":\\\"abcd23\\\"}' > \"$work/.juex/juex.local.json\"\n\"\"\", encoding='utf-8')",
+		"    fake.chmod(0o755)",
+		"    case_dir = root / 'case'",
+		"    case_dir.mkdir()",
+		"    row = helper.MatrixRow('provider', 'model', 'openai', 'default', 'default', 'unset', 'provider:model')",
+		"    ctx = helper.ProviderSmokeContext(row, str(fake), {}, root / 'work', root / 'report', 'unit', 5, 0, str(root / 'codex'))",
+		"    observables = helper.prepare_agent_observables_config(ctx, case_dir)",
+		"    expected = case_dir / 'home' / '.juex' / 'agents' / 'abcd23' / 'observables.json'",
+		"    assert observables == expected, (observables, expected)",
+		"    assert observables.parent.is_dir(), observables.parent",
+		"    assert not (case_dir / '.juex' / 'observables.json').exists()",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -4289,22 +4324,30 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"    ctx = helper.ProviderSmokeContext(row, '/fake/juex', {'providers': []}, work / 'work', work / 'report', 'unit', 5, 1, str(work / 'codex'))",
 		"    attempts = []",
 		"    attempt_seeds = []",
+		"    def fake_prepare_agent_observables_config(ctx, case_dir):",
+		"        agent_id = 'abcd23'",
+		"        marker = case_dir / '.juex' / 'juex.local.json'",
+		"        marker.parent.mkdir(parents=True, exist_ok=True)",
+		"        marker.write_text(json.dumps({'agent_id': agent_id}), encoding='utf-8')",
+		"        observables = case_dir / 'home' / '.juex' / 'agents' / agent_id / 'observables.json'",
+		"        observables.parent.mkdir(parents=True, exist_ok=True)",
+		"        return observables",
 		"    def fake_write_config(cfg, provider_id, model_id, output_path):",
 		"        output_path.parent.mkdir(parents=True, exist_ok=True)",
 		"        output_path.write_text('models: [provider:model]\\n', encoding='utf-8')",
 		"    def fake_run_turn(ctx, case_dir, case_config, label, args):",
 		"        attempts.append(case_dir)",
-		"        attempt_seeds.append(json.loads((case_dir / '.juex' / 'observables.json').read_text(encoding='utf-8')))",
+		"        observables = helper.agent_observables_config_path(case_dir, case_dir / 'home' / '.juex')",
+		"        attempt_seeds.append(json.loads(observables.read_text(encoding='utf-8')))",
 		"        case_dir.mkdir(parents=True, exist_ok=True)",
 		"        (case_dir / 'turn1.stdout.json').write_text('{}\\n', encoding='utf-8')",
 		"        (case_dir / 'turn1.stderr.log').write_text('timeout\\n', encoding='utf-8')",
 		"        if len(attempts) == 1:",
-		"            (case_dir / '.juex' / 'observables.json').write_text(json.dumps({'observables': [{'id': 'dirty-attempt-1'}]}), encoding='utf-8')",
+		"            observables.write_text(json.dumps({'observables': [{'id': 'dirty-attempt-1'}]}), encoding='utf-8')",
 		"            return 124",
 		"        thread_id = 'abc234'",
 		"        (case_dir / 'turn1.stdout.json').write_text(json.dumps({'thread_id': thread_id, 'blocks': [{'type': 'text', 'text': expect.completion_token}]}) + '\\n', encoding='utf-8')",
 		"        agent_id = 'abcd23'",
-		"        (case_dir / '.juex' / 'juex.local.json').write_text(json.dumps({'agent_id': agent_id}), encoding='utf-8')",
 		"        thread = case_dir / 'home' / '.juex' / 'agents' / agent_id / 'threads' / thread_id",
 		"        thread.mkdir(parents=True)",
 		"        generations = thread / 'generations'",
@@ -4315,19 +4358,22 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"            conversation_rows.insert(5, {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'create-duplicate', 'content': '{}'}]})",
 		"            duplicate = json.loads(json.dumps(seed))",
 		"            duplicate['observables'].append({'id': expect.schedule_id, 'type': 'schedule', 'schedule_config': seed['observables'][0]['schedule_config']})",
-		"            (case_dir / '.juex' / 'observables.json').write_text(json.dumps(duplicate), encoding='utf-8')",
+		"            observables.write_text(json.dumps(duplicate), encoding='utf-8')",
 		"        (generations / 'g000001.jsonl').write_text('\\n'.join(json.dumps(row) for row in conversation_rows) + '\\n', encoding='utf-8')",
 		"        (thread / 'thread.json').write_text(json.dumps({'generations': [{'generation_id': 'g000001'}]}), encoding='utf-8')",
 		"        return 0",
 		"    original_write_config = helper.write_selected_config",
 		"    original_run_turn = helper.run_turn",
+		"    original_prepare_agent = helper.prepare_agent_observables_config",
 		"    helper.write_selected_config = fake_write_config",
 		"    helper.run_turn = fake_run_turn",
+		"    helper.prepare_agent_observables_config = fake_prepare_agent_observables_config",
 		"    try:",
 		"        outcome = helper.run_schedule_routing_case(ctx, work / 'report' / 'cases' / 'provider_model', expect)",
 		"    finally:",
 		"        helper.write_selected_config = original_write_config",
 		"        helper.run_turn = original_run_turn",
+		"        helper.prepare_agent_observables_config = original_prepare_agent",
 		"    assert outcome.kind == 'capability_failed' and not outcome.report.passed, outcome.report.message()",
 		"    assert outcome.validation_outcome.outcome == 'product_failure', outcome.validation_outcome",
 		"    assert outcome.thread_id == 'abc234', outcome.thread_id",

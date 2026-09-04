@@ -772,7 +772,8 @@ def run_schedule_routing_case(
             if expectation.variant == schedule_routing.SEEDED_EQUIVALENT_VARIANT:
                 seed = schedule_routing.seeded_observables_config(expectation)
                 seed_text = json.dumps(seed, ensure_ascii=False, indent=2) + "\n"
-                (case_dir / ".juex" / "observables.json").write_text(seed_text, encoding="utf-8")
+                observables = prepare_agent_observables_config(ctx, case_dir)
+                observables.write_text(seed_text, encoding="utf-8")
                 (attempt_artifacts / "seed-observables.json").write_text(seed_text, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
             copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
@@ -844,7 +845,7 @@ def run_schedule_routing_case(
                 attempt,
             )
         thread_dir = threads / thread_id
-        observables = case_dir / ".juex" / "observables.json"
+        observables = agent_observables_config_path(case_dir, case_dir / "home" / ".juex")
         validation = schedule_routing.validate_outcome(thread_dir, observables, expectation)
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
         write_contract_report(attempt_artifacts, validation.kind, validation.report)
@@ -866,22 +867,7 @@ def run_schedule_routing_case(
 def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pathlib.Path, label: str, args: list[str]) -> int:
     stdout_file = case_dir / f"{label}.stdout.json"
     stderr_file = case_dir / f"{label}.stderr.log"
-    case_home = case_dir / "home"
-    (case_home / ".agents").mkdir(parents=True, exist_ok=True)
-    (case_home / ".juex").mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
-        env.pop(name, None)
-    env.update(
-        {
-            "HOME": str(case_home),
-            "USERPROFILE": str(case_home),
-            "JUEX_HOME": str(case_home / ".juex"),
-            "GIT_CONFIG_GLOBAL": str(case_home / "gitconfig"),
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "CODEX_HOME": ctx.codex_home,
-        }
-    )
+    env = isolated_provider_environment(ctx, case_dir)
     command = [
         ctx.juex_bin,
         "-C",
@@ -1037,10 +1023,15 @@ def thread_generation_journals(thread_dir: pathlib.Path) -> list[pathlib.Path]:
 
 def copy_schedule_routing_artifacts(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> None:
     copy_case_artifacts(case_dir, artifact_dir)
-    for relative in (pathlib.Path("prompt.txt"), pathlib.Path(".juex") / "observables.json"):
-        source = case_dir / relative
-        if source.is_file():
-            shutil.copy2(source, artifact_dir / source.name)
+    prompt = case_dir / "prompt.txt"
+    if prompt.is_file():
+        shutil.copy2(prompt, artifact_dir / prompt.name)
+    try:
+        observables = agent_observables_config_path(case_dir, case_dir / "home" / ".juex")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return
+    if observables.is_file():
+        shutil.copy2(observables, artifact_dir / observables.name)
 
 
 def write_contract_report(
@@ -1059,13 +1050,60 @@ def write_contract_report(
     )
 
 
-def agent_threads_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
+def agent_state_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
     marker_path = work_dir / ".juex" / "juex.local.json"
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     agent_id = marker.get("agent_id") if isinstance(marker, dict) else None
     if not isinstance(agent_id, str) or re.fullmatch(r"[a-z2-7]{6}", agent_id) is None:
         raise ValueError(f"invalid or missing agent_id in {marker_path}")
-    return juex_home / "agents" / agent_id / "threads"
+    return juex_home / "agents" / agent_id
+
+
+def agent_threads_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
+    return agent_state_dir(work_dir, juex_home) / "threads"
+
+
+def agent_observables_config_path(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
+    return agent_state_dir(work_dir, juex_home) / "observables.json"
+
+
+def isolated_provider_environment(ctx: ProviderSmokeContext, case_dir: pathlib.Path) -> dict[str, str]:
+    case_home = case_dir / "home"
+    (case_home / ".agents").mkdir(parents=True, exist_ok=True)
+    (case_home / ".juex").mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
+        env.pop(name, None)
+    env.update(
+        {
+            "HOME": str(case_home),
+            "USERPROFILE": str(case_home),
+            "JUEX_HOME": str(case_home / ".juex"),
+            "GIT_CONFIG_GLOBAL": str(case_home / "gitconfig"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "CODEX_HOME": ctx.codex_home,
+        }
+    )
+    return env
+
+
+def prepare_agent_observables_config(ctx: ProviderSmokeContext, case_dir: pathlib.Path) -> pathlib.Path:
+    env = isolated_provider_environment(ctx, case_dir)
+    completed = subprocess.run(
+        [ctx.juex_bin, "fleet", "add", str(case_dir)],
+        env=env,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=15,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or f"status {completed.returncode}"
+        raise RuntimeError(f"prepare schedule routing Agent state: {detail}")
+    observables = agent_observables_config_path(case_dir, case_dir / "home" / ".juex")
+    observables.parent.mkdir(parents=True, exist_ok=True)
+    return observables
 
 
 def stop_agent_runtime(juex_bin: str, work_dir: pathlib.Path, env: dict[str, str]) -> None:
