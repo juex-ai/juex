@@ -16,12 +16,13 @@ import (
 
 func TestResolveSelectorUsesExactIDOrUniqueExactName(t *testing.T) {
 	entries := []agentstate.RegistryEntry{
-		registryEntry("aaaaaa", "shared"),
 		registryEntry("bbbbbb", "shared"),
+		registryEntry("aaaaaa", "shared"),
 		registryEntry("cccccc", "unique"),
+		registryEntry("dddddd", "aaaaaa"),
 	}
 	if got, err := resolveSelector(entries, "aaaaaa"); err != nil || got.ID != "aaaaaa" {
-		t.Fatalf("resolve id = %+v, %v", got, err)
+		t.Fatalf("resolve id/name collision = %+v, %v", got, err)
 	}
 	if got, err := resolveSelector(entries, "unique"); err != nil || got.ID != "cccccc" {
 		t.Fatalf("resolve name = %+v, %v", got, err)
@@ -30,9 +31,48 @@ func TestResolveSelectorUsesExactIDOrUniqueExactName(t *testing.T) {
 	if _, err := resolveSelector(entries, "shared"); !errors.As(err, &ambiguous) {
 		t.Fatalf("ambiguous error = %T %v", err, err)
 	}
+	if got := strings.Join(ambiguous.IDs, ","); got != "aaaaaa,bbbbbb" {
+		t.Fatalf("ambiguous IDs = %q, want sorted IDs", got)
+	}
 	var missing *NotFoundError
 	if _, err := resolveSelector(entries, "missing"); !errors.As(err, &missing) {
 		t.Fatalf("missing error = %T %v", err, err)
+	}
+	if _, err := resolveSelector(entries, "Unique"); !errors.As(err, &missing) {
+		t.Fatalf("case-insensitive name unexpectedly matched: %T %v", err, err)
+	}
+}
+
+func TestStatusOneInspectsOnlySelectedAgent(t *testing.T) {
+	selected := registryEntry("aaaaaa", "selected")
+	other := registryEntry("bbbbbb", "other")
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{selected, other}, nil
+	}
+	deps.inspectBinding = func(entry agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		if entry.ID != selected.ID {
+			t.Fatalf("StatusOne inspected unselected Agent %s", entry.ID)
+		}
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(address agentstate.AgentAddress) (endpoint.Runtime, error) {
+		if address.ID() != selected.ID {
+			t.Fatalf("StatusOne read Runtime for unselected Agent %s", address.ID())
+		}
+		return endpoint.Runtime{}, os.ErrNotExist
+	}
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
+		return noopGuard{}, nil
+	}
+	manager := &Manager{homeDir: t.TempDir(), deps: deps}
+
+	status, err := manager.StatusOne(context.Background(), selected.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ID != selected.ID || status.RuntimeHealth != RuntimeStopped {
+		t.Fatalf("status = %+v", status)
 	}
 }
 

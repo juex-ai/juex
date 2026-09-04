@@ -21,7 +21,7 @@ does not own HTTP routing, CLI presentation, or native service installation.
 - Process existence alone never proves Runtime ownership; lifecycle mutation
   requires matching process and endpoint identity.
 - Stop uses instance-bound graceful shutdown and does not signal a recorded PID.
-- Start launches a detached `juex listen` and waits for exact identity.
+- Start launches the hidden `juex listen --agent-id <id>` Runtime entrypoint and waits for exact identity.
 - Disable stops before persisting the flag; enable does not implicitly start.
 - Restart may submit one continuation only after the replacement confirms the
   same Thread and interrupted/failed Turn identity. Completed, cancelled, or

@@ -43,7 +43,7 @@ func TestAgentClientResolvesThreadIDAndAliasAcrossIndexSections(t *testing.T) {
 
 func TestRenderThreadsTableSeparatesRetentionAndExecutionState(t *testing.T) {
 	var output bytes.Buffer
-	cmd := newThreadsListCmd(&persistentFlags{})
+	cmd := newThreadsListCmd(&agentSelectorFlags{})
 	cmd.SetOut(&output)
 	renderThreadsTable(cmd, []thread.IndexEntry{
 		{ThreadID: "abc123", Alias: "active", RetentionState: thread.RetentionActive, ExecutionState: thread.ExecutionFailed},
@@ -92,7 +92,7 @@ func TestAgentClientRenamesArchivedThread(t *testing.T) {
 
 func TestRootExposesSendAndThreadManagement(t *testing.T) {
 	root := newRootCmd()
-	for _, path := range [][]string{{"send"}, {"threads", "list"}, {"threads", "archive"}, {"threads", "delete"}} {
+	for _, path := range [][]string{{"agent", "send"}, {"thread", "send"}, {"thread", "list"}, {"thread", "archive"}, {"thread", "delete"}} {
 		command, _, err := root.Find(path)
 		if err != nil || command == nil {
 			t.Fatalf("command %v missing: %v", path, err)
@@ -102,7 +102,7 @@ func TestRootExposesSendAndThreadManagement(t *testing.T) {
 
 func TestThreadsCreateExposesExplicitParentSelector(t *testing.T) {
 	root := newRootCmd()
-	command, _, err := root.Find([]string{"threads", "create"})
+	command, _, err := root.Find([]string{"thread", "create"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestRenderThreadShowReportsCurrentGenerationJournal(t *testing.T) {
 	}
 	for _, jsonOut := range []bool{false, true} {
 		var output bytes.Buffer
-		cmd := newThreadsShowCmd(&persistentFlags{})
+		cmd := newThreadsShowCmd(&agentSelectorFlags{})
 		cmd.SetOut(&output)
 		renderThreadShow(cmd, info, jsonOut)
 		if !strings.Contains(output.String(), "generation_journal") || !strings.Contains(output.String(), info.GenerationJournalPath) {

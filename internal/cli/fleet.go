@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -14,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -21,34 +24,25 @@ import (
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/fleetservice"
 	"github.com/juex-ai/juex/internal/fleetweb"
+	"github.com/juex-ai/juex/internal/processmetrics"
 	"github.com/juex-ai/juex/internal/version"
 )
 
 func newFleetCmd(flags *persistentFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "fleet",
-		Short: "Manage resident workspace agents in the effective JUEX_HOME",
-		Args:  cobra.NoArgs,
+		Short: "Manage resident Workspace Agents in the effective JUEX_HOME",
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
-	declareUnavailableInheritedFlags(cmd, "config", "cwd", "models")
 	cmd.AddCommand(newFleetServeCmd(flags))
 	cmd.AddCommand(newFleetStatusCmd(flags))
-	cmd.AddCommand(newFleetAddCmd(flags))
-	cmd.AddCommand(newFleetEnabledCmd(flags, true))
-	cmd.AddCommand(newFleetEnabledCmd(flags, false))
-	cmd.AddCommand(newFleetRemoveCmd(flags))
-	cmd.AddCommand(newFleetLifecycleCmd(flags, "start"))
-	cmd.AddCommand(newFleetLifecycleCmd(flags, "stop"))
-	cmd.AddCommand(newFleetLifecycleCmd(flags, "restart"))
-	cmd.AddCommand(newFleetLogsCmd(flags))
 	cmd.AddCommand(newFleetGCCmd(flags))
 	cmd.AddCommand(newFleetInstallCmd(flags))
 	cmd.AddCommand(newFleetUninstallCmd(flags))
 	cmd.AddCommand(newFleetServiceInstalledCmd())
-	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }
 
@@ -72,7 +66,7 @@ func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the resident fleet supervisor and browser API",
-		Args:  cobra.NoArgs,
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			settings, err := resolveFleetServeSettings(cmd, addr, unsafeBindAny)
 			if err != nil {
@@ -221,22 +215,14 @@ type fleetServiceInstaller interface {
 	Install(context.Context) (fleetservice.Registration, error)
 }
 
-type fleetAgentRestarter interface {
-	RestartRunningAgents(context.Context) (fleet.RestartAgentsResult, error)
-}
-
 type fleetInstallCommandDeps struct {
 	newServiceManager func() (fleetServiceInstaller, error)
-	newAgentManager   func() (fleetAgentRestarter, error)
 }
 
 func defaultFleetInstallCommandDeps() fleetInstallCommandDeps {
 	return fleetInstallCommandDeps{
 		newServiceManager: func() (fleetServiceInstaller, error) {
 			return newFleetServiceManager()
-		},
-		newAgentManager: func() (fleetAgentRestarter, error) {
-			return newFleetManager()
 		},
 	}
 }
@@ -289,12 +275,11 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 	var (
 		addr          string
 		unsafeBindAny bool
-		restartAgents bool
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install and start the fleet as a per-user system service",
-		Args:  cobra.NoArgs,
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			explicitAddr := cmd.Flags().Changed("addr")
 			fleetCfg, err := config.LoadHomeFleetConfig()
@@ -349,66 +334,19 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 				return err
 			}
 			renderFleetServiceResult(cmd, "Installed", registration)
-			if !restartAgents {
-				return nil
-			}
-			agentManager, err := deps.newAgentManager()
-			if err != nil {
-				return err
-			}
-			result, restartErr := agentManager.RestartRunningAgents(cmd.Context())
-			renderRestartAgentsResult(cmd, result)
-			return restartErr
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", config.DefaultFleetAddr, "stable fleet browser address (host:port)")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
-	cmd.Flags().BoolVar(&restartAgents, "restart-agents", false, "restart currently healthy resident agents after installing the service")
 	return cmd
-}
-
-func renderRestartAgentsResult(cmd *cobra.Command, result fleet.RestartAgentsResult) {
-	for _, item := range result.Items {
-		resume := "not-needed"
-		switch {
-		case item.Resume.Sent:
-			resume = "sent"
-		case item.Resume.Required:
-			resume = "failed"
-		case item.Resume.Error != "":
-			resume = "unknown"
-		}
-		fmt.Fprintf(
-			cmd.OutOrStdout(),
-			"Agent %s %s: %s runtime=%s resume=%s",
-			item.Agent.ID,
-			item.Agent.Name,
-			item.Outcome,
-			item.Agent.RuntimeHealth,
-			resume,
-		)
-		if item.Reason != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), " reason=%s", item.Reason)
-		}
-		if item.Resume.Error != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), " warning=%s", item.Resume.Error)
-		}
-		fmt.Fprintln(cmd.OutOrStdout())
-	}
-	fmt.Fprintf(
-		cmd.OutOrStdout(),
-		"Agent refresh: %d restarted, %d skipped, %d failed.\n",
-		result.Restarted,
-		result.Skipped,
-		result.Failed,
-	)
 }
 
 func newFleetUninstallCmd(_ *persistentFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "uninstall",
 		Short: "Stop and remove the fleet per-user system service",
-		Args:  cobra.NoArgs,
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			manager, err := newFleetServiceManager()
 			if err != nil {
@@ -428,7 +366,7 @@ func newFleetServiceInstalledCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "service-installed",
 		Hidden: true,
-		Args:   cobra.NoArgs,
+		Args:   usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			manager, err := newFleetServiceManager()
 			if err != nil {
@@ -474,39 +412,134 @@ func reportFleetAction(cmd *cobra.Command, action fleet.Action) {
 	fmt.Fprintf(cmd.OutOrStdout(), "%s: %s: %s\n", prefix, action.Kind, detail)
 }
 
+type fleetStatusService interface {
+	Installed(context.Context) (bool, error)
+}
+
+type fleetStatusCommandDeps struct {
+	loadHome          func() (string, error)
+	loadConfig        func() (config.FleetConfig, error)
+	newServiceManager func() (fleetStatusService, error)
+	httpClient        *http.Client
+}
+
+type fleetServiceStatus struct {
+	EffectiveHome    string                `json:"effective_home"`
+	Address          string                `json:"address"`
+	ServiceInstalled bool                  `json:"service_installed"`
+	Running          bool                  `json:"running"`
+	Reachable        bool                  `json:"reachable"`
+	Process          *processmetrics.Usage `json:"process,omitempty"`
+	Problem          string                `json:"problem,omitempty"`
+}
+
+func defaultFleetStatusCommandDeps() fleetStatusCommandDeps {
+	return fleetStatusCommandDeps{
+		loadHome:   config.EffectiveHomeDir,
+		loadConfig: config.LoadHomeFleetConfig,
+		newServiceManager: func() (fleetStatusService, error) {
+			return newFleetServiceManager()
+		},
+		httpClient: &http.Client{Timeout: time.Second},
+	}
+}
+
 func newFleetStatusCmd(_ *persistentFlags) *cobra.Command {
+	return newFleetStatusCmdWithDeps(defaultFleetStatusCommandDeps())
+}
+
+func newFleetStatusCmdWithDeps(deps fleetStatusCommandDeps) *cobra.Command {
 	var format string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show every registered agent and its runtime health",
-		Args:  cobra.NoArgs,
+		Short: "Show Fleet service configuration and process health",
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if format != "table" && format != "json" {
 				return &usageError{msg: "juex fleet status: --format must be table or json"}
 			}
-			manager, err := newFleetManager()
+			home, err := deps.loadHome()
 			if err != nil {
 				return err
 			}
-			statuses, err := manager.Status(cmd.Context())
+			fleetConfig, err := deps.loadConfig()
 			if err != nil {
-				return mapFleetError(err)
+				return err
 			}
+			serviceManager, err := deps.newServiceManager()
+			if err != nil {
+				return err
+			}
+			installed, err := serviceManager.Installed(cmd.Context())
+			if err != nil {
+				return err
+			}
+			status := fleetServiceStatus{EffectiveHome: home, Address: fleetConfig.Addr, ServiceInstalled: installed}
+			probeFleetStatus(cmd.Context(), deps.httpClient, &status)
 			if format == "json" {
-				encoder := json.NewEncoder(cmd.OutOrStdout())
-				encoder.SetIndent("", "  ")
-				if err := encoder.Encode(statuses); err != nil {
-					return err
-				}
+				cmdPrintln(cmd, mustJSON(status))
 			} else {
-				renderFleetStatusTable(cmd, statuses)
+				fmt.Fprintf(cmd.OutOrStdout(), "effective_home:    %s\naddress:           %s\nservice_installed: %t\nrunning:           %t\nreachable:         %t\n", status.EffectiveHome, status.Address, status.ServiceInstalled, status.Running, status.Reachable)
+				if status.Process != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "rss_bytes:         %d\n", status.Process.RSSBytes)
+				}
+				if status.Problem != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "problem:           "+status.Problem)
+				}
 			}
-			reportFleetVersionSkew(cmd, statuses)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "table", "output format: table or json")
 	return cmd
+}
+
+func probeFleetStatus(ctx context.Context, client *http.Client, status *fleetServiceStatus) {
+	if status == nil {
+		return
+	}
+	addr := fleetProbeAddress(status.Address)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/api/fleet/status", nil)
+	if err != nil {
+		status.Problem = err.Error()
+		return
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		status.Problem = err.Error()
+		return
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		status.Problem = err.Error()
+		return
+	}
+	if response.StatusCode != http.StatusOK {
+		status.Problem = fmt.Sprintf("Fleet API returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
+		return
+	}
+	var payload struct {
+		Process processmetrics.Usage `json:"process"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		status.Problem = "decode Fleet status: " + err.Error()
+		return
+	}
+	status.Running = true
+	status.Reachable = true
+	status.Process = &payload.Process
+}
+
+func fleetProbeAddress(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func renderFleetStatusTable(cmd *cobra.Command, statuses []fleet.AgentStatus) {
@@ -573,225 +606,12 @@ func optionalStartedAt(status fleet.AgentStatus) string {
 	return status.StartedAt.Format("2006-01-02T15:04:05Z07:00")
 }
 
-func newFleetAddCmd(_ *persistentFlags) *cobra.Command {
-	var (
-		name      string
-		autostart bool
-		start     bool
-	)
-	cmd := &cobra.Command{
-		Use:   "add <path>",
-		Short: "Register an existing workspace as a resident agent",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := newFleetManager()
-			if err != nil {
-				return err
-			}
-			var nameOption *string
-			if cmd.Flags().Changed("name") {
-				nameOption = &name
-			}
-			var autostartOption *bool
-			if cmd.Flags().Changed("autostart") {
-				autostartOption = &autostart
-			}
-			result, err := manager.Add(cmd.Context(), fleet.AddOptions{
-				Workspace: args[0],
-				Name:      nameOption,
-				Autostart: autostartOption,
-				Start:     start,
-			})
-			if err != nil {
-				return mapFleetError(err)
-			}
-			action := "Registered"
-			if result.Created {
-				action = "Added"
-			}
-			fmt.Fprintf(
-				cmd.OutOrStdout(),
-				"%s %s %s: %s\n",
-				action,
-				result.Agent.ID,
-				result.Agent.Name,
-				result.Agent.RuntimeHealth,
-			)
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&name, "name", "", "agent display name")
-	cmd.Flags().BoolVar(&autostart, "autostart", false, "start the agent during fleet reconciliation")
-	cmd.Flags().BoolVar(&start, "start", false, "start the agent immediately after registration")
-	return cmd
-}
-
-func newFleetEnabledCmd(_ *persistentFlags, enabled bool) *cobra.Command {
-	action := "disable"
-	if enabled {
-		action = "enable"
-	}
-	return &cobra.Command{
-		Use:   action + " <agent>",
-		Short: strings.ToUpper(action[:1]) + action[1:] + " one resident agent",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := newFleetManager()
-			if err != nil {
-				return err
-			}
-			status, err := manager.SetEnabled(cmd.Context(), args[0], enabled)
-			if err != nil {
-				return mapFleetError(err)
-			}
-			fmt.Fprintf(
-				cmd.OutOrStdout(),
-				"%s %s: enabled=%t runtime=%s\n",
-				status.ID,
-				status.Name,
-				status.Enabled,
-				status.RuntimeHealth,
-			)
-			return nil
-		},
-	}
-}
-
-func newFleetRemoveCmd(_ *persistentFlags) *cobra.Command {
-	var yes bool
-	cmd := &cobra.Command{
-		Use:   "remove <agent>",
-		Short: "Permanently delete one registered agent and its state",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if !yes {
-				fmt.Fprintf(
-					cmd.OutOrStdout(),
-					"Permanently remove agent %q and delete all of its runtime state? [y/N] ",
-					args[0],
-				)
-				line, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-				if readErr != nil && strings.TrimSpace(line) == "" {
-					return readErr
-				}
-				answer := strings.ToLower(strings.TrimSpace(line))
-				if answer != "y" && answer != "yes" {
-					fmt.Fprintln(cmd.OutOrStdout(), "Cancelled; no agent state was deleted.")
-					return nil
-				}
-			}
-			manager, err := newFleetManager()
-			if err != nil {
-				return err
-			}
-			removed, err := manager.Remove(cmd.Context(), args[0], fleet.RemoveOptions{
-				SkipConfirmation: true,
-			})
-			if err != nil {
-				return mapFleetError(err)
-			}
-			fmt.Fprintf(
-				cmd.OutOrStdout(),
-				"Removed %s %s from %s.\n",
-				removed.ID,
-				removed.Name,
-				removed.Workspace,
-			)
-			return nil
-		},
-	}
-	cmd.Flags().BoolVar(&yes, "yes", false, "remove the agent without prompting")
-	return cmd
-}
-
-func newFleetLifecycleCmd(_ *persistentFlags, action string) *cobra.Command {
-	return &cobra.Command{
-		Use:   action + " <agent>",
-		Short: strings.ToUpper(action[:1]) + action[1:] + " one resident agent",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			manager, err := newFleetManager()
-			if err != nil {
-				return err
-			}
-			var status fleet.AgentStatus
-			var restartResult fleet.RestartResult
-			switch action {
-			case "start":
-				status, err = manager.Start(cmd.Context(), args[0])
-			case "stop":
-				status, err = manager.Stop(cmd.Context(), args[0])
-			case "restart":
-				restartResult, err = manager.Restart(cmd.Context(), args[0])
-				status = restartResult.AgentStatus
-			}
-			if err != nil {
-				return mapFleetError(err)
-			}
-			fmt.Fprintf(
-				cmd.OutOrStdout(),
-				"%s %s: %s",
-				status.ID,
-				status.Name,
-				status.RuntimeHealth,
-			)
-			if status.Endpoint != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), " at %s", status.Endpoint)
-			}
-			if action == "restart" {
-				resume := restartResult.Resume
-				switch {
-				case resume.Sent:
-					fmt.Fprint(cmd.OutOrStdout(), " resume=sent")
-				case resume.Required:
-					fmt.Fprint(cmd.OutOrStdout(), " resume=failed")
-				case resume.Error != "":
-					fmt.Fprint(cmd.OutOrStdout(), " resume=unknown")
-				default:
-					fmt.Fprint(cmd.OutOrStdout(), " resume=not-needed")
-				}
-				if resume.Error != "" {
-					fmt.Fprintf(cmd.OutOrStdout(), " warning=%s", resume.Error)
-				}
-			}
-			fmt.Fprintln(cmd.OutOrStdout())
-			return nil
-		},
-	}
-}
-
-func newFleetLogsCmd(_ *persistentFlags) *cobra.Command {
-	var lines int
-	cmd := &cobra.Command{
-		Use:   "logs <agent>",
-		Short: "Print a bounded tail of one agent's fleet log",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if lines < 1 || lines > 10_000 {
-				return &usageError{msg: "juex fleet logs: --lines must be between 1 and 10000"}
-			}
-			manager, err := newFleetManager()
-			if err != nil {
-				return err
-			}
-			body, err := manager.Logs(args[0], lines)
-			if err != nil {
-				return mapFleetError(err)
-			}
-			_, err = cmd.OutOrStdout().Write(body)
-			return err
-		},
-	}
-	cmd.Flags().IntVar(&lines, "lines", 200, "number of trailing log lines (1-10000)")
-	return cmd
-}
-
 func newFleetGCCmd(_ *persistentFlags) *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "gc",
 		Short: "Review and delete definitely orphaned agent state",
-		Args:  cobra.NoArgs,
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			manager, err := newFleetManager()
 			if err != nil {

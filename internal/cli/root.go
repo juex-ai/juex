@@ -16,7 +16,6 @@ import (
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/errorclass"
-	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -35,10 +34,9 @@ const (
 )
 
 const (
-	workspaceCommandGroupID = "workspace"
-	debugCommandGroupID     = "debug"
-	fleetCommandGroupID     = "fleet"
-	cliCommandGroupID       = "cli"
+	resourceCommandGroupID = "resources"
+	adminCommandGroupID    = "administration"
+	cliCommandGroupID      = "cli"
 )
 
 // Execute runs the root cobra command and returns the process exit code.
@@ -53,6 +51,9 @@ func Execute() int {
 	err := cmd.ExecuteContext(ctx)
 	if err == nil {
 		return ExitSuccess
+	}
+	if strings.HasPrefix(err.Error(), "unknown command ") {
+		err = &usageError{msg: err.Error()}
 	}
 	alreadyEmitted := false
 	var emitted *emittedError
@@ -128,6 +129,15 @@ type dryRunOK struct{ msg string }
 
 func (d *dryRunOK) Error() string { return d.msg }
 
+func usageArgs(validate cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := validate(cmd, args); err != nil {
+			return &usageError{msg: err.Error()}
+		}
+		return nil
+	}
+}
+
 type emittedError struct{ err error }
 
 func (e *emittedError) Error() string {
@@ -145,14 +155,8 @@ func (e *emittedError) Unwrap() error {
 }
 
 type persistentFlags struct {
-	configPath                string
-	cwd                       string
-	agentID                   string
-	models                    string
-	enableUserAgentsResources string
-	debug                     bool
-	logLevel                  string
-	verbose                   bool
+	cwd     string
+	agentID string
 }
 
 type agentStatePolicy uint8
@@ -160,59 +164,17 @@ type agentStatePolicy uint8
 const (
 	agentStateNone agentStatePolicy = iota
 	agentStateExisting
-	agentStateMint
 )
 
-const agentStatePolicyAnnotation = "juex.ai/agent-state-policy"
-
-func declareAgentStatePolicy(cmd *cobra.Command, policy agentStatePolicy) {
-	if cmd.Annotations == nil {
-		cmd.Annotations = map[string]string{}
-	}
-	switch policy {
-	case agentStateNone:
-		cmd.Annotations[agentStatePolicyAnnotation] = "none"
-	case agentStateExisting:
-		cmd.Annotations[agentStatePolicyAnnotation] = "existing"
-	case agentStateMint:
-		cmd.Annotations[agentStatePolicyAnnotation] = "mint"
-	default:
-		panic(fmt.Sprintf("unsupported declared agent-state policy %d", policy))
-	}
-}
-
-func commandAgentStatePolicy(cmd *cobra.Command) (agentStatePolicy, error) {
-	for current := cmd; current != nil && current != cmd.Root(); current = current.Parent() {
-		value, ok := current.Annotations[agentStatePolicyAnnotation]
-		if !ok {
-			continue
-		}
-		switch value {
-		case "none":
-			return agentStateNone, nil
-		case "existing":
-			return agentStateExisting, nil
-		case "mint":
-			return agentStateMint, nil
-		default:
-			return agentStateNone, fmt.Errorf("juex: command %s declares unknown agent-state policy %q", cmd.CommandPath(), value)
-		}
-	}
-	return agentStateNone, fmt.Errorf("juex: command %s has no agent-state policy declaration", cmd.CommandPath())
-}
-
 func newRootCmd() *cobra.Command {
-	flags := &persistentFlags{}
 	var showVersion bool
 	cmd := &cobra.Command{
 		Use:   "juex",
 		Short: "Juex agent runtime",
 		Long: `Juex agent runtime.
 
-Agent, Thread, and troubleshooting commands resolve the workspace agent from
-the current directory or --cwd. juex fleet commands manage all agents
-registered under the effective $JUEX_HOME. CLI information commands do not
-operate on an agent.`,
+Fleet manages the resident supervisor. Agent commands manage registered
+workspace Agents. Thread commands operate through the selected Agent Runtime.`,
 		SilenceUsage:  true,
 		SilenceErrors: true, // Execute() prints errors itself so it can suppress dry-run sentinels
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -222,44 +184,15 @@ operate on an agent.`,
 			}
 			return cmd.Help()
 		},
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if isFleetCommand(cmd) {
-				for _, name := range []string{"cwd", "config", "models"} {
-					flag := cmd.Root().PersistentFlags().Lookup(name)
-					if flag != nil && flag.Changed {
-						return &usageError{msg: "juex fleet: --" + name + " is not supported; fleet commands use the effective JUEX_HOME registry"}
-					}
-				}
-			}
-			if flag := cmd.Root().PersistentFlags().Lookup("models"); flag != nil && flag.Changed && strings.TrimSpace(flags.models) == "" {
-				return &usageError{msg: "--models: at least one provider:model is required"}
-			}
-			if _, err := observability.ParseLevel(flags.logLevel); err != nil {
-				return &usageError{msg: "--log-level: " + err.Error()}
-			}
-			return nil
-		},
 	}
 	cmd.Flags().BoolVarP(&showVersion, "version", "v", false, "print version and exit")
-	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
-	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
-	cmd.PersistentFlags().StringVar(&flags.agentID, "agent-id", "", "load an existing Agent from the JUEX_HOME registry")
-	_ = cmd.PersistentFlags().MarkHidden("agent-id")
-	cmd.PersistentFlags().StringVar(&flags.models, "models", "", "ordered model override as comma-separated provider:model refs")
-	cmd.PersistentFlags().StringVar(&flags.enableUserAgentsResources, "enable-user-agents-resources", "", "enable personal ~/.agents resources (true/false or 1/0; default from config)")
-	if flag := cmd.PersistentFlags().Lookup("enable-user-agents-resources"); flag != nil {
-		flag.NoOptDefVal = "true"
-	}
-	// --verbose has no short form at root level so each subcommand can use
-	// -v locally (see version.go); cobra would otherwise conflict.
-	cmd.PersistentFlags().BoolVar(&flags.debug, "debug", false, "write detailed Thread logs, traces, spans, and tool summaries")
-	cmd.PersistentFlags().StringVar(&flags.logLevel, "log-level", "", "minimum Thread log level: debug, info, warn, or error (default info)")
-	cmd.PersistentFlags().BoolVar(&flags.verbose, "verbose", false, "stream runtime lifecycle events to stderr")
+	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return &usageError{msg: err.Error()}
+	})
 
 	cmd.AddGroup(
-		&cobra.Group{ID: workspaceCommandGroupID, Title: "Workspace agent (current directory)"},
-		&cobra.Group{ID: debugCommandGroupID, Title: "Troubleshooting (current directory)"},
-		&cobra.Group{ID: fleetCommandGroupID, Title: "Fleet (all agents under $JUEX_HOME)"},
+		&cobra.Group{ID: resourceCommandGroupID, Title: "Managed resources"},
+		&cobra.Group{ID: adminCommandGroupID, Title: "Administration"},
 		&cobra.Group{ID: cliCommandGroupID, Title: "About this CLI"},
 	)
 	cmd.SetHelpCommandGroupID(cliCommandGroupID)
@@ -270,39 +203,12 @@ operate on an agent.`,
 		}
 		cmd.AddCommand(commands...)
 	}
-	addGrouped(
-		workspaceCommandGroupID,
-		newSendCmd(flags),
-		newListenCmd(flags),
-		newThreadsCmd(flags),
-		newInitCmd(flags),
-	)
-	addGrouped(
-		debugCommandGroupID,
-		newDoctorCmd(flags),
-		newBundleCmd(flags),
-	)
-	addGrouped(fleetCommandGroupID, newFleetCmd(flags))
-	addGrouped(
-		cliCommandGroupID,
-		newVersionCmd(flags),
-	)
+	addGrouped(resourceCommandGroupID, newAgentCmd(), newThreadCmd())
+	addGrouped(adminCommandGroupID, newFleetCmd(nil), newConfigCmd(), newDiagnoseCmd(), newListenCmd(&persistentFlags{}))
+	addGrouped(cliCommandGroupID, newVersionCmd(nil))
+	cmd.InitDefaultHelpCmd()
+	cmd.InitDefaultCompletionCmd()
 	return cmd
-}
-
-func isFleetCommand(cmd *cobra.Command) bool {
-	for current := cmd; current != nil; current = current.Parent() {
-		if current.Name() == "fleet" {
-			return true
-		}
-	}
-	return false
-}
-
-// loadConfig preserves the historical durable-mint behavior for internal
-// callers that are not tied to a Cobra command.
-func loadConfig(flags *persistentFlags) (config.Config, error) {
-	return loadConfigWithPolicy(flags, agentStateMint)
 }
 
 func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (config.Config, error) {
@@ -310,11 +216,8 @@ func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (conf
 		cfg config.Config
 		err error
 	)
-	configPath := explicitConfigPath(flags)
 	var mode config.AgentStateMode
 	switch policy {
-	case agentStateMint:
-		mode = config.AgentStateMint
 	case agentStateExisting:
 		mode = config.AgentStateExisting
 	case agentStateNone:
@@ -325,38 +228,13 @@ func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (conf
 	cfg, err = config.LoadWithOptions(config.LoadOptions{
 		WorkDir:    flags.cwd,
 		AgentID:    flags.agentID,
-		ConfigPath: configPath,
-		ModelRefs:  modelsOverride(flags),
 		AgentState: mode,
 	})
 	if err != nil {
-		var modelErr *config.ModelsOverrideError
-		if errors.As(err, &modelErr) {
-			return cfg, &usageError{msg: "--models: " + err.Error()}
-		}
 		var noAgent *agentstate.NoAgentError
 		if errors.As(err, &noAgent) {
 			return cfg, &notFoundError{msg: noAgent.Error()}
 		}
-		return cfg, err
-	}
-	if flags != nil && flags.enableUserAgentsResources != "" {
-		enabled, err := config.ParseBoolValue(flags.enableUserAgentsResources)
-		if err != nil {
-			return cfg, &usageError{msg: "--enable-user-agents-resources: " + err.Error()}
-		}
-		cfg.EnableUserAgentsResources = enabled
-	}
-	return cfg, nil
-}
-
-func loadConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Config, error) {
-	policy, err := commandAgentStatePolicy(cmd)
-	if err != nil {
-		return config.Config{}, err
-	}
-	cfg, err := loadConfigWithPolicy(flags, policy)
-	if err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -367,11 +245,7 @@ type runtimeConfigLifecycle struct {
 }
 
 func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Config, *runtimeConfigLifecycle, error) {
-	policy, err := commandAgentStatePolicy(cmd)
-	if err != nil {
-		return config.Config{}, nil, err
-	}
-	cfg, err := loadConfigWithPolicy(flags, policy)
+	cfg, err := loadConfigWithPolicy(flags, agentStateExisting)
 	if err != nil {
 		return cfg, nil, err
 	}
@@ -400,20 +274,6 @@ func (lifecycle *runtimeConfigLifecycle) finish(cmd *cobra.Command, primary erro
 	return primary
 }
 
-func explicitConfigPath(flags *persistentFlags) string {
-	if flags == nil {
-		return ""
-	}
-	return flags.configPath
-}
-
-func modelsOverride(flags *persistentFlags) []string {
-	if flags == nil || strings.TrimSpace(flags.models) == "" {
-		return nil
-	}
-	return strings.Split(flags.models, ",")
-}
-
 // cmdPrintln is a small helper so subcommands always write to the cobra
 // command's stdout (which tests can capture via cmd.SetOut).
 func cmdPrintln(c *cobra.Command, s string) {
@@ -423,8 +283,4 @@ func cmdPrintln(c *cobra.Command, s string) {
 func mustJSON(v any) string {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	return string(b)
-}
-
-func configFileForPlan(flags *persistentFlags) string {
-	return explicitConfigPath(flags)
 }

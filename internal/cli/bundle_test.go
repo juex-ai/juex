@@ -24,7 +24,7 @@ func TestBundleCommandUsesThreadIdentity(t *testing.T) {
 	var stdout bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stdout)
-	root.SetArgs([]string{"-C", work, "bundle", "--thread", thread.MainID, "--out", out})
+	root.SetArgs([]string{"thread", "bundle", thread.MainID, "--cwd", work, "--out", out})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestBundleCommandReportsUnknownThread(t *testing.T) {
 	work := t.TempDir()
 	ensureTestWorkspaceAgent(t, work)
 	root := newRootCmd()
-	root.SetArgs([]string{"-C", work, "bundle", "--thread", "abcdef", "--out", filepath.Join(work, "debug.tar.gz")})
+	root.SetArgs([]string{"thread", "bundle", "abcdef", "--cwd", work, "--out", filepath.Join(work, "debug.tar.gz")})
 	err := root.Execute()
 	if _, ok := err.(*notFoundError); !ok {
 		t.Fatalf("error = %T %v, want notFoundError", err, err)

@@ -28,6 +28,15 @@ func (m *Manager) Status(ctx context.Context) ([]AgentStatus, error) {
 	return statuses, nil
 }
 
+// StatusOne resolves and inspects exactly one Agent without scanning the Fleet.
+func (m *Manager) StatusOne(ctx context.Context, selector string) (AgentStatus, error) {
+	entry, err := m.resolve(selector)
+	if err != nil {
+		return AgentStatus{}, err
+	}
+	return m.inspectStatus(ctx, entry), nil
+}
+
 func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEntry) AgentStatus {
 	status := AgentStatus{
 		ID:        entry.ID,

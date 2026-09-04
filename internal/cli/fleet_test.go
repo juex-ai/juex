@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/fleet"
@@ -43,31 +41,24 @@ func (f *fakeFleetServiceInstaller) Install(context.Context) (fleetservice.Regis
 	return f.registration, nil
 }
 
-type fakeFleetAgentRestarter struct {
-	result fleet.RestartAgentsResult
-	err    error
-	calls  int
+func setFleetTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", filepath.Join(home, "user-home"))
+	t.Setenv("USERPROFILE", filepath.Join(home, "user-home"))
+	t.Setenv("JUEX_HOME", home)
 }
 
-func (f *fakeFleetAgentRestarter) RestartRunningAgents(context.Context) (
-	fleet.RestartAgentsResult,
-	error,
-) {
-	f.calls++
-	return f.result, f.err
-}
-
-func TestFleetStatusDoesNotCreateWorkspaceIdentity(t *testing.T) {
+func TestAgentListDoesNotCreateWorkspaceIdentity(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 	t.Chdir(work)
 
 	root := newRootCmd()
 	var output bytes.Buffer
 	root.SetOut(&output)
 	root.SetErr(&output)
-	root.SetArgs([]string{"fleet", "status", "--format", "json"})
+	root.SetArgs([]string{"agent", "list", "--format", "json"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -96,17 +87,17 @@ func TestMapFleetErrorTreatsUnavailableLogAsNotFound(t *testing.T) {
 	}
 }
 
-func TestFleetStatusPreservesOrthogonalState(t *testing.T) {
+func TestAgentListPreservesOrthogonalState(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 	writeFleetAgentFixture(t, home, workspace, "aaaaaa", "alpha")
 
 	root := newRootCmd()
 	var output bytes.Buffer
 	root.SetOut(&output)
 	root.SetErr(&output)
-	root.SetArgs([]string{"fleet", "status", "--format", "json"})
+	root.SetArgs([]string{"agent", "list", "--format", "json"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -123,29 +114,10 @@ func TestFleetStatusPreservesOrthogonalState(t *testing.T) {
 	}
 }
 
-func TestFleetRejectsWorkspaceConfigAndModelOverrides(t *testing.T) {
-	for _, args := range [][]string{
-		{"-C", t.TempDir(), "fleet", "status"},
-		{"--config", filepath.Join(t.TempDir(), "juex.yaml"), "fleet", "status"},
-		{"--models", "openai:test", "fleet", "status"},
-	} {
-		root := newRootCmd()
-		root.SetArgs(args)
-		err := root.Execute()
-		var usage *usageError
-		if err == nil || !strings.Contains(err.Error(), "not supported") {
-			t.Fatalf("args %v error = %T %v, want unsupported usage error", args, err, err)
-		}
-		if _, ok := err.(*usageError); !ok {
-			t.Fatalf("args %v error = %T, want *usageError", args, usage)
-		}
-	}
-}
-
 func TestFleetGCConfirmationControlsDeletion(t *testing.T) {
 	home := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "missing-workspace")
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 	agentDir := writeFleetAgentFixture(t, home, workspace, "aaaaaa", "alpha")
 	if err := os.RemoveAll(workspace); err != nil {
 		t.Fatal(err)
@@ -180,14 +152,14 @@ func TestFleetGCConfirmationControlsDeletion(t *testing.T) {
 func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 
 	root := newRootCmd()
 	var output bytes.Buffer
 	root.SetOut(&output)
 	root.SetErr(&output)
 	root.SetArgs([]string{
-		"fleet", "add", workspace,
+		"agent", "add", workspace,
 		"--name", "alpha",
 		"--autostart",
 	})
@@ -221,9 +193,9 @@ func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 		output.Reset()
 		root.SetOut(&output)
 		root.SetErr(&output)
-		root.SetArgs([]string{"fleet", action.name, agentID})
+		root.SetArgs([]string{"agent", action.name, "--agent", agentID})
 		if err := root.Execute(); err != nil {
-			t.Fatalf("fleet %s: %v", action.name, err)
+			t.Fatalf("agent %s: %v", action.name, err)
 		}
 		entries, err = agentstate.ListRegistry(home)
 		if err != nil {
@@ -240,7 +212,7 @@ func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 	root.SetOut(&output)
 	root.SetErr(&output)
 	root.SetIn(strings.NewReader("n\n"))
-	root.SetArgs([]string{"fleet", "remove", agentID})
+	root.SetArgs([]string{"agent", "remove", "--agent", agentID})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +225,7 @@ func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 	root.SetOut(&output)
 	root.SetErr(&output)
 	root.SetIn(strings.NewReader("y\n"))
-	root.SetArgs([]string{"fleet", "remove", agentID})
+	root.SetArgs([]string{"agent", "remove", "--agent", agentID})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -263,15 +235,12 @@ func TestFleetAddEnableDisableAndRemove(t *testing.T) {
 	if _, err := os.Stat(workspace); err != nil {
 		t.Fatalf("confirmed remove changed workspace %s: %v", workspace, err)
 	}
-	if !strings.Contains(output.String(), "Removed") {
-		t.Fatalf("remove output = %q", output.String())
-	}
 }
 
-func TestFleetAddValidationMapsToUsageError(t *testing.T) {
-	t.Setenv("JUEX_HOME", t.TempDir())
+func TestAgentAddValidationMapsToUsageError(t *testing.T) {
+	setFleetTestHome(t, t.TempDir())
 	root := newRootCmd()
-	root.SetArgs([]string{"fleet", "add", "relative"})
+	root.SetArgs([]string{"agent", "add", "relative"})
 	err := root.Execute()
 	var usage *usageError
 	if !errors.As(err, &usage) {
@@ -291,14 +260,6 @@ func TestFleetHelpExposesCommandsAndFlags(t *testing.T) {
 	for _, want := range []string{
 		"serve",
 		"status",
-		"add",
-		"enable",
-		"disable",
-		"remove",
-		"start",
-		"stop",
-		"restart",
-		"logs",
 		"gc",
 		"install",
 		"uninstall",
@@ -322,99 +283,24 @@ func TestFleetHelpExposesCommandsAndFlags(t *testing.T) {
 	}
 
 	for _, test := range []struct {
-		command string
-		flag    string
+		path []string
+		flag string
 	}{
-		{command: "logs", flag: "--lines"},
-		{command: "gc", flag: "--yes"},
+		{path: []string{"agent", "logs"}, flag: "--lines"},
+		{path: []string{"fleet", "gc"}, flag: "--yes"},
 	} {
 		root = newRootCmd()
 		output.Reset()
 		root.SetOut(&output)
-		root.SetArgs([]string{"fleet", test.command, "--help"})
+		root.SetArgs(append(test.path, "--help"))
 		if err := root.Execute(); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(output.String(), test.flag) {
-			t.Fatalf("fleet %s help missing %q:\n%s", test.command, test.flag, output.String())
+			t.Fatalf("%v help missing %q:\n%s", test.path, test.flag, output.String())
 		}
 	}
 
-}
-
-func TestFleetHelpAdvertisesOnlyAcceptedInheritedFlags(t *testing.T) {
-	root := newRootCmd()
-	fleetCommand, _, err := root.Find([]string{"fleet"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	allRootFlags := []string{
-		"config",
-		"cwd",
-		"models",
-		"debug",
-		"enable-user-agents-resources",
-		"log-level",
-		"verbose",
-	}
-	forbidden := map[string]bool{"config": true, "cwd": true, "models": true}
-
-	var visit func(*cobra.Command)
-	visit = func(command *cobra.Command) {
-		t.Helper()
-		var help bytes.Buffer
-		root.SetOut(&help)
-		root.SetErr(&help)
-		if err := command.Help(); err != nil {
-			t.Fatalf("%s help: %v", command.CommandPath(), err)
-		}
-
-		for _, name := range allRootFlags {
-			inHelp := strings.Contains(help.String(), "--"+name)
-			if forbidden[name] && inHelp {
-				t.Errorf("%s advertises rejected flag --%s", command.CommandPath(), name)
-			}
-			if !forbidden[name] && !inHelp {
-				t.Errorf("%s omits accepted flag --%s", command.CommandPath(), name)
-			}
-		}
-
-		for _, child := range command.Commands() {
-			if child.Hidden || child.Name() == "help" || child.Name() == "completion" {
-				continue
-			}
-			visit(child)
-		}
-	}
-	visit(fleetCommand)
-
-	for _, commandName := range []string{
-		"send",
-		"listen",
-		"threads",
-		"init",
-		"bundle",
-		"doctor",
-	} {
-		command, _, err := root.Find([]string{commandName})
-		if err != nil {
-			t.Errorf("find %s: %v", commandName, err)
-			continue
-		}
-		var help bytes.Buffer
-		root.SetOut(&help)
-		root.SetErr(&help)
-		if err := command.Help(); err != nil {
-			t.Errorf("%s help: %v", command.CommandPath(), err)
-			continue
-		}
-		for name := range forbidden {
-			if !strings.Contains(help.String(), "--"+name) {
-				t.Errorf("%s help missing supported flag --%s after Fleet help rendering", commandName, name)
-			}
-		}
-	}
 }
 
 func TestFleetInstallRejectsUnstableOrMalformedAddressBeforeMutation(t *testing.T) {
@@ -473,7 +359,7 @@ func TestFleetServeRejectsMalformedAddressBeforeReconciliation(t *testing.T) {
 func TestFleetAddressPrecedenceUsesFlagThenHomeConfigThenDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 
 	cmd := newFleetServeCmd(nil)
 	settings, err := resolveFleetServeSettings(cmd, config.DefaultFleetAddr, false)
@@ -503,7 +389,7 @@ func TestFleetAddressPrecedenceUsesFlagThenHomeConfigThenDefault(t *testing.T) {
 }
 
 func TestFleetServeReadsPersistentUnsafeBindForEachInvocation(t *testing.T) {
-	t.Setenv("JUEX_HOME", t.TempDir())
+	setFleetTestHome(t, t.TempDir())
 	if _, err := config.SetHomeFleetSettings("0.0.0.0:6843", true); err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +424,7 @@ func TestFleetServeReadsPersistentUnsafeBindForEachInvocation(t *testing.T) {
 func TestFleetInstallUsesCurrentDefaultWithoutPersisting(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 	fleetCfg, err := config.LoadHomeFleetConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -569,7 +455,7 @@ func TestFleetInstallUsesCurrentDefaultWithoutPersisting(t *testing.T) {
 
 func TestFleetInstallRequiresExplicitUnsafeBindForNonLoopbackHomeConfig(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 	if _, err := config.SetHomeFleetSettings("0.0.0.0:6843", false); err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +500,7 @@ func TestFleetInstallRequiresExplicitUnsafeBindForNonLoopbackHomeConfig(t *testi
 
 func TestFleetInstallUsesPersistentUnsafeBindForNonLoopbackHomeConfig(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 	if _, err := config.SetHomeFleetSettings("0.0.0.0:6843", true); err != nil {
 		t.Fatal(err)
 	}
@@ -631,9 +517,6 @@ func TestFleetInstallUsesPersistentUnsafeBindForNonLoopbackHomeConfig(t *testing
 			managerCalls++
 			return service, nil
 		},
-		newAgentManager: func() (fleetAgentRestarter, error) {
-			return &fakeFleetAgentRestarter{}, nil
-		},
 	})
 
 	if err := cmd.Execute(); err != nil {
@@ -648,7 +531,7 @@ func TestFleetInstallUsesPersistentUnsafeBindForNonLoopbackHomeConfig(t *testing
 }
 
 func TestFleetInstallExplicitAddressDoesNotInheritHomeUnsafeBind(t *testing.T) {
-	t.Setenv("JUEX_HOME", t.TempDir())
+	setFleetTestHome(t, t.TempDir())
 	if _, err := config.SetHomeFleetSettings("0.0.0.0:6843", true); err != nil {
 		t.Fatal(err)
 	}
@@ -672,7 +555,7 @@ func TestFleetInstallExplicitAddressDoesNotInheritHomeUnsafeBind(t *testing.T) {
 
 func TestFleetInstallExplicitFlagsOverrideExistingServiceOptions(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 	fleetCfg, err := config.LoadHomeFleetConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -698,7 +581,7 @@ func TestFleetInstallExplicitFlagsOverrideExistingServiceOptions(t *testing.T) {
 }
 
 func TestFleetInstallReinstallsAfterReadingButIgnoringExistingDefinition(t *testing.T) {
-	t.Setenv("JUEX_HOME", t.TempDir())
+	setFleetTestHome(t, t.TempDir())
 	service := &fakeFleetServiceInstaller{
 		existing: fleetservice.InstalledServeOptions{
 			Addr:          "0.0.0.0:8181",
@@ -716,9 +599,6 @@ func TestFleetInstallReinstallsAfterReadingButIgnoringExistingDefinition(t *test
 		newServiceManager: func() (fleetServiceInstaller, error) {
 			managerCalls++
 			return service, nil
-		},
-		newAgentManager: func() (fleetAgentRestarter, error) {
-			return &fakeFleetAgentRestarter{}, nil
 		},
 	})
 
@@ -738,16 +618,13 @@ func TestFleetInstallReinstallsAfterReadingButIgnoringExistingDefinition(t *test
 }
 
 func TestFleetInstallRejectsUnreadableExistingDefinitionBeforeInstall(t *testing.T) {
-	t.Setenv("JUEX_HOME", t.TempDir())
+	setFleetTestHome(t, t.TempDir())
 	service := &fakeFleetServiceInstaller{
 		existingErr: errors.New("malformed existing definition"),
 	}
 	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
 		newServiceManager: func() (fleetServiceInstaller, error) {
 			return service, nil
-		},
-		newAgentManager: func() (fleetAgentRestarter, error) {
-			return &fakeFleetAgentRestarter{}, nil
 		},
 	})
 
@@ -766,7 +643,7 @@ func TestFleetInstallRejectsUnreadableExistingDefinitionBeforeInstall(t *testing
 
 func TestFleetInstallExplicitAddressPersistsThroughCommand(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("JUEX_HOME", home)
+	setFleetTestHome(t, home)
 	service := &fakeFleetServiceInstaller{
 		registration: fleetservice.Registration{
 			Platform:       fleetservice.PlatformLaunchd,
@@ -777,9 +654,6 @@ func TestFleetInstallExplicitAddressPersistsThroughCommand(t *testing.T) {
 	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
 		newServiceManager: func() (fleetServiceInstaller, error) {
 			return service, nil
-		},
-		newAgentManager: func() (fleetAgentRestarter, error) {
-			return &fakeFleetAgentRestarter{}, nil
 		},
 	})
 	cmd.SetArgs([]string{"--addr", "127.0.0.1:6844"})
@@ -793,144 +667,6 @@ func TestFleetInstallExplicitAddressPersistsThroughCommand(t *testing.T) {
 	}
 	if loaded.Addr != "127.0.0.1:6844" || !loaded.AddrConfigured {
 		t.Fatalf("home config = %+v", loaded)
-	}
-}
-
-func TestFleetInstallRestartAgentsFlagIsOptIn(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		args      []string
-		wantCalls int
-	}{
-		{name: "default", wantCalls: 0},
-		{name: "explicit", args: []string{"--restart-agents"}, wantCalls: 1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("JUEX_HOME", t.TempDir())
-			service := &fakeFleetServiceInstaller{
-				registration: fleetservice.Registration{
-					Platform:       fleetservice.PlatformLaunchd,
-					Name:           "dev.juex.fleet",
-					DefinitionPath: "/tmp/dev.juex.fleet.plist",
-				},
-			}
-			agents := &fakeFleetAgentRestarter{
-				result: fleet.RestartAgentsResult{
-					Items: []fleet.RestartAgentResult{{
-						Agent: fleet.AgentStatus{
-							ID:            "aaaaaa",
-							Name:          "alpha",
-							RuntimeHealth: fleet.RuntimeHealthy,
-						},
-						Outcome: fleet.RestartAgentRestarted,
-						Resume:  fleet.RestartResume{Required: true, Sent: true},
-					}},
-					Restarted: 1,
-				},
-			}
-			cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
-				newServiceManager: func() (fleetServiceInstaller, error) {
-					return service, nil
-				},
-				newAgentManager: func() (fleetAgentRestarter, error) {
-					return agents, nil
-				},
-			})
-			var output bytes.Buffer
-			cmd.SetOut(&output)
-			cmd.SetErr(&output)
-			cmd.SetArgs(test.args)
-
-			if err := cmd.Execute(); err != nil {
-				t.Fatal(err)
-			}
-			if service.installCalls != 1 || agents.calls != test.wantCalls {
-				t.Fatalf(
-					"install calls = %d, agent refresh calls = %d, want 1/%d",
-					service.installCalls,
-					agents.calls,
-					test.wantCalls,
-				)
-			}
-			if test.wantCalls == 1 {
-				for _, want := range []string{
-					"Agent aaaaaa alpha: restarted runtime=healthy resume=sent",
-					"Agent refresh: 1 restarted, 0 skipped, 0 failed.",
-				} {
-					if !strings.Contains(output.String(), want) {
-						t.Fatalf("output missing %q:\n%s", want, output.String())
-					}
-				}
-			}
-		})
-	}
-}
-
-func TestFleetInstallRestartAgentsRendersCompleteBatchBeforeReturningFailure(t *testing.T) {
-	t.Setenv("JUEX_HOME", t.TempDir())
-	service := &fakeFleetServiceInstaller{
-		registration: fleetservice.Registration{
-			Platform:       fleetservice.PlatformSystemd,
-			Name:           "juex-fleet.service",
-			DefinitionPath: "/tmp/juex-fleet.service",
-		},
-	}
-	agents := &fakeFleetAgentRestarter{
-		result: fleet.RestartAgentsResult{
-			Items: []fleet.RestartAgentResult{
-				{
-					Agent: fleet.AgentStatus{
-						ID:            "aaaaaa",
-						Name:          "failed",
-						RuntimeHealth: fleet.RuntimeHealthy,
-					},
-					Outcome: fleet.RestartAgentFailed,
-					Reason:  "shutdown failed",
-				},
-				{
-					Agent: fleet.AgentStatus{
-						ID:            "bbbbbb",
-						Name:          "continued",
-						RuntimeHealth: fleet.RuntimeHealthy,
-					},
-					Outcome: fleet.RestartAgentRestarted,
-					Resume: fleet.RestartResume{
-						Error: "status route unavailable",
-					},
-				},
-			},
-			Restarted: 1,
-			Failed:    1,
-		},
-		err: &fleet.RestartAgentsError{Failed: 1},
-	}
-	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
-		newServiceManager: func() (fleetServiceInstaller, error) {
-			return service, nil
-		},
-		newAgentManager: func() (fleetAgentRestarter, error) {
-			return agents, nil
-		},
-	})
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetErr(&output)
-	cmd.SetArgs([]string{"--restart-agents"})
-
-	err := cmd.Execute()
-	var aggregate *fleet.RestartAgentsError
-	if !errors.As(err, &aggregate) {
-		t.Fatalf("error = %T %v, want RestartAgentsError", err, err)
-	}
-	for _, want := range []string{
-		"Agent aaaaaa failed: failed",
-		"Agent bbbbbb continued: restarted",
-		"resume=unknown",
-		"Agent refresh: 1 restarted, 0 skipped, 1 failed.",
-	} {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("output missing %q:\n%s", want, output.String())
-		}
 	}
 }
 

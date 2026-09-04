@@ -10,9 +10,8 @@ import (
 	"github.com/juex-ai/juex/internal/bundle"
 )
 
-func newBundleCmd(flags *persistentFlags) *cobra.Command {
+func newThreadBundleCmd(selectors *agentSelectorFlags) *cobra.Command {
 	var (
-		threadID               string
 		outPath                string
 		format                 string
 		redact                 bool
@@ -21,17 +20,18 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 		includeWorktreeSummary bool
 	)
 	cmd := &cobra.Command{
-		Use:   "bundle --thread <id> --out <file.tar.gz>",
+		Use:   "bundle <thread> --out <file.tar.gz>",
 		Short: "Create a portable debug bundle for one thread",
-		Args:  cobra.NoArgs,
+		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if threadID == "" {
-				return &usageError{msg: "juex bundle: --thread required"}
-			}
 			if outPath == "" {
-				return &usageError{msg: "juex bundle: --out required"}
+				return &usageError{msg: "juex thread bundle: --out required"}
 			}
-			cfg, err := loadConfigForCommand(cmd, flags)
+			_, state, err := resolveSelectedAgent(selectors)
+			if err != nil {
+				return err
+			}
+			cfg, err := loadSelectedAgentConfig(state)
 			if err != nil {
 				return err
 			}
@@ -41,7 +41,7 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 			}
 			result, err := bundle.Create(bundle.Options{
 				WorkDir:                cfg.WorkDir,
-				ThreadID:               threadID,
+				ThreadID:               args[0],
 				OutPath:                outPath,
 				Redact:                 redact,
 				Force:                  force,
@@ -71,13 +71,11 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&threadID, "thread", "", "thread id to bundle")
 	cmd.Flags().StringVar(&outPath, "out", "", "output .tar.gz path")
 	cmd.Flags().StringVar(&format, "format", "json", "json|text")
 	cmd.Flags().BoolVar(&redact, "redact", true, "redact secret-like values from bundled text files")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing output path")
 	cmd.Flags().BoolVar(&includeMedia, "include-media", false, "include Agent-managed media files")
 	cmd.Flags().BoolVar(&includeWorktreeSummary, "include-worktree-summary", false, "include a worktree summary without file contents")
-	declareAgentStatePolicy(cmd, agentStateExisting)
 	return cmd
 }

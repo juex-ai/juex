@@ -871,12 +871,13 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
     home_config = pathlib.Path(env["JUEX_HOME"]) / "juex.yaml"
     shutil.copyfile(case_config, home_config)
     home_config.chmod(0o600)
+    register_managed_agent(ctx.juex_bin, case_dir, env)
     command = [
         ctx.juex_bin,
-        "-C",
-        str(case_dir),
-        "--enable-user-agents-resources=false",
+        "agent",
         "send",
+        "--cwd",
+        str(case_dir),
         "--wait",
         "--json",
         *args,
@@ -1101,8 +1102,15 @@ def isolated_provider_environment(ctx: ProviderSmokeContext, case_dir: pathlib.P
 
 def prepare_agent_observables_config(ctx: ProviderSmokeContext, case_dir: pathlib.Path) -> pathlib.Path:
     env = isolated_provider_environment(ctx, case_dir)
+    register_managed_agent(ctx.juex_bin, case_dir, env)
+    observables = agent_observables_config_path(case_dir, case_dir / "home" / ".juex")
+    observables.parent.mkdir(parents=True, exist_ok=True)
+    return observables
+
+
+def register_managed_agent(juex_bin: str, case_dir: pathlib.Path, env: dict[str, str]) -> None:
     completed = subprocess.run(
-        [ctx.juex_bin, "fleet", "add", str(case_dir)],
+        [juex_bin, "agent", "add", str(case_dir)],
         env=env,
         check=False,
         stdout=subprocess.PIPE,
@@ -1112,18 +1120,15 @@ def prepare_agent_observables_config(ctx: ProviderSmokeContext, case_dir: pathli
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or f"status {completed.returncode}"
-        raise RuntimeError(f"prepare schedule routing Agent state: {detail}")
-    observables = agent_observables_config_path(case_dir, case_dir / "home" / ".juex")
-    observables.parent.mkdir(parents=True, exist_ok=True)
-    return observables
+        raise RuntimeError(f"register managed Agent: {detail}")
 
 
 def stop_agent_runtime(juex_bin: str, work_dir: pathlib.Path, env: dict[str, str]) -> None:
-    """Best-effort cleanup for the resident Runtime started by `juex send`."""
+    """Best-effort cleanup for the resident Runtime started by `juex agent send`."""
     try:
         agent_id = agent_state_dir(work_dir, pathlib.Path(env["JUEX_HOME"])).name
         subprocess.run(
-            [juex_bin, "fleet", "stop", agent_id],
+            [juex_bin, "agent", "stop", "--agent", agent_id],
             env=env,
             check=False,
             stdout=subprocess.DEVNULL,
@@ -1327,23 +1332,25 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
     """Ask Juex to parse the complete source config without exposing diagnostics."""
     config_path = selection.resolved_path(config_path)
     with tempfile.TemporaryDirectory(prefix="juex-eval-config-check.") as work:
-        command = [juex_bin, "-C", work]
+        root = pathlib.Path(work)
+        workspace = root / "workspace"
+        workspace_config = workspace / ".juex" / "juex.yaml"
+        workspace_config.parent.mkdir(parents=True, mode=0o700)
+        workspace_config.write_text(
+            dump_yaml({"imports": [{"source": str(config_path)}]}),
+            encoding="utf-8",
+        )
+        workspace_config.chmod(0o600)
+        command = [juex_bin, "diagnose", "--cwd", str(workspace), "--offline", "--format", "json"]
         env = os.environ.copy()
         for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
             env.pop(name, None)
         if not env.get("CODEX_HOME", "").strip():
             env["CODEX_HOME"] = str(pathlib.Path.home() / ".codex")
-        default_home, effective_home = provider_home_dirs()
-        home_config_paths = {home / "juex.yaml" for home in (default_home, effective_home)}
-        isolated_user_home = pathlib.Path(work) / "home"
+        isolated_user_home = root / "home"
         env["HOME"] = str(isolated_user_home)
         env["USERPROFILE"] = str(isolated_user_home)
-        if config_path in home_config_paths:
-            env["JUEX_HOME"] = str(config_path.parent)
-        else:
-            env["JUEX_HOME"] = str(pathlib.Path(work) / "juex-home")
-            command.extend(["--config", str(config_path)])
-        command.extend(["doctor", "--offline", "--format", "json"])
+        env["JUEX_HOME"] = str(root / "juex-home")
         result = _run_source_config_validation(command, env)
     _require_valid_source_config(result)
 
@@ -1362,20 +1369,20 @@ def validate_source_layers(juex_bin: str | list[str], layers: list[SourceConfigL
         root = pathlib.Path(work)
         default_home = root / "home" / ".juex"
         effective_home = root / "juex-home"
-        explicit_dir = root / "explicit"
         workspace = root / "work"
-        for directory in (default_home, effective_home, explicit_dir, workspace):
+        workspace_config = workspace / ".juex"
+        for directory in (default_home, effective_home, workspace_config):
             directory.mkdir(parents=True, mode=0o700)
 
         paths = {
             "default-home": default_home / "juex.yaml",
             "effective-home": effective_home / "juex.yaml",
-            "explicit": explicit_dir / "juex.yaml",
+            "explicit": workspace_config / "juex.yaml",
         }
         for scope, layer in by_scope.items():
             _materialize_source_layer(layer, paths[scope])
 
-        command = [*_juex_validation_command(juex_bin), "-C", str(workspace)]
+        command = [*_juex_validation_command(juex_bin), "diagnose", "--cwd", str(workspace), "--offline", "--format", "json"]
         env = os.environ.copy()
         for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
             env.pop(name, None)
@@ -1384,9 +1391,6 @@ def validate_source_layers(juex_bin: str | list[str], layers: list[SourceConfigL
         env["HOME"] = str(root / "home")
         env["USERPROFILE"] = str(root / "home")
         env["JUEX_HOME"] = str(effective_home if "effective-home" in by_scope else default_home)
-        if "explicit" in by_scope:
-            command.extend(["--config", str(paths["explicit"])])
-        command.extend(["doctor", "--offline", "--format", "json"])
         result = _run_source_config_validation(command, env)
     _require_valid_source_config(result)
 

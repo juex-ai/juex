@@ -27,21 +27,22 @@ make build
 Initialize and validate configuration:
 
 ```bash
-juex init
-juex doctor
+juex config init
+juex agent add .
+juex diagnose
 ```
 
-Start the current Workspace Agent, then send Inputs from another shell:
+Start the managed Agent and send Inputs to its Main Thread:
 
 ```bash
-juex listen
-juex send "summarize this repository"
-juex send --wait "implement the next task"
+juex agent start
+juex agent send "summarize this repository"
+juex agent send --wait "implement the next task"
 ```
 
-`send` returns after durable acceptance. `send --wait` follows events until
-the Turn that consumes that Input settles. Start the Fleet UI with
-`juex fleet serve`.
+`agent send` returns after durable acceptance. `agent send --wait` follows
+events until the Turn that consumes that Input settles. Start the Fleet UI
+with `juex fleet serve`.
 
 ## Mental Model
 
@@ -65,12 +66,11 @@ See [DOMAIN.md](DOMAIN.md) for canonical terms and invariants.
 
 | Command | Purpose |
 | --- | --- |
-| `juex listen` | Serve the current Workspace Agent. |
-| `juex send` | Submit an Input, optionally following its consuming Turn. |
-| `juex threads` | Inspect and manage Worker Threads. |
-| `juex fleet` | Register, control, and serve resident Agents. |
-| `juex bundle` | Create a redacted diagnostic bundle. |
-| `juex init` / `juex doctor` | Create and validate configuration. |
+| `juex fleet` | Serve and inspect the resident Fleet supervisor. |
+| `juex agent` | Register Agents, control their lifecycle, and send Main Thread Inputs. |
+| `juex thread` | Inspect and manage Worker Threads, including debug bundles. |
+| `juex config` | Initialize Juex configuration. |
+| `juex diagnose` | Validate configuration and local runtime dependencies. |
 
 Command help is authoritative for flags and subcommands.
 
@@ -80,7 +80,7 @@ User configuration defaults to `~/.juex/juex.yaml`. Workspace configuration
 lives at `<WorkDir>/.juex/juex.yaml`. Each registered Agent has a sparse
 configuration overlay at `$JUEX_HOME/agents/<agent-id>/juex.yaml`. YAML layers
 load in that order, with a distinct `$JUEX_HOME/juex.yaml` between the user and
-Workspace layers; an explicit `--config` is a transient final override.
+Workspace layers.
 Personal and Workspace MCP definitions live under their respective
 `.agents/mcp.json` files. Saving Agent configuration through Fleet validates
 the complete chain atomically and restarts that Agent.

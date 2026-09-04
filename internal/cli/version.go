@@ -1,11 +1,8 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
-	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -16,60 +13,26 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "version",
-		Short: "Print build info; with --verbose also dump runtime context (workdir, config, provider)",
-		Args:  cobra.NoArgs,
+		Short: "Print Juex CLI build information",
+		Args:  usageArgs(cobra.NoArgs),
 		Example: `  juex version                  # short: "juex 0.0.1"
-  juex version --verbose        # multi-line: build + runtime context
-  juex version --json           # machine-readable`,
+	  juex version --verbose        # multi-line build metadata
+	  juex version --json           # machine-readable`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Either form of --verbose triggers runtime context. The local
-			// `-v` short binds to `verbose`; `--verbose` may bind to the
-			// root persistent flag (cobra resolves same-named flags to the
-			// closest declared one, which is undefined for our case), so
-			// honour both.
-			showRuntime := verbose || flags.verbose || jsonOut
+			showBuild := verbose
 			info := version.Build()
-			var runtimeEnvironment environment.Snapshot
-			if showRuntime {
-				// Soft-fail: if config can't load (missing override file, etc.) we
-				// still surface as much runtime context as we can. cfg's
-				// WorkDir / HomeAgentsDir come from Load() which only fails
-				// on os.Getwd, so they are usually populated even when the
-				// config override is missing.
-				cfg, _ := loadConfigForCommand(cmd, flags)
-				runtimeEnvironment = cfg.EnvironmentSnapshot()
-				info.WorkDir = cfg.WorkDir
-				info.ConfigFile = configFileForPlan(flags)
-				if cfg.ProviderID != "" || cfg.ProviderProtocol != "" {
-					if profile, err := cfg.ProviderProfile(); err == nil {
-						info.ProviderID = profile.ID
-						info.Protocol = string(profile.Protocol)
-					} else {
-						info.ProviderID = cfg.ProviderID
-						info.Protocol = cfg.ProviderProtocol
-					}
-				}
-				info.Model = cfg.Model
-				info.BaseURL = cfg.BaseURL
-			}
 			switch {
 			case jsonOut:
-				data, _, err := runtimeEnvironment.RedactConfiguredJSON([]byte(info.JSON()))
-				if err != nil {
-					return fmt.Errorf("redact version JSON: %w", err)
-				}
-				cmdPrintln(cmd, string(data))
-			case showRuntime:
-				data, _ := runtimeEnvironment.RedactConfiguredValues([]byte(info.Verbose()))
-				cmdPrintln(cmd, string(data))
+				cmdPrintln(cmd, info.JSON())
+			case showBuild:
+				cmdPrintln(cmd, info.Verbose())
 			default:
 				cmdPrintln(cmd, version.String())
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "include commit, build time, go version, runtime context")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON (implies runtime context)")
-	declareAgentStatePolicy(cmd, agentStateNone)
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "include commit, build time, Go version, and platform")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output build information as JSON")
 	return cmd
 }

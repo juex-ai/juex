@@ -12,32 +12,43 @@ import (
 	"github.com/juex-ai/juex/internal/thread"
 )
 
-func newThreadsCmd(flags *persistentFlags) *cobra.Command {
-	cmd := &cobra.Command{Use: "threads", Short: "Create, inspect, and manage Threads"}
-	cmd.AddCommand(
-		newThreadsCreateCmd(flags),
-		newThreadsListCmd(flags),
-		newThreadsShowCmd(flags),
-		newThreadsRenameCmd(flags),
-		newThreadMutationCmd(flags, "archive <thread>", "Archive an idle Worker Thread", "archive"),
-		newThreadMutationCmd(flags, "unarchive <thread>", "Restore an archived Worker Thread", "unarchive"),
-		newThreadMutationCmd(flags, "stop <thread>", "Cancel the active Turn in a Thread", "stop"),
-		newThreadsDeleteCmd(flags),
-	)
-	declareAgentStatePolicy(cmd, agentStateExisting)
+func newThreadCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "thread", Short: "Create, inspect, and manage Threads"}
+	children := []*cobra.Command{
+		withThreadSelectors(newThreadsCreateCmd),
+		withThreadSelectors(newThreadsListCmd),
+		withThreadSelectors(newThreadsShowCmd),
+		withThreadSelectors(newThreadsRenameCmd),
+		withThreadSelectors(func(selectors *agentSelectorFlags) *cobra.Command {
+			return newThreadMutationCmd(selectors, "archive <thread>", "Archive an idle Worker Thread", "archive")
+		}),
+		withThreadSelectors(func(selectors *agentSelectorFlags) *cobra.Command {
+			return newThreadMutationCmd(selectors, "unarchive <thread>", "Restore an archived Worker Thread", "unarchive")
+		}),
+		withThreadSelectors(func(selectors *agentSelectorFlags) *cobra.Command {
+			return newThreadMutationCmd(selectors, "stop <thread>", "Cancel the active Turn in a Thread", "stop")
+		}),
+		withThreadSelectors(newThreadsDeleteCmd),
+		withThreadSelectors(newThreadBundleCmd),
+		withThreadSelectors(newThreadSendCmd),
+	}
+	cmd.AddCommand(children...)
 	return cmd
 }
 
-func withAgentClient(cmd *cobra.Command, flags *persistentFlags, run func(*agentClient) error) error {
-	if err := rejectExplicitConfigForResidentCommand(flags); err != nil {
-		return err
-	}
-	cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags)
+func withThreadSelectors(build func(*agentSelectorFlags) *cobra.Command) *cobra.Command {
+	selectors := &agentSelectorFlags{}
+	cmd := build(selectors)
+	bindAgentSelectorFlags(cmd, selectors)
+	return cmd
+}
+
+func withAgentClient(cmd *cobra.Command, selectors *agentSelectorFlags, run func(*agentClient) error) error {
+	manager, state, err := resolveSelectedAgent(selectors)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = lifecycle.finish(cmd, nil) }()
-	client, err := connectAgent(cmd.Context(), cfg)
+	client, err := connectSelectedAgent(cmd.Context(), manager, state)
 	if err != nil {
 		return err
 	}
@@ -45,14 +56,14 @@ func withAgentClient(cmd *cobra.Command, flags *persistentFlags, run func(*agent
 	return run(client)
 }
 
-func newThreadsCreateCmd(flags *persistentFlags) *cobra.Command {
+func newThreadsCreateCmd(flags *agentSelectorFlags) *cobra.Command {
 	var alias string
 	var parent string
 	cmd := &cobra.Command{
-		Use:   "create [message...]",
+		Use:   "create",
 		Short: "Create a Worker Thread",
-		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withAgentClient(cmd, flags, func(client *agentClient) error {
 				parentEntry, err := client.resolveThread(cmd.Context(), parent, false)
 				if err != nil {
@@ -65,33 +76,25 @@ func newThreadsCreateCmd(flags *persistentFlags) *cobra.Command {
 					return err
 				}
 				cmdPrintln(cmd, mustJSON(created))
-				if message := strings.TrimSpace(strings.Join(args, " ")); message != "" {
-					var receipt sendReceipt
-					if err := client.doJSON(cmd.Context(), http.MethodPost, "/api/threads/"+created.ID+"/inputs", map[string]any{"prompt": message}, &receipt); err != nil {
-						return err
-					}
-					cmdPrintln(cmd, compactJSON(receipt))
-				}
 				return nil
 			})
 		},
 	}
 	cmd.Flags().StringVar(&alias, "alias", "", "Worker alias")
 	cmd.Flags().StringVar(&parent, "parent", thread.MainID, "active parent Thread id or alias")
-	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
 }
 
-func newThreadsListCmd(flags *persistentFlags) *cobra.Command {
+func newThreadsListCmd(flags *agentSelectorFlags) *cobra.Command {
 	var activeOnly, archivedOnly, all bool
 	var format string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List Threads from the Agent index",
-		Args:  cobra.NoArgs,
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if selected := countTrue(activeOnly, archivedOnly, all); selected > 1 {
-				return &usageError{msg: "juex threads list: pass only one of --active, --archived, or --all"}
+				return &usageError{msg: "juex thread list: pass only one of --active, --archived, or --all"}
 			}
 			return withAgentClient(cmd, flags, func(client *agentClient) error {
 				list, err := client.listThreads(cmd.Context())
@@ -152,10 +155,10 @@ func renderThreadsTable(cmd *cobra.Command, entries []thread.IndexEntry) {
 	}
 }
 
-func newThreadsShowCmd(flags *persistentFlags) *cobra.Command {
+func newThreadsShowCmd(flags *agentSelectorFlags) *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
-		Use: "show <thread>", Short: "Show Thread metadata and local paths", Args: cobra.ExactArgs(1),
+		Use: "show <thread>", Short: "Show Thread metadata and local paths", Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withAgentClient(cmd, flags, func(client *agentClient) error {
 				entry, err := client.resolveThread(cmd.Context(), args[0], true)
@@ -196,9 +199,9 @@ func renderThreadShow(cmd *cobra.Command, info thread.Info, jsonOut bool) {
 		info.TurnCount, info.PendingInputs, view["generation_journal"], view["scratchpad"])
 }
 
-func newThreadsRenameCmd(flags *persistentFlags) *cobra.Command {
+func newThreadsRenameCmd(flags *agentSelectorFlags) *cobra.Command {
 	return &cobra.Command{
-		Use: "rename <thread> <alias>", Short: "Rename a Worker Thread", Args: cobra.ExactArgs(2),
+		Use: "rename <thread> <alias>", Short: "Rename a Worker Thread", Args: usageArgs(cobra.ExactArgs(2)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withAgentClient(cmd, flags, func(client *agentClient) error {
 				result, err := client.renameThread(cmd.Context(), args[0], args[1])
@@ -224,9 +227,9 @@ func (client *agentClient) renameThread(ctx context.Context, selector, alias str
 	return result, nil
 }
 
-func newThreadMutationCmd(flags *persistentFlags, use, short, operation string) *cobra.Command {
+func newThreadMutationCmd(flags *agentSelectorFlags, use, short, operation string) *cobra.Command {
 	return &cobra.Command{
-		Use: use, Short: short, Args: cobra.ExactArgs(1),
+		Use: use, Short: short, Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withAgentClient(cmd, flags, func(client *agentClient) error {
 				entry, err := client.resolveThread(cmd.Context(), args[0], operation == "unarchive")
@@ -244,13 +247,13 @@ func newThreadMutationCmd(flags *persistentFlags, use, short, operation string) 
 	}
 }
 
-func newThreadsDeleteCmd(flags *persistentFlags) *cobra.Command {
+func newThreadsDeleteCmd(flags *agentSelectorFlags) *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
-		Use: "delete <thread>", Short: "Permanently delete an archived Worker Thread", Args: cobra.ExactArgs(1),
+		Use: "delete <thread>", Short: "Permanently delete an archived Worker Thread", Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
-				return &usageError{msg: "juex threads delete: --yes is required"}
+				return &usageError{msg: "juex thread delete: --yes is required"}
 			}
 			return withAgentClient(cmd, flags, func(client *agentClient) error {
 				entry, err := client.resolveThread(cmd.Context(), args[0], true)

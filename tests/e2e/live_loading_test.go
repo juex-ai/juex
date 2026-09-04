@@ -52,9 +52,9 @@ providers:
 
 	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
 
-	stdout, stderr, err := runAgentStateCommand(bin, home, work, "send", "--wait", "--json", "hello Main")
+	stdout, stderr, err := runAgentStateCommand(bin, home, work, "agent", "send", "--wait", "--json", "hello Main")
 	if err != nil {
-		t.Fatalf("juex send --wait: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		t.Fatalf("juex agent send --wait: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	if !strings.Contains(stdout, `"type":"input.terminal"`) || !strings.Contains(stdout, `"state":"succeeded"`) {
 		t.Fatalf("send output missing terminal success:\n%s", stdout)
@@ -71,18 +71,17 @@ providers:
 	}
 }
 
-func TestLiveBinary_EndpointOnlyListenHasNoExtraTCPListener(t *testing.T) {
+func TestLiveBinary_HiddenAgentRuntimeHasNoExtraTCPListener(t *testing.T) {
 	bin := buildJuex(t)
 	for _, test := range []struct {
 		name               string
-		args               []string
 		scannerUnavailable bool
 	}{
 		{name: "flagless"},
 		{name: "listener scanner unavailable", scannerUnavailable: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			process := startLiveListen(t, bin, test.args...)
+			process := startLiveListen(t, bin)
 			defer process.stop()
 
 			target, err := endpoint.Parse(process.runtime.Endpoint)
@@ -119,46 +118,6 @@ func TestLiveBinary_EndpointOnlyListenHasNoExtraTCPListener(t *testing.T) {
 	}
 }
 
-func TestLiveBinary_ExplicitListenTCPHasFriendlyPointer(t *testing.T) {
-	bin := buildJuex(t)
-	process := startLiveListen(t, bin, "--addr", "127.0.0.1:0")
-	defer process.stop()
-
-	target, err := endpoint.Parse(process.runtime.Endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tcpAddress := waitForListenTCPAddress(t, process.stdout)
-	assertProcessTCPListeners(t, process.cmd.Process.Pid, target, tcpAddress)
-
-	for path, want := range map[string]int{
-		"/healthz":          http.StatusOK,
-		"/":                 http.StatusOK,
-		"/some-browser-url": http.StatusOK,
-		"/api/not-a-route":  http.StatusNotFound,
-	} {
-		response, err := http.Get("http://" + tcpAddress + path)
-		if err != nil {
-			t.Fatalf("GET TCP %s: %v", path, err)
-		}
-		body, readErr := io.ReadAll(response.Body)
-		_ = response.Body.Close()
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		if response.StatusCode != want {
-			t.Fatalf("GET TCP %s status = %d, want %d: %s", path, response.StatusCode, want, body)
-		}
-		if want == http.StatusOK && path != "/healthz" {
-			for _, pointer := range []string{"agent JSON/SSE API", "no web UI", "juex fleet serve", "127.0.0.1:5839"} {
-				if !strings.Contains(string(body), pointer) {
-					t.Fatalf("GET TCP %s body missing %q:\n%s", path, pointer, body)
-				}
-			}
-		}
-	}
-}
-
 type lockedBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -185,7 +144,7 @@ type liveListenProcess struct {
 	once    sync.Once
 }
 
-func startLiveListen(t *testing.T, bin string, listenArgs ...string) *liveListenProcess {
+func startLiveListen(t *testing.T, bin string) *liveListenProcess {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -193,7 +152,7 @@ func startLiveListen(t *testing.T, bin string, listenArgs ...string) *liveListen
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configFile := filepath.Join(work, "juex.yaml")
+	configFile := filepath.Join(work, ".juex", "juex.yaml")
 	configBody := "models: [openai:test-model]\n" +
 		"providers:\n" +
 		"  - id: openai\n" +
@@ -201,11 +160,17 @@ func startLiveListen(t *testing.T, bin string, listenArgs ...string) *liveListen
 		"    api_key: test-key\n" +
 		"    models:\n" +
 		"      - id: test-model\n"
-	if err := os.WriteFile(configFile, []byte(configBody), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	commandArgs := append([]string{"-C", work, "--config", configFile, "listen"}, listenArgs...)
+	if err := os.WriteFile(configFile, []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandArgs := []string{"listen", "--agent-id", resolution.Agent.ID}
 	cmd := exec.Command(bin, commandArgs...)
 	cmd.Env = filteredEnv(
 		"HOME", "USERPROFILE", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
@@ -284,19 +249,6 @@ func waitForListenOutput(t *testing.T, output *lockedBuffer, want string) string
 	return ""
 }
 
-func waitForListenTCPAddress(t *testing.T, output *lockedBuffer) string {
-	t.Helper()
-	const prefix = "juex listen agent JSON/SSE API (no web UI) listening on http://"
-	body := waitForListenOutput(t, output, prefix)
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
-		}
-	}
-	t.Fatalf("listen output did not contain a parseable TCP address:\n%s", body)
-	return ""
-}
-
 var errProcessListenerScanUnavailable = errors.New("process TCP listener scan unavailable")
 
 func assertProcessTCPListeners(t *testing.T, pid int, endpointTarget endpoint.Target, additional ...string) {
@@ -342,7 +294,13 @@ func sameStringSet(left, right []string) bool {
 }
 
 func runAgentStateCommand(bin, home, work string, args ...string) (string, string, error) {
-	commandArgs := append([]string{"-C", work}, args...)
+	if _, stderr, err := runJuexHomeCommand(bin, home, "agent", "add", work); err != nil {
+		return "", stderr, err
+	}
+	commandArgs := append([]string(nil), args...)
+	if len(commandArgs) >= 2 && (commandArgs[0] == "agent" || commandArgs[0] == "thread") {
+		commandArgs = append([]string{commandArgs[0], commandArgs[1], "--cwd", work}, commandArgs[2:]...)
+	}
 	return runJuexHomeCommand(bin, home, commandArgs...)
 }
 

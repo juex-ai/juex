@@ -137,9 +137,9 @@ jobs:
             printf '%s\n' "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
           juex version
-          juex init --provider openai --model ci --api-key sk-ci-placeholder --skip-check --yes
+          juex config init --provider openai --model ci --api-key sk-ci-placeholder --skip-check --yes
           set +e
-          juex doctor --format json --offline > "${work}/doctor.json"
+          juex diagnose --format json --offline > "${work}/doctor.json"
           doctor_status=$?
           set -e
           cat "${work}/doctor.json"

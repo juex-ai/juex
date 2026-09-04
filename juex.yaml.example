@@ -1,4 +1,4 @@
-# Prefer `juex init` for first-run setup. Copy this template manually only when
+# Prefer `juex config init` for first-run setup. Copy this template manually only when
 # you want full control over .juex/juex.yaml in a workspace,
 # ~/.juex/juex.yaml as the shared base, or $JUEX_HOME/juex.yaml as a
 # non-default instance override. Instance config and state writes never modify
@@ -104,7 +104,7 @@ models:
 # Omit the entire sandbox section for the platform default. Linux and macOS
 # default to enabled with read-only host access outside the Workspace and
 # current AgentStateDir; Windows defaults to disabled. Network access remains
-# enabled. Linux requires bubblewrap; use `juex doctor` to verify the backend.
+# enabled. Linux requires bubblewrap; use `juex diagnose` to verify the backend.
 #
 # An explicit sandbox section starts from the same platform defaults and then
 # applies its fields. Set enabled: false or outside_workspace: read_write as an

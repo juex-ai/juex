@@ -113,15 +113,14 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 	}
 	body := out.String()
 	for _, want := range []string{
-		"Workspace agent (current directory)",
-		"Troubleshooting (current directory)",
-		"Fleet (all agents under $JUEX_HOME)",
+		"Managed resources",
+		"Administration",
 		"About this CLI",
-		"Create a user or workspace juex.yaml config (user by default)",
-		"listen",
-		"send",
-		"threads",
-		"bundle",
+		"agent",
+		"thread",
+		"config",
+		"diagnose",
+		"fleet",
 		"version",
 	} {
 		if !strings.Contains(body, want) {
@@ -133,9 +132,8 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 	}
 
 	wantGroups := []cobra.Group{
-		{ID: "workspace", Title: "Workspace agent (current directory)"},
-		{ID: "debug", Title: "Troubleshooting (current directory)"},
-		{ID: "fleet", Title: "Fleet (all agents under $JUEX_HOME)"},
+		{ID: "resources", Title: "Managed resources"},
+		{ID: "administration", Title: "Administration"},
 		{ID: "cli", Title: "About this CLI"},
 	}
 	groups := root.Groups()
@@ -149,15 +147,14 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 	}
 
 	wantCommandGroups := map[string]string{
-		"bundle":     "debug",
+		"agent":      "resources",
 		"completion": "cli",
-		"doctor":     "debug",
-		"fleet":      "fleet",
+		"config":     "administration",
+		"diagnose":   "administration",
+		"fleet":      "administration",
 		"help":       "cli",
-		"init":       "workspace",
-		"listen":     "workspace",
-		"send":       "workspace",
-		"threads":    "workspace",
+		"listen":     "administration",
+		"thread":     "resources",
 		"version":    "cli",
 	}
 	commands := root.Commands()
@@ -176,10 +173,10 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 func TestRootLongNamesWorkspaceFleetAndCLIScopes(t *testing.T) {
 	body := newRootCmd().Long
 	for _, want := range []string{
-		"current directory",
-		"juex fleet",
-		"$JUEX_HOME",
-		"CLI information commands",
+		"Fleet manages",
+		"Agent commands",
+		"Thread commands",
+		"selected Agent Runtime",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("root Long missing %q:\n%s", want, body)
@@ -196,20 +193,6 @@ func TestUnknownSubcommandIsError(t *testing.T) {
 	root.SetArgs([]string{"totally-bogus"})
 	if err := root.Execute(); err == nil {
 		t.Fatal("expected error for unknown command")
-	}
-}
-
-func TestPersistentFlagsParsedAtRoot(t *testing.T) {
-	// `juex --verbose run` should propagate verbose to the run command.
-	// We can't easily run `run` end-to-end here (no stub provider), but we
-	// can verify the flag is registered on the root and accepted.
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"--verbose", "version"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -237,89 +220,24 @@ func TestVersionCmd_JSONForm(t *testing.T) {
 	}
 }
 
-func TestVersionCmd_RedactsConfiguredRuntimeValues(t *testing.T) {
-	const configuredBaseURL = "https://version-configured-secret.example"
-
-	previous, existed := os.LookupEnv("PROVIDER_API_BASE")
-	if err := os.Unsetenv("PROVIDER_API_BASE"); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if existed {
-			_ = os.Setenv("PROVIDER_API_BASE", previous)
-		} else {
-			_ = os.Unsetenv("PROVIDER_API_BASE")
-		}
-	})
-
+func TestVersionCmdDoesNotLoadRuntimeConfig(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
-	if err := writeJuexConfigFile(
-		filepath.Join(work, ".juex", "juex.yaml"),
-		"openai",
-		"https://default.example",
-		"k",
-		"m",
-	); err != nil {
+	if err := writeTextFile(filepath.Join(work, ".juex", "juex.yaml"), ": malformed"); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTextFile(
-		filepath.Join(work, ".env"),
-		"PROVIDER_API_BASE="+configuredBaseURL+"\n",
-	); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(work)
 
-	for _, args := range [][]string{
-		{"-C", work, "version", "--json"},
-		{"-C", work, "version", "--verbose"},
-	} {
-		t.Run(args[len(args)-1], func(t *testing.T) {
-			root := newRootCmd()
-			var out bytes.Buffer
-			root.SetOut(&out)
-			root.SetErr(&out)
-			root.SetArgs(args)
-			if err := root.Execute(); err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(out.String(), configuredBaseURL) {
-				t.Fatalf("version output leaked configured value:\n%s", out.String())
-			}
-			if !strings.Contains(out.String(), "[REDACTED_ENV]") {
-				t.Fatalf("version output missing redaction marker:\n%s", out.String())
-			}
-		})
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"version", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("version loaded malformed runtime config: %v", err)
 	}
-}
-
-func TestLoadConfig_ModelFlagOverridesConfig(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := `models: [openai:gpt-default]
-providers:
-  - id: openai
-    base_url: https://openai.example
-    api_key: sk-openai
-    models:
-      - id: gpt-default
-  - id: anthropic
-    base_url: https://anthropic.example
-    api_key: sk-anthropic
-    models:
-      - id: claude-sonnet
-`
-	if err := writeTextFile(configPath, body); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := loadConfig(&persistentFlags{cwd: work, models: "anthropic:claude-sonnet"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.ProviderID != "anthropic" || cfg.BaseURL != "https://anthropic.example" || cfg.APIKey != "sk-anthropic" || cfg.Model != "claude-sonnet" {
-		t.Fatalf("cfg = %+v", cfg)
+	if !strings.Contains(out.String(), `"name": "juex"`) {
+		t.Fatalf("version output = %s", out.String())
 	}
 }
 
@@ -334,7 +252,7 @@ func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	root.SetErr(&stderr)
 	var stdout bytes.Buffer
 	root.SetOut(&stdout)
-	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	root.SetArgs([]string{"diagnose", "--cwd", work, "--format", "json", "--offline"})
 
 	err := root.Execute()
 	var doctorErr *doctorExitError
@@ -344,7 +262,7 @@ func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("doctor stderr = %q, want empty", stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "no agent is registered") {
+	if !strings.Contains(stdout.String(), "no Agent is registered") {
 		t.Fatalf("doctor output missing no-agent warning:\n%s", stdout.String())
 	}
 }
@@ -372,7 +290,7 @@ func TestDoctorInspectsExtensionDataDefaultsBeforeAgentCreation(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	root.SetArgs([]string{"diagnose", "--cwd", work, "--format", "json", "--offline"})
 	err := root.Execute()
 	var doctorErr *doctorExitError
 	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusWarn {
@@ -403,139 +321,12 @@ func TestDoctorAgentCheckReportsUnregisteredWorkspace(t *testing.T) {
 	if check.Status != doctorStatusWarn {
 		t.Fatalf("status = %q, want %q", check.Status, doctorStatusWarn)
 	}
-	if !strings.Contains(check.Message, "no agent is registered") {
+	if !strings.Contains(check.Message, "no Agent is registered") {
 		t.Fatalf("message = %q, want no-agent explanation", check.Message)
 	}
-	const want = "run juex send or listen to create a durable workspace agent"
+	const want = "run juex agent add <workspace> to register this Workspace"
 	if check.Suggestion != want {
 		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
-	}
-}
-
-func TestLoadConfig_ModelsFlagUsesUserGlobalProvidersFromEmptyWorkdir(t *testing.T) {
-	home := setHomeForCLITest(t)
-	work := t.TempDir()
-	body := `models: [openai:gpt-default]
-providers:
-  - id: openai
-    base_url: https://global.example
-    api_key: sk-global
-    models:
-      - id: gpt-default
-      - id: gpt-global
-  - id: anthropic
-    api_key: sk-anthropic
-    models:
-      - id: claude-global
-`
-	if err := writeTextFile(filepath.Join(home, ".juex", "juex.yaml"), body); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := loadConfig(&persistentFlags{cwd: work, models: "openai:gpt-global, anthropic:claude-global"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://global.example" || cfg.APIKey != "sk-global" || cfg.Model != "gpt-global" {
-		t.Fatalf("cfg = %+v", cfg)
-	}
-	chain, err := cfg.ModelChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(chain) != 2 || chain[0].Ref != "openai:gpt-global" || chain[1].Ref != "anthropic:claude-global" {
-		t.Fatalf("model chain = %+v", chain)
-	}
-}
-
-func TestLoadConfig_ModelsFlagRejectsUnknownModelAsUsageError(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := loadConfig(&persistentFlags{cwd: work, models: "openai:m,openai:missing"})
-	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--models:") || !strings.Contains(err.Error(), "models[1]") {
-		t.Fatalf("err = %T %v, want indexed usage error for --models", err, err)
-	}
-}
-
-func TestLoadConfig_ModelsFlagRejectsMalformedOrDuplicateRefsAsUsageError(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, raw := range []string{"openai/missing", "openai:m,,openai:m", "openai:m,openai:m"} {
-		_, err := loadConfig(&persistentFlags{cwd: work, models: raw})
-		var usageErr *usageError
-		if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--models:") {
-			t.Fatalf("models %q error = %T %v, want usage error", raw, err, err)
-		}
-	}
-}
-
-func TestRoot_LogLevelRejectsInvalidValue(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"--log-level", "chatty", "version"})
-	err := root.Execute()
-	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--log-level:") {
-		t.Fatalf("err = %T %v, want usage error for --log-level", err, err)
-	}
-}
-
-func TestLoadConfig_EnableUserAgentsResourcesFlagOverridesConfig(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	path := filepath.Join(work, ".juex", "juex.yaml")
-	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendTextFile(path, "enable_user_agents_resources: false\n"); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := loadConfig(&persistentFlags{cwd: work, enableUserAgentsResources: "1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.EnableUserAgentsResources {
-		t.Fatal("--enable-user-agents-resources=1 should override config false")
-	}
-
-	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendTextFile(path, "enable_user_agents_resources: true\n"); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err = loadConfig(&persistentFlags{cwd: work, enableUserAgentsResources: "0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.EnableUserAgentsResources {
-		t.Fatal("--enable-user-agents-resources=0 should override config true")
-	}
-}
-
-func TestLoadConfig_EnableUserAgentsResourcesFlagRejectsInvalidBool(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := loadConfig(&persistentFlags{cwd: work, enableUserAgentsResources: "maybe"})
-	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--enable-user-agents-resources") {
-		t.Fatalf("err = %T %v, want usage error for enable-user-agents-resources", err, err)
 	}
 }
 
@@ -549,6 +340,7 @@ func TestLoadRuntimeConfigForCommandActivatesAndRestoresEnvironment(t *testing.T
 	if err := appendTextFile(path, "environment:\n  variables:\n    JUEX_RUNTIME_ACTIVATION_TEST: configured\n"); err != nil {
 		t.Fatal(err)
 	}
+	cfg := ensureTestWorkspaceAgent(t, work)
 	original, originallySet := os.LookupEnv("JUEX_RUNTIME_ACTIVATION_TEST")
 	if err := os.Unsetenv("JUEX_RUNTIME_ACTIVATION_TEST"); err != nil {
 		t.Fatal(err)
@@ -562,42 +354,22 @@ func TestLoadRuntimeConfigForCommandActivatesAndRestoresEnvironment(t *testing.T
 	})
 
 	root := newRootCmd()
-	sendCmd, _, err := root.Find([]string{"send"})
+	listenCmd, _, err := root.Find([]string{"listen"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, lifecycle, err := loadRuntimeConfigForCommand(sendCmd, &persistentFlags{cwd: work})
+	_, lifecycle, err := loadRuntimeConfigForCommand(listenCmd, &persistentFlags{agentID: cfg.AgentID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := os.Getenv("JUEX_RUNTIME_ACTIVATION_TEST"); got != "configured" {
 		t.Fatalf("activated environment = %q", got)
 	}
-	if err := lifecycle.finish(sendCmd, nil); err != nil {
+	if err := lifecycle.finish(listenCmd, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := os.LookupEnv("JUEX_RUNTIME_ACTIVATION_TEST"); ok {
 		t.Fatal("runtime environment was not restored")
-	}
-}
-
-func TestSendExplicitConfigIsRejectedBeforeAgentMint(t *testing.T) {
-	home := setHomeForCLITest(t)
-	work := t.TempDir()
-	configPath := filepath.Join(work, "explicit.yaml")
-	if err := writeJuexConfigFile(configPath, "openai", "https://example.test", "key", "model"); err != nil {
-		t.Fatal(err)
-	}
-
-	root := newRootCmd()
-	root.SetArgs([]string{"-C", work, "--config", configPath, "send", "hello"})
-	err := root.Execute()
-	var usage *usageError
-	if !errors.As(err, &usage) || !strings.Contains(err.Error(), residentAgentConfigError) {
-		t.Fatalf("error = %T %v, want resident --config usage error", err, err)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("rejected send created Agent registry: %v", err)
 	}
 }
 
@@ -609,8 +381,8 @@ func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs([]string{
-		"-C", work,
-		"init",
+		"config", "init",
+		"--cwd", work,
 		"--scope", "workspace",
 		"--provider", "openai",
 		"--model", "gpt-4.1",
@@ -633,14 +405,14 @@ func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 			t.Fatalf("config missing %q:\n%s", want, body)
 		}
 	}
-	cfg, err := loadConfig(&persistentFlags{cwd: work})
+	cfg, err := config.LoadWithOptions(config.LoadOptions{WorkDir: work, AgentState: config.AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.ProviderID != "openai" || cfg.Model != "gpt-4.1" || cfg.APIKey != "sk-test" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
-	if !strings.Contains(out.String(), `juex send --wait "say hello"`) {
+	if !strings.Contains(out.String(), `juex agent send --wait "say hello"`) {
 		t.Fatalf("quickstart missing from output:\n%s", out.String())
 	}
 }
@@ -696,8 +468,8 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs([]string{
-		"-C", work,
-		"init",
+		"config", "init",
+		"--cwd", work,
 		"--scope", "workspace",
 		"--provider", "openai",
 		"--model", "gpt-new",
@@ -725,7 +497,9 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 			t.Fatalf("merge should not overwrite existing provider with %q:\n%s", forbidden, body)
 		}
 	}
-	cfg, err := loadConfig(&persistentFlags{cwd: work, models: "openai:gpt-new"})
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir: work, ModelRefs: []string{"openai:gpt-new"}, AgentState: config.AgentStateNone,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -809,8 +583,8 @@ func TestInitCmd_UserScopeIgnoresBrokenWorkspaceConfig(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs([]string{
-		"-C", work,
-		"init",
+		"config", "init",
+		"--cwd", work,
 		"--scope", "user",
 		"--provider", "openai",
 		"--model", "gpt-4.1",
@@ -896,7 +670,7 @@ func TestInitCmdUserScopeWritesOnlyEffectiveInstanceHome(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs([]string{
-		"init",
+		"config", "init",
 		"--scope", "user",
 		"--provider", "openai",
 		"--model", "gpt-4.1",
@@ -988,7 +762,7 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	}
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	root.SetArgs([]string{"diagnose", "--cwd", work, "--format", "json", "--offline"})
 	err = root.Execute()
 	var doctorErr *doctorExitError
 	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusWarn {
@@ -1061,7 +835,7 @@ func TestDoctorCmd_ReportsExtensionEnvironmentWithoutValues(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	root.SetArgs([]string{"diagnose", "--cwd", work, "--format", "json", "--offline"})
 	err := root.Execute()
 	var doctorErr *doctorExitError
 	if err != nil && !errors.As(err, &doctorErr) {
@@ -1280,7 +1054,7 @@ func TestDoctorCmdReportsMalformedDotenvWithoutPartialValues(t *testing.T) {
 	}
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	root.SetArgs([]string{"diagnose", "--cwd", work, "--format", "json", "--offline"})
 	err := root.Execute()
 	var doctorErr *doctorExitError
 	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusFail {
@@ -1382,7 +1156,7 @@ func TestDoctorCmd_JSONOfflineEmptyConfigFailsWithInitSuggestion(t *testing.T) {
 	work := t.TempDir()
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	root.SetArgs([]string{"diagnose", "--cwd", work, "--format", "json", "--offline"})
 	err := root.Execute()
 	var doctorErr *doctorExitError
 	if !errors.As(err, &doctorErr) {
@@ -1391,7 +1165,7 @@ func TestDoctorCmd_JSONOfflineEmptyConfigFailsWithInitSuggestion(t *testing.T) {
 	if doctorErr.status != doctorStatusFail {
 		t.Fatalf("doctor status = %q", doctorErr.status)
 	}
-	for _, want := range []string{`"status": "fail"`, "juex init"} {
+	for _, want := range []string{`"status": "fail"`, "juex config init"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out.String())
 		}
@@ -1491,107 +1265,6 @@ func setHomeForCLITest(t *testing.T) string {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex-home"))
 	return home
-}
-
-func TestListenCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
-	// Without --unsafe-bind-any, a non-loopback addr is a usage error.
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "listen", "--addr", "0.0.0.0:0"})
-	err := root.Execute()
-	if _, ok := err.(*usageError); !ok {
-		t.Fatalf("expected *usageError without --unsafe-bind-any, got %T: %v", err, err)
-	}
-
-	// With --unsafe-bind-any, the loopback check is skipped. We don't
-	// actually want to bind here, so we use a port that's almost
-	// certainly already in use to force srv.Run to error quickly with a
-	// bind failure (general error, not usage error). Pass an obviously
-	// unavailable address.
-	root2 := newRootCmd()
-	var out2 bytes.Buffer
-	root2.SetOut(&out2)
-	root2.SetErr(&out2)
-	root2.SetArgs([]string{"-C", dir, "--config", configFile, "listen", "--addr", "300.300.300.300:0", "--unsafe-bind-any"})
-	err2 := root2.Execute()
-	if err2 == nil {
-		t.Fatal("expected non-nil error from invalid bind address")
-	}
-	if _, ok := err2.(*usageError); ok {
-		t.Fatalf("expected non-usage error with --unsafe-bind-any, got *usageError: %v", err2)
-	}
-	// Confirm the warning was printed.
-	if !strings.Contains(out2.String(), "WARNING: --unsafe-bind-any") {
-		t.Errorf("expected stderr warning, got: %s", out2.String())
-	}
-}
-
-func TestListenCmdAddrDefaultIsEndpointOnly(t *testing.T) {
-	cmd := newListenCmd(&persistentFlags{})
-	flag := cmd.Flags().Lookup("addr")
-	if flag == nil {
-		t.Fatal("listen command has no --addr flag")
-	}
-	if flag.DefValue != "" {
-		t.Fatalf("--addr default = %q, want empty endpoint-only default", flag.DefValue)
-	}
-	if !strings.Contains(flag.Usage, "enables") {
-		t.Fatalf("--addr help does not explain TCP opt-in: %q", flag.Usage)
-	}
-}
-
-func TestValidateListenOptions(t *testing.T) {
-	tests := []struct {
-		name        string
-		addr        string
-		addrChanged bool
-		unsafe      bool
-		wantError   bool
-	}{
-		{name: "flagless"},
-		{name: "explicit TCP", addr: "127.0.0.1:9000", addrChanged: true},
-		{name: "unsafe without address", unsafe: true, wantError: true},
-		{name: "explicit empty address", addrChanged: true, wantError: true},
-		{name: "explicit whitespace address", addr: " ", addrChanged: true, wantError: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateListenOptions(test.addr, test.addrChanged, test.unsafe)
-			if (err != nil) != test.wantError {
-				t.Fatalf("error = %v, wantError = %v", err, test.wantError)
-			}
-			if err != nil {
-				var usage *usageError
-				if !errors.As(err, &usage) {
-					t.Fatalf("error = %T %v, want usageError", err, err)
-				}
-			}
-		})
-	}
-}
-
-func TestListenCmdRejectsInvalidListenerFlagCombinationsBeforeConfig(t *testing.T) {
-	for _, args := range [][]string{
-		{"listen", "--unsafe-bind-any"},
-		{"listen", "--addr="},
-	} {
-		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			root := newRootCmd()
-			root.SetArgs(args)
-			err := root.Execute()
-			var usage *usageError
-			if !errors.As(err, &usage) {
-				t.Fatalf("error = %T %v, want usageError", err, err)
-			}
-		})
-	}
 }
 
 func TestReportListenReadyIncludesEndpointSchemeAndFallback(t *testing.T) {
