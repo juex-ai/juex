@@ -229,6 +229,31 @@ test("formatObservationEventForDisplay preserves section-like MCP content", () =
   );
 });
 
+test("formatObservationEventForDisplay validates nested content before trimming spaces", () => {
+  const payload = "first line\nmeta:\nstill notification content   ";
+  const content = [
+    "MCP notification",
+    "server: wechat-wire",
+    "event_type: notification",
+    `content_bytes: ${Buffer.byteLength(payload)}`,
+    "content:",
+    payload,
+  ].join("\n");
+  const body = [
+    "Observable observation",
+    "observation_id: obs-trailing-space-content",
+    "observable_id: mcp:wechat-wire",
+    `content_bytes: ${Buffer.byteLength(content)}`,
+    "content:",
+    content,
+  ].join("\n");
+
+  assert.equal(
+    formatObservationEventForDisplay(body).preview,
+    "first line meta: still notification content",
+  );
+});
+
 test("formatObservationEventForDisplay preserves empty JSON content", () => {
   for (const content of ["", "   ", JSON.stringify({ content: "" })]) {
     const body = JSON.stringify({

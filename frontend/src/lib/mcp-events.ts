@@ -185,7 +185,7 @@ function parseObservationTextEnvelope(text: string): {
 
   return {
     observableID: lineValue(metadata, "observable_id"),
-    content: detail.slice(contentStart, contentEnd).trim(),
+    content: detail.slice(contentStart, contentEnd),
     detail,
     attachmentFooter: contentLength === null
       ? ""
@@ -257,16 +257,16 @@ function observationContentPreview(content: string): string {
   const trimmed = content.trim();
   if (!trimmed) return content;
 
-  const mcpContent = trimmed.startsWith("MCP notification")
-    ? boundedTextSection(trimmed, "content", "content_bytes") ??
-      namedTextSection(trimmed, "content", [
+  const mcpContent = content.startsWith("MCP notification")
+    ? boundedTextSection(content, "content", "content_bytes") ??
+      namedTextSection(content, "content", [
         "meta",
         "params",
         "attachments",
         "attachment_errors",
       ])
     : null;
-  const candidate = mcpContent?.trim() || trimmed;
+  const candidate = mcpContent === null ? trimmed : mcpContent.trim();
   const jsonContent = stringFieldIncludingEmpty(
     parseJSONRecord(candidate),
     "content",
