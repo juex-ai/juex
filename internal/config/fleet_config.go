@@ -27,7 +27,7 @@ type fleetFileConfig struct {
 
 func LoadHomeFleetConfig() (cfg FleetConfig, returnErr error) {
 	cfg = FleetConfig{Addr: DefaultFleetAddr}
-	resolution, err := resolveHomeConfigSources()
+	resolution, err := resolveHomeConfigSources("")
 	if err != nil {
 		return cfg, err
 	}

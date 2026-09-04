@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/thread"
 )
@@ -100,18 +101,13 @@ func sendAndWaitFailure(t *testing.T, bin, home, work string, args ...string) li
 
 func stopLiveAgent(t *testing.T, bin, home, work string) {
 	t.Helper()
-	markerBytes, err := os.ReadFile(filepath.Join(work, ".juex", "juex.local.json"))
+	resolution, err := agentstate.ResolveExisting(agentstate.Options{HomeDir: home, WorkDir: work})
 	if err != nil {
 		return
 	}
-	var marker struct {
-		AgentID string `json:"agent_id"`
-	}
-	if json.Unmarshal(markerBytes, &marker) == nil && marker.AgentID != "" {
-		stdout, stderr, err := runJuexHomeCommand(bin, home, "fleet", "stop", marker.AgentID)
-		if err != nil {
-			t.Errorf("stop live Agent %s: %v\nstdout:\n%s\nstderr:\n%s", marker.AgentID, err, stdout, stderr)
-		}
+	stdout, stderr, err := runJuexHomeCommand(bin, home, "fleet", "stop", resolution.Agent.ID)
+	if err != nil {
+		t.Errorf("stop live Agent %s: %v\nstdout:\n%s\nstderr:\n%s", resolution.Agent.ID, err, stdout, stderr)
 	}
 }
 

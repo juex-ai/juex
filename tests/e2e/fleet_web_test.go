@@ -32,8 +32,8 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
-	unknownWorkspace := filepath.Join(root, "unknown-marker")
-	for _, path := range []string{workspace, unknownWorkspace} {
+	unregisteredWorkspace := filepath.Join(root, "unregistered")
+	for _, path := range []string{workspace, unregisteredWorkspace} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -48,14 +48,6 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(unknownWorkspace, ".juex"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFleetE2EJSON(
-		t,
-		filepath.Join(unknownWorkspace, ".juex", "juex.local.json"),
-		map[string]string{"agent_id": "aaaaaa"},
-	)
 	environment := fleetWebEnvironment(home)
 	supervisor := startFleetSupervisor(t, binary, environment)
 	t.Cleanup(func() {
@@ -81,8 +73,8 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	for _, dir := range listing.Dirs {
 		registered[dir.Name] = dir.Registered
 	}
-	if registered["workspace"] || !registered["unknown-marker"] {
-		t.Fatalf("directory registration markers = %+v", registered)
+	if registered["workspace"] || registered["unregistered"] {
+		t.Fatalf("initial directory registration = %+v", registered)
 	}
 
 	createBody, err := json.Marshal(map[string]any{
@@ -108,6 +100,23 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 		added.Agent.Name != "managed" ||
 		added.Agent.RuntimeHealth != fleet.RuntimeHealthy {
 		t.Fatalf("created agent = %+v", added)
+	}
+	listing = fleetweb.DirectoryListing{}
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/api/fs/dirs?path="+url.QueryEscape(root),
+		"",
+		http.StatusOK,
+		&listing,
+	)
+	registered = make(map[string]bool, len(listing.Dirs))
+	for _, dir := range listing.Dirs {
+		registered[dir.Name] = dir.Registered
+	}
+	if !registered["workspace"] || registered["unregistered"] {
+		t.Fatalf("registry-backed directory registration = %+v", registered)
 	}
 	agentAddress, err := agentstate.NewAgentAddress(home, added.Agent.ID)
 	if err != nil {
@@ -137,20 +146,6 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	if repeated.Created || repeated.Agent.ID != added.Agent.ID {
 		t.Fatalf("idempotent add = %+v, first = %+v", repeated, added)
 	}
-
-	unknownBody, err := json.Marshal(map[string]string{"workspace": unknownWorkspace})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fleetWebJSON(
-		t,
-		client,
-		http.MethodPost,
-		baseURL+"/api/agents",
-		string(unknownBody),
-		http.StatusConflict,
-		nil,
-	)
 
 	var disabled fleet.AgentStatus
 	fleetWebJSON(
@@ -252,13 +247,8 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 		http.StatusBadRequest,
 		nil,
 	)
-	for _, path := range []string{
-		agentDir,
-		filepath.Join(workspace, ".juex", "juex.local.json"),
-	} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("rejected removal changed %s: %v", path, err)
-		}
+	if _, err := os.Stat(agentDir); err != nil {
+		t.Fatalf("rejected removal changed %s: %v", agentDir, err)
 	}
 
 	var removed fleet.RemovedAgent
@@ -275,13 +265,11 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 		t.Fatalf("removed agent = %+v", removed)
 	}
 	removedSuccessfully = true
-	for _, path := range []string{
-		agentDir,
-		filepath.Join(workspace, ".juex", "juex.local.json"),
-	} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("removed path still exists %s: %v", path, err)
-		}
+	if _, err := os.Stat(agentDir); !os.IsNotExist(err) {
+		t.Fatalf("removed path still exists %s: %v", agentDir, err)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("removed Agent changed Workspace %s: %v", workspace, err)
 	}
 	probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	probeErr := endpoint.Probe(probeCtx, runtimeState)
@@ -344,7 +332,12 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 		secondAgentID,
 	)
 	const configSecret = "fleet-web-config-secret-sentinel"
-	configPath := filepath.Join(workspace, ".juex", "juex.yaml")
+	workspaceConfigPath := filepath.Join(workspace, ".juex", "juex.yaml")
+	workspaceConfig := fleetWebConfig("old-model")
+	if err := os.WriteFile(workspaceConfigPath, workspaceConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := agentAddress.ConfigPath()
 	initialConfig := append(
 		fleetWebConfig("old-model"),
 		[]byte("environment:\n  variables:\n    SECRET_TOKEN: "+configSecret+"\n")...,
@@ -590,6 +583,13 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	if !strings.Contains(string(updatedRawConfig), configSecret) {
 		t.Fatalf("placeholder PUT did not retain the existing secret:\n%s", updatedRawConfig)
 	}
+	workspaceAfterUpdate, err := os.ReadFile(workspaceConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(workspaceAfterUpdate) != string(workspaceConfig) {
+		t.Fatalf("Agent config update changed Workspace config:\n%s", workspaceAfterUpdate)
+	}
 	secondRuntime := waitFleetRuntime(t, agentAddress)
 	if secondRuntime.InstanceID == firstRuntime.InstanceID {
 		t.Fatalf("config update reused runtime instance %q", secondRuntime.InstanceID)
@@ -688,6 +688,14 @@ func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {
 	agentID := "aaaaaa"
 	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 	writeFleetProviderConfig(t, workspace, provider.URL)
+	workspaceConfigPath := filepath.Join(workspace, ".juex", "juex.yaml")
+	workspaceConfig, err := os.ReadFile(workspaceConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentAddress.ConfigPath(), workspaceConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	environment := fleetE2EEnvironmentForProvider(
 		home,
 		"local-chat",
@@ -729,12 +737,12 @@ func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {
 		t.Fatal("original provider request did not start")
 	}
 
-	configPath := filepath.Join(workspace, ".juex", "juex.yaml")
+	configPath := agentAddress.ConfigPath()
 	configBody, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	updatedContent := string(configBody) + "\n# saved through Runtime Config\n"
+	updatedContent := string(configBody) + "\n# saved through Agent config\n"
 	requestBody, err := json.Marshal(map[string]string{"content": updatedContent})
 	if err != nil {
 		t.Fatal(err)
@@ -766,6 +774,13 @@ func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {
 	)
 	if newRuntime.PID == oldRuntime.PID {
 		t.Fatalf("config restart reused pid %d", newRuntime.PID)
+	}
+	workspaceAfterUpdate, err := os.ReadFile(workspaceConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(workspaceAfterUpdate) != string(workspaceConfig) {
+		t.Fatalf("Agent config update changed Workspace config:\n%s", workspaceAfterUpdate)
 	}
 	select {
 	case request := <-continuationRequests:

@@ -17,6 +17,7 @@ const (
 	configScopeDefaultHome configScope = iota
 	configScopeInstanceHome
 	configScopeWorkspace
+	configScopeAgent
 	configScopeExplicit
 )
 
@@ -32,19 +33,23 @@ func (s yamlConfigSource) hookSource() string {
 		return "home:default"
 	case configScopeInstanceHome:
 		return "home:instance"
+	case configScopeAgent:
+		return "agent"
 	default:
 		return "project"
 	}
 }
 
 func (s yamlConfigSource) requireHookTrust() bool {
-	return s.Scope == configScopeWorkspace || s.Scope == configScopeExplicit
+	return s.Scope == configScopeWorkspace || s.Scope == configScopeAgent || s.Scope == configScopeExplicit
 }
 
 func (s yamlConfigSource) environmentSource() environment.Source {
 	switch s.Scope {
 	case configScopeWorkspace:
 		return environment.SourceWorkspaceConfig
+	case configScopeAgent:
+		return environment.SourceAgentConfig
 	case configScopeExplicit:
 		return environment.SourceExplicitConfig
 	default:
@@ -66,7 +71,7 @@ type homeConfigResolution struct {
 	Sources           []yamlConfigSource
 }
 
-func resolveHomeConfigSources() (homeConfigResolution, error) {
+func resolveHomeConfigSources(effectiveHomeOverride string) (homeConfigResolution, error) {
 	userHome, err := os.UserHomeDir()
 	if err != nil {
 		return homeConfigResolution{}, fmt.Errorf("config: resolve user home: %w", err)
@@ -75,9 +80,17 @@ func resolveHomeConfigSources() (homeConfigResolution, error) {
 	if err != nil {
 		return homeConfigResolution{}, fmt.Errorf("config: resolve default JueX home: %w", err)
 	}
-	effectiveHome, err := agentstate.EffectiveHome()
-	if err != nil {
-		return homeConfigResolution{}, err
+	var effectiveHome string
+	if strings.TrimSpace(effectiveHomeOverride) == "" {
+		effectiveHome, err = agentstate.EffectiveHome()
+		if err != nil {
+			return homeConfigResolution{}, err
+		}
+	} else {
+		effectiveHome, err = canonicalHomeConfigDir(effectiveHomeOverride)
+		if err != nil {
+			return homeConfigResolution{}, fmt.Errorf("config: resolve effective JueX home: %w", err)
+		}
 	}
 	resolution := homeConfigResolution{
 		DefaultConfigPath: filepath.Join(defaultHome, "juex.yaml"),
@@ -217,6 +230,10 @@ func canonicalHomeConfigDir(path string) (string, error) {
 
 func workspaceYAMLSource(path string) yamlConfigSource {
 	return yamlConfigSource{Path: path, Scope: configScopeWorkspace, MissingOK: true}
+}
+
+func agentYAMLSource(path string) yamlConfigSource {
+	return yamlConfigSource{Path: path, Scope: configScopeAgent, MissingOK: true}
 }
 
 func explicitYAMLSource(path string) yamlConfigSource {

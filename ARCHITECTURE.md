@@ -47,6 +47,8 @@ locator. See [ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.md).
 
 | Package | Owns |
 | --- | --- |
+| `internal/agentstate` | Agent registry identity, canonical Workspace binding, Agent state addressing, and lifecycle metadata. |
+| `internal/config` | Layered YAML loading, scope validation, imports, environment projection, and atomic managed-config publication. |
 | `internal/jsonl` | Domain-neutral durable append, repair, forward iteration, and bounded reverse reads for JSONL files. |
 | `internal/thread` | Thread metadata, Agent index, Generation EventStore, timeline paging, archive, and delete. |
 | `internal/runtime` | Pending Input state, Input/Turn lifecycle, Provider loop, context projection, compaction, status, and Tool execution. |
@@ -69,6 +71,7 @@ Agent-owned persistence is rooted at `$JUEX_HOME/agents/<agent-id>/`:
 
 ```text
 agent.json
+juex.yaml
 threads.index.json
 threads/<thread-id>/
   thread.json
@@ -87,6 +90,19 @@ observables.json
 observables/
 extensions/
 ```
+
+`agent.json` is the registry authority for identity, canonical Workspace, and
+lifecycle metadata. Agent discovery by Workspace reads this registry; a Fleet
+launch selects an explicit Agent id and derives both Workspace and state paths
+from that record. The registry is also the read-only source used by the Fleet
+directory browser to mark registered Workspaces.
+
+Configuration loads as built-ins, default Home, distinct JUEX_HOME, Workspace,
+Agent, then an optional transient explicit override. Imports inherit the scope
+of the declaring layer. Agent `juex.yaml` uses the ordinary schema and merge
+rules, but cannot own Fleet settings. Fleet config updates validate the whole
+chain and publish the Agent file and remote-import cache atomically before
+restarting the selected Agent; Workspace configuration is unchanged.
 
 `thread.json` is authoritative for Thread identity, topology, lifecycle,
 timestamps, and the Context Generation registry. It also materializes bounded

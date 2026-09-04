@@ -137,7 +137,7 @@ func initTargetPath(scope, workDir string) (string, error) {
 		return filepath.Join(home, "juex.yaml"), nil
 	case "workspace", "project", "local":
 		paths := (config.Config{WorkDir: workDir}).RuntimePaths()
-		return paths.RuntimeConfigPath, nil
+		return paths.WorkspaceConfigPath, nil
 	default:
 		return "", &usageError{msg: "--scope must be user or workspace"}
 	}
@@ -503,7 +503,7 @@ func loadInitConfigForCheck(path, workDir string) (config.Config, error) {
 }
 
 func initConfigTargetScope(path, workDir string) string {
-	workspaceConfig := (config.Config{WorkDir: workDir}).RuntimePaths().RuntimeConfigPath
+	workspaceConfig := (config.Config{WorkDir: workDir}).RuntimePaths().WorkspaceConfigPath
 	if cleanPath(path) == cleanPath(workspaceConfig) {
 		return "workspace"
 	}

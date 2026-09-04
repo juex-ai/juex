@@ -344,11 +344,8 @@ func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("doctor stderr = %q, want empty", stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "no agent exists") {
+	if !strings.Contains(stdout.String(), "no agent is registered") {
 		t.Fatalf("doctor output missing no-agent warning:\n%s", stdout.String())
-	}
-	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("doctor created marker: %v", err)
 	}
 }
 
@@ -395,62 +392,21 @@ func TestDoctorInspectsExtensionDataDefaultsBeforeAgentCreation(t *testing.T) {
 	if checks["environment"].Details["extension_default_count"] != float64(1) {
 		t.Fatalf("environment details = %+v", checks["environment"].Details)
 	}
-	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("doctor created Agent marker: %v", err)
-	}
 }
 
-func TestDoctorAgentCheckExplainsStatefulRebind(t *testing.T) {
+func TestDoctorAgentCheckReportsUnregisteredWorkspace(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
-	resolution, err := agentstate.Resolve(agentstate.Options{WorkDir: work})
-	if err != nil {
-		t.Fatal(err)
-	}
-	moved := filepath.Join(filepath.Dir(work), "moved-workspace")
-	if err := os.Rename(work, moved); err != nil {
-		t.Fatal(err)
-	}
 
-	check := doctorAgentCheck(moved)
+	check := doctorAgentCheck(work)
 
-	if check.Status != doctorStatusFail {
-		t.Fatalf("status = %q, want %q", check.Status, doctorStatusFail)
+	if check.Status != doctorStatusWarn {
+		t.Fatalf("status = %q, want %q", check.Status, doctorStatusWarn)
 	}
-	if !strings.Contains(check.Message, resolution.Agent.ID) {
-		t.Fatalf("message = %q, want agent id %q", check.Message, resolution.Agent.ID)
+	if !strings.Contains(check.Message, "no agent is registered") {
+		t.Fatalf("message = %q, want no-agent explanation", check.Message)
 	}
-	const want = "run juex send or listen once to automatically rebind the workspace agent"
-	if check.Suggestion != want {
-		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
-	}
-}
-
-func TestDoctorAgentCheckExplainsCopiedWorkspaceMarker(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	resolution, err := agentstate.Resolve(agentstate.Options{WorkDir: work})
-	if err != nil {
-		t.Fatal(err)
-	}
-	copied := filepath.Join(filepath.Dir(work), "copied-workspace")
-	if err := os.MkdirAll(filepath.Join(copied, ".juex"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	marker, err := os.ReadFile(resolution.MarkerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(copied, ".juex", "juex.local.json"), marker, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	check := doctorAgentCheck(copied)
-
-	if check.Status != doctorStatusFail {
-		t.Fatalf("status = %q, want %q", check.Status, doctorStatusFail)
-	}
-	const want = "remove the copied workspace marker to mint a new identity"
+	const want = "run juex send or listen to create a durable workspace agent"
 	if check.Suggestion != want {
 		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
 	}
@@ -624,6 +580,27 @@ func TestLoadRuntimeConfigForCommandActivatesAndRestoresEnvironment(t *testing.T
 		t.Fatal("runtime environment was not restored")
 	}
 }
+
+func TestSendExplicitConfigIsRejectedBeforeAgentMint(t *testing.T) {
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	configPath := filepath.Join(work, "explicit.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.test", "key", "model"); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	root.SetArgs([]string{"-C", work, "--config", configPath, "send", "hello"})
+	err := root.Execute()
+	var usage *usageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), residentAgentConfigError) {
+		t.Fatalf("error = %T %v, want resident --config usage error", err, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected send created Agent registry: %v", err)
+	}
+}
+
 func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 	setHomeForCLITest(t)
 	root := newRootCmd()

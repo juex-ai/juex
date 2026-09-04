@@ -25,6 +25,6 @@ HTTP route、CLI 展示或原生 service 安装。
 - Restart 只有在 replacement 确认同一 Thread 和 interrupted/failed Turn 后，
   才能提交一次 continuation。Completed、cancelled 或 superseded work 不恢复。
 - Registry remove 与 orphan collection 在删除前锁定并重新校验精确目标。
-- Runtime config secret 在 Web boundary 脱敏。
+- Agent config secret 在 Web boundary 脱敏。
 
 具体 operation 与 error category 以导出接口和测试为准。

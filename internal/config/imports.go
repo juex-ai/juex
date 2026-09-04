@@ -28,7 +28,7 @@ const (
 	configImportMaxRedirects    = 3
 	configImportMaxCacheAge     = 7 * 24 * time.Hour
 	configImportCacheVersion    = 3
-	configImportJournalVersion  = 1
+	configImportJournalVersion  = 2
 	configImportJournalMaxBytes = 64 << 20
 	configImportJournalName     = ".publication-journal.json"
 )
@@ -647,10 +647,10 @@ type configImportCacheCommit struct {
 }
 
 type configImportCacheJournal struct {
-	Version   int                                `json:"version"`
-	State     string                             `json:"state"`
-	Entries   []configImportCacheJournalEntry    `json:"entries"`
-	Workspace *configImportWorkspaceJournalEntry `json:"workspace,omitempty"`
+	Version int                             `json:"version"`
+	State   string                          `json:"state"`
+	Entries []configImportCacheJournalEntry `json:"entries"`
+	Target  *configImportTargetJournalEntry `json:"target,omitempty"`
 }
 
 type configImportCacheJournalEntry struct {
@@ -660,7 +660,7 @@ type configImportCacheJournalEntry struct {
 	Existed      bool   `json:"existed"`
 }
 
-type configImportWorkspaceJournalEntry struct {
+type configImportTargetJournalEntry struct {
 	Path         string `json:"path"`
 	Previous     []byte `json:"previous,omitempty"`
 	PreviousMode uint32 `json:"previous_mode,omitempty"`
@@ -814,15 +814,15 @@ func beginConfigImportCachePublication(commits []configImportCacheCommit) (strin
 		return "", errors.New("config: import cache publication is empty")
 	}
 	homeDir := filepath.Dir(filepath.Dir(filepath.Dir(commits[0].record.cachePath)))
-	return beginConfigImportCachePublicationWithWorkspace(homeDir, commits, nil)
+	return beginConfigImportCachePublicationWithConfig(homeDir, commits, nil)
 }
 
-func beginConfigImportCachePublicationWithWorkspace(
+func beginConfigImportCachePublicationWithConfig(
 	homeDir string,
 	commits []configImportCacheCommit,
-	workspace *workspaceConfigSnapshot,
+	target *configFileSnapshot,
 ) (string, error) {
-	if len(commits) == 0 && workspace == nil {
+	if len(commits) == 0 && target == nil {
 		return "", errors.New("config: import cache publication is empty")
 	}
 	homeDir = strings.TrimSpace(homeDir)
@@ -835,12 +835,12 @@ func beginConfigImportCachePublicationWithWorkspace(
 		State:   configImportJournalPrepared,
 		Entries: make([]configImportCacheJournalEntry, 0, len(commits)),
 	}
-	if workspace != nil {
-		journal.Workspace = &configImportWorkspaceJournalEntry{
-			Path:         workspace.path,
-			Previous:     workspace.data,
-			PreviousMode: uint32(workspace.mode.Perm()),
-			Existed:      workspace.existed,
+	if target != nil {
+		journal.Target = &configImportTargetJournalEntry{
+			Path:         target.path,
+			Previous:     target.data,
+			PreviousMode: uint32(target.mode.Perm()),
+			Existed:      target.existed,
 		}
 	}
 	for _, commit := range commits {
@@ -919,14 +919,14 @@ func recoverConfigImportCachePublicationAt(path string) error {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore %s: %w", entry.CacheFile, restoreErr))
 			}
 		}
-		if journal.Workspace != nil {
-			workspace := workspaceConfigSnapshot{
-				path:    journal.Workspace.Path,
-				data:    journal.Workspace.Previous,
-				mode:    os.FileMode(journal.Workspace.PreviousMode),
-				existed: journal.Workspace.Existed,
+		if journal.Target != nil {
+			target := configFileSnapshot{
+				path:    journal.Target.Path,
+				data:    journal.Target.Previous,
+				mode:    os.FileMode(journal.Target.PreviousMode),
+				existed: journal.Target.Existed,
 			}
-			rollbackErr = errors.Join(rollbackErr, rollbackWorkspaceConfig(workspace))
+			rollbackErr = errors.Join(rollbackErr, rollbackConfigFile(target))
 		}
 		if rollbackErr != nil {
 			return rollbackErr
@@ -969,7 +969,7 @@ func readConfigImportCacheJournal(path string) (configImportCacheJournal, error)
 	}
 	if journal.Version != configImportJournalVersion ||
 		(journal.State != configImportJournalPrepared && journal.State != configImportJournalCommitted) ||
-		(len(journal.Entries) == 0 && journal.Workspace == nil) {
+		(len(journal.Entries) == 0 && journal.Target == nil) {
 		return configImportCacheJournal{}, errors.New("publication journal metadata is invalid")
 	}
 	seen := make(map[string]struct{}, len(journal.Entries))
@@ -985,14 +985,17 @@ func readConfigImportCacheJournal(path string) (configImportCacheJournal, error)
 			return configImportCacheJournal{}, errors.New("publication journal prior state is invalid")
 		}
 	}
-	if workspace := journal.Workspace; workspace != nil {
-		cleanPath := filepath.Clean(workspace.Path)
-		workspaceDir := filepath.Dir(cleanPath)
-		if !filepath.IsAbs(workspace.Path) || cleanPath != workspace.Path ||
-			filepath.Base(cleanPath) != "juex.yaml" || filepath.Base(workspaceDir) != ".juex" ||
-			workspace.PreviousMode > 0o777 ||
-			(!workspace.Existed && (len(workspace.Previous) != 0 || workspace.PreviousMode != 0)) {
-			return configImportCacheJournal{}, errors.New("publication journal workspace prior state is invalid")
+	if target := journal.Target; target != nil {
+		cleanPath := filepath.Clean(target.Path)
+		configDir := filepath.Dir(cleanPath)
+		homeDir := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+		workspaceTarget := filepath.Base(configDir) == ".juex"
+		agentTarget := filepath.Clean(filepath.Dir(configDir)) == filepath.Join(homeDir, "agents")
+		if !filepath.IsAbs(target.Path) || cleanPath != target.Path ||
+			filepath.Base(cleanPath) != "juex.yaml" || (!workspaceTarget && !agentTarget) ||
+			target.PreviousMode > 0o777 ||
+			(!target.Existed && (len(target.Previous) != 0 || target.PreviousMode != 0)) {
+			return configImportCacheJournal{}, errors.New("publication journal config target prior state is invalid")
 		}
 	}
 	return journal, nil
@@ -1199,7 +1202,6 @@ func cloneConfigForImport(cfg *Config) Config {
 	out.Skills.Exclude = append([]string(nil), cfg.Skills.Exclude...)
 	out.Modules = cloneModulePolicy(cfg.Modules)
 	out.Extensions.Allow = append([]string(nil), cfg.Extensions.Allow...)
-	out.AgentStateNotices = append([]string(nil), cfg.AgentStateNotices...)
 	out.shellConfig.Args = append([]string(nil), cfg.shellConfig.Args...)
 	out.providerConfigs = cloneProviderConfigs(cfg.providerConfigs)
 	out.environmentLayers = cloneEnvironmentLayers(cfg.environmentLayers)

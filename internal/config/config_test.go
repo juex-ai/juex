@@ -49,8 +49,8 @@ func TestLoadWithOptionsResolvesRuntimeEnvironmentPrecedenceAndMetadata(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.ExplicitRuntimeConfigPath(); got != explicitPath {
-		t.Fatalf("explicit runtime config path = %q, want %q", got, explicitPath)
+	if got := cfg.ExplicitConfigPath(); got != explicitPath {
+		t.Fatalf("explicit config path = %q, want %q", got, explicitPath)
 	}
 	snapshot := cfg.EnvironmentSnapshot()
 	for key, want := range map[string]string{
@@ -367,8 +367,8 @@ hooks:
 	if cfg.HomeJuexDir != canonicalDefaultHome {
 		t.Fatalf("effective home dir = %q, want %q", cfg.HomeJuexDir, canonicalDefaultHome)
 	}
-	if cfg.HomeRuntimeConfigPath() != filepath.Join(canonicalDefaultHome, "juex.yaml") ||
-		cfg.DefaultHomeRuntimeConfigPath() != filepath.Join(canonicalDefaultHome, "juex.yaml") {
+	if cfg.HomeConfigPath() != filepath.Join(canonicalDefaultHome, "juex.yaml") ||
+		cfg.DefaultHomeConfigPath() != filepath.Join(canonicalDefaultHome, "juex.yaml") {
 		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
 	}
 	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "once" {
@@ -1029,9 +1029,6 @@ runtime:
 	if err == nil || !strings.Contains(err.Error(), "runtime.max_iters") {
 		t.Fatalf("Load error = %v, want runtime.max_iters", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("unknown runtime key created an agent marker: %v", statErr)
-	}
 }
 
 func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
@@ -1328,7 +1325,7 @@ shell:
 	}
 }
 
-func TestLoad_DefaultRuntimeConfigPath(t *testing.T) {
+func TestLoad_DefaultWorkspaceConfigPath(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -1343,7 +1340,7 @@ func TestLoad_DefaultRuntimeConfigPath(t *testing.T) {
 	}
 }
 
-func TestLoad_RuntimeConfigPathWhenWorkDirIsDotJuex(t *testing.T) {
+func TestLoad_WorkspaceConfigPathWhenWorkDirIsDotJuex(t *testing.T) {
 	prepareConfigTest(t)
 	project := t.TempDir()
 	work := filepath.Join(project, ".juex")
@@ -1357,8 +1354,8 @@ func TestLoad_RuntimeConfigPathWhenWorkDirIsDotJuex(t *testing.T) {
 	if cfg.WorkDir != work {
 		t.Fatalf("WorkDir = %q, want %q", cfg.WorkDir, work)
 	}
-	if got, want := cfg.RuntimeConfigPath(), filepath.Join(work, "juex.yaml"); got != want {
-		t.Fatalf("RuntimeConfigPath = %q, want %q", got, want)
+	if got, want := cfg.WorkspaceConfigPath(), filepath.Join(work, "juex.yaml"); got != want {
+		t.Fatalf("WorkspaceConfigPath = %q, want %q", got, want)
 	}
 	if cfg.Model != "gpt-dot" || cfg.BaseURL != "https://dotjuex.example" {
 		t.Fatalf("cfg = %+v", cfg)
@@ -1685,12 +1682,12 @@ func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
 	if cfg.ObservablesConfigPath() != filepath.Join(cfg.AgentStateDir, "observables.json") {
 		t.Fatalf("observable config path = %q", cfg.ObservablesConfigPath())
 	}
-	if cfg.RuntimeConfigPath() != filepath.Join(workDir, ".juex", "juex.yaml") {
-		t.Fatalf("workspace config path = %q", cfg.RuntimeConfigPath())
+	if cfg.WorkspaceConfigPath() != filepath.Join(workDir, ".juex", "juex.yaml") {
+		t.Fatalf("workspace config path = %q", cfg.WorkspaceConfigPath())
 	}
-	if cfg.HomeRuntimeConfigPath() != filepath.Join(juexHome, "juex.yaml") ||
+	if cfg.HomeConfigPath() != filepath.Join(juexHome, "juex.yaml") ||
 		cfg.HomeExtensionsDir() != filepath.Join(juexHome, "extensions") {
-		t.Fatalf("home paths = config %q extensions %q", cfg.HomeRuntimeConfigPath(), cfg.HomeExtensionsDir())
+		t.Fatalf("home paths = config %q extensions %q", cfg.HomeConfigPath(), cfg.HomeExtensionsDir())
 	}
 	if cfg.HomeAgentsDir != filepath.Join(home, ".agents") {
 		t.Fatalf("HomeAgentsDir = %q, want existing user resource home", cfg.HomeAgentsDir)
@@ -1708,11 +1705,21 @@ func TestLoadForWorkDirDoesNotCreateIdentityBeforeConfigValidation(t *testing.T)
 	if _, err := LoadForWorkDir(workDir); err == nil {
 		t.Fatal("expected invalid config error")
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("marker exists before config validation: %v", err)
-	}
 	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("agent registry exists before config validation: %v", err)
+	}
+}
+
+func TestLoadForWorkDirDoesNotCreateIdentityBeforeSemanticValidation(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [missing:model]\n")
+
+	if _, err := LoadForWorkDir(workDir); err == nil {
+		t.Fatal("expected invalid model reference error")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("agent registry exists before semantic config validation: %v", err)
 	}
 }
 
@@ -1741,7 +1748,7 @@ func TestLoadWithOptionsAgentStateNoneDoesNotUseWorkspaceFallback(t *testing.T) 
 	}
 }
 
-func TestLoadWithOptionsExistingRequiresMarker(t *testing.T) {
+func TestLoadWithOptionsExistingRequiresRegisteredAgent(t *testing.T) {
 	home := prepareConfigTest(t)
 	workDir := filepath.Join(home, "workspace")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -1785,11 +1792,11 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 	if want := filepath.Join("/proj", ".juex", "threads.index.json"); cfg.ThreadIndexPath() != want {
 		t.Fatalf("history path = %q, want %q", cfg.ThreadIndexPath(), want)
 	}
-	if want := filepath.Join("/proj", ".juex", "juex.yaml"); cfg.RuntimeConfigPath() != want {
-		t.Fatalf("runtime config = %q, want %q", cfg.RuntimeConfigPath(), want)
+	if want := filepath.Join("/proj", ".juex", "juex.yaml"); cfg.WorkspaceConfigPath() != want {
+		t.Fatalf("workspace config = %q, want %q", cfg.WorkspaceConfigPath(), want)
 	}
-	if want := filepath.Join("/u", ".juex", "juex.yaml"); cfg.HomeRuntimeConfigPath() != want {
-		t.Fatalf("home runtime config = %q, want %q", cfg.HomeRuntimeConfigPath(), want)
+	if want := filepath.Join("/u", ".juex", "juex.yaml"); cfg.HomeConfigPath() != want {
+		t.Fatalf("home config = %q, want %q", cfg.HomeConfigPath(), want)
 	}
 	mcp := cfg.MCPConfigPaths()
 	wantUserMCP := filepath.Join("/u", ".agents", "mcp.json")
@@ -1820,14 +1827,14 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserAgentsResources: true}
-	if cfg.ThreadsDir() != "" || cfg.ThreadIndexPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
+	if cfg.ThreadsDir() != "" || cfg.ThreadIndexPath() != "" || cfg.WorkspaceConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
 	if cfg.ProjectExtensionsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty project extension dir: %q", cfg.ProjectExtensionsDir())
 	}
-	if cfg.HomeRuntimeConfigPath() != filepath.Join("/u", ".juex", "juex.yaml") {
-		t.Fatalf("home runtime config = %q", cfg.HomeRuntimeConfigPath())
+	if cfg.HomeConfigPath() != filepath.Join("/u", ".juex", "juex.yaml") {
+		t.Fatalf("home config = %q", cfg.HomeConfigPath())
 	}
 	if cfg.HomeExtensionsDir() != filepath.Join("/u", ".juex", "extensions") {
 		t.Fatalf("home extension dir = %q", cfg.HomeExtensionsDir())

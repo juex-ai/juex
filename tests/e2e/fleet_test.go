@@ -993,6 +993,10 @@ func waitFleetEnvironmentValue(t *testing.T, workDir, want string) {
 
 func writeFleetE2EAgent(t *testing.T, home, workspace, id string) agentstate.AgentAddress {
 	t.Helper()
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	agentAddress, err := agentstate.NewAgentAddress(home, id)
 	if err != nil {
 		t.Fatal(err)
@@ -1003,7 +1007,7 @@ func writeFleetE2EAgent(t *testing.T, home, workspace, id string) agentstate.Age
 	agent := agentstate.Agent{
 		ID:        id,
 		Name:      "fleet-e2e",
-		Workspace: workspace,
+		Workspace: canonicalWorkspace,
 		Enabled:   true,
 		Autostart: true,
 		CreatedAt: time.Now().UTC(),
@@ -1012,11 +1016,6 @@ func writeFleetE2EAgent(t *testing.T, home, workspace, id string) agentstate.Age
 	if err := os.MkdirAll(filepath.Join(workspace, ".juex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeFleetE2EJSON(
-		t,
-		filepath.Join(workspace, ".juex", "juex.local.json"),
-		agentstate.Marker{AgentID: id},
-	)
 	return agentAddress
 }
 

@@ -25,7 +25,7 @@ import (
 //
 // HomeAgentsDir hosts user-global resources (AGENTS.md, skills, mcp.json).
 // HomeJuexDir is the effective instance home and owns all writable state.
-// Runtime config may inherit from the read-only default-home config path.
+// Configuration may inherit from the read-only default-home config path.
 // WorkDir hosts work-local resources. Project AGENTS.md, skills, and mcp.json
 // live under .agents. Agent-owned runtime data lives under AgentStateDir.
 type Config struct {
@@ -58,20 +58,19 @@ type Config struct {
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool
 
-	HomeAgentsDir     string // ~/.agents (user-global resources)
-	HomeJuexDir       string // effective $JUEX_HOME instance root and only write target
-	WorkDir           string // explicit; defaults to os.Getwd()
-	AgentID           string
-	AgentName         string
-	AgentStateDir     string
-	AgentAddress      agentstate.AgentAddress
-	AgentStateNotices []string
-	agentStateLoaded  bool
+	HomeAgentsDir    string // ~/.agents (user-global resources)
+	HomeJuexDir      string // effective $JUEX_HOME instance root and only write target
+	WorkDir          string // explicit; defaults to os.Getwd()
+	AgentID          string
+	AgentName        string
+	AgentStateDir    string
+	AgentAddress     agentstate.AgentAddress
+	agentStateLoaded bool
 
-	shellConfig                  ShellConfig
-	providerConfigs              map[string]providerConfig
-	defaultHomeRuntimeConfigPath string
-	explicitRuntimeConfigPath    string
+	shellConfig           ShellConfig
+	providerConfigs       map[string]providerConfig
+	defaultHomeConfigPath string
+	explicitConfigPath    string
 
 	loadDotenv         bool
 	environmentLayers  []environment.Layer
@@ -95,6 +94,8 @@ const (
 
 type LoadOptions struct {
 	WorkDir    string
+	HomeDir    string
+	AgentID    string
 	ConfigPath string
 	ModelRefs  []string
 	AgentState AgentStateMode
@@ -383,19 +384,74 @@ const allowedThinkingEffortText = "low, medium, high, xhigh, max"
 //
 // YAML priority (later wins): defaults < ~/.juex/juex.yaml <
 // $JUEX_HOME/juex.yaml when distinct < <WorkDir>/.juex/juex.yaml (or
-// <WorkDir>/juex.yaml when WorkDir is .juex).
+// <WorkDir>/juex.yaml when WorkDir is .juex) < Agent juex.yaml < an explicit
+// --config override.
 // Runtime-environment priority is documented by internal/environment and the
 // architecture guide; config loading itself does not mutate os.Environ.
 func Load() (Config, error) {
 	return LoadForWorkDir("")
 }
 
-// LoadWithOptions loads runtime configuration with an explicit workspace
-// identity policy. AgentStateMint preserves the historical loader behavior.
+// LoadWithOptions loads runtime configuration with an explicit Workspace
+// identity policy. AgentStateMint creates a Registry entry only after the
+// effective configuration passes validation.
 func LoadWithOptions(opts LoadOptions) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(opts.WorkDir, opts.ConfigPath)
+	workDir := opts.WorkDir
+	var selectedAgent *agentstate.Resolution
+	mintAfterValidation := false
+	if strings.TrimSpace(opts.AgentID) != "" {
+		resolution, err := agentstate.ResolveByID(agentstate.Options{HomeDir: opts.HomeDir}, strings.TrimSpace(opts.AgentID))
+		if err != nil {
+			return Config{}, err
+		}
+		if strings.TrimSpace(workDir) != "" {
+			requested, err := filepath.Abs(workDir)
+			if err != nil {
+				return Config{}, fmt.Errorf("config: resolve requested workspace: %w", err)
+			}
+			same, err := sameConfigPath(requested, resolution.Agent.Workspace)
+			if err != nil {
+				return Config{}, fmt.Errorf("config: compare requested and registered workspace: %w", err)
+			}
+			if !same {
+				return Config{}, fmt.Errorf("config: agent %q is registered for workspace %s, not %s", resolution.Agent.ID, resolution.Agent.Workspace, requested)
+			}
+		}
+		workDir = resolution.Agent.Workspace
+		selectedAgent = &resolution
+	}
+	cfg, err := loadConfigFilesForWorkDir(workDir, opts.HomeDir, opts.ConfigPath)
 	if err != nil {
 		return cfg, err
+	}
+	if selectedAgent != nil || opts.AgentState != AgentStateNone {
+		var resolution agentstate.Resolution
+		if selectedAgent != nil {
+			resolution = *selectedAgent
+		} else {
+			switch opts.AgentState {
+			case AgentStateMint:
+				resolution, err = agentstate.ResolveExisting(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: cfg.WorkDir})
+				var noAgent *agentstate.NoAgentError
+				if errors.As(err, &noAgent) {
+					err = nil
+					mintAfterValidation = true
+				}
+			case AgentStateExisting:
+				resolution, err = agentstate.ResolveExisting(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: cfg.WorkDir})
+			default:
+				return cfg, fmt.Errorf("config: unsupported agent state mode %d", opts.AgentState)
+			}
+			if err != nil {
+				return cfg, closeConfigImportLoaderAfterError(&cfg, err)
+			}
+		}
+		if !mintAfterValidation {
+			bindAgentState(&cfg, resolution)
+			if err := applyYAMLFile(&cfg, agentYAMLSource(cfg.AgentConfigPath())); err != nil {
+				return cfg, err
+			}
+		}
 	}
 	if strings.TrimSpace(opts.ConfigPath) != "" {
 		if err := applyExplicitYAMLFile(&cfg, opts.ConfigPath); err != nil {
@@ -405,64 +461,56 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 		if err != nil {
 			return cfg, fmt.Errorf("config: resolve explicit path: %w", err)
 		}
-		cfg.explicitRuntimeConfigPath = filepath.Clean(absolute)
+		cfg.explicitConfigPath = filepath.Clean(absolute)
 	}
-	if err := finalizeConfigLoadWithAgentState(&cfg, opts.ModelRefs, true, opts.AgentState); err != nil {
+	if err := finalizeConfigLoad(&cfg, opts.ModelRefs, true, true, false); err != nil {
 		return cfg, err
+	}
+	if mintAfterValidation {
+		resolution, err := agentstate.Resolve(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: cfg.WorkDir})
+		if err != nil {
+			return cfg, err
+		}
+		if !resolution.Created {
+			reload := opts
+			reload.AgentID = resolution.Agent.ID
+			reload.AgentState = AgentStateExisting
+			return LoadWithOptions(reload)
+		}
+		bindAgentState(&cfg, resolution)
 	}
 	return cfg, nil
 }
 
 // LoadForWorkDir is Load with an explicit working directory.
 func LoadForWorkDir(workDir string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
-	if err != nil {
-		return cfg, err
-	}
-	if err := finalizeConfigLoad(&cfg, nil, true); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
+	return LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateMint})
 }
 
 // LoadForWorkDirForValidation loads and validates runtime configuration
 // without resolving or creating a workspace agent identity.
 func LoadForWorkDirForValidation(workDir string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
-	if err != nil {
-		return cfg, err
-	}
-	if err := finalizeConfigLoadForValidation(&cfg, nil, true); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
+	return LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
 }
 
 // LoadForWorkDirWithModelsOverride is LoadForWorkDir with an explicit ordered
 // model chain that wins over YAML and provider selector environment values.
 func LoadForWorkDirWithModelsOverride(workDir string, modelRefs []string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
+	return LoadWithOptions(LoadOptions{WorkDir: workDir, ModelRefs: modelRefs, AgentState: AgentStateMint})
+}
+
+func loadConfigFilesForWorkDir(workDir, homeDir string, explicitPaths ...string) (Config, error) {
+	cfg, err := loadUserConfigForWorkDir(workDir, homeDir, explicitPaths...)
 	if err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoad(&cfg, modelRefs, true); err != nil {
+	if err := applyYAMLFile(&cfg, workspaceYAMLSource(cfg.WorkspaceConfigPath())); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
-func loadConfigFilesForWorkDir(workDir string, explicitPaths ...string) (Config, error) {
-	cfg, err := loadUserConfigForWorkDir(workDir, explicitPaths...)
-	if err != nil {
-		return cfg, err
-	}
-	if err := applyYAMLFile(&cfg, workspaceYAMLSource(cfg.RuntimeConfigPath())); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
-}
-
-func loadUserConfigForWorkDir(workDir string, explicitPaths ...string) (Config, error) {
+func loadUserConfigForWorkDir(workDir, homeDir string, explicitPaths ...string) (Config, error) {
 	cfg := Config{
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
@@ -492,12 +540,12 @@ func loadUserConfigForWorkDir(workDir string, explicitPaths ...string) (Config, 
 	if home, err := os.UserHomeDir(); err == nil {
 		cfg.HomeAgentsDir = filepath.Join(home, ".agents")
 	}
-	homeConfig, err := resolveHomeConfigSources()
+	homeConfig, err := resolveHomeConfigSources(homeDir)
 	if err != nil {
 		return cfg, err
 	}
 	cfg.HomeJuexDir = homeConfig.EffectiveHomeDir
-	cfg.defaultHomeRuntimeConfigPath = homeConfig.DefaultConfigPath
+	cfg.defaultHomeConfigPath = homeConfig.DefaultConfigPath
 	loader := configImportLoaderFor(&cfg)
 	if err := loader.recoverConfigImportPublicationIfPresent(); err != nil {
 		cfg.importLoader = nil
@@ -520,69 +568,20 @@ func LoadFromFile(path string) (Config, error) {
 
 // LoadFromFileForWorkDir is LoadFromFile with an explicit working directory.
 func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir, path)
-	if err != nil {
-		return cfg, err
-	}
-	err = applyExplicitYAMLFile(&cfg, path)
-	if err != nil {
-		return cfg, err
-	}
-	if err := finalizeConfigLoad(&cfg, nil, true); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
+	return LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: path, AgentState: AgentStateMint})
 }
 
 // LoadFromFileForWorkDirForValidation is LoadFromFileForWorkDir without
 // resolving or creating a workspace agent identity.
 func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir, path)
-	if err != nil {
-		return cfg, err
-	}
-	if err := applyExplicitYAMLFile(&cfg, path); err != nil {
-		return cfg, err
-	}
-	if err := finalizeConfigLoadForValidation(&cfg, nil, true); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
+	return LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: path, AgentState: AgentStateNone})
 }
 
 // LoadFromFileForWorkDirWithModelsOverride is LoadFromFileForWorkDir with an
 // explicit ordered model chain that wins over YAML and provider selector
 // environment values.
 func LoadFromFileForWorkDirWithModelsOverride(path, workDir string, modelRefs []string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir, path)
-	if err != nil {
-		return cfg, err
-	}
-	err = applyExplicitYAMLFile(&cfg, path)
-	if err != nil {
-		return cfg, err
-	}
-	if err := finalizeConfigLoad(&cfg, modelRefs, true); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
-}
-
-func finalizeConfigLoad(cfg *Config, modelRefs []string, resolveAuth bool) error {
-	return finalizeConfigLoadWithAgentState(cfg, modelRefs, resolveAuth, AgentStateMint)
-}
-
-func finalizeConfigLoadForValidation(cfg *Config, modelRefs []string, resolveAuth bool) error {
-	return finalizeConfigLoadWithAgentState(cfg, modelRefs, resolveAuth, AgentStateNone)
-}
-
-func finalizeConfigLoadWithAgentState(
-	cfg *Config,
-	modelRefs []string,
-	resolveAuth bool,
-	agentStateMode AgentStateMode,
-) error {
-	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, agentStateMode, true, false)
+	return LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: path, ModelRefs: modelRefs, AgentState: AgentStateMint})
 }
 
 func finalizeConfigLoadForValidationRetainingImportCacheLock(
@@ -590,14 +589,13 @@ func finalizeConfigLoadForValidationRetainingImportCacheLock(
 	modelRefs []string,
 	resolveAuth bool,
 ) error {
-	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, AgentStateNone, false, true)
+	return finalizeConfigLoad(cfg, modelRefs, resolveAuth, false, true)
 }
 
-func finalizeConfigLoadWithAgentStateAndImportCache(
+func finalizeConfigLoad(
 	cfg *Config,
 	modelRefs []string,
 	resolveAuth bool,
-	agentStateMode AgentStateMode,
 	publishImportCache bool,
 	retainImportCacheLock bool,
 ) (loadErr error) {
@@ -641,7 +639,7 @@ func finalizeConfigLoadWithAgentStateAndImportCache(
 		}); err != nil {
 			return err
 		}
-		return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode, publishImportCache)
+		return finalizeLoadedConfig(cfg, resolveAuth, publishImportCache)
 	}
 	if err := resolveSelectedProvider(cfg); err != nil {
 		return err
@@ -649,7 +647,7 @@ func finalizeConfigLoadWithAgentStateAndImportCache(
 	if err := applyOSEnv(cfg); err != nil {
 		return err
 	}
-	return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode, publishImportCache)
+	return finalizeLoadedConfig(cfg, resolveAuth, publishImportCache)
 }
 
 type configuredEnvironmentError struct {
@@ -680,7 +678,7 @@ func redactConfiguredEnvironmentError(snapshot environment.Snapshot, err error) 
 	}
 }
 
-func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentStateMode, publishImportCache bool) error {
+func finalizeLoadedConfig(cfg *Config, resolveAuth bool, publishImportCache bool) error {
 	if err := resolveShellProfileForConfig(cfg); err != nil {
 		return err
 	}
@@ -695,36 +693,14 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentSta
 		}
 	}
 	cfg.agentStateLoaded = true
-	if agentStateMode == AgentStateNone {
-		return nil
-	}
-	var (
-		resolution agentstate.Resolution
-		err        error
-	)
-	switch agentStateMode {
-	case AgentStateMint:
-		resolution, err = agentstate.Resolve(agentstate.Options{
-			HomeDir: cfg.HomeJuexDir,
-			WorkDir: cfg.WorkDir,
-		})
-	case AgentStateExisting:
-		resolution, err = agentstate.ResolveExisting(agentstate.Options{
-			HomeDir: cfg.HomeJuexDir,
-			WorkDir: cfg.WorkDir,
-		})
-	default:
-		return fmt.Errorf("config: unsupported agent state mode %d", agentStateMode)
-	}
-	if err != nil {
-		return err
-	}
+	return nil
+}
+
+func bindAgentState(cfg *Config, resolution agentstate.Resolution) {
 	cfg.AgentID = resolution.Agent.ID
 	cfg.AgentName = resolution.Agent.Name
 	cfg.AgentStateDir = resolution.Address.StateDir()
 	cfg.AgentAddress = resolution.Address
-	cfg.AgentStateNotices = append([]string(nil), resolution.Notices...)
-	return nil
 }
 
 // EffectiveHomeDir returns JUEX_HOME when configured, otherwise ~/.juex.
@@ -778,25 +754,29 @@ func (c Config) MediaDir() string {
 	return c.RuntimePaths().MediaDir
 }
 
-// RuntimeConfigPath returns the work-local runtime config file path.
-func (c Config) RuntimeConfigPath() string {
-	return c.RuntimePaths().RuntimeConfigPath
+// WorkspaceConfigPath returns the project-authored Workspace config path.
+func (c Config) WorkspaceConfigPath() string {
+	return c.RuntimePaths().WorkspaceConfigPath
 }
 
-// ExplicitRuntimeConfigPath returns the absolute --config path that must be
-// reused when a client asks Fleet to start the resident Agent Runtime.
-func (c Config) ExplicitRuntimeConfigPath() string {
-	return c.explicitRuntimeConfigPath
+// AgentConfigPath returns the Fleet-managed sparse Agent overlay path.
+func (c Config) AgentConfigPath() string {
+	return c.RuntimePaths().AgentConfigPath
 }
 
-// HomeRuntimeConfigPath returns the effective instance runtime config path.
-func (c Config) HomeRuntimeConfigPath() string {
-	return c.RuntimePaths().HomeRuntimeConfigPath
+// ExplicitConfigPath returns the absolute non-persistent --config override.
+func (c Config) ExplicitConfigPath() string {
+	return c.explicitConfigPath
 }
 
-// DefaultHomeRuntimeConfigPath returns the shared default-home config path.
-func (c Config) DefaultHomeRuntimeConfigPath() string {
-	return c.RuntimePaths().DefaultHomeRuntimeConfigPath
+// HomeConfigPath returns the effective instance Home config path.
+func (c Config) HomeConfigPath() string {
+	return c.RuntimePaths().HomeConfigPath
+}
+
+// DefaultHomeConfigPath returns the shared default-home config path.
+func (c Config) DefaultHomeConfigPath() string {
+	return c.RuntimePaths().DefaultHomeConfigPath
 }
 
 // GlobalAgentsMDPath returns the user-global AGENTS.md path when user-global
@@ -864,14 +844,13 @@ func configImportLoaderFor(cfg *Config) *configImportLoader {
 }
 
 func applyExplicitYAMLFile(cfg *Config, path string) error {
-	// A workspace file is already the highest ordinary YAML layer, so naming it
-	// again through --config must not replay append-only values. A loaded Home
-	// file needs ordinary values from both its imports and declaring document
-	// replayed above the workspace, while append-only hooks/sandbox paths,
+	// A loaded file selected again through --config must replay overwrite-style
+	// values above every persistent layer. Append-only hooks/sandbox paths,
 	// durable Extension policy, and import bookkeeping remain single-instance.
-	defaultHomeSource := yamlConfigSource{Path: cfg.DefaultHomeRuntimeConfigPath(), Scope: configScopeDefaultHome}
+	// The Agent file is already the highest persistent layer and needs no replay.
+	defaultHomeSource := yamlConfigSource{Path: cfg.DefaultHomeConfigPath(), Scope: configScopeDefaultHome}
 	loadedSources := []yamlConfigSource{defaultHomeSource}
-	instanceHomeSource := yamlConfigSource{Path: cfg.HomeRuntimeConfigPath(), Scope: configScopeInstanceHome}
+	instanceHomeSource := yamlConfigSource{Path: cfg.HomeConfigPath(), Scope: configScopeInstanceHome}
 	if instanceHomeSource.Path != "" {
 		sameDefaultPath := false
 		var err error
@@ -885,8 +864,11 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 			loadedSources = append(loadedSources, instanceHomeSource)
 		}
 	}
-	if workspacePath := cfg.RuntimeConfigPath(); workspacePath != "" {
+	if workspacePath := cfg.WorkspaceConfigPath(); workspacePath != "" {
 		loadedSources = append(loadedSources, workspaceYAMLSource(workspacePath))
+	}
+	if agentPath := cfg.AgentConfigPath(); agentPath != "" {
+		loadedSources = append(loadedSources, agentYAMLSource(agentPath))
 	}
 	selectedSource := yamlConfigSource{}
 	for i := len(loadedSources) - 1; i >= 0; i-- {
@@ -920,7 +902,7 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 		}
 	}
 	if selectedSource.Path != "" {
-		if selectedSource.Scope == configScopeWorkspace {
+		if selectedSource.Scope == configScopeAgent {
 			return nil
 		}
 		applyErr := applyYAMLFileWithImportLoaderAndOptions(cfg, selectedSource, configImportLoaderFor(cfg), applyYAMLDataOptions{

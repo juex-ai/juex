@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -167,13 +166,4 @@ func (m *Manager) Remove(
 	}, nil
 }
 
-func registrationError(err error) error {
-	var (
-		unknown *agentstate.UnknownAgentError
-		copied  *agentstate.WorkspaceCopyError
-	)
-	if errors.As(err, &unknown) || errors.As(err, &copied) {
-		return &ConflictError{Reason: err.Error()}
-	}
-	return err
-}
+func registrationError(err error) error { return err }

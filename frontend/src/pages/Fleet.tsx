@@ -316,7 +316,7 @@ export function Fleet() {
           <div>
             <h2 className="text-sm font-semibold text-foreground">Agents</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              Lifecycle, registration, logs, and workspace configuration.
+              Lifecycle, registration, logs, and Agent configuration.
             </p>
           </div>
 

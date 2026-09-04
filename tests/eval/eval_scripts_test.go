@@ -1590,6 +1590,49 @@ func TestCompactionTurnIsolatesInheritedProviderRuntimeOverrides(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestProviderSmokeTurnUsesIsolatedHomeConfig(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"row = helper.MatrixRow('provider', 'model', 'openai', 'default', 'default', 'unset', 'provider:model')",
+		"captured = {}",
+		"original_run = helper.run_subprocess_with_timeout",
+		"def fake_run(command, timeout, **kwargs):",
+		"    captured['command'] = command",
+		"    captured['env'] = kwargs['env']",
+		"    kwargs['stdout'].write(b'{}\\n')",
+		"    return 0",
+		"helper.run_subprocess_with_timeout = fake_run",
+		"try:",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        case = Path(tmp) / 'case'",
+		"        case.mkdir()",
+		"        source = case / 'provider.juex.yaml'",
+		"        source.write_text('models: [provider:model]\\n', encoding='utf-8')",
+		"        ctx = helper.ProviderSmokeContext(row, '/fake/juex', {}, case, case / 'report', 'unit', 5, 0, str(case / 'codex'))",
+		"        assert helper.run_turn(ctx, case, source, 'turn1', ['hello']) == 0",
+		"        home_config = case / 'home' / '.juex' / 'juex.yaml'",
+		"        assert home_config.read_text(encoding='utf-8') == source.read_text(encoding='utf-8')",
+		"        assert home_config.stat().st_mode & 0o777 == 0o600",
+		"        assert '--config' not in captured['command'], captured['command']",
+		"        assert captured['command'] == ['/fake/juex', '-C', str(case), '--enable-user-agents-resources=false', 'send', '--wait', '--json', 'hello']",
+		"        assert captured['env']['HOME'] == str(case / 'home')",
+		"        assert captured['env']['JUEX_HOME'] == str(case / 'home' / '.juex')",
+		"finally:",
+		"    helper.run_subprocess_with_timeout = original_run",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestJuexSourceConfigValidationUsesCompleteConfigDoctor(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
@@ -2531,6 +2574,7 @@ func TestEvalProviderRetryBudgetExcludesContractFailures(t *testing.T) {
 	}
 
 	program := strings.Join([]string{
+		"import json",
 		"import tempfile",
 		"from pathlib import Path",
 		"from types import SimpleNamespace",
@@ -2569,7 +2613,9 @@ func TestEvalProviderRetryBudgetExcludesContractFailures(t *testing.T) {
 		"            calls.append(label)",
 		"            (case_dir / f'{label}.stdout.json').write_text('{\"thread_id\":\"0\"}\\n', encoding='utf-8')",
 		"            (case_dir / f'{label}.stderr.log').write_text('', encoding='utf-8')",
-		"            (case_dir / '.juex' / 'juex.local.json').write_text('{\"agent_id\":\"abcd23\"}\\n', encoding='utf-8')",
+		"            state = case_dir / 'home' / '.juex' / 'agents' / 'abcd23'",
+		"            state.mkdir(parents=True, exist_ok=True)",
+		"            (state / 'agent.json').write_text(json.dumps({'id': 'abcd23', 'workspace': str(case_dir.resolve())}), encoding='utf-8')",
 		"            return 0",
 		"        helper.run_turn = passing_turn",
 		"        helper.write_selected_config = lambda *args, **kwargs: None",
@@ -3413,10 +3459,11 @@ func TestEvalHelpersResolveAgentHomeThreads(t *testing.T) {
 		"from tests.eval.juex_eval import compaction, helper",
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp) / 'work'",
+		"    work.mkdir()",
 		"    juex_home = work / 'home' / '.juex'",
-		"    marker = work / '.juex' / 'juex.local.json'",
-		"    marker.parent.mkdir(parents=True)",
-		"    marker.write_text(json.dumps({'agent_id': 'abcd23'}), encoding='utf-8')",
+		"    state = juex_home / 'agents' / 'abcd23'",
+		"    state.mkdir(parents=True)",
+		"    (state / 'agent.json').write_text(json.dumps({'id': 'abcd23', 'workspace': str(work.resolve())}), encoding='utf-8')",
 		"    expected = juex_home / 'agents' / 'abcd23' / 'threads'",
 		"    assert helper.agent_threads_dir(work, juex_home) == expected",
 		"    assert helper.agent_state_dir(work, juex_home) == expected.parent",
@@ -3443,7 +3490,7 @@ func TestPrepareAgentObservablesConfigUsesIsolatedAgentState(t *testing.T) {
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    root = Path(tmp)",
 		"    fake = root / 'juex'",
-		"    fake.write_text(\"\"\"#!/bin/sh\nset -eu\ntest \"$1\" = fleet\ntest \"$2\" = add\nwork=$3\ntest \"$JUEX_HOME\" = \"$work/home/.juex\"\nmkdir -p \"$work/.juex\" \"$JUEX_HOME/agents/abcd23\"\nprintf '{\\\"agent_id\\\":\\\"abcd23\\\"}' > \"$work/.juex/juex.local.json\"\n\"\"\", encoding='utf-8')",
+		"    fake.write_text(\"\"\"#!/bin/sh\nset -eu\ntest \"$1\" = fleet\ntest \"$2\" = add\nwork=$3\ntest \"$JUEX_HOME\" = \"$work/home/.juex\"\nmkdir -p \"$JUEX_HOME/agents/abcd23\"\nprintf '{\\\"id\\\":\\\"abcd23\\\",\\\"workspace\\\":\\\"%s\\\"}' \"$work\" > \"$JUEX_HOME/agents/abcd23/agent.json\"\n\"\"\", encoding='utf-8')",
 		"    fake.chmod(0o755)",
 		"    case_dir = root / 'case'",
 		"    case_dir.mkdir()",
@@ -3474,9 +3521,9 @@ func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 		"from tests.eval.juex_eval import compaction",
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp)",
-		"    marker = work / '.juex' / 'juex.local.json'",
-		"    marker.parent.mkdir(parents=True)",
-		"    marker.write_text(json.dumps({'agent_id': 'abcd23'}), encoding='utf-8')",
+		"    state = work / 'home' / '.juex' / 'agents' / 'abcd23'",
+		"    state.mkdir(parents=True)",
+		"    (state / 'agent.json').write_text(json.dumps({'id': 'abcd23', 'workspace': str(work.resolve())}), encoding='utf-8')",
 		"    thread = work / 'home' / '.juex' / 'agents' / 'abcd23' / 'threads' / '0'",
 		"    thread.mkdir(parents=True)",
 		"    generations = thread / 'generations'",
@@ -3522,9 +3569,9 @@ func TestCompactionEvalSeedsModuleOwnedFilesWithoutChangingThreadStores(t *testi
 		"from tests.eval.juex_eval import compaction",
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp)",
-		"    marker = work / '.juex' / 'juex.local.json'",
-		"    marker.parent.mkdir(parents=True)",
-		"    marker.write_text(json.dumps({'agent_id': 'abcd23'}), encoding='utf-8')",
+		"    state = work / 'home' / '.juex' / 'agents' / 'abcd23'",
+		"    state.mkdir(parents=True)",
+		"    (state / 'agent.json').write_text(json.dumps({'id': 'abcd23', 'workspace': str(work.resolve())}), encoding='utf-8')",
 		"    thread = work / 'home' / '.juex' / 'agents' / 'abcd23' / 'threads' / '0'",
 		"    thread.mkdir(parents=True)",
 		"    generations = thread / 'generations'",
@@ -4326,11 +4373,10 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"    attempt_seeds = []",
 		"    def fake_prepare_agent_observables_config(ctx, case_dir):",
 		"        agent_id = 'abcd23'",
-		"        marker = case_dir / '.juex' / 'juex.local.json'",
-		"        marker.parent.mkdir(parents=True, exist_ok=True)",
-		"        marker.write_text(json.dumps({'agent_id': agent_id}), encoding='utf-8')",
-		"        observables = case_dir / 'home' / '.juex' / 'agents' / agent_id / 'observables.json'",
-		"        observables.parent.mkdir(parents=True, exist_ok=True)",
+		"        state = case_dir / 'home' / '.juex' / 'agents' / agent_id",
+		"        state.mkdir(parents=True, exist_ok=True)",
+		"        (state / 'agent.json').write_text(json.dumps({'id': agent_id, 'workspace': str(case_dir.resolve())}), encoding='utf-8')",
+		"        observables = state / 'observables.json'",
 		"        return observables",
 		"    def fake_write_config(cfg, provider_id, model_id, output_path):",
 		"        output_path.parent.mkdir(parents=True, exist_ok=True)",

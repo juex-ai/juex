@@ -77,16 +77,22 @@ Command help is authoritative for flags and subcommands.
 ## Configuration And State
 
 User configuration defaults to `~/.juex/juex.yaml`. Workspace configuration
-lives at `<WorkDir>/.juex/juex.yaml`. Personal and Workspace MCP definitions
-live under their respective `.agents/mcp.json` files. Restart a resident Agent
-after changing startup configuration.
+lives at `<WorkDir>/.juex/juex.yaml`. Each registered Agent has a sparse
+configuration overlay at `$JUEX_HOME/agents/<agent-id>/juex.yaml`. YAML layers
+load in that order, with a distinct `$JUEX_HOME/juex.yaml` between the user and
+Workspace layers; an explicit `--config` is a transient final override.
+Personal and Workspace MCP definitions live under their respective
+`.agents/mcp.json` files. Saving Agent configuration through Fleet validates
+the complete chain atomically and restarts that Agent.
 
 Editable Observable definitions live at
 `$JUEX_HOME/agents/<agent-id>/observables.json`; they follow the Agent rather
 than appearing in its Workspace.
 
-Generated Agent state lives under `$JUEX_HOME/agents/<agent-id>/`. The Agent
-owns identity, the rebuildable Thread index, active and archived Threads,
+Generated Agent state lives under `$JUEX_HOME/agents/<agent-id>/`. `agent.json`
+is authoritative for Agent identity, Workspace ownership, and lifecycle
+metadata. The Agent also owns its configuration overlay, the rebuildable
+Thread index, active and archived Threads,
 media, logs, Observables, and Extension state. Each Thread has authoritative
 metadata, Generation-segmented chronological Event history, bounded pending
 Input state, module-owned Goal and Notes state, Scratchpad, and system-managed

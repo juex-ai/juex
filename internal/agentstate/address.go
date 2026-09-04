@@ -47,6 +47,15 @@ func (a AgentAddress) StateDir() string {
 	return a.stateDir
 }
 
+// ConfigPath is the fixed Fleet-managed sparse configuration overlay owned by
+// this Agent.
+func (a AgentAddress) ConfigPath() string {
+	if a.stateDir == "" {
+		return ""
+	}
+	return filepath.Join(a.stateDir, "juex.yaml")
+}
+
 func (a AgentAddress) EndpointLockPath() string {
 	return a.endpointLockPath
 }

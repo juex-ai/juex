@@ -22,7 +22,7 @@ type ConfigValidationError struct {
 }
 
 func (e *ConfigValidationError) Error() string {
-	return fmt.Sprintf("fleet: invalid workspace config: %v", e.Err)
+	return fmt.Sprintf("fleet: invalid Agent config: %v", e.Err)
 }
 
 func (e *ConfigValidationError) Unwrap() error {
@@ -157,10 +157,11 @@ func (m *Manager) UpdateConfig(
 	if err != nil {
 		return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: err}
 	}
-	if _, err := config.ValidateWorkspaceConfig(content, entry.Agent.Workspace); err != nil {
-		return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: err}
-	}
-	if _, err := config.WriteWorkspaceConfig(content, entry.Agent.Workspace); err != nil {
+	if _, err := config.WriteAgentConfig(content, m.homeDir, entry.ID); err != nil {
+		var validation *config.AgentConfigValidationError
+		if errors.As(err, &validation) {
+			return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: validation.Err}
+		}
 		return AgentConfig{}, RestartResult{AgentStatus: status}, err
 	}
 	configState, err := readAgentConfig(entry)
@@ -172,14 +173,14 @@ func (m *Manager) UpdateConfig(
 }
 
 func readAgentConfig(entry agentstate.RegistryEntry) (AgentConfig, error) {
-	path := (config.Config{WorkDir: entry.Agent.Workspace}).RuntimePaths().RuntimeConfigPath
+	path := entry.Address.ConfigPath()
 	state := AgentConfig{Path: path}
 	content, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return state, nil
 	}
 	if err != nil {
-		return AgentConfig{}, fmt.Errorf("fleet: read workspace config: %w", err)
+		return AgentConfig{}, fmt.Errorf("fleet: read Agent config: %w", err)
 	}
 	state.Content = string(content)
 	state.Exists = true

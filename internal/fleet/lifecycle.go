@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/juex-ai/juex/internal/agentstate"
@@ -21,21 +19,6 @@ const (
 )
 
 func (m *Manager) Start(ctx context.Context, selector string) (AgentStatus, error) {
-	return m.start(ctx, selector, "", false)
-}
-
-// StartWithConfig starts a stopped Agent with an explicit runtime config and
-// persists that launch input so Fleet restart uses the same configuration.
-// It never replaces a healthy Runtime with a different configuration.
-func (m *Manager) StartWithConfig(ctx context.Context, selector, configPath string) (AgentStatus, error) {
-	configPath = filepath.Clean(strings.TrimSpace(configPath))
-	if configPath == "." || !filepath.IsAbs(configPath) {
-		return AgentStatus{}, errors.New("fleet: runtime config path must be absolute")
-	}
-	return m.start(ctx, selector, configPath, true)
-}
-
-func (m *Manager) start(ctx context.Context, selector, configPath string, configure bool) (AgentStatus, error) {
 	entry, err := m.resolve(selector)
 	if err != nil {
 		return AgentStatus{}, err
@@ -48,17 +31,6 @@ func (m *Manager) start(ctx context.Context, selector, configPath string, config
 	entry, err = m.reload(entry.ID)
 	if err != nil {
 		return AgentStatus{}, err
-	}
-	if configure && entry.Agent.RuntimeConfigPath != configPath {
-		status := m.inspectStatus(ctx, entry)
-		if status.RuntimeHealth != RuntimeStopped && status.RuntimeHealth != RuntimeUnhealthy {
-			return status, &ConflictError{AgentID: entry.ID, Reason: "runtime config differs while Agent Runtime is active"}
-		}
-		updated, err := m.deps.updateAgent(m.homeDir, entry.ID, agentstate.AgentUpdate{RuntimeConfigPath: &configPath})
-		if err != nil {
-			return status, err
-		}
-		entry.Agent = updated
 	}
 	return m.startEntry(ctx, entry)
 }

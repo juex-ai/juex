@@ -28,7 +28,7 @@ does not own HTTP routing, CLI presentation, or native service installation.
   superseded work is not resumed.
 - Registry removal and orphan collection lock and revalidate their exact
   targets before deletion.
-- Runtime config secrets are redacted at the Web boundary.
+- Agent config secrets are redacted at the Web boundary.
 
 Exact operations and error categories are defined by exported interfaces and
 tests.

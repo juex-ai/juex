@@ -106,7 +106,7 @@ func (c Config) configForModelRef(ref string) (Config, error) {
 	}); err != nil {
 		return Config{}, err
 	}
-	if err := finalizeLoadedConfig(&cfg, true, AgentStateNone, true); err != nil {
+	if err := finalizeLoadedConfig(&cfg, true, true); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -185,15 +185,16 @@ func (s ProviderSelection) llmConfig() llm.Config {
 // RuntimePaths separates workspace-local configuration from identity-owned
 // runtime state.
 type RuntimePaths struct {
-	WorkDir                      string
-	JuexDir                      string
-	StateDir                     string
-	MediaDir                     string
-	ThreadsDir                   string
-	ThreadIndexPath              string
-	RuntimeConfigPath            string
-	DefaultHomeRuntimeConfigPath string
-	HomeRuntimeConfigPath        string
+	WorkDir               string
+	JuexDir               string
+	StateDir              string
+	MediaDir              string
+	ThreadsDir            string
+	ThreadIndexPath       string
+	WorkspaceConfigPath   string
+	DefaultHomeConfigPath string
+	HomeConfigPath        string
+	AgentConfigPath       string
 }
 
 func (c Config) RuntimePaths() RuntimePaths {
@@ -210,17 +211,18 @@ func (c Config) RuntimePaths() RuntimePaths {
 		paths.ThreadIndexPath = filepath.Join(paths.StateDir, "threads.index.json")
 		if c.AgentStateDir != "" {
 			paths.MediaDir = filepath.Join(c.AgentStateDir, "media")
+			paths.AgentConfigPath = filepath.Join(c.AgentStateDir, "juex.yaml")
 		}
 		if filepath.Base(filepath.Clean(c.WorkDir)) == ".juex" {
-			paths.RuntimeConfigPath = filepath.Join(c.WorkDir, "juex.yaml")
+			paths.WorkspaceConfigPath = filepath.Join(c.WorkDir, "juex.yaml")
 		} else {
-			paths.RuntimeConfigPath = filepath.Join(paths.JuexDir, "juex.yaml")
+			paths.WorkspaceConfigPath = filepath.Join(paths.JuexDir, "juex.yaml")
 		}
 	}
 	if c.HomeJuexDir != "" {
-		paths.HomeRuntimeConfigPath = filepath.Join(c.HomeJuexDir, "juex.yaml")
+		paths.HomeConfigPath = filepath.Join(c.HomeJuexDir, "juex.yaml")
 	}
-	paths.DefaultHomeRuntimeConfigPath = c.defaultHomeRuntimeConfigPath
+	paths.DefaultHomeConfigPath = c.defaultHomeConfigPath
 	return paths
 }
 
@@ -269,8 +271,8 @@ func (c Config) ResourcePaths() ResourcePaths {
 	if c.HomeJuexDir != "" {
 		paths.HomeExtensionsDir = filepath.Join(c.HomeJuexDir, "extensions")
 	}
-	if c.defaultHomeRuntimeConfigPath != "" {
-		paths.DefaultHomeExtensionsDir = filepath.Join(filepath.Dir(c.defaultHomeRuntimeConfigPath), "extensions")
+	if c.defaultHomeConfigPath != "" {
+		paths.DefaultHomeExtensionsDir = filepath.Join(filepath.Dir(c.defaultHomeConfigPath), "extensions")
 	}
 	if c.WorkDir != "" {
 		paths.ProjectAgentsDir = filepath.Join(c.WorkDir, ".agents")

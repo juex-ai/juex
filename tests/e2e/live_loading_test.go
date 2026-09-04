@@ -50,7 +50,6 @@ providers:
 		t.Fatal(err)
 	}
 
-	markerPath := filepath.Join(work, ".juex", "juex.local.json")
 	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
 
 	stdout, stderr, err := runAgentStateCommand(bin, home, work, "send", "--wait", "--json", "hello Main")
@@ -60,17 +59,11 @@ providers:
 	if !strings.Contains(stdout, `"type":"input.terminal"`) || !strings.Contains(stdout, `"state":"succeeded"`) {
 		t.Fatalf("send output missing terminal success:\n%s", stdout)
 	}
-	data, err := os.ReadFile(markerPath)
+	resolution, err := agentstate.ResolveExisting(agentstate.Options{HomeDir: home, WorkDir: work})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var marker struct {
-		AgentID string `json:"agent_id"`
-	}
-	if err := json.Unmarshal(data, &marker); err != nil || marker.AgentID == "" {
-		t.Fatalf("workspace marker = %s, err=%v", data, err)
-	}
-	journal := []byte(threadJournalText(t, filepath.Join(home, "agents", marker.AgentID, "threads", "0")))
+	journal := []byte(threadJournalText(t, filepath.Join(home, "agents", resolution.Agent.ID, "threads", "0")))
 	for _, want := range []string{"hello Main", "send wait complete", `"thread_id":"0"`} {
 		if !strings.Contains(string(journal), want) {
 			t.Fatalf("Main Thread journal missing %q:\n%s", want, journal)
@@ -247,20 +240,11 @@ func startLiveListen(t *testing.T, bin string, listenArgs ...string) *liveListen
 			)
 		default:
 		}
-		markerData, err := os.ReadFile(filepath.Join(work, ".juex", "juex.local.json"))
+		resolution, err := agentstate.ResolveExisting(agentstate.Options{HomeDir: home, WorkDir: work})
 		if err == nil {
-			var marker struct {
-				AgentID string `json:"agent_id"`
-			}
-			if json.Unmarshal(markerData, &marker) == nil && marker.AgentID != "" {
-				address, addressErr := agentstate.NewAgentAddress(home, marker.AgentID)
-				if addressErr != nil {
-					t.Fatal(addressErr)
-				}
-				runtimeState, err = endpoint.ReadRuntime(address)
-				if err == nil {
-					break
-				}
+			runtimeState, err = endpoint.ReadRuntime(resolution.Address)
+			if err == nil {
+				break
 			}
 		}
 		time.Sleep(20 * time.Millisecond)

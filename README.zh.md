@@ -73,15 +73,20 @@ juex send --wait "implement the next task"
 ## 配置与状态
 
 用户配置默认位于 `~/.juex/juex.yaml`，Workspace 配置位于
-`<WorkDir>/.juex/juex.yaml`。个人与 Workspace MCP 定义分别位于对应的
-`.agents/mcp.json`。修改启动配置后需要重启常驻 Agent。
+`<WorkDir>/.juex/juex.yaml`。每个已注册 Agent 都有一层稀疏配置，位于
+`$JUEX_HOME/agents/<agent-id>/juex.yaml`。YAML 按此顺序加载；当
+`$JUEX_HOME` 与默认 Home 不同时，其 `juex.yaml` 位于用户层与 Workspace 层
+之间；显式 `--config` 是最后一层临时覆盖。个人与 Workspace MCP 定义分别
+位于对应的 `.agents/mcp.json`。通过 Fleet 保存 Agent 配置时会原子校验完整
+配置链并重启该 Agent。
 
 可编辑的 Observable 定义位于
 `$JUEX_HOME/agents/<agent-id>/observables.json`；它随 Agent 保存，不出现在
 Workspace 中。
 
-生成的 Agent 状态位于 `$JUEX_HOME/agents/<agent-id>/`。Agent 拥有身份、
-可重建的 Thread index、active 与 archived Thread、media、日志、Observable 和
+生成的 Agent 状态位于 `$JUEX_HOME/agents/<agent-id>/`。`agent.json` 是 Agent
+身份、Workspace 所有权与 lifecycle metadata 的权威来源。Agent 还拥有配置
+覆盖、可重建的 Thread index、active 与 archived Thread、media、日志、Observable 和
 Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event
 历史、有界 pending Input 状态、由 Module 拥有的 Goal 与 Notes 状态、Scratchpad
 和系统管理的 spool。当前 Provider context 只从当前 Generation 重建；Thread
