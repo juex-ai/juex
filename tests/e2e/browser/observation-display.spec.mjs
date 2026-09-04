@@ -31,6 +31,7 @@ const observationText = [
   observationContent,
   "attachments:",
   `- image source=/tmp/photo.png artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
+  `- image source=/tmp/photo-copy.png artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
   `- file source=/tmp/details.txt artifact=${filePath} (text/plain, 18 bytes, sha256=${fileDigest})`,
 ].join("\n");
 
@@ -129,6 +130,16 @@ async function openObservationThread(page, { filePreviewError = false } = {}) {
                     height: 1,
                   },
                 },
+                {
+                  type: "image",
+                  media: {
+                    artifact_path: imagePath,
+                    media_type: "image/png",
+                    original_bytes: 68,
+                    width: 1,
+                    height: 1,
+                  },
+                },
               ],
             },
           },
@@ -193,11 +204,17 @@ test("Observation rows expose source, content, image lightbox, and file preview"
   );
   await expect(
     observation.locator("[data-observation-attachments] img"),
+  ).toHaveCount(2);
+  await expect(
+    observation.getByRole("button", { name: "Preview photo.png" }),
+  ).toBeVisible();
+  await expect(
+    observation.getByRole("button", { name: "Preview photo-copy.png" }),
   ).toBeVisible();
 
-  await observation.locator("[data-observation-attachments] img").click();
+  await observation.getByRole("button", { name: "Preview photo.png" }).click();
   await expect(
-    page.getByRole("dialog", { name: `Preview ${imageDigest}.png` }),
+    page.getByRole("dialog", { name: "Preview photo.png" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Close image preview" }).click();
 

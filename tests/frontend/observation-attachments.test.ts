@@ -31,6 +31,8 @@ test("observation disclosure names the detail and forwards image blocks", () => 
 
 test("observation attachments use image lightboxes and file preview sheets", () => {
   assert.match(attachmentsSource, /<ImageBlock[\s\S]*?root="artifact"[\s\S]*?variant="thumbnail"/);
+  assert.match(attachmentsSource, /displayName=\{name\}/);
+  assert.match(attachmentsSource, /remaining\.splice\(metadataIndex, 1\)/);
   assert.match(attachmentsSource, /data-observation-file-attachment/);
   assert.match(
     attachmentsSource,
@@ -41,6 +43,6 @@ test("observation attachments use image lightboxes and file preview sheets", () 
   assert.match(attachmentsSource, /role="alert"/);
   assert.doesNotMatch(
     attachmentsSource,
-    /imageByPath\.set\(attachment\.artifactPath/,
+    /new Map<string, MediaRef>/,
   );
 });

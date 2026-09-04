@@ -17,6 +17,7 @@ import type { MediaRef } from "@/types";
 type ImageBlockProps = {
   alt?: string;
   className?: string;
+  displayName?: string;
   media?: MediaRef | null;
   root?: MediaRoot;
   variant?: "card" | "thumbnail";
@@ -25,6 +26,7 @@ type ImageBlockProps = {
 export function ImageBlock({
   alt,
   className,
+  displayName,
   media,
   root = "artifact",
   variant = "card",
@@ -33,7 +35,10 @@ export function ImageBlock({
   const [failed, setFailed] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
   const captionID = useId();
-  const meta = useMemo(() => mediaMetadata(media), [media]);
+  const meta = useMemo(
+    () => mediaMetadata(media, displayName),
+    [displayName, media],
+  );
   const isThumbnail = variant === "thumbnail";
 
   if (!path || failed) {
@@ -56,7 +61,7 @@ export function ImageBlock({
   }
 
   const src = getMediaURL(path, root);
-  const name = mediaName(path);
+  const name = displayName?.trim() || mediaName(path);
   const aspectRatio =
     media?.width && media.height ? `${media.width} / ${media.height}` : undefined;
 
@@ -160,9 +165,12 @@ export function ImageBlock({
   );
 }
 
-function mediaMetadata(media?: MediaRef | null): string {
+function mediaMetadata(
+  media?: MediaRef | null,
+  displayName?: string,
+): string {
   const path = media?.artifact_path ?? "";
-  const parts = [mediaName(path)];
+  const parts = [displayName?.trim() || mediaName(path)];
   if (media?.width && media.height) {
     parts.push(`${media.width}x${media.height}`);
   }

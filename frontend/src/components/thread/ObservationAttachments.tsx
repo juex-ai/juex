@@ -29,12 +29,7 @@ export function ObservationAttachments({
 }) {
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
-  const imageByPath = new Map<string, MediaRef>();
-  for (const image of images) {
-    const path = image?.artifact_path?.trim();
-    if (path && image) imageByPath.set(path, image);
-  }
-  const imageAttachments = [...imageByPath.values()];
+  const imageAttachments = pairImageAttachments(images, attachments);
   const fileAttachments = attachments.filter((item) => item.kind === "file");
 
   useEffect(() => () => previewAbortRef.current?.abort(), []);
@@ -86,13 +81,14 @@ export function ObservationAttachments({
         Attachments
       </span>
       <div className="flex flex-wrap gap-2">
-        {imageAttachments.map((media) => (
+        {imageAttachments.map(({ media, name }, index) => (
           <div
-            key={media.artifact_path}
-            title={imageAttachmentName(media, attachments)}
+            key={`${media.artifact_path}:${index}`}
+            title={name}
           >
             <ImageBlock
-              alt={imageAttachmentName(media, attachments)}
+              alt={name}
+              displayName={name}
               media={media}
               root="artifact"
               variant="thumbnail"
@@ -198,14 +194,27 @@ function attachmentName(path?: string): string {
   return name || "attachment";
 }
 
-function imageAttachmentName(
-  media: MediaRef,
+function pairImageAttachments(
+  images: Array<MediaRef | null>,
   attachments: ObservationAttachmentDisplay[],
-): string {
-  const metadata = attachments.find(
-    (item) => item.kind === "image" && item.artifactPath === media.artifact_path,
-  );
-  return attachmentName(metadata?.sourcePath || media.artifact_path);
+): Array<{ media: MediaRef; name: string }> {
+  const remaining = attachments.filter((item) => item.kind === "image");
+  const paired: Array<{ media: MediaRef; name: string }> = [];
+  for (const media of images) {
+    const artifactPath = media?.artifact_path?.trim();
+    if (!media || !artifactPath) continue;
+    const metadataIndex = remaining.findIndex(
+      (item) => item.artifactPath === artifactPath,
+    );
+    const metadata = metadataIndex >= 0
+      ? remaining.splice(metadataIndex, 1)[0]
+      : undefined;
+    paired.push({
+      media,
+      name: attachmentName(metadata?.sourcePath || artifactPath),
+    });
+  }
+  return paired;
 }
 
 function isTextAttachment(mediaType: string): boolean {
