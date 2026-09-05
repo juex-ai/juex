@@ -23,9 +23,8 @@
 #   - source: https://config.example/juex/common.yaml
 
 # Ordered model chain in provider:model form. The first entry is primary and
-# later entries are fallbacks. A nearer YAML layer or root `--models` flag
-# replaces the complete list. Entries must be unique and resolve to declared
-# provider models.
+# later entries are fallbacks. A nearer YAML layer replaces the complete list.
+# Entries must be unique and resolve to declared provider models.
 models:
   - openai:gpt-4.1
   # - anthropic:claude-sonnet-5
