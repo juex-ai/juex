@@ -13,7 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-const InitSuggestion = "run `juex init` to get started"
+const InitSuggestion = "run `juex config init` to get started"
 
 type Status string
 

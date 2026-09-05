@@ -37,6 +37,20 @@ type initProviderSpec struct {
 	Model    string
 }
 
+func newConfigCmd() *cobra.Command {
+	flags := &persistentFlags{}
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Manage Juex configuration",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
+	}
+	initCmd := newInitCmd(flags)
+	initCmd.Flags().StringVarP(&flags.cwd, "cwd", "C", "", "Workspace path (default current directory)")
+	cmd.AddCommand(initCmd)
+	return cmd
+}
+
 func newInitCmd(flags *persistentFlags) *cobra.Command {
 	opts := &initOptions{}
 	cmd := &cobra.Command{
@@ -46,10 +60,10 @@ func newInitCmd(flags *persistentFlags) *cobra.Command {
 effective $JUEX_HOME/juex.yaml. With the default home this is the shared
 ~/.juex/juex.yaml; a non-default home writes only its instance override.
 Use --scope workspace to write the current workspace .juex/juex.yaml.`,
-		Example: `  juex init
-  juex init --scope workspace --provider openai --model gpt-4.1 --api-key "$OPENAI_API_KEY" --skip-check --yes
-  juex init --provider openai-codex --model gpt-5.5 --skip-check --yes`,
-		Args: cobra.NoArgs,
+		Example: `  juex config init
+  juex config init --scope workspace --provider openai --model gpt-4.1 --api-key "$OPENAI_API_KEY" --skip-check --yes
+  juex config init --provider openai-codex --model gpt-5.5 --skip-check --yes`,
+		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workDir, err := initWorkDir(flags)
 			if err != nil {
@@ -88,8 +102,8 @@ Use --scope workspace to write the current workspace .juex/juex.yaml.`,
 				cmdPrintln(cmd, "Provider hello check passed.")
 			}
 			cmdPrintln(cmd, "Next:")
-			cmdPrintln(cmd, `  juex send --wait "say hello"`)
-			cmdPrintln(cmd, "  juex listen")
+			cmdPrintln(cmd, fmt.Sprintf("  juex agent add %q", workDir))
+			cmdPrintln(cmd, fmt.Sprintf(`  juex agent send --cwd %q --wait "say hello"`, workDir))
 			return nil
 		},
 	}
@@ -101,7 +115,6 @@ Use --scope workspace to write the current workspace .juex/juex.yaml.`,
 	cmd.Flags().StringVar(&opts.protocol, "protocol", "", "custom provider protocol: anthropic/messages, openai/responses, or openai/chat")
 	cmd.Flags().BoolVar(&opts.skipCheck, "skip-check", false, "skip the provider hello connectivity check")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "accept prompts and merge existing config without asking")
-	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }
 

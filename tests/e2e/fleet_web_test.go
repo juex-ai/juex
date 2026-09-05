@@ -288,7 +288,7 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 		"cli-managed",
 	)
 	if err != nil {
-		t.Fatalf("fleet add: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		t.Fatalf("agent add: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	var roster []fleet.AgentStatus
 	fleetWebJSON(t, client, http.MethodGet, baseURL+"/api/agents", "", http.StatusOK, &roster)
@@ -306,7 +306,7 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 		"--yes",
 	)
 	if err != nil {
-		t.Fatalf("fleet remove: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		t.Fatalf("agent remove: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 }
 

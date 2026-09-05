@@ -518,12 +518,13 @@ def run_eval_turn(args: argparse.Namespace, work: pathlib.Path, prompt_file: pat
     for name in helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
         env.pop(name, None)
     env["PROVIDER_CONTEXT_WINDOW"] = str(args.context_window)
+    helper.register_managed_agent(args.juex, work, env)
     command = [
         args.juex,
-        "-C",
-        str(work),
-        "--enable-user-agents-resources=false",
+        "agent",
         "send",
+        "--cwd",
+        str(work),
         "--wait",
         prompt_file.read_text(encoding="utf-8"),
     ]

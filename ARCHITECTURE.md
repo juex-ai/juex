@@ -23,9 +23,11 @@ Main and Workers execute through the same `runtime.Engine`. Policy limits
 Observation delivery to Main. Worker creation derives the parent from the
 calling Thread.
 
-CLI and Fleet Web are clients of the resident Agent JSON/SSE service.
-`juex send` ensures the Agent is listening and uses the same admission and
-subscription interfaces as Web.
+CLI and Fleet Web are clients of the resident Agent JSON/SSE service. CLI
+selectors resolve a registered Agent by ID, exact unique name, or canonical
+Workspace. Agent and Thread commands ask Fleet to ensure that Runtime is
+healthy, then use the same admission and subscription interfaces as Web.
+Only Fleet invokes the hidden single-Agent Runtime entrypoint.
 
 ## Dependency Direction
 

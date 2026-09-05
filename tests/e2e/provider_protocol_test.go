@@ -32,7 +32,18 @@ type liveSendResult struct {
 
 func sendAndWait(t *testing.T, bin, home, work string, args ...string) liveSendResult {
 	t.Helper()
-	commandArgs := append([]string{"send", "--wait", "--json"}, args...)
+	commandArgs := append([]string{"agent", "send", "--wait", "--json"}, args...)
+	return sendAndWaitCommand(t, bin, home, work, commandArgs)
+}
+
+func sendThreadAndWait(t *testing.T, bin, home, work, threadSelector string, args ...string) liveSendResult {
+	t.Helper()
+	commandArgs := append([]string{"thread", "send", threadSelector, "--wait", "--json"}, args...)
+	return sendAndWaitCommand(t, bin, home, work, commandArgs)
+}
+
+func sendAndWaitCommand(t *testing.T, bin, home, work string, commandArgs []string) liveSendResult {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	var stdout, stderr string
 	var err error
@@ -74,7 +85,7 @@ func sendAndWait(t *testing.T, bin, home, work string, args ...string) liveSendR
 
 func sendAndWaitFailure(t *testing.T, bin, home, work string, args ...string) liveSendResult {
 	t.Helper()
-	commandArgs := append([]string{"send", "--wait", "--json"}, args...)
+	commandArgs := append([]string{"agent", "send", "--wait", "--json"}, args...)
 	stdout, stderr, err := runAgentStateCommand(bin, home, work, commandArgs...)
 	if err == nil {
 		t.Fatalf("juex %s unexpectedly succeeded:\n%s", strings.Join(commandArgs, " "), stdout)
@@ -105,7 +116,7 @@ func stopLiveAgent(t *testing.T, bin, home, work string) {
 	if err != nil {
 		return
 	}
-	stdout, stderr, err := runJuexHomeCommand(bin, home, "fleet", "stop", resolution.Agent.ID)
+	stdout, stderr, err := runJuexHomeCommand(bin, home, "agent", "stop", "--agent", resolution.Agent.ID)
 	if err != nil {
 		t.Errorf("stop live Agent %s: %v\nstdout:\n%s\nstderr:\n%s", resolution.Agent.ID, err, stdout, stderr)
 	}
@@ -695,7 +706,7 @@ providers:
 	}
 	home := t.TempDir()
 	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
-	createdOut, createdErr, err := runAgentStateCommand(bin, home, work, "threads", "create", "--alias", "reviewer")
+	createdOut, createdErr, err := runAgentStateCommand(bin, home, work, "thread", "create", "--alias", "reviewer")
 	if err != nil {
 		t.Fatalf("create Worker Thread: %v\nstdout:\n%s\nstderr:\n%s", err, createdOut, createdErr)
 	}
@@ -706,8 +717,8 @@ providers:
 	if !thread.ValidWorkerID(created.ID) || created.ParentThreadID != thread.MainID || created.Alias != "reviewer" {
 		t.Fatalf("created Worker = %+v", created)
 	}
-	first := sendAndWait(t, bin, home, work, "--thread", created.ID, "first worker turn")
-	continued := sendAndWait(t, bin, home, work, "--thread", created.ID, "second worker turn")
+	first := sendThreadAndWait(t, bin, home, work, created.ID, "first worker turn")
+	continued := sendThreadAndWait(t, bin, home, work, created.ID, "second worker turn")
 	if continued.ThreadID != first.ThreadID || continued.ThreadDir != first.ThreadDir {
 		t.Fatalf("continued Worker changed identity: first=%+v continued=%+v", first, continued)
 	}

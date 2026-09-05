@@ -355,7 +355,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	standalone := exec.Command(binary, "-C", workspace, "listen")
+	standalone := exec.Command(binary, "listen", "--agent-id", agentID)
 	standalone.Env = environment
 	standalone.Stdout = standaloneOutput
 	standalone.Stderr = standaloneOutput
@@ -883,7 +883,26 @@ func runFleetE2E(
 	stdin string,
 	args ...string,
 ) (string, string, error) {
-	command := exec.Command(binary, append([]string{"fleet"}, args...)...)
+	commandArgs := []string{"fleet"}
+	if len(args) > 0 {
+		switch args[0] {
+		case "gc":
+			commandArgs = append(commandArgs, args...)
+		case "status":
+			commandArgs = append([]string{"agent", "list"}, args[1:]...)
+		case "add":
+			commandArgs = append([]string{"agent", "add"}, args[1:]...)
+		case "start", "stop", "restart", "logs", "remove", "enable", "disable":
+			commandArgs = []string{"agent", args[0]}
+			if len(args) > 1 {
+				commandArgs = append(commandArgs, "--agent", args[1])
+				commandArgs = append(commandArgs, args[2:]...)
+			}
+		default:
+			commandArgs = append(commandArgs, args...)
+		}
+	}
+	command := exec.Command(binary, commandArgs...)
 	command.Env = environment
 	command.Stdin = strings.NewReader(stdin)
 	var stdout bytes.Buffer

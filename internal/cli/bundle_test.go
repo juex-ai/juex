@@ -3,20 +3,31 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/thread"
 )
 
-func TestBundleCommandUsesThreadIdentity(t *testing.T) {
+func TestBundleCommandResolvesArchivedThreadAlias(t *testing.T) {
 	work := t.TempDir()
 	cfg := ensureTestWorkspaceAgent(t, work)
-	target, err := thread.NewStore(cfg.RuntimePaths().StateDir).EnsureMain()
+	store := thread.NewStore(cfg.RuntimePaths().StateDir)
+	mainThread, err := store.EnsureMain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := target.Close(); err != nil {
+	if err := mainThread.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.CreateWorker(thread.MainID, "reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := target.ID
+	if err := store.Archive(target); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(work, "debug.tar.gz")
@@ -24,7 +35,7 @@ func TestBundleCommandUsesThreadIdentity(t *testing.T) {
 	var stdout bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stdout)
-	root.SetArgs([]string{"-C", work, "bundle", "--thread", thread.MainID, "--out", out})
+	root.SetArgs([]string{"thread", "bundle", "reviewer", "--cwd", work, "--out", out})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -35,18 +46,57 @@ func TestBundleCommandUsesThreadIdentity(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("output is not JSON: %v\n%s", err, stdout.String())
 	}
-	if result.ThreadID != thread.MainID || result.Path != out {
+	if result.ThreadID != threadID || result.Path != out {
 		t.Fatalf("result = %+v", result)
 	}
 }
 
 func TestBundleCommandReportsUnknownThread(t *testing.T) {
 	work := t.TempDir()
-	ensureTestWorkspaceAgent(t, work)
+	cfg := ensureTestWorkspaceAgent(t, work)
+	target, err := thread.NewStore(cfg.RuntimePaths().StateDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
 	root := newRootCmd()
-	root.SetArgs([]string{"-C", work, "bundle", "--thread", "abcdef", "--out", filepath.Join(work, "debug.tar.gz")})
-	err := root.Execute()
+	root.SetArgs([]string{"thread", "bundle", "abcdef", "--cwd", work, "--out", filepath.Join(work, "debug.tar.gz")})
+	err = root.Execute()
 	if _, ok := err.(*notFoundError); !ok {
 		t.Fatalf("error = %T %v, want notFoundError", err, err)
+	}
+}
+
+func TestBundleCommandAcceptsCanonicalIDWithoutThreadIndex(t *testing.T) {
+	work := t.TempDir()
+	cfg := ensureTestWorkspaceAgent(t, work)
+	store := thread.NewStore(cfg.RuntimePaths().StateDir)
+	target, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.IndexPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(work, "debug.tar.gz")
+	root := newRootCmd()
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stdout)
+	root.SetArgs([]string{"thread", "bundle", thread.MainID, "--cwd", work, "--out", out})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.IndexPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("bundle rebuilt missing Thread index: %v", err)
 	}
 }

@@ -232,10 +232,10 @@ warn_missing_sandbox_backend() {
     return
   fi
   if [[ "$termux_mode" -eq 1 ]]; then
-    printf 'warning: bubblewrap (bwrap) is not on PATH; the default Linux sandbox will fail closed. On rooted Termux, run pkg install -y root-repo && pkg install -y bubblewrap; otherwise explicitly set sandbox.enabled: false. Run juex doctor after installation.\n' >&2
+    printf 'warning: bubblewrap (bwrap) is not on PATH; the default Linux sandbox will fail closed. On rooted Termux, run pkg install -y root-repo && pkg install -y bubblewrap; otherwise explicitly set sandbox.enabled: false. Run juex diagnose after installation.\n' >&2
     return
   fi
-  printf 'warning: bubblewrap (bwrap) is not on PATH; the default Linux sandbox will fail closed. Install the bubblewrap package or explicitly set sandbox.enabled: false. Run juex doctor after installation.\n' >&2
+  printf 'warning: bubblewrap (bwrap) is not on PATH; the default Linux sandbox will fail closed. Install the bubblewrap package or explicitly set sandbox.enabled: false. Run juex diagnose after installation.\n' >&2
 }
 
 archive_name() {
@@ -546,7 +546,7 @@ refresh_fleet_service() {
     true)
       if "$binary" fleet install; then
         printf 'Refreshed existing JueX fleet service.\n'
-        if ! "$binary" fleet status --format json >/dev/null; then
+        if ! "$binary" agent list --format json >/dev/null; then
           printf 'warning: refreshed JueX fleet service, but could not check running agent versions.\n' >&2
         fi
       else
@@ -557,7 +557,7 @@ refresh_fleet_service() {
       if [[ "${INSTALL_FLEET_SERVICE:-0}" == "1" ]]; then
         if "$binary" fleet install; then
           printf 'Installed JueX fleet service by explicit request.\n'
-          if ! "$binary" fleet status --format json >/dev/null; then
+          if ! "$binary" agent list --format json >/dev/null; then
             printf 'warning: installed JueX fleet service, but could not check running agent versions.\n' >&2
           fi
         else

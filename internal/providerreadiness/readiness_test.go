@@ -57,7 +57,7 @@ func TestCheckSelection(t *testing.T) {
 			if tc.message != "" && !strings.Contains(got.Message, tc.message) {
 				t.Fatalf("message = %q, want containing %q", got.Message, tc.message)
 			}
-			if tc.want == StatusFail && !strings.Contains(got.Suggestion, "juex init") {
+			if tc.want == StatusFail && !strings.Contains(got.Suggestion, "juex config init") {
 				t.Fatalf("suggestion = %q, want init hint", got.Suggestion)
 			}
 		})

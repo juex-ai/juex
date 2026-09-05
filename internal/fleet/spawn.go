@@ -47,7 +47,7 @@ func spawnDetached(executable, homeDir string, entry agentstate.RegistryEntry) (
 }
 
 func runtimeCommandArgs(entry agentstate.RegistryEntry) []string {
-	return []string{"--agent-id", entry.ID, "listen"}
+	return []string{"listen", "--agent-id", entry.ID}
 }
 
 func withEnvironment(environment []string, key, value string) []string {

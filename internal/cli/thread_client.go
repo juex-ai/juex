@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/thread"
@@ -22,38 +21,20 @@ import (
 
 type agentClient struct {
 	agentID   string
+	workspace string
 	target    endpoint.Target
 	client    *http.Client
 	transport *http.Transport
 }
 
-const residentAgentConfigError = "--config is not supported by commands that connect to a resident Agent; save an Agent config through Fleet or run juex listen --config directly"
-
-func rejectExplicitConfigForResidentCommand(flags *persistentFlags) error {
-	if strings.TrimSpace(explicitConfigPath(flags)) != "" {
-		return &usageError{msg: residentAgentConfigError}
-	}
-	return nil
-}
-
-func connectAgent(ctx context.Context, cfg config.Config) (*agentClient, error) {
-	manager, err := fleet.New(fleet.Options{HomeDir: cfg.HomeJuexDir})
-	if err != nil {
-		return nil, err
-	}
-	if cfg.ExplicitConfigPath() != "" {
-		return nil, &usageError{msg: residentAgentConfigError}
-	}
-	_, startErr := manager.Start(ctx, cfg.AgentID)
+func connectSelectedAgent(ctx context.Context, manager *fleet.Manager, state fleet.ReadOnlyAgentState) (*agentClient, error) {
+	_, startErr := manager.Start(ctx, state.ID)
 	if startErr != nil {
-		return nil, fmt.Errorf("start Agent Runtime: %w", startErr)
+		return nil, mapFleetError(fmt.Errorf("start Agent Runtime: %w", startErr))
 	}
-	running, err := endpoint.ReadRuntime(cfg.AgentAddress)
+	running, err := manager.Endpoint(ctx, state.ID)
 	if err != nil {
-		return nil, fmt.Errorf("read Agent Runtime endpoint: %w", err)
-	}
-	if err := endpoint.Probe(ctx, running); err != nil {
-		return nil, fmt.Errorf("validate Agent Runtime endpoint: %w", err)
+		return nil, mapFleetError(err)
 	}
 	target, err := endpoint.Parse(running.Endpoint)
 	if err != nil {
@@ -61,7 +42,7 @@ func connectAgent(ctx context.Context, cfg config.Config) (*agentClient, error) 
 	}
 	transport := target.NewTransport()
 	return &agentClient{
-		agentID: cfg.AgentID, target: target,
+		agentID: state.ID, workspace: state.Workspace, target: target,
 		client: &http.Client{Transport: transport}, transport: transport,
 	}, nil
 }
@@ -95,7 +76,7 @@ func (c *agentClient) doJSON(ctx context.Context, method, path string, body, res
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 16<<10))
-		return fmt.Errorf("agent API %s %s returned HTTP %d: %s", method, path, response.StatusCode, strings.TrimSpace(string(data)))
+		return mapAgentAPIError(method, path, response.StatusCode, data)
 	}
 	if result == nil {
 		return nil
@@ -115,14 +96,15 @@ func (c *agentClient) listThreads(ctx context.Context) (threadList, error) {
 }
 
 func (c *agentClient) resolveThread(ctx context.Context, selector string, includeArchived bool) (thread.IndexEntry, error) {
-	selector = strings.TrimSpace(strings.TrimPrefix(selector, "#"))
-	if selector == "" || strings.EqualFold(selector, thread.MainAlias) {
-		selector = thread.MainID
-	}
 	list, err := c.listThreads(ctx)
 	if err != nil {
 		return thread.IndexEntry{}, err
 	}
+	return resolveThreadEntry(selector, list, includeArchived)
+}
+
+func resolveThreadEntry(selector string, list threadList, includeArchived bool) (thread.IndexEntry, error) {
+	selector = normalizeThreadSelector(selector)
 	entries := append([]thread.IndexEntry(nil), list.Active...)
 	if includeArchived {
 		entries = append(entries, list.Archived...)
@@ -147,6 +129,14 @@ func (c *agentClient) resolveThread(ctx context.Context, selector string, includ
 		return thread.IndexEntry{}, &notFoundError{msg: "Thread not found: " + selector}
 	}
 	return *match, nil
+}
+
+func normalizeThreadSelector(selector string) string {
+	selector = strings.TrimSpace(strings.TrimPrefix(selector, "#"))
+	if selector == "" || strings.EqualFold(selector, thread.MainAlias) {
+		selector = thread.MainID
+	}
+	return selector
 }
 
 func (c *agentClient) upload(ctx context.Context, threadID, path string) (map[string]any, error) {
@@ -180,7 +170,7 @@ func (c *agentClient) upload(ctx context.Context, threadID, path string) (map[st
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 16<<10))
-		return nil, fmt.Errorf("attachment upload returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
+		return nil, mapAgentAPIError(http.MethodPost, apiPath, response.StatusCode, data)
 	}
 	var result map[string]any
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
@@ -214,7 +204,7 @@ func (c *agentClient) stream(ctx context.Context, threadID, after string, visit 
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 16<<10))
-		return fmt.Errorf("event stream returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
+		return mapAgentAPIError(http.MethodGet, path, response.StatusCode, data)
 	}
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 64<<10), 4<<20)
@@ -233,4 +223,35 @@ func (c *agentClient) stream(ctx context.Context, threadID, after string, visit 
 		}
 	}
 	return scanner.Err()
+}
+
+func mapAgentAPIError(method, path string, status int, body []byte) error {
+	message := strings.TrimSpace(string(body))
+	var payload struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &payload) == nil {
+		if strings.TrimSpace(payload.Message) != "" {
+			message = strings.TrimSpace(payload.Message)
+		} else if strings.TrimSpace(payload.Error) != "" {
+			message = strings.TrimSpace(payload.Error)
+		}
+	}
+	if message == "" {
+		message = http.StatusText(status)
+	}
+	text := fmt.Sprintf("agent API %s %s: %s", method, path, message)
+	switch status {
+	case http.StatusBadRequest:
+		return &usageError{msg: text}
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return &permissionError{msg: text}
+	case http.StatusNotFound:
+		return &notFoundError{msg: text}
+	case http.StatusConflict:
+		return &conflictError{msg: text}
+	default:
+		return fmt.Errorf("%s (HTTP %d)", text, status)
+	}
 }

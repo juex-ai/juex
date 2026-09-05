@@ -14,29 +14,14 @@ import (
 )
 
 func newListenCmd(flags *persistentFlags) *cobra.Command {
-	var (
-		addr          string
-		unsafeBindAny bool
-	)
 	cmd := &cobra.Command{
-		Use:   "listen",
-		Short: "Listen for the current WorkDir agent JSON/SSE API",
-		Long: `Starts the current workspace agent and exposes its JSON/SSE API.
-The canonical local agent endpoint is always published. Pass --addr explicitly
-to also listen for the same API on TCP.
-
-This command does not serve the React SPA. Use juex fleet serve for the fleet
-browser UI, agent switcher, and per-agent API proxy.
-
-Hit Ctrl-C to shut down. In-flight turns receive context cancellation
-and the server flushes Thread Journal before exit.`,
-		Example: `  juex listen
-  juex listen --addr 127.0.0.1:9000`,
-		Args: cobra.NoArgs,
+		Use:    "listen",
+		Short:  "Run one Agent Runtime (internal Fleet command)",
+		Hidden: true,
+		Args:   usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
-			addrChanged := cmd.Flags().Changed("addr")
-			if err := validateListenOptions(addr, addrChanged, unsafeBindAny); err != nil {
-				return err
+			if strings.TrimSpace(flags.agentID) == "" {
+				return &usageError{msg: "juex listen: --agent-id is required"}
 			}
 			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags)
 			if err != nil {
@@ -50,21 +35,10 @@ and the server flushes Thread Journal before exit.`,
 			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 				return err
 			}
-			if addr != "" && !unsafeBindAny && !isLoopbackAddr(addr) {
-				return &usageError{msg: "juex listen: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
-			}
-			if unsafeBindAny {
-				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
-			}
 			srv := web.NewServer(web.Options{
-				Cfg:          cfg,
-				Addr:         addr,
-				AllowAnyBind: unsafeBindAny,
-				Verbose:      flags.verbose,
-				Debug:        flags.debug,
-				LogLevel:     flags.logLevel,
-				Stderr:       cmd.ErrOrStderr(),
-				OnReady:      func(info web.ReadyInfo) { reportListenReady(cmd, info) },
+				Cfg:     cfg,
+				Stderr:  cmd.ErrOrStderr(),
+				OnReady: func(info web.ReadyInfo) { reportListenReady(cmd, info) },
 			})
 
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -73,20 +47,9 @@ and the server flushes Thread Journal before exit.`,
 			return srv.Run(ctx)
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", "", "loopback address (host:port); enables the TCP API listener")
-	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
-	declareAgentStatePolicy(cmd, agentStateMint)
+	cmd.Flags().StringVar(&flags.agentID, "agent-id", "", "registered Agent ID")
+	_ = cmd.Flags().MarkHidden("agent-id")
 	return cmd
-}
-
-func validateListenOptions(addr string, addrChanged, unsafeBindAny bool) error {
-	if unsafeBindAny && !addrChanged {
-		return &usageError{msg: "juex listen: --unsafe-bind-any requires --addr"}
-	}
-	if addrChanged && strings.TrimSpace(addr) == "" {
-		return &usageError{msg: "juex listen: --addr must not be empty"}
-	}
-	return nil
 }
 
 func reportListenReady(cmd *cobra.Command, info web.ReadyInfo) {

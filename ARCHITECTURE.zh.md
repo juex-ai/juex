@@ -21,8 +21,10 @@ Agent Runtime
 Main 与 Worker 都通过 `runtime.Engine` 执行，policy 只允许 Main 接收
 Observation。创建 Worker 时从调用方 Thread 自动推导 parent。
 
-CLI 与 Fleet Web 都是常驻 Agent JSON/SSE 服务的 client。`juex send` 确保
-Agent 已监听，并使用与 Web 相同的 admission 和 subscription 接口。
+CLI 与 Fleet Web 都是常驻 Agent JSON/SSE 服务的 client。CLI selector 按 ID、
+大小写敏感的唯一精确名称或规范 Workspace 解析已注册 Agent。Agent 与 Thread
+命令先要求 Fleet 确保该 Runtime 健康，再使用与 Web 相同的 admission 和
+subscription 接口。只有 Fleet 会调用隐藏的单 Agent Runtime 入口。
 
 ## 依赖方向
 

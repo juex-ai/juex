@@ -51,7 +51,8 @@ type NoAgentError struct {
 
 func (e *NoAgentError) Error() string {
 	return fmt.Sprintf(
-		"agentstate: no agent is registered for workspace %s; run juex send or listen to create a durable workspace agent",
+		"agentstate: no Agent is registered for Workspace %s; run juex agent add %s",
+		e.WorkDir,
 		e.WorkDir,
 	)
 }

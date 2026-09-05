@@ -51,7 +51,22 @@ type doctorExitError struct {
 }
 
 func (e *doctorExitError) Error() string {
-	return "juex doctor: " + string(e.status)
+	return "juex diagnose: " + string(e.status)
+}
+
+func newDiagnoseCmd() *cobra.Command {
+	flags := &persistentFlags{}
+	cmd := newDoctorCmd(flags)
+	cmd.Use = "diagnose"
+	cmd.Short = "Check Juex runtime config, credentials, and local resources"
+	cmd.Example = `  juex diagnose
+  juex diagnose --offline
+  juex diagnose --config ./juex.yaml --offline
+  juex diagnose --agent <id> --format json`
+	cmd.Flags().StringVar(&flags.agentID, "agent", "", "registered Agent id or unique exact name")
+	cmd.Flags().StringVarP(&flags.cwd, "cwd", "C", "", "registered Workspace path (default current directory)")
+	cmd.Flags().StringVar(&flags.configPath, "config", "", "explicit config file to validate without changing a managed Agent")
+	return cmd
 }
 
 func (e *doctorExitError) ExitCode() int {
@@ -74,13 +89,28 @@ func newDoctorCmd(flags *persistentFlags) *cobra.Command {
 		offline bool
 	)
 	cmd := &cobra.Command{
-		Use:   "doctor",
+		Use:   "diagnose",
 		Short: "Check Juex runtime config, credentials, and local resources",
-		Example: `  juex doctor
-  juex doctor --offline
-  juex doctor --format json`,
-		Args: cobra.NoArgs,
+		Example: `  juex diagnose
+  juex diagnose --offline
+  juex diagnose --format json`,
+		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(flags.agentID) != "" && strings.TrimSpace(flags.cwd) != "" {
+				return &usageError{msg: "--agent and --cwd are mutually exclusive"}
+			}
+			if strings.TrimSpace(flags.agentID) != "" {
+				manager, err := newFleetManager()
+				if err != nil {
+					return err
+				}
+				state, err := manager.ReadOnlyState(flags.agentID)
+				if err != nil {
+					return mapFleetError(err)
+				}
+				flags.agentID = state.ID
+				flags.cwd = state.Workspace
+			}
 			if format == "table" {
 				format = "text"
 			}
@@ -97,7 +127,6 @@ func newDoctorCmd(flags *persistentFlags) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text, table, or json")
 	cmd.Flags().BoolVar(&offline, "offline", false, "skip network connectivity checks")
-	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }
 
@@ -219,7 +248,7 @@ func doctorAgentCheck(workDir string) doctorCheck {
 			Name:       "agent",
 			Status:     doctorStatusWarn,
 			Message:    noAgent.Error(),
-			Suggestion: "run juex send or listen to create a durable workspace agent",
+			Suggestion: "run juex agent add <workspace> to register this Workspace",
 		}
 	}
 	return doctorCheck{

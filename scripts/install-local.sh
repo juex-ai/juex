@@ -103,9 +103,9 @@ refresh_fleet_service() {
   fi
   case "$installed" in
     true)
-      if "$binary" fleet install --restart-agents; then
+      if "$binary" fleet install; then
         printf 'Refreshed existing JueX fleet service.\n'
-        if ! "$binary" fleet status --format json >/dev/null; then
+        if ! "$binary" agent list --format json >/dev/null; then
           printf 'warning: refreshed JueX fleet service, but could not check running agent versions.\n' >&2
         fi
       else
@@ -116,7 +116,7 @@ refresh_fleet_service() {
       if [[ "${INSTALL_FLEET_SERVICE:-0}" == "1" ]]; then
         if "$binary" fleet install; then
           printf 'Installed JueX fleet service by explicit request.\n'
-          if ! "$binary" fleet status --format json >/dev/null; then
+          if ! "$binary" agent list --format json >/dev/null; then
             printf 'warning: installed JueX fleet service, but could not check running agent versions.\n' >&2
           fi
         else

@@ -20,7 +20,7 @@ HTTP route、CLI 展示或原生 service 安装。
 - 只有进程存在不能证明 Runtime ownership；lifecycle mutation 需要进程与 endpoint
   身份同时匹配。
 - Stop 使用 instance-bound graceful shutdown，不向记录的 PID 发送 signal。
-- Start 启动 detached `juex listen`，并等待精确身份。
+- Start 启动隐藏的 `juex listen --agent-id <id>` Runtime 入口，并等待精确身份。
 - Disable 先 stop 再持久化；enable 不会隐式 start。
 - Restart 只有在 replacement 确认同一 Thread 和 interrupted/failed Turn 后，
   才能提交一次 continuation。Completed、cancelled 或 superseded work 不恢复。

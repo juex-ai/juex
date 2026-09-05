@@ -364,7 +364,7 @@ func TestCIWorkflowExercisesPOSIXReleaseInstaller(t *testing.T) {
 		`cp -R .tmp/ci-ripgrep/. "$package_root/"`,
 		`internal/version.Version=${version}`,
 		`${package_root}/bin/juex`,
-		`juex doctor --format json --offline`,
+		`juex diagnose --format json --offline`,
 		`"$doctor_status" -eq 7`,
 		`'"source": "package"'`,
 		`"$package_root/juex-path/rg" --version`,
@@ -527,27 +527,27 @@ func TestReleaseInstallScriptFleetServiceLifecycle(t *testing.T) {
 			installed:   "false",
 			wantOutput:  "set INSTALL_FLEET_SERVICE=1",
 			wantCalls:   []string{"fleet service-installed"},
-			forbidCalls: []string{"fleet install", "fleet status --format json"},
+			forbidCalls: []string{"fleet install", "agent list --format json"},
 		},
 		{
 			name:       "explicit opt-in installs service",
 			installed:  "false",
 			optIn:      "1",
 			wantOutput: "Installed JueX fleet service by explicit request.",
-			wantCalls:  []string{"fleet service-installed", "fleet install", "fleet status --format json"},
+			wantCalls:  []string{"fleet service-installed", "fleet install", "agent list --format json"},
 		},
 		{
 			name:       "existing service is refreshed",
 			installed:  "true",
 			wantOutput: "Refreshed existing JueX fleet service.",
-			wantCalls:  []string{"fleet service-installed", "fleet install", "fleet status --format json"},
+			wantCalls:  []string{"fleet service-installed", "fleet install", "agent list --format json"},
 		},
 		{
 			name:        "service probe failure is a post-install warning",
 			probeFail:   "1",
 			wantOutput:  "could not check fleet service status",
 			wantCalls:   []string{"fleet service-installed"},
-			forbidCalls: []string{"fleet install", "fleet status --format json"},
+			forbidCalls: []string{"fleet install", "agent list --format json"},
 		},
 		{
 			name:        "existing service refresh failure is a warning",
@@ -555,7 +555,7 @@ func TestReleaseInstallScriptFleetServiceLifecycle(t *testing.T) {
 			installFail: "1",
 			wantOutput:  "failed to refresh existing fleet service",
 			wantCalls:   []string{"fleet service-installed", "fleet install"},
-			forbidCalls: []string{"fleet status --format json"},
+			forbidCalls: []string{"agent list --format json"},
 		},
 		{
 			name:        "explicit service install failure is a warning",
@@ -564,14 +564,14 @@ func TestReleaseInstallScriptFleetServiceLifecycle(t *testing.T) {
 			installFail: "1",
 			wantOutput:  "failed to install the requested fleet service",
 			wantCalls:   []string{"fleet service-installed", "fleet install"},
-			forbidCalls: []string{"fleet status --format json"},
+			forbidCalls: []string{"agent list --format json"},
 		},
 		{
 			name:       "version check failure is a warning",
 			installed:  "true",
 			statusFail: "1",
 			wantOutput: "could not check running agent versions",
-			wantCalls:  []string{"fleet service-installed", "fleet install", "fleet status --format json"},
+			wantCalls:  []string{"fleet service-installed", "fleet install", "agent list --format json"},
 		},
 	}
 
@@ -597,7 +597,7 @@ case "${1:-} ${2:-}" in
       exit 18
     fi
     ;;
-  "fleet status")
+  "agent list")
     if [ "${FAKE_FLEET_STATUS_FAIL:-0}" = "1" ]; then
       exit 19
     fi
@@ -686,7 +686,7 @@ func TestPOSIXInstallersShareFleetRefreshContract(t *testing.T) {
 			"fleet service-installed",
 			`INSTALL_FLEET_SERVICE:-0`,
 			"fleet install",
-			"fleet status --format json",
+			"agent list --format json",
 			"Refreshed existing JueX fleet service.",
 			"set INSTALL_FLEET_SERVICE=1",
 			"could not check fleet service status",
@@ -695,19 +695,6 @@ func TestPOSIXInstallersShareFleetRefreshContract(t *testing.T) {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing fleet refresh contract %q", rel, want)
 			}
-		}
-	}
-	localBody, err := os.ReadFile(filepath.Join(root, "scripts/install-local.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	localText := string(localBody)
-	for _, want := range []string{
-		`if "$binary" fleet install --restart-agents; then`,
-		`if "$binary" fleet install; then`,
-	} {
-		if !strings.Contains(localText, want) {
-			t.Fatalf("scripts/install-local.sh missing install mode %q", want)
 		}
 	}
 }

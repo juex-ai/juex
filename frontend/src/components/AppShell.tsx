@@ -570,7 +570,7 @@ function FleetEmptyState() {
           </Link>
         </Button>
         <div className="mt-4 font-mono text-xs text-muted-foreground">
-          juex fleet add /absolute/workspace
+          juex agent add /absolute/workspace
         </div>
       </div>
     </div>

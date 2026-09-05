@@ -27,43 +27,63 @@ type sendReceipt struct {
 	Warnings     []json.RawMessage `json:"warnings,omitempty"`
 }
 
-func newSendCmd(flags *persistentFlags) *cobra.Command {
-	var selector string
+func newAgentSendCmd() *cobra.Command {
+	selectors := &agentSelectorFlags{}
+	cmd := newSendCommand(selectors, false)
+	bindAgentSelectorFlags(cmd, selectors)
+	return cmd
+}
+
+func newThreadSendCmd(selectors *agentSelectorFlags) *cobra.Command {
+	return newSendCommand(selectors, true)
+}
+
+func newSendCommand(selectors *agentSelectorFlags, explicitThread bool) *cobra.Command {
 	var attachments []string
 	var wait bool
 	var jsonOut bool
+	use := "send [message...]"
+	short := "Durably send one Input to the Main Thread"
+	argsValidator := cobra.ArbitraryArgs
+	if explicitThread {
+		use = "send <thread> [message...]"
+		short = "Durably send one Input to a Worker Thread"
+		argsValidator = cobra.MinimumNArgs(1)
+	}
 	cmd := &cobra.Command{
-		Use:   "send [message...]",
-		Short: "Durably send one Input to a Thread",
-		Args:  cobra.ArbitraryArgs,
+		Use:   use,
+		Short: short,
+		Args:  usageArgs(argsValidator),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := rejectExplicitConfigForResidentCommand(flags); err != nil {
-				return err
+			threadSelector := "0"
+			messageArgs := args
+			if explicitThread {
+				threadSelector = strings.TrimSpace(strings.TrimPrefix(args[0], "#"))
+				if threadSelector == "" || threadSelector == "0" || strings.EqualFold(threadSelector, "main") {
+					return &usageError{msg: "juex thread send: target must be a Worker Thread; use juex agent send for Main"}
+				}
+				messageArgs = args[1:]
 			}
-			message, err := readSendInput(cmd, args, len(attachments) > 0)
+			message, err := readSendInput(cmd, messageArgs, len(attachments) > 0)
 			if err != nil {
 				return err
 			}
-			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags)
+			manager, state, err := resolveSelectedAgent(selectors)
 			if err != nil {
 				return err
 			}
-			defer func() { _ = lifecycle.finish(cmd, nil) }()
-			client, err := connectAgent(cmd.Context(), cfg)
+			client, err := connectSelectedAgent(cmd.Context(), manager, state)
 			if err != nil {
 				return err
 			}
 			defer client.Close()
-			entry, err := client.resolveThread(cmd.Context(), selector, false)
+			entry, err := client.resolveThread(cmd.Context(), threadSelector, false)
 			if err != nil {
 				return err
 			}
 			refs := make([]map[string]any, 0, len(attachments))
 			for _, attachment := range attachments {
-				path := attachment
-				if !filepath.IsAbs(path) {
-					path = filepath.Join(cfg.WorkDir, path)
-				}
+				path := resolveAttachmentPath(client.workspace, attachment)
 				ref, err := client.upload(cmd.Context(), entry.ThreadID, path)
 				if err != nil {
 					return err
@@ -91,12 +111,17 @@ func newSendCmd(flags *persistentFlags) *cobra.Command {
 			return waitForInput(cmd, client, receipt, jsonOut)
 		},
 	}
-	cmd.Flags().StringVarP(&selector, "thread", "t", "0", "target Thread id or alias")
 	cmd.Flags().StringArrayVarP(&attachments, "attach", "a", nil, "attach one file (repeatable)")
 	cmd.Flags().BoolVarP(&wait, "wait", "w", false, "stream the consuming Turn until it settles")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit a receipt or NDJSON event stream")
-	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
+}
+
+func resolveAttachmentPath(workspace, attachment string) string {
+	if filepath.IsAbs(attachment) {
+		return filepath.Clean(attachment)
+	}
+	return filepath.Join(workspace, attachment)
 }
 
 func readSendInput(cmd *cobra.Command, args []string, hasAttachments bool) (string, error) {
@@ -116,7 +141,7 @@ func readSendInput(cmd *cobra.Command, args []string, hasAttachments bool) (stri
 	if hasAttachments {
 		return "", nil
 	}
-	return "", &usageError{msg: "juex send: message, piped stdin, or --attach required"}
+	return "", &usageError{msg: cmd.CommandPath() + ": message, piped stdin, or --attach required"}
 }
 
 func waitForInput(cmd *cobra.Command, client *agentClient, receipt sendReceipt, jsonOut bool) error {

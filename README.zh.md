@@ -26,20 +26,21 @@ make build
 初始化并校验配置：
 
 ```bash
-juex init
-juex doctor
+juex config init
+juex agent add .
+juex diagnose
 ```
 
-启动当前 Workspace Agent，再从另一个终端发送 Input：
+启动受管 Agent，并向其 Main Thread 发送 Input：
 
 ```bash
-juex listen
-juex send "summarize this repository"
-juex send --wait "implement the next task"
+juex agent start
+juex agent send "summarize this repository"
+juex agent send --wait "implement the next task"
 ```
 
-`send` 在持久接受后返回；`send --wait` 持续跟随 Event，直到消费该 Input
-的 Turn 结束。使用 `juex fleet serve` 启动 Fleet UI。
+`agent send` 在持久接受后返回；`agent send --wait` 持续跟随 Event，直到消费
+该 Input 的 Turn 结束。使用 `juex fleet serve` 启动 Fleet UI。
 
 ## 核心模型
 
@@ -61,12 +62,11 @@ juex send --wait "implement the next task"
 
 | 命令 | 用途 |
 | --- | --- |
-| `juex listen` | 启动当前 Workspace Agent 服务。 |
-| `juex send` | 提交 Input，并可选择跟随消费它的 Turn。 |
-| `juex threads` | 查看和管理 Worker Thread。 |
-| `juex fleet` | 注册、控制并服务常驻 Agent。 |
-| `juex bundle` | 创建脱敏诊断包。 |
-| `juex init` / `juex doctor` | 创建并校验配置。 |
+| `juex fleet` | 启动并检查常驻 Fleet supervisor。 |
+| `juex agent` | 注册 Agent、控制 lifecycle，并向 Main Thread 发送 Input。 |
+| `juex thread` | 查看和管理 Worker Thread，包括创建诊断包。 |
+| `juex config` | 初始化 Juex 配置。 |
+| `juex diagnose` | 校验配置与本地 Runtime 依赖。 |
 
 具体 flag 和 subcommand 以命令帮助为准。
 
@@ -76,7 +76,7 @@ juex send --wait "implement the next task"
 `<WorkDir>/.juex/juex.yaml`。每个已注册 Agent 都有一层稀疏配置，位于
 `$JUEX_HOME/agents/<agent-id>/juex.yaml`。YAML 按此顺序加载；当
 `$JUEX_HOME` 与默认 Home 不同时，其 `juex.yaml` 位于用户层与 Workspace 层
-之间；显式 `--config` 是最后一层临时覆盖。个人与 Workspace MCP 定义分别
+之间。个人与 Workspace MCP 定义分别
 位于对应的 `.agents/mcp.json`。通过 Fleet 保存 Agent 配置时会原子校验完整
 配置链并重启该 Agent。
 
