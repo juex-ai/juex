@@ -41,6 +41,14 @@ test("observation attachments use image lightboxes and file preview sheets", () 
   assert.match(attachmentsSource, /<Sheet\s+open=\{preview !== null\}/);
   assert.match(attachmentsSource, /Preview truncated at 256 KB\./);
   assert.match(attachmentsSource, /role="alert"/);
+  assert.match(
+    attachmentsSource,
+    /const previewName = attachmentName\([\s\S]*?preview\?\.attachment\.sourcePath[\s\S]*?preview\?\.attachment\.artifactPath/,
+  );
+  assert.match(
+    attachmentsSource,
+    /preview\?\.content\?\.kind === "image"[\s\S]*?<ImageBlock[\s\S]*?displayName=\{previewName\}/,
+  );
   assert.doesNotMatch(
     attachmentsSource,
     /new Map<string, MediaRef>/,

@@ -9,8 +9,11 @@ const imageDigest =
   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const fileDigest =
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const previewImageDigest =
+  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const imagePath = `event-media/${imageDigest}.png`;
 const filePath = `event-media/${fileDigest}.txt`;
+const previewImagePath = `event-media/${previewImageDigest}.bin`;
 const observationContent = [
   "MCP notification",
   "server: wechat-wire",
@@ -33,6 +36,7 @@ const observationText = [
   `- image source="photo.png" artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
   `- image source="photo-copy.png" artifact=${imagePath} (image/png, 68 bytes, sha256=${imageDigest}, 1x1)`,
   `- file source="details.txt" artifact=${filePath} (text/plain, 18 bytes, sha256=${fileDigest})`,
+  `- file source="diagram.bmp" artifact=${previewImagePath} (image/bmp, 6 bytes, sha256=${previewImageDigest})`,
 ].join("\n");
 
 async function openObservationThread(page, { filePreviewError = false } = {}) {
@@ -150,6 +154,19 @@ async function openObservationThread(page, { filePreviewError = false } = {}) {
     }),
   );
   await page.route("**/agents/test-agent/api/files/content?root=artifact**", (route) => {
+    const artifactPath = new URL(route.request().url()).searchParams.get("path");
+    if (artifactPath === previewImagePath) {
+      return route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          path: previewImagePath,
+          kind: "image",
+          media_type: "image/bmp",
+          size: 6,
+          truncated: false,
+        }),
+      });
+    }
     if (filePreviewError) {
       return route.fulfill({
         status: 415,
@@ -240,4 +257,15 @@ test("one failed file preview leaves the Observation readable", async ({ page })
   await expect(observation.locator("[data-external-event-body]")).toContainText(
     "Alice sent a new photo",
   );
+});
+
+test("image-valued file previews preserve the source filename", async ({ page }) => {
+  await openObservationThread(page);
+
+  const observation = page.locator('[data-external-event-kind="observation"]');
+  await observation.locator("[data-external-event-toggle]").click();
+  await observation.getByRole("button", { name: "Preview diagram.bmp" }).click();
+
+  const sheet = page.getByRole("dialog", { name: "diagram.bmp" });
+  await expect(sheet.getByRole("link", { name: "Download diagram.bmp" })).toBeVisible();
 });

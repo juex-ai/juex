@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 func TestLoadAgentConfigAfterWorkspaceWithInheritedImportScope(t *testing.T) {
@@ -94,6 +95,208 @@ func TestAgentConfigRejectsFleetAndWriteLeavesWorkspaceUnchanged(t *testing.T) {
 	}
 	if string(gotAgent) != "enable_user_agents_resources: false\n" {
 		t.Fatalf("agent config = %q", gotAgent)
+	}
+}
+
+func TestAgentConfigRecoveryDoesNotRecreateDeletedAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		oldConfig string
+	}{
+		{name: "existing config", oldConfig: "runtime:\n  tool_timeout: 40s\n"},
+		{name: "new config"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspace := t.TempDir()
+			resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: workspace})
+			if err != nil {
+				t.Fatal(err)
+			}
+			configPath := resolved.Address.ConfigPath()
+			if tc.oldConfig != "" {
+				writeTextFile(t, configPath, tc.oldConfig)
+			}
+			snapshot, err := snapshotConfigFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loader := newConfigImportLoaderForTest(t, home)
+			source := "https://config.example/agent.yaml"
+			oldCache := configImportCacheRecord{
+				Version:         configImportCacheVersion,
+				Source:          source,
+				SourceSHA256:    sourceDigest(source),
+				DeclaringSHA256: declaringConfigDigest(configPath),
+				ContextSHA256:   loader.cacheContextDigest(),
+				FetchedAt:       time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC),
+				Content:         "runtime:\n  tool_timeout: 39s\n",
+				cachePath:       loader.cachePath(source, configPath),
+			}
+			oldCache.ContentSHA256 = contentDigest([]byte(oldCache.Content))
+			seed := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{oldCache}}
+			if err := commitConfigImportCaches(&seed); err != nil {
+				t.Fatal(err)
+			}
+			oldCacheData, err := os.ReadFile(oldCache.cachePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newCache := oldCache
+			newCache.Content = "runtime:\n  tool_timeout: 42s\n"
+			newCache.ContentSHA256 = contentDigest([]byte(newCache.Content))
+			commits, err := prepareConfigImportCacheCommits([]configImportCacheRecord{newCache})
+			if err != nil {
+				t.Fatal(err)
+			}
+			journalPath, err := beginConfigImportCachePublicationWithConfig(home, commits, &snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeTextFile(t, configPath, "runtime:\n  tool_timeout: 41s\n")
+			if err := os.WriteFile(newCache.cachePath, commits[0].data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := agentstate.DeleteRegistered(home, resolved.Agent.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := recoverConfigImportCachePublicationAt(journalPath); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(resolved.Address.StateDir()); !os.IsNotExist(err) {
+				t.Fatalf("recovery recreated deleted Agent directory: %v", err)
+			}
+			if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+				t.Fatalf("publication journal remains after deleted-Agent recovery: %v", err)
+			}
+			gotCacheData, err := os.ReadFile(oldCache.cachePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotCacheData) != string(oldCacheData) {
+				t.Fatalf("shared import cache was not rolled back after Agent deletion:\n%s", gotCacheData)
+			}
+		})
+	}
+}
+
+func TestAgentConfigRecoveryWaitsForFailedDeleteRestoration(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := resolved.Address.ConfigPath()
+	oldConfig := []byte("runtime:\n  tool_timeout: 40s\n")
+	writeTextFile(t, configPath, string(oldConfig))
+	snapshot, err := snapshotConfigFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader := newConfigImportLoaderForTest(t, home)
+	source := "https://config.example/agent.yaml"
+	oldCache := configImportCacheRecord{
+		Version:         configImportCacheVersion,
+		Source:          source,
+		SourceSHA256:    sourceDigest(source),
+		DeclaringSHA256: declaringConfigDigest(configPath),
+		ContextSHA256:   loader.cacheContextDigest(),
+		FetchedAt:       time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC),
+		Content:         "runtime:\n  tool_timeout: 39s\n",
+		cachePath:       loader.cachePath(source, configPath),
+	}
+	oldCache.ContentSHA256 = contentDigest([]byte(oldCache.Content))
+	if err := commitConfigImportCaches(&Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{oldCache}}); err != nil {
+		t.Fatal(err)
+	}
+	oldCacheData, err := os.ReadFile(oldCache.cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCache := oldCache
+	newCache.Content = "runtime:\n  tool_timeout: 42s\n"
+	newCache.ContentSHA256 = contentDigest([]byte(newCache.Content))
+	commits, err := prepareConfigImportCacheCommits([]configImportCacheRecord{newCache})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalPath, err := beginConfigImportCachePublicationWithConfig(home, commits, &snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTextFile(t, configPath, "runtime:\n  tool_timeout: 41s\n")
+	if err := os.WriteFile(newCache.cachePath, commits[0].data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	guard, err := homestore.New(home).Lock(homestore.AgentLocks, resolved.Agent.ID, homestore.LockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardClosed := false
+	t.Cleanup(func() {
+		if !guardClosed {
+			_ = guard.Close()
+		}
+	})
+	tombstone := filepath.Join(home, "agents", "."+resolved.Agent.ID+".deleting-failed")
+	if err := os.Rename(resolved.Address.StateDir(), tombstone); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	recoveryDone := make(chan error, 1)
+	go func() {
+		close(started)
+		recoveryDone <- recoverConfigImportCachePublicationAt(journalPath)
+	}()
+	<-started
+	select {
+	case err := <-recoveryDone:
+		t.Fatalf("recovery completed during Agent deletion: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	if err := os.Rename(tombstone, resolved.Address.StateDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.Close(); err != nil {
+		t.Fatal(err)
+	}
+	guardClosed = true
+	select {
+	case err := <-recoveryDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery remained blocked after failed deletion restored the Agent")
+	}
+
+	gotConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotConfig) != string(oldConfig) {
+		t.Fatalf("Agent config was not rolled back after deletion restoration: %q", gotConfig)
+	}
+	gotCacheData, err := os.ReadFile(oldCache.cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotCacheData) != string(oldCacheData) {
+		t.Fatalf("shared import cache was not rolled back after deletion restoration:\n%s", gotCacheData)
+	}
+	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+		t.Fatalf("publication journal remains after deletion restoration recovery: %v", err)
 	}
 }
 

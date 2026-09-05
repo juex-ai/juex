@@ -31,6 +31,9 @@ export function ObservationAttachments({
   const previewAbortRef = useRef<AbortController | null>(null);
   const imageAttachments = pairImageAttachments(images, attachments);
   const fileAttachments = attachments.filter((item) => item.kind === "file");
+  const previewName = attachmentName(
+    preview?.attachment.sourcePath || preview?.attachment.artifactPath,
+  );
 
   useEffect(() => () => previewAbortRef.current?.abort(), []);
 
@@ -138,10 +141,7 @@ export function ObservationAttachments({
         >
           <SheetHeader className="border-b p-4">
             <SheetTitle className="break-all pr-8 font-mono text-sm text-foreground">
-              {attachmentName(
-                preview?.attachment.sourcePath ||
-                  preview?.attachment.artifactPath,
-              )}
+              {previewName}
             </SheetTitle>
             <SheetDescription className="sr-only">
               Observation attachment preview
@@ -170,6 +170,7 @@ export function ObservationAttachments({
               </div>
             ) : preview?.content?.kind === "image" ? (
               <ImageBlock
+                displayName={previewName}
                 media={{
                   artifact_path: preview.attachment.artifactPath,
                   media_type: preview.content.media_type,
