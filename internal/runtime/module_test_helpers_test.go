@@ -105,7 +105,7 @@ func appendPolicyAdditionalContext(msg llm.Message, results []hooks.Result) llm.
 }
 
 func newTestPromptBuilder(workDir string, now func() time.Time) *prompt.Builder {
-	provider := &promptcontext.ThreadContextModule{WorkDir: workDir, Now: now}
+	provider := &promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir, Now: now}
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return provider.Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
 	}}

@@ -30,7 +30,6 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -226,7 +225,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	if cfg.AgentStateDir == "" && cfg.AgentAddress.StateDir() != "" {
 		cfg.AgentStateDir = cfg.AgentAddress.StateDir()
 	}
-	if err := ValidateModuleComposition(cfg); err != nil {
+	if err := ValidateModuleConfig(cfg); err != nil {
 		return nil, err
 	}
 	runtimePaths := cfg.RuntimePaths()
@@ -331,16 +330,9 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{
 		DefaultTimeoutSeconds: toolTimeoutSeconds,
 	})
-	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{
-		Policy:        cfg.SandboxPolicy(),
-		WorkDir:       runtimePaths.WorkDir,
-		AgentStateDir: runtimePaths.StateDir,
-		ReadOnlyPaths: []string{runtimePaths.MediaDir},
-	})
-	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, filePolicy)
 	runtimeEnvironment := agentRuntime.Environment()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
-	runtimeModules, err = prepareRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner, chunkedWrites, toolTimeoutSeconds)
+	runtimeModules, err = prepareRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner, toolTimeoutSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +478,6 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		cancel:                appCancel,
 		cfg:                   cfg,
 		stderr:                stderr,
-		chunkedWrites:         chunkedWrites,
 		threadResource:        threadState,
 		eventSink:             eventSink,
 		eventCatalog:          eventCatalog,
@@ -616,8 +607,9 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		a.skillFilteredItems = runtimeModules.skills.Filtered()
 		a.skillFiltered = len(a.skillFilteredItems)
 	}
-	if runtimeModules.builtinTools != nil {
-		a.shellSessions = runtimeModules.builtinTools.ShellSessions()
+	a.chunkedWrites = runtimeModules.chunkedWrites
+	if runtimeModules.shell != nil {
+		a.shellSessions = runtimeModules.shell.ShellSessions()
 	}
 	if observableRuntimeModule != nil {
 		a.obsv = observableRuntimeModule.Manager()
@@ -638,8 +630,6 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		threadState,
 		eng,
 		runtimePaths.WorkDir,
-		promptcontext.ShellProfileFromConfig(cfg.Shell),
-		a.shellSessions,
 		threadModuleOptions{
 			hookRunner:               hookRunner,
 			hookBaseRequest:          hookBaseRequest,
@@ -679,7 +669,9 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	status.RecoverAfterRestart()
-	chunkedWrites.RestoreActiveFromHistory(threadState.History)
+	if a.chunkedWrites != nil {
+		a.chunkedWrites.RestoreActiveFromHistory(threadState.History)
+	}
 	if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
 		_ = a.Close()
 		return nil, err

@@ -15,8 +15,6 @@ import (
 
 const NotesToolUpdate = "update_notes"
 
-const notesGuide = `Guide available via skill_load("juex-thread-state").`
-
 const NotesModuleID runtimemodule.ID = modulecatalog.Notes
 
 type NotesModuleOptions struct {
@@ -83,7 +81,7 @@ func NotesToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{
 		Name:        NotesToolUpdate,
 		Group:       tools.ToolGroupThreadState,
-		Description: "Replace concise thread working notes; use scratchpad files for long material. " + notesGuide,
+		Description: "Replace concise thread working notes; use scratchpad files for long material. ",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/juex-ai/juex/internal/modules/shelltools"
 	"os"
 	"path/filepath"
 	"slices"
@@ -183,7 +184,7 @@ func TestEndToEnd_RuntimeAppliesDefaultStreamIdleTimeout(t *testing.T) {
 		Tools:    tools.NewRegistry(),
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt:   e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, time.Now, threadState),
+		Prompt:   e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, time.Now, threadState),
 	}
 
 	if output, err := engine.Turn(context.Background(), "hello"); err != nil || output != "done" {
@@ -473,7 +474,7 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -573,7 +574,7 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{work}, work, promptcontext.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, tools.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -644,7 +645,7 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{work}, work, promptcontext.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, tools.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -1093,13 +1094,16 @@ func e2ePromptBuilder(
 	globalAgentsMDPath string,
 	agentsMDDirs []string,
 	workDir string,
-	shell promptcontext.ShellProfile,
+	shell tools.ShellProfile,
 	now func() time.Time,
 	threadState *thread.Thread,
 	runtimeModules ...runtimemodule.Module,
 ) *prompt.Builder {
 	t.Helper()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
+	if shell.Binary != "" {
+		runtimeModules = append(runtimeModules, shelltools.New(context.Background(), tools.BuiltinOptions{WorkDir: workDir, Shell: shell}))
+	}
 	runtimeModules = append([]runtimemodule.Module{&promptcontext.GuidanceModule{
 		GlobalAgentsMDPath: globalAgentsMDPath,
 		AgentsMDDirs:       agentsMDDirs,
@@ -1115,16 +1119,13 @@ func e2ePromptBuilder(
 			},
 		})
 	}
-	runtimeSet, err := runtimemodule.BuildRuntimeSet(
+	runtimeSet, err := runtimemodule.BuildAndStartRuntimeSet(
 		t.Context(),
 		runtimeSpecs,
 		runtimeContext,
 		runtimemodule.ToolContext{Runtime: runtimeContext},
 	)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtimeSet.StartRuntime(t.Context(), runtimeContext); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = runtimeSet.CloseRuntime(context.Background()) })
@@ -1137,7 +1138,7 @@ func e2ePromptBuilder(
 			ScratchpadDir: threadState.ScratchpadDir(),
 		}
 	}
-	threadModule := &promptcontext.ThreadContextModule{WorkDir: workDir, Shell: shell, Now: now}
+	threadModule := &promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir, Now: now}
 	threadSet, err := runtimemodule.BuildThreadSet(
 		t.Context(),
 		[]runtimemodule.ThreadFactorySpec{{
@@ -1174,12 +1175,25 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
 	runtimeSet, err := runtimemodule.BuildAndStartRuntimeSet(ctx, []runtimemodule.RuntimeFactorySpec{
 		{
-			ID:      builtintools.ModuleID,
+			ID:      "basic-file-tools",
 			Enabled: true,
 			New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.New(factoryCtx, tools.BuiltinOptions{WorkDir: workDir, Shell: e2eToolShellProfile()}), nil
+				return builtintools.NewBasicFiles(tools.BuiltinOptions{WorkDir: workDir}), nil
 			},
 		},
+		{ID: shelltools.ModuleID, Enabled: true, New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return shelltools.New(factoryCtx, tools.BuiltinOptions{WorkDir: workDir, Shell: e2eToolShellProfile()}), nil
+		}},
+		{ID: "apply-patch", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return builtintools.NewApplyPatch(tools.BuiltinOptions{WorkDir: workDir}), nil
+		}},
+		{ID: "file-search", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return builtintools.NewFileSearch(tools.BuiltinOptions{WorkDir: workDir}), nil
+		}},
+		{ID: "chunked-write", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return builtintools.NewChunkedWrite(tools.BuiltinOptions{WorkDir: workDir}), nil
+		}},
+
 		{
 			ID:      mcp.ModuleID,
 			Enabled: true,
@@ -1417,8 +1431,8 @@ func e2eToolShellProfile() tools.ShellProfile {
 	}
 }
 
-func e2ePromptShellProfile() promptcontext.ShellProfile {
-	return promptcontext.ShellProfile{
+func e2ePromptShellProfile() tools.ShellProfile {
+	return tools.ShellProfile{
 		Profile:   "fake-posix",
 		Family:    "posix",
 		Binary:    os.Args[0],

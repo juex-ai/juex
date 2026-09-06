@@ -1,22 +1,13 @@
 package tools
 
-const chunkedWriteGuidePointer = `Guide available via skill_load("juex-chunked-write").`
+import "fmt"
 
 type ChunkedWriteToolProvider struct{}
 
-func (ChunkedWriteToolProvider) definitions(BuiltinDefinitionOptions) []ToolDefinition {
-	return []ToolDefinition{
-		writeBeginToolDefinition(),
-		writeChunkToolDefinition(),
-		writeCommitToolDefinition(),
-		writeAbortToolDefinition(),
-	}
-}
-
 func (ChunkedWriteToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
-	manager := newChunkWriteManager(ctx.WorkDir, ctx.FilePolicy)
-	if ctx.ChunkedWrites != nil {
-		manager = ctx.ChunkedWrites
+	manager := ctx.ChunkedWrites
+	if manager == nil {
+		manager = newChunkWriteManager(ctx.WorkDir, ctx.FilePolicy)
 	}
 	return []Tool{
 		writeBeginTool(manager),
@@ -30,7 +21,7 @@ func writeBeginToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "write_begin",
 		Group:       ToolGroupChunkedWrite,
-		Description: "Begin a long-file write; use write for short content. " + chunkedWriteGuidePointer,
+		Description: "Begin mode overwrite (default) or create (new file). Use write_id with write_chunk, then write_commit or write_abort.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -46,7 +37,7 @@ func writeChunkToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "write_chunk",
 		Group:       ToolGroupChunkedWrite,
-		Description: "Append indexed content to a chunked write session. " + chunkedWriteGuidePointer,
+		Description: fmt.Sprintf("Add write_id content. Index starts at 0; identical retries are safe. Max %d chars and %d bytes. Optional sha256 verifies content.", chunkWriteMaxChunkChars, chunkWriteMaxChunkBytes),
 		Schema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -65,7 +56,7 @@ func writeCommitToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "write_commit",
 		Group:       ToolGroupChunkedWrite,
-		Description: "Validate and atomically commit a chunked write. " + chunkedWriteGuidePointer,
+		Description: "Publish write_id atomically. expected_chunks and sha256 optionally validate content; failure preserves session and target.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -82,7 +73,7 @@ func writeAbortToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "write_abort",
 		Group:       ToolGroupChunkedWrite,
-		Description: "Abort and discard an unfinished chunked write. " + chunkedWriteGuidePointer,
+		Description: "Discard buffered chunks; target unchanged.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

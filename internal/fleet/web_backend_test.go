@@ -242,8 +242,8 @@ func TestUpdateConfigPreflightsBeforeWriting(t *testing.T) {
 	}
 }
 
-func TestUpdateConfigRejectsUnsupportedModuleCompositionBeforeWriting(t *testing.T) {
-	for _, overlay := range []string{"preset: minimal\n", "modules:\n  scratchpad:\n    enabled: false\n"} {
+func TestUpdateConfigRejectsInvalidModuleDeclarationsBeforeWriting(t *testing.T) {
+	for _, overlay := range []string{"preset: invalid\n", "modules:\n  invalid-module:\n    enabled: false\n"} {
 		t.Run(overlay, func(t *testing.T) {
 			home, _, entry := prepareFleetConfigTest(t)
 			old := validFleetConfig("old-model")
@@ -264,8 +264,8 @@ func TestUpdateConfigRejectsUnsupportedModuleCompositionBeforeWriting(t *testing
 			candidate := append(validFleetConfig("new-model"), []byte(overlay)...)
 			_, _, err := manager.UpdateConfig(context.Background(), entry.ID, candidate)
 			var validation *ConfigValidationError
-			if !errors.As(err, &validation) || !strings.Contains(err.Error(), "not yet supported") {
-				t.Errorf("UpdateConfig error = %v, want unsupported composition validation", err)
+			if !errors.As(err, &validation) {
+				t.Errorf("UpdateConfig error = %v, want invalid module validation", err)
 			}
 			got, err := os.ReadFile(entry.Address.ConfigPath())
 			if err != nil {

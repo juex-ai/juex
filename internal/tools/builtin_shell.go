@@ -13,19 +13,10 @@ import (
 
 type ShellToolProvider struct{}
 
-func (ShellToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefinition {
-	profile := opts.Shell
-	if profile.Binary == "" {
-		profile = DefaultShellProfile()
-	}
-	return []ToolDefinition{
-		execCommandToolDefinition(profile),
-		listShellSessionsToolDefinition(),
-		writeStdinToolDefinition(),
-	}
-}
-
 func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
+	if ctx.ShellSessions == nil {
+		ctx.ShellSessions = NewShellSessionManager(context.Background())
+	}
 	return []Tool{
 		execCommandTool(ctx.WorkDir, ctx.Environment, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.FilePolicy, ctx.SandboxRunner),
 		listShellSessionsTool(ctx.ShellSessions),

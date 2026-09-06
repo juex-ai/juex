@@ -71,8 +71,7 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 	if !ok {
 		t.Fatal("observable_create missing")
 	}
-	if !strings.Contains(create.Description, "schedule_create") ||
-		!strings.Contains(create.Description, `Guide available via skill_load("juex-observables").`) {
+	if !strings.Contains(create.Description, "schedule_create") {
 		t.Fatalf("description = %q", create.Description)
 	}
 	schedule, ok := reg.Get("schedule_create")
@@ -90,7 +89,6 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 			"Read observable_list results",
 			"reuse matches",
 			"no probe/poll",
-			`Guide available via skill_load("juex-observables").`,
 		} {
 			if !strings.Contains(description, want) {
 				t.Errorf("schedule_create description missing %q: %q", want, description)

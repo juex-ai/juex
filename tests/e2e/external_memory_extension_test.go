@@ -15,7 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modules/builtintools"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
@@ -98,7 +98,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		}
 	}
 	for name, wantOwner := range map[string]runtimemodule.ID{
-		"read":                       builtintools.ModuleID,
+		"read":                       modulecatalog.BasicFileTools,
 		"skill_search":               skillsmodule.ModuleID,
 		juexruntime.GoalToolGet:      juexruntime.GoalModuleID,
 		juexruntime.NotesToolUpdate:  juexruntime.NotesModuleID,

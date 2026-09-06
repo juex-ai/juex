@@ -97,7 +97,9 @@ func pwdCommand() string {
 var _ = filepath.Join
 
 func TestDefaultBuiltinToolGroups(t *testing.T) {
-	definitions := DefaultBuiltinToolDefinitions(BuiltinDefinitionOptions{Shell: fakeShellProfile()})
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{Shell: fakeShellProfile()})
+	definitions := registry.List()
 	want := map[string]ToolGroup{
 		"read":                ToolGroupFile,
 		"write":               ToolGroupFile,
@@ -115,22 +117,13 @@ func TestDefaultBuiltinToolGroups(t *testing.T) {
 	if len(definitions) != len(want) {
 		t.Fatalf("definition count = %d, want %d", len(definitions), len(want))
 	}
-	registry := NewRegistry()
-	RegisterBuiltins(registry, BuiltinOptions{Shell: fakeShellProfile()})
 	for _, definition := range definitions {
 		if got, ok := want[definition.Name]; !ok {
 			t.Errorf("unexpected builtin definition %q", definition.Name)
 		} else if definition.Group != got {
 			t.Errorf("%s group = %q, want %q", definition.Name, definition.Group, got)
 		}
-		registered, ok := registry.Get(definition.Name)
-		if !ok {
-			t.Errorf("%s is not registered", definition.Name)
-			continue
-		}
-		if got := registered.Definition(); !reflect.DeepEqual(got, definition) {
-			t.Errorf("%s registered definition = %#v, want %#v", definition.Name, got, definition)
-		}
+
 	}
 }
 
@@ -927,7 +920,7 @@ func TestRegistry_CallWithInfoRejectsMalformedRawArgumentsBeforeDispatch(t *test
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "provider returned malformed tool arguments") ||
-		!strings.Contains(msg, "retry with smaller/chunked content") {
+		!strings.Contains(msg, "retry with valid JSON and smaller content") {
 		t.Fatalf("error = %q, want provider malformed arguments guidance", msg)
 	}
 }
@@ -1706,11 +1699,6 @@ func TestRegisterBuiltinsApplyPatchSchemaAndDisable(t *testing.T) {
 		t.Fatalf("required = %+v, want [patch_text]", tool.Schema["required"])
 	}
 
-	disabled := NewRegistry()
-	RegisterBuiltins(disabled, BuiltinOptions{WorkDir: t.TempDir(), Shell: DefaultShellProfile(), DisableApplyPatch: true})
-	if _, ok := disabled.Get("apply_patch"); ok {
-		t.Fatal("apply_patch should be omitted when DisableApplyPatch is set")
-	}
 }
 
 func TestBuiltins_ApplyPatchAddUpdateDeleteMove(t *testing.T) {
@@ -2208,12 +2196,12 @@ func TestRegisterBuiltinsChunkedWriteSchema(t *testing.T) {
 		}
 	}
 	begin, _ := r.Get("write_begin")
-	if !strings.Contains(begin.Description, "use write for short content") || !strings.Contains(begin.Description, `Guide available via skill_load("juex-chunked-write").`) {
-		t.Fatalf("write_begin description missing routing and guide pointer: %q", begin.Description)
+	if !strings.Contains(begin.Description, "write_id") || !strings.Contains(begin.Description, "write_abort") {
+		t.Fatalf("write_begin description missing standalone workflow: %q", begin.Description)
 	}
 	chunk, _ := r.Get("write_chunk")
-	if !strings.Contains(chunk.Description, "indexed content") || !strings.Contains(chunk.Description, `Guide available via skill_load("juex-chunked-write").`) {
-		t.Fatalf("write_chunk description missing purpose and guide pointer: %q", chunk.Description)
+	if !strings.Contains(chunk.Description, "Index starts at 0") || !strings.Contains(chunk.Description, "4000 bytes") {
+		t.Fatalf("write_chunk description missing standalone constraints: %q", chunk.Description)
 	}
 	if chunk.Schema["additionalProperties"] != false {
 		t.Fatalf("write_chunk schema should reject additional properties: %+v", chunk.Schema)
@@ -2228,7 +2216,7 @@ func TestRegisterBuiltinsChunkedWriteSchema(t *testing.T) {
 		t.Fatalf("write description should steer long content to chunked write: %q", write.Description)
 	}
 	writeContentSchema, ok := write.Schema["properties"].(map[string]any)["content"].(map[string]any)
-	if !ok || writeContentSchema["maxLength"] != chunkWriteRecommendedChunkChars {
+	if !ok || writeContentSchema["maxLength"] != directWriteRecommendedMaxChars {
 		t.Fatalf("write content schema should cap provider-visible content length: %+v", writeContentSchema)
 	}
 }

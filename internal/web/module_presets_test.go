@@ -11,10 +11,10 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 )
 
-func TestRunRejectsUnsupportedModulesBeforeReadinessAndMCPStartup(t *testing.T) {
+func TestRunRejectsUnknownModuleBeforeReadinessAndMCPStartup(t *testing.T) {
 	srv := newTestServer(t)
 	setTestAgentAddress(t, &srv.opts.Cfg)
-	srv.opts.Cfg.Modules = config.ModulePolicy{"apply-patch": {Enabled: false}}
+	srv.opts.Cfg.Modules = config.ModulePolicy{"invalid-module": {Enabled: true}}
 	marker := filepath.Join(t.TempDir(), "mcp-started")
 	mustWriteWebFakeMCPConfigEnv(t, srv.opts.Cfg.WorkDir, false, map[string]string{
 		"JUEX_WEB_FAKE_MCP_LIST_MARKER": marker,
@@ -23,8 +23,8 @@ func TestRunRejectsUnsupportedModulesBeforeReadinessAndMCPStartup(t *testing.T) 
 	srv.opts.OnReady = func(ReadyInfo) { ready = true }
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if err := srv.Run(ctx); err == nil || !strings.Contains(err.Error(), "not yet supported") {
-		t.Fatalf("Run error = %v, want unsupported composition", err)
+	if err := srv.Run(ctx); err == nil || !strings.Contains(err.Error(), "unsupported module") {
+		t.Fatalf("Run error = %v, want unknown module", err)
 	}
 	if ready {
 		t.Error("invalid configuration advertised readiness")

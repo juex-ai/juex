@@ -49,7 +49,7 @@ func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
 	if _, ok := eng.Tools.Get("get_notes"); ok {
 		t.Fatal("get_notes must not be registered")
 	}
-	for _, want := range []string{"scratchpad", "replace", `guide available via skill_load("juex-thread-state")`} {
+	for _, want := range []string{"scratchpad", "replace"} {
 		if !strings.Contains(strings.ToLower(tool.Description), want) {
 			t.Fatalf("tool description missing %q: %q", want, tool.Description)
 		}

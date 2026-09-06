@@ -10,10 +10,6 @@ import (
 
 type SearchToolProvider struct{}
 
-func (SearchToolProvider) definitions(BuiltinDefinitionOptions) []ToolDefinition {
-	return []ToolDefinition{grepToolDefinition()}
-}
-
 func (SearchToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	runner := ctx.SearchRunner
 	if runner == nil {

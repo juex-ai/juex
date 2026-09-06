@@ -268,14 +268,14 @@ func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	}
 }
 
-func TestDoctorRejectsUnsupportedModuleComposition(t *testing.T) {
+func TestDoctorRejectsUnknownModule(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	path := filepath.Join(work, ".juex", "juex.yaml")
 	if err := writeJuexConfigFile(path, "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendTextFile(path, "preset: minimal\n"); err != nil {
+	if err := appendTextFile(path, "modules:\n  invalid-module:\n    enabled: true\n"); err != nil {
 		t.Fatal(err)
 	}
 	root := newRootCmd()
@@ -293,11 +293,11 @@ func TestDoctorRejectsUnsupportedModuleComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, check := range result.Checks {
-		if check.Name == "config" && check.Status == doctorStatusFail && strings.Contains(check.Message, "not yet supported") {
+		if check.Name == "config" && check.Status == doctorStatusFail && strings.Contains(check.Message, "unsupported module") {
 			return
 		}
 	}
-	t.Fatalf("missing unsupported composition config check: %+v", result.Checks)
+	t.Fatalf("missing unknown module config check: %+v", result.Checks)
 }
 
 func TestDoctorInspectsExtensionDataDefaultsBeforeAgentCreation(t *testing.T) {

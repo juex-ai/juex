@@ -14,29 +14,22 @@ import (
 
 type FileToolProvider struct{}
 
-func (FileToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefinition {
-	definitions := []ToolDefinition{
-		readToolDefinition(),
-		writeToolDefinition(),
-		editToolDefinition(),
-	}
-	if !opts.DisableApplyPatch {
-		definitions = append(definitions, applyPatchToolDefinition())
-	}
-	return definitions
-}
+// Bound a single generated argument only when staged writing is available.
+const directWriteRecommendedMaxChars = 2000
 
 func (FileToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	guard := ctx.FilePolicy
-	out := []Tool{
+	return []Tool{
 		readTool(ctx.WorkDir, ctx.MediaDir, guard),
 		writeTool(ctx.WorkDir, guard),
 		editTool(ctx.WorkDir, guard),
 	}
-	if !ctx.Options.DisableApplyPatch {
-		out = append(out, applyPatchTool(ctx.WorkDir, guard))
-	}
-	return out
+}
+
+type PatchToolProvider struct{}
+
+func (PatchToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
+	return []Tool{applyPatchTool(ctx.WorkDir, ctx.FilePolicy)}
 }
 
 func readToolDefinition() ToolDefinition {
@@ -60,12 +53,12 @@ func writeToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "write",
 		Group:       ToolGroupFile,
-		Description: fmt.Sprintf("Write short content to a file, creating parent directories if needed. Overwrites existing files. For generated content longer than %d characters, use write_begin/write_chunk/write_commit instead.", chunkWriteRecommendedChunkChars),
+		Description: "Write content to a file, creating parent directories if needed. Overwrites existing files.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string"},
-				"content": map[string]any{"type": "string", "maxLength": chunkWriteRecommendedChunkChars},
+				"content": map[string]any{"type": "string"},
 			},
 			"required": []string{"path", "content"},
 		},
@@ -173,7 +166,7 @@ func readTool(workDir, mediaDir string, guard sandbox.PathGuard) Tool {
 }
 
 func writeTool(workDir string, guard sandbox.PathGuard) Tool {
-	return writeToolDefinition().Bind(func(ctx context.Context, in map[string]any) (string, error) {
+	tool := writeToolDefinition().Bind(func(ctx context.Context, in map[string]any) (string, error) {
 		path, _ := in["path"].(string)
 		content, _ := in["content"].(string)
 		if path == "" {
@@ -197,6 +190,15 @@ func writeTool(workDir string, guard sandbox.PathGuard) Tool {
 		}
 		return fmt.Sprintf("wrote %d bytes to %s", len(content), path), nil
 	})
+	tool.ResolveDefinition = func(available ToolAvailability) ToolDefinition {
+		definition := writeToolDefinition()
+		if available.HasAll("write_begin", "write_chunk", "write_commit", "write_abort") {
+			definition.Description += fmt.Sprintf(" For generated content longer than %d characters, use write_begin/write_chunk/write_commit; write_abort discards an unfinished write.", directWriteRecommendedMaxChars)
+			definition.Schema["properties"].(map[string]any)["content"].(map[string]any)["maxLength"] = directWriteRecommendedMaxChars
+		}
+		return definition
+	}
+	return tool
 }
 
 func editTool(workDir string, guard sandbox.PathGuard) Tool {

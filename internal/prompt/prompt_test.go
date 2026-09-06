@@ -3,6 +3,8 @@ package prompt
 import (
 	"context"
 	"errors"
+	"github.com/juex-ai/juex/internal/modules/shelltools"
+	"github.com/juex-ai/juex/internal/tools"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,7 +44,7 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			runtimeSections, err := (&promptcontext.ThreadContextModule{Now: func() time.Time {
+			runtimeSections, err := (&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, Now: func() time.Time {
 				return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 			}}).Context(context.Background(), request)
 			if err != nil {
@@ -71,7 +73,7 @@ func TestBuilder_EmptySourcesSkipped(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
 		&promptcontext.GuidanceModule{AgentsMDDirs: []string{t.TempDir()}},
-		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
 	got := mustBuild(t, b)
 	if strings.Contains(got, "Available Skills") {
@@ -114,7 +116,7 @@ func TestBuilder_OnlyGlobalAgentsMD(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
 		&promptcontext.GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{t.TempDir()}},
-		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
 	got := mustBuild(t, b)
 	mustContain(t, got, "only-global-rule")
@@ -156,7 +158,7 @@ func TestBuilder_SectionsIncludeInspectableAgentsEntries(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
 		&promptcontext.GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{root, projectAgents}},
-		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 	sections := mustSections(t, b)
 	if len(sections) != 4 {
@@ -187,7 +189,7 @@ func TestBuilder_ModuleSectionsPreserveProviderOrder(t *testing.T) {
 		staticContextProvider{sections: []runtimemodule.ContextSection{{
 			Key: "active_shell_sessions", Label: "Active Shell Sessions", Source: "runtime", Text: "## Active Shell Sessions\n- session_id=7", Projection: runtimemodule.ContextProjectionSystemPrompt, Budget: runtimemodule.UnboundedContextBudget(),
 		}}},
-		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
 	sections := mustSections(t, b)
@@ -217,7 +219,7 @@ func TestBuilder_ThreadScratchpadSection(t *testing.T) {
 	dir := filepath.Join(work, ".juex", "threads", "123456", "scratchpad")
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration, Thread: &runtimemodule.ThreadContext{ScratchpadDir: dir}},
-		&promptcontext.ThreadContextModule{WorkDir: work, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: work, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
 	sections := mustSections(t, b)
@@ -231,10 +233,9 @@ func TestBuilder_ThreadScratchpadSection(t *testing.T) {
 	for _, want := range []string{
 		"## Thread Scratchpad",
 		dir,
-		"workspace-relative path for `write_begin`: .juex/threads/123456/scratchpad",
+		"workspace-relative path: .juex/threads/123456/scratchpad",
 		"not automatically added to context",
-		"use `read` or `grep`",
-		"Notes",
+		"available file tools",
 		"before compaction",
 	} {
 		if !strings.Contains(got.Text, want) {
@@ -249,7 +250,7 @@ func TestBuilder_ThreadScratchpadSection(t *testing.T) {
 func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 	got := mustBuild(t, b)
 	for _, want := range []string{"cwd:", "os:", "time:", "2026-05-01T12:30:45Z"} {
@@ -265,7 +266,7 @@ func TestBuilder_OperatingContextUsesWorkDir(t *testing.T) {
 	workDir := t.TempDir()
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&promptcontext.ThreadContextModule{WorkDir: workDir, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
 	got := mustBuild(t, b)
@@ -275,16 +276,16 @@ func TestBuilder_OperatingContextUsesWorkDir(t *testing.T) {
 	}
 }
 
-func TestBuilder_OperatingContextIncludesShellProfile(t *testing.T) {
+func TestBuilder_IncludesShellModuleContext(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&promptcontext.ThreadContextModule{Shell: promptcontext.ShellProfile{
+		shelltools.New(context.Background(), tools.BuiltinOptions{Shell: tools.ShellProfile{
 			Profile:   "powershell",
 			Family:    "powershell",
 			Binary:    "pwsh",
 			Args:      []string{"-NoProfile", "-Command"},
 			PathStyle: "windows",
-		}, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		}}),
 	)
 
 	got := mustBuild(t, b)
@@ -309,7 +310,7 @@ func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
 	}
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&promptcontext.ThreadContextModule{WorkDir: "workspace", Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: "workspace", Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
 	got := mustBuild(t, b)
@@ -345,7 +346,7 @@ func TestBuilder_SectionsSeparatedByDivider(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
 		&promptcontext.GuidanceModule{AgentsMDDirs: []string{root}},
-		&promptcontext.ThreadContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
+		&promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
 	got := mustBuild(t, b)
 	if !strings.Contains(got, "---") {

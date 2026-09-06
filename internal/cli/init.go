@@ -44,8 +44,8 @@ func newConfigCmd() *cobra.Command {
 		Short: "Manage Juex configuration",
 		Long: fmt.Sprintf(`Manage Juex configuration. YAML preset defaults to %s;
 %s selects the minimal module defaults. Explicit modules.<id>.enabled
-switches override preset defaults. Configured capabilities and available tools
-are distinct; some independent module combinations are not yet supported.`, config.PresetStandard, config.PresetMinimal),
+switches override preset defaults. Tool descriptions and guidance follow the
+tools available in the final runtime catalog.`, config.PresetStandard, config.PresetMinimal),
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}

@@ -18,8 +18,6 @@ const (
 	ContextToolCompact     string           = "context_compact"
 )
 
-const contextControlGuide = `Guide available via skill_load("juex-thread-state").`
-
 type contextTransitionKind string
 
 const (
@@ -104,14 +102,14 @@ func contextToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:          ContextToolNew,
 			Group:         tools.ToolGroupThreadState,
-			Description:   "End the current task context and start an empty Context Generation. Goal and Notes are cleared; the Thread scratchpad and journal are retained. " + contextControlGuide,
+			Description:   "End the current task context and start an empty Context Generation. Goal and Notes are cleared; the Thread scratchpad and journal are retained. ",
 			Schema:        map[string]any{"type": "object", "properties": map[string]any{}},
 			TimeoutPolicy: tools.ToolTimeoutDisabled,
 		},
 		{
 			Name:        ContextToolCompact,
 			Group:       tools.ToolGroupThreadState,
-			Description: "Summarize the current task context into a new Context Generation while retaining Goal, Notes, and the Thread scratchpad. " + contextControlGuide,
+			Description: "Summarize the current task context into a new Context Generation while retaining Goal, Notes, and the Thread scratchpad. ",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

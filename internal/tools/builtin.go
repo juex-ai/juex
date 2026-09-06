@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"path/filepath"
 	"runtime"
 
@@ -18,7 +17,6 @@ type BuiltinOptions struct {
 	Sandbox            sandbox.Policy
 	SandboxRunner      sandbox.Runner
 	ToolTimeoutSeconds int
-	DisableApplyPatch  bool
 	Providers          []BuiltinProvider
 	ChunkedWrites      *ChunkedWriteManager
 	AgentStateDir      string
@@ -38,15 +36,6 @@ type BuiltinProvider interface {
 	Tools(ctx BuiltinProviderContext) []Tool
 }
 
-type BuiltinDefinitionOptions struct {
-	Shell             ShellProfile
-	DisableApplyPatch bool
-}
-
-type builtinDefinitionProvider interface {
-	definitions(opts BuiltinDefinitionOptions) []ToolDefinition
-}
-
 type BuiltinProviderContext struct {
 	WorkDir            string
 	Environment        environment.Snapshot
@@ -56,7 +45,6 @@ type BuiltinProviderContext struct {
 	Sandbox            sandbox.Policy
 	SandboxRunner      sandbox.Runner
 	ToolTimeoutSeconds int
-	Options            BuiltinOptions
 	ChunkedWrites      *ChunkedWriteManager
 	AgentStateDir      string
 	MediaDir           string
@@ -66,25 +54,11 @@ type BuiltinProviderContext struct {
 func DefaultBuiltinProviders() []BuiltinProvider {
 	return []BuiltinProvider{
 		FileToolProvider{},
+		PatchToolProvider{},
 		ChunkedWriteToolProvider{},
 		ShellToolProvider{},
 		SearchToolProvider{},
 	}
-}
-
-func DefaultBuiltinToolDefinitions(opts BuiltinDefinitionOptions) []ToolDefinition {
-	if opts.Shell.Binary == "" {
-		opts.Shell = DefaultShellProfile()
-	}
-	var definitions []ToolDefinition
-	for _, provider := range DefaultBuiltinProviders() {
-		definitionProvider, ok := provider.(builtinDefinitionProvider)
-		if !ok {
-			continue
-		}
-		definitions = append(definitions, definitionProvider.definitions(opts)...)
-	}
-	return definitions
 }
 
 // RegisterBuiltins adds the default builtin tool set.
@@ -93,7 +67,13 @@ func DefaultBuiltinToolDefinitions(opts BuiltinDefinitionOptions) []ToolDefiniti
 // for exec_command / grep calls without an explicit workdir / path. Pass "" to
 // fall back to the process cwd (file tools and shell) and "." (grep).
 func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
-	for _, tool := range builtinTools(newBuiltinProviderContext(r, opts), opts.Providers) {
+	existing := r.List()
+	provided := builtinTools(newBuiltinProviderContext(r, opts), opts.Providers)
+	resolved, err := ResolveTools(append(existing, provided...))
+	if err != nil {
+		panic(err)
+	}
+	for _, tool := range resolved[len(existing):] {
 		r.MustRegister(tool)
 	}
 }
@@ -127,10 +107,6 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 	if shell.Binary == "" {
 		shell = DefaultShellProfile()
 	}
-	shellSessions := opts.ShellSessions
-	if shellSessions == nil {
-		shellSessions = NewShellSessionManager(context.Background())
-	}
 	toolTimeoutSeconds := opts.ToolTimeoutSeconds
 	if toolTimeoutSeconds <= 0 && r != nil {
 		toolTimeoutSeconds = r.defaultTimeoutSeconds
@@ -146,12 +122,11 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		WorkDir:            workDir,
 		Environment:        opts.Environment,
 		Shell:              shell,
-		ShellSessions:      shellSessions,
+		ShellSessions:      opts.ShellSessions,
 		SearchRunner:       opts.SearchRunner,
 		Sandbox:            opts.Sandbox,
 		SandboxRunner:      opts.SandboxRunner,
 		ToolTimeoutSeconds: toolTimeoutSeconds,
-		Options:            opts,
 		ChunkedWrites:      opts.ChunkedWrites,
 		AgentStateDir:      opts.AgentStateDir,
 		MediaDir:           opts.MediaDir,

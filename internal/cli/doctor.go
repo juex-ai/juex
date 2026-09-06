@@ -171,7 +171,7 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		checks = append(checks, doctorWorkdirCheck(workDir))
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 	}
-	if err := app.ValidateModuleComposition(cfg); err != nil {
+	if err := app.ValidateModuleConfig(cfg); err != nil {
 		checks = append(checks, doctorCheck{
 			Name:       "config",
 			Status:     doctorStatusFail,

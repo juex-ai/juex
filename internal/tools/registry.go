@@ -21,7 +21,7 @@ const (
 	MaxTimeoutSeconds     = 300
 )
 
-var ErrMalformedRawArguments = errors.New("provider returned malformed tool arguments; retry with smaller/chunked content")
+var ErrMalformedRawArguments = errors.New("provider returned malformed tool arguments; retry with valid JSON and smaller content")
 
 type Handler func(ctx context.Context, input map[string]any) (string, error)
 
@@ -105,6 +105,9 @@ type Tool struct {
 	TimeoutSeconds int
 	Handler        Handler
 	ResultHandler  ResultHandler
+	// ResolveDefinition must be pure: a shared contribution can serve multiple
+	// Thread registries with different available tools.
+	ResolveDefinition func(ToolAvailability) ToolDefinition
 }
 
 // Clone returns a defensive copy of the Tool definition while preserving its

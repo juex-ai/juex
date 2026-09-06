@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
@@ -88,7 +87,7 @@ func TestThreadContextModuleIncludesScratchpadAndOperatingContext(t *testing.T) 
 	workDir := t.TempDir()
 	scratchpadDir := filepath.Join(workDir, ".juex", "threads", "123456", "scratchpad")
 	now := time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC)
-	sections, err := (&ThreadContextModule{WorkDir: workDir, Now: func() time.Time { return now }}).Context(
+	sections, err := (&ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir, Now: func() time.Time { return now }}).Context(
 		context.Background(),
 		runtimemodule.ContextRequest{
 			Purpose: runtimemodule.ContextPurposeProviderIteration,
@@ -102,10 +101,10 @@ func TestThreadContextModuleIncludesScratchpadAndOperatingContext(t *testing.T) 
 		t.Fatalf("sections = %+v, want scratchpad and operating context", sections)
 	}
 	scratchpad := sections[0]
-	if scratchpad.Key != "thread_scratchpad" || scratchpad.Path != scratchpadDir || !strings.Contains(scratchpad.Text, "workspace-relative path for `write_begin`: .juex/threads/123456/scratchpad") {
+	if scratchpad.Key != "thread_scratchpad" || scratchpad.Path != scratchpadDir || !strings.Contains(scratchpad.Text, "workspace-relative path: .juex/threads/123456/scratchpad") {
 		t.Fatalf("scratchpad section = %+v", scratchpad)
 	}
-	for _, want := range []string{"not automatically added to context", "use `read` or `grep`", "before compaction"} {
+	for _, want := range []string{"not automatically added to context", "available file tools", "before compaction"} {
 		if !strings.Contains(scratchpad.Text, want) {
 			t.Errorf("scratchpad section missing %q:\n%s", want, scratchpad.Text)
 		}
@@ -115,57 +114,6 @@ func TestThreadContextModuleIncludesScratchpadAndOperatingContext(t *testing.T) 
 		if !strings.Contains(operating.Text, want) {
 			t.Errorf("operating context missing %q:\n%s", want, operating.Text)
 		}
-	}
-}
-
-func TestThreadContextModuleIncludesShellProfile(t *testing.T) {
-	sections, err := (&ThreadContextModule{
-		Shell: ShellProfile{
-			Profile:   "powershell",
-			Family:    "powershell",
-			Binary:    "pwsh",
-			Args:      []string{"-NoProfile", "-Command"},
-			PathStyle: "windows",
-		},
-		Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
-	}).Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sections) != 1 {
-		t.Fatalf("sections = %+v, want operating context", sections)
-	}
-	for _, want := range []string{
-		"- shell: powershell (pwsh)",
-		"- shell_family: powershell",
-		"- shell_path_style: windows",
-		"Use the `exec_command` tool with powershell syntax.",
-		"do not use POSIX heredocs",
-	} {
-		if !strings.Contains(sections[0].Text, want) {
-			t.Errorf("operating context missing %q:\n%s", want, sections[0].Text)
-		}
-	}
-}
-
-func TestShellProfileFromConfigCopiesArgs(t *testing.T) {
-	cfg := config.ShellProfile{
-		Profile:       "custom",
-		Family:        "posix",
-		Binary:        "bash",
-		Args:          []string{"-lc"},
-		PathStyle:     "posix",
-		HostPathStyle: "platform",
-	}
-
-	got := ShellProfileFromConfig(cfg)
-	cfg.Args[0] = "-c"
-
-	if got.Profile != "custom" || got.Family != "posix" || got.Binary != "bash" || got.PathStyle != "posix" || got.HostPathStyle != "platform" {
-		t.Fatalf("ShellProfileFromConfig = %+v", got)
-	}
-	if len(got.Args) != 1 || got.Args[0] != "-lc" {
-		t.Fatalf("args = %+v, want defensive copy", got.Args)
 	}
 }
 

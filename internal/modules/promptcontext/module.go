@@ -11,10 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const (
@@ -59,31 +57,11 @@ func guidanceSectionKey(globalPath, path string) string {
 	return "agents_project:" + filepath.ToSlash(filepath.Clean(cleaned))
 }
 
-type ShellProfile struct {
-	Profile       string
-	Family        string
-	Binary        string
-	Args          []string
-	PathStyle     string
-	HostPathStyle string
-}
-
-func ShellProfileFromConfig(profile config.ShellProfile) ShellProfile {
-	return ShellProfile{
-		Profile:       profile.Profile,
-		Family:        profile.Family,
-		Binary:        profile.Binary,
-		Args:          append([]string(nil), profile.Args...),
-		PathStyle:     profile.PathStyle,
-		HostPathStyle: profile.HostPathStyle,
-	}
-}
-
 type ThreadContextModule struct {
-	WorkDir       string
-	Shell         ShellProfile
-	ShellSessions *tools.ShellSessionManager
-	Now           func() time.Time
+	WorkDir                 string
+	OperatingContextEnabled bool
+	ScratchpadEnabled       bool
+	Now                     func() time.Time
 }
 
 func (*ThreadContextModule) ID() runtimemodule.ID { return ThreadContextModuleID }
@@ -94,7 +72,7 @@ func (m *ThreadContextModule) Context(_ context.Context, request runtimemodule.C
 	}
 	var sections []runtimemodule.ContextSection
 	scratchpadDir := ""
-	if request.Thread != nil {
+	if m.ScratchpadEnabled && request.Thread != nil {
 		scratchpadDir = request.Thread.ScratchpadDir
 	}
 	if section, ok := scratchpadSection(m.WorkDir, scratchpadDir); ok {
@@ -102,26 +80,16 @@ func (m *ThreadContextModule) Context(_ context.Context, request runtimemodule.C
 		section.Budget = runtimemodule.UnboundedContextBudget()
 		sections = append(sections, section)
 	}
-	if m.ShellSessions != nil {
-		if text := tools.FormatActiveShellSessionsPrompt(m.ShellSessions.List(false)); text != "" {
-			sections = append(sections, runtimemodule.ContextSection{
-				Key:        "active_shell_sessions",
-				Label:      "Active Shell Sessions",
-				Source:     "runtime",
-				Text:       text,
-				Projection: runtimemodule.ContextProjectionSystemPrompt,
-				Budget:     runtimemodule.UnboundedContextBudget(),
-			})
-		}
+	if m.OperatingContextEnabled {
+		sections = append(sections, runtimemodule.ContextSection{
+			Key:        "operating_context",
+			Label:      "Operating Context",
+			Source:     "runtime",
+			Text:       operatingContext(m.WorkDir, m.Now),
+			Projection: runtimemodule.ContextProjectionSystemPrompt,
+			Budget:     runtimemodule.UnboundedContextBudget(),
+		})
 	}
-	sections = append(sections, runtimemodule.ContextSection{
-		Key:        "operating_context",
-		Label:      "Operating Context",
-		Source:     "runtime",
-		Text:       operatingContext(m.WorkDir, m.Shell, m.Now),
-		Projection: runtimemodule.ContextProjectionSystemPrompt,
-		Budget:     runtimemodule.UnboundedContextBudget(),
-	})
 	return sections, nil
 }
 
@@ -169,12 +137,11 @@ func scratchpadSection(workDir, scratchpadDir string) (runtimemodule.ContextSect
 	}
 	lines := []string{"## Thread Scratchpad", fmt.Sprintf("- path: %s", dir)}
 	if rel, ok := scratchpadRelativePath(workDir, dir); ok {
-		lines = append(lines, fmt.Sprintf("- workspace-relative path for `write_begin`: %s", rel))
+		lines = append(lines, fmt.Sprintf("- workspace-relative path: %s", rel))
 	}
 	lines = append(lines,
-		"- Use this directory for long drafts, intermediate files, and working material that exceeds the compact Notes budget.",
-		"- Scratchpad contents are not automatically added to context. When needed, use `read` or `grep` to retrieve them.",
-		"- Keep the current plan and short progress checkpoints in Notes; keep substantial working material here.",
+		"- Use this directory for long drafts, intermediate files, and working material.",
+		"- Scratchpad contents are not automatically added to context. Retrieve needed contents with the available file tools.",
 		"- Save important intermediate conclusions here before compaction so a later turn can read them back.",
 	)
 	return runtimemodule.ContextSection{
@@ -198,7 +165,7 @@ func scratchpadRelativePath(workDir, dir string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-func operatingContext(workDir string, shell ShellProfile, nowFn func() time.Time) string {
+func operatingContext(workDir string, nowFn func() time.Time) string {
 	now := time.Now
 	if nowFn != nil {
 		now = nowFn
@@ -214,34 +181,6 @@ func operatingContext(workDir string, shell ShellProfile, nowFn func() time.Time
 		fmt.Sprintf("- cwd: %s", cwd),
 		fmt.Sprintf("- os: %s/%s", runtime.GOOS, runtime.GOARCH),
 		fmt.Sprintf("- time: %s", now().UTC().Format(time.RFC3339)),
-	}
-	if shell.Binary != "" || shell.Profile != "" || shell.Family != "" {
-		profile := shell.Profile
-		if profile == "" {
-			profile = shell.Family
-		}
-		binary := shell.Binary
-		if binary == "" {
-			binary = "shell"
-		}
-		family := shell.Family
-		if family == "" {
-			family = profile
-		}
-		pathStyle := shell.PathStyle
-		if pathStyle == "" {
-			pathStyle = "platform"
-		}
-		lines = append(lines,
-			fmt.Sprintf("- shell: %s (%s)", profile, binary),
-			fmt.Sprintf("- shell_family: %s", family),
-			fmt.Sprintf("- shell_path_style: %s", pathStyle),
-			"",
-			fmt.Sprintf("Use the `exec_command` tool with %s syntax.", family),
-		)
-		if family == "powershell" {
-			lines = append(lines, "For powershell, do not use POSIX heredocs, rm -rf, grep-only assumptions, or bash-specific expansion.")
-		}
 	}
 	return strings.Join(lines, "\n")
 }
