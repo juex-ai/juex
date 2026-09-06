@@ -83,6 +83,7 @@ type Config struct {
 	pendingImportCache []configImportCacheRecord
 	importLoader       *configImportLoader
 	importCacheContext string
+	moduleDeclarations []moduleDeclaration
 }
 
 type AgentStateMode uint8
@@ -118,11 +119,11 @@ type fileConfig struct {
 	Providers                 []providerConfig        `yaml:"providers"`
 	Compaction                compactionConfig        `yaml:"compaction"`
 	ToolOutput                toolOutputConfig        `yaml:"tool_output"`
-	Hooks                     hooks.FileConfig        `yaml:"hooks"`
+	Hooks                     yaml.Node               `yaml:"hooks"`
 	Runtime                   runtimeConfig           `yaml:"runtime"`
 	Shell                     *ShellConfig            `yaml:"shell"`
 	Sandbox                   *sandboxConfig          `yaml:"sandbox"`
-	Skills                    skillsConfig            `yaml:"skills"`
+	Skills                    yaml.Node               `yaml:"skills"`
 	Preset                    *string                 `yaml:"preset"`
 	Modules                   map[string]moduleConfig `yaml:"modules"`
 	Extensions                extensionsConfig        `yaml:"extensions"`
@@ -681,6 +682,9 @@ func redactConfiguredEnvironmentError(snapshot environment.Snapshot, err error) 
 }
 
 func finalizeLoadedConfig(cfg *Config, resolveAuth bool, publishImportCache bool) error {
+	if err := resolveModuleDeclarations(cfg); err != nil {
+		return err
+	}
 	if err := resolveShellProfileForConfig(cfg); err != nil {
 		return err
 	}
@@ -971,17 +975,15 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
-	if !opts.SkipAppendOnlyValues {
-		if err := applyHooksConfig(cfg, fc.Hooks, source.hookSource(), source.requireHookTrust()); err != nil {
-			return fmt.Errorf("config: parse %s: %w", source.Path, err)
-		}
+	hasHooks := fc.Hooks.Kind != 0 && !opts.SkipAppendOnlyValues
+	if hasHooks || fc.Skills.Kind != 0 {
+		cfg.moduleDeclarations = append(cfg.moduleDeclarations, moduleDeclaration{
+			data: string(data), source: source, hooks: hasHooks, skills: fc.Skills.Kind != 0,
+		})
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyToolOutputConfig(cfg, fc.ToolOutput)
 	applyRuntimeConfig(cfg, fc.Runtime)
-	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source.Path, err)
-	}
 	if fc.Preset != nil {
 		if err := validatePreset(*fc.Preset); err != nil {
 			return fmt.Errorf("config: parse %s: %w", source.Path, err)

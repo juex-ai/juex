@@ -13,6 +13,7 @@ func TestDiscoverLoadsNoExtensionsWithoutAllowedNames(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(root, "demo", "mcp.json"), "{}")
 
 	resources, err := Discover(DiscoverOptions{
+		Resources: ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots: []Root{{
 			Path:  root,
 			Scope: ScopeDefaultHome,
@@ -69,6 +70,7 @@ func TestDiscoverLoadsSelectedExtensionManifest(t *testing.T) {
 }`)
 
 	resources, err := Discover(DiscoverOptions{
+		Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots:        []Root{{Path: root, Scope: ScopeInstanceHome}},
 		AllowedNames: []string{"demo"},
 	})
@@ -110,6 +112,7 @@ func TestDiscoverLoadsAgentEnvironmentDefaults(t *testing.T) {
 }`)
 
 	resources, err := Discover(DiscoverOptions{
+		Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
 		AllowedNames: []string{"lark-cli"},
 	})
@@ -145,6 +148,7 @@ func TestDiscoverRejectsInvalidAgentEnvironmentManifestShapes(t *testing.T) {
 			manifest := fmt.Sprintf(`{"manifest_version":1,"name":"demo","version":"1.0.0","agent":%s}`, tt.agent)
 			writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), manifest)
 			_, err := Discover(DiscoverOptions{
+				Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 				Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
 				AllowedNames: []string{"demo"},
 			})
@@ -180,6 +184,7 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 			manifest := fmt.Sprintf(`{"manifest_version":1,"name":"demo","version":"1.0.0","requirements":%s}`, tt.requirements)
 			writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), manifest)
 			_, err := Discover(DiscoverOptions{
+				Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 				Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
 				AllowedNames: []string{"demo"},
 			})
@@ -203,6 +208,7 @@ func TestDiscoverPreservesInformationalRequirementURLs(t *testing.T) {
 			writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), manifest)
 
 			resources, err := Discover(DiscoverOptions{
+				Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 				Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
 				AllowedNames: []string{"demo"},
 			})
@@ -224,6 +230,7 @@ func TestDiscoverValidatesOnlySelectedWinningManifest(t *testing.T) {
 	writeRawExtensionFile(t, filepath.Join(higher, "blocked", manifestFilename), "not json")
 
 	resources, err := Discover(DiscoverOptions{
+		Resources: ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots: []Root{
 			{Path: lower, Scope: ScopeDefaultHome},
 			{Path: higher, Scope: ScopeProject, RequireTrust: true},
@@ -245,6 +252,7 @@ func TestDiscoverInvalidWinningManifestNeverFallsBack(t *testing.T) {
 	writeRawExtensionFile(t, filepath.Join(higher, "shared", manifestFilename), "not json")
 
 	_, err := Discover(DiscoverOptions{
+		Resources: ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots: []Root{
 			{Path: lower, Scope: ScopeDefaultHome},
 			{Path: higher, Scope: ScopeProject, RequireTrust: true},
@@ -283,6 +291,7 @@ func TestDiscoverRejectsInvalidSelectedManifests(t *testing.T) {
 				writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), tt.manifest)
 			}
 			_, err := Discover(DiscoverOptions{
+				Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 				Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
 				AllowedNames: []string{tt.dirName},
 			})
@@ -299,6 +308,7 @@ func TestDiscoverRequiresExactManifestFilenameCase(t *testing.T) {
 	writeRawExtensionFile(t, filepath.Join(dir, "JUEX.EXTENSION.JSON"), `{"manifest_version":1,"name":"demo","version":"1.0.0"}`)
 
 	_, err := Discover(DiscoverOptions{
+		Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
 		AllowedNames: []string{"demo"},
 	})
@@ -337,6 +347,7 @@ func TestDiscoverIgnoresInvalidResourcesFromUnallowedExtensions(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(root, "blocked", "skills"), "not a directory")
 
 	resources, err := Discover(DiscoverOptions{
+		Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
 		AllowedNames: []string{"allowed"},
 	})
@@ -358,6 +369,7 @@ func TestDiscoverOverlappingRootsKeepHigherPrecedenceScopeAndTrust(t *testing.T)
 	writeExtensionFile(t, filepath.Join(middle, "shared", "mcp.json"), "{}")
 
 	resources, err := Discover(DiscoverOptions{
+		Resources: ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots: []Root{
 			{Path: root, Scope: ScopeDefaultHome},
 			{Path: middle, Scope: ScopeInstanceHome},
@@ -386,6 +398,7 @@ func TestDiscoverFindsUserAndProjectExtensions(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "project-ext", "observables.json"), `{"observables":[]}`)
 
 	resources, err := Discover(DiscoverOptions{
+		Resources: ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots: []Root{
 			{Path: filepath.Join(home, "extensions"), Scope: ScopeInstanceHome},
 			{Path: filepath.Join(work, ".juex", "extensions"), Scope: ScopeProject, RequireTrust: true},
@@ -428,6 +441,7 @@ func TestDiscoverObservableConfigRequiresRegularFile(t *testing.T) {
 	}
 	writeRawExtensionFile(t, filepath.Join(work, "bad", manifestFilename), `{"manifest_version":1,"name":"bad","version":"1.0.0"}`)
 	_, err := Discover(DiscoverOptions{
+		Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots:        []Root{{Path: work, Scope: ScopeInstanceHome}},
 		AllowedNames: []string{"bad"},
 	})
@@ -442,6 +456,7 @@ func TestDiscoverDeduplicatesOverlappingHomeAndProjectRoots(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(homeJuex, "extensions", "shared", "hooks.yaml"), "commands: {}\n")
 
 	resources, err := Discover(DiscoverOptions{
+		Resources: ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots: []Root{
 			{Path: filepath.Join(homeJuex, "extensions"), Scope: ScopeInstanceHome},
 			{Path: filepath.Join(work, ".juex", "extensions"), Scope: ScopeProject, RequireTrust: true},
@@ -471,6 +486,7 @@ func TestDiscoverDeduplicatesSymlinkedRoots(t *testing.T) {
 	}
 
 	resources, err := Discover(DiscoverOptions{
+		Resources: ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots: []Root{
 			{Path: filepath.Join(alias, "extensions"), Scope: ScopeInstanceHome},
 			{Path: filepath.Join(work, ".juex", "extensions"), Scope: ScopeProject, RequireTrust: true},
@@ -495,6 +511,7 @@ func TestDiscoverHigherPrecedenceExtensionReplacesLowerBundle(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(projectDir, "mcp.json"), "{}")
 
 	resources, err := Discover(DiscoverOptions{
+		Resources: ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots: []Root{
 			{Path: home, Scope: ScopeDefaultHome},
 			{Path: work, Scope: ScopeProject, RequireTrust: true},
@@ -519,6 +536,7 @@ func TestDiscoverErrorsWhenSkillsResourceIsNotDirectory(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(work, "bad", "skills"), "not a directory")
 
 	_, err := Discover(DiscoverOptions{
+		Resources:    ResourceSelection{Skills: true, Hooks: true, MCP: true, Observables: true},
 		Roots:        []Root{{Path: work, Scope: ScopeProject, RequireTrust: true}},
 		AllowedNames: []string{"bad"},
 	})

@@ -22,6 +22,22 @@ advice: basic writes support long content when the complete chunked-write
 workflow is unavailable, and skill-guide pointers require `skill_load`.
 Fleet config updates validate declarations before publishing the Agent overlay
 or import cache and restarting. `diagnose` validates before resource discovery.
-Extension discovery gating and the built-in Memory factory are separate work.
 Presets do not change Provider, model, Sandbox, auto-compaction, or core
 persistence settings.
+
+Hooks and Skills declarations are parsed only after the final module switches
+are known, so a higher-layer disablement can suppress damaged lower-layer
+declarations. Ordinary YAML syntax and common configuration remain validated.
+Disabled declarations are retained in the submitted YAML; enabling the module
+restores its strict parsing and existing merge and trust rules.
+
+Extension discovery requires `modules.extensions.enabled` and selection by
+`extensions.allow`. Each resource also requires its hosting `skills`, `hooks`,
+`mcp`, or `observables` module before its path is probed or content parsed.
+Workspace resources depend only on their host, so disabling Extensions still
+allows workspace MCP, Skills and Hooks. These switches govern external command
+Hooks, independently of built-in module lifecycle callbacks. A selected
+Extension's manifest and shared environment defaults remain Extension-owned,
+even when its hosts are disabled; evaluating defaults does not prepare private
+data directories. Enabled resources keep their existing validation, provenance,
+conflict and child-process isolation rules.

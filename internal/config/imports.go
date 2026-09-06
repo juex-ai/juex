@@ -1213,6 +1213,7 @@ func cloneConfigForImport(cfg *Config) Config {
 	out.ProviderQuery = cloneStringMap(cfg.ProviderQuery)
 	out.ProviderCompat.ReasoningReplayFields = append([]string(nil), cfg.ProviderCompat.ReasoningReplayFields...)
 	out.Hooks = cloneHooksConfig(cfg.Hooks)
+	out.moduleDeclarations = append([]moduleDeclaration(nil), cfg.moduleDeclarations...)
 	out.Shell.Args = append([]string(nil), cfg.Shell.Args...)
 	out.Sandbox.FileSystem.BlockedPaths = append([]string(nil), cfg.Sandbox.FileSystem.BlockedPaths...)
 	out.Skills.Include = append([]string(nil), cfg.Skills.Include...)

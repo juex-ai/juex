@@ -12,6 +12,7 @@ import (
 )
 
 func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
+	isolateModuleConfig(t)
 	work := t.TempDir()
 	configPath := filepath.Join(work, "preset.yaml")
 	data := []byte("preset: minimal\nmodules:\n  shell:\n    enabled: false\n  basic-file-tools:\n    enabled: false\n  operating-context:\n    enabled: false\n  worker-threads:\n    enabled: true\n  notes:\n    enabled: true\n")
@@ -71,4 +72,17 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func isolateModuleConfig(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
+	t.Setenv("JUEX_HOME", filepath.Join(root, ".juex"))
+	t.Setenv("CODEX_HOME", filepath.Join(root, "missing-codex-home"))
+	for _, key := range []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"} {
+		t.Setenv(key, "")
+	}
+	return root
 }
