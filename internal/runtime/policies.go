@@ -161,9 +161,14 @@ func (e *Engine) queuePolicyRuntimeContext(contexts []runtimemodule.PolicyContex
 }
 
 func (e *Engine) RunThreadStartPolicies(ctx context.Context) error {
+	var history []llm.Message
+	if current := e.currentThread(); current != nil {
+		history = current.ReplaySnapshot().Messages
+	}
 	contexts, err := runtimemodule.ApplyThreadStartPolicies(ctx, runtimemodule.ThreadStartRequest{
 		Runtime:  e.policyRuntimeContext(),
 		Thread:   e.policyThreadContext(),
+		History:  history,
 		Observer: e.policyObserver(""),
 	}, e.policySets()...)
 	if err != nil {

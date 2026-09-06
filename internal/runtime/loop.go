@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -33,7 +34,6 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/cancellation"
-	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
@@ -1373,6 +1373,11 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, recor
 	var fatalErr error
 	for index := range toolResults {
 		result := &toolResults[index]
+		if result.Block.Type == llm.BlockToolResult {
+			if owner := runtimemodule.ToolOwner(result.Block.ToolName, e.policySets()...); owner != "" {
+				result.Block.ResultFact = &llm.ResultFact{Owner: string(owner), Data: append(json.RawMessage(nil), result.Info.Fact...)}
+			}
+		}
 		if result.FatalError != nil {
 			fatalErr = errors.Join(fatalErr, result.FatalError)
 		}
@@ -1669,9 +1674,6 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 		toolErr = err
 	} else {
 		block.Content = out
-		if event, ok := chunkedwrite.EventFromStructured(info.StructuredResult); ok {
-			block.ChunkedWrite = &event
-		}
 	}
 	shellBaseContent := ""
 	isShellCall := isShellStructuredResult(info.StructuredResult)
@@ -1698,7 +1700,6 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	if postPolicy.ResultTransformed {
 		block.Content = postPolicy.Result.Content
 		block.IsError = postPolicy.Result.IsError
-		block.ChunkedWrite = nil
 	}
 	var fatalErr error
 	if postErr != nil {

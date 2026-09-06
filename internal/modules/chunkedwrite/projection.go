@@ -1,24 +1,18 @@
-package llm
+package chunkedwrite
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/juex-ai/juex/internal/chunkedwrite"
+	writefacts "github.com/juex-ai/juex/internal/chunkedwrite"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
 const providerWriteChunkRecentReplayCount = 4
-
-// FoldChunkedWriteHistoryForProvider removes provider-heavy chunked write
-// tool-call pairs from replay while preserving durable conversation history.
-// Active chunked writes keep the most recent chunks visible so the model can
-// continue; committed or aborted writes collapse to a text summary.
-func FoldChunkedWriteHistoryForProvider(history []Message) []Message {
-	return foldChunkedWriteHistoryForProvider(history)
-}
 
 type providerChunkedWriteProjectionPlan struct {
 	omitToolCalls map[string]bool
@@ -50,56 +44,27 @@ type providerChunkedWriteChunk struct {
 	chars     int
 }
 
-func foldChunkedWriteHistoryForProvider(history []Message) []Message {
-	plan := buildChunkedWriteProjectionPlan(history)
-	if len(plan.omitToolCalls) == 0 {
-		return history
-	}
-	out := make([]Message, 0, len(history))
-	for _, m := range history {
-		projected := m
-		projected.Blocks = make([]Block, 0, len(m.Blocks))
-		var deferredSummaries []Block
-		for _, b := range m.Blocks {
-			if isProviderChunkedWriteOmittedBlock(b, plan.omitToolCalls) {
-				if b.Type == BlockToolResult {
-					if summary := plan.summaries[b.ToolUseID]; summary != "" {
-						deferredSummaries = append(deferredSummaries, Block{Type: BlockText, Text: summary})
-					}
-				}
-				continue
-			}
-			projected.Blocks = append(projected.Blocks, b)
-		}
-		projected.Blocks = append(projected.Blocks, deferredSummaries...)
-		out = append(out, projected)
-	}
-	return out
-}
-
-func isProviderChunkedWriteOmittedBlock(b Block, omitToolCalls map[string]bool) bool {
-	switch b.Type {
-	case BlockToolUse, BlockToolResult:
-		return omitToolCalls[b.ToolUseID]
-	default:
-		return false
-	}
-}
-
-func buildChunkedWriteProjectionPlan(history []Message) providerChunkedWriteProjectionPlan {
-	toolUses := map[string]Block{}
-	toolResults := map[string]Block{}
-	for _, m := range history {
-		for _, b := range m.Blocks {
-			switch b.Type {
-			case BlockToolUse:
-				toolUses[b.ToolUseID] = b
-			case BlockToolResult:
-				toolResults[b.ToolUseID] = b
-			}
+func (*Module) ProjectProviderHistory(_ context.Context, pairs []runtimemodule.ToolResultPair, budget runtimemodule.ProviderHistoryBudget) (runtimemodule.ProviderHistoryPlan, error) {
+	plan := buildChunkedWriteProjectionPlan(pairs)
+	for _, summary := range plan.summaries {
+		if !budget.FitsSummary(summary) {
+			return runtimemodule.ProviderHistoryPlan{}, nil
 		}
 	}
+	result := runtimemodule.ProviderHistoryPlan{}
+	for id := range plan.omitToolCalls {
+		result.Omit = append(result.Omit, id)
+	}
+	sort.Strings(result.Omit)
+	for _, id := range result.Omit {
+		if text := plan.summaries[id]; text != "" {
+			result.Summaries = append(result.Summaries, runtimemodule.ToolSummary{ToolUseID: id, Text: text})
+		}
+	}
+	return result, nil
+}
 
+func buildChunkedWriteProjectionPlan(pairs []runtimemodule.ToolResultPair) providerChunkedWriteProjectionPlan {
 	sessions := map[string]*providerChunkedWriteSession{}
 	getSession := func(writeID string) *providerChunkedWriteSession {
 		session := sessions[writeID]
@@ -110,15 +75,9 @@ func buildChunkedWriteProjectionPlan(history []Message) providerChunkedWriteProj
 		return session
 	}
 
-	for toolUseID, use := range toolUses {
-		if toolUseID == "" {
-			continue
-		}
-		result, hasResult := toolResults[toolUseID]
-		if !hasResult {
-			continue
-		}
-		event := result.ChunkedWrite
+	for _, pair := range pairs {
+		toolUseID, use, result := pair.Use.ToolUseID, pair.Use, pair.Result
+		event := eventFromResult(result)
 		if event == nil || event.WriteID == "" {
 			if result.IsError && use.ToolName == "write_chunk" {
 				if writeID := providerToolInputString(use.Input, "write_id"); writeID != "" {
@@ -129,7 +88,7 @@ func buildChunkedWriteProjectionPlan(history []Message) providerChunkedWriteProj
 			continue
 		}
 		switch event.Kind {
-		case chunkedwrite.EventBegin:
+		case writefacts.EventBegin:
 			writeID := event.WriteID
 			if writeID == "" {
 				continue
@@ -138,7 +97,7 @@ func buildChunkedWriteProjectionPlan(history []Message) providerChunkedWriteProj
 			session.beginCallID = toolUseID
 			session.path = providerProjectionFirstNonEmpty(event.Path, providerToolInputString(use.Input, "path"), session.path)
 			session.mode = providerProjectionFirstNonEmpty(event.Mode, providerToolInputString(use.Input, "mode"), session.mode)
-		case chunkedwrite.EventChunk:
+		case writefacts.EventChunk:
 			writeID := event.WriteID
 			if writeID == "" {
 				continue
@@ -155,7 +114,7 @@ func buildChunkedWriteProjectionPlan(history []Message) providerChunkedWriteProj
 				}
 			}
 			session.chunks = append(session.chunks, chunk)
-		case chunkedwrite.EventCommit:
+		case writefacts.EventCommit:
 			writeID := event.WriteID
 			if writeID == "" {
 				continue
@@ -168,7 +127,7 @@ func buildChunkedWriteProjectionPlan(history []Message) providerChunkedWriteProj
 			session.commitBytes = event.Bytes
 			session.commitChars = event.Chars
 			session.commitChunks = event.Chunks
-		case chunkedwrite.EventAbort:
+		case writefacts.EventAbort:
 			writeID := event.WriteID
 			if writeID == "" {
 				continue

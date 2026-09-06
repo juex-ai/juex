@@ -18,7 +18,6 @@ func TestIndependentToolModules(t *testing.T) {
 		{NewBasicFiles(opts), "basic-file-tools", []string{"read", "write", "edit"}},
 		{NewApplyPatch(opts), "apply-patch", []string{"apply_patch"}},
 		{NewFileSearch(opts), "file-search", []string{"grep"}},
-		{NewChunkedWrite(opts), "chunked-write", []string{"write_begin", "write_chunk", "write_commit", "write_abort"}},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			if string(tc.module.ID()) != tc.id {

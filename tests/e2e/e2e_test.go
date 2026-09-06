@@ -30,8 +30,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/modules/scratchpad"
-	"github.com/juex-ai/juex/internal/modules/shelltools"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
@@ -40,7 +38,10 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/modules/agentsmd"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
+	chunkmodule "github.com/juex-ai/juex/internal/modules/chunkedwrite"
 	"github.com/juex-ai/juex/internal/modules/operatingcontext"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
+	"github.com/juex-ai/juex/internal/modules/shelltools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -265,7 +266,6 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	// Connect MCP server (re-execs this test binary as a fake JSON-RPC server)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	runtimeSet, reg := e2eServingToolCatalog(t, ctx, root, mcpConfig)
 
 	// -- Build runtime --
 	bus := events.NewBus()
@@ -275,6 +275,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	}
 	defer func() { _ = threadState.Close() }()
 	threadState.SubscribeBus(bus)
+	runtimeSet, threadSet, reg := e2eServingToolCatalog(t, ctx, root, mcpConfig, threadState)
 
 	pb := e2ePromptBuilder(
 		t,
@@ -344,6 +345,10 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		Bus:            bus,
 		Thread:         threadState,
 		Prompt:         pb,
+	}
+
+	if err := eng.ReplaceThreadRuntimeBundle(threadState, runtime.ThreadRuntimeReplacement{Modules: threadSet, Tools: reg}); err != nil {
+		t.Fatal(err)
 	}
 
 	out, err := eng.Turn(ctx, "drive the demo")
@@ -635,8 +640,18 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 	t.Cleanup(func() { _ = threadState.Close() })
 	bus := events.NewBus()
 	threadState.SubscribeBus(bus)
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: work, Shell: tools.DefaultShellProfile()})
+	tc := runtimemodule.ThreadContext{ID: threadState.ID, Dir: threadState.Dir}
+	set, err := runtimemodule.BuildAndStartThreadSet(t.Context(), []runtimemodule.ThreadFactorySpec{{ID: chunkmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+		return chunkmodule.New(tools.BuiltinOptions{WorkDir: work}), nil
+	}}}, tc, runtimemodule.ToolContext{Thread: &tc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = set.CloseThread(context.Background()) })
+	reg, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, set)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	contentA := strings.Repeat("alpha\n", 80)
 	contentB := strings.Repeat("beta\n", 80)
@@ -650,6 +665,10 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 		Prompt: e2ePromptBuilder(t, "", []string{work}, work, tools.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC)
 		}, threadState),
+	}
+
+	if err := eng.ReplaceThreadRuntimeBundle(threadState, runtime.ThreadRuntimeReplacement{Modules: set, Tools: reg}); err != nil {
+		t.Fatal(err)
 	}
 
 	out, err := eng.Turn(context.Background(), "write a long report")
@@ -975,7 +994,6 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	runtimeSet, reg := e2eServingToolCatalog(t, ctx, root, mcpConfig)
 
 	bus := events.NewBus()
 	threadState, err := thread.New(filepath.Join(root, ".juex", "threads"))
@@ -984,6 +1002,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	}
 	defer func() { _ = threadState.Close() }()
 	threadState.SubscribeBus(bus)
+	runtimeSet, threadSet, reg := e2eServingToolCatalog(t, ctx, root, mcpConfig, threadState)
 
 	pb := e2ePromptBuilder(
 		t,
@@ -1043,6 +1062,10 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		Bus:            bus,
 		Thread:         threadState,
 		Prompt:         pb,
+	}
+
+	if err := eng.ReplaceThreadRuntimeBundle(threadState, runtime.ThreadRuntimeReplacement{Modules: threadSet, Tools: reg}); err != nil {
+		t.Fatal(err)
 	}
 
 	out, err := eng.Turn(ctx, "drive the portable demo")
@@ -1170,7 +1193,7 @@ func e2ePromptBuilder(
 
 // ---- Fake MCP server (re-exec) ----
 
-func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cfg mcp.Config) (*runtimemodule.Set, *tools.Registry) {
+func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cfg mcp.Config, state *thread.Thread) (*runtimemodule.Set, *runtimemodule.Set, *tools.Registry) {
 	t.Helper()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
 	runtimeSet, err := runtimemodule.BuildAndStartRuntimeSet(ctx, []runtimemodule.RuntimeFactorySpec{
@@ -1190,9 +1213,6 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 		{ID: "file-search", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 			return builtintools.NewFileSearch(tools.BuiltinOptions{WorkDir: workDir}), nil
 		}},
-		{ID: "chunked-write", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return builtintools.NewChunkedWrite(tools.BuiltinOptions{WorkDir: workDir}), nil
-		}},
 
 		{
 			ID:      mcp.ModuleID,
@@ -1210,11 +1230,23 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 			t.Errorf("close E2E Runtime Modules: %v", err)
 		}
 	})
-	registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: tools.DefaultTimeoutSeconds}, runtimeSet)
+	tc := runtimemodule.ThreadContext{ID: state.ID, Dir: state.Dir}
+	threadSet, err := runtimemodule.BuildAndStartThreadSet(ctx, []runtimemodule.ThreadFactorySpec{{ID: chunkmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+		return chunkmodule.New(tools.BuiltinOptions{WorkDir: workDir}), nil
+	}}}, tc, runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &tc})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runtimeSet, registry
+	t.Cleanup(func() {
+		if err := threadSet.CloseThread(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: tools.DefaultTimeoutSeconds}, runtimeSet, threadSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtimeSet, threadSet, registry
 }
 
 func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {

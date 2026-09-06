@@ -411,8 +411,8 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	if tools := a.Engine.Tools.List(); len(tools) != 0 {
 		t.Fatalf("serving Tools = %#v, want none", tools)
 	}
-	if a.shellSessions != nil || a.chunkedWrites != nil || a.workers != nil || a.obsv != nil || a.mcpManager != nil {
-		t.Fatalf("disabled resources were constructed: shell=%p chunked-write=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.chunkedWrites, a.workers, a.obsv, a.mcpManager)
+	if a.shellSessions != nil || a.workers != nil || a.obsv != nil || a.mcpManager != nil {
+		t.Fatalf("disabled resources were constructed: shell=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.workers, a.obsv, a.mcpManager)
 	}
 	if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
 		status, statusErr := NewRuntimeCatalogService(a.cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})

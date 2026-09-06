@@ -2,6 +2,7 @@ package module
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -10,6 +11,46 @@ import (
 
 	"github.com/juex-ai/juex/internal/llm"
 )
+
+type recoveryPolicy struct {
+	id    ID
+	apply func(ThreadStartRequest)
+}
+
+func (m *recoveryPolicy) ID() ID { return m.id }
+func (m *recoveryPolicy) ApplyThreadStart(_ context.Context, request ThreadStartRequest) (ThreadStartDecision, error) {
+	m.apply(request)
+	return ThreadStartDecision{}, nil
+}
+
+func TestThreadStartHistoryIsIsolatedPerPolicy(t *testing.T) {
+	history := projectionHistory()
+	before, _ := json.Marshal(history)
+	registry := NewRegistry()
+	for _, id := range []ID{"first", "second"} {
+		if err := registry.Register(&recoveryPolicy{id: id, apply: func(request ThreadStartRequest) {
+			got, _ := json.Marshal(request.History)
+			if string(got) != string(before) {
+				t.Fatalf("%s received mutated history", id)
+			}
+			request.History[0].Blocks[1].Input["content"] = "mutation"
+			request.History[1].Blocks[0].ResultFact.Data[0] = 'x'
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set, err := registry.Seal(t.Context(), ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyThreadStartPolicies(t.Context(), ThreadStartRequest{History: history}, set); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := json.Marshal(history)
+	if string(before) != string(after) {
+		t.Fatal("Thread startup changed source history")
+	}
+}
 
 type policyTestModule struct {
 	id ID

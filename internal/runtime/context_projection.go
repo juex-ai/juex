@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime/contextbudget"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
 type projectionStats struct {
@@ -108,7 +110,15 @@ func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compa
 	return msg, stats, nil
 }
 
-func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy compactionPolicy) ([]llm.Message, projectionStats, error) {
+func (e *Engine) projectMessagesForProviderLocked(ctx context.Context, msgs []llm.Message, policy compactionPolicy) ([]llm.Message, projectionStats, error) {
+	toolOutput := effectiveToolOutputPolicy(e.ToolOutput, policy.ContextWindow)
+	msgs, err := runtimemodule.ProjectProviderHistory(ctx, msgs, runtimemodule.ProviderHistoryBudget{
+		MaxBytes: toolOutput.InlineMaxBytes, MaxTokens: toolOutput.ContentMaxTokens,
+		EstimateTokens: contextbudget.EstimateTextTokens,
+	}, e.policySets()...)
+	if err != nil {
+		return nil, projectionStats{}, err
+	}
 	out := make([]llm.Message, len(msgs))
 	var total projectionStats
 	for i, msg := range msgs {
@@ -126,7 +136,7 @@ func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy com
 		total.ToolResultsExternalized += stats.ToolResultsExternalized
 		total.BytesExternalized += stats.BytesExternalized
 	}
-	return llm.FoldChunkedWriteHistoryForProvider(out), total, nil
+	return out, total, nil
 }
 
 func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids []string, policy compactionPolicy) ([]llm.Message, []llm.Message, projectionStats, error) {

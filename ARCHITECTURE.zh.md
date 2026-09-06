@@ -175,6 +175,12 @@ Runtime 与 Thread 工具贡献合并后，才基于完整工具名称集合生�
 schema。解析不能改变工具身份或执行策略。Provider 请求与活动状态读取同一份
 已发布 Registry，共享 Module catalog 保持不变。
 
+工具执行可以输出显式 JSON fact。Framework 根据封存的工具 catalog 赋予所有者，
+并独立于结果展示文本持久化。启用的 Module 可以通过声明式 Provider 历史计划
+汇总自己已完成的工具对。Framework 在最终上下文投影之前验证所有权、配对、取消
+和摘要预算，Journal 保持不变。Thread 级的[分块写 Module](internal/modules/chunkedwrite/README.zh.md)
+拥有缓冲会话、当前 Generation 恢复和折叠算法。
+
 Prompt assembly 使用已注册的 context contributor。稳定 guidance、Hook
 context、Thread state 和每次请求的 recitation 在该接口汇合。Generation 边界
 活动不是普通 Provider 对话。Operating context 只贡献 cwd、OS 与时间；Shell

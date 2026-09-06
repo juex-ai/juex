@@ -26,10 +26,6 @@ func NewFileSearch(options tools.BuiltinOptions) *Module {
 	return newModule(modulecatalog.FileSearch, options, tools.SearchToolProvider{})
 }
 
-func NewChunkedWrite(options tools.BuiltinOptions) *Module {
-	return newModule(modulecatalog.ChunkedWrite, options, tools.ChunkedWriteToolProvider{})
-}
-
 func newModule(id string, options tools.BuiltinOptions, provider tools.BuiltinProvider) *Module {
 	options.Providers = []tools.BuiltinProvider{provider}
 	return &Module{id: runtimemodule.ID(id), options: options}
