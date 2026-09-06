@@ -1,4 +1,4 @@
-// Package promptcontext provides the concrete project-guidance and Thread
+// Package promptcontext provides the concrete AGENTS.md and Thread
 // context Modules used to assemble provider system prompts.
 package promptcontext
 
@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 const (
-	GuidanceModuleID      runtimemodule.ID = "project-guidance"
+	GuidanceModuleID      runtimemodule.ID = modulecatalog.AgentsMD
 	ThreadContextModuleID runtimemodule.ID = "thread-context"
 )
 

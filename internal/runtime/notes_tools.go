@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
@@ -16,7 +17,7 @@ const NotesToolUpdate = "update_notes"
 
 const notesGuide = `Guide available via skill_load("juex-thread-state").`
 
-const NotesModuleID runtimemodule.ID = "notes"
+const NotesModuleID runtimemodule.ID = modulecatalog.Notes
 
 type NotesModuleOptions struct {
 	EventSink     func(events.Event) error

@@ -76,11 +76,15 @@ models:
 #   # include: [taskline-management] # whitelist mode; exclude is ignored.
 #   # exclude: [large-global-skill]  # blacklist mode when include is empty.
 
-# Compiled Modules default to enabled when omitted. Disable a Module by its
-# stable ID; disabled factories are filtered before construction. Supported
-# Runtime IDs include builtin-tools, project-guidance, skills, worker-threads,
-# observables, and mcp. Thread IDs include thread-context, goal, notes, and
-# hooks. Unknown IDs or fields fail startup.
+# Presets and explicit module switches merge independently across config layers.
+# standard (the default) enables all declared capabilities. minimal defaults only
+# basic-file-tools, shell, and operating-context on. Explicit switches win over
+# preset defaults, including switches inherited from a lower config layer.
+# Configured capabilities are not the active tool catalog. Independent builtin
+# tool and Thread context switches currently fail App startup until their
+# factories are split; minimal is not yet a runnable six-tool mode.
+# Unknown presets, module IDs, or fields fail configuration validation.
+# preset: standard
 # modules:
 #   skills:
 #     enabled: false

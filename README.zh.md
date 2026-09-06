@@ -84,6 +84,8 @@ juex agent send --wait "implement the next task"
 `$JUEX_HOME/agents/<agent-id>/observables.json`；它随 Agent 保存，不出现在
 Workspace 中。
 
+模块预设与显式开关见[配置说明](internal/config/README.zh.md)。
+
 生成的 Agent 状态位于 `$JUEX_HOME/agents/<agent-id>/`。`agent.json` 是 Agent
 身份、Workspace 所有权与 lifecycle metadata 的权威来源。Agent 还拥有配置
 覆盖、可重建的 Thread index、active 与 archived Thread、media、日志、Observable 和

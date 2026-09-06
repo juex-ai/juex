@@ -14,13 +14,14 @@ import (
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-const workerThreadModuleID runtimemodule.ID = "worker-threads"
+const workerThreadModuleID runtimemodule.ID = modulecatalog.WorkerThreads
 
 type workerThreadModule struct {
 	manager *workerThreadManager

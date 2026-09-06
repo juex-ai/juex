@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -20,7 +21,7 @@ const (
 	observableGuidePointer      = `Guide available via skill_load("juex-observables").`
 )
 
-const ModuleID runtimemodule.ID = "observables"
+const ModuleID runtimemodule.ID = modulecatalog.Observables
 
 type Module struct {
 	mu      sync.RWMutex

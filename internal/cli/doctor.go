@@ -171,6 +171,16 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		checks = append(checks, doctorWorkdirCheck(workDir))
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 	}
+	if err := app.ValidateModuleComposition(cfg); err != nil {
+		checks = append(checks, doctorCheck{
+			Name:       "config",
+			Status:     doctorStatusFail,
+			Message:    err.Error(),
+			Suggestion: "configure the bundled module switches consistently",
+		})
+		checks = append(checks, doctorWorkdirCheck(workDir))
+		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
+	}
 
 	var agentRuntime app.AgentRuntimeResolution
 	var agentRuntimeErr error

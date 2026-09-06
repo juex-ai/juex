@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
@@ -385,8 +386,8 @@ func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing.T) {
 	work := t.TempDir()
 	policy := config.ModulePolicy{}
-	for _, id := range compiledModuleIDs() {
-		policy[id] = config.ModuleSettings{Enabled: false}
+	for _, definition := range modulecatalog.Definitions() {
+		policy[definition.ID] = config.ModuleSettings{Enabled: false}
 	}
 	a, err := New(Options{
 		Config:   config.Config{WorkDir: work, Modules: policy},

@@ -661,18 +661,30 @@ func waitForThreadText(t *testing.T, dir string, role llm.Role, want string) {
 
 func waitForThreadMessage(t *testing.T, dir string, match func(llm.Message) bool, label string) {
 	t.Helper()
+	// Recovery reads must share the active writer's Store lock. LoadInfo can
+	// otherwise republish an older projection during a Usage commit.
+	store := thread.NewStore(filepath.Dir(filepath.Dir(dir)))
+	var lastErr error
+	var lastMessages []llm.Message
 	deadline := time.After(60 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("timed out waiting for %s in %s", label, dir)
+			t.Fatalf("timed out waiting for %s in %s; last read error: %v; last messages: %+v", label, dir, lastErr, lastMessages)
 		case <-tick.C:
-			_, msgs, err := thread.LoadInfo(dir)
+			target, err := store.OpenActive(filepath.Base(dir))
 			if err != nil {
+				lastErr = err
 				continue
 			}
+			_, msgs := target.Snapshot()
+			if err := target.Close(); err != nil {
+				lastErr = err
+				continue
+			}
+			lastMessages = msgs
 			for _, msg := range msgs {
 				if match(msg) {
 					return

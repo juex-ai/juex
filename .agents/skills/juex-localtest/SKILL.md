@@ -35,9 +35,9 @@ setting `JUEX_RG`. Provision via `PATH`, not `JUEX_RG`: `JUEX_RG` is an override
 that short-circuits every other resolver source, so exporting it for the whole
 `go test` process would also override the resolver's own unit tests that read
 the ambient environment. `make verify-focused` prepares the non-overwriting web
-embed stub, provisions ripgrep, and runs through
-`scripts/with-test-juex-home.sh`, so fresh-checkout web tests compile and focused
-tests cannot register test Agents in the developer's Fleet.
+embed stub and provisions ripgrep, so fresh-checkout web tests compile. The
+orchestrator runs Go tests directly; tests that create Agent state must select
+their own temporary state paths.
 
 ## Execution Steps
 
@@ -75,7 +75,7 @@ There is no local service startup step for the current suite. Web tests use
   example:
 
   ```bash
-  GOOS=windows GOARCH=amd64 ./scripts/with-test-juex-home.sh go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
+  GOOS=windows GOARCH=amd64 go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
   ```
 - **Eval harness changes** - run `make verify-focused PKGS="./tests/eval"`;
   its contract suite includes the module and wrapper help checks.

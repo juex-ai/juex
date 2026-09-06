@@ -1,6 +1,9 @@
 package config
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +68,7 @@ func TestAgentConfigRejectsFleetAndWriteLeavesWorkspaceUnchanged(t *testing.T) {
 	}
 	oldAgent := []byte("enable_user_agents_resources: true\n")
 	writeTextFile(t, resolved.Address.ConfigPath(), string(oldAgent))
-	if _, err := WriteAgentConfig([]byte("unknown_field: true\n"), home, resolved.Agent.ID); err == nil {
+	if _, err := WriteAgentConfig([]byte("unknown_field: true\n"), home, resolved.Agent.ID, nil); err == nil {
 		t.Fatal("WriteAgentConfig() accepted an invalid field")
 	}
 	unchangedAgent, err := os.ReadFile(resolved.Address.ConfigPath())
@@ -75,7 +78,7 @@ func TestAgentConfigRejectsFleetAndWriteLeavesWorkspaceUnchanged(t *testing.T) {
 	if string(unchangedAgent) != string(oldAgent) {
 		t.Fatalf("invalid update changed Agent config: %q", unchangedAgent)
 	}
-	written, err := WriteAgentConfig([]byte("enable_user_agents_resources: false\n"), home, resolved.Agent.ID)
+	written, err := WriteAgentConfig([]byte("enable_user_agents_resources: false\n"), home, resolved.Agent.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +98,60 @@ func TestAgentConfigRejectsFleetAndWriteLeavesWorkspaceUnchanged(t *testing.T) {
 	}
 	if string(gotAgent) != "enable_user_agents_resources: false\n" {
 		t.Fatalf("agent config = %q", gotAgent)
+	}
+}
+
+func TestWriteAgentConfigRuntimeValidationPrecedesPublication(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	writeTextFile(t, filepath.Join(workspace, ".juex", "juex.yaml"), "modules:\n  goal:\n    enabled: false\n")
+	resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := "preset: standard\n"
+	writeTextFile(t, resolved.Address.ConfigPath(), old)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("preset: minimal\n"))
+	}))
+	defer server.Close()
+	candidate := []byte("imports:\n  - source: " + server.URL + "/shared.yaml\n")
+	rejection := errors.New("runtime composition unavailable")
+	calls := 0
+	validate := func(cfg Config) error {
+		calls++
+		if cfg.EffectivePreset() != PresetMinimal || cfg.ModuleEnabled("goal") {
+			t.Errorf("validator did not receive merged configuration: %+v", cfg.Modules)
+		}
+		return rejection
+	}
+	_, err = WriteAgentConfig(candidate, home, resolved.Agent.ID, validate)
+	var validation *AgentConfigValidationError
+	if !errors.As(err, &validation) || !errors.Is(err, rejection) || calls != 1 {
+		t.Fatalf("runtime validation = %v, calls = %d", err, calls)
+	}
+	got, err := os.ReadFile(resolved.Address.ConfigPath())
+	if err != nil || string(got) != old {
+		t.Fatalf("rejection changed config: %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "cache", "config-imports")); !os.IsNotExist(err) {
+		t.Fatalf("rejection published remote import cache: %v", err)
+	}
+	lock, err := homestore.AcquireLock(configImportCacheLockPath(home), homestore.LockTry)
+	if err != nil {
+		t.Fatalf("rejection retained import cache lock: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteAgentConfig(candidate, home, resolved.Agent.ID, nil); err != nil {
+		t.Fatalf("subsequent config publication: %v", err)
+	}
+	got, err = os.ReadFile(resolved.Address.ConfigPath())
+	if err != nil || string(got) != string(candidate) {
+		t.Fatalf("accepted candidate = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "cache", "config-imports")); err != nil {
+		t.Fatalf("accepted candidate did not publish import cache: %v", err)
 	}
 }
 

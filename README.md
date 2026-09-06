@@ -89,6 +89,9 @@ Editable Observable definitions live at
 `$JUEX_HOME/agents/<agent-id>/observables.json`; they follow the Agent rather
 than appearing in its Workspace.
 
+Module presets and explicit switches are described in
+[Configuration](internal/config/README.md).
+
 Generated Agent state lives under `$JUEX_HOME/agents/<agent-id>/`. `agent.json`
 is authoritative for Agent identity, Workspace ownership, and lifecycle
 metadata. The Agent also owns its configuration overlay, the rebuildable

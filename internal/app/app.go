@@ -226,7 +226,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	if cfg.AgentStateDir == "" && cfg.AgentAddress.StateDir() != "" {
 		cfg.AgentStateDir = cfg.AgentAddress.StateDir()
 	}
-	if err := ValidateModuleConfig(cfg); err != nil {
+	if err := ValidateModuleComposition(cfg); err != nil {
 		return nil, err
 	}
 	runtimePaths := cfg.RuntimePaths()

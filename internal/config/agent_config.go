@@ -65,11 +65,22 @@ func validateAgentConfig(content []byte, homeDir, agentID string) (Config, error
 
 // WriteAgentConfig validates the candidate against the complete Home and
 // Workspace chain, then atomically publishes the sparse Agent overlay and any
-// remote-import cache generation under one recovery journal.
-func WriteAgentConfig(content []byte, homeDir, agentID string) (string, error) {
+// remote-import cache generation under one recovery journal. validateRuntime,
+// when provided, checks the merged configuration before either is published.
+func WriteAgentConfig(content []byte, homeDir, agentID string, validateRuntime func(Config) error) (string, error) {
 	cfg, err := validateAgentConfig(content, homeDir, agentID)
 	if err != nil {
 		return "", &AgentConfigValidationError{Err: err}
+	}
+	if validateRuntime != nil {
+		if err := validateRuntime(cfg); err != nil {
+			cfg.pendingImportCache = nil
+			if cfg.importLoader != nil {
+				err = errors.Join(err, cfg.importLoader.closeConfigImportCacheLock())
+				cfg.importLoader = nil
+			}
+			return "", &AgentConfigValidationError{Err: err}
+		}
 	}
 	return writeValidatedConfig(
 		content,

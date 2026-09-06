@@ -10,13 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/skills"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-const ModuleID runtimemodule.ID = "skills"
+const ModuleID runtimemodule.ID = modulecatalog.Skills
 
 const defaultSkillSearchLimit = 20
 

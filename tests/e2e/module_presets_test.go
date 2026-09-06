@@ -1,0 +1,101 @@
+package e2e
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/config"
+)
+
+func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
+	work := t.TempDir()
+	configPath := filepath.Join(work, "preset.yaml")
+	data := []byte("preset: minimal\nmodules:\n  shell:\n    enabled: false\n  basic-file-tools:\n    enabled: false\n  operating-context:\n    enabled: false\n  worker-threads:\n    enabled: true\n  notes:\n    enabled: true\n")
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{WorkDir: work, HomeDir: t.TempDir(), ConfigPath: configPath, AgentState: config.AgentStateNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ValidateModuleConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentStateDir = filepath.Join(work, "state")
+	main, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := main.CloseAndWait(); err != nil {
+			t.Error(err)
+		}
+	})
+	create, ok := main.Engine.Tools.Get(app.WorkerThreadToolCreate)
+	if !ok {
+		t.Fatal("Worker tool unavailable")
+	}
+	result, err := create.Handler(context.Background(), map[string]any{"query": "reply done", "alias": "preset-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status app.WorkerThreadStatus
+	if err := json.Unmarshal([]byte(result), &status); err != nil {
+		t.Fatal(err)
+	}
+	worker, ok := main.ManagedWorkerApp(status.ThreadID)
+	if !ok {
+		t.Fatalf("Worker not managed: %s", result)
+	}
+	for name, application := range map[string]*app.App{"Main": main, "Worker": worker} {
+		for module, tool := range map[string]string{"goal": "get_goal", "notes": "update_notes", "context-control": "context_new", "skills": "skill_search", "basic-file-tools": "read", "worker-threads": "thread_create"} {
+			_, available := application.Engine.Tools.Get(tool)
+			if available != cfg.ModuleEnabled(module) {
+				t.Errorf("%s %s availability = %v, configuration = %v", name, tool, available, cfg.ModuleEnabled(module))
+			}
+		}
+		if err := application.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+			observed, err := app.NewRuntimeCatalogService(cfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
+			if err != nil {
+				return err
+			}
+			if observed.Tools.Count != len(application.Engine.Tools.List()) {
+				t.Errorf("%s read-only catalog count = %d", name, observed.Tools.Count)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestModulePresetsRejectUnsupportedCompositionBeforeResources(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config.Config
+	}{
+		{name: "minimal", cfg: config.Config{Preset: config.PresetMinimal}},
+		{name: "context split", cfg: config.Config{Modules: config.ModulePolicy{"scratchpad": {Enabled: false}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := app.ValidateModuleConfig(tc.cfg); err != nil {
+				t.Fatalf("valid declaration rejected: %v", err)
+			}
+			work := t.TempDir()
+			tc.cfg.WorkDir = work
+			tc.cfg.AgentStateDir = filepath.Join(work, "state")
+			_, err := app.New(app.Options{Config: tc.cfg, Provider: &bareScriptProvider{}})
+			if err == nil || !strings.Contains(err.Error(), "not yet supported") {
+				t.Fatalf("composition error = %v", err)
+			}
+			if _, err := os.Stat(tc.cfg.AgentStateDir); !os.IsNotExist(err) {
+				t.Fatalf("failed composition created state: %v", err)
+			}
+		})
+	}
+}
