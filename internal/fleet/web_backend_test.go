@@ -242,6 +242,42 @@ func TestUpdateConfigPreflightsBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestUpdateConfigRejectsUnsupportedModuleCompositionBeforeWriting(t *testing.T) {
+	for _, overlay := range []string{"preset: minimal\n", "modules:\n  scratchpad:\n    enabled: false\n"} {
+		t.Run(overlay, func(t *testing.T) {
+			home, _, entry := prepareFleetConfigTest(t)
+			old := validFleetConfig("old-model")
+			if err := os.WriteFile(entry.Address.ConfigPath(), old, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runtimeState := endpoint.Runtime{
+				AgentID: entry.ID, InstanceID: "instance-one", PID: 42,
+				Endpoint: "tcp://127.0.0.1:43123", StartedAt: time.Now().UTC(),
+			}
+			deps := configTestDependencies(entry, runtimeState)
+			shutdowns := 0
+			deps.requestRestart = func(context.Context, endpoint.Runtime) (bool, error) {
+				shutdowns++
+				return false, errors.New("unexpected restart")
+			}
+			manager := &Manager{homeDir: home, probeTimeout: time.Second, deps: deps}
+			candidate := append(validFleetConfig("new-model"), []byte(overlay)...)
+			_, _, err := manager.UpdateConfig(context.Background(), entry.ID, candidate)
+			var validation *ConfigValidationError
+			if !errors.As(err, &validation) || !strings.Contains(err.Error(), "not yet supported") {
+				t.Errorf("UpdateConfig error = %v, want unsupported composition validation", err)
+			}
+			got, err := os.ReadFile(entry.Address.ConfigPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(old) || shutdowns != 0 {
+				t.Fatalf("rejected update changed state: config=%q shutdowns=%d", got, shutdowns)
+			}
+		})
+	}
+}
+
 func TestUpdateConfigRejectsAmbiguousRuntimeBeforeWriting(t *testing.T) {
 	home, _, entry := prepareFleetConfigTest(t)
 	old := []byte("old: unchanged\n")

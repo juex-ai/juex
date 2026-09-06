@@ -105,7 +105,7 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := WriteAgentConfig(content, home, resolved.Agent.ID)
+	path, err := WriteAgentConfig(content, home, resolved.Agent.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 		t.Fatalf("wrong effective policy: %+v", loaded.Modules)
 	}
 	for _, invalid := range []string{"preset: typo\n", "modules:\n  typo: {}\n"} {
-		if _, err := WriteAgentConfig([]byte(invalid), home, resolved.Agent.ID); err == nil {
+		if _, err := WriteAgentConfig([]byte(invalid), home, resolved.Agent.ID, nil); err == nil {
 			t.Fatalf("saved invalid configuration %q", invalid)
 		}
 		got, err := os.ReadFile(path)

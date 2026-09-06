@@ -118,9 +118,13 @@ func ValidateModuleConfig(cfg config.Config) error {
 	return cfg.ValidateModules()
 }
 
-// The bundled factories cannot yet honor independent switches. Reject mixed
-// groups before resource discovery rather than start explicitly disabled work.
-func validateModuleComposition(cfg config.Config) error {
+// ValidateModuleComposition checks declarations and current factory support
+// before config publication or resource discovery. Bundled factories cannot
+// yet honor independent switches within their groups.
+func ValidateModuleComposition(cfg config.Config) error {
+	if err := ValidateModuleConfig(cfg); err != nil {
+		return err
+	}
 	for _, group := range [][]string{
 		{modulecatalog.BasicFileTools, modulecatalog.Shell, modulecatalog.ApplyPatch, modulecatalog.ChunkedWrite, modulecatalog.FileSearch},
 		{modulecatalog.OperatingContext, modulecatalog.Scratchpad, modulecatalog.Shell},

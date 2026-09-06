@@ -19,6 +19,9 @@ Effective configuration is not evidence of available tools. The sealed runtime
 catalog remains authoritative. The current bundled tool and Thread context
 factories reject independent switches they cannot yet honor before constructing
 resources; a bare minimal preset is therefore not yet a runnable six-tool mode.
+Fleet config updates reject unsupported combinations before publishing the
+Agent overlay or import cache and restarting. `diagnose` reports the same
+composition error before resource discovery.
 Extension discovery gating and the built-in Memory factory are separate work.
 Presets do not change Provider, model, Sandbox, auto-compaction, or core
 persistence settings.

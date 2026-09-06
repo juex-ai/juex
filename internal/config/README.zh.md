@@ -14,6 +14,8 @@ preset 和显式开关分别沿既有配置层级与 imports 合并。高层仅�
 
 有效配置不代表工具已可用，实际工具以封闭后的运行时目录为准。目前基础工具
 和 Thread 上下文仍由组合工厂提供，无法满足的独立开关会在资源构造前被拒绝；
-因此仅设置 minimal 尚不能运行六工具模式。Extension 发现前关闭与内置 Memory
+因此仅设置 minimal 尚不能运行六工具模式。Fleet 更新配置时，会在发布 Agent
+覆盖层、导入缓存及重启前拒绝不支持的组合；`diagnose` 在资源发现前报告相同的
+组合错误。Extension 发现前关闭与内置 Memory
 工厂属于独立交付。preset 不改变 Provider、模型、Sandbox、自动压缩或核心
 持久化设置。
