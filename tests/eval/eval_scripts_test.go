@@ -3542,8 +3542,9 @@ func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 		"    thread.mkdir(parents=True)",
 		"    generations = thread / 'generations'",
 		"    generations.mkdir()",
-		"    (thread / 'goal_state.json').write_text(json.dumps(compaction.AUTHORITATIVE_GOAL), encoding='utf-8')",
-		"    (thread / 'notes.md').write_text(compaction.AUTHORITATIVE_NOTES, encoding='utf-8')",
+		"    compaction.seed_module_ownership(thread)",
+		"    (thread / 'modules/goal/goal_state.json').write_text(json.dumps(compaction.AUTHORITATIVE_GOAL), encoding='utf-8')",
+		"    (thread / 'modules/notes/notes.md').write_text(compaction.AUTHORITATIVE_NOTES, encoding='utf-8')",
 		"    goal = compaction.AUTHORITATIVE_GOAL",
 		"    summary = '\\n'.join([",
 		"        'Goal',",
@@ -3603,8 +3604,8 @@ func TestCompactionEvalSeedsModuleOwnedFilesWithoutChangingThreadStores(t *testi
 		"    compaction.seed_authoritative_state(work)",
 		"    assert journal.read_bytes() == before_journal",
 		"    assert metadata_path.read_bytes() == before_metadata",
-		"    assert json.loads((thread / 'goal_state.json').read_text(encoding='utf-8')) == compaction.AUTHORITATIVE_GOAL",
-		"    assert (thread / 'notes.md').read_text(encoding='utf-8') == compaction.AUTHORITATIVE_NOTES",
+		"    assert json.loads((thread / 'modules/goal/goal_state.json').read_text(encoding='utf-8')) == compaction.AUTHORITATIVE_GOAL",
+		"    assert (thread / 'modules/notes/notes.md').read_text(encoding='utf-8') == compaction.AUTHORITATIVE_NOTES",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

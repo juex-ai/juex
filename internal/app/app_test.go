@@ -422,7 +422,7 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 				t.Fatal(err)
 			}
 			generationID := first.Thread.Projection().CurrentGeneration.ID
-			for _, path := range []string{goal.Path, filepath.Join(first.Thread.Dir, workmem.NotesFileName)} {
+			for _, path := range []string{goal.Path, notes.Path} {
 				if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
 					t.Fatal(err)
 				}
@@ -436,10 +436,6 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 				t.Fatal(err)
 			}
 
-			cfg.Modules = config.ModulePolicy{
-				string(runtime.GoalModuleID):  {Enabled: false},
-				string(runtime.NotesModuleID): {Enabled: false},
-			}
 			restarted, err := New(Options{Config: cfg, Provider: &stubProvider{}, DisableMCP: true})
 			if err != nil {
 				t.Fatal(err)

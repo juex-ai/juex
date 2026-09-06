@@ -114,8 +114,9 @@ registry 的权威。它还物化有界 counter、context status、Pending Input
 存储路径。Torn final write 可以修复，完整但非法的 commit 属于 corruption。
 
 `pending_inputs.json` 是 runtime 拥有的原子、有界当前状态文档。Goal 与 Notes
-Module 分别拥有 `goal_state.json` 和 `notes.md`，core Thread storage 不解释其
-schema。Owner 没有持久状态时，对应文件可以不存在。Scratchpad ThreadResource
+Module 在 Thread 内 Framework 分配的 `modules/<owner>/` 目录中拥有当前状态
+文件，core Thread storage 不解释其 schema。首次写状态前，资源 owner 持久登记
+身份、scope、相对目录和保留策略；没有持久状态时，文件与登记都可以不存在。Scratchpad ThreadResource
 只在启用时基于通用 Thread 目录准备模型管理的工作存储；core Thread 和 runtime
 context 不携带其私有路径。工作文件跨 Generation 和模块关闭保留；spool 是系统
 管理的 Thread 临时数据。Active
@@ -156,6 +157,17 @@ status、transcript 或 subscriber。Thread metadata 先于 Agent index refresh
 
 Module 在 Agent 或 Thread scope 注册一次类型化 capability。Framework 校验并
 seal Module set，按注册顺序启动，按反序关闭或 rollback。
+
+资源退休独立于 Close。已接受配置的 factory 声明确定可用 owner，不构造禁用的
+Module。Agent 生命周期 lease 排除旧实例和延迟 writer。删除任一资源前，Framework
+先持久化完整退休意图，再枚举 active 与 archived Thread 的所有权，不打开 Thread
+metadata 或 journal。只删除已登记且可丢弃的 owner 目录，包含 /new 暂存备份。
+失败保持可观察、可重试；即使下一份配置重新启用 owner，也必须完成待处理的退休。
+正常 Thread 恢复按当前 Generation 处理已登记 owner 目录中的暂存文件。
+
+配置预检与检查不触发退休。资源应用提交后，清理或后续启动失败代表应用尚未完成，
+不会通过复活旧状态回滚；退休成功后才发布新 endpoint。部署前的无所有权状态边界
+见[资源生命周期约定](internal/runtime/module/state/README.zh.md)。
 
 Runtime 与 Thread 工具贡献合并后，才基于完整工具名称集合生成最终描述和
 schema。解析不能改变工具身份或执行策略。Provider 请求与活动状态读取同一份

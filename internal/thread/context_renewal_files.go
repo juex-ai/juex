@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/homestore"
+	modstate "github.com/juex-ai/juex/internal/runtime/module/state"
 )
 
 const contextRenewalBackupMarker = ".context-renewal-"
@@ -138,6 +139,24 @@ func recoverContextRenewalFiles(threadDir, currentGenerationID string) error {
 	if _, err := parseGenerationID(currentGenerationID); err != nil {
 		return err
 	}
+	dirs, err := modstate.Directories(threadDir)
+	if err != nil {
+		return err
+	}
+	for _, dir := range append([]string{threadDir}, dirs...) {
+		if contextRenewalTransactions.active[dir] > 0 {
+			return errContextRenewalInProgress
+		}
+	}
+	for _, dir := range append([]string{threadDir}, dirs...) {
+		if err := recoverContextRenewalDirectory(dir, currentGenerationID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func recoverContextRenewalDirectory(threadDir, currentGenerationID string) error {
 	entries, err := os.ReadDir(threadDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -195,16 +214,22 @@ func recoverContextRenewalFilesFromMetadata(threadDir, threadID string) error {
 }
 
 func contextRenewalFilesPresent(threadDir string) (bool, error) {
-	entries, err := os.ReadDir(threadDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
+	dirs, err := modstate.Directories(threadDir)
 	if err != nil {
 		return false, err
 	}
-	for _, entry := range entries {
-		if strings.LastIndex(entry.Name(), contextRenewalBackupMarker) > 0 {
-			return true, nil
+	for _, dir := range append([]string{threadDir}, dirs...) {
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range entries {
+			if strings.LastIndex(entry.Name(), contextRenewalBackupMarker) > 0 {
+				return true, nil
+			}
 		}
 	}
 	return false, nil

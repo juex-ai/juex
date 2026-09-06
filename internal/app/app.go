@@ -347,6 +347,20 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 	}
 
+	// Configuration, providers and resource declarations have passed preflight.
+	// From here a cleanup/startup failure is an incomplete accepted application,
+	// not a rejected preview; persisted retirement must finish before publishing.
+	resourceLease, err := acquireModuleResources(cfg, opts.threadModuleFactories)
+	if err != nil {
+		return nil, err
+	}
+	leaseTransferred := false
+	defer func() {
+		if !leaseTransferred {
+			_ = resourceLease.Close()
+		}
+	}()
+
 	attachment, err := AttachWorkspaceThread(cfg, ThreadAttachmentRequest{
 		ThreadID:       opts.ThreadID,
 		ParentThreadID: opts.parentThreadID,
@@ -531,6 +545,9 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 		return a.runtimeModules.CloseRuntime(context.Background())
 	})
+
+	a.cleanup = append(a.cleanup, resourceLease.Close)
+	leaseTransferred = true
 
 	var notificationGate *mcpNotificationGate
 	connectOpts := mcp.ConnectOptions{

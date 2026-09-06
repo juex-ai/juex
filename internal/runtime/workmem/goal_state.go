@@ -11,10 +11,13 @@ import (
 	"sync"
 	"time"
 
+	modstate "github.com/juex-ai/juex/internal/runtime/module/state"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
 const goalStateFile = "goal_state.json"
+
+var goalOwner = modstate.Owner{Module: "goal", Scope: modstate.ScopeThread}
 
 type GoalStatus string
 
@@ -86,7 +89,7 @@ func NewGoalStateStore(threadDir string, opts GoalStateOptions) *GoalStateStore 
 	}
 	return &GoalStateStore{
 		ThreadDir: threadDir,
-		Path:      filepath.Join(threadDir, goalStateFile),
+		Path:      filepath.Join(modstate.Directory(threadDir, goalOwner), goalStateFile),
 		Now:       now,
 	}
 }
@@ -359,6 +362,9 @@ func (s *GoalStateStore) saveLocked(state GoalState) error {
 		return fmt.Errorf("goal state encode: %w", err)
 	}
 	data = append(data, '\n')
+	if _, err := modstate.Prepare(s.ThreadDir, goalOwner, modstate.DiscardOnRemoval); err != nil {
+		return err
+	}
 	if err := replaceFileAtomic(s.Path, data, 0o600); err != nil {
 		return fmt.Errorf("goal state replace: %w", err)
 	}

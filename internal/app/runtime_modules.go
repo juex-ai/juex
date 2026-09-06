@@ -180,14 +180,15 @@ func buildThreadModules(
 	workDir string,
 	opts threadModuleOptions,
 ) (*runtimemodule.Set, error) {
-	goalState := opts.goalState
-	if goalState == nil && cfg.ModuleEnabled(string(juexruntime.GoalModuleID)) {
-		goalState = goalStateStore(threadState)
-	}
-	notes := opts.notes
-	if notes == nil && cfg.ModuleEnabled(string(juexruntime.NotesModuleID)) {
-		notes = notesStore(threadState)
-	}
+	var set *runtimemodule.Set
+	specs = threadFactorySpecs(cfg, specs, threadState, engine, workDir, opts, func() []byte { return juexruntime.HookGoalStateFromModules(set) })
+	threadContext := threadModuleContext(threadState)
+	var err error
+	set, err = runtimemodule.BuildAndStartThreadSet(ctx, specs, threadContext, runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &threadContext})
+	return set, err
+}
+
+func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySpec, threadState *thread.Thread, engine *juexruntime.Engine, workDir string, opts threadModuleOptions, goalState func() []byte) []runtimemodule.ThreadFactorySpec {
 	eventSink := func(event events.Event) error {
 		if engine == nil || engine.Bus == nil {
 			return nil
@@ -223,9 +224,14 @@ func buildThreadModules(
 			},
 		},
 		{
-			ID:      juexruntime.GoalModuleID,
-			Enabled: cfg.ModuleEnabled(string(juexruntime.GoalModuleID)),
+			ID:            juexruntime.GoalModuleID,
+			OwnsResources: true,
+			Enabled:       cfg.ModuleEnabled(string(juexruntime.GoalModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				goalState := opts.goalState
+				if goalState == nil {
+					goalState = goalStateStore(threadState)
+				}
 				return juexruntime.NewGoalModuleWithOptions(goalState, juexruntime.GoalModuleOptions{
 					EnableContinuation:   opts.goalContinuation,
 					ContinuationDeferrer: opts.goalContinuationDeferrer,
@@ -235,9 +241,14 @@ func buildThreadModules(
 			},
 		},
 		{
-			ID:      juexruntime.NotesModuleID,
-			Enabled: cfg.ModuleEnabled(string(juexruntime.NotesModuleID)),
+			ID:            juexruntime.NotesModuleID,
+			OwnsResources: true,
+			Enabled:       cfg.ModuleEnabled(string(juexruntime.NotesModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				notes := opts.notes
+				if notes == nil {
+					notes = notesStore(threadState)
+				}
 				return juexruntime.NewNotesModuleWithOptions(notes, juexruntime.NotesModuleOptions{
 					EventSink:     eventSink,
 					CurrentTurnID: currentTurnID,
@@ -245,7 +256,6 @@ func buildThreadModules(
 			},
 		},
 	}
-	var set *runtimemodule.Set
 	if opts.hookRunner != nil && cfg.ModuleEnabled(string(hooks.ModuleID)) {
 		builtinSpecs = append(builtinSpecs, runtimemodule.ThreadFactorySpec{
 			ID:      hooks.ModuleID,
@@ -256,22 +266,12 @@ func buildThreadModules(
 				return hooks.NewModule(opts.hookRunner, hooks.ModuleOptions{
 					BaseRequest:           base,
 					GenerationJournalPath: threadState.CurrentGenerationJournalPath,
-					GoalState:             func() []byte { return juexruntime.HookGoalStateFromModules(set) },
+					GoalState:             goalState,
 				}), nil
 			},
 		})
 	}
-	specs = append(builtinSpecs, specs...)
-	threadContext := threadModuleContext(threadState)
-	var err error
-	set, err = runtimemodule.BuildAndStartThreadSet(ctx, specs, threadContext, runtimemodule.ToolContext{
-		Runtime: runtimeContext,
-		Thread:  &threadContext,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return set, nil
+	return append(builtinSpecs, extra...)
 }
 
 func validateThreadModuleContext(

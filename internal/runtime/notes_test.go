@@ -221,7 +221,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			eng, bus := newEngine(t, &mockProvider{}, false)
 			installThreadStateModules(t, eng)
-			notesPath := filepath.Join(eng.Thread.Dir, workmem.NotesFileName)
+			notesPath := prepareTestNotesPath(t, eng.Thread.Dir)
 			if err := os.WriteFile(notesPath, tt.corrupt, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -239,7 +239,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 					t.Fatalf("active context missing Notes error placeholder: %+v", snapshot.Messages)
 				}
 				text := message.FirstText()
-				relativePath := filepath.ToSlash(filepath.Join(".juex", "threads", filepath.Base(eng.Thread.Dir), workmem.NotesFileName))
+				relativePath := filepath.ToSlash(filepath.Join(".juex", "threads", filepath.Base(eng.Thread.Dir), "modules", "notes", workmem.NotesFileName))
 				for _, want := range []string{"Working notes unavailable", tt.wantError, relativePath, "update_notes"} {
 					if !strings.Contains(text, want) {
 						t.Fatalf("Notes placeholder missing %q: %q", want, text)
@@ -299,7 +299,7 @@ func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T)
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(eng.Thread.Dir, workmem.NotesFileName), []byte{0xff}, 0o600); err != nil {
+	if err := os.WriteFile(prepareTestNotesPath(t, eng.Thread.Dir), []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -335,7 +335,7 @@ func TestTurnRecitesNotesReadFailurePlaceholder(t *testing.T) {
 	}}}
 	eng, bus := newEngine(t, prov, false)
 	installThreadStateModules(t, eng)
-	notesPath := filepath.Join(eng.Thread.Dir, workmem.NotesFileName)
+	notesPath := prepareTestNotesPath(t, eng.Thread.Dir)
 	if err := os.WriteFile(notesPath, []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -377,4 +377,13 @@ func TestNotesModuleRejectsMissingStore(t *testing.T) {
 	if _, err := reg.Call(context.Background(), NotesToolUpdate, map[string]any{"content": "hi"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("missing store error = %v", err)
 	}
+}
+
+func prepareTestNotesPath(t *testing.T, dir string) string {
+	t.Helper()
+	store := workmem.NewNotesStore(dir)
+	if _, err := store.Update(""); err != nil {
+		t.Fatal(err)
+	}
+	return store.Path
 }

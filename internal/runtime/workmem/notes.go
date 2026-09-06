@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	modstate "github.com/juex-ai/juex/internal/runtime/module/state"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
@@ -22,13 +23,16 @@ type NotesSnapshot struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
+var notesOwner = modstate.Owner{Module: "notes", Scope: modstate.ScopeThread}
+
 type NotesStore struct {
 	ThreadDir string
+	Path      string
 	mu        sync.Mutex
 }
 
 func NewNotesStore(threadDir string) *NotesStore {
-	return &NotesStore{ThreadDir: threadDir}
+	return &NotesStore{ThreadDir: threadDir, Path: filepath.Join(modstate.Directory(threadDir, notesOwner), NotesFileName)}
 }
 
 func (s *NotesStore) Clear() error {
@@ -37,7 +41,7 @@ func (s *NotesStore) Clear() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path := filepath.Join(s.ThreadDir, NotesFileName)
+	path := s.Path
 	if err := clearFile(path); err != nil {
 		return fmt.Errorf("notes clear: %w", err)
 	}
@@ -49,7 +53,7 @@ func (s *NotesStore) StageClearForContextRenewal(generationID string) (finalize,
 		return func() error { return nil }, func() error { return nil }, nil
 	}
 	s.mu.Lock()
-	clear, stageErr := thread.StageContextRenewalFileClear(filepath.Join(s.ThreadDir, NotesFileName), generationID)
+	clear, stageErr := thread.StageContextRenewalFileClear(s.Path, generationID)
 	s.mu.Unlock()
 	finalize, rollback, err = clear.Finalize, clear.Rollback, stageErr
 	if err != nil {
@@ -105,7 +109,10 @@ func (s *NotesStore) Update(content string) (NotesSnapshot, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path := filepath.Join(s.ThreadDir, NotesFileName)
+	path := s.Path
+	if _, err := modstate.Prepare(s.ThreadDir, notesOwner, modstate.DiscardOnRemoval); err != nil {
+		return NotesSnapshot{}, err
+	}
 	if err := replaceFileAtomic(path, []byte(content), 0o600); err != nil {
 		return NotesSnapshot{}, fmt.Errorf("notes replace: %w", err)
 	}
@@ -120,7 +127,7 @@ func (s *NotesStore) snapshotLocked() (NotesSnapshot, bool, error) {
 	if strings.TrimSpace(s.ThreadDir) == "" {
 		return NotesSnapshot{}, false, nil
 	}
-	path := filepath.Join(s.ThreadDir, NotesFileName)
+	path := s.Path
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

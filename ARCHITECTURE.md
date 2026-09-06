@@ -124,9 +124,11 @@ Generations without inventing storage paths. A torn final write may be repaired;
 a complete malformed commit is corruption.
 
 `pending_inputs.json` is an atomic, bounded current-state document owned by
-runtime. Goal and Notes Modules own `goal_state.json` and `notes.md`; core Thread
-storage does not interpret their schemas. Owner-specific files need not exist
-until that owner has durable state. The Scratchpad ThreadResource prepares
+runtime. Goal and Notes own their current-state files in Framework-assigned
+`modules/<owner>/` directories inside the Thread. Core Thread storage does not
+interpret their schemas. Before the first state write, the resource owner
+durably records its identity, scope, relative directory and retention policy.
+Files and ownership need not exist until that owner has durable state. The Scratchpad ThreadResource prepares
 model-managed working storage from the generic Thread directory only when
 enabled; its private path is absent from core Thread and runtime contexts.
 Working files survive Generation changes and module shutdown. Spool is system-managed temporary Thread
@@ -171,6 +173,22 @@ state. Live-only deltas are explicitly transient.
 Modules register typed capabilities once per Agent or Thread scope. The
 Framework validates and seals the set, starts resources in registration order,
 and closes or rolls back in reverse order.
+
+Resource retirement is separate from Close. The accepted configuration's factory
+declarations identify available owners without constructing disabled Modules.
+An Agent lifecycle lease excludes old and deferred writers. Before deleting any
+resource, the Framework persists the complete retirement intent, then enumerates
+active and archived Thread ownership without opening their metadata or journals.
+Only recorded disposable owner directories are removed, including staged /new
+backups. Failures remain observable and retryable; pending retirement completes
+even if the next configuration re-enables that owner. Normal Thread recovery
+resolves staged files in recorded owner directories against the current Generation.
+
+Configuration preflight and inspection do not retire resources. Once resource
+application commits, cleanup or later startup failure is an incomplete application;
+it does not roll back by resurrecting old state. The new endpoint is published
+only after retirement succeeds. See the [resource lifecycle contract](internal/runtime/module/state/README.md)
+for the pre-ownership deployment boundary.
 
 Runtime and Thread tool contributions are merged before resolving their final
 descriptions and schemas against the complete tool-name set. Resolution cannot

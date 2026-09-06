@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +42,7 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 		t.Fatalf("updated state = %+v", state)
 	}
 
-	data, err := os.ReadFile(filepath.Join(store.ThreadDir, "goal_state.json"))
+	data, err := os.ReadFile(store.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +72,9 @@ func TestGoalStateStoreRejectsInvalidAuthoritativeFile(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
+			if _, err := store.Create("seed", "corrupt after ownership"); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(store.Path, []byte(test.body), 0o600); err != nil {
 				t.Fatal(err)
 			}

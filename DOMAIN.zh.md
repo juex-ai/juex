@@ -67,10 +67,14 @@ Context Generation 是 Thread 内的一代 Provider 可见上下文。
 - `/compact` 从 compact summary 创建新 Generation，保留 Goal 与 Notes，
   并记录 `context.compacted`。
 - 两者都保留按时间顺序排列的 Generation 历史与 Scratchpad 文件。Disabled
-  Module 不加载、修改、注入或发布其保留状态。
+  Module 不加载、注入或发布状态；配置退休独立于 Generation 切换。
 - Generation 边界是用户可见的系统活动，不是普通 Provider 对话。
 
-Goal 与 Notes 是由 Module 拥有、可以跨 Generation 的 Thread 状态。Scratchpad
+Goal 与 Notes 是由 Module 拥有、可以跨 Generation 的可丢弃当前工作状态。应用
+禁用或移除 owner 的配置时，会清理 active 与 archived Thread 中已登记的资源；
+重新启用从空状态开始，不从保留的历史恢复已退休状态。owner 仍启用时，正常退出
+保留状态。预览和被拒绝的配置不清理资源；中断的退休必须在新组合发布前完成。
+Scratchpad
 是模型管理的 Thread 工作存储，只由启用的 Module 准备；关闭时保留已有文件，
 不准备或发布工作目录。spool 是系统管理的超长 Runtime 数据临时目录。
 

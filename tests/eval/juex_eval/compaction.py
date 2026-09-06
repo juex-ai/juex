@@ -568,8 +568,25 @@ def seed_authoritative_state(work: pathlib.Path) -> None:
     if len(journals) != 1:
         raise ValueError(f"expected one active Thread after turn1, found {len(journals)}")
     thread_dir = journals[0].parent.parent
-    write_json_atomic(thread_dir / "goal_state.json", AUTHORITATIVE_GOAL)
-    write_text_atomic(thread_dir / "notes.md", AUTHORITATIVE_NOTES)
+    seed_module_ownership(thread_dir)
+    write_json_atomic(thread_dir / "modules/goal/goal_state.json", AUTHORITATIVE_GOAL)
+    write_text_atomic(thread_dir / "modules/notes/notes.md", AUTHORITATIVE_NOTES)
+
+
+def seed_module_ownership(thread_dir: pathlib.Path) -> None:
+    """Establish the real resource ownership fixture before seeding state."""
+    path = thread_dir / "module-resources.json"
+    ledger = json.loads(path.read_text()) if path.exists() else {"version": 1, "resources": []}
+    for owner in ["goal", "notes"]:
+        record = {"module": owner, "scope": "thread", "path": f"modules/{owner}", "retention": "discard-on-removal"}
+        matches = [r for r in ledger["resources"] if r["module"] == owner]
+        if matches and matches != [record]:
+            raise ValueError(f"unexpected ownership fixture for {owner}: {matches}")
+        if not matches:
+            ledger["resources"].append(record)
+    write_json_atomic(path, ledger)
+    for owner in ["goal", "notes"]:
+        (thread_dir / "modules" / owner).mkdir(parents=True, exist_ok=True)
 
 
 def write_json_atomic(path: pathlib.Path, value: object) -> None:
