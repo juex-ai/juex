@@ -63,6 +63,16 @@ type ManifestEnvironment struct {
 type DiscoverOptions struct {
 	Roots        []Root
 	AllowedNames []string
+	Resources    ResourceSelection
+}
+
+// ResourceSelection determines which resource paths may be probed. The selected
+// extension's manifest is independent of its individual hosting capabilities.
+type ResourceSelection struct {
+	Skills      bool
+	Hooks       bool
+	MCP         bool
+	Observables bool
 }
 
 // Root is one installed extension directory in low-to-high precedence order.
@@ -98,6 +108,9 @@ type Resources struct {
 }
 
 func Discover(opts DiscoverOptions) (Resources, error) {
+	if len(opts.AllowedNames) == 0 {
+		return Resources{}, nil
+	}
 	var roots []extensionRoot
 	for _, root := range opts.Roots {
 		if root.Path == "" {
@@ -105,10 +118,6 @@ func Discover(opts DiscoverOptions) (Resources, error) {
 		}
 		roots = appendDistinctExtensionRoot(roots, extensionRoot(root))
 	}
-	if len(opts.AllowedNames) == 0 {
-		return Resources{}, nil
-	}
-
 	allowed := make(map[string]struct{}, len(opts.AllowedNames))
 	for _, name := range opts.AllowedNames {
 		allowed[name] = struct{}{}
@@ -153,33 +162,41 @@ func Discover(opts DiscoverOptions) (Resources, error) {
 			ExtensionDir:  ext.Dir,
 			RequireTrust:  selection.RequireTrust,
 		}
-		if ok, err := skillDirExists(filepath.Join(ext.Dir, "skills")); err != nil {
-			return Resources{}, err
-		} else if ok {
-			skillRef := ref
-			skillRef.Path = filepath.Join(ext.Dir, "skills")
-			out.SkillDirs = append(out.SkillDirs, skillRef)
+		if opts.Resources.Skills {
+			if ok, err := skillDirExists(filepath.Join(ext.Dir, "skills")); err != nil {
+				return Resources{}, err
+			} else if ok {
+				skillRef := ref
+				skillRef.Path = filepath.Join(ext.Dir, "skills")
+				out.SkillDirs = append(out.SkillDirs, skillRef)
+			}
 		}
-		if ok, err := pathExists(filepath.Join(ext.Dir, "mcp.json")); err != nil {
-			return Resources{}, err
-		} else if ok {
-			mcpRef := ref
-			mcpRef.Path = filepath.Join(ext.Dir, "mcp.json")
-			out.MCPConfigs = append(out.MCPConfigs, mcpRef)
+		if opts.Resources.MCP {
+			if ok, err := pathExists(filepath.Join(ext.Dir, "mcp.json")); err != nil {
+				return Resources{}, err
+			} else if ok {
+				mcpRef := ref
+				mcpRef.Path = filepath.Join(ext.Dir, "mcp.json")
+				out.MCPConfigs = append(out.MCPConfigs, mcpRef)
+			}
 		}
-		if ok, err := pathExists(filepath.Join(ext.Dir, "hooks.yaml")); err != nil {
-			return Resources{}, err
-		} else if ok {
-			hookRef := ref
-			hookRef.Path = filepath.Join(ext.Dir, "hooks.yaml")
-			out.HookFiles = append(out.HookFiles, hookRef)
+		if opts.Resources.Hooks {
+			if ok, err := pathExists(filepath.Join(ext.Dir, "hooks.yaml")); err != nil {
+				return Resources{}, err
+			} else if ok {
+				hookRef := ref
+				hookRef.Path = filepath.Join(ext.Dir, "hooks.yaml")
+				out.HookFiles = append(out.HookFiles, hookRef)
+			}
 		}
-		if ok, err := regularFileExists(filepath.Join(ext.Dir, "observables.json")); err != nil {
-			return Resources{}, err
-		} else if ok {
-			observableRef := ref
-			observableRef.Path = filepath.Join(ext.Dir, "observables.json")
-			out.ObservableConfigs = append(out.ObservableConfigs, observableRef)
+		if opts.Resources.Observables {
+			if ok, err := regularFileExists(filepath.Join(ext.Dir, "observables.json")); err != nil {
+				return Resources{}, err
+			} else if ok {
+				observableRef := ref
+				observableRef.Path = filepath.Join(ext.Dir, "observables.json")
+				out.ObservableConfigs = append(out.ObservableConfigs, observableRef)
+			}
 		}
 	}
 	return out, nil

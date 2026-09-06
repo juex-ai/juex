@@ -652,6 +652,44 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	if thirdRuntime.InstanceID == secondRuntime.InstanceID {
 		t.Fatalf("literal placeholder update reused runtime instance %q", thirdRuntime.InstanceID)
 	}
+
+	writeE2EConfig(t, filepath.Join(workspace, ".juex", "retained.yaml"), "hooks: broken\nskills: broken\n")
+	writeE2EConfig(t, workspaceConfigPath, string(workspaceConfig)+"imports:\n  - source: retained.yaml\nextensions:\n  allow: [broken]\n")
+	writeE2EConfig(t, filepath.Join(workspace, ".juex", "extensions", "broken", "juex.extension.json"), "{")
+	writeE2EConfig(t, filepath.Join(agentAddress.StateDir(), "observables.json"), "{")
+	disabledContent := literalUpdate.Config.Content + "modules:\n  hooks:\n    enabled: false\n  skills:\n    enabled: false\n  extensions:\n    enabled: false\n  observables:\n    enabled: false\n"
+	disabledBody, err := json.Marshal(map[string]string{"content": disabledContent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleetWebJSON(t, client, http.MethodPut, baseURL+"/api/agents/"+agentID+"/config", string(disabledBody), http.StatusOK, &update)
+	if update.Agent.RuntimeHealth != fleet.RuntimeHealthy {
+		t.Fatalf("disabled resource restart = %+v", update.Agent)
+	}
+	fourthRuntime := waitFleetRuntime(t, agentAddress)
+	if fourthRuntime.InstanceID == thirdRuntime.InstanceID {
+		t.Fatal("disabled resource update did not restart Agent")
+	}
+	fleetWebJSON(t, client, http.MethodGet, baseURL+"/agents/"+agentID+"/api/runtime", "", http.StatusOK, &runtimeStatus)
+	if len(runtimeStatus.MCP.Servers) != 1 || runtimeStatus.MCP.Servers[0].Name != "remote" {
+		t.Fatalf("workspace MCP lost after Extension disablement: %+v", runtimeStatus.MCP)
+	}
+	savedDisabled, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabledBody, err := json.Marshal(map[string]string{"content": strings.Replace(disabledContent, "hooks:\n    enabled: false", "hooks:\n    enabled: true", 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleetWebJSON(t, client, http.MethodPut, baseURL+"/api/agents/"+agentID+"/config", string(enabledBody), http.StatusBadRequest, nil)
+	stillDisabled, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stillDisabled) != string(savedDisabled) || !waitFleetRuntime(t, agentAddress).Matches(fourthRuntime) {
+		t.Fatal("invalid reenablement changed config or restarted Agent")
+	}
 }
 
 func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {

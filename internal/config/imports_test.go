@@ -84,6 +84,9 @@ skills:
 	if err := applyYAMLFile(&cfg, source); err != nil {
 		t.Fatal(err)
 	}
+	if err := resolveModuleDeclarations(&cfg); err != nil {
+		t.Fatal(err)
+	}
 	provider := cfg.providerConfigs["local"]
 	if provider.BaseURL != "https://main.example" || provider.Headers["X-Layer"] != "main" || provider.Headers["X-Second"] != "second" {
 		t.Fatalf("provider merge = %+v", provider)
@@ -140,6 +143,9 @@ skills:
 
 	cfg := Config{HomeJuexDir: t.TempDir()}
 	if err := applyYAMLFile(&cfg, explicitYAMLSource(mainPath)); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveModuleDeclarations(&cfg); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(cfg.Models, []string{"local:main"}) {
@@ -1209,9 +1215,11 @@ providers:
 		t.Fatalf("first models = %v, want valid remote selection", first.Models)
 	}
 
-	body.Store("models: [missing:model]\n")
-	if _, err := LoadFromFileForWorkDirForValidation(mainPath, workDir); err == nil {
-		t.Fatal("semantically invalid remote update error = nil")
+	for _, invalid := range []string{"models: [missing:model]\n", "hooks: broken\n", "skills:\n  prompt_budget_chars: -1\n"} {
+		body.Store(invalid)
+		if _, err := LoadFromFileForWorkDirForValidation(mainPath, workDir); err == nil {
+			t.Fatalf("invalid remote update accepted: %q", invalid)
+		}
 	}
 
 	body.Store("retry")

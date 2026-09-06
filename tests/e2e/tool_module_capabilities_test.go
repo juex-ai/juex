@@ -147,6 +147,7 @@ func (p *moduleCapabilityProvider) planActions() {
 }
 
 func TestToolModulesExposeEffectiveCapabilitiesToProvider(t *testing.T) {
+	isolateModuleConfig(t)
 	cases := []struct {
 		name, preset, module string
 		enabled              bool
