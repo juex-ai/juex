@@ -27,7 +27,7 @@ func TestNotesStoreUpdatesSnapshots(t *testing.T) {
 		t.Fatal("updated_at is zero")
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "notes.md"))
+	data, err := os.ReadFile(store.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestNotesStoreUpdatesSnapshots(t *testing.T) {
 	if err != nil || status == nil || status.Content != snapshot.Content {
 		t.Fatalf("status snapshot = %+v, err = %v", status, err)
 	}
-	temps, err := filepath.Glob(filepath.Join(dir, ".notes.md-*"))
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(store.Path), ".notes.md-*"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestNotesStoreRejectsOversizedContentWithoutReplacingExisting(t *testing.T)
 	if _, err := store.Update(tooLong); err == nil || !strings.Contains(err.Error(), "maximum is 2048") || !strings.Contains(err.Error(), "working files") {
 		t.Fatalf("oversize error = %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "notes.md"))
+	data, err := os.ReadFile(store.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestNotesStoreRedactsAssignmentValues(t *testing.T) {
 			t.Fatalf("snapshot leaked %q: %q", secret, snapshot.Content)
 		}
 	}
-	persisted, err := os.ReadFile(filepath.Join(dir, NotesFileName))
+	persisted, err := os.ReadFile(store.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,5 +134,19 @@ func TestTruncatePreservesUTF8(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "界...(truncated") {
 		t.Fatalf("truncate returned %q", got)
+	}
+}
+
+func TestNotesOwnershipFailurePreventsFirstStateWrite(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "module-resources.json"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	store := NewNotesStore(dir)
+	if _, err := store.Update("must not escape ownership"); err == nil {
+		t.Fatal("ignored ownership publication failure")
+	}
+	if _, err := os.Stat(store.Path); !os.IsNotExist(err) {
+		t.Fatalf("unowned state published: %v", err)
 	}
 }

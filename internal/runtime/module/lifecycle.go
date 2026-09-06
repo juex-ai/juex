@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/juex-ai/juex/internal/runtime/module/state"
 )
 
-type Scope string
+// Scope is shared with durable resource ownership.
+type Scope = state.Scope
 
 const (
-	ScopeRuntime Scope = "runtime"
-	ScopeThread  Scope = "thread"
+	ScopeRuntime = state.ScopeRuntime
+	ScopeThread  = state.ScopeThread
 )
 
 type RuntimeResource interface {
@@ -39,8 +42,8 @@ type ContextRenewalClear struct {
 }
 
 // ContextRenewalCleaner owns module state that must be cleared around a new
-// Context Generation commit. Only enabled modules exist in the Set, so
-// disabled module files remain untouched.
+// Context Generation commit. Configuration retirement is a separate operation
+// over persisted resource ownership, independent of the enabled Set.
 type ContextRenewalCleaner interface {
 	ClearContextForRenewal(context.Context, string) (ContextRenewalClear, error)
 }
@@ -133,9 +136,11 @@ type RuntimeFactorySpec struct {
 }
 
 type ThreadFactorySpec struct {
-	ID      ID
-	Enabled bool
-	New     func(context.Context, ThreadContext) (Module, error)
+	// OwnsResources declares this implementation as an available durable resource owner.
+	OwnsResources bool
+	ID            ID
+	Enabled       bool
+	New           func(context.Context, ThreadContext) (Module, error)
 }
 
 func BuildRuntimeSet(ctx context.Context, specs []RuntimeFactorySpec, runtimeContext RuntimeContext, toolContext ToolContext) (*Set, error) {

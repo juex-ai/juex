@@ -2,6 +2,9 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,12 +12,14 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/web"
 )
 
 func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
@@ -95,7 +100,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	if snapshot, err := notes.StatusSnapshot(); err != nil || snapshot != nil {
 		t.Fatalf("Notes after /new = %+v, %v", snapshot, err)
 	}
-	for _, path := range []string{goal.Path, filepath.Join(after.Thread.Dir, "notes.md")} {
+	for _, path := range []string{goal.Path, notes.Path} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("module state file survived /new: %s: %v", path, err)
 		}
@@ -119,81 +124,81 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	}
 }
 
-func TestModuleLifecycle_DisabledGoalAndNotesSurviveNewAndReloadWhenEnabled(t *testing.T) {
-	if testing.Short() {
-		t.Skip("e2e is slow")
-	}
+func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) {
 	work := t.TempDir()
-	stateDir := filepath.Join(work, ".juex")
-	cfg := config.Config{WorkDir: work, AgentStateDir: stateDir}
-
-	first, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true})
+	cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
+	first, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
+	}
+	for name, input := range map[string]map[string]any{
+		"create_goal":  {"description": "retire current work", "acceptance": "re-enable empty"},
+		"update_notes": {"content": "retire these notes"},
+	} {
+		tool, ok := first.Engine.Tools.Get(name)
+		if !ok {
+			t.Fatalf("missing %s", name)
+		}
+		if _, err := tool.Handler(context.Background(), input); err != nil {
+			t.Fatal(err)
+		}
 	}
 	goal, notes := runtime.ThreadStateStoresFromModules(first.Engine.ThreadRuntimeSnapshot().Modules)
-	if goal == nil || notes == nil {
-		t.Fatal("Goal and Notes Modules did not expose their stores")
-	}
-	if _, err := goal.Create("retain while disabled", "reload the exact file"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := notes.Update("- [ ] retained while disabled"); err != nil {
-		t.Fatal(err)
-	}
-	goalBefore, err := os.ReadFile(goal.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	notesPath := filepath.Join(first.Thread.Dir, "notes.md")
-	notesBefore, err := os.ReadFile(notesPath)
-	if err != nil {
+	if err := first.Thread.Append(llm.TextMessage(llm.RoleUser, "retain history")); err != nil {
 		t.Fatal(err)
 	}
 	if err := first.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
-
-	disabled := cfg
-	disabled.Modules = config.ModulePolicy{
-		"goal":  {Enabled: false},
-		"notes": {Enabled: false},
-	}
-	second, err := app.New(app.Options{Config: disabled, Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true})
+	// An ordinary restart keeps both owners' current state.
+	restarted, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	goalStatus, notesStatus := second.ThreadStateStatus()
-	if goalStatus != nil || notesStatus != nil {
-		t.Fatalf("disabled module state leaked through status: Goal=%+v Notes=%+v", goalStatus, notesStatus)
+	g, n := restarted.ThreadStateStatus()
+	if g == nil || n == nil {
+		t.Fatalf("ordinary restart lost state: %v %v", g, n)
 	}
-	if err := second.NewContext(context.Background()); err != nil {
+	if err := restarted.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+	disabled := cfg
+	disabled.Modules = config.ModulePolicy{"goal": {Enabled: false}, "notes": {Enabled: false}}
+	response := httptest.NewRecorder()
+	web.NewReadOnlyAPIHandler(disabled).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/threads/"+thread.MainID, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("read-only request: %d %s", response.Code, response.Body.String())
+	}
+	if g, err := goal.StatusSnapshot(); err != nil || g == nil {
+		t.Fatalf("read-only request retired Goal: %v %v", g, err)
+	}
+	if n, err := notes.StatusSnapshot(); err != nil || n == nil {
+		t.Fatalf("read-only request retired Notes: %v %v", n, err)
+	}
+	second, err := app.New(app.Options{Config: disabled, Provider: &bareScriptProvider{}, DisableMCP: true})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := second.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(goal.Path); err != nil || string(got) != string(goalBefore) {
-		t.Fatalf("disabled Goal file changed across /new: %q, %v", got, err)
+	if got, err := goal.StatusSnapshot(); err != nil || got != nil {
+		t.Fatalf("retired Goal = %+v, %v", got, err)
 	}
-	if got, err := os.ReadFile(notesPath); err != nil || string(got) != string(notesBefore) {
-		t.Fatalf("disabled Notes file changed across /new: %q, %v", got, err)
+	if got, err := notes.StatusSnapshot(); err != nil || got != nil {
+		t.Fatalf("retired Notes = %+v, %v", got, err)
 	}
-
-	third, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true})
+	third, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = third.CloseAndWait() })
-	goalStatus, notesStatus = third.ThreadStateStatus()
-	if goalStatus == nil || goalStatus.Description != "retain while disabled" {
-		t.Fatalf("re-enabled Goal = %+v", goalStatus)
+	g, n = third.ThreadStateStatus()
+	if g != nil || n != nil {
+		t.Fatalf("re-enabled state revived from history: %v %v", g, n)
 	}
-	if notesStatus == nil || notesStatus.Content != "- [ ] retained while disabled" {
-		t.Fatalf("re-enabled Notes = %+v", notesStatus)
-	}
-	if got := third.Thread.Info().GenerationID; got != "g000002" {
-		t.Fatalf("Generation after disabled /new = %q", got)
+	if len(third.Thread.History) == 0 {
+		t.Fatal("retirement deleted event history")
 	}
 }
 
@@ -225,11 +230,7 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	generationID := worker.Projection().CurrentGeneration.ID
-	for _, path := range []string{goal.Path, filepath.Join(worker.Dir, workmem.NotesFileName)} {
-		if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
-			t.Fatal(err)
-		}
-	}
+	stageModuleRenewalCrash(t, worker.Dir, generationID, goal.Path, notes.Path)
 	if err := worker.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -254,11 +255,35 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 	if notesErr != nil || notesSnapshot == nil || notesSnapshot.Content != "- [ ] preserve before archive" {
 		t.Fatalf("archived Notes = %+v, %v", notesSnapshot, notesErr)
 	}
-	backups, err := filepath.Glob(filepath.Join(archived.Dir, "*.context-renewal-*"))
+	backups, err := filepath.Glob(filepath.Join(archived.Dir, "modules", "*", "*.context-renewal-*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(backups) != 0 {
 		t.Fatalf("archive retained recovery backups: %v", backups)
+	}
+}
+
+func stageModuleRenewalCrash(t *testing.T, dir, generationID string, paths ...string) {
+	t.Helper()
+	entries := make([]map[string]string, 0, len(paths))
+	for _, path := range paths {
+		relative, err := filepath.Rel(dir, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, map[string]string{"path": filepath.ToSlash(relative), "generation_id": generationID})
+	}
+	data, err := json.Marshal(map[string]any{"version": 1, "files": entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "context-renewal.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

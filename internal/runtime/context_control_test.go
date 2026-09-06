@@ -70,7 +70,10 @@ func TestNewContextStopsBeforeGenerationWhenModuleStateCannotClear(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	notesPath := filepath.Join(engine.Thread.Dir, workmem.NotesFileName)
+	notesPath := prepareTestNotesPath(t, engine.Thread.Dir)
+	if err := os.Remove(notesPath); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(notesPath, 0o700); err != nil {
 		t.Fatal(err)
 	}

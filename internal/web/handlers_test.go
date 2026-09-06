@@ -341,7 +341,7 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 		t.Fatalf("archived module state = Goal:%+v Notes:%+v", archivedDetail.Goal, archivedDetail.Notes)
 	}
 	archivedDir := filepath.Join(server.opts.Cfg.RuntimePaths().StateDir, "archive", "threads", created.ID)
-	for _, name := range []string{"goal_state.json", "notes.md"} {
+	for _, name := range []string{"modules/goal/goal_state.json", "modules/notes/notes.md"} {
 		if _, err := os.Stat(filepath.Join(archivedDir, name)); err != nil {
 			t.Fatalf("archived module file %s: %v", name, err)
 		}
@@ -373,7 +373,7 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 		restored.RetentionState != thread.RetentionActive || restored.ExecutionState != thread.ExecutionIdle {
 		t.Fatalf("unarchived Thread changed generation = %+v", restored)
 	}
-	for _, name := range []string{"goal_state.json", "notes.md"} {
+	for _, name := range []string{"modules/goal/goal_state.json", "modules/notes/notes.md"} {
 		if _, err := os.Stat(filepath.Join(activeDir, name)); err != nil {
 			t.Fatalf("unarchived module file %s: %v", name, err)
 		}

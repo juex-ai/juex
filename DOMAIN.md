@@ -73,12 +73,18 @@ A Context Generation is one Provider-visible context epoch inside a Thread.
 - `/compact` starts a Generation from a compact summary, retains Goal and
   Notes, and records `context.compacted`.
 - Both retain chronological Generation history and Scratchpad files. Disabled
-  Modules do not load, mutate, inject, or publish their retained state.
+  Modules do not load, inject, or publish state; configuration retirement is
+  independent of Generation changes.
 - Generation boundary records are user-visible system activity, not ordinary
   Provider dialogue.
 
-Goal and Notes are Module-owned Thread state that can cross Generation
-boundaries. Scratchpad is model-managed Thread working storage prepared only by
+Goal and Notes are disposable Module-owned current state that can cross
+Generation boundaries. Applying a configuration that disables or removes their
+owner retires recorded resources across active and archived Threads. Re-enabling
+starts empty; retained history never restores retired work state. Ordinary
+shutdown with the owner enabled retains state. Preview and rejected configuration
+do not retire resources; interrupted retirement must finish before a new
+composition can be published. Scratchpad is model-managed Thread working storage prepared only by
 its enabled Module. Disabling it preserves existing files without preparing or
 publishing the working directory. Spool is
 system-managed temporary storage for oversized runtime data.

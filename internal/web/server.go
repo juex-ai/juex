@@ -301,9 +301,6 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.opts.Addr != "" && !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex listen: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
-	if err := app.EnsureMainThread(s.opts.Cfg); err != nil {
-		return err
-	}
 
 	address := s.opts.Cfg.AgentAddress
 	if address.ID() == "" {
@@ -314,6 +311,17 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = binding.Close() }()
+	if _, err := s.resolveAgentRuntime(); err != nil {
+		return err
+	}
+	resourceLease, err := app.AcquireModuleResources(s.opts.Cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resourceLease.Close() }()
+	if err := app.EnsureMainThread(s.opts.Cfg); err != nil {
+		return err
+	}
 	shutdownCh := s.setEndpointControl(binding.Runtime())
 	defer s.clearEndpointControl(binding.Runtime())
 
@@ -578,6 +586,11 @@ func (s *Server) openThreadLocked(ctx context.Context, id string) (*activeThread
 		s.threads.Delete(id)
 		active.close()
 	}
+	resourceLease, err := app.AcquireModuleResources(s.opts.Cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resourceLease.Close() }()
 	store := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir)
 	probe, err := store.OpenActive(id)
 	if os.IsNotExist(err) && id == thread.MainID {
