@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 const (
-	ContextControlModuleID runtimemodule.ID = "context-control"
+	ContextControlModuleID runtimemodule.ID = modulecatalog.ContextControl
 	ContextToolNew         string           = "context_new"
 	ContextToolCompact     string           = "context_compact"
 )

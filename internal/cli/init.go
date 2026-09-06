@@ -42,8 +42,12 @@ func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Manage Juex configuration",
-		Args:  usageArgs(cobra.NoArgs),
-		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
+		Long: fmt.Sprintf(`Manage Juex configuration. YAML preset defaults to %s;
+%s selects the minimal module defaults. Explicit modules.<id>.enabled
+switches override preset defaults. Configured capabilities and available tools
+are distinct; some independent module combinations are not yet supported.`, config.PresetStandard, config.PresetMinimal),
+		Args: usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	initCmd := newInitCmd(flags)
 	initCmd.Flags().StringVarP(&flags.cwd, "cwd", "C", "", "Workspace path (default current directory)")

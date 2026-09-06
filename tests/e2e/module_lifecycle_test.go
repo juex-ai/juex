@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
@@ -20,20 +21,8 @@ func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
 		t.Skip("e2e is slow")
 	}
 	modules := config.ModulePolicy{}
-	for _, id := range []string{
-		"builtin-tools",
-		"project-guidance",
-		"skills",
-		"worker-threads",
-		"observables",
-		"mcp",
-		"context-control",
-		"thread-context",
-		"goal",
-		"notes",
-		"hooks",
-	} {
-		modules[id] = config.ModuleSettings{Enabled: false}
+	for _, definition := range modulecatalog.Definitions() {
+		modules[definition.ID] = config.ModuleSettings{Enabled: false}
 	}
 	work := t.TempDir()
 	application, err := app.New(app.Options{

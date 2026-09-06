@@ -229,6 +229,9 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	if err := ValidateModuleConfig(cfg); err != nil {
 		return nil, err
 	}
+	if err := validateModuleComposition(cfg); err != nil {
+		return nil, err
+	}
 	runtimePaths := cfg.RuntimePaths()
 	runtimeLimits := cfg.RuntimeLimits()
 	var agentRuntime AgentRuntimeResolution

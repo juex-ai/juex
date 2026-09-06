@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
@@ -20,7 +21,7 @@ const (
 	goalGuide      = `Guide available via skill_load("juex-thread-state").`
 )
 
-const GoalModuleID runtimemodule.ID = "goal"
+const GoalModuleID runtimemodule.ID = modulecatalog.Goal
 
 const goalCompletionGateName = "goal-completion-gate"
 

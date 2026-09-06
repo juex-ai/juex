@@ -7,11 +7,12 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-const ModuleID runtimemodule.ID = "mcp"
+const ModuleID runtimemodule.ID = modulecatalog.MCP
 
 type Module struct {
 	mu      sync.RWMutex

@@ -2,16 +2,16 @@ package app
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
-	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
-	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
@@ -65,7 +65,7 @@ func prepareRuntimeModules(
 	composition.specs = []runtimemodule.RuntimeFactorySpec{
 		{
 			ID:      builtintools.ModuleID,
-			Enabled: cfg.ModuleEnabled(string(builtintools.ModuleID)),
+			Enabled: cfg.ModuleEnabled(modulecatalog.BasicFileTools),
 			New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				mod := builtintools.New(factoryCtx, tools.BuiltinOptions{
 					WorkDir:            runtimePaths.WorkDir,
@@ -113,26 +113,25 @@ func prepareRuntimeModules(
 	return composition, nil
 }
 
-func compiledModuleIDs() []string {
-	return []string{
-		string(builtintools.ModuleID),
-		string(promptcontext.GuidanceModuleID),
-		string(skillsmodule.ModuleID),
-		string(workerThreadModuleID),
-		string(observable.ModuleID),
-		string(mcp.ModuleID),
-		string(promptcontext.ThreadContextModuleID),
-		string(juexruntime.ContextControlModuleID),
-		string(juexruntime.GoalModuleID),
-		string(juexruntime.NotesModuleID),
-		string(hooks.ModuleID),
-	}
+// ValidateModuleConfig validates declarations without constructing resources.
+func ValidateModuleConfig(cfg config.Config) error {
+	return cfg.ValidateModules()
 }
 
-// ValidateModuleConfig rejects unknown compiled Module IDs before any Module
-// constructor or process-scoped feature startup can run.
-func ValidateModuleConfig(cfg config.Config) error {
-	return cfg.ValidateModuleIDs(compiledModuleIDs())
+// The bundled factories cannot yet honor independent switches. Reject mixed
+// groups before resource discovery rather than start explicitly disabled work.
+func validateModuleComposition(cfg config.Config) error {
+	for _, group := range [][]string{
+		{modulecatalog.BasicFileTools, modulecatalog.Shell, modulecatalog.ApplyPatch, modulecatalog.ChunkedWrite, modulecatalog.FileSearch},
+		{modulecatalog.OperatingContext, modulecatalog.Scratchpad, modulecatalog.Shell},
+	} {
+		for _, id := range group[1:] {
+			if cfg.ModuleEnabled(id) != cfg.ModuleEnabled(group[0]) {
+				return fmt.Errorf("app: independent module switches for %v are not yet supported by the bundled factory; configure every member consistently", group)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *runtimeModuleComposition) sealAndStart(ctx context.Context, extra ...runtimemodule.RuntimeFactorySpec) error {
@@ -191,7 +190,7 @@ func buildThreadModules(
 		},
 		{
 			ID:      promptcontext.ThreadContextModuleID,
-			Enabled: cfg.ModuleEnabled(string(promptcontext.ThreadContextModuleID)),
+			Enabled: cfg.ModuleEnabled(modulecatalog.OperatingContext),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				return &promptcontext.ThreadContextModule{WorkDir: workDir, Shell: shell, ShellSessions: shellSessions}, nil
 			},

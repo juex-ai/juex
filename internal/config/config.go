@@ -53,6 +53,7 @@ type Config struct {
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
 	Skills                    SkillsConfig
+	Preset                    string
 	Modules                   ModulePolicy
 	Extensions                ExtensionPolicy
 	Fleet                     FleetConfig
@@ -122,6 +123,7 @@ type fileConfig struct {
 	Shell                     *ShellConfig            `yaml:"shell"`
 	Sandbox                   *sandboxConfig          `yaml:"sandbox"`
 	Skills                    skillsConfig            `yaml:"skills"`
+	Preset                    *string                 `yaml:"preset"`
 	Modules                   map[string]moduleConfig `yaml:"modules"`
 	Extensions                extensionsConfig        `yaml:"extensions"`
 	Fleet                     *fleetFileConfig        `yaml:"fleet"`
@@ -979,6 +981,12 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	applyRuntimeConfig(cfg, fc.Runtime)
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	}
+	if fc.Preset != nil {
+		if err := validatePreset(*fc.Preset); err != nil {
+			return fmt.Errorf("config: parse %s: %w", source.Path, err)
+		}
+		cfg.Preset = *fc.Preset
 	}
 	if err := applyModulesConfig(cfg, fc.Modules); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)

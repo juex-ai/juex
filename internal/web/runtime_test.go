@@ -59,7 +59,7 @@ body`)
 	}
 	wantModules := []runtimeModuleInfo{
 		{ID: "builtin-tools", Scope: "runtime"},
-		{ID: "project-guidance", Scope: "runtime"},
+		{ID: "agents-md", Scope: "runtime"},
 		{ID: "skills", Scope: "runtime"},
 		{ID: "mcp", Scope: "runtime"},
 		{ID: "observables", Scope: "runtime"},

@@ -222,22 +222,19 @@ func TestModulePolicyRejectsUnknownEnvelopeFieldAndUnsupportedID(t *testing.T) {
   " skills ":
     enabled: false
 `), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace})
-		if err == nil || !strings.Contains(err.Error(), `invalid module id " skills "`) {
+		if err == nil || !strings.Contains(err.Error(), `unsupported module " skills "`) {
 			t.Fatalf("applyYAMLData() error = %v, want non-canonical id rejection", err)
 		}
 	})
 
 	t.Run("unsupported id", func(t *testing.T) {
 		cfg := Config{}
-		if err := applyYAMLData(&cfg, []byte(`modules:
+		err := applyYAMLData(&cfg, []byte(`modules:
   skillz:
     enabled: false
-`), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace}); err != nil {
-			t.Fatal(err)
-		}
-		err := cfg.ValidateModuleIDs([]string{"skills", "mcp"})
+`), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace})
 		if err == nil || !strings.Contains(err.Error(), `unsupported module "skillz"`) {
-			t.Fatalf("ValidateModuleIDs() error = %v", err)
+			t.Fatalf("applyYAMLData() error = %v", err)
 		}
 	})
 }
