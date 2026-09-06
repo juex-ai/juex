@@ -167,9 +167,6 @@ func (s *Store) OpenArchived(id string) (*Thread, error) {
 
 func (s *Store) createLocked(id, alias, parentID string) (*Thread, error) {
 	dir := filepath.Join(s.ThreadsDir(), id)
-	if err := os.MkdirAll(filepath.Join(dir, "scratchpad"), 0o755); err != nil {
-		return nil, err
-	}
 	if err := os.MkdirAll(filepath.Join(dir, "spool"), 0o700); err != nil {
 		return nil, err
 	}

@@ -8,8 +8,10 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/modulecatalog"
+	"github.com/juex-ai/juex/internal/modules/agentsmd"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
+	"github.com/juex-ai/juex/internal/modules/operatingcontext"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/modules/shelltools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
@@ -118,10 +120,10 @@ func prepareRuntimeModules(
 			},
 		},
 		{
-			ID:      promptcontext.GuidanceModuleID,
-			Enabled: cfg.ModuleEnabled(string(promptcontext.GuidanceModuleID)),
+			ID:      agentsmd.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(agentsmd.ModuleID)),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return &promptcontext.GuidanceModule{
+				return &agentsmd.Module{
 					GlobalAgentsMDPath: cfg.GlobalAgentsMDPath(),
 					AgentsMDDirs:       cfg.AgentsMDDirs(),
 				}, nil
@@ -207,14 +209,17 @@ func buildThreadModules(
 			},
 		},
 		{
-			ID:      promptcontext.ThreadContextModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.OperatingContext) || cfg.ModuleEnabled(modulecatalog.Scratchpad),
+			ID:      operatingcontext.ModuleID,
+			Enabled: cfg.ModuleEnabled(modulecatalog.OperatingContext),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-				return &promptcontext.ThreadContextModule{
-					WorkDir:                 workDir,
-					OperatingContextEnabled: cfg.ModuleEnabled(modulecatalog.OperatingContext),
-					ScratchpadEnabled:       cfg.ModuleEnabled(modulecatalog.Scratchpad),
-				}, nil
+				return &operatingcontext.Module{WorkDir: workDir}, nil
+			},
+		},
+		{
+			ID:      scratchpad.ModuleID,
+			Enabled: cfg.ModuleEnabled(modulecatalog.Scratchpad),
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				return &scratchpad.Module{WorkDir: workDir}, nil
 			},
 		},
 		{
@@ -290,9 +295,8 @@ func threadModuleContext(threadState *thread.Thread) runtimemodule.ThreadContext
 		return runtimemodule.ThreadContext{}
 	}
 	return runtimemodule.ThreadContext{
-		ID:            threadState.ID,
-		Dir:           threadState.Dir,
-		ScratchpadDir: threadState.ScratchpadDir(),
+		ID:  threadState.ID,
+		Dir: threadState.Dir,
 	}
 }
 

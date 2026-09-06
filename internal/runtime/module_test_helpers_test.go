@@ -8,7 +8,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
+	"github.com/juex-ai/juex/internal/modules/operatingcontext"
 	"github.com/juex-ai/juex/internal/prompt"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
@@ -105,7 +105,7 @@ func appendPolicyAdditionalContext(msg llm.Message, results []hooks.Result) llm.
 }
 
 func newTestPromptBuilder(workDir string, now func() time.Time) *prompt.Builder {
-	provider := &promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir, Now: now}
+	provider := &operatingcontext.Module{WorkDir: workDir, Now: now}
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return provider.Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
 	}}
@@ -172,9 +172,8 @@ func installThreadStateModulesWithStoresAndGoalOptions(
 	goalOptions.EventSink = eventSink
 	goalOptions.CurrentTurnID = currentTurnID
 	threadContext := runtimemodule.ThreadContext{
-		ID:            engine.Thread.ID,
-		Dir:           engine.Thread.Dir,
-		ScratchpadDir: engine.Thread.ScratchpadDir(),
+		ID:  engine.Thread.ID,
+		Dir: engine.Thread.Dir,
 	}
 	set, err := runtimemodule.BuildThreadSet(context.Background(), []runtimemodule.ThreadFactorySpec{
 		{ID: GoalModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {

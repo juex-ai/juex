@@ -14,6 +14,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,8 +29,11 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modulecatalog"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/web"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -243,7 +247,10 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	if err := target.Append(llm.TextMessage(llm.RoleUser, "survives restart")); err != nil {
 		t.Fatal(err)
 	}
-	scratchFile := filepath.Join(target.ScratchpadDir(), "state.txt")
+	if err := (&scratchpad.Module{}).StartThread(t.Context(), runtimemodule.ThreadContext{Dir: target.Dir}); err != nil {
+		t.Fatal(err)
+	}
+	scratchFile := filepath.Join(scratchpad.Dir(target.Dir), "state.txt")
 	if err := os.WriteFile(scratchFile, []byte("preserved"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +300,7 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	if len(reopened.History) != 1 || reopened.History[0].FirstText() != "survives restart" {
 		t.Fatalf("restored history = %+v", reopened.History)
 	}
-	if data, err := os.ReadFile(filepath.Join(reopened.ScratchpadDir(), "state.txt")); err != nil || string(data) != "preserved" {
+	if data, err := os.ReadFile(filepath.Join(scratchpad.Dir(reopened.Dir), "state.txt")); err != nil || string(data) != "preserved" {
 		t.Fatalf("restored Scratchpad = %q, %v", data, err)
 	}
 	journalAfter, err := os.Stat(reopened.CurrentGenerationJournalPath())
@@ -302,6 +309,75 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	}
 	if journalAfter.Size() != journalBefore.Size() {
 		t.Fatalf("metadata lifecycle changed Journal size from %d to %d", journalBefore.Size(), journalAfter.Size())
+	}
+}
+
+func TestWeb_ScratchpadReadAliasesFollowModuleSwitchAcrossRestart(t *testing.T) {
+	cfg := config.Config{
+		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: t.TempDir(),
+		AgentStateDir: t.TempDir(),
+	}
+	target, err := thread.NewStore(cfg.RuntimePaths().StateDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := scratchpad.Dir(target.Dir)
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	imagePath := filepath.Join(dir, "image.png")
+	writeE2ETestPNG(t, imagePath)
+	writeE2ETestPNG(t, filepath.Join(cfg.WorkDir, "workspace.png"))
+	before, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := url.QueryEscape(".juex/threads/" + thread.MainID + "/scratchpad/image.png")
+	for _, enabled := range []bool{true, false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			cfg.Modules = config.ModulePolicy{modulecatalog.Scratchpad: {Enabled: enabled}}
+			server := web.NewServer(web.Options{Cfg: cfg, Provider: &webProvider{}})
+			defer server.Close()
+			httpServer := httptest.NewServer(server.Handler())
+			defer httpServer.Close()
+			for _, endpoint := range []string{
+				"/api/threads/" + thread.MainID + "/scratchpad",
+				"/api/files/content?path=" + alias,
+				"/api/files/raw?path=" + alias,
+				"/api/media?root=workspace&path=" + alias,
+				"/api/media?root=workspace&path=workspace.png",
+			} {
+				methods := []string{http.MethodGet}
+				if strings.HasPrefix(endpoint, "/api/media?") {
+					methods = append(methods, http.MethodHead)
+				}
+				for _, method := range methods {
+					request, err := http.NewRequest(method, httpServer.URL+endpoint, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response, err := httpServer.Client().Do(request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					body, err := io.ReadAll(response.Body)
+					_ = response.Body.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := http.StatusOK
+					if !enabled && !strings.HasSuffix(endpoint, "path=workspace.png") {
+						want = http.StatusNotFound
+					}
+					if response.StatusCode != want {
+						t.Fatalf("%s %s: status=%d want=%d body=%s", method, endpoint, response.StatusCode, want, body)
+					}
+				}
+			}
+		})
+	}
+	if after, err := os.ReadFile(imagePath); err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("retained image changed: %v", err)
 	}
 }
 

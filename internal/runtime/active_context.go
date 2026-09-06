@@ -81,9 +81,8 @@ func (e *Engine) moduleRuntimeContextMessages(ctx context.Context, runtime Threa
 		return nil, nil
 	}
 	threadContext := runtimemodule.ThreadContext{
-		ID:            runtime.Thread.ID,
-		Dir:           runtime.Thread.Dir,
-		ScratchpadDir: runtime.ScratchpadDir,
+		ID:  runtime.Thread.ID,
+		Dir: runtime.Thread.Dir,
 	}
 	sections, err := runtimemodule.CollectContext(ctx, runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,

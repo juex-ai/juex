@@ -11,7 +11,7 @@ import (
 
 // NewContext starts an empty Context Generation on the current Thread. It is
 // serialized with Turns and clears Thread work state while preserving the
-// Thread journal and scratchpad.
+// Thread journal and module-owned working files.
 func (e *Engine) NewContext(ctx context.Context) error {
 	if e == nil {
 		return fmt.Errorf("runtime: engine is required")

@@ -126,8 +126,10 @@ a complete malformed commit is corruption.
 `pending_inputs.json` is an atomic, bounded current-state document owned by
 runtime. Goal and Notes Modules own `goal_state.json` and `notes.md`; core Thread
 storage does not interpret their schemas. Owner-specific files need not exist
-until that owner has durable state. Scratchpad is model-managed Thread
-state and survives Generation changes. Spool is system-managed temporary Thread
+until that owner has durable state. The Scratchpad ThreadResource prepares
+model-managed working storage from the generic Thread directory only when
+enabled; its private path is absent from core Thread and runtime contexts.
+Working files survive Generation changes and module shutdown. Spool is system-managed temporary Thread
 data. Active and archived Thread roots are separate, and lifecycle operations
 move the whole Thread directory. Agent media is stored separately.
 
@@ -177,7 +179,10 @@ read the same published registry; shared Module catalogs remain unchanged.
 
 Prompt assembly consumes registered context contributors. Stable guidance,
 Hook context, Thread state, and per-request recitation meet at this interface.
-Generation boundary activity is not ordinary Provider dialogue.
+Generation boundary activity is not ordinary Provider dialogue. Operating
+context contributes only cwd, OS and time; Shell owns its execution guidance.
+The agents-md Module owns automatic guidance-file reads, and disabling it does
+not change explicit file-tool permissions.
 
 MCP transports are Agent-scoped to avoid duplicate processes, authentication,
 catalogs, and Notifications. Tool calls remain attached to the calling

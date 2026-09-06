@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
+func TestArchiveUnarchivePreservesGenerationAndModuleFiles(t *testing.T) {
 	t.Parallel()
 	store := NewStore(t.TempDir())
 	store.now = fixedNow()
@@ -44,7 +44,10 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeArchive := worker.Projection()
-	scratchFile := filepath.Join(worker.ScratchpadDir(), "draft.md")
+	if err := os.MkdirAll(filepath.Join(worker.Dir, "module-files"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	scratchFile := filepath.Join(filepath.Join(worker.Dir, "module-files"), "draft.md")
 	if err := os.WriteFile(scratchFile, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +116,7 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 	if restoredProjection.Revision != archivedProjection.Revision+1 || len(restoredProjection.Generations) != len(archivedProjection.Generations) {
 		t.Fatalf("restored metadata = %+v, archived = %+v", restoredProjection, archivedProjection)
 	}
-	data, err := os.ReadFile(filepath.Join(restored.ScratchpadDir(), "draft.md"))
+	data, err := os.ReadFile(filepath.Join(filepath.Join(restored.Dir, "module-files"), "draft.md"))
 	if err != nil || string(data) != "keep" {
 		t.Fatalf("scratchpad = %q, %v", data, err)
 	}

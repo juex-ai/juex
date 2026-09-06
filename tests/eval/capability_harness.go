@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/juex-ai/juex/internal/modules/shelltools"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +14,10 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
+	"github.com/juex-ai/juex/internal/modules/agentsmd"
+	"github.com/juex-ai/juex/internal/modules/operatingcontext"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
+	"github.com/juex-ai/juex/internal/modules/shelltools"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -195,17 +197,22 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 }
 
 func capabilityPromptBuilder(workDir string, worker *thread.Thread) *prompt.Builder {
-	guidance := &promptcontext.GuidanceModule{AgentsMDDirs: []string{workDir}}
-	runtimeContext := &promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true,
+	guidance := &agentsmd.Module{AgentsMDDirs: []string{workDir}}
+	runtimeContext := &operatingcontext.Module{
 		WorkDir: workDir,
 		Now:     func() time.Time { return time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC) },
 	}
 	shellContext := shelltools.New(context.Background(), tools.BuiltinOptions{WorkDir: workDir, Shell: tools.DefaultShellProfile()})
 	request := runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
-		Thread:  &runtimemodule.ThreadContext{ID: worker.ID, Dir: worker.Dir, ScratchpadDir: worker.ScratchpadDir()},
+		Thread:  &runtimemodule.ThreadContext{ID: worker.ID, Dir: worker.Dir},
 	}
+	scratch := &scratchpad.Module{WorkDir: workDir}
+	startErr := scratch.StartThread(context.Background(), *request.Thread)
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
+		if startErr != nil {
+			return nil, startErr
+		}
 		sections, err := guidance.Context(context.Background(), request)
 		if err != nil {
 			return nil, err
@@ -215,7 +222,11 @@ func capabilityPromptBuilder(workDir string, worker *thread.Thread) *prompt.Buil
 			return nil, err
 		}
 		shellSections, err := shellContext.Context(context.Background(), request)
-		return append(append(sections, runtimeSections...), shellSections...), err
+		if err != nil {
+			return nil, err
+		}
+		scratchSections, err := scratch.Context(context.Background(), request)
+		return append(append(append(sections, runtimeSections...), shellSections...), scratchSections...), err
 	}}
 }
 

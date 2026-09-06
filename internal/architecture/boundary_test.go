@@ -95,7 +95,7 @@ func TestImportBoundaryClassifiesCurrentFrameworkAndFeatureRoots(t *testing.T) {
 	for _, importPath := range []string{
 		modulePath + "/internal/hooks",
 		modulePath + "/internal/mcp",
-		modulePath + "/internal/modules/promptcontext",
+		modulePath + "/internal/modules/scratchpad",
 		modulePath + "/internal/observable",
 		modulePath + "/internal/skills",
 	} {

@@ -11,8 +11,8 @@
 | --- | --- |
 | Workspace | 用户维护的项目文件、Workspace 配置、Skill 和 Hook。 |
 | Agent | 长期身份、Workspace 所有权、配置覆盖、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、Observable 定义与状态，以及 Extension 状态。 |
-| Thread | 身份、拓扑、lifecycle、Context Generation registry、pending Input、Turn、消息、Event、Usage、Scratchpad 和 spool。 |
-| Thread Module | 可选的 Thread scope 状态，例如 Goal 与 Notes，以及其加载、context 和 Generation lifecycle 行为。 |
+| Thread | 身份、拓扑、lifecycle、Context Generation registry、pending Input、Turn、消息、Event、Usage 和 spool。 |
+| Thread Module | 可选的 Thread scope 状态，例如 Goal、Notes 与 Scratchpad，以及其资源、context 和 Generation lifecycle 行为。 |
 | Agent Runtime | 可替换的进程资源：Provider、MCP client、Tool、Observable、scheduler 和实时订阅。 |
 
 Agent 绑定一个 Workspace。替换 Runtime 不会替换持久 Agent 或 Thread 状态。
@@ -71,7 +71,8 @@ Context Generation 是 Thread 内的一代 Provider 可见上下文。
 - Generation 边界是用户可见的系统活动，不是普通 Provider 对话。
 
 Goal 与 Notes 是由 Module 拥有、可以跨 Generation 的 Thread 状态。Scratchpad
-是模型管理的 Thread 工作目录；spool 是系统管理的超长 Runtime 数据临时目录。
+是模型管理的 Thread 工作存储，只由启用的 Module 准备；关闭时保留已有文件，
+不准备或发布工作目录。spool 是系统管理的超长 Runtime 数据临时目录。
 
 ## Token Usage
 

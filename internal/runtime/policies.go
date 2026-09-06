@@ -42,9 +42,8 @@ func (e *Engine) policyThreadContext() *runtimemodule.ThreadContext {
 		return nil
 	}
 	return &runtimemodule.ThreadContext{
-		ID:            threadState.ID,
-		Dir:           threadState.Dir,
-		ScratchpadDir: threadState.ScratchpadDir(),
+		ID:  threadState.ID,
+		Dir: threadState.Dir,
 	}
 }
 

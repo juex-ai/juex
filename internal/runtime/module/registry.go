@@ -31,9 +31,8 @@ type RuntimeContext struct {
 }
 
 type ThreadContext struct {
-	ID            string
-	Dir           string
-	ScratchpadDir string
+	ID  string
+	Dir string
 }
 
 type ToolContext struct {

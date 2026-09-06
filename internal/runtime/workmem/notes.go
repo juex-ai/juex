@@ -156,7 +156,7 @@ func validateNotesContent(content string) error {
 	}
 	count := utf8.RuneCountInString(content)
 	if count > MaxNotesCharacters {
-		return fmt.Errorf("notes content is %d characters; maximum is %d; shorten the notes and move long material to scratchpad files", count, MaxNotesCharacters)
+		return fmt.Errorf("notes content is %d characters; maximum is %d; shorten the notes and move long material to working files", count, MaxNotesCharacters)
 	}
 	return nil
 }

@@ -49,7 +49,7 @@ func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
 	if _, ok := eng.Tools.Get("get_notes"); ok {
 		t.Fatal("get_notes must not be registered")
 	}
-	for _, want := range []string{"scratchpad", "replace"} {
+	for _, want := range []string{"working files", "replace"} {
 		if !strings.Contains(strings.ToLower(tool.Description), want) {
 			t.Fatalf("tool description missing %q: %q", want, tool.Description)
 		}

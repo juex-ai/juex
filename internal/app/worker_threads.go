@@ -380,7 +380,6 @@ func (m *workerThreadManager) reserveWorkerThread(alias string) (ThreadIdentityS
 		Dir:            info.Dir,
 		Alias:          info.Alias,
 		ParentThreadID: info.ParentThreadID,
-		ScratchpadDir:  target.ScratchpadDir(),
 	}
 	if err := target.Close(); err != nil {
 		rollbackErr := m.parent.ThreadStore.RollbackWorkerCreation(identity.ID)

@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/juex-ai/juex/internal/modules/shelltools"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,14 +30,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
+	"github.com/juex-ai/juex/internal/modules/shelltools"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modules/agentsmd"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
+	"github.com/juex-ai/juex/internal/modules/operatingcontext"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -1104,7 +1106,7 @@ func e2ePromptBuilder(
 	if shell.Binary != "" {
 		runtimeModules = append(runtimeModules, shelltools.New(context.Background(), tools.BuiltinOptions{WorkDir: workDir, Shell: shell}))
 	}
-	runtimeModules = append([]runtimemodule.Module{&promptcontext.GuidanceModule{
+	runtimeModules = append([]runtimemodule.Module{&agentsmd.Module{
 		GlobalAgentsMDPath: globalAgentsMDPath,
 		AgentsMDDirs:       agentsMDDirs,
 	}}, runtimeModules...)
@@ -1133,24 +1135,22 @@ func e2ePromptBuilder(
 	threadContext := runtimemodule.ThreadContext{}
 	if threadState != nil {
 		threadContext = runtimemodule.ThreadContext{
-			ID:            threadState.ID,
-			Dir:           threadState.Dir,
-			ScratchpadDir: threadState.ScratchpadDir(),
+			ID:  threadState.ID,
+			Dir: threadState.Dir,
 		}
 	}
-	threadModule := &promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir, Now: now}
-	threadSet, err := runtimemodule.BuildThreadSet(
-		t.Context(),
-		[]runtimemodule.ThreadFactorySpec{{
-			ID:      threadModule.ID(),
-			Enabled: true,
-			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-				return threadModule, nil
-			},
-		}},
-		threadContext,
-		runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &threadContext},
-	)
+	threadSpecs := []runtimemodule.ThreadFactorySpec{{
+		ID: operatingcontext.ModuleID, Enabled: true,
+		New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+			return &operatingcontext.Module{WorkDir: workDir, Now: now}, nil
+		},
+	}, {
+		ID: scratchpad.ModuleID, Enabled: threadState != nil,
+		New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+			return &scratchpad.Module{WorkDir: workDir}, nil
+		},
+	}}
+	threadSet, err := runtimemodule.BuildThreadSet(t.Context(), threadSpecs, threadContext, runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &threadContext})
 	if err != nil {
 		t.Fatal(err)
 	}

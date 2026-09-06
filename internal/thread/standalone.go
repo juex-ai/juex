@@ -31,9 +31,6 @@ func New(root string) (*Thread, error) {
 }
 
 func createStandalone(dir, id, alias, parentID string, now func() time.Time) (*Thread, error) {
-	if err := os.MkdirAll(filepath.Join(dir, "scratchpad"), 0o755); err != nil {
-		return nil, err
-	}
 	if err := os.MkdirAll(filepath.Join(dir, "spool"), 0o700); err != nil {
 		return nil, err
 	}

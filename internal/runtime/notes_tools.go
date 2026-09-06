@@ -81,7 +81,7 @@ func NotesToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{
 		Name:        NotesToolUpdate,
 		Group:       tools.ToolGroupThreadState,
-		Description: "Replace concise thread working notes; use scratchpad files for long material. ",
+		Description: "Replace concise thread working notes; use working files for long material. ",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -22,7 +22,6 @@ var ErrThreadRuntimeBusy = errors.New("runtime: thread runtime is busy")
 // lifecycle owners keep old thread resources alive for their readers.
 type ThreadRuntimeSnapshot struct {
 	Thread            *thread.Thread
-	ScratchpadDir     string
 	PendingInputQueue *PendingInputQueue
 	Modules           *runtimemodule.Set
 	Tools             *tools.Registry
@@ -169,7 +168,7 @@ func (e *Engine) RestoreThreadRuntimeCheckpoint(checkpoint ThreadRuntimeCheckpoi
 }
 
 // PromptSections builds the prompt from the same immutable prompt builder and
-// scratchpad selection that were published with the thread runtime.
+// module selection that were published with the thread runtime.
 func (e *Engine) PromptSections() []prompt.Section {
 	sections, _ := e.PromptSectionsWithError()
 	return sections
@@ -243,14 +242,9 @@ func (e *Engine) threadRuntimeStateLocked() threadRuntimeState {
 	if e.threadRuntime != nil {
 		return *e.threadRuntime
 	}
-	scratchpadDir := ""
-	if e.Thread != nil {
-		scratchpadDir = e.Thread.ScratchpadDir()
-	}
 	return threadRuntimeState{
 		ThreadRuntimeSnapshot: ThreadRuntimeSnapshot{
 			Thread:            e.Thread,
-			ScratchpadDir:     scratchpadDir,
 			PendingInputQueue: e.PendingInputQueue,
 			Tools:             e.Tools,
 		},
@@ -259,7 +253,6 @@ func (e *Engine) threadRuntimeStateLocked() threadRuntimeState {
 }
 
 func buildThreadRuntimeState(current threadRuntimeState, threadState *thread.Thread, replacement ThreadRuntimeReplacement) threadRuntimeState {
-	scratchpadDir := threadState.ScratchpadDir()
 	builder := clonePromptBuilder(current.prompt)
 	if builder == nil {
 		builder = &prompt.Builder{}
@@ -281,7 +274,6 @@ func buildThreadRuntimeState(current threadRuntimeState, threadState *thread.Thr
 	return threadRuntimeState{
 		ThreadRuntimeSnapshot: ThreadRuntimeSnapshot{
 			Thread:            threadState,
-			ScratchpadDir:     scratchpadDir,
 			PendingInputQueue: queue,
 			Modules:           modules,
 			Tools:             toolRegistry,
