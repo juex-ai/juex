@@ -1093,10 +1093,11 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		}
 
 		resp, err := llm.CompleteWithOptions(ctx, candidate.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
-			Purpose:         "turn",
-			MaxOutputTokens: candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
-			CachePolicy:     cachePolicy,
-			RetryObserver:   e.providerRetryObserverForEpochLocked(turnID, "turn", &request.iter, request.epochID, request.requestDigest),
+			Purpose:           "turn",
+			MaxOutputTokens:   candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
+			CachePolicy:       cachePolicy,
+			RetryObserver:     e.providerRetryObserverForEpochLocked(turnID, "turn", &request.iter, request.epochID, request.requestDigest),
+			StreamIdleTimeout: llm.DefaultStreamIdleTimeout,
 			OnDelta: func(delta llm.StreamDelta) {
 				_ = e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
 					Iter:  request.iter,
