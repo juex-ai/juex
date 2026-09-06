@@ -25,6 +25,10 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
+func e2eConfiguredShellProfile(profile config.ShellProfile) tools.ShellProfile {
+	return tools.ShellProfile{Profile: profile.Profile, Family: profile.Family, Binary: profile.Binary, Args: append([]string(nil), profile.Args...), PathStyle: profile.PathStyle, HostPathStyle: profile.HostPathStyle}
+}
+
 var liveConfigSelectorEnvKeys = []string{
 	"PROVIDER_API_ID",
 	"PROVIDER_API_PROTOCOL",

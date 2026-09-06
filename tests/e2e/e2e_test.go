@@ -2440,7 +2440,3 @@ func rootJSONLFiles(t *testing.T, dir string) []string {
 	slices.Sort(names)
 	return names
 }
-
-func e2eConfiguredShellProfile(profile config.ShellProfile) tools.ShellProfile {
-	return tools.ShellProfile{Profile: profile.Profile, Family: profile.Family, Binary: profile.Binary, Args: append([]string(nil), profile.Args...), PathStyle: profile.PathStyle, HostPathStyle: profile.HostPathStyle}
-}
