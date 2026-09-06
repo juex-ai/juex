@@ -545,6 +545,9 @@ func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *file
 	}
 	displayPath := ""
 	if scratchpadPath, logicalPath, ok := resolveScratchpadRequestPath(reqPath); ok {
+		if !s.opts.Cfg.ModuleEnabled(modulecatalog.Scratchpad) {
+			return resolvedFileRequest{}, &fileRequestError{status: http.StatusNotFound, code: "not_found", message: "file not found"}
+		}
 		root = s.opts.Cfg.ThreadsDir()
 		reqPath = scratchpadPath
 		displayPath = logicalPath

@@ -1015,11 +1015,22 @@ func TestDisabledScratchpadEndpointSkipsStoredResources(t *testing.T) {
 	dir := filepath.Join(srv.opts.Cfg.ThreadsDir(), id)
 	mustWriteFile(t, filepath.Join(dir, "thread.json"), "malformed metadata must not be opened")
 	mustWriteFile(t, filepath.Join(dir, "scratchpad", "draft.md"), "private-draft-529")
-	request := httptest.NewRequest(http.MethodGet, "/api/threads/"+id+"/scratchpad", nil)
-	response := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusNotFound || strings.Contains(response.Body.String(), "private-draft-529") || strings.Contains(response.Body.String(), dir) {
-		t.Fatalf("disabled response=%d %s", response.Code, response.Body.String())
+	mustWriteBytes(t, filepath.Join(dir, "scratchpad", "image.png"), tinyPNG)
+	alias := ".juex/threads/" + id + "/scratchpad/"
+	for _, endpoint := range []string{
+		"/api/threads/" + id + "/scratchpad",
+		"/api/files/content?path=" + url.QueryEscape(alias+"draft.md"),
+		"/api/files/raw?path=" + url.QueryEscape(alias+"image.png"),
+		"/api/media?root=workspace&path=" + url.QueryEscape(alias+"image.png"),
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, endpoint, nil)
+			response := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound || strings.Contains(response.Body.String(), "private-draft-529") || strings.Contains(response.Body.String(), dir) {
+				t.Fatalf("disabled response=%d %s", response.Code, response.Body.String())
+			}
+		})
 	}
 	if data, err := os.ReadFile(filepath.Join(dir, "scratchpad", "draft.md")); err != nil || string(data) != "private-draft-529" {
 		t.Fatalf("retained file=%q %v", data, err)
