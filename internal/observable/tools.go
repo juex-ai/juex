@@ -18,7 +18,6 @@ import (
 const (
 	defaultObservationToolLimit = 20
 	maxObservationToolLimit     = 100
-	observableGuidePointer      = `Guide available via skill_load("juex-observables").`
 )
 
 const ModuleID runtimemodule.ID = modulecatalog.Observables
@@ -132,43 +131,43 @@ func ToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        "observable_list",
 			Group:       tools.ToolGroupObservable,
-			Description: "List configured Observables and runtime status; call before creating one. " + observableGuidePointer,
+			Description: "List configured Observables and runtime status; call before creating one. ",
 			Schema:      map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		},
 		{
 			Name:        "observable_create",
 			Group:       tools.ToolGroupObservable,
-			Description: "Create and start a command Observable; use schedule_create for timed work. " + observableGuidePointer,
+			Description: "Create and start a command Observable; use schedule_create for timed work. ",
 			Schema:      commandCreateSchema(),
 		},
 		{
 			Name:        "schedule_create",
 			Group:       tools.ToolGroupObservable,
-			Description: "Read observable_list results; reuse matches; no probe/poll. " + observableGuidePointer,
+			Description: "Read observable_list results; reuse matches; no probe/poll. ",
 			Schema:      scheduleCreateSchema(),
 		},
 		{
 			Name:        "observable_start",
 			Group:       tools.ToolGroupObservable,
-			Description: "Temporarily start an Observable for this process. " + observableGuidePointer,
+			Description: "Temporarily start an Observable for this process. ",
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_stop",
 			Group:       tools.ToolGroupObservable,
-			Description: "Temporarily stop an Observable; delete for permanent removal. " + observableGuidePointer,
+			Description: "Temporarily stop an Observable; delete for permanent removal. ",
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_delete",
 			Group:       tools.ToolGroupObservable,
-			Description: "Permanently delete and stop a project-owned Observable; extension definitions are read-only. Use stop for temporary pause. " + observableGuidePointer,
+			Description: "Permanently delete and stop a project-owned Observable; extension definitions are read-only. Use stop for temporary pause. ",
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_observations",
 			Group:       tools.ToolGroupObservable,
-			Description: "List recent durable Observations, optionally for one Observable. " + observableGuidePointer,
+			Description: "List recent durable Observations, optionally for one Observable. ",
 			Schema: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,

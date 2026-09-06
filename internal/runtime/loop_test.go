@@ -4679,6 +4679,7 @@ func TestTurn_GuidedToolErrorAddsRecoveryHintAfterDiagnosticEvent(t *testing.T) 
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{Name: "skill_load", Handler: func(context.Context, map[string]any) (string, error) { return "guide", nil }})
 	eng.Tools.MustRegister(tools.Tool{
 		Name:  "guided_test",
 		Group: tools.ToolGroupObservable,
@@ -7382,10 +7383,11 @@ func TestRecordToolBatchUsesServingCandidateContextWindowForProjection(t *testin
 func TestNormalizeGuidedToolFailureResults(t *testing.T) {
 	reg := tools.NewRegistry()
 	for name, group := range map[string]tools.ToolGroup{
-		"observe": tools.ToolGroupObservable,
-		"chunk":   tools.ToolGroupChunkedWrite,
-		"goal":    tools.ToolGroupThreadState,
-		"read":    tools.ToolGroupFile,
+		"skill_load": tools.ToolGroupSkill,
+		"observe":    tools.ToolGroupObservable,
+		"chunk":      tools.ToolGroupChunkedWrite,
+		"goal":       tools.ToolGroupThreadState,
+		"read":       tools.ToolGroupFile,
 	} {
 		reg.MustRegister(tools.Tool{
 			Name:    name,

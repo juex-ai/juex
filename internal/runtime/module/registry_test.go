@@ -336,6 +336,49 @@ func TestBuildToolRegistryIsAtomicAcrossSets(t *testing.T) {
 	}
 }
 
+type adaptedToolModule struct{}
+
+func (adaptedToolModule) ID() ID { return "adapted" }
+func (adaptedToolModule) Tools(context.Context, ToolContext) ([]tools.Tool, error) {
+	definition := tools.ToolDefinition{Name: "adapted", Description: "standalone"}
+	tool := definition.Bind(func(context.Context, map[string]any) (string, error) { return "executed", nil })
+	tool.ResolveDefinition = func(available tools.ToolAvailability) tools.ToolDefinition {
+		resolved := definition
+		if available.Has("other_scope") {
+			resolved.Description = "composed"
+		}
+		return resolved
+	}
+	return []tools.Tool{tool}, nil
+}
+
+func TestBuildToolRegistryResolvesAfterMergingScopes(t *testing.T) {
+	runtimeSet := mustToolSet(t, ScopeRuntime, adaptedToolModule{})
+	threadSet := mustToolSet(t, ScopeThread, testModule{id: "thread", toolNames: []string{"other_scope"}})
+	if got := runtimeSet.ToolCatalog().Entries()[0].Tool.Description; got != "standalone" {
+		t.Fatalf("early resolution=%s", got)
+	}
+	combined, err := BuildToolRegistry(tools.RegistryOptions{}, runtimeSet, threadSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, _ := combined.Get("adapted")
+	if tool.Description != "composed" || tool.ResolveDefinition != nil {
+		t.Fatalf("final tool=%+v", tool.Definition())
+	}
+	if got, err := combined.Call(context.Background(), "adapted", nil); err != nil || got != "executed" {
+		t.Fatalf("handler=%q err=%v", got, err)
+	}
+	alone, err := BuildToolRegistry(tools.RegistryOptions{}, runtimeSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, _ = alone.Get("adapted")
+	if tool.Description != "standalone" {
+		t.Fatalf("shared scope leaked previous composition: %s", tool.Description)
+	}
+}
+
 func mustToolSet(t *testing.T, scope Scope, mod Module) *Set {
 	t.Helper()
 	registry := NewRegistry()

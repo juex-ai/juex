@@ -64,9 +64,8 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 		t.Fatalf("update_goal properties = %#v", updateProperties)
 	}
 	if !strings.Contains(strings.ToLower(updateTool.Description), "success requires acceptance") ||
-		!strings.Contains(updateTool.Description, string(workmem.GoalStatusWaitForUser)) ||
-		!strings.Contains(updateTool.Description, `Guide available via skill_load("juex-thread-state").`) {
-		t.Fatalf("update_goal description should retain routing and guide pointer: %q", updateTool.Description)
+		!strings.Contains(updateTool.Description, string(workmem.GoalStatusWaitForUser)) {
+		t.Fatalf("update_goal description should explain completion and waiting: %q", updateTool.Description)
 	}
 
 	out, err := reg.Call(context.Background(), GoalToolGet, nil)

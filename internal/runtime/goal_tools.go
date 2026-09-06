@@ -18,7 +18,6 @@ const (
 	GoalToolGet    = "get_goal"
 	GoalToolCreate = "create_goal"
 	GoalToolUpdate = "update_goal"
-	goalGuide      = `Guide available via skill_load("juex-thread-state").`
 )
 
 const GoalModuleID runtimemodule.ID = modulecatalog.Goal
@@ -189,7 +188,7 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        GoalToolGet,
 			Group:       tools.ToolGroupThreadState,
-			Description: "Read the current thread goal before changing it. " + goalGuide,
+			Description: "Read the current thread goal before changing it. ",
 			Schema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -198,7 +197,7 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        GoalToolCreate,
 			Group:       tools.ToolGroupThreadState,
-			Description: "Create or replace this thread's in-progress goal contract. " + goalGuide,
+			Description: "Create or replace this thread's in-progress goal contract. ",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -212,7 +211,7 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        GoalToolUpdate,
 			Group:       tools.ToolGroupThreadState,
-			Description: "Update goal fields or status (in_progress, wait_for_user, success, or failure). Use wait_for_user only when progress requires new external input; success requires acceptance. " + goalGuide,
+			Description: "Update goal fields or status (in_progress, wait_for_user, success, or failure). Use wait_for_user only when progress requires new external input; success requires acceptance. ",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

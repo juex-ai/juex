@@ -326,7 +326,7 @@ func TestRecoverThreadProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T) 
 }
 
 func threadRuntimeTestPrompt(engine *Engine, workDir string) *prompt.Builder {
-	provider := &promptcontext.ThreadContextModule{WorkDir: workDir}
+	provider := &promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir}
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		snapshot := engine.ThreadRuntimeSnapshot()
 		request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration}

@@ -282,9 +282,17 @@ func BuildToolRegistry(options tools.RegistryOptions, sets ...*Set) (*tools.Regi
 		}
 	}
 	registry := tools.NewRegistryWithOptions(options)
+	contributions := make([]tools.Tool, 0, len(entries))
 	for _, entry := range entries {
-		if err := registry.Register(entry.Tool.Clone()); err != nil {
-			return nil, fmt.Errorf("runtime modules: build tool %q from module %q: %w", entry.Tool.Name, entry.ModuleID, err)
+		contributions = append(contributions, entry.Tool)
+	}
+	resolved, err := tools.ResolveTools(contributions)
+	if err != nil {
+		return nil, fmt.Errorf("runtime modules: resolve tool definitions: %w", err)
+	}
+	for _, tool := range resolved {
+		if err := registry.Register(tool); err != nil {
+			return nil, fmt.Errorf("runtime modules: build tool %q from module %q: %w", tool.Name, owners[tool.Name], err)
 		}
 	}
 	return registry, nil

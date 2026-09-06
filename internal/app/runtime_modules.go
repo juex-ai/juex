@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
@@ -11,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
+	"github.com/juex-ai/juex/internal/modules/shelltools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -23,7 +23,8 @@ import (
 
 type runtimeModuleComposition struct {
 	set            *runtimemodule.Set
-	builtinTools   *builtintools.Module
+	shell          *shelltools.Module
+	chunkedWrites  *tools.ChunkedWriteManager
 	skills         *skillsmodule.Module
 	constructed    *constructedRuntimeModules
 	runtimeContext runtimemodule.RuntimeContext
@@ -31,8 +32,9 @@ type runtimeModuleComposition struct {
 }
 
 type constructedRuntimeModules struct {
-	builtinTools *builtintools.Module
-	skills       *skillsmodule.Module
+	shell         *shelltools.Module
+	chunkedWrites *tools.ChunkedWriteManager
+	skills        *skillsmodule.Module
 }
 
 type threadModuleOptions struct {
@@ -51,7 +53,6 @@ func prepareRuntimeModules(
 	runtimePaths config.RuntimePaths,
 	runtimeEnvironment environment.Snapshot,
 	sandboxRunner sandbox.Runner,
-	chunkedWrites *tools.ChunkedWriteManager,
 	toolTimeoutSeconds int,
 ) (runtimeModuleComposition, error) {
 	runtimeContext := runtimemodule.RuntimeContext{
@@ -62,24 +63,58 @@ func prepareRuntimeModules(
 	}
 	constructed := &constructedRuntimeModules{}
 	composition := runtimeModuleComposition{runtimeContext: runtimeContext, constructed: constructed}
+	toolOptions := tools.BuiltinOptions{
+		WorkDir:            runtimePaths.WorkDir,
+		Environment:        runtimeEnvironment,
+		Shell:              toolsShellProfile(cfg.Shell),
+		Sandbox:            cfg.SandboxPolicy(),
+		SandboxRunner:      sandboxRunner,
+		ToolTimeoutSeconds: toolTimeoutSeconds,
+		AgentStateDir:      runtimePaths.StateDir,
+		MediaDir:           runtimePaths.MediaDir,
+	}
 	composition.specs = []runtimemodule.RuntimeFactorySpec{
 		{
-			ID:      builtintools.ModuleID,
+			ID:      modulecatalog.BasicFileTools,
 			Enabled: cfg.ModuleEnabled(modulecatalog.BasicFileTools),
-			New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				mod := builtintools.New(factoryCtx, tools.BuiltinOptions{
-					WorkDir:            runtimePaths.WorkDir,
-					Environment:        runtimeEnvironment,
-					Shell:              toolsShellProfile(cfg.Shell),
-					Sandbox:            cfg.SandboxPolicy(),
-					SandboxRunner:      sandboxRunner,
-					ToolTimeoutSeconds: toolTimeoutSeconds,
-					ChunkedWrites:      chunkedWrites,
-					AgentStateDir:      runtimePaths.StateDir,
-					MediaDir:           runtimePaths.MediaDir,
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return builtintools.NewBasicFiles(toolOptions), nil
+			},
+		},
+		{
+			ID:      modulecatalog.ApplyPatch,
+			Enabled: cfg.ModuleEnabled(modulecatalog.ApplyPatch),
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return builtintools.NewApplyPatch(toolOptions), nil
+			},
+		},
+		{
+			ID:      modulecatalog.FileSearch,
+			Enabled: cfg.ModuleEnabled(modulecatalog.FileSearch),
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return builtintools.NewFileSearch(toolOptions), nil
+			},
+		},
+		{
+			ID:      modulecatalog.ChunkedWrite,
+			Enabled: cfg.ModuleEnabled(modulecatalog.ChunkedWrite),
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{
+					Policy: cfg.SandboxPolicy(), WorkDir: runtimePaths.WorkDir,
+					AgentStateDir: runtimePaths.StateDir, ReadOnlyPaths: []string{runtimePaths.MediaDir},
 				})
-				constructed.builtinTools = mod
-				return mod, nil
+				constructed.chunkedWrites = tools.NewChunkedWriteManager(runtimePaths.WorkDir, filePolicy)
+				options := toolOptions
+				options.ChunkedWrites = constructed.chunkedWrites
+				return builtintools.NewChunkedWrite(options), nil
+			},
+		},
+		{
+			ID:      shelltools.ModuleID,
+			Enabled: cfg.ModuleEnabled(modulecatalog.Shell),
+			New: func(ctx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				constructed.shell = shelltools.New(ctx, toolOptions)
+				return constructed.shell, nil
 			},
 		},
 		{
@@ -118,26 +153,6 @@ func ValidateModuleConfig(cfg config.Config) error {
 	return cfg.ValidateModules()
 }
 
-// ValidateModuleComposition checks declarations and current factory support
-// before config publication or resource discovery. Bundled factories cannot
-// yet honor independent switches within their groups.
-func ValidateModuleComposition(cfg config.Config) error {
-	if err := ValidateModuleConfig(cfg); err != nil {
-		return err
-	}
-	for _, group := range [][]string{
-		{modulecatalog.BasicFileTools, modulecatalog.Shell, modulecatalog.ApplyPatch, modulecatalog.ChunkedWrite, modulecatalog.FileSearch},
-		{modulecatalog.OperatingContext, modulecatalog.Scratchpad, modulecatalog.Shell},
-	} {
-		for _, id := range group[1:] {
-			if cfg.ModuleEnabled(id) != cfg.ModuleEnabled(group[0]) {
-				return fmt.Errorf("app: independent module switches for %v are not yet supported by the bundled factory; configure every member consistently", group)
-			}
-		}
-	}
-	return nil
-}
-
 func (c *runtimeModuleComposition) sealAndStart(ctx context.Context, extra ...runtimemodule.RuntimeFactorySpec) error {
 	specs := append(append([]runtimemodule.RuntimeFactorySpec(nil), c.specs...), extra...)
 	set, err := runtimemodule.BuildAndStartRuntimeSet(ctx, specs, c.runtimeContext, runtimemodule.ToolContext{Runtime: c.runtimeContext})
@@ -146,7 +161,8 @@ func (c *runtimeModuleComposition) sealAndStart(ctx context.Context, extra ...ru
 	}
 	c.set = set
 	if c.constructed != nil {
-		c.builtinTools = c.constructed.builtinTools
+		c.shell = c.constructed.shell
+		c.chunkedWrites = c.constructed.chunkedWrites
 		c.skills = c.constructed.skills
 	}
 	return nil
@@ -160,8 +176,6 @@ func buildThreadModules(
 	threadState *thread.Thread,
 	engine *juexruntime.Engine,
 	workDir string,
-	shell promptcontext.ShellProfile,
-	shellSessions *tools.ShellSessionManager,
 	opts threadModuleOptions,
 ) (*runtimemodule.Set, error) {
 	goalState := opts.goalState
@@ -194,9 +208,13 @@ func buildThreadModules(
 		},
 		{
 			ID:      promptcontext.ThreadContextModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.OperatingContext),
+			Enabled: cfg.ModuleEnabled(modulecatalog.OperatingContext) || cfg.ModuleEnabled(modulecatalog.Scratchpad),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-				return &promptcontext.ThreadContextModule{WorkDir: workDir, Shell: shell, ShellSessions: shellSessions}, nil
+				return &promptcontext.ThreadContextModule{
+					WorkDir:                 workDir,
+					OperatingContextEnabled: cfg.ModuleEnabled(modulecatalog.OperatingContext),
+					ScratchpadEnabled:       cfg.ModuleEnabled(modulecatalog.Scratchpad),
+				}, nil
 			},
 		},
 		{

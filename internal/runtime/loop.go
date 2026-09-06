@@ -1572,6 +1572,9 @@ func (e *Engine) normalizeGuidedToolFailureResults(results []toolCallResult) []t
 	if e == nil || e.Tools == nil {
 		return results
 	}
+	if _, available := e.Tools.Get("skill_load"); !available {
+		return results
+	}
 	for i := range results {
 		if !results[i].Block.IsError {
 			continue

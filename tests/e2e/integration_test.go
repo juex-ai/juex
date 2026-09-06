@@ -20,7 +20,6 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/tools"
@@ -237,7 +236,7 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 		"",
 		[]string{t.TempDir()}, // empty
 		"",
-		promptcontext.ShellProfileFromConfig(cfg.Shell),
+		e2eConfiguredShellProfile(cfg.Shell),
 		func() time.Time { return time.Now().UTC() },
 		threadState,
 	)
@@ -378,7 +377,7 @@ func TestLiveConfigs_ExternalizedToolResultRetrieval(t *testing.T) {
 				Tools:    registry,
 				Bus:      bus,
 				Thread:   threadState,
-				Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, promptcontext.ShellProfileFromConfig(lc.cfg.Shell), func() time.Time {
+				Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, e2eConfiguredShellProfile(lc.cfg.Shell), func() time.Time {
 					return time.Now().UTC()
 				}, threadState),
 				WorkDir:         workDir,

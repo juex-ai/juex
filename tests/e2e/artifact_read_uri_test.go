@@ -11,7 +11,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/tools"
@@ -88,7 +87,7 @@ func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinSpoolPath(t *testing.T) 
 		Tools:    registry,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, promptcontext.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, tools.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 24, 11, 0, 0, 0, time.UTC)
 		}, threadState),
 		WorkDir:  workDir,

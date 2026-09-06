@@ -155,6 +155,10 @@ status、transcript 或 subscriber。Thread metadata 先于 Agent index refresh
 Module 在 Agent 或 Thread scope 注册一次类型化 capability。Framework 校验并
 seal Module set，按注册顺序启动，按反序关闭或 rollback。
 
+Runtime 与 Thread 工具贡献合并后，才基于完整工具名称集合生成最终描述和
+schema。解析不能改变工具身份或执行策略。Provider 请求与活动状态读取同一份
+已发布 Registry，共享 Module catalog 保持不变。
+
 Prompt assembly 使用已注册的 context contributor。稳定 guidance、Hook
 context、Thread state 和每次请求的 recitation 在该接口汇合。Generation 边界
 活动不是普通 Provider 对话。

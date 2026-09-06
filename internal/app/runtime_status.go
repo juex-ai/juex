@@ -42,6 +42,7 @@ type RuntimeStatusOptions struct {
 // Callers obtain it through App.ReadRuntimeModuleSnapshot so Thread
 // replacement and shutdown cannot invalidate the sets during projection.
 type RuntimeModuleSnapshot struct {
+	Tools          *tools.Registry
 	Runtime        *runtimemodule.Set
 	Thread         *runtimemodule.Set
 	RuntimeContext runtimemodule.RuntimeContext
@@ -239,6 +240,7 @@ func (a *App) ReadRuntimeModuleSnapshot(fn func(RuntimeModuleSnapshot) error) er
 		return fmt.Errorf("runtime status: active Thread Module set is unavailable")
 	}
 	return fn(RuntimeModuleSnapshot{
+		Tools:          threadRuntime.Tools,
 		Runtime:        a.runtimeModules,
 		Thread:         threadRuntime.Modules,
 		RuntimeContext: a.runtimeModuleContext,
@@ -275,7 +277,10 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	entries := activeToolEntries(*active)
+	entries, err := activeToolEntries(*active)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
 	mcpEnabled := activeModuleEnabled(*active, mcp.ModuleID)
 	mcpStatus, err := s.mcpStatus(opts, resourceGraph.MCPConfigs(), agentRuntime.Environment(), entries, mcpEnabled)
 	if err != nil {
@@ -379,10 +384,20 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 	return RuntimeExtensionsStatus{Count: len(items), Items: items}, nil
 }
 
-func activeToolEntries(active RuntimeModuleSnapshot) []runtimemodule.ToolEntry {
+func activeToolEntries(active RuntimeModuleSnapshot) ([]runtimemodule.ToolEntry, error) {
+	if active.Tools == nil {
+		return nil, fmt.Errorf("runtime status: published tool registry is unavailable")
+	}
 	entries := active.Runtime.ToolCatalog().Entries()
 	entries = append(entries, active.Thread.ToolCatalog().Entries()...)
-	return entries
+	for i := range entries {
+		final, ok := active.Tools.Get(entries[i].Tool.Name)
+		if !ok {
+			return nil, fmt.Errorf("runtime status: published definition for tool %q is unavailable", entries[i].Tool.Name)
+		}
+		entries[i].Tool = final
+	}
+	return entries, nil
 }
 
 func runtimeToolsStatusFromActiveCatalogs(defaultTimeoutSeconds int, entries []runtimemodule.ToolEntry) (RuntimeToolsStatus, error) {

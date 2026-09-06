@@ -158,7 +158,7 @@ func (m *Manager) UpdateConfig(
 	if err != nil {
 		return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: err}
 	}
-	if _, err := config.WriteAgentConfig(content, m.homeDir, entry.ID, app.ValidateModuleComposition); err != nil {
+	if _, err := config.WriteAgentConfig(content, m.homeDir, entry.ID, app.ValidateModuleConfig); err != nil {
 		var validation *config.AgentConfigValidationError
 		if errors.As(err, &validation) {
 			return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: validation.Err}

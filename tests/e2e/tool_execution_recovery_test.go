@@ -10,7 +10,6 @@ import (
 	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/thread"
@@ -101,7 +100,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Tools:    registry,
 		Bus:      bus,
 		Thread:   recovered,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 		}, recovered),
 		WorkDir:  root,
@@ -211,7 +210,7 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 	defer func() { _ = sink.Close() }()
 	engine := &runtime.Engine{
 		Provider: provider, Tools: registry, Bus: bus, Thread: recovered,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 		}, recovered),
 		WorkDir: root, MediaDir: filepath.Join(root, "media"),

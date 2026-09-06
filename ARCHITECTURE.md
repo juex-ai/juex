@@ -170,6 +170,11 @@ Modules register typed capabilities once per Agent or Thread scope. The
 Framework validates and seals the set, starts resources in registration order,
 and closes or rolls back in reverse order.
 
+Runtime and Thread tool contributions are merged before resolving their final
+descriptions and schemas against the complete tool-name set. Resolution cannot
+change tool identity or execution policy. Provider requests and active status
+read the same published registry; shared Module catalogs remain unchanged.
+
 Prompt assembly consumes registered context contributors. Stable guidance,
 Hook context, Thread state, and per-request recitation meet at this interface.
 Generation boundary activity is not ordinary Provider dialogue.

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
@@ -71,31 +70,5 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func TestModulePresetsRejectUnsupportedCompositionBeforeResources(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		cfg  config.Config
-	}{
-		{name: "minimal", cfg: config.Config{Preset: config.PresetMinimal}},
-		{name: "context split", cfg: config.Config{Modules: config.ModulePolicy{"scratchpad": {Enabled: false}}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := app.ValidateModuleConfig(tc.cfg); err != nil {
-				t.Fatalf("valid declaration rejected: %v", err)
-			}
-			work := t.TempDir()
-			tc.cfg.WorkDir = work
-			tc.cfg.AgentStateDir = filepath.Join(work, "state")
-			_, err := app.New(app.Options{Config: tc.cfg, Provider: &bareScriptProvider{}})
-			if err == nil || !strings.Contains(err.Error(), "not yet supported") {
-				t.Fatalf("composition error = %v", err)
-			}
-			if _, err := os.Stat(tc.cfg.AgentStateDir); !os.IsNotExist(err) {
-				t.Fatalf("failed composition created state: %v", err)
-			}
-		})
 	}
 }

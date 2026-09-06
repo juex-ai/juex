@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/juex-ai/juex/internal/modules/shelltools"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,11 +196,11 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 
 func capabilityPromptBuilder(workDir string, worker *thread.Thread) *prompt.Builder {
 	guidance := &promptcontext.GuidanceModule{AgentsMDDirs: []string{workDir}}
-	runtimeContext := &promptcontext.ThreadContextModule{
+	runtimeContext := &promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true,
 		WorkDir: workDir,
-		Shell:   capabilityPromptShellProfile(),
 		Now:     func() time.Time { return time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC) },
 	}
+	shellContext := shelltools.New(context.Background(), tools.BuiltinOptions{WorkDir: workDir, Shell: tools.DefaultShellProfile()})
 	request := runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 		Thread:  &runtimemodule.ThreadContext{ID: worker.ID, Dir: worker.Dir, ScratchpadDir: worker.ScratchpadDir()},
@@ -210,7 +211,11 @@ func capabilityPromptBuilder(workDir string, worker *thread.Thread) *prompt.Buil
 			return nil, err
 		}
 		runtimeSections, err := runtimeContext.Context(context.Background(), request)
-		return append(sections, runtimeSections...), err
+		if err != nil {
+			return nil, err
+		}
+		shellSections, err := shellContext.Context(context.Background(), request)
+		return append(append(sections, runtimeSections...), shellSections...), err
 	}}
 }
 
@@ -294,18 +299,6 @@ func marshalCapabilityLines[T any](t *testing.T, values []T) []string {
 		lines = append(lines, string(data))
 	}
 	return lines
-}
-
-func capabilityPromptShellProfile() promptcontext.ShellProfile {
-	p := tools.DefaultShellProfile()
-	return promptcontext.ShellProfile{
-		Profile:       p.Profile,
-		Family:        p.Family,
-		Binary:        p.Binary,
-		Args:          append([]string(nil), p.Args...),
-		PathStyle:     p.PathStyle,
-		HostPathStyle: p.HostPathStyle,
-	}
 }
 
 func writeCapabilityFile(t *testing.T, path, body string) {

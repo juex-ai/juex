@@ -16,7 +16,6 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/modules/builtintools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
@@ -94,7 +93,11 @@ func mcpRuntimeStatusSnapshot(t *testing.T, serverTools map[string][]mcp.ToolDes
 	if err != nil {
 		t.Fatal(err)
 	}
-	return RuntimeModuleSnapshot{Runtime: runtimeSet, Thread: threadSet}
+	registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, runtimeSet, threadSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return RuntimeModuleSnapshot{Runtime: runtimeSet, Thread: threadSet, Tools: registry}
 }
 
 func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
@@ -335,7 +338,7 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 	}
 
 	for tool, wantOwner := range map[string]runtimemodule.ID{
-		"read":            builtintools.ModuleID,
+		"read":            modulecatalog.BasicFileTools,
 		"skill_search":    skillsmodule.ModuleID,
 		"get_goal":        juexruntime.GoalModuleID,
 		"update_notes":    juexruntime.NotesModuleID,
@@ -408,8 +411,8 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	if tools := a.Engine.Tools.List(); len(tools) != 0 {
 		t.Fatalf("serving Tools = %#v, want none", tools)
 	}
-	if a.shellSessions != nil || a.workers != nil || a.obsv != nil || a.mcpManager != nil {
-		t.Fatalf("disabled resources were constructed: shell=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.workers, a.obsv, a.mcpManager)
+	if a.shellSessions != nil || a.chunkedWrites != nil || a.workers != nil || a.obsv != nil || a.mcpManager != nil {
+		t.Fatalf("disabled resources were constructed: shell=%p chunked-write=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.chunkedWrites, a.workers, a.obsv, a.mcpManager)
 	}
 	if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
 		status, statusErr := NewRuntimeCatalogService(a.cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})
