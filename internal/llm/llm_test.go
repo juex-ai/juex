@@ -88,6 +88,25 @@ func requireStreamIdleTimeout(t testing.TB, err error) {
 	}
 }
 
+func TestStreamIdleTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		opts CompleteOptions
+		want time.Duration
+	}{
+		{name: "default", want: 3 * time.Minute},
+		{name: "override", opts: CompleteOptions{StreamIdleTimeout: 17 * time.Second}, want: 17 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := streamIdleTimeout(tt.opts); got != tt.want {
+				t.Fatalf("streamIdleTimeout() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func blockingConfig(cfg Config) Config {
 	cfg.Capabilities.Streaming = boolPtr(false)
 	return cfg

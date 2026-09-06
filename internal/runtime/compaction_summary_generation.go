@@ -381,11 +381,12 @@ func (e *Engine) completeCompactionSummary(
 		return llm.Response{}, epoch, &compactionSummaryJournalError{err: fmt.Errorf("commit compaction provider request: %w", err)}
 	}
 	resp, requestErr := llm.CompleteWithOptions(ctx, provider, system, history, nil, llm.CompleteOptions{
-		Purpose:         "compaction",
-		MaxOutputTokens: maxOutputTokens,
-		ThinkingEffort:  compactionSummaryThinkingEffort,
-		CachePolicy:     cachePolicy,
-		RetryObserver:   e.providerRetryObserverForEpochLocked(turnID, "compaction", nil, epoch.EpochID, epoch.RequestDigest),
+		Purpose:           "compaction",
+		MaxOutputTokens:   maxOutputTokens,
+		ThinkingEffort:    compactionSummaryThinkingEffort,
+		CachePolicy:       cachePolicy,
+		RetryObserver:     e.providerRetryObserverForEpochLocked(turnID, "compaction", nil, epoch.EpochID, epoch.RequestDigest),
+		StreamIdleTimeout: llm.DefaultStreamIdleTimeout,
 	})
 	model := descriptor.Model
 	if model == "" && provider != nil {

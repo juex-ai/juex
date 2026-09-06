@@ -69,7 +69,7 @@ type ProviderWithOptions interface {
 
 const (
 	providerMaxRetries       = 10
-	DefaultStreamIdleTimeout = 90 * time.Second
+	DefaultStreamIdleTimeout = 3 * time.Minute
 )
 
 type Config struct {

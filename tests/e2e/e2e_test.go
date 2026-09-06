@@ -105,6 +105,24 @@ type bareScriptProvider struct {
 	tools   [][]string
 }
 
+type optionsCaptureProvider struct {
+	opts llm.CompleteOptions
+}
+
+func (p *optionsCaptureProvider) Name() string { return "options-capture" }
+
+func (p *optionsCaptureProvider) Complete(ctx context.Context, sys string, hist []llm.Message, toolSpecs []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, hist, toolSpecs, llm.CompleteOptions{})
+}
+
+func (p *optionsCaptureProvider) CompleteWithOptions(_ context.Context, _ string, _ []llm.Message, _ []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	p.opts = opts
+	return llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	}, nil
+}
+
 func (p *bareScriptProvider) Name() string { return "script" }
 
 func (p *bareScriptProvider) Complete(ctx context.Context, sys string, hist []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
@@ -147,6 +165,33 @@ func keys(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestEndToEnd_RuntimeAppliesDefaultStreamIdleTimeout(t *testing.T) {
+	root := t.TempDir()
+	threadState, err := thread.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = threadState.Close() })
+	bus := events.NewBus()
+	threadState.SubscribeBus(bus)
+
+	provider := &optionsCaptureProvider{}
+	engine := &runtime.Engine{
+		Provider: provider,
+		Tools:    tools.NewRegistry(),
+		Bus:      bus,
+		Thread:   threadState,
+		Prompt:   e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, time.Now, threadState),
+	}
+
+	if output, err := engine.Turn(context.Background(), "hello"); err != nil || output != "done" {
+		t.Fatalf("Turn() = %q, %v", output, err)
+	}
+	if got := provider.opts.StreamIdleTimeout; got != 3*time.Minute {
+		t.Fatalf("runtime StreamIdleTimeout = %s, want 3m0s", got)
+	}
 }
 
 func TestEndToEnd_FullStack(t *testing.T) {
