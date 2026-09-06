@@ -111,7 +111,7 @@ func (s *GoalStateStore) StageClearForContextRenewal(generationID string) (final
 		return func() error { return nil }, func() error { return nil }, nil
 	}
 	s.mu.Lock()
-	clear, stageErr := thread.StageContextRenewalFileClear(s.Path, generationID)
+	clear, stageErr := thread.StageContextRenewalFileClear(s.ThreadDir, s.Path, generationID)
 	s.mu.Unlock()
 	finalize, rollback, err = clear.Finalize, clear.Rollback, stageErr
 	if err != nil {

@@ -181,8 +181,10 @@ resource, the Framework persists the complete retirement intent, then enumerates
 active and archived Thread ownership without opening their metadata or journals.
 Only recorded disposable owner directories are removed, including staged /new
 backups. Failures remain observable and retryable; pending retirement completes
-even if the next configuration re-enables that owner. Normal Thread recovery
-resolves staged files in recorded owner directories against the current Generation.
+even if the next configuration re-enables that owner. Thread owns the generic staged-file transaction manifest, recording relative paths
+and Generation before rename. Recovery and archive use this manifest without
+depending on Module ownership; a retired or already-restored file has no backup
+and is never recreated.
 
 Configuration preflight and inspection do not retire resources. Once resource
 application commits, cleanup or later startup failure is an incomplete application;

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -422,11 +423,7 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 				t.Fatal(err)
 			}
 			generationID := first.Thread.Projection().CurrentGeneration.ID
-			for _, path := range []string{goal.Path, notes.Path} {
-				if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
-					t.Fatal(err)
-				}
-			}
+			stageAppRenewalCrash(t, first.Thread.Dir, generationID, goal.Path, notes.Path)
 			if test.committed {
 				if _, err := first.Thread.BeginNewGeneration(); err != nil {
 					t.Fatal(err)
@@ -528,5 +525,29 @@ func TestWorkerRuntimeHasOwnStateAndNoObservableManager(t *testing.T) {
 	}
 	if worker.Observables() != nil {
 		t.Fatal("Worker unexpectedly owns Observable manager")
+	}
+}
+
+func stageAppRenewalCrash(t *testing.T, dir, generationID string, paths ...string) {
+	t.Helper()
+	entries := make([]map[string]string, 0, len(paths))
+	for _, path := range paths {
+		relative, err := filepath.Rel(dir, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, map[string]string{"path": filepath.ToSlash(relative), "generation_id": generationID})
+	}
+	data, err := json.Marshal(map[string]any{"version": 1, "files": entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "context-renewal.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

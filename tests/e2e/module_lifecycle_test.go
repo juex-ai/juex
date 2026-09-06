@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -229,11 +230,7 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	generationID := worker.Projection().CurrentGeneration.ID
-	for _, path := range []string{goal.Path, notes.Path} {
-		if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
-			t.Fatal(err)
-		}
-	}
+	stageModuleRenewalCrash(t, worker.Dir, generationID, goal.Path, notes.Path)
 	if err := worker.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -264,5 +261,29 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 	}
 	if len(backups) != 0 {
 		t.Fatalf("archive retained recovery backups: %v", backups)
+	}
+}
+
+func stageModuleRenewalCrash(t *testing.T, dir, generationID string, paths ...string) {
+	t.Helper()
+	entries := make([]map[string]string, 0, len(paths))
+	for _, path := range paths {
+		relative, err := filepath.Rel(dir, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, map[string]string{"path": filepath.ToSlash(relative), "generation_id": generationID})
+	}
+	data, err := json.Marshal(map[string]any{"version": 1, "files": entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "context-renewal.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if err := os.Rename(path, path+".context-renewal-"+generationID); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

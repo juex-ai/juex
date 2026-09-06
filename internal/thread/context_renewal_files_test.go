@@ -158,6 +158,9 @@ func TestDeleteArchivedStopsWhenContextRenewalRecoveryIsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := os.WriteFile(filepath.Join(archivedDir, contextRenewalManifestFile), []byte(`{"version":1,"files":[{"path":"module.state","generation_id":"invalid"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.DeleteArchived(workerID); err == nil {
 		t.Fatal("DeleteArchived() succeeded without resolving an invalid Context renewal backup")
 	}
@@ -242,7 +245,7 @@ func TestStoreOpenDoesNotRecoverActiveContextRenewal(t *testing.T) {
 	if err := os.WriteFile(statePath, []byte("old state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	clear, err := StageContextRenewalFileClear(statePath, target.Projection().CurrentGeneration.ID)
+	clear, err := StageContextRenewalFileClear(target.Dir, statePath, target.Projection().CurrentGeneration.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +289,7 @@ func TestStageContextRenewalFileClearRejectsSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := StageContextRenewalFileClear(statePath, InitialGeneration); err == nil {
+	if _, err := StageContextRenewalFileClear(dir, statePath, InitialGeneration); err == nil {
 		t.Fatal("StageContextRenewalFileClear() accepted a symlink")
 	}
 	info, err := os.Lstat(statePath)
@@ -303,7 +306,156 @@ func TestStageContextRenewalFileClearRejectsSymlink(t *testing.T) {
 
 func stageContextRenewalCrashFixture(t *testing.T, path, generationID string) {
 	t.Helper()
+	dir := filepath.Dir(path)
+	manifest, err := readContextRenewalManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Files = append(manifest.Files, contextRenewalFile{Path: filepath.Base(path), GenerationID: generationID})
+	if err := writeContextRenewalManifest(dir, manifest); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Rename(path, contextRenewalBackupPath(path, generationID)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestContextRenewalRecoversRegisteredNestedFilesAcrossCrashWindows(t *testing.T) {
+	for _, phase := range []string{"registered", "renamed", "restored", "retired"} {
+		t.Run(phase, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "private", "module.state")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("preserve"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			manifest := contextRenewalManifest{Version: 1, Files: []contextRenewalFile{{Path: "private/module.state", GenerationID: InitialGeneration}}}
+			if err := writeContextRenewalManifest(dir, manifest); err != nil {
+				t.Fatal(err)
+			}
+			if phase != "registered" {
+				if err := os.Rename(path, contextRenewalBackupPath(path, InitialGeneration)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if phase == "restored" {
+				if err := os.Rename(contextRenewalBackupPath(path, InitialGeneration), path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if phase == "retired" {
+				if err := os.RemoveAll(filepath.Dir(path)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := recoverContextRenewalFiles(dir, InitialGeneration); err != nil {
+				t.Fatal(err)
+			}
+			if phase == "retired" {
+				if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
+					t.Fatal("recreated retired directory", err)
+				}
+			} else {
+				if body, err := os.ReadFile(path); err != nil || string(body) != "preserve" {
+					t.Fatalf("state = %s %v", body, err)
+				}
+			}
+			if present, err := contextRenewalFilesPresent(dir); err != nil || present {
+				t.Fatalf("transaction remains: %v %v", present, err)
+			}
+		})
+	}
+}
+
+func TestContextRenewalStagesNestedFilesWithoutRecoveringAnotherActiveFile(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{filepath.Join(dir, "first", "state"), filepath.Join(dir, "second", "state")}
+	for _, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("current"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := StageContextRenewalFileClear(dir, paths[0], InitialGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := StageContextRenewalFileClear(dir, paths[1], InitialGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StageContextRenewalFileClear(dir, paths[0], InitialGeneration); !errors.Is(err, errContextRenewalInProgress) {
+		t.Fatalf("duplicate stage = %v", err)
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("staging restored active file", err)
+		}
+	}
+	if err := recoverContextRenewalFiles(dir, InitialGeneration); !errors.Is(err, errContextRenewalInProgress) {
+		t.Fatalf("recovered active transaction: %v", err)
+	}
+	if err := first.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(paths[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(paths[1]); !os.IsNotExist(err) {
+		t.Fatal("finalized file returned", err)
+	}
+}
+
+func TestContextRenewalRejectsEscapingAndLinkedTransactionPaths(t *testing.T) {
+	for _, relative := range []string{"../outside.state", "linked/state"} {
+		t.Run(relative, func(t *testing.T) {
+			dir, outside := t.TempDir(), t.TempDir()
+			backup := filepath.Join(outside, "state") + contextRenewalBackupMarker + InitialGeneration
+			if err := os.WriteFile(backup, []byte("outside"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeContextRenewalManifest(dir, contextRenewalManifest{Version: 1, Files: []contextRenewalFile{{Path: relative, GenerationID: InitialGeneration}}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := recoverContextRenewalFiles(dir, InitialGeneration); err == nil {
+				t.Fatal("recovered outside the Thread boundary")
+			}
+			if body, err := os.ReadFile(backup); err != nil || string(body) != "outside" {
+				t.Fatalf("outside backup modified: %q %v", body, err)
+			}
+		})
+	}
+}
+
+func TestContextRenewalRecoveryPreservesConflictingCanonicalFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state")
+	if err := os.WriteFile(path, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stageContextRenewalCrashFixture(t, path, InitialGeneration)
+	if err := os.WriteFile(path, []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverContextRenewalFiles(dir, InitialGeneration); err == nil {
+		t.Fatal("overwrote new canonical state")
+	}
+	for _, item := range []struct{ path, content string }{{path, "new"}, {contextRenewalBackupPath(path, InitialGeneration), "old"}} {
+		if body, err := os.ReadFile(item.path); err != nil || string(body) != item.content {
+			t.Fatalf("state modified: %q %v", body, err)
+		}
 	}
 }

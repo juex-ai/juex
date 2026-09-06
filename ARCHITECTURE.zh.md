@@ -163,7 +163,9 @@ Module。Agent 生命周期 lease 排除旧实例和延迟 writer。删除任一
 先持久化完整退休意图，再枚举 active 与 archived Thread 的所有权，不打开 Thread
 metadata 或 journal。只删除已登记且可丢弃的 owner 目录，包含 /new 暂存备份。
 失败保持可观察、可重试；即使下一份配置重新启用 owner，也必须完成待处理的退休。
-正常 Thread 恢复按当前 Generation 处理已登记 owner 目录中的暂存文件。
+Thread 自己拥有通用文件事务记录，在 rename 前登记相对路径和 Generation；恢复
+与归档使用该记录，不依赖 Module 所有权。已退休或已恢复的文件没有备份，不会
+重新创建。
 
 配置预检与检查不触发退休。资源应用提交后，清理或后续启动失败代表应用尚未完成，
 不会通过复活旧状态回滚；退休成功后才发布新 endpoint。部署前的无所有权状态边界

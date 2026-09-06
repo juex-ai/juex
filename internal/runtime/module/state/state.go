@@ -128,22 +128,6 @@ func Prepare(scopeDir string, owner Owner, retention Retention) (string, error) 
 	return dir, nil
 }
 
-// Directories reads only ownership metadata, for generic file-transaction
-// recovery. It neither creates resources nor interprets their contents.
-func Directories(scopeDir string) ([]string, error) {
-	resourceMu.Lock()
-	defer resourceMu.Unlock()
-	records, err := readLedger(scopeDir)
-	if err != nil {
-		return nil, err
-	}
-	dirs := make([]string, 0, len(records.Resources))
-	for _, r := range records.Resources {
-		dirs = append(dirs, Directory(scopeDir, r.Owner))
-	}
-	return dirs, nil
-}
-
 func readLedger(scopeDir string) (ledger, error) {
 	result := ledger{Version: 1}
 	if err := plainDirectory(scopeDir); err != nil {

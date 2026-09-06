@@ -48,9 +48,7 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		if _, err := notes.Update("keep Notes"); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Rename(goal.Path, goal.Path+".context-renewal-g000001"); err != nil {
-			t.Fatal(err)
-		}
+		stageModuleRenewalCrash(t, dir, "g000001", goal.Path)
 		if err := os.WriteFile(goal.Path+".context-renewal-g000001", []byte("broken body: cleanup must not parse"), 0600); err != nil {
 			t.Fatal(err)
 		}
