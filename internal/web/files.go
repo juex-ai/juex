@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/artifact"
+	"github.com/juex-ai/juex/internal/modulecatalog"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
@@ -213,11 +215,14 @@ func rejectScratchpadTreeSymlinks(root, relPath string) error {
 }
 
 func (s *Server) threadScratchpadDir(id string) (string, bool) {
+	if !s.opts.Cfg.ModuleEnabled(modulecatalog.Scratchpad) {
+		return "", false
+	}
 	if active, ok := s.threads.Load(id); ok {
 		as := active.(*activeThread)
 		var scratchpadDir string
 		err := as.app.ReadThreadID(id, func(target *thread.Thread) error {
-			scratchpadDir = target.ScratchpadDir()
+			scratchpadDir = scratchpad.Dir(target.Dir)
 			return nil
 		})
 		if err == nil {
@@ -235,7 +240,7 @@ func (s *Server) threadScratchpadDir(id string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	scratchpadDir := target.ScratchpadDir()
+	scratchpadDir := scratchpad.Dir(target.Dir)
 	if err := target.Close(); err != nil {
 		return "", false
 	}

@@ -61,8 +61,8 @@ func TestStoreCreatesAndReplaysMainAndWorker(t *testing.T) {
 		projection.Generations[0] != projection.CurrentGeneration {
 		t.Fatalf("authoritative metadata = %#v", projection)
 	}
-	if _, err := os.Stat(reopened.ScratchpadDir()); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(reopened.Dir, "scratchpad")); !os.IsNotExist(err) {
+		t.Fatalf("Core Thread created optional working storage: %v", err)
 	}
 	if _, err := os.Stat(reopened.SpoolDir()); err != nil {
 		t.Fatal(err)
@@ -985,5 +985,30 @@ func TestCreateWorkerDoesNotGenerateIDReservedByAlias(t *testing.T) {
 	defer func() { _ = created.Close() }()
 	if created.ID != "111111" {
 		t.Fatalf("created ID = %q, want retry result 111111", created.ID)
+	}
+}
+
+func TestNewThreadDefersOptionalWorkingStorage(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := store.CreateWorker(MainID, "optional-storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	standalone, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []*Thread{main, worker, standalone} {
+		t.Cleanup(func() { _ = target.Close() })
+		if _, err := os.Stat(filepath.Join(target.Dir, "scratchpad")); !os.IsNotExist(err) {
+			t.Errorf("Thread %s created optional storage: %v", target.ID, err)
+		}
+		if _, err := os.Stat(target.SpoolDir()); err != nil {
+			t.Errorf("Thread %s missing core spool: %v", target.ID, err)
+		}
 	}
 }

@@ -66,7 +66,7 @@ func TestNotesStoreRejectsOversizedContentWithoutReplacingExisting(t *testing.T)
 	}
 
 	tooLong := valid + "界"
-	if _, err := store.Update(tooLong); err == nil || !strings.Contains(err.Error(), "maximum is 2048") || !strings.Contains(err.Error(), "scratchpad") {
+	if _, err := store.Update(tooLong); err == nil || !strings.Contains(err.Error(), "maximum is 2048") || !strings.Contains(err.Error(), "working files") {
 		t.Fatalf("oversize error = %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "notes.md"))

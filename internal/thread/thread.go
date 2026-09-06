@@ -42,13 +42,6 @@ type Thread struct {
 	closed          bool
 }
 
-func (t *Thread) ScratchpadDir() string {
-	if t == nil {
-		return ""
-	}
-	return filepath.Join(t.Dir, "scratchpad")
-}
-
 func (t *Thread) SpoolDir() string {
 	if t == nil {
 		return ""

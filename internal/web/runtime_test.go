@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -69,7 +70,8 @@ body`)
 		{ID: "observables", Scope: "runtime"},
 		{ID: "worker-threads", Scope: "runtime"},
 		{ID: "context-control", Scope: "thread"},
-		{ID: "thread-context", Scope: "thread"},
+		{ID: "operating-context", Scope: "thread"},
+		{ID: "scratchpad", Scope: "thread"},
 		{ID: "goal", Scope: "thread"},
 		{ID: "notes", Scope: "thread"},
 		{ID: "hooks", Scope: "thread"},
@@ -502,7 +504,7 @@ func TestRuntimeStatusIncludesActiveThreadScratchpadPrompt(t *testing.T) {
 	}
 	for _, item := range got.SystemPrompt.Items {
 		if item.Key == "thread_scratchpad" {
-			wantPath := as.app.Thread.ScratchpadDir()
+			wantPath := scratchpad.Dir(as.app.Thread.Dir)
 			if item.Path != wantPath || !strings.Contains(item.Text, wantPath) {
 				t.Fatalf("scratchpad prompt = %+v, want path %q", item, wantPath)
 			}
@@ -699,8 +701,8 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 		{label: "Workspace AGENTS.md", source: "project", path: filepath.Join(work, "AGENTS.md"), text: "workspace root rule"},
 		{label: ".agents/AGENTS.md", source: "project", path: filepath.Join(work, ".agents", "AGENTS.md"), text: "workspace agents rule"},
 		{label: "Context Window", source: "runtime", path: "", text: "Context window"},
-		{label: "Thread Scratchpad", source: "runtime", path: got.SystemPrompt.Items[5].Path, text: "Thread Scratchpad"},
 		{label: "Operating Context", source: "runtime", path: "", text: "Operating Context"},
+		{label: "Thread Scratchpad", source: "runtime", path: got.SystemPrompt.Items[6].Path, text: "Thread Scratchpad"},
 	}
 	for i, w := range want {
 		gotEntry := got.SystemPrompt.Items[i]

@@ -22,7 +22,6 @@ type ThreadIdentitySnapshot struct {
 	Dir            string
 	Alias          string
 	ParentThreadID string
-	ScratchpadDir  string
 }
 
 func (a *App) ReadThread(read func(*thread.Thread) error) error {
@@ -55,7 +54,6 @@ func (a *App) ThreadIdentity() (ThreadIdentitySnapshot, bool) {
 		snapshot = ThreadIdentitySnapshot{
 			ID: info.ID, Dir: info.Dir, Alias: info.Alias,
 			ParentThreadID: info.ParentThreadID,
-			ScratchpadDir:  target.ScratchpadDir(),
 		}
 		return nil
 	})

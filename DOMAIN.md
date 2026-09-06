@@ -11,8 +11,8 @@ storage implementation belong in [ARCHITECTURE.md](ARCHITECTURE.md).
 | --- | --- |
 | Workspace | User-authored project files, workspace configuration, Skills, and Hooks. |
 | Agent | Long-lived identity, Workspace ownership, configuration overlay, rebuildable Thread list index, active and archived Threads, media, logs, Observable definitions and state, and Extension state. |
-| Thread | Identity, topology, lifecycle, Context Generation registry, pending Inputs, Turns, messages, Events, Usage, Scratchpad, and spool. |
-| Thread Module | Optional Thread-scoped state such as Goal and Notes, including its load, context, and Generation lifecycle behavior. |
+| Thread | Identity, topology, lifecycle, Context Generation registry, pending Inputs, Turns, messages, Events, Usage, and spool. |
+| Thread Module | Optional Thread-scoped state such as Goal, Notes, and Scratchpad, including its resources, context, and Generation lifecycle behavior. |
 | Agent Runtime | Replaceable process resources: Providers, MCP clients, Tools, Observables, schedulers, and live subscriptions. |
 
 An Agent is bound to one Workspace. Replacing its Runtime does not replace its
@@ -78,7 +78,9 @@ A Context Generation is one Provider-visible context epoch inside a Thread.
   Provider dialogue.
 
 Goal and Notes are Module-owned Thread state that can cross Generation
-boundaries. Scratchpad is model-managed Thread working storage. Spool is
+boundaries. Scratchpad is model-managed Thread working storage prepared only by
+its enabled Module. Disabling it preserves existing files without preparing or
+publishing the working directory. Spool is
 system-managed temporary storage for oversized runtime data.
 
 ## Token Usage

@@ -18,6 +18,9 @@ import (
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/modulecatalog"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
@@ -994,10 +997,31 @@ func seedScratchpadThread(t *testing.T, workDir, id, _ string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = target.Close() }()
+	if err := (&scratchpad.Module{}).StartThread(t.Context(), runtimemodule.ThreadContext{Dir: target.Dir}); err != nil {
+		t.Fatal(err)
+	}
 	if id != thread.MainID {
 		t.Fatalf("scratchpad fixture id = %q, want Main", id)
 	}
 	if err := target.Append(llm.TextMessage(llm.RoleUser, "hi")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDisabledScratchpadEndpointSkipsStoredResources(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Cfg.Modules = config.ModulePolicy{modulecatalog.Scratchpad: {Enabled: false}}
+	id := thread.MainID
+	dir := filepath.Join(srv.opts.Cfg.ThreadsDir(), id)
+	mustWriteFile(t, filepath.Join(dir, "thread.json"), "malformed metadata must not be opened")
+	mustWriteFile(t, filepath.Join(dir, "scratchpad", "draft.md"), "private-draft-529")
+	request := httptest.NewRequest(http.MethodGet, "/api/threads/"+id+"/scratchpad", nil)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || strings.Contains(response.Body.String(), "private-draft-529") || strings.Contains(response.Body.String(), dir) {
+		t.Fatalf("disabled response=%d %s", response.Code, response.Body.String())
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "scratchpad", "draft.md")); err != nil || string(data) != "private-draft-529" {
+		t.Fatalf("retained file=%q %v", data, err)
 	}
 }

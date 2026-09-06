@@ -115,8 +115,10 @@ registry 的权威。它还物化有界 counter、context status、Pending Input
 
 `pending_inputs.json` 是 runtime 拥有的原子、有界当前状态文档。Goal 与 Notes
 Module 分别拥有 `goal_state.json` 和 `notes.md`，core Thread storage 不解释其
-schema。Owner 没有持久状态时，对应文件可以不存在。Scratchpad 是模型管理的
-Thread 状态，跨 Generation 保留；spool 是系统管理的 Thread 临时数据。Active
+schema。Owner 没有持久状态时，对应文件可以不存在。Scratchpad ThreadResource
+只在启用时基于通用 Thread 目录准备模型管理的工作存储；core Thread 和 runtime
+context 不携带其私有路径。工作文件跨 Generation 和模块关闭保留；spool 是系统
+管理的 Thread 临时数据。Active
 与 archived Thread 使用不同 root，lifecycle
 操作移动整个 Thread 目录。Agent media 独立存储。
 
@@ -161,7 +163,9 @@ schema。解析不能改变工具身份或执行策略。Provider 请求与活�
 
 Prompt assembly 使用已注册的 context contributor。稳定 guidance、Hook
 context、Thread state 和每次请求的 recitation 在该接口汇合。Generation 边界
-活动不是普通 Provider 对话。
+活动不是普通 Provider 对话。Operating context 只贡献 cwd、OS 与时间；Shell
+拥有执行指导。agents-md Module 拥有指导文件的自动读取，关闭它不改变显式文件
+工具的访问权限。
 
 MCP transport 属于 Agent，避免重复进程、认证、catalog 和 Notification。
 Tool call 仍属于发起调用的 Thread Turn。Observation producer 同样属于 Agent，

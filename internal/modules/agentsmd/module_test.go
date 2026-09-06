@@ -1,17 +1,15 @@
-package promptcontext
+package agentsmd
 
 import (
 	"context"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
-func TestGuidanceModuleContextLoadsOrderedSections(t *testing.T) {
+func TestModuleContextLoadsOrderedSections(t *testing.T) {
 	globalDir := t.TempDir()
 	globalAgents := filepath.Join(globalDir, "AGENTS.md")
 	if err := os.WriteFile(globalAgents, []byte("global rule"), 0o644); err != nil {
@@ -29,7 +27,7 @@ func TestGuidanceModuleContextLoadsOrderedSections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sections, err := (&GuidanceModule{
+	sections, err := (&Module{
 		GlobalAgentsMDPath: globalAgents,
 		AgentsMDDirs:       []string{workspace, agentsDir},
 	}).Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
@@ -60,7 +58,7 @@ func TestGuidanceModuleContextLoadsOrderedSections(t *testing.T) {
 	}
 }
 
-func TestGuidanceModuleDeduplicatesGlobalWorkspaceFile(t *testing.T) {
+func TestModuleDeduplicatesGlobalWorkspaceFile(t *testing.T) {
 	home := t.TempDir()
 	homeAgents := filepath.Join(home, ".agents")
 	if err := os.MkdirAll(homeAgents, 0o755); err != nil {
@@ -71,7 +69,7 @@ func TestGuidanceModuleDeduplicatesGlobalWorkspaceFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sections, err := (&GuidanceModule{
+	sections, err := (&Module{
 		GlobalAgentsMDPath: globalAgents,
 		AgentsMDDirs:       []string{home, homeAgents},
 	}).Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
@@ -80,52 +78,5 @@ func TestGuidanceModuleDeduplicatesGlobalWorkspaceFile(t *testing.T) {
 	}
 	if len(sections) != 1 || sections[0].Key != "agents_global" {
 		t.Fatalf("sections = %+v, want one global AGENTS section", sections)
-	}
-}
-
-func TestThreadContextModuleIncludesScratchpadAndOperatingContext(t *testing.T) {
-	workDir := t.TempDir()
-	scratchpadDir := filepath.Join(workDir, ".juex", "threads", "123456", "scratchpad")
-	now := time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC)
-	sections, err := (&ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir, Now: func() time.Time { return now }}).Context(
-		context.Background(),
-		runtimemodule.ContextRequest{
-			Purpose: runtimemodule.ContextPurposeProviderIteration,
-			Thread:  &runtimemodule.ThreadContext{ScratchpadDir: scratchpadDir},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sections) != 2 {
-		t.Fatalf("sections = %+v, want scratchpad and operating context", sections)
-	}
-	scratchpad := sections[0]
-	if scratchpad.Key != "thread_scratchpad" || scratchpad.Path != scratchpadDir || !strings.Contains(scratchpad.Text, "workspace-relative path: .juex/threads/123456/scratchpad") {
-		t.Fatalf("scratchpad section = %+v", scratchpad)
-	}
-	for _, want := range []string{"not automatically added to context", "available file tools", "before compaction"} {
-		if !strings.Contains(scratchpad.Text, want) {
-			t.Errorf("scratchpad section missing %q:\n%s", want, scratchpad.Text)
-		}
-	}
-	operating := sections[1]
-	for _, want := range []string{"- cwd: " + workDir, "- os:", "- time: 2026-05-01T12:30:45Z"} {
-		if !strings.Contains(operating.Text, want) {
-			t.Errorf("operating context missing %q:\n%s", want, operating.Text)
-		}
-	}
-}
-
-func TestContextModulesIgnoreOtherPurposes(t *testing.T) {
-	request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeThreadStart}
-	for _, provider := range []runtimemodule.ContextProvider{&GuidanceModule{}, &ThreadContextModule{}} {
-		sections, err := provider.Context(context.Background(), request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(sections) != 0 {
-			t.Fatalf("%T sections = %+v, want none", provider, sections)
-		}
 	}
 }

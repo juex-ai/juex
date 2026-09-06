@@ -11,7 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modules/promptcontext"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -27,9 +27,9 @@ func TestReplaceThreadRuntimePublishesCoherentBundle(t *testing.T) {
 		Thread:            first,
 		PendingInputQueue: NewPendingInputQueue(first.Dir, PendingInputQueueOptions{Thread: first}),
 	}
-	engine.Prompt = threadRuntimeTestPrompt(engine, root)
-	firstModules := newThreadRuntimeTestModuleSet(t)
-	secondModules := newThreadRuntimeTestModuleSet(t)
+	engine.Prompt = threadRuntimeTestPrompt(engine)
+	firstModules := newThreadRuntimeTestModuleSet(t, first)
+	secondModules := newThreadRuntimeTestModuleSet(t, second)
 	firstTools := threadRuntimeTestTools(t, "first_tool")
 	secondTools := threadRuntimeTestTools(t, "second_tool")
 
@@ -49,9 +49,9 @@ func TestReplaceThreadRuntimePublishesCoherentBundle(t *testing.T) {
 	if snapshot.Modules != secondModules || snapshot.Tools != secondTools || engine.Tools != secondTools {
 		t.Fatalf("replacement module bundle = modules %p tools %p engine tools %p, want %p %p", snapshot.Modules, snapshot.Tools, engine.Tools, secondModules, secondTools)
 	}
-	if got := engine.SystemPrompt(); !strings.Contains(got, second.ScratchpadDir()) ||
-		strings.Contains(got, first.ScratchpadDir()) {
-		t.Fatalf("system prompt did not switch scratchpad from %q to %q:\n%s", first.ScratchpadDir(), second.ScratchpadDir(), got)
+	if got := engine.SystemPrompt(); !strings.Contains(got, scratchpad.Dir(second.Dir)) ||
+		strings.Contains(got, scratchpad.Dir(first.Dir)) {
+		t.Fatalf("system prompt did not switch scratchpad from %q to %q:\n%s", scratchpad.Dir(first.Dir), scratchpad.Dir(second.Dir), got)
 	}
 }
 
@@ -67,8 +67,8 @@ func TestReplaceThreadRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 	if err := engine.ReplaceThreadRuntime(first); err != nil {
 		t.Fatal(err)
 	}
-	firstModules := newThreadRuntimeTestModuleSet(t)
-	secondModules := newThreadRuntimeTestModuleSet(t)
+	firstModules := newThreadRuntimeTestModuleSet(t, first)
+	secondModules := newThreadRuntimeTestModuleSet(t, second)
 	firstTools := threadRuntimeTestTools(t, "first_tool")
 	secondTools := threadRuntimeTestTools(t, "second_tool")
 	if err := engine.ReplaceThreadRuntimeBundle(first, ThreadRuntimeReplacement{Modules: firstModules, Tools: firstTools}); err != nil {
@@ -325,19 +325,17 @@ func TestRecoverThreadProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T) 
 	}
 }
 
-func threadRuntimeTestPrompt(engine *Engine, workDir string) *prompt.Builder {
-	provider := &promptcontext.ThreadContextModule{OperatingContextEnabled: true, ScratchpadEnabled: true, WorkDir: workDir}
+func threadRuntimeTestPrompt(engine *Engine) *prompt.Builder {
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		snapshot := engine.ThreadRuntimeSnapshot()
 		request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration}
 		if snapshot.Thread != nil {
 			request.Thread = &runtimemodule.ThreadContext{
-				ID:            snapshot.Thread.ID,
-				Dir:           snapshot.Thread.Dir,
-				ScratchpadDir: snapshot.ScratchpadDir,
+				ID:  snapshot.Thread.ID,
+				Dir: snapshot.Thread.Dir,
 			}
 		}
-		return provider.Context(context.Background(), request)
+		return snapshot.Modules.Context(context.Background(), request)
 	}}
 }
 
@@ -378,13 +376,15 @@ func newThreadRuntimeTestThread(t *testing.T, root string) *thread.Thread {
 	return target
 }
 
-func newThreadRuntimeTestModuleSet(t *testing.T) *runtimemodule.Set {
+func newThreadRuntimeTestModuleSet(t *testing.T, target *thread.Thread) *runtimemodule.Set {
 	t.Helper()
-	set, err := runtimemodule.BuildThreadSet(t.Context(), nil, runtimemodule.ThreadContext{ID: "test"}, runtimemodule.ToolContext{})
+	threadContext := runtimemodule.ThreadContext{ID: target.ID, Dir: target.Dir}
+	set, err := runtimemodule.BuildAndStartThreadSet(t.Context(), []runtimemodule.ThreadFactorySpec{{
+		ID: scratchpad.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+			return &scratchpad.Module{}, nil
+		},
+	}}, threadContext, runtimemodule.ToolContext{Thread: &threadContext})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := set.StartThread(t.Context(), runtimemodule.ThreadContext{ID: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = set.CloseThread(context.Background()) })
@@ -407,9 +407,6 @@ func assertThreadRuntimeBundle(t *testing.T, snapshot ThreadRuntimeSnapshot, wan
 	t.Helper()
 	if snapshot.Thread != want {
 		t.Fatalf("thread = %p (%v), want %p (%v)", snapshot.Thread, threadID(snapshot.Thread), want, want.ID)
-	}
-	if snapshot.ScratchpadDir != want.ScratchpadDir() {
-		t.Fatalf("scratchpad = %q, want %q", snapshot.ScratchpadDir, want.ScratchpadDir())
 	}
 	if snapshot.PendingInputQueue == nil || snapshot.PendingInputQueue.thread != want {
 		t.Fatalf("pending queue = %+v, want thread dir %q", snapshot.PendingInputQueue, want.Dir)

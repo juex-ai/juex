@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/modulecatalog"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
@@ -62,7 +63,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	if before.Thread == nil || before.Thread.ID != thread.MainID || before.Modules == nil {
 		t.Fatalf("initial Thread runtime = %+v", before)
 	}
-	if err := os.WriteFile(filepath.Join(before.ScratchpadDir, "durable.txt"), []byte("retained"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(scratchpad.Dir(before.Thread.Dir), "durable.txt"), []byte("retained"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	goal, notes := runtime.ThreadStateStoresFromModules(before.Modules)
@@ -85,7 +86,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	if info := after.Thread.Info(); info.GenerationID != "g000002" {
 		t.Fatalf("generation = %q, want g000002", info.GenerationID)
 	}
-	if data, err := os.ReadFile(filepath.Join(after.ScratchpadDir, "durable.txt")); err != nil || string(data) != "retained" {
+	if data, err := os.ReadFile(filepath.Join(scratchpad.Dir(after.Thread.Dir), "durable.txt")); err != nil || string(data) != "retained" {
 		t.Fatalf("scratchpad after /new = %q, %v", data, err)
 	}
 	if snapshot, err := goal.StatusSnapshot(); err != nil || snapshot != nil {
@@ -100,7 +101,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 		}
 	}
 
-	threadContext := runtimemodule.ThreadContext{ID: after.Thread.ID, Dir: after.Thread.Dir, ScratchpadDir: after.ScratchpadDir}
+	threadContext := runtimemodule.ThreadContext{ID: after.Thread.ID, Dir: after.Thread.Dir}
 	sections, err := after.Modules.Context(context.Background(), runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 		Thread:  &threadContext,

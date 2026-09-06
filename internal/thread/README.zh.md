@@ -16,7 +16,8 @@
   拼接或打开 Generation 路径。
 - Runtime 拥有有界 Pending Input 状态。Goal 与 Notes Module 拥有自己的 Thread
   scope 文件。本 package 可以协调 lifecycle 文件操作，但不解释这些 Module
-  schema。
+  schema。Scratchpad 的准备和路径发布属于其 Module；创建或打开 Thread 不准备
+  可选工作目录。
 
 ## 顺序与恢复
 

@@ -16,6 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
@@ -465,7 +466,7 @@ func TestAppNewContextPreservesJournalAndScratchpad(t *testing.T) {
 	if err := app.Thread.Append(llm.TextMessage(llm.RoleUser, "old context")); err != nil {
 		t.Fatal(err)
 	}
-	scratch := filepath.Join(app.Thread.ScratchpadDir(), "work.md")
+	scratch := filepath.Join(scratchpad.Dir(app.Thread.Dir), "work.md")
 	if err := os.WriteFile(scratch, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +505,7 @@ func TestAppPromptUsesThreadScratchpad(t *testing.T) {
 	if _, err := app.Run(context.Background(), "hello"); err != nil {
 		t.Fatal(err)
 	}
-	if len(provider.systems) != 1 || !strings.Contains(provider.systems[0], app.Thread.ScratchpadDir()) {
+	if len(provider.systems) != 1 || !strings.Contains(provider.systems[0], scratchpad.Dir(app.Thread.Dir)) {
 		t.Fatalf("system prompt missing Thread scratchpad: %q", provider.systems)
 	}
 }
