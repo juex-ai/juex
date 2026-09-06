@@ -295,6 +295,9 @@ func (s *Server) dispatchThread(w http.ResponseWriter, r *http.Request) {
 // Run starts the canonical agent API endpoint and an optional TCP API listener.
 // It blocks until cancellation or a listener/startup failure.
 func (s *Server) Run(ctx context.Context) error {
+	if err := app.ValidateModuleComposition(s.opts.Cfg); err != nil {
+		return err
+	}
 	if s.opts.Addr != "" && !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex listen: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
