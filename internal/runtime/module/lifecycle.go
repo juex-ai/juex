@@ -282,6 +282,8 @@ func validateFactoryModule(factoryID ID, mod Module) error {
 }
 
 type lifecycleState struct {
+	activation *runtimeActivation
+	stopping   bool
 	started    []registeredModule
 	quiesced   bool
 	quiesceErr error
@@ -300,7 +302,7 @@ func (s *Set) StartRuntime(ctx context.Context, runtimeContext RuntimeContext) e
 	if s.scope != ScopeRuntime {
 		return fmt.Errorf("runtime modules: cannot start %q set as runtime", s.scope)
 	}
-	if s.state.closed {
+	if s.state.closed || s.state.stopping {
 		return fmt.Errorf("runtime modules: runtime set is closed")
 	}
 	if s.state.started != nil {
@@ -453,12 +455,26 @@ func (s *Set) CloseThread(ctx context.Context) error {
 }
 
 func (s *Set) quiesceRuntime(ctx context.Context) error {
-	s.mu.RLock()
+	s.mu.Lock()
 	if s.scope != ScopeRuntime {
 		scope := s.scope
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		return fmt.Errorf("runtime modules: cannot quiesce %q set as runtime", scope)
 	}
+	s.state.stopping = true
+	activation := s.state.activation
+	s.mu.Unlock()
+	if activation != nil {
+		activation.cancel()
+		select {
+		case <-activation.done:
+		default:
+			// Synchronous producer callbacks must return before cleanup can
+			// advance. The host cancels its delivery lifetime before retrying.
+			return activation
+		}
+	}
+	s.mu.RLock()
 	if s.state.closed {
 		err := s.state.closeErr
 		s.mu.RUnlock()

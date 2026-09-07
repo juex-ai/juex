@@ -25,7 +25,7 @@ func TestRuntimeModuleDefersManagerConstructionUntilStart(t *testing.T) {
 	if manager == nil {
 		t.Fatal("runtime module did not publish started Observable manager")
 	}
-	if err := mod.StartAll(context.Background()); err != nil {
+	if err := mod.ActivateRuntime(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := mod.QuiesceRuntime(context.Background()); err != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
 const pendingRecoveryTestTimeout = 10 * time.Second
@@ -941,19 +942,18 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	deliveryErr := make(chan error, 1)
-	gate := newMCPNotificationGate(func(notification mcp.Notification) {
+	notification := mcp.Notification{
+		ServerName: "startup", EventType: "message", Content: "newer startup notification",
+		Params: map[string]any{"content": "newer startup notification"},
+	}
+	installRecoveryInputSource(t, a, func(context.Context) error {
 		_, deliveryErrValue := a.DeliverObservation(a.ctx, a.ObservationFromMCPNotification(notification))
 		deliveryErr <- deliveryErrValue
-	})
-	gate.Enqueue(mcp.Notification{
-		ServerName: "startup",
-		EventType:  "message",
-		Content:    "newer startup notification",
-		Params:     map[string]any{"content": "newer startup notification"},
+		return deliveryErrValue
 	})
 	activated := make(chan struct{})
 	go func() {
-		a.activateExternalInputAfterPendingRecovery(gate, []runtime.PendingInputRecovery{{RecordID: record.ID}}, nil)
+		_ = a.activateExternalInputAfterPendingRecovery(context.Background(), []runtime.PendingInputRecovery{{RecordID: record.ID}})
 		close(activated)
 	}()
 
@@ -1040,12 +1040,14 @@ func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
 	}
 	delivered := make(chan observableResult, 1)
 	observation := testObservationRecord("obs-during-observable-startup")
+	installRecoveryInputSource(t, a, func(context.Context) error {
+		outcome, err := a.DeliverObservation(context.Background(), observation)
+		delivered <- observableResult{outcome: outcome, err: err}
+		return err
+	})
 	activated := make(chan struct{})
 	go func() {
-		a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecovery{{RecordID: record.ID}}, func() {
-			outcome, err := a.DeliverObservation(context.Background(), observation)
-			delivered <- observableResult{outcome: outcome, err: err}
-		})
+		_ = a.activateExternalInputAfterPendingRecovery(context.Background(), []runtime.PendingInputRecovery{{RecordID: record.ID}})
 		close(activated)
 	}()
 
@@ -1405,7 +1407,9 @@ func TestAppStartupRecoveryAdvancesPastOldestRecordThatExpiresBeforeWorker(t *te
 	}
 	time.Sleep(5 * time.Millisecond)
 
-	a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecovery{{RecordID: oldest.ID}, {RecordID: later.ID}}, nil)
+	if err := a.activateExternalInputAfterPendingRecovery(context.Background(), []runtime.PendingInputRecovery{{RecordID: oldest.ID}, {RecordID: later.ID}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.waitPendingInputRecovery(); err != nil {
 		t.Fatal(err)
 	}
@@ -1434,4 +1438,31 @@ func providerHistoryContains(history []llm.Message, id, text string) bool {
 		}
 	}
 	return false
+}
+
+// A new input owner participates by registering the lifecycle contract alone.
+type recoveryInputSource struct{ activate func(context.Context) error }
+
+func (*recoveryInputSource) ID() runtimemodule.ID { return "recovery-test-source" }
+func (*recoveryInputSource) StartRuntime(context.Context, runtimemodule.RuntimeContext) error {
+	return nil
+}
+func (*recoveryInputSource) QuiesceRuntime(context.Context) error        { return nil }
+func (*recoveryInputSource) CloseRuntime(context.Context) error          { return nil }
+func (s *recoveryInputSource) ActivateRuntime(ctx context.Context) error { return s.activate(ctx) }
+
+func installRecoveryInputSource(t *testing.T, a *App, activate func(context.Context) error) {
+	t.Helper()
+	original := a.runtimeModules
+	set, err := runtimemodule.BuildAndStartRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{{
+		ID: "recovery-test-source", Enabled: true,
+		New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return &recoveryInputSource{activate: activate}, nil
+		},
+	}}, runtimemodule.RuntimeContext{}, runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.runtimeModules = set
+	t.Cleanup(func() { _ = original.CloseRuntime(context.Background()) })
 }

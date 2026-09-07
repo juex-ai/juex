@@ -81,14 +81,15 @@ type Options struct {
 	// resolution owned by a long-running caller such as the Web server.
 	AgentRuntime *AgentRuntimeResolution
 
-	// Internal child-runtime seams for managed Worker Threads.
-	disableObservables    bool
-	sharedGoalState       *workmem.GoalStateStore
-	sharedNotes           *workmem.NotesStore
-	sharedObservables     *observable.Manager
-	workerThreadFactory   workerThreadFactory
-	threadModuleFactories []runtimemodule.ThreadFactorySpec
-	startupContext        context.Context
+	// Internal composition seams for managed Workers and lifecycle tests.
+	disableObservables     bool
+	sharedGoalState        *workmem.GoalStateStore
+	sharedNotes            *workmem.NotesStore
+	sharedObservables      *observable.Manager
+	workerThreadFactory    workerThreadFactory
+	threadModuleFactories  []runtimemodule.ThreadFactorySpec
+	runtimeModuleFactories []runtimemodule.RuntimeFactorySpec
+	startupContext         context.Context
 }
 
 type App struct {
@@ -314,6 +315,8 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	}
 
 	appCtx, appCancel := context.WithCancel(context.Background())
+	stopStartupCancellation := context.AfterFunc(startupCtx, appCancel)
+	defer stopStartupCancellation()
 	appContextTransferred := false
 	var runtimeModules runtimeModuleComposition
 	var err error
@@ -548,7 +551,6 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	a.cleanup = append(a.cleanup, resourceLease.Close)
 	leaseTransferred = true
 
-	var notificationGate *mcpNotificationGate
 	connectOpts := mcp.ConnectOptions{
 		Stderr:        stderr,
 		ForwardStderr: opts.Verbose,
@@ -556,11 +558,10 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	}
 	if threadState.ID == thread.MainID {
 		connectOpts.EnableClaudeChannel = true
-		notificationGate = newMCPNotificationGate(func(n mcp.Notification) {
+		connectOpts.OnNotification = func(n mcp.Notification) {
 			record := a.ObservationFromMCPNotification(n)
 			_, _ = a.DeliverObservation(a.ctx, record)
-		})
-		connectOpts.OnNotification = notificationGate.Enqueue
+		}
 	}
 	var mcpRuntimeModule *mcp.Module
 	var observableRuntimeModule *observable.Module
@@ -611,6 +612,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			},
 		},
 	}
+	extraRuntimeSpecs = append(extraRuntimeSpecs, opts.runtimeModuleFactories...)
 	if err := runtimeModules.sealAndStart(startupCtx, extraRuntimeSpecs...); err != nil {
 		_ = a.Close()
 		return nil, err
@@ -692,12 +694,10 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		_ = a.Close()
 		return nil, err
 	}
-	appContextTransferred = true
-	var activateObservables func()
-	if observableRuntimeModule != nil && opts.sharedObservables == nil && threadState.ID == thread.MainID {
-		activateObservables = func() { _ = observableRuntimeModule.StartAll(startupCtx) }
+	if err := a.activateExternalInputAfterPendingRecovery(startupCtx, replayablePendingInput); err != nil {
+		return nil, errors.Join(err, a.CloseAndWait())
 	}
-	a.activateExternalInputAfterPendingRecovery(notificationGate, replayablePendingInput, activateObservables)
+	appContextTransferred = true
 	creationCommitted = true
 	return a, nil
 }

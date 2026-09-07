@@ -32,8 +32,8 @@ type Module struct {
 func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
 
 // NewRuntimeModule defers config loading and durable store construction until
-// the runtime Module lifecycle starts. Producer startup remains an explicit
-// App action after Thread recovery barriers have been published.
+// the runtime Module lifecycle starts. Producers start in ActivateRuntime
+// after the host has published its Thread recovery barrier.
 func NewRuntimeModule(options ManagerOptions) *Module {
 	return &Module{options: options, owned: true}
 }
@@ -70,10 +70,9 @@ func (m *Module) StartRuntime(context.Context, runtimemodule.RuntimeContext) err
 	return nil
 }
 
-// StartAll starts producers for an App-owned manager after the App has
-// published its Thread recovery boundary. Injected managers retain lifecycle
-// ownership in their caller and are intentionally left untouched.
-func (m *Module) StartAll(ctx context.Context) error {
+// ActivateRuntime starts owned producers. Injected managers retain lifecycle
+// ownership in their caller.
+func (m *Module) ActivateRuntime(ctx context.Context) error {
 	if m == nil || !m.owned {
 		return nil
 	}
@@ -83,7 +82,10 @@ func (m *Module) StartAll(ctx context.Context) error {
 	if manager == nil {
 		return fmt.Errorf("observable: runtime module manager is not started")
 	}
-	return manager.StartAll(ctx)
+	// Individual source failures remain visible in Observable status without
+	// preventing the other sources or the Agent from starting.
+	_ = manager.StartAll(ctx)
+	return ctx.Err()
 }
 
 func (m *Module) QuiesceRuntime(context.Context) error { return m.closeOwned() }

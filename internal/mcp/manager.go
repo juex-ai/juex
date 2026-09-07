@@ -20,6 +20,7 @@ type Module struct {
 	configs []Config
 	options ConnectOptions
 	owned   bool
+	gate    *notificationGate
 }
 
 func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
@@ -28,10 +29,13 @@ func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
 // lifecycle starts. Disabled factories therefore perform no process or
 // network work during composition.
 func NewRuntimeModule(configs []Config, options ConnectOptions) *Module {
+	gate := newNotificationGate(options.OnNotification)
+	options.OnNotification = gate.Enqueue
 	return &Module{
 		configs: append([]Config(nil), configs...),
 		options: options,
 		owned:   true,
+		gate:    gate,
 	}
 }
 
@@ -71,6 +75,13 @@ func (m *Module) StartRuntime(ctx context.Context, _ runtimemodule.RuntimeContex
 	return nil
 }
 
+func (m *Module) ActivateRuntime(ctx context.Context) error {
+	if m == nil || !m.owned {
+		return nil
+	}
+	return m.gate.Activate(ctx)
+}
+
 func (m *Module) QuiesceRuntime(context.Context) error { return m.closeOwned() }
 
 func (m *Module) CloseRuntime(context.Context) error { return m.closeOwned() }
@@ -87,6 +98,9 @@ func (m *Module) Manager() *Manager {
 func (m *Module) closeOwned() error {
 	if m == nil || !m.owned {
 		return nil
+	}
+	if err := m.gate.Quiesce(); err != nil {
+		return err
 	}
 	m.mu.RLock()
 	manager := m.manager

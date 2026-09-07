@@ -158,6 +158,12 @@ status、transcript 或 subscriber。Thread metadata 先于 Agent index refresh
 Module 在 Agent 或 Thread scope 注册一次类型化 capability。Framework 校验并
 seal Module set，按注册顺序启动，按反序关闭或 rollback。
 
+Runtime 资源启动只准备连接和工具目录，不接纳外部输入。Main 恢复过程发布
+Pending Input 屏障后，Framework 通过统一生命周期契约激活已注册的输入 owner。
+MCP 自己管理早期通知缓冲，Observables 自己启动生产者。激活回调在 Set 锁外执行。
+关闭时先取消投递并 quiesce 输入；激活及在途回调返回前，资源清理保持延迟，随后
+才关闭 Thread 和 Runtime 资源。
+
 资源退休独立于 Close。已接受配置的 factory 声明确定可用 owner，不构造禁用的
 Module。Agent 生命周期 lease 排除旧实例和延迟 writer。删除任一资源前，Framework
 先持久化完整退休意图，再枚举 active 与 archived Thread 的所有权，不打开 Thread
