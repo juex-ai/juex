@@ -1074,6 +1074,13 @@ func TestLiveBinary_CLIVerboseCompactsToolBatch(t *testing.T) {
 }
 
 func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
+	for _, preset := range []string{"minimal", "standard"} {
+		t.Run(preset, func(t *testing.T) { testLiveBinaryShellYield(t, preset) })
+	}
+}
+
+func testLiveBinaryShellYield(t *testing.T, preset string) {
+	t.Helper()
 	bin := buildJuex(t)
 
 	var requestCount atomic.Int32
@@ -1122,7 +1129,7 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "models: [local-chat:chat-test]\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "preset: " + preset + "\nmodels: [local-chat:chat-test]\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k

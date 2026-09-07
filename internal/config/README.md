@@ -25,6 +25,12 @@ or import cache and restarting. `diagnose` validates before resource discovery.
 Presets do not change Provider, model, Sandbox, auto-compaction, or core
 persistence settings.
 
+Main and Workers resolve the same effective module policy. Scope still limits
+contributions: Observable management tools and external inputs belong to Main.
+Minimal does not enable Worker execution; enable `worker-threads` explicitly
+when that capability is needed. Reducing available tools and guidance reduces
+the request content, but is not evidence of better model accuracy or latency.
+
 Hooks and Skills declarations are parsed only after the final module switches
 are known, so a higher-layer disablement can suppress damaged lower-layer
 declarations. Ordinary YAML syntax and common configuration remain validated.
