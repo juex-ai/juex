@@ -23,7 +23,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
-func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
+func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e is slow")
 	}
@@ -36,8 +36,8 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	extensionDir := filepath.Join(home, "extensions", "memory")
-	installMemoryExtensionFixture(t, extensionDir)
+	extensionDir := filepath.Join(home, "extensions", "catalog")
+	installCatalogExtensionFixture(t, extensionDir)
 	probePath := filepath.Join(work, "module-catalog-probe.txt")
 	if err := os.WriteFile(probePath, []byte("module catalog\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -46,11 +46,11 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		{
 			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 				{Type: llm.BlockToolUse, ToolUseID: "builtin-read", ToolName: "read", Input: map[string]any{"path": probePath}},
-				{Type: llm.BlockToolUse, ToolUseID: "skill-search", ToolName: "skill_search", Input: map[string]any{"query": "memory"}},
+				{Type: llm.BlockToolUse, ToolUseID: "skill-search", ToolName: "skill_search", Input: map[string]any{"query": "catalog"}},
 				{Type: llm.BlockToolUse, ToolUseID: "goal-get", ToolName: goalmodule.ToolGet, Input: map[string]any{}},
 				{Type: llm.BlockToolUse, ToolUseID: "notes-update", ToolName: notesmodule.ToolUpdate, Input: map[string]any{"content": "- [x] exercise the Module catalog"}},
 				{Type: llm.BlockToolUse, ToolUseID: "observable-list", ToolName: "observable_list", Input: map[string]any{}},
-				{Type: llm.BlockToolUse, ToolUseID: "memory-write", ToolName: "mcp__memory__memory_write", Input: map[string]any{
+				{Type: llm.BlockToolUse, ToolUseID: "catalog-write", ToolName: "mcp__catalog__catalog_write", Input: map[string]any{
 					"name": "isolated-home", "description": "test isolation", "type": "feedback", "body": "use a temporary JUEX_HOME",
 				}},
 			}},
@@ -58,7 +58,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		},
 		{
 			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
-				Type: llm.BlockToolUse, ToolUseID: "memory-search", ToolName: "mcp__memory__memory_search", Input: map[string]any{"query": "isolated"},
+				Type: llm.BlockToolUse, ToolUseID: "catalog-search", ToolName: "mcp__catalog__catalog_search", Input: map[string]any{"query": "isolated"},
 			}}},
 			StopReason: llm.StopToolUse,
 		},
@@ -68,7 +68,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	cfg := config.Config{
 		ProviderID: "openai", APIKey: "test", Model: "test", WorkDir: work,
 		HomeJuexDir: home, AgentAddress: address,
-		Extensions: config.ExtensionPolicy{Allow: []string{"memory"}, Configured: true},
+		Extensions: config.ExtensionPolicy{Allow: []string{"catalog"}, Configured: true},
 	}
 	enabled, err := app.New(app.Options{
 		Config: cfg, Provider: provider, WorkDir: work,
@@ -84,9 +84,9 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	})
 
 	for _, name := range []string{
-		"mcp__memory__memory_write",
-		"mcp__memory__memory_search",
-		"mcp__memory__memory_delete",
+		"mcp__catalog__catalog_write",
+		"mcp__catalog__catalog_search",
+		"mcp__catalog__catalog_delete",
 	} {
 		if _, ok := enabled.Engine.Tools.Get(name); !ok {
 			t.Fatalf("enabled extension tool %q is missing", name)
@@ -99,14 +99,14 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		}
 	}
 	for name, wantOwner := range map[string]runtimemodule.ID{
-		"read":                       modulecatalog.BasicFileTools,
-		"skill_search":               skillsmodule.ModuleID,
-		goalmodule.ToolGet:           goalmodule.ModuleID,
-		notesmodule.ToolUpdate:       notesmodule.ModuleID,
-		"observable_list":            observable.ModuleID,
-		"mcp__memory__memory_write":  mcp.ModuleID,
-		"mcp__memory__memory_search": mcp.ModuleID,
-		"mcp__memory__memory_delete": mcp.ModuleID,
+		"read":                         modulecatalog.BasicFileTools,
+		"skill_search":                 skillsmodule.ModuleID,
+		goalmodule.ToolGet:             goalmodule.ModuleID,
+		notesmodule.ToolUpdate:         notesmodule.ModuleID,
+		"observable_list":              observable.ModuleID,
+		"mcp__catalog__catalog_write":  mcp.ModuleID,
+		"mcp__catalog__catalog_search": mcp.ModuleID,
+		"mcp__catalog__catalog_delete": mcp.ModuleID,
 	} {
 		if got := owners[name]; got != wantOwner {
 			t.Fatalf("tool %q Module owner = %q, want %q", name, got, wantOwner)
@@ -119,8 +119,8 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		goalmodule.ToolGet,
 		notesmodule.ToolUpdate,
 		"observable_list",
-		"mcp__memory__memory_write",
-		"mcp__memory__memory_search",
+		"mcp__catalog__catalog_write",
+		"mcp__catalog__catalog_search",
 	}
 	result, err := enabled.Engine.Turn(t.Context(), "exercise every Module catalog family")
 	if err != nil {
@@ -135,25 +135,25 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	assertProviderOfferedTools(t, provider, wantOffered)
 	assertSuccessfulProviderToolResults(t, provider.history[len(provider.history)-1], map[string]string{
 		"builtin-read":    "module catalog",
-		"skill-search":    "memory",
+		"skill-search":    "catalog",
 		"goal-get":        "",
 		"notes-update":    "",
 		"observable-list": "",
-		"memory-write":    "saved memory",
-		"memory-search":   "temporary JUEX_HOME",
+		"catalog-write":   "saved catalog",
+		"catalog-search":  "temporary JUEX_HOME",
 	})
-	dataDir := filepath.Join(address.StateDir(), "extensions", "memory")
+	dataDir := filepath.Join(address.StateDir(), "extensions", "catalog")
 	if marker, err := os.ReadFile(filepath.Join(dataDir, "hook-ran")); err != nil || string(marker) != "ThreadStart" {
 		t.Fatalf("extension hook marker = %q, err=%v", marker, err)
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "memory-entry")); err != nil {
-		t.Fatalf("Memory MCP did not write Agent-private extension data: %v", err)
+	if _, err := os.Stat(filepath.Join(dataDir, "catalog-entry")); err != nil {
+		t.Fatalf("Catalog MCP did not write Agent-private extension data: %v", err)
 	}
 	promptText, err := enabled.Engine.SystemPromptWithError()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(promptText, "external-memory-test") || !strings.Contains(promptText, "ext:memory") {
+	if !strings.Contains(promptText, "external-catalog-test") || !strings.Contains(promptText, "ext:catalog") {
 		t.Fatalf("enabled extension skill is missing from prompt:\n%s", promptText)
 	}
 	var status app.RuntimeStatus
@@ -165,16 +165,16 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	memorySkillSource := ""
+	catalogSkillSource := ""
 	for _, skill := range status.Skills.Items {
-		if skill.Name == "memory" {
-			memorySkillSource = skill.Source
+		if skill.Name == "catalog" {
+			catalogSkillSource = skill.Source
 		}
 	}
-	if len(status.Extensions.Items) != 1 || status.Extensions.Items[0].Name != "memory" ||
-		memorySkillSource != "ext:memory" ||
-		len(status.Hooks.Commands) != 1 || status.Hooks.Commands[0].Source != "ext:memory" ||
-		len(status.MCP.Servers) != 1 || status.MCP.Servers[0].Source != "ext:memory" {
+	if len(status.Extensions.Items) != 1 || status.Extensions.Items[0].Name != "catalog" ||
+		catalogSkillSource != "ext:catalog" ||
+		len(status.Hooks.Commands) != 1 || status.Hooks.Commands[0].Source != "ext:catalog" ||
+		len(status.MCP.Servers) != 1 || status.MCP.Servers[0].Source != "ext:catalog" {
 		t.Fatalf("enabled extension sources = extensions:%+v skills:%+v hooks:%+v mcp:%+v", status.Extensions, status.Skills, status.Hooks, status.MCP)
 	}
 	if status.Hooks.Commands[0].Required {
@@ -198,9 +198,9 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = disabled.CloseAndWait() })
 	for _, name := range []string{
-		"mcp__memory__memory_write",
-		"mcp__memory__memory_search",
-		"mcp__memory__memory_delete",
+		"mcp__catalog__catalog_write",
+		"mcp__catalog__catalog_search",
+		"mcp__catalog__catalog_delete",
 	} {
 		if _, ok := disabled.Engine.Tools.Get(name); ok {
 			t.Fatalf("disabled extension tool %q is still registered", name)
@@ -210,7 +210,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(disabledPrompt, "external-memory-test") || strings.Contains(disabledPrompt, "ext:memory") {
+	if strings.Contains(disabledPrompt, "external-catalog-test") || strings.Contains(disabledPrompt, "ext:catalog") {
 		t.Fatalf("disabled extension skill is still present:\n%s", disabledPrompt)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "hook-ran")); !os.IsNotExist(err) {
@@ -271,7 +271,7 @@ func assertSuccessfulProviderToolResults(t *testing.T, history []llm.Message, wa
 	}
 }
 
-func installMemoryExtensionFixture(t *testing.T, extensionDir string) {
+func installCatalogExtensionFixture(t *testing.T, extensionDir string) {
 	t.Helper()
 	write := func(relative, body string, mode os.FileMode) {
 		t.Helper()
@@ -283,19 +283,19 @@ func installMemoryExtensionFixture(t *testing.T, extensionDir string) {
 			t.Fatal(err)
 		}
 	}
-	write("juex.extension.json", `{"manifest_version":1,"name":"memory","version":"1.0.0"}`, 0o600)
-	write("mcp.json", `{"mcpServers":{"memory":{"command":"${JUEX_EXT_DIR}/memory-helper","args":["-test.run=TestExternalMemoryMCPHelperProcess"],"env":{"JUEX_E2E_MEMORY_MCP":"1"}}}}`, 0o600)
+	write("juex.extension.json", `{"manifest_version":1,"name":"catalog","version":"1.0.0"}`, 0o600)
+	write("mcp.json", `{"mcpServers":{"catalog":{"command":"${JUEX_EXT_DIR}/catalog-helper","args":["-test.run=TestExternalCatalogMCPHelperProcess"],"env":{"JUEX_E2E_CATALOG_MCP":"1"}}}}`, 0o600)
 	write("hooks.yaml", `trusted: true
 commands:
-  - name: memory-thread-start
+  - name: catalog-thread-start
     events: [ThreadStart]
-    command: ["${JUEX_EXT_DIR}/memory-helper", "-test.run=TestExternalMemoryHookHelperProcess"]
+    command: ["${JUEX_EXT_DIR}/catalog-helper", "-test.run=TestExternalCatalogHookHelperProcess"]
 `, 0o600)
-	write("skills/memory/SKILL.md", `---
-name: memory
-description: external-memory-test
+	write("skills/catalog/SKILL.md", `---
+name: catalog
+description: external-catalog-test
 ---
-Use the external Memory MCP tools.
+Use the external Catalog MCP tools.
 `, 0o600)
 	executable, err := os.Executable()
 	if err != nil {
@@ -305,14 +305,14 @@ Use the external Memory MCP tools.
 	if err != nil {
 		t.Fatal(err)
 	}
-	helperName := "memory-helper"
+	helperName := "catalog-helper"
 	if runtime.GOOS == "windows" {
 		helperName += ".exe"
 	}
 	write(helperName, string(body), 0o700)
 }
 
-func TestExternalMemoryHookHelperProcess(t *testing.T) {
+func TestExternalCatalogHookHelperProcess(t *testing.T) {
 	dataDir := os.Getenv("JUEX_EXT_DATA_DIR")
 	if dataDir == "" {
 		return
@@ -331,8 +331,8 @@ func TestExternalMemoryHookHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestExternalMemoryMCPHelperProcess(t *testing.T) {
-	if os.Getenv("JUEX_E2E_MEMORY_MCP") != "1" {
+func TestExternalCatalogMCPHelperProcess(t *testing.T) {
+	if os.Getenv("JUEX_E2E_CATALOG_MCP") != "1" {
 		return
 	}
 	dataDir := os.Getenv("JUEX_EXT_DATA_DIR")
@@ -355,25 +355,25 @@ func TestExternalMemoryMCPHelperProcess(t *testing.T) {
 			result = map[string]any{
 				"protocolVersion": version,
 				"capabilities":    map[string]any{"tools": map[string]any{}},
-				"serverInfo":      map[string]any{"name": "external-memory-test", "version": "1.0.0"},
+				"serverInfo":      map[string]any{"name": "external-catalog-test", "version": "1.0.0"},
 			}
 		case "tools/list":
-			result = map[string]any{"tools": memoryExtensionFixtureTools()}
+			result = map[string]any{"tools": catalogExtensionFixtureTools()}
 		case "tools/call":
 			params, _ := request["params"].(map[string]any)
 			name, _ := params["name"].(string)
 			arguments, _ := params["arguments"].(map[string]any)
 			text := "ok"
 			switch name {
-			case "memory_write":
-				text = "saved memory"
-				_ = os.WriteFile(filepath.Join(dataDir, "memory-entry"), []byte(fmt.Sprint(arguments["body"])), 0o600)
-			case "memory_search":
-				body, _ := os.ReadFile(filepath.Join(dataDir, "memory-entry"))
+			case "catalog_write":
+				text = "saved catalog"
+				_ = os.WriteFile(filepath.Join(dataDir, "catalog-entry"), []byte(fmt.Sprint(arguments["body"])), 0o600)
+			case "catalog_search":
+				body, _ := os.ReadFile(filepath.Join(dataDir, "catalog-entry"))
 				text = string(body)
-			case "memory_delete":
-				_ = os.Remove(filepath.Join(dataDir, "memory-entry"))
-				text = "deleted memory"
+			case "catalog_delete":
+				_ = os.Remove(filepath.Join(dataDir, "catalog-entry"))
+				text = "deleted catalog"
 			}
 			result = map[string]any{"content": []map[string]any{{"type": "text", "text": text}}, "isError": false}
 		default:
@@ -386,12 +386,12 @@ func TestExternalMemoryMCPHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-func memoryExtensionFixtureTools() []map[string]any {
+func catalogExtensionFixtureTools() []map[string]any {
 	object := map[string]any{"type": "object", "properties": map[string]any{}}
 	return []map[string]any{
-		{"name": "memory_write", "description": "write", "inputSchema": object},
-		{"name": "memory_search", "description": "search", "inputSchema": object},
-		{"name": "memory_delete", "description": "delete", "inputSchema": object},
+		{"name": "catalog_write", "description": "write", "inputSchema": object},
+		{"name": "catalog_search", "description": "search", "inputSchema": object},
+		{"name": "catalog_delete", "description": "delete", "inputSchema": object},
 	}
 }
 
