@@ -17,9 +17,10 @@ import (
 )
 
 type spoolReadProvider struct {
-	t       *testing.T
-	calls   int
-	readURI string
+	t             *testing.T
+	calls         int
+	readURI       string
+	firstReadPath string
 }
 
 func (p *spoolReadProvider) Name() string { return "spool-read" }
@@ -28,9 +29,14 @@ func (p *spoolReadProvider) Complete(_ context.Context, _ string, history []llm.
 	switch p.calls {
 	case 0:
 		p.calls++
-		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		call := llm.Block{
 			Type: llm.BlockToolUse, ToolUseID: "large-result", ToolName: "large_result",
-		}}}, StopReason: llm.StopToolUse}, nil
+		}
+		if p.firstReadPath != "" {
+			call.ToolName = "read"
+			call.Input = map[string]any{"path": p.firstReadPath}
+		}
+		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{call}}, StopReason: llm.StopToolUse}, nil
 	case 1:
 		p.calls++
 		p.readURI = providerSpoolPath(messagesText(history))

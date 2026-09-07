@@ -4,11 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
@@ -128,7 +130,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enabled := []byte("preset: minimal\nmodules:\n  goal:\n    enabled: true\n  notes:\n    enabled: true\n")
+	enabled := []byte("preset: minimal\nmodules:\n  goal:\n    enabled: true\n  notes:\n    enabled: true\n  memory:\n    enabled: true\n  scratchpad:\n    enabled: true\n")
 	if _, err := config.WriteAgentConfig(enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +152,32 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	}
 	if _, err := notes.Update("old writer"); err != nil {
 		t.Fatal(err)
+	}
+	memoryWrite, ok := running.Engine.Tools.Get("memory_write")
+	if !ok {
+		t.Fatal("enabled Memory tool unavailable")
+	}
+	if _, err := memoryWrite.Handler(t.Context(), memoryWriteInput("retained", "Durable acceptance knowledge")); err != nil {
+		t.Fatal(err)
+	}
+	draft := filepath.Join(running.Thread.Dir, "scratchpad", "retained.txt")
+	if err := os.WriteFile(draft, []byte("durable working file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := running.Thread.Append(llm.TextMessage(llm.RoleUser, "durable acceptance history")); err != nil {
+		t.Fatal(err)
+	}
+	journal := filepath.Join(running.Thread.Dir, "generations", running.Thread.Info().GenerationID+".jsonl")
+	if err := running.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+	// Restart while enabled before applying the same Agent's sparse disablement.
+	running, err = app.New(app.Options{Config: load(), Provider: &bareScriptProvider{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, n := running.Engine.ThreadStateStatus(); g == nil || n == nil {
+		t.Fatalf("enabled restart lost work state: %v %v", g, n)
 	}
 	off := []byte("preset: minimal\n")
 	if _, err := config.ValidateAgentConfig(off, home, resolved.Agent.ID); err != nil {
@@ -175,6 +203,12 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := applied.NewContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if applied.Thread.Info().GenerationID != "g000002" {
+		t.Fatalf("disabled host /new generation=%s", applied.Thread.Info().GenerationID)
+	}
 	if err := applied.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
@@ -195,5 +229,17 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	g, n := fresh.Engine.ThreadStateStatus()
 	if g != nil || n != nil {
 		t.Fatalf("re-enable revived work state: %v %v", g, n)
+	}
+	search, ok := fresh.Engine.Tools.Get("memory_search")
+	if !ok {
+		t.Fatal("re-enabled Memory tool unavailable")
+	}
+	if result, err := search.Handler(t.Context(), map[string]any{"query": "Durable acceptance knowledge"}); err != nil || !strings.Contains(result, "Durable acceptance knowledge") {
+		t.Fatalf("retained Memory=%q, %v", result, err)
+	}
+	for path, marker := range map[string]string{draft: "durable working file", journal: "durable acceptance history"} {
+		if data, err := os.ReadFile(path); err != nil || !strings.Contains(string(data), marker) {
+			t.Fatalf("retained %s=%q, %v", path, data, err)
+		}
 	}
 }
