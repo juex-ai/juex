@@ -1094,43 +1094,28 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	if a == nil || a.Engine == nil {
 		return observable.DeliveryOutcome{}, nil
 	}
-	threadLease := a.acquireExternalInputThreadLease()
-	defer threadLease.Release()
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	targetThread := ""
-	if a.Thread != nil {
-		targetThread = a.Thread.ID
-	}
-	select {
-	case <-ctx.Done():
-		return observable.DeliveryOutcome{}, ctx.Err()
-	default:
-	}
-	msg, attachmentErrors, err := buildObservationMessage(record, a.externalAttachmentOptions())
-	if err != nil {
-		return observable.DeliveryOutcome{}, err
-	}
-	if len(attachmentErrors) > 0 {
-		a.markObservationAttachmentError(record, attachmentErrors)
-	}
-	pendingID := observationPendingInputID(record)
-	delivery, err := a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
-		ID:  pendingID,
-		TTL: a.Engine.ExternalEventTTL,
-	}, threadLease, true, nil)
+	delivery, err := a.DeliverExternalInput(ctx, func() (llm.Message, runtime.PendingInputOptions, error) {
+		msg, attachmentErrors, err := buildObservationMessage(record, a.externalAttachmentOptions())
+		if err != nil {
+			return llm.Message{}, runtime.PendingInputOptions{}, err
+		}
+		if len(attachmentErrors) > 0 {
+			a.markObservationAttachmentError(record, attachmentErrors)
+		}
+		return msg, runtime.PendingInputOptions{ID: observationPendingInputID(record), TTL: a.Engine.ExternalEventTTL}, nil
+	})
 	if delivery.Queued {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateQueued,
-			PendingInputID: pendingID,
-			TargetThread:   targetThread,
+			PendingInputID: delivery.RecordID,
+			TargetThread:   delivery.TargetThread,
 		}, err
 	}
 	if delivery.Delivered {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateDelivered,
-			PendingInputID: pendingID,
-			TargetThread:   targetThread,
+			PendingInputID: delivery.RecordID,
+			TargetThread:   delivery.TargetThread,
 		}, err
 	}
 	return observable.DeliveryOutcome{}, err

@@ -62,7 +62,7 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 				t.Errorf("%s %s availability = %v, configuration = %v", name, tool, available, cfg.ModuleEnabled(module))
 			}
 		}
-		if err := application.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+		if err := app.ReadRuntimeModuleSnapshot(application, func(active app.RuntimeModuleSnapshot) error {
 			observed, err := app.NewRuntimeCatalogService(cfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
 			if err != nil {
 				return err

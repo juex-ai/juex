@@ -22,6 +22,7 @@ import (
 
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 
+	"github.com/juex-ai/juex/internal/framework/agent"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
@@ -46,14 +47,10 @@ type RuntimeStatusOptions struct {
 }
 
 // RuntimeModuleSnapshot is a leased view of the active, sealed Module sets.
-// Callers obtain it through App.ReadRuntimeModuleSnapshot so Thread
+// Callers obtain it through ReadRuntimeModuleSnapshot so Thread
 // replacement and shutdown cannot invalidate the sets during projection.
 type RuntimeModuleSnapshot struct {
-	Tools          *toolcore.Registry
-	Runtime        *runtimemodule.Set
-	Thread         *runtimemodule.Set
-	RuntimeContext runtimemodule.RuntimeContext
-	ThreadContext  runtimemodule.ThreadContext
+	agent.ModuleSnapshot
 	Skills         []skills.Skill
 	FilteredSkills []skills.FilteredSkill
 	SkillPrompt    skills.PromptBudgetReport
@@ -230,32 +227,24 @@ type RuntimeSkillOmittedInfo struct {
 	Reason string
 }
 
-// ReadRuntimeModuleSnapshot holds the App and Thread publication leases while
-// fn projects the currently active Runtime and Thread Module sets.
-func (a *App) ReadRuntimeModuleSnapshot(fn func(RuntimeModuleSnapshot) error) error {
-	if a == nil || fn == nil {
-		return fmt.Errorf("runtime status: active App and snapshot reader are required")
+// ReadRuntimeModuleSnapshot projects Feature metadata while the execution object's
+// Module lease is held, including for a borrowed Worker without an App handle.
+func ReadRuntimeModuleSnapshot(reader interface {
+	ReadModuleSnapshot(func(agent.ModuleSnapshot) error) error
+}, fn func(RuntimeModuleSnapshot) error) error {
+	if reader == nil || fn == nil {
+		return fmt.Errorf("runtime status: active Agent and snapshot reader are required")
 	}
-	a.lifecycleMu.RLock()
-	defer a.lifecycleMu.RUnlock()
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	if a.Engine == nil || a.runtimeModules == nil {
-		return fmt.Errorf("runtime status: active Runtime Module set is unavailable")
-	}
-	threadRuntime := a.Engine.ThreadRuntimeSnapshot()
-	if threadRuntime.Modules == nil || threadRuntime.Thread == nil {
-		return fmt.Errorf("runtime status: active Thread Module set is unavailable")
-	}
-	return fn(RuntimeModuleSnapshot{
-		Tools:          threadRuntime.Tools,
-		Runtime:        a.runtimeModules,
-		Thread:         threadRuntime.Modules,
-		RuntimeContext: a.runtimeModuleContext,
-		ThreadContext:  threadModuleContext(threadRuntime.Thread),
-		Skills:         append([]skills.Skill(nil), a.skills...),
-		FilteredSkills: append([]skills.FilteredSkill(nil), a.skillFilteredItems...),
-		SkillPrompt:    cloneSkillPromptReport(a.skillPrompt),
+	return reader.ReadModuleSnapshot(func(snapshot agent.ModuleSnapshot) error {
+		active := RuntimeModuleSnapshot{ModuleSnapshot: snapshot}
+		for _, item := range snapshot.Runtime.Modules() {
+			if feature, ok := item.(*skills.Module); ok {
+				active.Skills = feature.All()
+				active.FilteredSkills = feature.Filtered()
+				active.SkillPrompt = cloneSkillPromptReport(feature.PromptReport())
+			}
+		}
+		return fn(active)
 	})
 }
 

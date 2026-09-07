@@ -162,7 +162,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 		t.Fatalf("enabled extension skill is missing from prompt:\n%s", promptText)
 	}
 	var status app.RuntimeStatus
-	err = enabled.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+	err = app.ReadRuntimeModuleSnapshot(enabled, func(active app.RuntimeModuleSnapshot) error {
 		var snapshotErr error
 		status, snapshotErr = app.NewRuntimeCatalogService(cfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
 		return snapshotErr
@@ -222,7 +222,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 		t.Fatalf("disabled extension hook ran, stat err=%v", err)
 	}
 	var disabledStatus app.RuntimeStatus
-	err = disabled.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+	err = app.ReadRuntimeModuleSnapshot(disabled, func(active app.RuntimeModuleSnapshot) error {
 		var snapshotErr error
 		disabledStatus, snapshotErr = app.NewRuntimeCatalogService(disabledCfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
 		return snapshotErr

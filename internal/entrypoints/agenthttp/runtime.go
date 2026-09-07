@@ -268,7 +268,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 		return runtimeStatusResponse{}, err
 	}
 	var status app.RuntimeStatus
-	err = active.app.ReadRuntimeModuleSnapshot(func(snapshot app.RuntimeModuleSnapshot) error {
+	err = app.ReadRuntimeModuleSnapshot(active.app, func(snapshot app.RuntimeModuleSnapshot) error {
 		var snapshotErr error
 		status, snapshotErr = app.NewRuntimeCatalogService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
 			ActiveModules:      &snapshot,

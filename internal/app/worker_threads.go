@@ -10,25 +10,23 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agent"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
-type workerThreadChildOptions struct {
-	Context           context.Context
-	Config            config.Config
-	ThreadID          string
-	Alias             string
-	Model             string
-	UseParentProvider bool
+type ChildRequest struct {
+	Context  context.Context
+	ThreadID string
+	Alias    string
 }
 
-type workerThreadFactory func(workerThreadChildOptions) (*App, error)
+type PreparedChild struct {
+	Model string
+	Open  func(ChildRequest) (*App, error)
+}
 
 type managedWorkerThread struct {
 	operationMu      sync.Mutex
@@ -50,9 +48,8 @@ type workerThreadReservation struct {
 }
 
 type workerThreadManager struct {
-	parent                     *App
-	factory                    workerThreadFactory
-	childThreadModuleFactories []runtimemodule.ThreadFactorySpec
+	parent  *App
+	prepare func(string) (PreparedChild, error)
 
 	lifecycleMu     sync.RWMutex
 	transitionMu    sync.Mutex
@@ -88,44 +85,11 @@ func newWorkerThreadManager(parent *App) *workerThreadManager {
 	}
 	m.deliveryCtx, m.deliveryCancel = context.WithCancel(baseCtx)
 	m.deliveryWait = &sync.WaitGroup{}
-	if parent != nil && parent.workerFactory != nil {
-		m.factory = parent.workerFactory
-	} else {
-		m.factory = m.newChildApp
+	if parent != nil {
+		m.prepare = parent.prepareWorkerChild
 	}
-	return m
-}
 
-func (m *workerThreadManager) newChildApp(child workerThreadChildOptions) (*App, error) {
-	if m == nil || m.parent == nil {
-		return nil, agent.ErrWorkerThreadManagerClosed
-	}
-	parent := m.parent
-	opts := Options{
-		Config:                child.Config,
-		ModelHealth:           parent.Engine.ModelHealth,
-		SummaryProvider:       parent.Engine.SummaryProvider,
-		SummaryProvenance:     parent.Engine.SummaryProvenance,
-		SummaryContextWindow:  parent.Engine.SummaryContextWindow,
-		Verbose:               false,
-		Debug:                 parent.debug,
-		LogLevel:              parent.logLevel,
-		Stderr:                parent.stderr,
-		WorkDir:               child.Config.WorkDir,
-		MCPManager:            parent.mcpManager,
-		DisableMCP:            true,
-		ThreadID:              child.ThreadID,
-		Alias:                 child.Alias,
-		AgentRuntime:          &parent.agentRuntime,
-		disableObservables:    true,
-		threadModuleFactories: append([]runtimemodule.ThreadFactorySpec(nil), m.childThreadModuleFactories...),
-		startupContext:        child.Context,
-	}
-	if child.UseParentProvider {
-		opts.Provider = parent.Engine.Provider
-		opts.ModelCandidates = append([]runtime.ModelCandidate(nil), parent.Engine.ModelCandidates...)
-	}
-	return New(opts)
+	return m
 }
 
 func (m *workerThreadManager) Create(ctx context.Context, query, alias, model string, subscribe bool) (agent.WorkerThreadStatus, error) {
@@ -143,16 +107,11 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 	if query == "" {
 		return agent.WorkerThreadStatus{}, errors.New("thread_create requires a non-empty query")
 	}
-	model = strings.TrimSpace(model)
-	useParentProvider := model == ""
-	cfg := m.parent.cfg
-	if model != "" {
-		if err := cfg.ApplyModelOverride(model); err != nil {
-			return agent.WorkerThreadStatus{}, fmt.Errorf("worker thread model: %w", err)
-		}
-	} else {
-		model = config.ModelRef{ProviderID: cfg.ProviderID, ModelID: cfg.Model}.String()
+	prepared, err := m.prepare(model)
+	if err != nil {
+		return agent.WorkerThreadStatus{}, err
 	}
+	model = prepared.Model
 	identity, err := m.reserveWorkerThread(strings.TrimSpace(alias))
 	if err != nil {
 		return agent.WorkerThreadStatus{}, fmt.Errorf("create Worker Thread identity: %w", err)
@@ -173,14 +132,7 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 	}
 	resultCh := make(chan factoryResult, 1)
 	go func() {
-		child, err := m.factory(workerThreadChildOptions{
-			Context:           createCtx,
-			Config:            cfg,
-			ThreadID:          identity.ID,
-			Alias:             strings.TrimSpace(alias),
-			Model:             model,
-			UseParentProvider: useParentProvider,
-		})
+		child, err := prepared.Open(ChildRequest{Context: createCtx, ThreadID: identity.ID, Alias: strings.TrimSpace(alias)})
 		resultCh <- factoryResult{child: child, err: err}
 	}()
 	var child *App

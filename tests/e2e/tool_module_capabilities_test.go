@@ -228,7 +228,7 @@ func TestToolModulesExposeEffectiveCapabilitiesToProvider(t *testing.T) {
 					}
 				}
 			}
-			if err := application.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+			if err := app.ReadRuntimeModuleSnapshot(application, func(active app.RuntimeModuleSnapshot) error {
 				status, err := app.NewRuntimeCatalogService(cfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
 				if err != nil {
 					return err

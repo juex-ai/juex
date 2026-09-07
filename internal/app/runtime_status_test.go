@@ -28,6 +28,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/llm"
 
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -69,7 +70,7 @@ func snapshotRuntimeStatus(t *testing.T, cfg config.Config, opts RuntimeStatusOp
 		_ = manager.Close()
 	})
 	var status RuntimeStatus
-	err = a.ReadRuntimeModuleSnapshot(func(snapshot RuntimeModuleSnapshot) error {
+	err = ReadRuntimeModuleSnapshot(a, func(snapshot RuntimeModuleSnapshot) error {
 		opts.ActiveModules = &snapshot
 		var snapshotErr error
 		status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(opts)
@@ -109,7 +110,7 @@ func mcpRuntimeStatusSnapshot(t *testing.T, serverTools map[string][]mcp.ToolDes
 	if err != nil {
 		t.Fatal(err)
 	}
-	return RuntimeModuleSnapshot{Runtime: runtimeSet, Thread: threadSet, Tools: registry}
+	return RuntimeModuleSnapshot{ModuleSnapshot: agent.ModuleSnapshot{Runtime: runtimeSet, Thread: threadSet, Tools: registry}}
 }
 
 func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
@@ -260,7 +261,7 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 	t.Cleanup(func() { _ = a.Close() })
 
 	var status RuntimeStatus
-	err = a.ReadRuntimeModuleSnapshot(func(snapshot RuntimeModuleSnapshot) error {
+	err = ReadRuntimeModuleSnapshot(a, func(snapshot RuntimeModuleSnapshot) error {
 		var snapshotErr error
 		status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &snapshot})
 		return snapshotErr
@@ -427,7 +428,7 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	if a.shellSessions != nil || a.workers != nil || a.obsv != nil || a.mcpManager != nil {
 		t.Fatalf("disabled resources were constructed: shell=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.workers, a.obsv, a.mcpManager)
 	}
-	if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
+	if err := ReadRuntimeModuleSnapshot(a, func(active RuntimeModuleSnapshot) error {
 		status, statusErr := NewRuntimeCatalogService(a.cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})
 		if statusErr != nil {
 			return statusErr
@@ -893,7 +894,7 @@ body`)
 	})
 	snapshot := func() RuntimeStatus {
 		var status RuntimeStatus
-		if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
+		if err := ReadRuntimeModuleSnapshot(a, func(active RuntimeModuleSnapshot) error {
 			var snapshotErr error
 			status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})
 			return snapshotErr

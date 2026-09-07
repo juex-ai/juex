@@ -232,7 +232,7 @@ func TestManagedWorkerLookupWaitsForCreationOwnership(t *testing.T) {
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"})
 	created := make(chan *App, 1)
 	release := make(chan struct{})
-	main.workers.factory = func(options workerThreadChildOptions) (*App, error) {
+	main.workerFactory = func(options workerThreadChildOptions) (*App, error) {
 		child, err := New(Options{
 			Config: options.Config, Provider: &workerProvider{response: "done"}, DisableMCP: true,
 			ThreadID: options.ThreadID, Alias: options.Alias,
@@ -282,14 +282,19 @@ func TestManagedWorkerLookupWaitsForCreationOwnership(t *testing.T) {
 func TestWorkerFactoryInitializationFailureRollsBackReservedIdentity(t *testing.T) {
 	wantErr := errors.New("worker initialization failed")
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"})
-	main.workers.factory = main.workers.newChildApp
-	main.workers.childThreadModuleFactories = []runtimemodule.ThreadFactorySpec{{
+	failureFactories := []runtimemodule.ThreadFactorySpec{{
 		ID:      "fail-worker-initialization",
 		Enabled: true,
 		New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 			return nil, wantErr
 		},
 	}}
+	main.workerFactory = func(options workerThreadChildOptions) (*App, error) {
+		return New(Options{Config: options.Config, Provider: main.Engine.Provider, DisableMCP: true,
+			ThreadID: options.ThreadID, Alias: options.Alias, startupContext: options.Context,
+			disableObservables: true, threadModuleFactories: failureFactories,
+		})
+	}
 	if _, err := main.workers.Create(context.Background(), "work", "retry-worker", "", false); !errors.Is(err, wantErr) {
 		t.Fatalf("create error = %v, want %v", err, wantErr)
 	}
@@ -300,7 +305,7 @@ func TestWorkerFactoryInitializationFailureRollsBackReservedIdentity(t *testing.
 	if len(entries) != 1 || entries[0].ThreadID != thread.MainID {
 		t.Fatalf("failed Worker remains published: %+v", entries)
 	}
-	main.workers.childThreadModuleFactories = nil
+	main.workerFactory = nil
 	status, err := main.workers.Create(context.Background(), "work", "retry-worker", "", false)
 	if err != nil {
 		t.Fatalf("retry same alias: %v", err)
@@ -460,5 +465,36 @@ func TestWorkerArchiveRequiresSettledSubscriptionAndMovesHistory(t *testing.T) {
 	defer func() { _ = archived.Close() }()
 	if archived.Info().ArchivedAt == nil || archived.Alias != "archive-me" {
 		t.Fatalf("archived info = %+v", archived.Info())
+	}
+}
+
+func TestWorkerModelValidationPrecedesIdentityReservationAndFactory(t *testing.T) {
+	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, &workerProvider{response: "done"})
+	original := main.workerFactory
+	factoryCalls := 0
+	main.workerFactory = func(options workerThreadChildOptions) (*App, error) {
+		factoryCalls++
+		return original(options)
+	}
+	if _, err := main.workers.Create(context.Background(), "work", "model-check", "not-configured:missing", false); err == nil || !strings.Contains(err.Error(), "worker thread model") {
+		t.Fatalf("invalid model error = %v", err)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("invalid model opened %d children", factoryCalls)
+	}
+	entries, err := main.ThreadStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ThreadID != thread.MainID {
+		t.Fatalf("invalid model reserved a Worker: %+v", entries)
+	}
+	status, err := main.workers.Create(context.Background(), "work", "model-check", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateIdle)
+	if factoryCalls != 1 {
+		t.Fatalf("valid model factory calls = %d", factoryCalls)
 	}
 }
