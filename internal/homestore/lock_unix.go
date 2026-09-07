@@ -21,6 +21,10 @@ func acquireLock(path string, mode LockMode) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
+	return lockOpenedFile(file, mode)
+}
+
+func lockOpenedFile(file *os.File, mode LockMode) (*Lock, error) {
 	flags := syscall.LOCK_EX
 	if mode == LockTry {
 		flags |= syscall.LOCK_NB

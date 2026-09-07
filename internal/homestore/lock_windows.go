@@ -23,6 +23,10 @@ func acquireLock(path string, mode LockMode) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
+	return lockOpenedFile(file, mode)
+}
+
+func lockOpenedFile(file *os.File, mode LockMode) (*Lock, error) {
 	guard := &Lock{file: file}
 	flags := uint32(windows.LOCKFILE_EXCLUSIVE_LOCK)
 	if mode == LockTry {

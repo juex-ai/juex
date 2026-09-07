@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +12,12 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/modules/memory"
+	"github.com/juex-ai/juex/internal/runtime"
 )
 
 func memoryConfig(t *testing.T) config.Config {
@@ -188,6 +192,50 @@ func TestEndToEnd_MemoryIndependentToolsAndRetainedKnowledge(t *testing.T) {
 	otherSearch, _ := other.Engine.Tools.Get(memory.ToolSearch)
 	if result, err := otherSearch.Handler(t.Context(), map[string]any{"query": ""}); err != nil || result != `{"memories":[]}` {
 		t.Fatalf("Agent knowledge leaked: %s, %v", result, err)
+	}
+}
+
+func TestEndToEnd_MemoryPostCompactionCancellationPreservesCommittedGeneration(t *testing.T) {
+	isolateModuleConfig(t)
+	cfg := memoryConfig(t)
+	a := memoryApp(t, cfg, &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "Stable fact saved"), StopReason: llm.StopEndTurn}}})
+	write, _ := a.Engine.Tools.Get(memory.ToolWrite)
+	if _, err := write.Handler(t.Context(), memoryWriteInput("retained", "Stable knowledge")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Run(t.Context(), "Discuss the stable project fact before compaction."); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(cfg.AgentStateDir, "modules", "memory", "retained.md")
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := homestore.AcquireLock(filepath.Join(filepath.Dir(file), ".lock"), homestore.LockTry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Close() }()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	started := false
+	unsubscribe := a.Bus.Subscribe("policy.started", func(event events.Event) {
+		payload, ok := event.Payload.(runtime.PolicyStartedPayload)
+		if ok && payload.ModuleID == memory.ModuleID && payload.PolicyPoint == "compaction_after" {
+			started = true
+			cancel()
+		}
+	})
+	defer unsubscribe()
+	generation := a.Thread.Info().GenerationID
+	if _, err := a.CompactWithInstructions(ctx, "manual", false, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("post-compaction cancellation=%v, want context.Canceled", err)
+	}
+	if !started || a.Thread.Info().GenerationID == generation {
+		t.Fatalf("maintenance started=%t, Generation=%s; expected committed compaction", started, a.Thread.Info().GenerationID)
+	}
+	if after, err := os.ReadFile(file); err != nil || string(after) != string(before) {
+		t.Fatalf("cancellation changed knowledge: %v", err)
 	}
 }
 

@@ -14,6 +14,10 @@ import (
 	"github.com/juex-ai/juex/internal/homestore"
 )
 
+func storeDirectory(store *Store) string {
+	return filepath.Join(store.agentDir, "modules", "memory")
+}
+
 func TestStoreEntryLifecycleAndIndex(t *testing.T) {
 	agent := t.TempDir()
 	store := NewStore(agent)
@@ -101,7 +105,7 @@ func TestStoreValidationAndBadEntries(t *testing.T) {
 		t.Fatal("accepted invalid UTF-8 body")
 	}
 	for name, body := range map[string]string{"unterminated.md": "---\nname: bad\n", "mismatch.md": "---\nname: other\ndescription: bad\ntype: project\n---\nwrong", "invalid-type.md": "---\nname: invalid-type\ndescription: bad\ntype: progress\n---\nwrong", "plain.md": "not a memory entry"} {
-		if err := os.WriteFile(filepath.Join(store.dir, name), []byte(body), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(storeDirectory(store), name), []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -124,7 +128,7 @@ func TestStoreRejectsSymlinkBoundaries(t *testing.T) {
 	if err := store.RebuildIndex(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(store.dir, "linked.md")); err != nil {
+	if err := os.Symlink(target, filepath.Join(storeDirectory(store), "linked.md")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := store.Write(t.Context(), Entry{Name: "linked", Description: "link", Type: "reference", Body: "replacement"}); err == nil {
@@ -156,6 +160,37 @@ func TestStoreRejectsSymlinkBoundaries(t *testing.T) {
 	}
 }
 
+func TestStoreIndexPublicationStaysInOpenedDirectory(t *testing.T) {
+	store := NewStore(t.TempDir())
+	entry := Entry{Name: "durable", Description: "Original directory", Type: "project", Body: "Retain this knowledge"}
+	if _, err := store.Write(t.Context(), entry); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	moved := storeDirectory(store) + "-moved"
+	err := store.withLock(t.Context(), true, func(root *os.Root) error {
+		if err := os.Rename(storeDirectory(store), moved); err != nil {
+			return err
+		}
+		if err := os.Symlink(outside, storeDirectory(store)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if err := root.Remove(indexFile); err != nil {
+			return err
+		}
+		return store.rebuildIndex(t.Context(), root)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("publication escaped opened directory: %v, %v", entries, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(moved, indexFile)); err != nil || !strings.Contains(string(data), "[durable](durable.md)") {
+		t.Fatalf("original directory index=%q, %v", data, err)
+	}
+}
+
 func TestStoreConcurrentViewsKeepCompleteIndex(t *testing.T) {
 	agent := t.TempDir()
 	var wg sync.WaitGroup
@@ -179,7 +214,7 @@ func TestStoreConcurrentViewsKeepCompleteIndex(t *testing.T) {
 	if err != nil || len(hits) != 16 {
 		t.Fatalf("concurrent entries=%d %v", len(hits), err)
 	}
-	index, err := os.ReadFile(filepath.Join(store.dir, "MEMORY.md"))
+	index, err := os.ReadFile(filepath.Join(storeDirectory(store), "MEMORY.md"))
 	if err != nil || strings.Count(string(index), "](") != 16 {
 		t.Fatalf("index lost writes: %s %v", index, err)
 	}
@@ -194,7 +229,7 @@ func TestStoreLockWaitCancelsAndIndexFailurePreservesEntry(t *testing.T) {
 	if err := store.RebuildIndex(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := homestore.AcquireLock(filepath.Join(store.dir, ".lock"), homestore.LockTry)
+	lock, err := homestore.AcquireLock(filepath.Join(storeDirectory(store), ".lock"), homestore.LockTry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +242,7 @@ func TestStoreLockWaitCancelsAndIndexFailurePreservesEntry(t *testing.T) {
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
-	index := filepath.Join(store.dir, "MEMORY.md")
+	index := filepath.Join(storeDirectory(store), "MEMORY.md")
 	if err := os.Remove(index); err != nil {
 		t.Fatal(err)
 	}

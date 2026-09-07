@@ -33,11 +33,11 @@ type Entry struct {
 
 // Store is a view of one Agent's shared on-disk knowledge. Different Store
 // instances coordinate through a stable transaction lock, without a cache.
-type Store struct{ agentDir, dir string }
+type Store struct{ agentDir string }
 
 // NewStore is pure; catalog construction and disabled modules do no file work.
 func NewStore(agentDir string) *Store {
-	return &Store{agentDir: agentDir, dir: filepath.Join(agentDir, "modules", "memory")}
+	return &Store{agentDir: agentDir}
 }
 
 func (s *Store) Search(ctx context.Context, query string) ([]Entry, error) {
@@ -90,7 +90,7 @@ func (s *Store) Write(ctx context.Context, entry Entry) (Entry, error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		publishErr := homestore.WriteFileAtomicExisting(filepath.Join(s.dir, name), document, 0600)
+		publishErr := homestore.WriteFileAtomicAt(root, name, document, 0600)
 		if publishErr != nil && !homestore.ReplacementOccurred(publishErr) {
 			return publishErr
 		}
@@ -119,7 +119,7 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 		if err := root.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		syncErr := homestore.SyncDir(s.dir)
+		syncErr := homestore.SyncRoot(root)
 		indexErr := s.rebuildIndex(ctx, root)
 		if err := errors.Join(syncErr, indexErr); err != nil {
 			return fmt.Errorf("memory %q deleted; index or durability maintenance failed: %w", name, err)
@@ -145,7 +145,7 @@ func (s *Store) rebuildIndex(ctx context.Context, root *os.Root) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return homestore.WriteFileAtomicExisting(filepath.Join(s.dir, indexFile), []byte(index.String()), 0600)
+	return homestore.WriteFileAtomicAt(root, indexFile, []byte(index.String()), 0600)
 }
 
 // No transaction removes the lock file: replacing its inode could admit two
@@ -193,7 +193,7 @@ func (s *Store) withLock(ctx context.Context, create bool, fn func(*os.Root) err
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		lock, err = homestore.AcquireLock(filepath.Join(s.dir, ".lock"), homestore.LockTry)
+		lock, err = homestore.AcquireLockAt(root, ".lock", homestore.LockTry)
 		if err == nil {
 			break
 		}

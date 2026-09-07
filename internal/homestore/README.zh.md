@@ -9,5 +9,10 @@ best-effort durability sync。
 Replacement 只重试平台瞬时冲突，destination 发布前不会报告成功。Error 会暴露
 足够的 outcome，让事务调用方只 rollback 自己拥有的 path。
 
+持有已检查 `os.Root` 的调用方使用仅接收文件名的加锁、发布与同步操作，避免目录
+重命名后，I/O 被原路径重定向。此类操作在基于目录句柄替换文件前同步文件内容。
+目录同步仍为 best effort；Windows 的此类替换不提供路径 API 的
+`MOVEFILE_WRITE_THROUGH` 标志。
+
 Identity、lifecycle 和多文件 transaction policy 仍属于 `agentstate`、
 `endpoint`、`fleet` 与 `fleetservice` 等调用方。

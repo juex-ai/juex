@@ -139,6 +139,14 @@ func TestReplaceFileWindowsRetryPolicy(t *testing.T) {
 			if !errors.Is(err, tc.wantErr) || calls != tc.calls {
 				t.Fatalf("replacement = %v after %d attempts, want %v after %d", err, calls, tc.wantErr, tc.calls)
 			}
+			calls = 0
+			err = retryReplacement(func() error {
+				calls++
+				return tc.sequence[min(calls-1, len(tc.sequence)-1)]
+			})
+			if !errors.Is(err, tc.wantErr) || calls != tc.calls {
+				t.Fatalf("rooted replacement retry policy = %v after %d attempts, want %v after %d", err, calls, tc.wantErr, tc.calls)
+			}
 		})
 	}
 }
