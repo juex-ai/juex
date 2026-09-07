@@ -2519,75 +2519,15 @@ func TestBuiltins_ChunkedWriteStaleSession(t *testing.T) {
 	}
 }
 
-func TestChunkedWriteManager_RestoreActiveFromHistoryWithoutGuard(t *testing.T) {
+func TestChunkedWriteManager_RestoreActiveSessionsWithoutGuard(t *testing.T) {
 	workDir := t.TempDir()
 	manager := NewChunkedWriteManager(workDir)
-	writeID := "w_no_guard"
-	history := []llm.Message{{
-		Role: llm.RoleAssistant,
-		Blocks: []llm.Block{
-			{
-				Type:         llm.BlockToolResult,
-				ToolUseID:    "begin_1",
-				ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventBegin, WriteID: writeID, Path: "restored.txt", Mode: "overwrite", FileMode: 0o644},
-			},
-			{
-				Type:      llm.BlockToolUse,
-				ToolUseID: "chunk_1",
-				ToolName:  "write_chunk",
-				Input:     map[string]any{"write_id": writeID, "index": 0, "content": "restored"},
-			},
-			{
-				Type:         llm.BlockToolResult,
-				ToolUseID:    "chunk_1",
-				ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventChunk, WriteID: writeID, Index: 0, Bytes: 8, Chars: 8, Chunks: 1},
-			},
-		},
-	}}
-
-	manager.RestoreActiveFromHistory(history)
-	if _, err := manager.commit(writeID, 1, ""); err != nil {
-		t.Fatalf("commit restored write without guard: %v", err)
+	manager.RestoreActiveSessions([]ChunkedWriteRecoverySession{{WriteID: "restored", Path: "restored.txt", Mode: "overwrite", Chunks: []ChunkedWriteRecoveryChunk{{Index: 0, Content: "restored"}}}})
+	if _, err := manager.commit("restored", 1, ""); err != nil {
+		t.Fatal(err)
 	}
-	data := mustReadFile(t, filepath.Join(workDir, "restored.txt"))
-	if string(data) != "restored" {
-		t.Fatalf("restored file = %q, want restored", data)
-	}
-}
-
-func TestChunkedWriteManager_RestoreActiveFromHistoryConsumesErrorLifecycleFacts(t *testing.T) {
-	workDir := t.TempDir()
-	manager := NewChunkedWriteManager(workDir)
-	writeID := "w_post_hook_denied_commit"
-	history := []llm.Message{
-		{Role: llm.RoleUser, Blocks: []llm.Block{{
-			Type:         llm.BlockToolResult,
-			ToolUseID:    "begin_1",
-			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventBegin, WriteID: writeID, Path: "committed.txt", Mode: "overwrite", FileMode: 0o644},
-		}}},
-		{Role: llm.RoleAssistant, Blocks: []llm.Block{{
-			Type:      llm.BlockToolUse,
-			ToolUseID: "chunk_1",
-			ToolName:  "write_chunk",
-			Input:     map[string]any{"write_id": writeID, "index": 0, "content": "already committed"},
-		}}},
-		{Role: llm.RoleUser, Blocks: []llm.Block{{
-			Type:         llm.BlockToolResult,
-			ToolUseID:    "chunk_1",
-			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventChunk, WriteID: writeID, Index: 0, Bytes: 17, Chars: 17, Chunks: 1},
-		}}},
-		{Role: llm.RoleUser, Blocks: []llm.Block{{
-			Type:         llm.BlockToolResult,
-			ToolUseID:    "commit_1",
-			Content:      "write_commit presentation text\n\n[tool error]\nhooks: tool denied after use: redaction required",
-			IsError:      true,
-			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventCommit, WriteID: writeID, Path: "committed.txt", Bytes: 17, Chars: 17, Chunks: 1},
-		}}},
-	}
-
-	manager.RestoreActiveFromHistory(history)
-	if _, err := manager.commit(writeID, 1, ""); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
-		t.Fatalf("commit restored finished write err = %v, want unknown write_id", err)
+	if data := mustReadFile(t, filepath.Join(workDir, "restored.txt")); string(data) != "restored" {
+		t.Fatalf("restored file=%q", data)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/modules/agentsmd"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
+	chunkmodule "github.com/juex-ai/juex/internal/modules/chunkedwrite"
 	"github.com/juex-ai/juex/internal/modules/operatingcontext"
 	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/modules/shelltools"
@@ -26,7 +27,6 @@ import (
 type runtimeModuleComposition struct {
 	set            *runtimemodule.Set
 	shell          *shelltools.Module
-	chunkedWrites  *tools.ChunkedWriteManager
 	skills         *skillsmodule.Module
 	constructed    *constructedRuntimeModules
 	runtimeContext runtimemodule.RuntimeContext
@@ -34,9 +34,8 @@ type runtimeModuleComposition struct {
 }
 
 type constructedRuntimeModules struct {
-	shell         *shelltools.Module
-	chunkedWrites *tools.ChunkedWriteManager
-	skills        *skillsmodule.Module
+	shell  *shelltools.Module
+	skills *skillsmodule.Module
 }
 
 type threadModuleOptions struct {
@@ -98,20 +97,6 @@ func prepareRuntimeModules(
 			},
 		},
 		{
-			ID:      modulecatalog.ChunkedWrite,
-			Enabled: cfg.ModuleEnabled(modulecatalog.ChunkedWrite),
-			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{
-					Policy: cfg.SandboxPolicy(), WorkDir: runtimePaths.WorkDir,
-					AgentStateDir: runtimePaths.StateDir, ReadOnlyPaths: []string{runtimePaths.MediaDir},
-				})
-				constructed.chunkedWrites = tools.NewChunkedWriteManager(runtimePaths.WorkDir, filePolicy)
-				options := toolOptions
-				options.ChunkedWrites = constructed.chunkedWrites
-				return builtintools.NewChunkedWrite(options), nil
-			},
-		},
-		{
 			ID:      shelltools.ModuleID,
 			Enabled: cfg.ModuleEnabled(modulecatalog.Shell),
 			New: func(ctx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
@@ -164,7 +149,6 @@ func (c *runtimeModuleComposition) sealAndStart(ctx context.Context, extra ...ru
 	c.set = set
 	if c.constructed != nil {
 		c.shell = c.constructed.shell
-		c.chunkedWrites = c.constructed.chunkedWrites
 		c.skills = c.constructed.skills
 	}
 	return nil
@@ -202,6 +186,14 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		return engine.PendingInputStatus().TurnID
 	}
 	builtinSpecs := []runtimemodule.ThreadFactorySpec{
+		{
+			ID:      chunkmodule.ModuleID,
+			Enabled: cfg.ModuleEnabled(modulecatalog.ChunkedWrite),
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				paths := cfg.RuntimePaths()
+				return chunkmodule.New(tools.BuiltinOptions{WorkDir: workDir, Sandbox: cfg.SandboxPolicy(), AgentStateDir: paths.StateDir, MediaDir: paths.MediaDir}), nil
+			},
+		},
 		{
 			ID:      juexruntime.ContextControlModuleID,
 			Enabled: cfg.ModuleEnabled(string(juexruntime.ContextControlModuleID)),

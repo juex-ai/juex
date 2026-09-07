@@ -28,6 +28,9 @@ type Handler func(ctx context.Context, input map[string]any) (string, error)
 type Result struct {
 	Text       string
 	Structured any
+	// Fact is optional durable execution data, independent of presentation.
+	// The Module catalog assigns its owner at the Framework boundary.
+	Fact json.RawMessage
 }
 
 type ResultHandler func(ctx context.Context, input map[string]any) (Result, error)
@@ -167,12 +170,13 @@ func EffectiveToolTimeout(def ToolDefinition, defaultSeconds int) EffectiveTimeo
 }
 
 type CallInfo struct {
-	TimeoutSeconds   int          `json:"timeout_seconds"`
-	TimedOut         bool         `json:"timed_out,omitempty"`
-	ErrorKind        string       `json:"error_kind,omitempty"`
-	RawCause         string       `json:"raw_cause,omitempty"`
-	StructuredResult any          `json:"structured_result,omitempty"`
-	Observation      *Observation `json:"-"`
+	TimeoutSeconds   int             `json:"timeout_seconds"`
+	TimedOut         bool            `json:"timed_out,omitempty"`
+	ErrorKind        string          `json:"error_kind,omitempty"`
+	RawCause         string          `json:"raw_cause,omitempty"`
+	StructuredResult any             `json:"structured_result,omitempty"`
+	Fact             json.RawMessage `json:"fact,omitempty"`
+	Observation      *Observation    `json:"-"`
 }
 
 type structuredTimeoutResult interface {
@@ -333,6 +337,13 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	result.Text = SanitizeOutputText(result.Text).Text
 	out := result.Text
 	info.StructuredResult = result.Structured
+	if len(result.Fact) > 0 {
+		if json.Valid(result.Fact) {
+			info.Fact = append(json.RawMessage(nil), result.Fact...)
+		} else {
+			err = errors.Join(err, fmt.Errorf("tools: %s returned an invalid execution fact", name))
+		}
+	}
 	if timeoutSeconds > 0 && structuredResultTimedOut(result.Structured) && ctx.Err() == nil {
 		info.TimedOut = true
 		info.ErrorKind = string(errorclass.KindTimeout)

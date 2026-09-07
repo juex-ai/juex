@@ -98,7 +98,7 @@ func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID strin
 	}
 	contextWindow := candidateContextWindow(candidate, e.ContextWindow)
 	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
-	request, err := e.projectCandidateHistoryLocked(turnID, prepared, base, policy, notice)
+	request, err := e.projectCandidateHistoryLocked(ctx, turnID, prepared, base, policy, notice)
 	if err != nil {
 		return base, err
 	}
@@ -115,7 +115,7 @@ func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID strin
 		if err := cancellation.ContextError(ctx); err != nil {
 			return base, err
 		}
-		request, err := e.projectCandidateHistoryLocked(turnID, prepared, base, policy, notice)
+		request, err := e.projectCandidateHistoryLocked(ctx, turnID, prepared, base, policy, notice)
 		if err != nil {
 			return base, err
 		}
@@ -124,8 +124,8 @@ func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID strin
 	return request, nil
 }
 
-func (e *Engine) projectCandidateHistoryLocked(turnID string, prepared preparedTurnContext, base providerTurnRequest, policy compactionPolicy, notice *llm.Message) (providerTurnRequest, error) {
-	projected, projection, err := e.projectMessagesForProviderLocked(base.history, policy)
+func (e *Engine) projectCandidateHistoryLocked(ctx context.Context, turnID string, prepared preparedTurnContext, base providerTurnRequest, policy compactionPolicy, notice *llm.Message) (providerTurnRequest, error) {
+	projected, projection, err := e.projectMessagesForProviderLocked(ctx, base.history, policy)
 	if err != nil {
 		return providerTurnRequest{}, err
 	}

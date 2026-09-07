@@ -119,7 +119,6 @@ type App struct {
 	skillFilteredItems    []skills.FilteredSkill
 	mcp                   MCPStatus
 	obsv                  *observable.Manager
-	chunkedWrites         *tools.ChunkedWriteManager
 	shellSessions         *tools.ShellSessionManager
 	workers               *workerThreadManager
 	workerFactory         workerThreadFactory
@@ -624,7 +623,6 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		a.skillFilteredItems = runtimeModules.skills.Filtered()
 		a.skillFiltered = len(a.skillFilteredItems)
 	}
-	a.chunkedWrites = runtimeModules.chunkedWrites
 	if runtimeModules.shell != nil {
 		a.shellSessions = runtimeModules.shell.ShellSessions()
 	}
@@ -686,9 +684,6 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	status.RecoverAfterRestart()
-	if a.chunkedWrites != nil {
-		a.chunkedWrites.RestoreActiveFromHistory(threadState.History)
-	}
 	if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
 		_ = a.Close()
 		return nil, err

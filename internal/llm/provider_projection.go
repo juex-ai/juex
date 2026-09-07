@@ -41,7 +41,7 @@ func projectProviderTranscript(history []Message, profile ProviderProfile, opts 
 		}
 		filtered = append(filtered, projected)
 	}
-	return compactHistoryForProvider(foldChunkedWriteHistoryForProvider(filtered))
+	return compactHistoryForProvider(filtered)
 }
 
 func shouldProjectProviderBlock(b Block, profile ProviderProfile, opts providerProjectionOptions) bool {

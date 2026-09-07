@@ -221,6 +221,7 @@ type FinishPolicyContinuationObserver interface {
 type ThreadStartRequest struct {
 	Runtime  RuntimeContext
 	Thread   *ThreadContext
+	History  []llm.Message
 	Observer PolicyObserver
 }
 
@@ -578,7 +579,9 @@ func (s *Set) applyThreadStartPolicies(ctx context.Context, request ThreadStartR
 	}
 	var contexts []PolicyContext
 	observer := request.Observer
+	history := request.History
 	for _, registered := range s.threadStartPolicies {
+		request.History = cloneMessages(history)
 		request.Observer = ownedPolicyObserver{owner: registered.id, point: PolicyPointThreadStart, next: observer}
 		decision, err := registered.module.(ThreadStartPolicy).ApplyThreadStart(nonNilContext(ctx), request)
 		if err != nil {
@@ -733,9 +736,10 @@ func cloneMessage(message llm.Message) llm.Message {
 			artifact := *block.Artifact
 			block.Artifact = &artifact
 		}
-		if block.ChunkedWrite != nil {
-			chunkedWrite := *block.ChunkedWrite
-			block.ChunkedWrite = &chunkedWrite
+		if block.ResultFact != nil {
+			fact := *block.ResultFact
+			fact.Data = append(fact.Data[:0:0], fact.Data...)
+			block.ResultFact = &fact
 		}
 	}
 	if message.Compaction != nil {

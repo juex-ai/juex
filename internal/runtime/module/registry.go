@@ -125,6 +125,7 @@ type Registry struct {
 	threadStartPolicies   []registeredModule
 	compactionPolicies    []registeredModule
 	pendingInputObservers []registeredModule
+	historyProjectors     []registeredModule
 }
 
 func NewRegistry() *Registry {
@@ -175,6 +176,9 @@ func (r *Registry) Register(mod Module) error {
 	if _, ok := mod.(CompactionPolicy); ok {
 		r.compactionPolicies = append(r.compactionPolicies, registered)
 	}
+	if _, ok := mod.(ProviderHistoryProjector); ok {
+		r.historyProjectors = append(r.historyProjectors, registered)
+	}
 	if _, ok := mod.(PendingInputObserver); ok {
 		r.pendingInputObservers = append(r.pendingInputObservers, registered)
 	}
@@ -222,6 +226,7 @@ func (r *Registry) freeze() (*Set, error) {
 	threadStartPolicies := append([]registeredModule(nil), r.threadStartPolicies...)
 	compactionPolicies := append([]registeredModule(nil), r.compactionPolicies...)
 	pendingInputObservers := append([]registeredModule(nil), r.pendingInputObservers...)
+	historyProjectors := append([]registeredModule(nil), r.historyProjectors...)
 	r.mu.Unlock()
 
 	return &Set{
@@ -234,6 +239,7 @@ func (r *Registry) freeze() (*Set, error) {
 		threadStartPolicies:   threadStartPolicies,
 		compactionPolicies:    compactionPolicies,
 		pendingInputObservers: pendingInputObservers,
+		historyProjectors:     historyProjectors,
 	}, nil
 }
 
@@ -337,6 +343,7 @@ type Set struct {
 	threadStartPolicies   []registeredModule
 	compactionPolicies    []registeredModule
 	pendingInputObservers []registeredModule
+	historyProjectors     []registeredModule
 
 	scope       Scope
 	mu          sync.RWMutex

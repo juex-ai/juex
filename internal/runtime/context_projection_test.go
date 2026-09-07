@@ -138,7 +138,7 @@ func TestProjectMessagesForProviderLockedAdvertisesReadOnlyToolResultURI(t *test
 		}},
 	}
 
-	messages, _, err := eng.projectMessagesForProviderLocked([]llm.Message{msg}, effectiveCompactionPolicy(DefaultCompactionPolicy(), DefaultContextWindowTokens))
+	messages, _, err := eng.projectMessagesForProviderLocked(t.Context(), []llm.Message{msg}, effectiveCompactionPolicy(DefaultCompactionPolicy(), DefaultContextWindowTokens))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestProjectMessagesForProviderLockedBoundsPersistedToolResultWhenCompaction
 		t.Fatal(err)
 	}
 
-	projected, stats, err := eng.projectMessagesForProviderLocked(eng.Thread.History, effectiveCompactionPolicy(eng.Compaction, DefaultContextWindowTokens))
+	projected, stats, err := eng.projectMessagesForProviderLocked(t.Context(), eng.Thread.History, effectiveCompactionPolicy(eng.Compaction, DefaultContextWindowTokens))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestProjectMessagesForProviderLockedPreservesExistingUserInputPreview(t *te
 	tighter.UserInputPreviewHeadBytes = 8
 	tighter.UserInputPreviewTailBytes = 8
 
-	got, stats, err := eng.projectMessagesForProviderLocked([]llm.Message{projected}, tighter)
+	got, stats, err := eng.projectMessagesForProviderLocked(t.Context(), []llm.Message{projected}, tighter)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -197,6 +197,14 @@ descriptions and schemas against the complete tool-name set. Resolution cannot
 change tool identity or execution policy. Provider requests and active status
 read the same published registry; shared Module catalogs remain unchanged.
 
+Tool execution may emit explicit JSON facts. Framework assigns their owner from
+the sealed tool catalog and persists them independently of result presentation.
+Enabled Modules may summarize their completed tool pairs through declarative
+provider-history plans. Framework validates ownership, pairing, cancellation and
+summary budgets before final context projection; journals remain unchanged.
+The Thread [chunked-write Module](internal/modules/chunkedwrite/README.md) owns
+its buffered sessions, current-Generation recovery and folding algorithm.
+
 Prompt assembly consumes registered context contributors. Stable guidance,
 Hook context, Thread state, and per-request recitation meet at this interface.
 Generation boundary activity is not ordinary Provider dialogue. Operating

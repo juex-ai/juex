@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/chunkedwrite"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -31,86 +30,69 @@ const (
 	chunkWriteSessionTTL            = 2 * time.Hour
 )
 
-type ChunkedWriteManager = chunkWriteManager
+type ChunkedWriteRecoveryChunk struct {
+	Index   int
+	Content string
+}
+
+type ChunkedWriteRecoverySession struct {
+	WriteID  string
+	Path     string
+	Mode     string
+	FileMode uint32
+	Chunks   []ChunkedWriteRecoveryChunk
+}
 
 func NewChunkedWriteManager(workDir string, guards ...sandbox.PathGuard) *ChunkedWriteManager {
 	return newChunkWriteManager(workDir, guards...)
 }
 
-func (m *chunkWriteManager) RestoreActiveFromHistory(history []llm.Message) {
+// RestoreActiveSessions installs validated buffered sessions. The owning Module
+// interprets history; this layer only validates filesystem and chunk mechanics.
+func (m *ChunkedWriteManager) RestoreActiveSessions(snapshots []ChunkedWriteRecoverySession) {
 	if m == nil {
 		return
 	}
-	toolUses := map[string]llm.Block{}
-	now := m.now()
 	restored := map[string]*chunkWriteSession{}
-	invalid := map[string]bool{}
-	var events []chunkedwrite.Event
-	for _, msg := range history {
-		for _, block := range msg.Blocks {
-			if block.Type == llm.BlockToolUse && block.ToolUseID != "" {
-				toolUses[block.ToolUseID] = block
-				continue
-			}
-			if block.Type != llm.BlockToolResult || block.ChunkedWrite == nil {
-				continue
-			}
-			event := *block.ChunkedWrite
-			if event.WriteID == "" || invalid[event.WriteID] {
-				continue
-			}
-			events = append(events, event)
-			switch event.Kind {
-			case chunkedwrite.EventBegin:
-				session, ok := m.restoreSessionFromBeginEvent(event, now)
-				if !ok {
-					invalid[event.WriteID] = true
-					delete(restored, event.WriteID)
-					continue
-				}
-				restored[event.WriteID] = session
-			case chunkedwrite.EventChunk:
-				session := restored[event.WriteID]
-				if session == nil || event.Index < 0 {
-					continue
-				}
-				content, ok := chunkContentFromToolUse(toolUses[block.ToolUseID])
-				if !ok {
-					invalid[event.WriteID] = true
-					delete(restored, event.WriteID)
-					continue
-				}
-				hash := sha256Hex([]byte(content))
-				if event.SHA256 != "" && !strings.EqualFold(event.SHA256, hash) {
-					invalid[event.WriteID] = true
-					delete(restored, event.WriteID)
-					continue
-				}
-				session.chunks[event.Index] = chunkWriteChunk{
-					content: content,
-					hash:    hash,
-					bytes:   len(content),
-					chars:   utf8.RuneCountInString(content),
-				}
-				session.updatedAt = now
-			case chunkedwrite.EventCommit, chunkedwrite.EventAbort:
-				delete(restored, event.WriteID)
-				delete(invalid, event.WriteID)
-			}
+	now := m.now()
+	for _, snapshot := range snapshots {
+		if snapshot.WriteID == "" {
+			continue
 		}
-	}
-	states := chunkedwrite.BuildStates(events)
-	for writeID := range restored {
-		if states[writeID].Status != chunkedwrite.StatusActive {
-			delete(restored, writeID)
+		session, ok := m.restoreSession(snapshot, now)
+		if !ok {
+			continue
+		}
+		for _, chunk := range snapshot.Chunks {
+			if chunk.Index < 0 || len(chunk.Content) > chunkWriteMaxChunkBytes || utf8.RuneCountInString(chunk.Content) > chunkWriteMaxChunkChars {
+				ok = false
+				break
+			}
+			session.chunks[chunk.Index] = chunkWriteChunk{content: chunk.Content, hash: sha256Hex([]byte(chunk.Content)), bytes: len(chunk.Content), chars: utf8.RuneCountInString(chunk.Content)}
+		}
+		if ok {
+			restored[snapshot.WriteID] = session
 		}
 	}
 	m.mu.Lock()
-	m.sessions = restored
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	if !m.closed {
+		m.sessions = restored
+	}
 }
 
-func (m *chunkWriteManager) restoreSessionFromBeginEvent(event chunkedwrite.Event, now time.Time) (*chunkWriteSession, bool) {
+func (m *ChunkedWriteManager) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	m.sessions = nil
+	return nil
+}
+
+func (m *ChunkedWriteManager) restoreSession(event ChunkedWriteRecoverySession, now time.Time) (*chunkWriteSession, bool) {
 	mode := event.Mode
 	if mode == "" {
 		mode = chunkWriteDefaultMode
@@ -152,20 +134,13 @@ func (m *chunkWriteManager) restoreSessionFromBeginEvent(event chunkedwrite.Even
 	}, true
 }
 
-func chunkContentFromToolUse(block llm.Block) (string, bool) {
-	if block.Type != llm.BlockToolUse {
-		return "", false
-	}
-	content, ok := block.Input["content"].(string)
-	return content, ok
-}
-
-type chunkWriteManager struct {
+type ChunkedWriteManager struct {
 	mu          sync.Mutex
 	paths       workspacePathResolver
 	resolverErr error
 	guard       sandbox.PathGuard
 	sessions    map[string]*chunkWriteSession
+	closed      bool
 	now         func() time.Time
 }
 
@@ -188,13 +163,13 @@ type chunkWriteChunk struct {
 	chars   int
 }
 
-func newChunkWriteManager(workDir string, guards ...sandbox.PathGuard) *chunkWriteManager {
+func newChunkWriteManager(workDir string, guards ...sandbox.PathGuard) *ChunkedWriteManager {
 	paths, resolverErr := newWorkspacePathResolver(workDir)
 	var guard sandbox.PathGuard
 	if len(guards) > 0 {
 		guard = guards[0]
 	}
-	return &chunkWriteManager{
+	return &ChunkedWriteManager{
 		paths:       paths,
 		resolverErr: resolverErr,
 		guard:       guard,
@@ -203,14 +178,14 @@ func newChunkWriteManager(workDir string, guards ...sandbox.PathGuard) *chunkWri
 	}
 }
 
-func (m *chunkWriteManager) resolvePath(path string) (workspacePath, error) {
+func (m *ChunkedWriteManager) resolvePath(path string) (workspacePath, error) {
 	if m.resolverErr != nil {
 		return workspacePath{}, m.resolverErr
 	}
 	return m.paths.Resolve(path)
 }
 
-func writeBeginTool(manager *chunkWriteManager) Tool {
+func writeBeginTool(manager *ChunkedWriteManager) Tool {
 	return writeBeginToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		path, _ := in["path"].(string)
 		mode, _ := in["mode"].(string)
@@ -229,7 +204,7 @@ func writeBeginTool(manager *chunkWriteManager) Tool {
 	})
 }
 
-func writeChunkTool(manager *chunkWriteManager) Tool {
+func writeChunkTool(manager *ChunkedWriteManager) Tool {
 	return writeChunkToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		writeID, _ := in["write_id"].(string)
 		index, ok := toInt(in["index"])
@@ -271,7 +246,7 @@ func projectedWriteChunkMetadata(in map[string]any) bool {
 	return false
 }
 
-func writeCommitTool(manager *chunkWriteManager) Tool {
+func writeCommitTool(manager *ChunkedWriteManager) Tool {
 	return writeCommitToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		writeID, _ := in["write_id"].(string)
 		expectedChunks := -1
@@ -300,7 +275,7 @@ func writeCommitTool(manager *chunkWriteManager) Tool {
 	})
 }
 
-func writeAbortTool(manager *chunkWriteManager) Tool {
+func writeAbortTool(manager *ChunkedWriteManager) Tool {
 	return writeAbortToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		writeID, _ := in["write_id"].(string)
 		chunks, err := manager.abort(writeID)
@@ -316,7 +291,7 @@ func writeAbortTool(manager *chunkWriteManager) Tool {
 	})
 }
 
-func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error) {
+func (m *ChunkedWriteManager) begin(path, mode string) (*chunkWriteSession, error) {
 	if m == nil {
 		return nil, fmt.Errorf("write_begin: manager unavailable")
 	}
@@ -365,6 +340,9 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, fmt.Errorf("write_begin: manager closed")
+	}
 	m.cleanupExpiredLocked(now)
 	for _, active := range m.sessions {
 		if active.identity == resolved.Identity {
@@ -375,7 +353,7 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 	return session, nil
 }
 
-func (m *chunkWriteManager) chunk(writeID string, index int, content, expectedHash string) (chunkWriteChunk, bool, int, error) {
+func (m *ChunkedWriteManager) chunk(writeID string, index int, content, expectedHash string) (chunkWriteChunk, bool, int, error) {
 	if writeID == "" {
 		return chunkWriteChunk{}, false, 0, fmt.Errorf("write_chunk: missing write_id")
 	}
@@ -422,7 +400,7 @@ type chunkWriteCommitResult struct {
 	hash   string
 }
 
-func (m *chunkWriteManager) commit(writeID string, expectedChunks int, expectedHash string) (chunkWriteCommitResult, error) {
+func (m *ChunkedWriteManager) commit(writeID string, expectedChunks int, expectedHash string) (chunkWriteCommitResult, error) {
 	if writeID == "" {
 		return chunkWriteCommitResult{}, fmt.Errorf("write_commit: missing write_id")
 	}
@@ -467,7 +445,7 @@ func (m *chunkWriteManager) commit(writeID string, expectedChunks int, expectedH
 	return result, nil
 }
 
-func (m *chunkWriteManager) abort(writeID string) (int, error) {
+func (m *ChunkedWriteManager) abort(writeID string) (int, error) {
 	if writeID == "" {
 		return 0, fmt.Errorf("write_abort: missing write_id")
 	}
@@ -481,7 +459,7 @@ func (m *chunkWriteManager) abort(writeID string) (int, error) {
 	return len(session.chunks), nil
 }
 
-func (m *chunkWriteManager) sessionLocked(writeID, prefix string) (*chunkWriteSession, error) {
+func (m *ChunkedWriteManager) sessionLocked(writeID, prefix string) (*chunkWriteSession, error) {
 	now := m.now()
 	session, ok := m.sessions[writeID]
 	if !ok {
@@ -496,7 +474,7 @@ func (m *chunkWriteManager) sessionLocked(writeID, prefix string) (*chunkWriteSe
 	return session, nil
 }
 
-func (m *chunkWriteManager) cleanupExpiredLocked(now time.Time) {
+func (m *ChunkedWriteManager) cleanupExpiredLocked(now time.Time) {
 	for id, session := range m.sessions {
 		if now.Sub(session.updatedAt) > chunkWriteSessionTTL {
 			delete(m.sessions, id)
