@@ -184,6 +184,7 @@ async function publishModules(page, change = {}) {
     const next = structuredClone(window.moduleBaseline);
     next.revision = String(window.moduleRevision = (window.moduleRevision ?? 0) + 1);
     if (change.composition) next.composition_revision = change.composition;
+    if (change.readOnly !== undefined) next.read_only = change.readOnly;
     if (change.only) {
       next.ui = next.ui.filter((item) => change.only.includes(item.module_id));
       next.modules = Object.fromEntries(Object.entries(next.modules).filter(([id]) => change.only.includes(id)));
@@ -279,6 +280,7 @@ for (const mode of ["readOnly", "stopped"]) {
     await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
     await page.getByRole("button", { name: "draft.md", exact: true }).click();
     await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.fileSources.length)).toBe(0);
     await expect(page.getByRole("textbox", { name: /message/i })).toHaveCount(0);
   });
 }
@@ -336,4 +338,21 @@ test("mobile file sheet follows module removal without retaining its preview", a
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Open goal:/ })).toHaveCount(0);
+});
+
+test("read-only transitions stop file subscriptions while manual refresh remains available", async ({ page }) => {
+  const reads = await openModuleThread(page);
+  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.fileSources.length)).toBe(1);
+  await publishModules(page, { readOnly: true });
+  await expect.poll(() => page.evaluate(() => window.fileSources.every((source) => source.readyState === EventSource.CLOSED))).toBe(true);
+  const beforeLate = reads();
+  await page.evaluate(() => window.fileSources.forEach((source) => source.changed()));
+  const refreshed = page.waitForResponse("**/resources/files/tree");
+  await page.getByRole("button", { name: "Refresh scratchpad", exact: true }).click();
+  await refreshed;
+  expect(reads()).toBe(beforeLate + 1);
+  await publishModules(page, { readOnly: false });
+  await expect.poll(() => page.evaluate(() => window.fileSources.filter((source) => source.readyState !== EventSource.CLOSED).length)).toBe(1);
 });

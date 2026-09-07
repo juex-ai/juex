@@ -92,6 +92,7 @@ Agent process health、Thread retention state 与 Thread execution state 是三�
 Workspace 是默认文件根。选择模块根后才加载对应资源。移除该根时返回 Workspace，
 并清理请求、订阅和预览。Agent、Thread 或 composition 改变也会重置选择；同一
 composition 内的普通状态更新与重连保留选择。
+只读文件根按需刷新，不建立实时资源订阅。
 
 ## 布局与视觉
 

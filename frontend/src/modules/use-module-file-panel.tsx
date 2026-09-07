@@ -23,6 +23,7 @@ export function useModuleFilePanel({ agentID, threadID, snapshot, workspaceHealt
     emptyLabel: selected?.emptyLabel ?? "This directory is empty.",
     unavailableReason: !selected && !workspaceHealthy ? "Workspace unavailable while the agent is stopped." : undefined,
     ...ports,
+    subscribeChanges: snapshot?.read_only ? undefined : ports.subscribeChanges,
     refreshRevision: selected ? 0 : workspaceRevision,
     refreshLabel: `Refresh ${title.toLowerCase()}`,
     headerAction: files.length ? <select aria-label="File root" value={selected?.id ?? "workspace"}

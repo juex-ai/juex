@@ -107,6 +107,7 @@ Workspace is the default file root. Selecting a module root loads its resources
 on demand. Removing it returns to Workspace and clears its requests, subscription,
 and preview. Agent, Thread, or composition changes also reset that selection;
 ordinary state updates and reconnects within the same composition preserve it.
+Read-only file roots refresh on demand without a live resource subscription.
 
 ## Layout And Visual Language
 
