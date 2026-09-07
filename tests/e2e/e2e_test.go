@@ -1759,7 +1759,8 @@ func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testi
 
 func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{ProviderProtocol: "openai/chat", WorkDir: work}
+	// Keep startup policies out of this exact-cursor replay fixture.
+	cfg := config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Preset: config.PresetMinimal}
 	first, err := app.New(app.Options{
 		Config:     cfg,
 		Provider:   &recordingProvider{},
