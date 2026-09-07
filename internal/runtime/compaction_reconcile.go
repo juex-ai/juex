@@ -14,13 +14,6 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 	if err := cancellation.ContextError(ctx); err != nil {
 		return "", err
 	}
-	var syntax compactionSummarySyntax
-	for _, line := range strings.Split(summary, "\n") {
-		syntax.literal(line)
-	}
-	if syntax.fence != 0 {
-		return "", fmt.Errorf("compaction summary contains an unterminated literal block")
-	}
 	if len(state.Contributions) > 0 {
 		headings := append([]string(nil), compactionSummaryHeadings...)
 		for _, part := range state.Contributions {
@@ -47,6 +40,9 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 			} else {
 				sections[current] += line + "\n"
 			}
+		}
+		if syntax.fence != 0 {
+			return "", fmt.Errorf("compaction summary contains an unterminated literal block")
 		}
 		for _, part := range state.Contributions {
 			heading, _ := canonicalSummaryHeading(part.Section, headings)

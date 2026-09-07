@@ -97,8 +97,9 @@ func TestCompactionSummaryLiteralSyntax(t *testing.T) {
 		}
 	}
 	for _, opening := range []string{"```text", "~~~text"} {
-		if _, err := reconcileCompactionSummary(t.Context(), "Goal\n"+opening+"\nNext Steps", compactionSummaryState{}, 1000); err == nil || !strings.Contains(err.Error(), "unterminated literal block") {
-			t.Fatalf("unterminated fence accepted: %v", err)
+		summary := "Goal\n" + opening + "\nNext Steps"
+		if got, err := reconcileCompactionSummary(t.Context(), summary, compactionSummaryState{}, 1000); err != nil || got != summary {
+			t.Fatalf("summary without module reconciliation changed: %q, %v", got, err)
 		}
 	}
 }

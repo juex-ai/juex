@@ -139,6 +139,43 @@ func TestGoalLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
 	}
 }
 
+func TestEmptyGoalNotesStateKeepsOrdinarySummaryText(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+			isolateModuleConfig(t)
+			cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{modulecatalog.Goal: {Enabled: enabled}, modulecatalog.Notes: {Enabled: enabled}}}
+			cfg.Compaction = config.DefaultCompactionConfig()
+			cfg.Compaction.KeepRecentTokens = 1
+			const summary = "Goal\nContinue the conversation\nNext Steps\nKeep this copied fragment:\n```text\npartial example"
+			a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: &moduleSummaryProvider{summary: summary}, DisableMCP: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := a.CloseAndWait(); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, "Preserve this conversation.")); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.Thread.Append(llm.TextMessage(llm.RoleAssistant, "Recorded the fragment.")); err != nil {
+				t.Fatal(err)
+			}
+			generation := a.Thread.CurrentGenerationJournalPath()
+			if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err != nil {
+				t.Fatal(err)
+			}
+			if a.Thread.CurrentGenerationJournalPath() == generation {
+				t.Fatal("ordinary compaction did not commit")
+			}
+			if !strings.Contains(a.Thread.History[0].FirstText(), summary) {
+				t.Fatalf("ordinary summary changed: %s", a.Thread.History[0].FirstText())
+			}
+		})
+	}
+}
+
 func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 	for _, goalEnabled := range []bool{false, true} {
 		for _, notesEnabled := range []bool{false, true} {
