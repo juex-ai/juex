@@ -11,7 +11,7 @@ import (
 
 var errTurnAdmissionBusy = errors.New("app: Thread busy")
 
-// turnAdmissionQueue keeps only App-owned command and compaction exclusion.
+// turnAdmissionQueue keeps only Agent-owned command and compaction exclusion.
 // Runtime is the sole authority for ordinary input start-versus-queue state.
 type turnAdmissionQueue struct {
 	state        *turnAdmission

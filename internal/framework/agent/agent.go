@@ -1,11 +1,5 @@
-// Package app wires process-level runtime dependencies: config -> provider ->
-// enabled Modules -> sealed catalogs -> Main Thread -> prompt -> engine.
-//
-// It also owns application policies shared by transports, such as workspace
-// Thread attachment, slash commands, MCP notification routing, and turn
-// admission. CLI and web code may still import lower-level packages for their
-// own presentation and inspection surfaces; shared runtime decisions should
-// move here instead of being duplicated across transports.
+// Package agent owns execution, admission, recovery and ordered cleanup for a
+// Thread runtime. App supplies prepared resources and product policy callbacks.
 package agent
 
 import (
@@ -22,7 +16,7 @@ import (
 	observability "github.com/juex-ai/juex/internal/framework/threadlog"
 )
 
-// CloseDeferredError reports that another App cleanup pass is in progress.
+// CloseDeferredError reports that another Agent cleanup pass is in progress.
 // Callback callers must return before waiting on it.
 type CloseDeferredError struct {
 	done   <-chan struct{}
@@ -92,7 +86,7 @@ func (a *Agent) closeActiveThreadResources() error {
 	return errors.Join(moduleErr, threadErr)
 }
 
-// WaitThreadReleased waits until final App cleanup has closed the active
+// WaitThreadReleased waits until final Agent cleanup has closed the active
 // Thread and its workspace lock, and until Worker Thread result deliveries can
 // no longer write its directory. Child runtimes may still be draining.
 func (a *Agent) WaitThreadReleased(ctx context.Context) error {
@@ -351,7 +345,7 @@ func (a *Agent) TokenUsage() llm.Usage {
 	return info.TokenUsage.Total
 }
 
-// BeginClose cancels App-owned work without waiting for active turns or
+// BeginClose cancels Agent-owned work without waiting for active turns or
 // deferred cleanup to drain.
 func (a *Agent) BeginClose() error {
 	if a == nil {

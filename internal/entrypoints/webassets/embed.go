@@ -22,7 +22,7 @@ func distSubFS() fs.FS {
 	return sub
 }
 
-// spaHandler serves files embedded under dist/ with a single-page-app
+// Handler serves files embedded under dist/ with a single-page-app
 // fallback: any GET request whose path doesn't match an embedded file
 // gets dist/index.html so client-side routing (React Router) takes over.
 func Handler() http.Handler {

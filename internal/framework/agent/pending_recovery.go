@@ -102,7 +102,7 @@ func (a *Agent) deliverExternalInputLockedWithStart(
 }
 
 // resumePersistedInputLocked follows the Framework-owned lifecycle outcome;
-// App owns only the Thread lease and execution of a returned start action.
+// Agent owns only the Thread lease and execution of a returned start action.
 func (a *Agent) resumePersistedInputLocked(ctx context.Context, recordID string) (externalInputDelivery, error) {
 	return a.resumePersistedInputLockedWithStart(ctx, recordID, nil)
 }
@@ -142,7 +142,7 @@ func externalInputDeliveryFromRuntime(result runtime.PendingInputResult) externa
 	}
 }
 
-// deliverExternalInputUntilSettled is the shared App delivery Adapter for
+// deliverExternalInputUntilSettled is the shared Agent delivery Adapter for
 // sources that must retain their own validity check while following runtime
 // retry instructions. It never interprets durable Pending states.
 func (a *Agent) deliverExternalInputUntilSettled(
@@ -361,7 +361,7 @@ func (a *Agent) waitPendingInputRecoveryContext(ctx context.Context) error {
 }
 
 // handoffPersistedInputAfterRecovery transfers caller-canceled delivery to
-// App-owned work. The durable record remains available for restart if the App
+// Agent-owned work. The durable record remains available for restart if the Agent
 // is already closing, and duplicate callers share one handoff by record ID.
 func (a *Agent) handoffPersistedInputAfterRecovery(
 	recordID string,

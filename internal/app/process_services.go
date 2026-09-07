@@ -16,8 +16,8 @@ import (
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
 )
 
-// Options configures a Server. Provider is optional; if unset, each Thread
-// resolves a provider profile from config and constructs a provider in app.
+// RuntimeResolution freezes the shared environment and resource selection for
+// every Thread created by this process.
 func (s *ProcessServices) RuntimeResolution() (AgentRuntimeResolution, error) {
 	s.agentRuntimeOnce.Do(func() {
 		s.agentRuntime, s.agentRuntimeErr = ResolveAgentRuntime(s.opts.Config)

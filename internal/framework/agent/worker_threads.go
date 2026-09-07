@@ -349,7 +349,7 @@ func (m *WorkerManager) Status(id string) (WorkerThreadStatus, error) {
 }
 
 // ManagedWorkerAgent returns the single runtime owner for an active descendant
-// Worker Thread. Transports may borrow this App, but must not close it.
+// Worker Thread. Transports may borrow this Agent, but must not close it.
 func (a *Agent) ManagedWorkerAgent(id string) (*Agent, bool) {
 	worker, _, ok := a.managedWorker(strings.TrimSpace(id), make(map[*Agent]struct{}))
 	return worker, ok
@@ -400,7 +400,7 @@ func (a *Agent) managedWorker(id string, visited map[*Agent]struct{}) (*Agent, *
 	return nil, nil, false
 }
 
-// ArchiveManagedWorker archives id when this App owns its runtime tree.
+// ArchiveManagedWorker archives id when this Agent owns its runtime tree.
 // The boolean distinguishes a non-managed Worker from an archive failure.
 func (a *Agent) ArchiveManagedWorker(ctx context.Context, id string) (bool, error) {
 	if a == nil {
@@ -624,7 +624,7 @@ func (m *WorkerManager) Close() error {
 }
 
 // StartClose cancels owned work and schedules final child cleanup without
-// waiting. App cleanup can therefore release the parent Thread resources
+// waiting. Agent cleanup can therefore release the parent Thread resources
 // before a provider that ignores cancellation finally returns.
 func (m *WorkerManager) StartClose() error {
 	if m == nil {
