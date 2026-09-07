@@ -36,7 +36,7 @@ import type {
   AgentResourceEvent,
   FleetStatus,
 } from "./types";
-import { agentBasePath } from "./lib/fleet-routes.ts";
+import { agentBasePath, agentPagePath } from "./lib/fleet-routes.ts";
 
 function agentAPIPath(path: string): string {
   const pathname = typeof window === "undefined" ? "" : window.location.pathname;
@@ -368,24 +368,24 @@ export function subscribeThreadModules(id: string, receive: (snapshot: ThreadMod
   return () => source.close();
 }
 
-export function moduleResourcePath(id: string, moduleID: string, resource: string, operation: string): string {
-  return agentAPIPath(`/api/threads/${encodeURIComponent(id)}/modules/${encodeURIComponent(moduleID)}/resources/${encodeURIComponent(resource)}/${operation}`);
+export function moduleResourcePath(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, operation: string): string {
+  return agentPagePath(scope.agentID, `/api/threads/${encodeURIComponent(scope.threadID)}/modules/${encodeURIComponent(moduleID)}/resources/${encodeURIComponent(resource)}/${operation}`);
 }
 
-export async function getModuleFileTree(id: string, moduleID: string, resource: string, signal?: AbortSignal): Promise<FileNode> {
-  return jsonOrThrow(await fetch(moduleResourcePath(id, moduleID, resource, "tree"), { signal }));
+export async function getModuleFileTree(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, signal?: AbortSignal): Promise<FileNode> {
+  return jsonOrThrow(await fetch(moduleResourcePath(scope, moduleID, resource, "tree"), { signal }));
 }
 
-export async function getModuleFileContent(id: string, moduleID: string, resource: string, path: string, signal?: AbortSignal): Promise<FileContentResponse> {
-  return jsonOrThrow(await fetch(`${moduleResourcePath(id, moduleID, resource, "content")}?path=${encodeURIComponent(path)}`, { signal }));
+export async function getModuleFileContent(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, path: string, signal?: AbortSignal): Promise<FileContentResponse> {
+  return jsonOrThrow(await fetch(`${moduleResourcePath(scope, moduleID, resource, "content")}?path=${encodeURIComponent(path)}`, { signal }));
 }
 
-export function getModuleFileRawURL(id: string, moduleID: string, resource: string, path: string): string {
-  return `${moduleResourcePath(id, moduleID, resource, "raw")}?path=${encodeURIComponent(path)}`;
+export function getModuleFileRawURL(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, path: string): string {
+  return `${moduleResourcePath(scope, moduleID, resource, "raw")}?path=${encodeURIComponent(path)}`;
 }
 
-export function subscribeModuleResource(id: string, moduleID: string, resource: string, receive: () => void): () => void {
-  const source = new EventSource(moduleResourcePath(id, moduleID, resource, "events"));
+export function subscribeModuleResource(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, receive: () => void): () => void {
+  const source = new EventSource(moduleResourcePath(scope, moduleID, resource, "events"));
   source.onmessage = receive;
   return () => source.close();
 }

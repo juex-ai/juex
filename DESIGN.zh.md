@@ -84,6 +84,15 @@ Thread detail 从 metadata、最新 transcript page 和权威 status snapshot �
 Agent process health、Thread retention state 与 Thread execution state 是三个
 独立信号。断连与 reconciliation failure 必须明确展示，不能表现为空白或静默冻结。
 
+模块 UI 仅使用 Thread 状态区和可选文件根两个固定插槽，由服务端贡献决定是否
+展示。Goal 与 Notes 使用独立的紧凑控件；启用但为空的模块与禁用模块明确区分。
+未知或失败的 renderer 显示局部不可用状态，不阻断 Thread。Thread 归档或 Agent
+停机后，仍可查看可读的模块内容。
+
+Workspace 是默认文件根。选择模块根后才加载对应资源。移除该根时返回 Workspace，
+并清理请求、订阅和预览。Agent、Thread 或 composition 改变也会重置选择；同一
+composition 内的普通状态更新与重连保留选择。
+
 ## 布局与视觉
 
 - Desktop 使用 Fleet/Agent navigation shell 和易读的居中内容区。

@@ -28,6 +28,10 @@ not installed in its standard platform location.
 
 - `src/pages/` owns route-level Fleet, Thread, and Runtime views.
 - `src/components/` owns reusable presentation and interaction.
+- `src/modules/` owns built-in module renderers and resource adapters. Its static
+  registry resolves server contributions into Thread status and optional file
+  roots; pages do not reinterpret module configuration. File adapters bind an
+  explicit Agent/Thread scope and mount only for the selected root.
 - `src/lib/` owns client-side read models and stream projection.
 - `src/api.ts` is the typed Fleet/Agent transport boundary.
 - `src/index.css` owns production design tokens.

@@ -132,6 +132,9 @@ export function ThreadComposer({
     return (
       <div className="shrink-0 px-4 py-3 md:px-6">
         <div className="mx-auto w-full max-w-[760px]">
+          <div aria-label="Thread status" role="group" className="mb-2 flex flex-wrap items-center gap-2">
+            <ThreadStatusPanel activeContext={activeContext} data={data} runtimeStatus={runtimeStatus} />
+          </div>
           <QueuedInputStack items={queuedInputs} />
           {!agentRuntimeHealthy ? (
             <AgentRuntimeStateBar />

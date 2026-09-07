@@ -49,10 +49,11 @@ type FileTreePanelProps = {
   refreshRevision?: number;
   rootKey?: string;
   title?: string;
+  unavailableReason?: string;
 };
 
 export function FileTreePanel({
-  active = true,
+  active: visible = true,
   emptyLabel = "This directory is empty.",
   headerAction,
   loadTree = getFileTree,
@@ -63,7 +64,9 @@ export function FileTreePanel({
   refreshRevision = 0,
   rootKey = "workspace",
   title = "Workspace",
+  unavailableReason,
 }: FileTreePanelProps) {
+  const active = visible && !unavailableReason;
   const [tree, setTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -72,6 +75,9 @@ export function FileTreePanel({
   const treeRef = useRef<FileNode | null>(null);
   const refreshAbortRef = useRef<AbortController | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
+  const previewPathRef = useRef<string | undefined>(undefined);
+
+  useLayoutEffect(() => { previewPathRef.current = previewFile?.path; }, [previewFile?.path]);
 
   useLayoutEffect(() => {
     refreshAbortRef.current?.abort();
@@ -96,7 +102,7 @@ export function FileTreePanel({
     loadWorkspaceSnapshot({
       loadTree,
       loadContent,
-      previewPath: previewFile?.path,
+      previewPath: previewPathRef.current,
       signal: controller.signal,
     })
       .then((snapshot) => {
@@ -118,7 +124,7 @@ export function FileTreePanel({
         setLoading(false);
         setRefreshing(false);
       });
-  }, [active, loadTree, loadContent, previewFile?.path]);
+  }, [active, loadTree, loadContent]);
 
   useEffect(() => {
     if (!active) return;
@@ -135,7 +141,10 @@ export function FileTreePanel({
   }, [active, loadContent, rootKey]);
 
   useEffect(() => {
-    if (active && subscribeChanges) return subscribeChanges(refreshWorkspace);
+    if (!active || !subscribeChanges) return;
+    let disposed = false;
+    const unsubscribe = subscribeChanges(() => { if (!disposed) refreshWorkspace(); });
+    return () => { disposed = true; unsubscribe(); };
   }, [active, subscribeChanges, refreshWorkspace]);
 
   const handleRefreshClick = () => {
@@ -181,7 +190,7 @@ export function FileTreePanel({
                 size="icon"
                 className="size-7 text-muted-foreground hover:text-foreground"
                 onClick={handleRefreshClick}
-                disabled={refreshing}
+                disabled={refreshing || !active}
                 aria-label={refreshLabel}
               >
                 <RefreshCw
@@ -206,7 +215,7 @@ export function FileTreePanel({
         </div>
       ) : null}
       <ScrollArea className="min-h-0 flex-1 overflow-hidden p-3">
-        {loading ? (
+        {unavailableReason ? <div role="status" className="p-2 text-sm text-muted-foreground">{unavailableReason}</div> : loading ? (
           <div className="p-2 text-sm text-muted-foreground motion-safe:animate-pulse">
             Loading...
           </div>
@@ -216,7 +225,7 @@ export function FileTreePanel({
           <TreeNode node={tree} depth={0} onFileClick={handleFileClick} />
         ) : (
           <div className="p-2 text-sm text-muted-foreground">
-            Workspace unavailable.
+            {title} unavailable.
           </div>
         )}
       </ScrollArea>

@@ -134,7 +134,6 @@ export function FleetStageHeader({
                 size="icon"
                 className="shrink-0"
                 onClick={onToggleWorkspace}
-                disabled={agent.runtime_health !== "healthy"}
                 aria-label={filePanelActionLabel}
               >
                 {workspaceOpen ? (
