@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -72,8 +73,9 @@ type RuntimeModuleStatus struct {
 }
 
 type RuntimeExtensionsStatus struct {
-	Count int
-	Items []RuntimeExtensionStatus
+	Enabled bool
+	Count   int
+	Items   []RuntimeExtensionStatus
 }
 
 type RuntimeExtensionStatus struct {
@@ -305,6 +307,7 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
+	extensionsStatus.Enabled = s.cfg.ModuleEnabled(modulecatalog.Extensions)
 	return RuntimeStatus{
 		WorkDir:      s.absoluteWorkDir(),
 		Modules:      runtimeModuleStatuses(*active),

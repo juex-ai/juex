@@ -39,6 +39,9 @@ Worker 使用相同的 Thread 模型：
 - 历史、上下文、工作状态、pending Input 和订阅相互独立；
 - 可以使用 Agent 共享资源，但不接收 Observation。
 
+`worker-threads` Module 控制 Worker 执行，不控制 Thread 存储。禁用时暂停
+pending Input 恢复，仍可读取历史、管理保留状态，并执行宿主 `/new` 与 `/compact`。
+
 创建者和结果目的地不是 Worker 属性。任何关注结果的调用方都自行订阅。
 Parent 只表达拓扑，不表示投递路由。
 

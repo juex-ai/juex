@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/providerreadiness"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/skills"
@@ -27,9 +28,10 @@ import (
 type doctorStatus string
 
 const (
-	doctorStatusOK   doctorStatus = "ok"
-	doctorStatusWarn doctorStatus = "warn"
-	doctorStatusFail doctorStatus = "fail"
+	doctorStatusOK       doctorStatus = "ok"
+	doctorStatusWarn     doctorStatus = "warn"
+	doctorStatusFail     doctorStatus = "fail"
+	doctorStatusDisabled doctorStatus = "disabled"
 )
 
 type doctorCheck struct {
@@ -199,9 +201,13 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 	checks = append(checks, doctorConnectivityCheck(ctx, cfg, offline))
 	checks = append(checks, doctorShellCheck(cfg))
 	checks = append(checks, doctorSandboxCheck(ctx, cfg.SandboxPolicy(), runtime.GOOS, cfg.LaunchEnvironmentSnapshot().LookPath))
-	checks = append(checks, doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
-		return toolruntime.ResolveRipgrepWithEnvironment(runtimeEnvironment)
-	}))
+	if cfg.ModuleEnabled(modulecatalog.FileSearch) {
+		checks = append(checks, doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
+			return toolruntime.ResolveRipgrepWithEnvironment(runtimeEnvironment)
+		}))
+	} else {
+		checks = append(checks, doctorDisabledCheck("ripgrep"))
+	}
 	checks = append(checks, doctorWorkdirCheck(workDir))
 	checks = append(checks, doctorMCPCheck(ctx, cfg, agentRuntime, agentRuntimeErr, offline || !agentAvailable))
 	checks = append(checks, doctorSkillsCheck(cfg))
@@ -418,6 +424,9 @@ func doctorConnectivityCheckWithOptions(
 }
 
 func doctorShellCheck(cfg config.Config) doctorCheck {
+	if !cfg.ModuleEnabled(modulecatalog.Shell) {
+		return doctorDisabledCheck("shell")
+	}
 	if strings.TrimSpace(cfg.Shell.Binary) == "" {
 		return doctorCheck{Name: "shell", Status: doctorStatusFail, Message: "shell binary is empty", Suggestion: "set shell.profile or shell.profile: custom in juex.yaml"}
 	}
@@ -477,6 +486,9 @@ func doctorWorkdirCheck(workDir string) doctorCheck {
 }
 
 func doctorMCPCheck(ctx context.Context, cfg config.Config, agentRuntime app.AgentRuntimeResolution, runtimeErr error, offline bool) doctorCheck {
+	if !cfg.ModuleEnabled(modulecatalog.MCP) {
+		return doctorDisabledCheck("mcp")
+	}
 	opts := mcp.RemoteReadinessOptions{Offline: offline}
 	if runtimeErr != nil {
 		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: runtimeErr.Error(), Suggestion: "fix selected Extension environment declarations and retry"}
@@ -508,6 +520,9 @@ func doctorMCPCheckWithAgentRuntimeOptions(
 	agentRuntime app.AgentRuntimeResolution,
 	opts mcp.RemoteReadinessOptions,
 ) doctorCheck {
+	if !cfg.ModuleEnabled(modulecatalog.MCP) {
+		return doctorDisabledCheck("mcp")
+	}
 	configs, err := app.LoadMCPConfigs(agentRuntime, cfg.WorkDir)
 	if err != nil {
 		if stage, ok := mcp.ErrorReadinessStage(err); ok {
@@ -610,6 +625,9 @@ func appendUniqueString(values []string, value string) []string {
 }
 
 func doctorSkillsCheck(cfg config.Config) doctorCheck {
+	if !cfg.ModuleEnabled(modulecatalog.Skills) {
+		return doctorDisabledCheck("skills")
+	}
 	graph, err := app.ResolveRuntimeResourceGraph(cfg)
 	if err != nil {
 		return doctorCheck{Name: "skills", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix extension resource configuration"}
@@ -619,6 +637,10 @@ func doctorSkillsCheck(cfg config.Config) doctorCheck {
 		return doctorCheck{Name: "skills", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix duplicate or unreadable skill directories"}
 	}
 	return doctorCheck{Name: "skills", Status: doctorStatusOK, Message: fmt.Sprintf("%d skill(s) loaded", len(loader.All()))}
+}
+
+func doctorDisabledCheck(name string) doctorCheck {
+	return doctorCheck{Name: name, Status: doctorStatusDisabled, Message: "module disabled"}
 }
 
 func commandExecutable(cfg config.Config, command string) error {

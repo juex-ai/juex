@@ -41,6 +41,10 @@ A Worker uses the same Thread model:
 - history, context, work state, pending Inputs, and subscriptions are independent;
 - it may use shared Agent resources, but it does not receive Observations.
 
+The `worker-threads` Module controls Worker execution, not Thread storage.
+When disabled, pending Input recovery pauses while history, retention management,
+and host `/new` and `/compact` remain available.
+
 The creator and result destination are not Worker properties. Any interested
 caller subscribes to the Worker. Parent identity expresses topology, not
 delivery routing.

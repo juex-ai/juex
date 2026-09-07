@@ -877,6 +877,11 @@ func (a *App) detachObservability() error {
 
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
+	if a != nil && a.Engine != nil {
+		if err := CheckTurnCapability(a.cfg, a.Engine.ThreadRuntimeSnapshot().Thread.ID, TurnAdmissionRequest{Prompt: prompt}); err != nil {
+			return "", err
+		}
+	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
 		return "", err
 	}
@@ -891,7 +896,7 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if cmd.Name == SlashNew {
+		if cmd.Name == SlashNew && a.executionError() == nil {
 			return a.runEngineTurnMessage(ctx, NewThreadGreetingMessage())
 		}
 		return result.Text, nil
@@ -922,6 +927,9 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 	if a.Thread == nil {
 		return "", errors.New("app: attachment turn requires an initialized Thread and engine")
 	}
+	if err := a.executionError(); err != nil {
+		return "", err
+	}
 	if err := usermedia.ValidateThreadMediaRefs(a.cfg.MediaDir(), a.Thread.ID, attachments, usermedia.Limits{}); err != nil {
 		return "", err
 	}
@@ -937,6 +945,9 @@ func (a *App) runEngineTurn(ctx context.Context, input string) (string, error) {
 	if a.Thread == nil {
 		return "", ErrThreadUnavailable
 	}
+	if err := a.executionError(); err != nil {
+		return "", err
+	}
 	return a.Engine.Turn(ctx, input)
 }
 
@@ -948,6 +959,9 @@ func (a *App) runEngineTurnMessage(ctx context.Context, message llm.Message) (st
 	defer a.threadMu.RUnlock()
 	if a.Thread == nil {
 		return "", ErrThreadUnavailable
+	}
+	if err := a.executionError(); err != nil {
+		return "", err
 	}
 	return a.Engine.TurnMessage(ctx, message)
 }

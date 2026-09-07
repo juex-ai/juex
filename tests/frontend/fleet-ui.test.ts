@@ -98,11 +98,12 @@ test("router exposes fleet and selected-agent pages", () => {
 });
 
 test("runtime navigation consolidates operational views without duplicating page behavior", () => {
-  assert.match(runtimeLayoutSource, /<Outlet \/>/);
+  assert.match(runtimeLayoutSource, /<Outlet context=/);
   assert.match(runtimeLayoutSource, /runtimeSections\.map/);
   assert.match(runtimeLayoutSource, /runtimeSectionFromPath\(location\.pathname\)/);
   assert.match(runtimeLayoutSource, /flex min-h-0 flex-1 flex-col overflow-hidden/);
-  assert.match(extensionsSource, /getRuntimeStatus/);
+  assert.match(runtimeLayoutSource, /getRuntimeStatus/);
+  assert.match(extensionsSource, /useOutletContext<RuntimeView>/);
   assert.match(extensionsSource, /No Extensions are selected for this Agent\./);
 	assert.match(extensionsSource, /Agent environment/);
 	assert.match(extensionsSource, /Requirements/);

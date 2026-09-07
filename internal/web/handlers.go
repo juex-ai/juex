@@ -337,14 +337,19 @@ type startTurnResponse struct {
 }
 
 func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id string) {
-	active, err := s.getThread(r.Context(), id)
-	if err != nil {
-		writeThreadLookupError(w, id, err)
-		return
-	}
 	var request turnRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body")
+		return
+	}
+	req := app.TurnAdmissionRequest{Prompt: request.Prompt, Kind: request.Kind, Attachments: request.Attachments, RetryTurnID: request.RetryTurnID}
+	if err := app.CheckTurnCapability(s.opts.Cfg, id, req); err != nil {
+		writeErr(w, http.StatusForbidden, "module_disabled", err.Error())
+		return
+	}
+	active, err := s.getThread(r.Context(), id)
+	if err != nil {
+		writeThreadLookupError(w, id, err)
 		return
 	}
 	if len(request.Attachments) > 0 {
@@ -354,10 +359,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		}
 	}
 	admissionCursor := latestDurableEventCursor(active)
-	result := active.app.AdmitTurn(r.Context(), app.TurnAdmissionRequest{
-		Prompt: request.Prompt, Kind: request.Kind, Attachments: request.Attachments,
-		RetryTurnID: request.RetryTurnID,
-	})
+	result := active.app.AdmitTurn(r.Context(), req)
 	if result.Start != nil {
 		active.turns.start(result.Start.TurnID, result.Start.Message)
 	}
@@ -400,6 +402,9 @@ func writeTurnAdmissionResult(w http.ResponseWriter, threadID string, result app
 		writeJSON(w, http.StatusOK, startTurnResponse{ThreadID: threadID, Command: result.Command, Warnings: result.Warnings})
 	case app.TurnAdmissionRejected:
 		status := http.StatusBadRequest
+		if result.Error.Kind == "module_disabled" {
+			status = http.StatusForbidden
+		}
 		if result.Error.Kind == "pending_input_full" {
 			status = http.StatusTooManyRequests
 		}

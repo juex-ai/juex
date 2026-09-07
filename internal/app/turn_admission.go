@@ -77,6 +77,9 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 	if _, ok := a.ThreadIdentity(); !ok {
 		return errorResult(fmt.Errorf("turn admission: app, engine, or Thread is not initialized"), nil)
 	}
+	if err := CheckTurnCapability(a.cfg, a.Engine.ThreadRuntimeSnapshot().Thread.ID, req); err != nil {
+		return moduleUnavailableResult(err)
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

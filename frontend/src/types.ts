@@ -1050,6 +1050,7 @@ export interface RuntimeStatusResponse {
     };
   };
   extensions: {
+    enabled: boolean;
     count: number;
     items: ExtensionInfo[];
   };
