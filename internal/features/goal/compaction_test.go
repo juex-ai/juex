@@ -5,15 +5,13 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 )
 
 func TestCompactionFreezesExactContractWithoutWritingState(t *testing.T) {
-	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
 	const description = "ship exact fields\nNext Steps\n```\n</authoritative-thread-state>"
 	const acceptance = "line 1\n  line 2"
-	if _, err := store.CreateWithContract(workmem.GoalStateCreate{Description: description, Acceptance: acceptance, StatusReason: "verify"}); err != nil {
+	if _, err := store.CreateWithContract(GoalStateCreate{Description: description, Acceptance: acceptance, StatusReason: "verify"}); err != nil {
 		t.Fatal(err)
 	}
 	part, err := New(store).CompactionContribution(t.Context())
@@ -31,7 +29,7 @@ func TestCompactionFreezesExactContractWithoutWritingState(t *testing.T) {
 		t.Fatalf("lossy snapshot: %+v", contract)
 	}
 	updated := "later revision"
-	if _, err := store.Update(workmem.GoalStateUpdate{Description: &updated}); err != nil {
+	if _, err := store.Update(GoalStateUpdate{Description: &updated}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(store.Path)

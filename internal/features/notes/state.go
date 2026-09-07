@@ -6,17 +6,16 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 )
 
-func (m *Module) NotesStore() *workmem.NotesStore {
+func (m *Module) NotesStore() *NotesStore {
 	if m == nil {
 		return nil
 	}
 	return m.store
 }
 
-func (m *Module) NotesStatusSnapshot() (*workmem.NotesSnapshot, error) {
+func (m *Module) NotesStatusSnapshot() (*NotesSnapshot, error) {
 	store := m.NotesStore()
 	if store == nil {
 		return nil, nil
@@ -24,7 +23,7 @@ func (m *Module) NotesStatusSnapshot() (*workmem.NotesSnapshot, error) {
 	return store.StatusSnapshot()
 }
 
-func (m *Module) notesContextFromStore(store *workmem.NotesStore) (string, bool) {
+func (m *Module) notesContextFromStore(store *NotesStore) (string, bool) {
 	if m == nil || store == nil {
 		return "", false
 	}
@@ -36,7 +35,7 @@ func (m *Module) notesContextFromStore(store *workmem.NotesStore) (string, bool)
 	return snapshot.RenderProviderContext()
 }
 
-func (m *Module) notesUnavailableContext(store *workmem.NotesStore, err error) string {
+func (m *Module) notesUnavailableContext(store *NotesStore, err error) string {
 	errorText := err.Error()
 	m.recordNotesContextError(store, err)
 
@@ -44,7 +43,7 @@ func (m *Module) notesUnavailableContext(store *workmem.NotesStore, err error) s
 	return fmt.Sprintf("Working notes unavailable (%s); fix %s or rewrite with update_notes", reason, notesProviderPath(store))
 }
 
-func (m *Module) recordNotesContextError(store *workmem.NotesStore, err error) {
+func (m *Module) recordNotesContextError(store *NotesStore, err error) {
 	if m == nil || store == nil || err == nil {
 		return
 	}
@@ -56,14 +55,14 @@ func (m *Module) recordNotesContextError(store *workmem.NotesStore, err error) {
 	m.notesContextErrorKey = errorKey
 	m.notesContextErrorMu.Unlock()
 	if emit {
-		_ = m.emit(events.Event{Type: "notes.errored", TurnID: m.activeTurnID(), Payload: workmem.NotesErroredPayload{
+		_ = m.emit(events.Event{Type: "notes.errored", TurnID: m.activeTurnID(), Payload: NotesErroredPayload{
 			Error: errorText,
 			Path:  notesPath,
 		}})
 	}
 }
 
-func notesProviderPath(store *workmem.NotesStore) string {
+func notesProviderPath(store *NotesStore) string {
 	threadID := filepath.Base(filepath.Clean(store.ThreadDir))
 	relative, _ := filepath.Rel(store.ThreadDir, store.Path)
 	return filepath.ToSlash(filepath.Join(".juex", "threads", threadID, relative))
@@ -78,12 +77,12 @@ func (m *Module) clearNotesContextError() {
 	m.notesContextErrorMu.Unlock()
 }
 
-func (m *Module) emitNotesUpdated(turnID string, snapshot workmem.NotesSnapshot) {
+func (m *Module) emitNotesUpdated(turnID string, snapshot NotesSnapshot) {
 	if m == nil {
 		return
 	}
 	m.clearNotesContextError()
-	_ = m.emit(events.Event{Type: "notes.updated", TurnID: turnID, Payload: workmem.NotesUpdatedPayload(snapshot)})
+	_ = m.emit(events.Event{Type: "notes.updated", TurnID: turnID, Payload: NotesUpdatedPayload(snapshot)})
 }
 
 func (m *Module) activeTurnID() string {

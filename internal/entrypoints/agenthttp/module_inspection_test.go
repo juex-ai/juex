@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -63,8 +63,8 @@ func TestModuleInspectionReadOnlyStateAndLazyResources(t *testing.T) {
 	if _, ok := s.threads.Load("0"); ok {
 		t.Fatal("inspection started runtime")
 	}
-	notes := workmem.NewNotesStore(dir)
-	mustWriteFile(t, notes.Path, strings.Repeat("x", workmem.MaxNotesCharacters+1))
+	notes := notesmodule.NewNotesStore(dir)
+	mustWriteFile(t, notes.Path, strings.Repeat("x", notesmodule.MaxNotesCharacters+1))
 	request = httptest.NewRecorder()
 	handler.ServeHTTP(request, httptest.NewRequest("GET", "/api/threads/0/modules", nil))
 	if err := json.Unmarshal(request.Body.Bytes(), &snapshot); err != nil {
@@ -224,7 +224,7 @@ func TestModuleStreamWatchesNewStateDirectoriesAndRenewalClear(t *testing.T) {
 	if len(baseline.UI) != 1 || string(baseline.Modules["notes"].Value) != "null" {
 		t.Fatalf("baseline=%+v", baseline)
 	}
-	notes := workmem.NewNotesStore(filepath.Join(s.opts.Cfg.ThreadsDir(), "0"))
+	notes := notesmodule.NewNotesStore(filepath.Join(s.opts.Cfg.ThreadsDir(), "0"))
 	if _, err := notes.Update("fresh"); err != nil {
 		t.Fatal(err)
 	}
@@ -258,6 +258,7 @@ func readModuleFrame(t *testing.T, reader *bufio.Reader) ThreadModulesSnapshot {
 		return snapshot
 	}
 }
+
 func diskImage(t *testing.T, root string) string {
 	t.Helper()
 	var out strings.Builder

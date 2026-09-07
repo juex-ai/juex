@@ -10,7 +10,6 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -36,18 +35,18 @@ type Options struct {
 }
 
 type Module struct {
-	store                *workmem.GoalStateStore
+	store                *GoalStateStore
 	enableContinuation   bool
 	continuationDeferrer ContinuationDeferrer
 	eventSink            func(events.Event) error
 	currentTurnID        func() string
 }
 
-func New(store *workmem.GoalStateStore) *Module {
+func New(store *GoalStateStore) *Module {
 	return NewWithOptions(store, Options{EnableContinuation: true})
 }
 
-func NewWithOptions(store *workmem.GoalStateStore, opts Options) *Module {
+func NewWithOptions(store *GoalStateStore, opts Options) *Module {
 	return &Module{
 		store:                store,
 		enableContinuation:   opts.EnableContinuation,
@@ -136,7 +135,7 @@ func (m *Module) CommitFinishDecision(_ context.Context, request runtimemodule.F
 	if m == nil || !m.enableContinuation || m.shouldDeferContinuation() {
 		return false, nil
 	}
-	decision, ok := selected.OwnerData.(workmem.GoalGateDecision)
+	decision, ok := selected.OwnerData.(GoalGateDecision)
 	if !ok || !decision.BlockStop {
 		return false, nil
 	}
@@ -163,7 +162,7 @@ func (m *Module) FinishContinuationCommitted(_ context.Context, request runtimem
 	if m == nil {
 		return
 	}
-	decision, ok := selected.OwnerData.(workmem.GoalGateDecision)
+	decision, ok := selected.OwnerData.(GoalGateDecision)
 	if !ok {
 		return
 	}
@@ -264,7 +263,7 @@ func (m *Module) handleCreateGoal(in map[string]any) (string, error) {
 		return "", fmt.Errorf("goal state is not configured")
 	}
 	description := goalToolString(in, "description")
-	state, err := store.CreateWithContract(workmem.GoalStateCreate{
+	state, err := store.CreateWithContract(GoalStateCreate{
 		Description:  description,
 		Acceptance:   goalToolString(in, "acceptance"),
 		StatusReason: goalToolString(in, "status_reason"),
@@ -281,7 +280,7 @@ func (m *Module) handleUpdateGoal(in map[string]any) (string, error) {
 	if store == nil {
 		return "", fmt.Errorf("goal state is not configured")
 	}
-	var update workmem.GoalStateUpdate
+	var update GoalStateUpdate
 	changed := false
 	if _, ok := in["description"]; ok {
 		value := goalToolString(in, "description")
@@ -294,7 +293,7 @@ func (m *Module) handleUpdateGoal(in map[string]any) (string, error) {
 		changed = true
 	}
 	if raw := goalToolString(in, "status"); raw != "" {
-		update.Status = workmem.GoalStatus(raw)
+		update.Status = GoalStatus(raw)
 		changed = true
 	}
 	if _, ok := in["status_reason"]; ok {

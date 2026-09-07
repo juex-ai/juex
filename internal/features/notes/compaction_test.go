@@ -4,8 +4,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 )
 
 func TestReconcileNextStepsPreservesChecklistMeaningAndOtherActions(t *testing.T) {
@@ -32,7 +30,7 @@ func TestReconcileNextStepsPreservesChecklistMeaningAndOtherActions(t *testing.T
 }
 
 func TestCompactionReconciliationUsesFrozenNotes(t *testing.T) {
-	store := workmem.NewNotesStore(t.TempDir())
+	store := NewNotesStore(t.TempDir())
 	if _, err := store.Update("- [ ] initial item"); err != nil {
 		t.Fatal(err)
 	}

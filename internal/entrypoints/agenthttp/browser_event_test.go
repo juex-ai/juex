@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
 	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	statusapi "github.com/juex-ai/juex/internal/framework/status"
 	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
@@ -712,11 +713,11 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "goal.updated",
 			Timestamp: ts.Add(7200 * time.Millisecond),
 			TurnID:    "turn-1",
-			Payload: workmem.GoalUpdatedPayload{
+			Payload: goalmodule.GoalUpdatedPayload{
 				Description:       "ship the fix",
 				Acceptance:        "tests pass",
 				ContinuationCount: 2,
-				Status:            workmem.GoalStatusInProgress,
+				Status:            goalmodule.GoalStatusInProgress,
 				UpdatedAt:         ts.Add(7200 * time.Millisecond),
 			},
 		},
@@ -725,7 +726,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "notes.updated",
 			Timestamp: ts.Add(7300 * time.Millisecond),
 			TurnID:    "turn-1",
-			Payload: workmem.NotesUpdatedPayload{
+			Payload: notesmodule.NotesUpdatedPayload{
 				Content:   "- [x] inspect\n- [ ] verify",
 				UpdatedAt: ts.Add(7300 * time.Millisecond),
 			},
@@ -735,7 +736,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "notes.errored",
 			Timestamp: ts.Add(7400 * time.Millisecond),
 			TurnID:    "turn-1",
-			Payload: workmem.NotesErroredPayload{
+			Payload: notesmodule.NotesErroredPayload{
 				Error: "notes read: notes content must be valid UTF-8",
 				Path:  "/state/threads/123456/notes.md",
 			},

@@ -1,4 +1,4 @@
-package workmem
+package notes
 
 import (
 	"os"
@@ -124,16 +124,6 @@ func TestNotesSnapshotRendersProviderContext(t *testing.T) {
 	rendered, ok := snapshot.RenderProviderContext()
 	if !ok || !strings.Contains(rendered, "Current working notes") || !strings.Contains(rendered, "rewrite with update_notes") || !strings.Contains(rendered, "- [ ] verify") {
 		t.Fatalf("provider context = %q", rendered)
-	}
-}
-
-func TestTruncatePreservesUTF8(t *testing.T) {
-	got := truncate("界界界", 4)
-	if !utf8.ValidString(got) {
-		t.Fatalf("truncate returned invalid UTF-8: %q", got)
-	}
-	if !strings.HasPrefix(got, "界...(truncated") {
-		t.Fatalf("truncate returned %q", got)
 	}
 }
 

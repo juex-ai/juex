@@ -1,6 +1,8 @@
-package workmem
+package goal
 
-import "time"
+import (
+	"time"
+)
 
 type GoalUpdatedPayload struct {
 	Description       string     `json:"description,omitempty"`
@@ -9,16 +11,6 @@ type GoalUpdatedPayload struct {
 	Status            GoalStatus `json:"status,omitempty"`
 	StatusReason      string     `json:"status_reason,omitempty"`
 	UpdatedAt         time.Time  `json:"updated_at,omitempty"`
-}
-
-type NotesUpdatedPayload struct {
-	Content   string    `json:"content"`
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
-}
-
-type NotesErroredPayload struct {
-	Error string `json:"error"`
-	Path  string `json:"path"`
 }
 
 type GoalContinuedPayload struct {

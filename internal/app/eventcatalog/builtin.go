@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -11,7 +13,6 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -72,10 +73,10 @@ func builtinDefinitions() []Definition {
 		required("pending_input.drained", func() any { return &juexruntime.PendingInputDrainedPayload{} }, true),
 		required("pending_input.dropped", func() any { return &juexruntime.PendingInputDroppedPayload{} }, true),
 		required("pending_input.rejected", func() any { return &juexruntime.PendingInputRejectedPayload{} }, true),
-		ignorable("goal.updated", func() any { return &workmem.GoalUpdatedPayload{} }, true),
-		ignorable("goal.continued", func() any { return &workmem.GoalContinuedPayload{} }, false),
-		ignorable("notes.updated", func() any { return &workmem.NotesUpdatedPayload{} }, true),
-		ignorable("notes.errored", func() any { return &workmem.NotesErroredPayload{} }, true),
+		ignorable("goal.updated", func() any { return &goalmodule.GoalUpdatedPayload{} }, true),
+		ignorable("goal.continued", func() any { return &goalmodule.GoalContinuedPayload{} }, false),
+		ignorable("notes.updated", func() any { return &notesmodule.NotesUpdatedPayload{} }, true),
+		ignorable("notes.errored", func() any { return &notesmodule.NotesErroredPayload{} }, true),
 		ignorable(observable.EventObservableStarted, func() any { return &observable.ObservableEventPayload{} }, true),
 		ignorable(observable.EventObservableStopped, func() any { return &observable.ObservableEventPayload{} }, true),
 		ignorable(observable.EventObservableExited, func() any { return &observable.ObservableEventPayload{} }, true),

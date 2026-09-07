@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -36,7 +36,7 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 				ToolUseID: "finish-goal",
 				ToolName:  goalmodule.ToolUpdate,
 				Input: map[string]any{
-					"status":        string(workmem.GoalStatusSuccess),
+					"status":        string(goalmodule.GoalStatusSuccess),
 					"status_reason": "subscribed worker result received",
 				},
 			}}}, StopReason: llm.StopToolUse}, nil
@@ -128,7 +128,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 	case <-time.After(workerThreadE2ETimeout):
 		t.Fatal("Worker Thread did not start")
 	}
-	goalState, _ := juexruntime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goalState, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalState == nil {
 		t.Fatal("active Goal Module did not provide a store")
 	}
@@ -136,7 +136,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != workmem.GoalStatusInProgress || goal.ContinuationCount != 0 {
+	if goal.Status != goalmodule.GoalStatusInProgress || goal.ContinuationCount != 0 {
 		t.Fatalf("waiting Goal = %+v", goal)
 	}
 	close(provider.releaseChild)
@@ -153,7 +153,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if goal.Status != workmem.GoalStatusSuccess || goal.ContinuationCount != 0 {
+			if goal.Status != goalmodule.GoalStatusSuccess || goal.ContinuationCount != 0 {
 				t.Fatalf("completed Goal = %+v", goal)
 			}
 			infos, err := thread.NewStore(stateDir).List()

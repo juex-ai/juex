@@ -1,4 +1,4 @@
-package workmem
+package goal
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/homestore"
 	modstate "github.com/juex-ai/juex/internal/framework/module/state"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -100,7 +101,7 @@ func (s *GoalStateStore) Clear() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := clearFile(s.Path); err != nil {
+	if err := modstate.RemoveFile(s.Path); err != nil {
 		return fmt.Errorf("goal state clear: %w", err)
 	}
 	return nil
@@ -365,7 +366,7 @@ func (s *GoalStateStore) saveLocked(state GoalState) error {
 	if _, err := modstate.Prepare(s.ThreadDir, goalOwner, modstate.DiscardOnRemoval); err != nil {
 		return err
 	}
-	if err := replaceFileAtomic(s.Path, data, 0o600); err != nil {
+	if err := homestore.WriteFileAtomic(s.Path, data, 0o600, 0o700); err != nil {
 		return fmt.Errorf("goal state replace: %w", err)
 	}
 	return nil
@@ -417,11 +418,11 @@ func redactGoalState(state GoalState) GoalState {
 }
 
 func sanitizeGoalText(text string) string {
-	return sanitizeWorkmemText(text, 1000)
+	return sanitizeGoalTextLimit(text, 1000)
 }
 
 func sanitizeGoalAcceptance(text string) string {
-	return sanitizeWorkmemText(text, maxGoalAcceptanceBytes)
+	return sanitizeGoalTextLimit(text, maxGoalAcceptanceBytes)
 }
 
 func (s GoalState) present() bool {

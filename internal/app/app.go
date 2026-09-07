@@ -24,8 +24,10 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/mcp"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/environment"
@@ -39,7 +41,6 @@ import (
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 	observability "github.com/juex-ai/juex/internal/framework/threadlog"
 	modelproviders "github.com/juex-ai/juex/internal/providers"
@@ -85,8 +86,8 @@ type Options struct {
 
 	// Internal composition seams for managed Workers and lifecycle tests.
 	disableObservables     bool
-	sharedGoalState        *workmem.GoalStateStore
-	sharedNotes            *workmem.NotesStore
+	sharedGoalState        *goalmodule.GoalStateStore
+	sharedNotes            *notesmodule.NotesStore
 	sharedObservables      *observable.Manager
 	workerThreadFactory    workerThreadFactory
 	threadModuleFactories  []runtimemodule.ThreadFactorySpec
@@ -706,18 +707,18 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	return a, nil
 }
 
-func goalStateStore(threadState *thread.Thread) *workmem.GoalStateStore {
+func goalStateStore(threadState *thread.Thread) *goalmodule.GoalStateStore {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewGoalStateStore(threadState.Dir, workmem.GoalStateOptions{})
+	return goalmodule.NewGoalStateStore(threadState.Dir, goalmodule.GoalStateOptions{})
 }
 
-func notesStore(threadState *thread.Thread) *workmem.NotesStore {
+func notesStore(threadState *thread.Thread) *notesmodule.NotesStore {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewNotesStore(threadState.Dir)
+	return notesmodule.NewNotesStore(threadState.Dir)
 }
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {

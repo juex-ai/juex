@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -160,25 +160,25 @@ func (a *App) executeCompactSlashCommand(ctx context.Context, cmd SlashCommand, 
 }
 
 type StatusSnapshot struct {
-	ThreadID     string                      `json:"thread_id"`
-	ThreadDir    string                      `json:"thread_dir,omitempty"`
-	ThreadAlias  string                      `json:"thread_alias,omitempty"`
-	GenerationID string                      `json:"generation_id"`
-	State        string                      `json:"state"`
-	WorkDir      string                      `json:"work_dir"`
-	Turns        int                         `json:"turns"`
-	StartedAt    time.Time                   `json:"started_at"`
-	LastActiveAt time.Time                   `json:"last_active_at"`
-	Provider     ProviderStatusSnapshot      `json:"provider"`
-	MCP          MCPStatus                   `json:"mcp"`
-	Observables  StatusObservablesSnapshot   `json:"observables"`
-	SkillCount   int                         `json:"skill_count"`
-	TokenUsage   llm.Usage                   `json:"token_usage"`
-	TokenTotal   int                         `json:"token_total"`
-	ContextUsage *llm.ContextUsage           `json:"context_usage,omitempty"`
-	Compaction   StatusCompactionSnapshot    `json:"compaction"`
-	PendingInput runtime.PendingInputStatus  `json:"pending_input"`
-	Goal         *workmem.GoalStatusSnapshot `json:"goal,omitempty"`
+	ThreadID     string                         `json:"thread_id"`
+	ThreadDir    string                         `json:"thread_dir,omitempty"`
+	ThreadAlias  string                         `json:"thread_alias,omitempty"`
+	GenerationID string                         `json:"generation_id"`
+	State        string                         `json:"state"`
+	WorkDir      string                         `json:"work_dir"`
+	Turns        int                            `json:"turns"`
+	StartedAt    time.Time                      `json:"started_at"`
+	LastActiveAt time.Time                      `json:"last_active_at"`
+	Provider     ProviderStatusSnapshot         `json:"provider"`
+	MCP          MCPStatus                      `json:"mcp"`
+	Observables  StatusObservablesSnapshot      `json:"observables"`
+	SkillCount   int                            `json:"skill_count"`
+	TokenUsage   llm.Usage                      `json:"token_usage"`
+	TokenTotal   int                            `json:"token_total"`
+	ContextUsage *llm.ContextUsage              `json:"context_usage,omitempty"`
+	Compaction   StatusCompactionSnapshot       `json:"compaction"`
+	PendingInput runtime.PendingInputStatus     `json:"pending_input"`
+	Goal         *goalmodule.GoalStatusSnapshot `json:"goal,omitempty"`
 }
 
 type ProviderStatusSnapshot struct {
@@ -263,10 +263,10 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 	}
 	observables := observablesStatusFromManager(a.obsv)
 	pending := runtime.PendingInputStatus{}
-	var goal *workmem.GoalStatusSnapshot
+	var goal *goalmodule.GoalStatusSnapshot
 	if a.Engine != nil {
 		pending = a.Engine.PendingInputStatus()
-		goal, _ = a.Engine.ThreadStateStatus()
+		goal, _ = goalmodule.StatusFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
 	}
 	return StatusSnapshot{
 		ThreadID:     threadID,
@@ -342,7 +342,7 @@ func (s StatusSnapshot) Text() string {
 	return strings.Join(lines, "\n")
 }
 
-func formatGoalStatus(goal *workmem.GoalStatusSnapshot) string {
+func formatGoalStatus(goal *goalmodule.GoalStatusSnapshot) string {
 	if goal == nil {
 		return "goal: none"
 	}

@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/mcp"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	"github.com/juex-ai/juex/internal/foundation/events"
@@ -21,7 +23,6 @@ import (
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -415,8 +416,8 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			goal := workmem.NewGoalStateStore(first.Thread.Dir, workmem.GoalStateOptions{})
-			notes := workmem.NewNotesStore(first.Thread.Dir)
+			goal := goalmodule.NewGoalStateStore(first.Thread.Dir, goalmodule.GoalStateOptions{})
+			notes := notesmodule.NewNotesStore(first.Thread.Dir)
 			if _, err := goal.Create("recover staged state", "respect the Generation boundary"); err != nil {
 				t.Fatal(err)
 			}
@@ -440,8 +441,8 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 			}
 			t.Cleanup(func() { _ = restarted.Close() })
 
-			goalSnapshot, goalErr := workmem.NewGoalStateStore(restarted.Thread.Dir, workmem.GoalStateOptions{}).StatusSnapshot()
-			notesSnapshot, notesErr := workmem.NewNotesStore(restarted.Thread.Dir).StatusSnapshot()
+			goalSnapshot, goalErr := goalmodule.NewGoalStateStore(restarted.Thread.Dir, goalmodule.GoalStateOptions{}).StatusSnapshot()
+			notesSnapshot, notesErr := notesmodule.NewNotesStore(restarted.Thread.Dir).StatusSnapshot()
 			if test.committed {
 				if goalErr != nil || goalSnapshot != nil || notesErr != nil || notesSnapshot != nil {
 					t.Fatalf("committed clear recovered old state: Goal=%+v/%v Notes=%+v/%v", goalSnapshot, goalErr, notesSnapshot, notesErr)

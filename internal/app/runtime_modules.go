@@ -23,7 +23,6 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	"github.com/juex-ai/juex/internal/tools"
@@ -46,8 +45,8 @@ type constructedRuntimeModules struct {
 type threadModuleOptions struct {
 	hookRunner               hooks.PolicyRunner
 	hookBaseRequest          hooks.Request
-	goalState                *workmem.GoalStateStore
-	notes                    *workmem.NotesStore
+	goalState                *goalmodule.GoalStateStore
+	notes                    *notesmodule.NotesStore
 	goalContinuation         bool
 	goalContinuationDeferrer goalmodule.ContinuationDeferrer
 }
@@ -184,7 +183,7 @@ func buildThreadModules(
 	opts threadModuleOptions,
 ) (*runtimemodule.Set, error) {
 	var set *runtimemodule.Set
-	specs = threadFactorySpecs(cfg, specs, threadState, engine, workDir, opts, func() []byte { return juexruntime.HookGoalStateFromModules(set) })
+	specs = threadFactorySpecs(cfg, specs, threadState, engine, workDir, opts, func() []byte { return goalmodule.HookStateFromModules(set) })
 	threadContext := threadModuleContext(threadState)
 	var err error
 	set, err = runtimemodule.BuildAndStartThreadSet(ctx, specs, threadContext, runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &threadContext})

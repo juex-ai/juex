@@ -12,11 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/providers"
 	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
@@ -113,7 +115,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 		t.Fatal(err)
 	}
 	defer a.Close()
-	goals, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goals, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goals == nil || notes == nil {
 		t.Fatal("missing authoritative Thread state stores")
 	}
@@ -121,7 +123,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 		t.Fatal(err)
 	}
 	// Keep the Goal contract without asking the scripted model to finish work.
-	if _, err := goals.Update(workmem.GoalStateUpdate{Status: workmem.GoalStatusSuccess}); err != nil {
+	if _, err := goals.Update(goalmodule.GoalStateUpdate{Status: goalmodule.GoalStatusSuccess}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notes.Update("- [ ] " + note); err != nil {

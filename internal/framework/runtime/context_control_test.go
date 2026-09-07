@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -23,8 +24,8 @@ func TestNewContextDoesNotRestoreStateAfterJournalCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = threadState.Close() })
 	engine.Thread = threadState
-	goal := workmem.NewGoalStateStore(engine.Thread.Dir, workmem.GoalStateOptions{})
-	notes := workmem.NewNotesStore(engine.Thread.Dir)
+	goal := goalmodule.NewGoalStateStore(engine.Thread.Dir, goalmodule.GoalStateOptions{})
+	notes := notesmodule.NewNotesStore(engine.Thread.Dir)
 	if _, err := goal.Create("finish the committed renewal", "do not restore old state"); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestNewContextDoesNotRestoreStateAfterJournalCommit(t *testing.T) {
 
 func TestNewContextStopsBeforeGenerationWhenModuleStateCannotClear(t *testing.T) {
 	engine, _ := newEngine(t, &mockProvider{}, false)
-	goal := workmem.NewGoalStateStore(engine.Thread.Dir, workmem.GoalStateOptions{})
+	goal := goalmodule.NewGoalStateStore(engine.Thread.Dir, goalmodule.GoalStateOptions{})
 	if _, err := goal.Create("finish the migration", "module files remain authoritative"); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestNewContextStopsBeforeGenerationWhenModuleStateCannotClear(t *testing.T)
 	if err := os.WriteFile(filepath.Join(notesPath, "block"), []byte("keep directory non-empty"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStores(t, engine, goal, workmem.NewNotesStore(engine.Thread.Dir))
+	installThreadStateModulesWithStores(t, engine, goal, notesmodule.NewNotesStore(engine.Thread.Dir))
 
 	err = engine.NewContext(context.Background())
 	if err == nil || !strings.Contains(err.Error(), `module "notes" clear context state`) {

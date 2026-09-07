@@ -9,7 +9,6 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -23,18 +22,18 @@ type Options struct {
 }
 
 type Module struct {
-	store                *workmem.NotesStore
+	store                *NotesStore
 	eventSink            func(events.Event) error
 	currentTurnID        func() string
 	notesContextErrorMu  sync.Mutex
 	notesContextErrorKey string
 }
 
-func New(store *workmem.NotesStore) *Module {
+func New(store *NotesStore) *Module {
 	return NewWithOptions(store, Options{})
 }
 
-func NewWithOptions(store *workmem.NotesStore, opts Options) *Module {
+func NewWithOptions(store *NotesStore, opts Options) *Module {
 	return &Module{store: store, eventSink: opts.EventSink, currentTurnID: opts.CurrentTurnID}
 }
 

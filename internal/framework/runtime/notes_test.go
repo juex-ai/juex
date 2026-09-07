@@ -9,16 +9,16 @@ import (
 	"sync"
 	"testing"
 
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestNotesToolDefinitionsBindThreadStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
-	installModuleTools(t, reg, notesmodule.New(workmem.NewNotesStore(t.TempDir())))
+	installModuleTools(t, reg, notesmodule.New(notesmodule.NewNotesStore(t.TempDir())))
 	definitions := notesmodule.ToolDefinitions()
 	if len(definitions) != 1 {
 		t.Fatalf("definition count = %d, want 1", len(definitions))
@@ -56,9 +56,9 @@ func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
 		}
 	}
 
-	var updated workmem.NotesUpdatedPayload
+	var updated notesmodule.NotesUpdatedPayload
 	bus.Subscribe("notes.updated", func(event events.Event) {
-		updated, _ = event.Payload.(workmem.NotesUpdatedPayload)
+		updated, _ = event.Payload.(notesmodule.NotesUpdatedPayload)
 	})
 	out, err := eng.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
 		"content": "- [x] inspect\n- [ ] verify",
@@ -78,7 +78,7 @@ func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
 	}
 
 	_, err = eng.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
-		"content": strings.Repeat("x", workmem.MaxNotesCharacters+1),
+		"content": strings.Repeat("x", notesmodule.MaxNotesCharacters+1),
 	})
 	if err == nil || !strings.Contains(err.Error(), "maximum is 2048") {
 		t.Fatalf("oversize tool error = %v", err)
@@ -87,16 +87,16 @@ func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
 
 func TestNotesSnapshotEntrypointsUseModuleStore(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	if _, err := workmem.NewNotesStore(eng.Thread.Dir).Update("thread directory store"); err != nil {
+	if _, err := notesmodule.NewNotesStore(eng.Thread.Dir).Update("thread directory store"); err != nil {
 		t.Fatal(err)
 	}
-	injected := workmem.NewNotesStore(t.TempDir())
+	injected := notesmodule.NewNotesStore(t.TempDir())
 	if _, err := injected.Update("module-owned store"); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = installThreadStateModulesWithStores(t, eng, nil, injected)
 
-	status, err := eng.NotesStatusSnapshot()
+	status, err := notesmodule.StatusFromModules(eng.ThreadRuntimeSnapshot().Modules)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,10 +110,10 @@ func TestNotesSnapshotEntrypointsUseModuleStore(t *testing.T) {
 }
 
 func TestNotesModuleReturnsOneOwnedStoreInstance(t *testing.T) {
-	store := workmem.NewNotesStore(t.TempDir())
+	store := notesmodule.NewNotesStore(t.TempDir())
 	module := notesmodule.New(store)
 	const callers = 32
-	stores := make([]*workmem.NotesStore, callers)
+	stores := make([]*notesmodule.NotesStore, callers)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 
@@ -166,8 +166,8 @@ func TestNotesToolRecitesRewriteOnNextProviderRequest(t *testing.T) {
 
 func TestActiveContextAppendsGoalThenNotes(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
-	notesStore := workmem.NewNotesStore(eng.Thread.Dir)
+	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
+	notesStore := notesmodule.NewNotesStore(eng.Thread.Dir)
 	if _, err := goalState.Create("ship notes", "tests pass"); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 	}{
 		{
 			name:      "oversized",
-			corrupt:   []byte(strings.Repeat("x", workmem.MaxNotesCharacters+1)),
+			corrupt:   []byte(strings.Repeat("x", notesmodule.MaxNotesCharacters+1)),
 			wantError: "maximum is 2048",
 		},
 		{
@@ -227,9 +227,9 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			var errored []workmem.NotesErroredPayload
+			var errored []notesmodule.NotesErroredPayload
 			bus.Subscribe("notes.errored", func(event events.Event) {
-				payload, _ := event.Payload.(workmem.NotesErroredPayload)
+				payload, _ := event.Payload.(notesmodule.NotesErroredPayload)
 				errored = append(errored, payload)
 			})
 
@@ -240,7 +240,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 					t.Fatalf("active context missing Notes error placeholder: %+v", snapshot.Messages)
 				}
 				text := message.FirstText()
-				relativePath := filepath.ToSlash(filepath.Join(".juex", "threads", filepath.Base(eng.Thread.Dir), "modules", "notes", workmem.NotesFileName))
+				relativePath := filepath.ToSlash(filepath.Join(".juex", "threads", filepath.Base(eng.Thread.Dir), "modules", "notes", notesmodule.NotesFileName))
 				for _, want := range []string{"Working notes unavailable", tt.wantError, relativePath, "update_notes"} {
 					if !strings.Contains(text, want) {
 						t.Fatalf("Notes placeholder missing %q: %q", want, text)
@@ -375,7 +375,7 @@ func TestNotesModuleRejectsMissingStore(t *testing.T) {
 
 func prepareTestNotesPath(t *testing.T, dir string) string {
 	t.Helper()
-	store := workmem.NewNotesStore(dir)
+	store := notesmodule.NewNotesStore(dir)
 	if _, err := store.Update(""); err != nil {
 		t.Fatal(err)
 	}

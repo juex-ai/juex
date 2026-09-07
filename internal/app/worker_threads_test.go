@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -200,8 +201,8 @@ func TestWorkerCreationPersistsParentAndIsolatesThreadState(t *testing.T) {
 	if managed == nil || managed.app.Thread.ParentThreadID != thread.MainID {
 		t.Fatalf("managed Worker = %+v", managed)
 	}
-	parentGoal, parentNotes := runtime.ThreadStateStoresFromModules(main.Engine.ThreadRuntimeSnapshot().Modules)
-	childGoal, childNotes := runtime.ThreadStateStoresFromModules(managed.app.Engine.ThreadRuntimeSnapshot().Modules)
+	parentGoal, parentNotes := modulestate.Stores(main.Engine.ThreadRuntimeSnapshot().Modules)
+	childGoal, childNotes := modulestate.Stores(managed.app.Engine.ThreadRuntimeSnapshot().Modules)
 	if parentGoal == childGoal || parentNotes == childNotes {
 		t.Fatal("Worker unexpectedly shares Goal or Notes stores with Main")
 	}

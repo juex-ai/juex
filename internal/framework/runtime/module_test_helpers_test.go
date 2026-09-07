@@ -13,7 +13,6 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -128,11 +127,11 @@ func installModuleTools(t *testing.T, registry *tools.Registry, providers ...run
 	}
 }
 
-func installThreadStateModules(t *testing.T, engine *Engine) (*workmem.GoalStateStore, *workmem.NotesStore) {
+func installThreadStateModules(t *testing.T, engine *Engine) (*goalmodule.GoalStateStore, *notesmodule.NotesStore) {
 	return installThreadStateModulesWithGoalOptions(t, engine, goalmodule.Options{EnableContinuation: true})
 }
 
-func installThreadStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions goalmodule.Options) (*workmem.GoalStateStore, *workmem.NotesStore) {
+func installThreadStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions goalmodule.Options) (*goalmodule.GoalStateStore, *notesmodule.NotesStore) {
 	t.Helper()
 	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, nil, nil, goalOptions)
 }
@@ -140,9 +139,9 @@ func installThreadStateModulesWithGoalOptions(t *testing.T, engine *Engine, goal
 func installThreadStateModulesWithStores(
 	t *testing.T,
 	engine *Engine,
-	goalState *workmem.GoalStateStore,
-	notes *workmem.NotesStore,
-) (*workmem.GoalStateStore, *workmem.NotesStore) {
+	goalState *goalmodule.GoalStateStore,
+	notes *notesmodule.NotesStore,
+) (*goalmodule.GoalStateStore, *notesmodule.NotesStore) {
 	t.Helper()
 	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, goalState, notes, goalmodule.Options{EnableContinuation: true})
 }
@@ -150,19 +149,19 @@ func installThreadStateModulesWithStores(
 func installThreadStateModulesWithStoresAndGoalOptions(
 	t *testing.T,
 	engine *Engine,
-	goalState *workmem.GoalStateStore,
-	notes *workmem.NotesStore,
+	goalState *goalmodule.GoalStateStore,
+	notes *notesmodule.NotesStore,
 	goalOptions goalmodule.Options,
-) (*workmem.GoalStateStore, *workmem.NotesStore) {
+) (*goalmodule.GoalStateStore, *notesmodule.NotesStore) {
 	t.Helper()
 	if engine == nil || engine.Thread == nil {
 		t.Fatal("thread state modules require an attached thread")
 	}
 	if goalState == nil {
-		goalState = workmem.NewGoalStateStore(engine.Thread.Dir, workmem.GoalStateOptions{})
+		goalState = goalmodule.NewGoalStateStore(engine.Thread.Dir, goalmodule.GoalStateOptions{})
 	}
 	if notes == nil {
-		notes = workmem.NewNotesStore(engine.Thread.Dir)
+		notes = notesmodule.NewNotesStore(engine.Thread.Dir)
 	}
 	eventSink := func(event events.Event) error {
 		if engine.Bus == nil {

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/features/hooks"
@@ -461,7 +463,7 @@ func TestRuntimeStatusOmitsActiveThreadState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goalState, notes := runtime.ThreadStateStoresFromModules(as.app.Engine.ThreadRuntimeSnapshot().Modules)
+	goalState, notes := modulestate.Stores(as.app.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalState == nil || notes == nil {
 		t.Fatal("active Thread Modules did not provide Goal and Notes stores")
 	}

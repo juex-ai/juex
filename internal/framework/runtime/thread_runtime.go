@@ -10,7 +10,6 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -199,12 +198,6 @@ func (e *Engine) SystemPromptWithError() (string, error) {
 		return "", err
 	}
 	return prompt.JoinSections(sections), nil
-}
-
-// ThreadStateStatus reads Goal and Notes from the active Thread Modules.
-func (e *Engine) ThreadStateStatus() (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
-	snapshot := e.ThreadRuntimeSnapshot()
-	return ThreadStateStatusFromModules(snapshot.Modules)
 }
 
 func (e *Engine) currentThread() *thread.Thread {

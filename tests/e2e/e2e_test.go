@@ -30,6 +30,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/features/agentsmd"
@@ -52,7 +54,6 @@ import (
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	"github.com/juex-ai/juex/internal/tools"
@@ -899,7 +900,7 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 	}
 	defer a.Close()
 
-	_, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	_, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if notes == nil {
 		t.Fatal("app did not initialize the Notes Module store")
 	}
@@ -2108,7 +2109,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(workmem.GoalStatusSuccess),
+						"status":        string(goalmodule.GoalStatusSuccess),
 						"status_reason": "continuation gate fired and final answer was verified",
 					}},
 				}},
@@ -2156,7 +2157,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 		!strings.Contains(goalContext.FirstText(), "ship goal state") {
 		t.Fatalf("goal runtime context = %+v", goalContext)
 	}
-	goalStore, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goalStore, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalStore == nil {
 		t.Fatal("Goal Module store is unavailable")
 	}
@@ -2164,7 +2165,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Description != "ship goal state" || goal.ContinuationCount != 1 || goal.Status != workmem.GoalStatusSuccess ||
+	if goal.Description != "ship goal state" || goal.ContinuationCount != 1 || goal.Status != goalmodule.GoalStatusSuccess ||
 		goal.StatusReason != "continuation gate fired and final answer was verified" || !strings.Contains(goal.Acceptance, "goal.continued") {
 		t.Fatalf("Thread goal = %+v", goal)
 	}
@@ -2192,7 +2193,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-wait", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(workmem.GoalStatusWaitForUser),
+						"status":        string(goalmodule.GoalStatusWaitForUser),
 						"status_reason": "waiting for deployment approval",
 					}},
 				}},
@@ -2205,7 +2206,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success-after-input", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(workmem.GoalStatusSuccess),
+						"status":        string(goalmodule.GoalStatusSuccess),
 						"status_reason": "user approved the healthy deployment",
 					}},
 				}},
@@ -2249,7 +2250,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 		t.Fatalf("new input should reach the model with unchanged waiting goal:\n%s", got)
 	}
 
-	goalStore, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goalStore, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalStore == nil {
 		t.Fatal("Goal Module store is unavailable")
 	}
@@ -2257,7 +2258,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != workmem.GoalStatusSuccess || goal.StatusReason != "user approved the healthy deployment" {
+	if goal.Status != goalmodule.GoalStatusSuccess || goal.StatusReason != "user approved the healthy deployment" {
 		t.Fatalf("Thread goal = %+v", goal)
 	}
 	eventsData := []byte(threadJournalText(t, a.Thread.Dir))

@@ -1,4 +1,4 @@
-package workmem
+package notes
 
 import (
 	"fmt"
@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/juex-ai/juex/internal/foundation/homestore"
 	modstate "github.com/juex-ai/juex/internal/framework/module/state"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -43,7 +44,7 @@ func (s *NotesStore) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.Path
-	if err := clearFile(path); err != nil {
+	if err := modstate.RemoveFile(path); err != nil {
 		return fmt.Errorf("notes clear: %w", err)
 	}
 	return nil
@@ -103,7 +104,7 @@ func (s *NotesStore) Update(content string) (NotesSnapshot, error) {
 	if err := validateNotesContent(content); err != nil {
 		return NotesSnapshot{}, err
 	}
-	content = redactWorkmemText(content)
+	content = redactNotesText(content)
 	if err := validateNotesContent(content); err != nil {
 		return NotesSnapshot{}, err
 	}
@@ -114,7 +115,7 @@ func (s *NotesStore) Update(content string) (NotesSnapshot, error) {
 	if _, err := modstate.Prepare(s.ThreadDir, notesOwner, modstate.DiscardOnRemoval); err != nil {
 		return NotesSnapshot{}, err
 	}
-	if err := replaceFileAtomic(path, []byte(content), 0o600); err != nil {
+	if err := homestore.WriteFileAtomic(path, []byte(content), 0o600, 0o700); err != nil {
 		return NotesSnapshot{}, fmt.Errorf("notes replace: %w", err)
 	}
 	info, err := os.Stat(path)
@@ -150,7 +151,7 @@ func (s *NotesStore) snapshotLocked() (NotesSnapshot, bool, error) {
 		return NotesSnapshot{}, false, fmt.Errorf("notes stat: %w", err)
 	}
 	return NotesSnapshot{
-		Content:   redactWorkmemText(content),
+		Content:   redactNotesText(content),
 		UpdatedAt: info.ModTime().UTC(),
 	}, true, nil
 }

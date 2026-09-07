@@ -7,13 +7,12 @@ import (
 	"testing"
 
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestGoalToolDefinitionsBindThreadStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
-	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
 	installModuleTools(t, reg, New(store))
 	definitions := ToolDefinitions()
 	if len(definitions) != 3 {
@@ -36,7 +35,7 @@ func TestGoalToolDefinitionsBindThreadStateGroup(t *testing.T) {
 
 func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 	reg := tools.NewRegistry()
-	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
 	installModuleTools(t, reg, New(store))
 	createTool, ok := reg.Get(ToolCreate)
 	if !ok {
@@ -65,7 +64,7 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 		t.Fatalf("update_goal properties = %#v", updateProperties)
 	}
 	if !strings.Contains(strings.ToLower(updateTool.Description), "success requires acceptance") ||
-		!strings.Contains(updateTool.Description, string(workmem.GoalStatusWaitForUser)) {
+		!strings.Contains(updateTool.Description, string(GoalStatusWaitForUser)) {
 		t.Fatalf("update_goal description should explain completion and waiting: %q", updateTool.Description)
 	}
 
@@ -85,7 +84,7 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := reg.Call(context.Background(), ToolUpdate, map[string]any{
-		"status":        string(workmem.GoalStatusSuccess),
+		"status":        string(GoalStatusSuccess),
 		"status_reason": "validated by tests",
 	}); err != nil {
 		t.Fatal(err)
@@ -107,12 +106,12 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 	}
 
 	if _, err := reg.Call(context.Background(), ToolUpdate, map[string]any{
-		"status": string(workmem.GoalStatusFailure),
+		"status": string(GoalStatusFailure),
 	}); err != nil {
 		t.Fatalf("failure without status_reason should remain valid: %v", err)
 	}
 
-	other := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
+	other := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
 	snapshot, err := other.StatusSnapshot()
 	if err != nil {
 		t.Fatal(err)

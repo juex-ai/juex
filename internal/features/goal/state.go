@@ -5,7 +5,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/events"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 )
 
 func (m *Module) ClearContextForRenewal(_ context.Context, generationID string) (runtimemodule.ContextRenewalClear, error) {
@@ -19,14 +18,14 @@ func (m *Module) ClearContextForRenewal(_ context.Context, generationID string) 
 	return runtimemodule.ContextRenewalClear{Finalize: finalize, Rollback: rollback}, err
 }
 
-func (m *Module) GoalStateStore() *workmem.GoalStateStore {
+func (m *Module) GoalStateStore() *GoalStateStore {
 	if m == nil {
 		return nil
 	}
 	return m.store
 }
 
-func (m *Module) GoalStatusSnapshot() (*workmem.GoalStatusSnapshot, error) {
+func (m *Module) GoalStatusSnapshot() (*GoalStatusSnapshot, error) {
 	store := m.GoalStateStore()
 	if store == nil {
 		return nil, nil
@@ -46,7 +45,7 @@ func (m *Module) HookGoalState() []byte {
 	return state.RawMessage()
 }
 
-func goalStateContextFromStore(store *workmem.GoalStateStore) (string, bool) {
+func goalStateContextFromStore(store *GoalStateStore) (string, bool) {
 	if store == nil {
 		return "", false
 	}
@@ -86,11 +85,11 @@ func (m *Module) emit(event events.Event) error {
 	return m.eventSink(event)
 }
 
-func goalUpdatedPayload(snapshot *workmem.GoalStatusSnapshot) workmem.GoalUpdatedPayload {
+func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
 	if snapshot == nil {
-		return workmem.GoalUpdatedPayload{}
+		return GoalUpdatedPayload{}
 	}
-	return workmem.GoalUpdatedPayload{
+	return GoalUpdatedPayload{
 		Description:       snapshot.Description,
 		Acceptance:        snapshot.Acceptance,
 		ContinuationCount: snapshot.ContinuationCount,
@@ -100,12 +99,12 @@ func goalUpdatedPayload(snapshot *workmem.GoalStatusSnapshot) workmem.GoalUpdate
 	}
 }
 
-func goalContinuedPayload(decision workmem.GoalGateDecision, snapshot *workmem.GoalStatusSnapshot) workmem.GoalContinuedPayload {
+func goalContinuedPayload(decision GoalGateDecision, snapshot *GoalStatusSnapshot) GoalContinuedPayload {
 	count := decision.ContinuationCount
 	if snapshot != nil {
 		count = snapshot.ContinuationCount
 	}
-	return workmem.GoalContinuedPayload{
+	return GoalContinuedPayload{
 		Status:                decision.Status,
 		Reason:                decision.Reason,
 		ContinuationCount:     count,

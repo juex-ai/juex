@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
@@ -234,7 +236,7 @@ func TestEndToEnd_WorkerBatchesKeepIndependentStateAndProgress(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing Worker %s", status.ThreadID)
 		}
-		_, notes := runtime.ThreadStateStoresFromModules(worker.Engine.ThreadRuntimeSnapshot().Modules)
+		_, notes := modulestate.Stores(worker.Engine.ThreadRuntimeSnapshot().Modules)
 		snapshot, err := notes.Snapshot()
 		if err != nil {
 			t.Fatal(err)

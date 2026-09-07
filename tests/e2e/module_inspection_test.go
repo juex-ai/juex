@@ -15,7 +15,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -40,11 +41,11 @@ func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	goals := workmem.NewGoalStateStore(worker.Dir, workmem.GoalStateOptions{})
+	goals := goalmodule.NewGoalStateStore(worker.Dir, goalmodule.GoalStateOptions{})
 	if _, err := goals.Create("read without runtime", "preserve all files"); err != nil {
 		t.Fatal(err)
 	}
-	notes := workmem.NewNotesStore(worker.Dir)
+	notes := notesmodule.NewNotesStore(worker.Dir)
 	if _, err := notes.Update("retained notes"); err != nil {
 		t.Fatal(err)
 	}

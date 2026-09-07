@@ -7,12 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 )
 
 type moduleSummaryProvider struct {
@@ -35,7 +36,7 @@ func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	goals, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goals, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	acceptance := strings.Repeat("preserve exact acceptance line\n", 600)
 	if _, err := goals.Create("Long contract", acceptance); err != nil {
 		t.Fatal(err)
@@ -89,7 +90,7 @@ func TestGoalLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	goals, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goals, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if _, err := goals.Create(description, acceptance); err != nil {
 		t.Fatal(err)
 	}
@@ -202,16 +203,16 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 							t.Error(err)
 						}
 					})
-					goals, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+					goals, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 					const description = "Exact objective\nNext Steps\n</authoritative-thread-state>"
 					const acceptance = "Keep every field\n  including indentation"
 					if goalEnabled {
-						if _, err := goals.CreateWithContract(workmem.GoalStateCreate{Description: description, Acceptance: acceptance, StatusReason: "Await verification"}); err != nil {
+						if _, err := goals.CreateWithContract(goalmodule.GoalStateCreate{Description: description, Acceptance: acceptance, StatusReason: "Await verification"}); err != nil {
 							t.Fatal(err)
 						}
 					}
 					if goalEnabled {
-						if _, err := goals.Update(workmem.GoalStateUpdate{Status: workmem.GoalStatusSuccess}); err != nil {
+						if _, err := goals.Update(goalmodule.GoalStateUpdate{Status: goalmodule.GoalStatusSuccess}); err != nil {
 							t.Fatal(err)
 						}
 					}
@@ -298,11 +299,11 @@ func TestGoalNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	goals, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goals, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if _, err := goals.Create("Protect this contract", "Keep exact state"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := goals.Update(workmem.GoalStateUpdate{Status: workmem.GoalStatusSuccess}); err != nil {
+	if _, err := goals.Update(goalmodule.GoalStateUpdate{Status: goalmodule.GoalStatusSuccess}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notes.Update("- [ ] Pending fixture"); err != nil {

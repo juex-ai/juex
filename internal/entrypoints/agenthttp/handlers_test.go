@@ -16,10 +16,11 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -307,8 +308,8 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 	var created thread.Info
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{}`, http.StatusCreated, &created)
 	activeDir := filepath.Join(server.opts.Cfg.RuntimePaths().StateDir, "threads", created.ID)
-	goalStore := workmem.NewGoalStateStore(activeDir, workmem.GoalStateOptions{})
-	notesStore := workmem.NewNotesStore(activeDir)
+	goalStore := goalmodule.NewGoalStateStore(activeDir, goalmodule.GoalStateOptions{})
+	notesStore := notesmodule.NewNotesStore(activeDir)
 	if _, err := goalStore.Create("preserve worker state", "archive round trip succeeds"); err != nil {
 		t.Fatal(err)
 	}

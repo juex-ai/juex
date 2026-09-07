@@ -7,12 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
-	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -42,8 +44,8 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		}
 	}
 	for _, dir := range dirs {
-		goal := workmem.NewGoalStateStore(dir, workmem.GoalStateOptions{})
-		notes := workmem.NewNotesStore(dir)
+		goal := goalmodule.NewGoalStateStore(dir, goalmodule.GoalStateOptions{})
+		notes := notesmodule.NewNotesStore(dir)
 		if _, err := goal.Create("retire", "include inactive scopes"); err != nil {
 			t.Fatal(err)
 		}
@@ -80,7 +82,7 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		t.Fatal("invalid candidate accepted")
 	}
 	for _, dir := range dirs {
-		if _, err := os.Stat(workmem.NewGoalStateStore(dir, workmem.GoalStateOptions{}).Path + ".context-renewal-g000001"); err != nil {
+		if _, err := os.Stat(goalmodule.NewGoalStateStore(dir, goalmodule.GoalStateOptions{}).Path + ".context-renewal-g000001"); err != nil {
 			t.Fatal("preview/rejection changed state", err)
 		}
 	}
@@ -92,11 +94,11 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		t.Fatal(err)
 	}
 	for _, dir := range dirs {
-		goal := workmem.NewGoalStateStore(dir, workmem.GoalStateOptions{})
+		goal := goalmodule.NewGoalStateStore(dir, goalmodule.GoalStateOptions{})
 		if _, err := os.Stat(filepath.Dir(goal.Path)); !os.IsNotExist(err) {
 			t.Fatalf("Goal files or renewal backup survived: %v", err)
 		}
-		notes, err := workmem.NewNotesStore(dir).StatusSnapshot()
+		notes, err := notesmodule.NewNotesStore(dir).StatusSnapshot()
 		if err != nil || notes == nil || notes.Content != "keep Notes" {
 			t.Fatalf("other owner altered: %+v %v", notes, err)
 		}
@@ -111,7 +113,7 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		t.Fatal(err)
 	}
 	defer func() { _ = reenabled.CloseAndWait() }()
-	goal, notes := runtime.ThreadStateStoresFromModules(reenabled.Engine.ThreadRuntimeSnapshot().Modules)
+	goal, notes := modulestate.Stores(reenabled.Engine.ThreadRuntimeSnapshot().Modules)
 	if got, err := goal.StatusSnapshot(); err != nil || got != nil {
 		t.Fatalf("retired state revived: %v %v", got, err)
 	}
@@ -146,7 +148,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goal, notes := runtime.ThreadStateStoresFromModules(running.Engine.ThreadRuntimeSnapshot().Modules)
+	goal, notes := modulestate.Stores(running.Engine.ThreadRuntimeSnapshot().Modules)
 	if _, err := goal.Create("old writer", "retire only on application"); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +178,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g, n := running.Engine.ThreadStateStatus(); g == nil || n == nil {
+	if g, n := modulestate.Status(running.Engine.ThreadRuntimeSnapshot().Modules); g == nil || n == nil {
 		t.Fatalf("enabled restart lost work state: %v %v", g, n)
 	}
 	off := []byte("preset: minimal\n")
@@ -226,7 +228,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = fresh.CloseAndWait() }()
-	g, n := fresh.Engine.ThreadStateStatus()
+	g, n := modulestate.Status(fresh.Engine.ThreadRuntimeSnapshot().Modules)
 	if g != nil || n != nil {
 		t.Fatalf("re-enable revived work state: %v %v", g, n)
 	}
