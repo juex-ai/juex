@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/juex-ai/juex/internal/web"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"log"
 	"os"
 )

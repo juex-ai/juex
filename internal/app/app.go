@@ -19,29 +19,32 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/environment"
-	"github.com/juex-ai/juex/internal/eventcatalog"
-	"github.com/juex-ai/juex/internal/eventmedia"
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/observability"
-	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/prompt"
-	"github.com/juex-ai/juex/internal/provenance"
-	"github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/sandbox"
-	"github.com/juex-ai/juex/internal/skills"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/tools"
-	"github.com/juex-ai/juex/internal/usermedia"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/eventcatalog"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/features/hooks"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/skills"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+	"github.com/juex-ai/juex/internal/foundation/command"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	"github.com/juex-ai/juex/internal/framework/agent"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
+	"github.com/juex-ai/juex/internal/framework/prompt"
+	"github.com/juex-ai/juex/internal/framework/provenance"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	modelproviders "github.com/juex-ai/juex/internal/providers"
 )
 
 // Options bundles the inputs to New.
@@ -51,7 +54,7 @@ type Options struct {
 	// ModelCandidates takes precedence over Provider and config-derived models.
 	// ModelHealth may be shared by multiple Apps, as juex listen does.
 	ModelCandidates []runtime.ModelCandidate
-	ModelHealth     *llm.ModelHealth
+	ModelHealth     *modelhealth.ModelHealth
 	// SummaryProvider, when set, overrides compaction.summary_model provider
 	// construction. It is primarily useful for tests and embedded callers.
 	SummaryProvider      llm.Provider
@@ -83,8 +86,8 @@ type Options struct {
 
 	// Internal composition seams for managed Workers and lifecycle tests.
 	disableObservables     bool
-	sharedGoalState        *workmem.GoalStateStore
-	sharedNotes            *workmem.NotesStore
+	sharedGoalState        *goalmodule.GoalStateStore
+	sharedNotes            *notesmodule.NotesStore
 	sharedObservables      *observable.Manager
 	workerThreadFactory    workerThreadFactory
 	threadModuleFactories  []runtimemodule.ThreadFactorySpec
@@ -93,66 +96,22 @@ type Options struct {
 }
 
 type App struct {
-	Engine                *runtime.Engine
-	Status                *runtime.StatusStore
-	Bus                   *events.Bus
-	Thread                *thread.Thread
-	ThreadStore           *thread.Store
-	cleanup               []func() error
-	closeMu               sync.Mutex
-	lifecycleMu           sync.RWMutex
-	closeCancel           sync.Once
-	cleanupIndex          int
-	closeErr              error
-	closeRunning          bool
-	closeRunDone          chan struct{}
-	closeRunResult        *error
-	threadMu              sync.RWMutex
-	threadReleased        chan struct{}
-	threadRelease         sync.Once
-	ctx                   context.Context
-	cancel                context.CancelFunc
-	cfg                   config.Config
-	stderr                io.Writer
-	skills                []skills.Skill
-	skillPrompt           skills.PromptBudgetReport
-	skillFiltered         int
-	skillFilteredItems    []skills.FilteredSkill
-	mcp                   MCPStatus
-	obsv                  *observable.Manager
-	shellSessions         *tools.ShellSessionManager
-	workers               *workerThreadManager
-	workerFactory         workerThreadFactory
-	mcpManager            *mcp.Manager
-	agentRuntime          AgentRuntimeResolution
-	runtimeModules        *runtimemodule.Set
-	runtimeModuleContext  runtimemodule.RuntimeContext
-	threadModuleFactories []runtimemodule.ThreadFactorySpec
-	hookRunner            hooks.PolicyRunner
-	hookBaseRequest       hooks.Request
+	*agent.Agent
+	cfg                config.Config
+	stderr             io.Writer
+	skills             []skills.Skill
+	skillPrompt        skills.PromptBudgetReport
+	skillFiltered      int
+	skillFilteredItems []skills.FilteredSkill
+	mcp                MCPStatus
+	obsv               *observable.Manager
+	workerFactory      workerThreadFactory
+	mcpManager         *mcp.Manager
+	agentRuntime       AgentRuntimeResolution
 
-	turnAdmission   turnAdmission
-	pendingRecovery sync.WaitGroup
-	// pendingRecoveryDone is non-nil only when startup found durable input to
-	// replay. It closes after that recovery Turn releases the Engine.
-	pendingRecoveryDone  <-chan struct{}
-	pendingHandoffMu     sync.Mutex
-	pendingHandoffs      sync.WaitGroup
-	pendingHandoffClosed bool
-	pendingHandoffIDs    map[string]struct{}
-	threadHandoffMu      sync.RWMutex
-
-	threadResource    *thread.Thread
-	eventSink         *events.DurableSink
-	eventCatalog      events.SchemaCatalog
-	eventUnsubscribe  func()
-	statusUnsubscribe func()
-
-	debug                    bool
-	logLevel                 string
-	runtimeEnvironment       environment.Snapshot
-	recorder                 *observability.Recorder
-	observabilityUnsubscribe func()
+	debug              bool
+	logLevel           string
+	runtimeEnvironment environment.Snapshot
 }
 
 // RedactRuntimeJSON removes configured Agent environment values from a JSON
@@ -169,28 +128,6 @@ type MCPStatus struct {
 	Connected  int               `json:"connected"`
 	Errors     int               `json:"errors"`
 	Servers    []MCPServerStatus `json:"servers"`
-}
-
-// CloseDeferredError reports that another App cleanup pass is in progress.
-// Callback callers must return before waiting on it.
-type CloseDeferredError struct {
-	done   <-chan struct{}
-	result *error
-}
-
-func (*CloseDeferredError) Error() string {
-	return "app: close deferred while cleanup is in progress"
-}
-
-func (e *CloseDeferredError) Wait() error {
-	if e == nil || e.done == nil {
-		return nil
-	}
-	<-e.done
-	if e.result == nil {
-		return nil
-	}
-	return *e.result
 }
 
 type MCPServerStatus struct {
@@ -267,7 +204,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			if err != nil {
 				return nil, err
 			}
-			candidateProvider, err := llm.NewProvider(profile)
+			candidateProvider, err := modelproviders.NewProvider(profile)
 			if err != nil {
 				return nil, err
 			}
@@ -283,7 +220,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	}
 	modelHealth := opts.ModelHealth
 	if modelHealth == nil {
-		modelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+		modelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	}
 	summaryProvider := opts.SummaryProvider
 	summaryProvenance := opts.SummaryProvenance
@@ -299,7 +236,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}
-		p, err := llm.NewProvider(profile)
+		p, err := modelproviders.NewProvider(profile)
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}
@@ -329,12 +266,12 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 	}()
 	toolTimeoutSeconds := durationSeconds(runtimeLimits.ToolTimeout)
-	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{
+	reg := toolcore.NewRegistryWithOptions(toolcore.RegistryOptions{
 		DefaultTimeoutSeconds: toolTimeoutSeconds,
 	})
 	runtimeEnvironment := agentRuntime.Environment()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
-	runtimeModules, err = prepareRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner, toolTimeoutSeconds)
+	runtimeModules, err = prepareRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +300,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 	}()
 
-	attachment, err := AttachWorkspaceThread(cfg, ThreadAttachmentRequest{
+	attachment, err := agent.AttachThread(cfg.RuntimePaths().StateDir, agent.ThreadAttachmentRequest{
 		ThreadID:       opts.ThreadID,
 		ParentThreadID: opts.parentThreadID,
 		Alias:          opts.Alias,
@@ -375,15 +312,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	var threadModules *runtimemodule.Set
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
-	var statusUnsubscribe func()
+
 	closeThreadResources := func() {
 		if threadModules != nil {
 			_ = threadModules.CloseThread(context.Background())
 			threadModules = nil
-		}
-		if statusUnsubscribe != nil {
-			statusUnsubscribe()
-			statusUnsubscribe = nil
 		}
 		if eventUnsubscribe != nil {
 			eventUnsubscribe()
@@ -412,7 +345,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	bus.SetCommitter(eventSink)
 	eventUnsubscribe = func() { bus.SetCommitter(nil) }
 	status, statusReplayErr := runtime.NewStatusStoreFromReplay(
-		runtimeStatusSeed(threadState, runtime.DefaultMaxPendingInput),
+		agent.RuntimeStatusSeed(threadState, runtime.DefaultMaxPendingInput),
 		func(visit func(events.Event)) error { threadState.ReplayEvents(visit); return nil },
 	)
 	if statusReplayErr != nil {
@@ -438,7 +371,8 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	var hookRunner hooks.PolicyRunner
 	if cfg.ModuleEnabled(string(hooks.ModuleID)) {
 		hookRunner, err = hooks.NewRunnerWithOptions(resourceGraph.HooksConfig(), hooks.RunnerOptions{
-			Environment: runtimeEnvironment,
+			Environment:     runtimeEnvironment,
+			RuntimeContexts: resourceGraph.HookRuntimeContexts(),
 		})
 		if err != nil {
 			closeThreadResources()
@@ -485,70 +419,22 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		ToolOutput:              runtimeLimits.ToolOutput,
 	}
 	a := &App{
-		Engine:                eng,
-		Status:                status,
-		Bus:                   bus,
-		Thread:                threadState,
-		ThreadStore:           attachment.Store,
-		ctx:                   appCtx,
-		cancel:                appCancel,
-		cfg:                   cfg,
-		stderr:                stderr,
-		threadResource:        threadState,
-		eventSink:             eventSink,
-		eventCatalog:          eventCatalog,
-		eventUnsubscribe:      eventUnsubscribe,
-		statusUnsubscribe:     statusUnsubscribe,
-		debug:                 opts.Debug,
-		logLevel:              opts.LogLevel,
-		runtimeEnvironment:    runtimeEnvironment,
-		threadReleased:        make(chan struct{}),
-		workerFactory:         opts.workerThreadFactory,
-		mcpManager:            opts.MCPManager,
-		agentRuntime:          agentRuntime,
-		runtimeModuleContext:  runtimeModules.runtimeContext,
-		threadModuleFactories: append([]runtimemodule.ThreadFactorySpec(nil), opts.threadModuleFactories...),
-		hookRunner:            hookRunner,
-		hookBaseRequest:       hookBaseRequest,
+		cfg: cfg, stderr: stderr, debug: opts.Debug, logLevel: opts.LogLevel,
+		runtimeEnvironment: runtimeEnvironment, workerFactory: opts.workerThreadFactory,
+		mcpManager: opts.MCPManager, agentRuntime: agentRuntime,
 	}
-	statusUnsubscribe = eventSink.AddProjection(status)
-	a.statusUnsubscribe = statusUnsubscribe
-	if err := a.attachObservability(threadState); err != nil {
+	a.Agent, err = agent.New(agent.Options{
+		Engine: eng, Status: status, Bus: bus, Thread: threadState, ThreadStore: attachment.Store,
+		Context: appCtx, Cancel: appCancel, Stderr: stderr, Debug: opts.Debug, LogLevel: opts.LogLevel,
+		EventSink: eventSink, EventCatalog: eventCatalog, EventUnsubscribe: eventUnsubscribe,
+		RuntimeContext: runtimeModules.runtimeContext, InputPolicy: a.applicationInputPolicy(cfg),
+		MediaDir: runtimePaths.MediaDir, ReleaseResources: resourceLease.Close,
+	})
+	if err != nil {
 		closeThreadResources()
 		return nil, err
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
-	a.cleanup = append(a.cleanup, func() error {
-		if a.runtimeModules == nil {
-			return nil
-		}
-		return a.runtimeModules.QuiesceRuntime(context.Background())
-	}, a.closeAndWaitPendingInputWork, func() error {
-		if err := a.detachObservability(); err != nil {
-			return err
-		}
-		return nil
-	}, func() error {
-		if a.statusUnsubscribe != nil {
-			a.statusUnsubscribe()
-			a.statusUnsubscribe = nil
-		}
-		if a.eventUnsubscribe != nil {
-			a.eventUnsubscribe()
-			a.eventUnsubscribe = nil
-		}
-		if a.eventSink != nil {
-			return a.eventSink.Close()
-		}
-		return nil
-	}, a.closeActiveThreadResources, func() error {
-		if a.runtimeModules == nil {
-			return nil
-		}
-		return a.runtimeModules.CloseRuntime(context.Background())
-	})
-
-	a.cleanup = append(a.cleanup, resourceLease.Close)
 	leaseTransferred = true
 
 	connectOpts := mcp.ConnectOptions{
@@ -560,7 +446,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		connectOpts.EnableClaudeChannel = true
 		connectOpts.OnNotification = func(n mcp.Notification) {
 			record := a.ObservationFromMCPNotification(n)
-			_, _ = a.DeliverObservation(a.ctx, record)
+			_, _ = a.DeliverObservation(a.Context(), record)
 		}
 	}
 	var mcpRuntimeModule *mcp.Module
@@ -593,22 +479,22 @@ func New(opts Options) (createdApp *App, resultErr error) {
 						AgentStateDir:         runtimePaths.StateDir,
 						MediaDir:              runtimePaths.MediaDir,
 						Environment:           runtimeEnvironment,
-						Shell:                 cfg.Shell,
-						Sandbox:               cfg.SandboxPolicy(),
-						SandboxRunner:         sandboxRunner,
-						Bus:                   bus,
-						Deliver:               a.DeliverObservation,
+
+						Sandbox:       cfg.SandboxPolicy(),
+						SandboxRunner: sandboxRunner,
+						Bus:           bus,
+						Deliver:       a.DeliverObservation,
 					})
 				}
 				return observableRuntimeModule, nil
 			},
 		},
 		{
-			ID:      workerThreadModuleID,
-			Enabled: cfg.ModuleEnabled(string(workerThreadModuleID)),
+			ID:      workerthreadsmodule.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(workerthreadsmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				a.workers = newWorkerThreadManager(a)
-				return &workerThreadModule{manager: a.workers}, nil
+				manager := a.NewWorkerManager(a.prepareWorkerChild)
+				return workerthreadsmodule.New(manager), nil
 			},
 		},
 	}
@@ -617,16 +503,12 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		_ = a.Close()
 		return nil, err
 	}
-	a.runtimeModules = runtimeModules.set
-	eng.RuntimeModules = runtimeModules.set
+	a.BindRuntimeModules(runtimeModules.set)
 	if runtimeModules.skills != nil {
 		a.skills = runtimeModules.skills.All()
 		a.skillPrompt = runtimeModules.skills.PromptReport()
 		a.skillFilteredItems = runtimeModules.skills.Filtered()
 		a.skillFiltered = len(a.skillFilteredItems)
-	}
-	if runtimeModules.shell != nil {
-		a.shellSessions = runtimeModules.shell.ShellSessions()
 	}
 	if observableRuntimeModule != nil {
 		a.obsv = observableRuntimeModule.Manager()
@@ -653,7 +535,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			goalState:                opts.sharedGoalState,
 			notes:                    opts.sharedNotes,
 			goalContinuation:         opts.sharedGoalState == nil,
-			goalContinuationDeferrer: a.workers,
+			goalContinuationDeferrer: a.Workers(),
 		},
 	)
 	if err != nil {
@@ -665,7 +547,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		_ = a.Close()
 		return nil, err
 	}
-	reg, err = runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds}, runtimeModules.set, threadModules)
+	reg, err = runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds}, runtimeModules.set, threadModules)
 	if err != nil {
 		_ = threadModules.CloseThread(context.Background())
 		_ = a.Close()
@@ -676,50 +558,30 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		_ = a.Close()
 		return nil, err
 	}
-	if err := eng.RecoverTranscript("load"); err != nil {
-		_ = a.Close()
+	if err := a.RestoreAndActivate(startupCtx); err != nil {
 		return nil, err
-	}
-	replayablePendingInput, err := eng.RecoverPendingInputs()
-	if err != nil {
-		_ = a.Close()
-		return nil, err
-	}
-	status.RecoverAfterRestart()
-	if a.executionError() == nil {
-		if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
-			_ = a.Close()
-			return nil, err
-		}
-	}
-	if err := startupCtx.Err(); err != nil {
-		_ = a.Close()
-		return nil, err
-	}
-	if err := a.activateExternalInputAfterPendingRecovery(startupCtx, replayablePendingInput); err != nil {
-		return nil, errors.Join(err, a.CloseAndWait())
 	}
 	appContextTransferred = true
 	creationCommitted = true
 	return a, nil
 }
 
-func goalStateStore(threadState *thread.Thread) *workmem.GoalStateStore {
+func goalStateStore(threadState *thread.Thread) *goalmodule.GoalStateStore {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewGoalStateStore(threadState.Dir, workmem.GoalStateOptions{})
+	return goalmodule.NewGoalStateStore(threadState.Dir, goalmodule.GoalStateOptions{})
 }
 
-func notesStore(threadState *thread.Thread) *workmem.NotesStore {
+func notesStore(threadState *thread.Thread) *notesmodule.NotesStore {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return workmem.NewNotesStore(threadState.Dir)
+	return notesmodule.NewNotesStore(threadState.Dir)
 }
 
-func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
-	return tools.ShellProfile{
+func toolsShellProfile(p config.ShellProfile) command.ShellProfile {
+	return command.ShellProfile{
 		Profile:       p.Profile,
 		Family:        p.Family,
 		Binary:        p.Binary,
@@ -727,305 +589,6 @@ func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 		PathStyle:     p.PathStyle,
 		HostPathStyle: p.HostPathStyle,
 	}
-}
-
-func (a *App) NewContext(ctx context.Context) error {
-	if a == nil || a.Engine == nil {
-		return ErrThreadUnavailable
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		return err
-	}
-	a.threadHandoffMu.Lock()
-	defer a.threadHandoffMu.Unlock()
-	if err := a.Engine.NewContext(ctx); err != nil {
-		return err
-	}
-	if a.Status != nil {
-		a.Status.ClearContextUsage()
-	}
-	return nil
-}
-
-func (a *App) closeActiveThreadResources() error {
-	if a == nil {
-		return nil
-	}
-	a.threadMu.Lock()
-	threadState := a.threadResource
-	a.threadResource = nil
-	a.Thread = nil
-	a.threadMu.Unlock()
-
-	var moduleErr, threadErr error
-	if a.Engine != nil {
-		if modules := a.Engine.ThreadRuntimeSnapshot().Modules; modules != nil {
-			moduleErr = modules.CloseThread(context.Background())
-		}
-	}
-	if threadState != nil {
-		threadErr = threadState.Close()
-	}
-	a.threadRelease.Do(func() {
-		if a.threadReleased != nil {
-			close(a.threadReleased)
-		}
-	})
-	return errors.Join(moduleErr, threadErr)
-}
-
-// WaitThreadReleased waits until final App cleanup has closed the active
-// Thread and its workspace lock, and until Worker Thread result deliveries can
-// no longer write its directory. Child runtimes may still be draining.
-func (a *App) WaitThreadReleased(ctx context.Context) error {
-	if a == nil || a.threadReleased == nil {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-a.threadReleased:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	if a.workers == nil {
-		return nil
-	}
-	return a.workers.WaitDeliveryWriters(ctx)
-}
-
-func runtimeStatusSeed(threadState *thread.Thread, maxPendingInputs int) runtime.StatusSeed {
-	if threadState == nil {
-		return runtime.StatusSeed{MaxPendingInputs: maxPendingInputs}
-	}
-	info := threadState.Info()
-	state := runtime.ThreadRuntimeIdle
-	switch info.ExecutionState {
-	case thread.ExecutionWorking:
-		state = runtime.ThreadRuntimeTurnActive
-	case thread.ExecutionFailed:
-		state = runtime.ThreadRuntimeFailed
-	}
-	return runtime.StatusSeed{
-		ThreadID:         threadState.ID,
-		ThreadAlias:      threadState.Alias,
-		ThreadState:      state,
-		PendingCount:     info.PendingInputs,
-		MaxPendingInputs: maxPendingInputs,
-		TokenUsage:       threadState.TokenUsageSnapshot(),
-		ContextUsage:     threadState.ContextUsageSnapshot(),
-	}
-}
-
-func (a *App) AddEventDelivery(delivery events.Delivery) func() {
-	if a == nil || a.eventSink == nil {
-		return func() {}
-	}
-	return a.eventSink.AddDelivery(delivery)
-}
-
-func (a *App) AddEventProjection(projection events.Delivery) func() {
-	if a == nil || a.eventSink == nil {
-		return func() {}
-	}
-	return a.eventSink.AddProjection(projection)
-}
-
-func (a *App) ReadCommittedEvents(read func() error) error {
-	if a == nil || a.eventSink == nil {
-		return events.ErrDurableSinkClosed
-	}
-	return a.eventSink.ReadCommitted(read)
-}
-
-func (a *App) attachObservability(threadState *thread.Thread) error {
-	if a == nil || a.Bus == nil || threadState == nil {
-		return nil
-	}
-	rec, err := observability.NewRecorder(observability.Options{
-		ThreadDir: threadState.Dir,
-		Debug:     a.debug,
-		LogLevel:  a.logLevel,
-	})
-	if err != nil {
-		return err
-	}
-	a.recorder = rec
-	a.observabilityUnsubscribe = a.Bus.Subscribe("*", func(e events.Event) {
-		_ = rec.Record(e)
-	})
-	return nil
-}
-
-func (a *App) detachObservability() error {
-	if a == nil {
-		return nil
-	}
-	if a.observabilityUnsubscribe != nil {
-		a.observabilityUnsubscribe()
-		a.observabilityUnsubscribe = nil
-	}
-	if a.recorder == nil {
-		return nil
-	}
-	err := a.recorder.Close()
-	a.recorder = nil
-	return err
-}
-
-// Run drives a single turn synchronously.
-func (a *App) Run(ctx context.Context, prompt string) (string, error) {
-	if a != nil && a.Engine != nil {
-		identity, ok := a.ThreadIdentity()
-		if !ok {
-			return "", ErrThreadUnavailable
-		}
-		if err := CheckTurnCapability(a.cfg, identity.ID, TurnAdmissionRequest{Prompt: prompt}); err != nil {
-			return "", err
-		}
-	}
-	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		return "", err
-	}
-	if cmd, handled, err := ParseSlashCommand(prompt); handled || err != nil {
-		if err != nil {
-			return "", err
-		}
-		if cmd.Name == SlashGoal {
-			return a.runEngineTurn(ctx, GoalInstructionPrompt(cmd.Args))
-		}
-		result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
-		if err != nil {
-			return "", err
-		}
-		if cmd.Name == SlashNew && a.executionError() == nil {
-			return a.runEngineTurnMessage(ctx, NewThreadGreetingMessage())
-		}
-		return result.Text, nil
-	}
-	return a.runEngineTurn(ctx, prompt)
-}
-
-// RunWithAttachments drives one synchronous text, image, or mixed-content
-// user turn. Attachment references must belong to the current Thread.
-func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments []llm.MediaRef) (string, error) {
-	if a == nil || a.Engine == nil {
-		return "", errors.New("app: attachment turn requires an initialized Thread and engine")
-	}
-	if len(attachments) == 0 {
-		return a.Run(ctx, prompt)
-	}
-	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		return "", err
-	}
-	if _, handled, err := ParseSlashCommand(prompt); handled || err != nil {
-		if err != nil {
-			return "", err
-		}
-		return "", errors.New("slash commands cannot include attachments")
-	}
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	if a.Thread == nil {
-		return "", errors.New("app: attachment turn requires an initialized Thread and engine")
-	}
-	if err := a.executionError(); err != nil {
-		return "", err
-	}
-	if err := usermedia.ValidateThreadMediaRefs(a.cfg.MediaDir(), a.Thread.ID, attachments, usermedia.Limits{}); err != nil {
-		return "", err
-	}
-	return a.Engine.TurnMessage(ctx, userTurnMessage(prompt, attachments))
-}
-
-func (a *App) runEngineTurn(ctx context.Context, input string) (string, error) {
-	if a == nil || a.Engine == nil {
-		return "", errors.New("app: turn requires an initialized engine")
-	}
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	if a.Thread == nil {
-		return "", ErrThreadUnavailable
-	}
-	if err := a.executionError(); err != nil {
-		return "", err
-	}
-	return a.Engine.Turn(ctx, input)
-}
-
-func (a *App) runEngineTurnMessage(ctx context.Context, message llm.Message) (string, error) {
-	if a == nil || a.Engine == nil {
-		return "", errors.New("app: turn requires an initialized engine")
-	}
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	if a.Thread == nil {
-		return "", ErrThreadUnavailable
-	}
-	if err := a.executionError(); err != nil {
-		return "", err
-	}
-	return a.Engine.TurnMessage(ctx, message)
-}
-
-func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
-	if a == nil || a.Engine == nil {
-		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
-	}
-	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		return runtime.CompactionResult{}, err
-	}
-	admitted := events.Normalize(events.Event{Type: runtime.TurnAdmittedType, Payload: runtime.TurnAdmittedPayload{}})
-	turnID := "compact-" + admitted.ID
-	admitted.TurnID = turnID
-	if err := a.Bus.Emit(admitted); err != nil {
-		return runtime.CompactionResult{}, fmt.Errorf("commit compaction admission: %w", err)
-	}
-	return a.compactWithTurnID(ctx, turnID, reason, auto, instructions)
-}
-
-func (a *App) CompactAdmittedWithInstructions(ctx context.Context, turnID, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
-	if a == nil || a.Engine == nil {
-		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
-	}
-	if turnID == "" {
-		return runtime.CompactionResult{}, fmt.Errorf("app: empty compact turn id")
-	}
-	return a.compactWithTurnID(ctx, turnID, reason, auto, instructions)
-}
-
-func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	if a.Thread == nil {
-		return runtime.CompactionResult{}, a.emitCompactionError(turnID, ErrThreadUnavailable)
-	}
-	sections, err := a.Engine.PromptSectionsWithError()
-	if err != nil {
-		return runtime.CompactionResult{}, a.emitCompactionError(turnID, fmt.Errorf("app: build compaction prompt: %w", err))
-	}
-	systemPrompt := prompt.JoinSections(sections)
-	result, err := a.Engine.CompactWithInstructions(ctx, turnID, systemPrompt, reason, auto, instructions)
-	if err != nil {
-		return result, a.emitCompactionError(turnID, err)
-	}
-	if err := a.Bus.Emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: runtime.TurnCompletedPayload{
-		TokenUsage: a.Thread.TokenUsageSnapshot(),
-	}}); err != nil {
-		return result, fmt.Errorf("commit compaction completion: %w", err)
-	}
-	return result, nil
-}
-
-func (a *App) emitCompactionError(turnID string, err error) error {
-	if emitErr := a.Bus.Emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: runtime.NewTurnErroredPayload(err)}); emitErr != nil {
-		return errors.Join(err, fmt.Errorf("commit compaction error: %w", emitErr))
-	}
-	return err
 }
 
 // ObservationFromMCPNotification is the MCP protocol adapter. Delivery stays
@@ -1082,43 +645,28 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	if a == nil || a.Engine == nil {
 		return observable.DeliveryOutcome{}, nil
 	}
-	threadLease := a.acquireExternalInputThreadLease()
-	defer threadLease.Release()
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	targetThread := ""
-	if a.Thread != nil {
-		targetThread = a.Thread.ID
-	}
-	select {
-	case <-ctx.Done():
-		return observable.DeliveryOutcome{}, ctx.Err()
-	default:
-	}
-	msg, attachmentErrors, err := buildObservationMessage(record, a.externalAttachmentOptions())
-	if err != nil {
-		return observable.DeliveryOutcome{}, err
-	}
-	if len(attachmentErrors) > 0 {
-		a.markObservationAttachmentError(record, attachmentErrors)
-	}
-	pendingID := observationPendingInputID(record)
-	delivery, err := a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
-		ID:  pendingID,
-		TTL: a.Engine.ExternalEventTTL,
-	}, threadLease, true, nil)
+	delivery, err := a.DeliverExternalInput(ctx, func() (llm.Message, runtime.PendingInputOptions, error) {
+		msg, attachmentErrors, err := buildObservationMessage(record, a.externalAttachmentOptions())
+		if err != nil {
+			return llm.Message{}, runtime.PendingInputOptions{}, err
+		}
+		if len(attachmentErrors) > 0 {
+			a.markObservationAttachmentError(record, attachmentErrors)
+		}
+		return msg, runtime.PendingInputOptions{ID: observationPendingInputID(record), TTL: a.Engine.ExternalEventTTL}, nil
+	})
 	if delivery.Queued {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateQueued,
-			PendingInputID: pendingID,
-			TargetThread:   targetThread,
+			PendingInputID: delivery.RecordID,
+			TargetThread:   delivery.TargetThread,
 		}, err
 	}
 	if delivery.Delivered {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateDelivered,
-			PendingInputID: pendingID,
-			TargetThread:   targetThread,
+			PendingInputID: delivery.RecordID,
+			TargetThread:   delivery.TargetThread,
 		}, err
 	}
 	return observable.DeliveryOutcome{}, err
@@ -1406,14 +954,6 @@ func mcpNotificationSourceEventID(n mcp.Notification, eventType string) string {
 	return "mcp-" + hex.EncodeToString(sum[:8])
 }
 
-func (a *App) TokenUsage() llm.Usage {
-	info, ok := a.ThreadInfo()
-	if !ok {
-		return llm.Usage{}
-	}
-	return info.TokenUsage.Total
-}
-
 func (a *App) MCPStatus() MCPStatus {
 	if a == nil {
 		return MCPStatus{}
@@ -1500,9 +1040,9 @@ func durationSeconds(d time.Duration) int {
 	if d <= 0 {
 		return 0
 	}
-	max := time.Duration(tools.MaxTimeoutSeconds) * time.Second
+	max := time.Duration(toolcore.MaxTimeoutSeconds) * time.Second
 	if d >= max {
-		return tools.MaxTimeoutSeconds
+		return toolcore.MaxTimeoutSeconds
 	}
 	seconds := d / time.Second
 	if d%time.Second > 0 {
@@ -1516,91 +1056,4 @@ func FormatTokenUsage(usage llm.Usage) string {
 		FormatCompactTokenCount(usage.TotalTokens()),
 		FormatCompactTokenCount(usage.InputTokens),
 		FormatCompactTokenCount(usage.OutputTokens))
-}
-
-// BeginClose cancels App-owned work without waiting for active turns or
-// deferred cleanup to drain.
-func (a *App) BeginClose() error {
-	if a == nil {
-		return nil
-	}
-	a.closeCancel.Do(func() {
-		if a.cancel != nil {
-			a.cancel()
-		}
-		if a.runtimeModules != nil {
-			// BeginClose is intentionally non-blocking. Close/CloseAndWait
-			// serializes with this generic Module quiesce pass and reports its
-			// cached result before releasing later resources.
-			go func() { _ = a.runtimeModules.QuiesceRuntime(context.Background()) }()
-		}
-	})
-	return nil
-}
-
-// Close advances cleanup until it completes or an observable close must be
-// deferred. A deferred result leaves later resources untouched so callback
-// callers can return safely and an external owner can resume cleanup.
-func (a *App) Close() (result error) {
-	if a == nil {
-		return nil
-	}
-	a.closeMu.Lock()
-	if a.closeRunning {
-		done := a.closeRunDone
-		activeResult := a.closeRunResult
-		a.closeMu.Unlock()
-		return &CloseDeferredError{done: done, result: activeResult}
-	}
-	a.closeRunning = true
-	a.closeRunDone = make(chan struct{})
-	a.closeRunResult = &result
-	done := a.closeRunDone
-	a.closeMu.Unlock()
-	defer func() {
-		a.closeMu.Lock()
-		a.closeRunning = false
-		close(done)
-		a.closeMu.Unlock()
-	}()
-	a.lifecycleMu.Lock()
-	defer a.lifecycleMu.Unlock()
-	_ = a.BeginClose()
-	for {
-		a.closeMu.Lock()
-		if a.cleanupIndex >= len(a.cleanup) {
-			result = a.closeErr
-			a.closeMu.Unlock()
-			return result
-		}
-		fn := a.cleanup[a.cleanupIndex]
-		a.closeMu.Unlock()
-		err := fn()
-		var deferred interface{ Wait() error }
-		if errors.As(err, &deferred) {
-			return err
-		}
-		a.closeMu.Lock()
-		a.cleanupIndex++
-		if err != nil && a.closeErr == nil {
-			a.closeErr = err
-		}
-		a.closeMu.Unlock()
-	}
-}
-
-// CloseAndWait fully drains deferred observable work before releasing later
-// resources. It is for process and transport owners, not callback code.
-func (a *App) CloseAndWait() error {
-	if a == nil {
-		return nil
-	}
-	for {
-		err := a.Close()
-		var deferred interface{ Wait() error }
-		if !errors.As(err, &deferred) {
-			return err
-		}
-		_ = deferred.Wait()
-	}
 }

@@ -8,7 +8,10 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+	"github.com/juex-ai/juex/internal/framework/agent"
 )
 
 func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
@@ -19,7 +22,7 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 	if err := os.WriteFile(configPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadWithOptions(config.LoadOptions{WorkDir: work, HomeDir: t.TempDir(), ConfigPath: configPath, AgentState: config.AgentStateNone})
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, HomeDir: t.TempDir(), ConfigPath: configPath, AgentState: config.AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +39,7 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	create, ok := main.Engine.Tools.Get(app.WorkerThreadToolCreate)
+	create, ok := main.Engine.Tools.Get(workerthreadsmodule.ToolCreate)
 	if !ok {
 		t.Fatal("Worker tool unavailable")
 	}
@@ -44,22 +47,22 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var status app.WorkerThreadStatus
+	var status agent.WorkerThreadStatus
 	if err := json.Unmarshal([]byte(result), &status); err != nil {
 		t.Fatal(err)
 	}
-	worker, ok := main.ManagedWorkerApp(status.ThreadID)
+	worker, ok := main.ManagedWorkerAgent(status.ThreadID)
 	if !ok {
 		t.Fatalf("Worker not managed: %s", result)
 	}
-	for name, application := range map[string]*app.App{"Main": main, "Worker": worker} {
+	for name, application := range map[string]*agent.Agent{"Main": main.Agent, "Worker": worker} {
 		for module, tool := range map[string]string{"goal": "get_goal", "notes": "update_notes", "context-control": "context_new", "skills": "skill_search", "basic-file-tools": "read", "worker-threads": "thread_create"} {
 			_, available := application.Engine.Tools.Get(tool)
 			if available != cfg.ModuleEnabled(module) {
 				t.Errorf("%s %s availability = %v, configuration = %v", name, tool, available, cfg.ModuleEnabled(module))
 			}
 		}
-		if err := application.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+		if err := app.ReadRuntimeModuleSnapshot(application, func(active app.RuntimeModuleSnapshot) error {
 			observed, err := app.NewRuntimeCatalogService(cfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
 			if err != nil {
 				return err

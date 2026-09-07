@@ -69,4 +69,4 @@ Memory 是使用同一套类型化 capability 的第一方 Go Feature Module，�
 - [架构：依赖方向](../../ARCHITECTURE.zh.md#依赖方向)
 - [领域模型](../../DOMAIN.zh.md)
 - [产品哲学](../../PHILOSOPHY.zh.md)
-- [Module contract](../../internal/runtime/module/)
+- [Module contract](../../internal/framework/module)

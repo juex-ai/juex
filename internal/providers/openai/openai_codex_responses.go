@@ -1,0 +1,432 @@
+package openai
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	protocolsupport "github.com/juex-ai/juex/internal/providers/internal/protocol"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
+	openai "github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
+	"github.com/openai/openai-go/responses"
+	"github.com/openai/openai-go/shared"
+)
+
+const defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
+
+var codexSSERetryBaseDelay = 100 * time.Millisecond
+
+const codexSSEIdleMaxAttempts = 2
+
+type openAICodexResponsesProvider struct {
+	profile   llm.ProviderProfile
+	client    openai.Client
+	transport string
+	ws        *codexResponsesWebsocketTransport
+}
+
+func NewOpenAICodexResponses(profile llm.ProviderProfile, client any) llm.Provider {
+	profile = providerprofile.CloneProviderProfile(profile)
+	if profile.BaseURL == "" {
+		profile.BaseURL = defaultOpenAICodexBaseURL
+	}
+	transport := profile.Compat.CodexTransport
+	if transport == "" {
+		transport = providerprofile.CodexTransportSSE
+		profile.Compat.CodexTransport = transport
+	}
+	opts := []option.RequestOption{
+		option.WithBaseURL(openAICodexResponsesBaseURL(profile.BaseURL)),
+		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
+	}
+	for k, v := range profile.Headers {
+		opts = append(opts, option.WithHeader(k, v))
+	}
+	opts = append(opts,
+		option.WithAPIKey(profile.APIKey),
+		option.WithHeader("originator", "juex"),
+		option.WithHeader("User-Agent", fmt.Sprintf("juex (%s; %s)", runtime.GOOS, runtime.GOARCH)),
+		option.WithHeader("OpenAI-Beta", "responses=experimental"),
+		option.WithHeader("Accept", "text/event-stream"),
+	)
+	if accountID := codexAccountID(profile); accountID != "" {
+		opts = append(opts, option.WithHeader("chatgpt-account-id", accountID))
+	}
+	for k, v := range profile.Query {
+		opts = append(opts, option.WithQuery(k, v))
+	}
+	if httpClient, ok := client.(*http.Client); ok && httpClient != nil {
+		opts = append(opts, option.WithHTTPClient(httpClient))
+	}
+	var httpClient *http.Client
+	if c, ok := client.(*http.Client); ok {
+		httpClient = c
+	}
+	return &openAICodexResponsesProvider{
+		profile:   profile,
+		client:    openai.NewClient(opts...),
+		transport: transport,
+		ws:        newCodexResponsesWebsocketTransport(profile, httpClient),
+	}
+}
+
+func (p *openAICodexResponsesProvider) Name() string { return p.profile.ID + ":" + p.profile.Model }
+
+func (p *openAICodexResponsesProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
+	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{OmitReasoning: true})
+	if err != nil {
+		return llm.Response{}, err
+	}
+	params := p.codexRequestParams(sys, providerContext.Messages, tools, opts)
+	var resp *responses.Response
+
+	switch p.transport {
+	case providerprofile.CodexTransportAuto:
+		resp, err = p.ws.Complete(ctx, params, opts)
+		if err != nil {
+			resp, err = p.completeSSE(ctx, params, opts)
+		}
+	case providerprofile.CodexTransportWebSocket, providerprofile.CodexTransportWebSocketCached:
+		resp, err = p.ws.Complete(ctx, params, opts)
+	case providerprofile.CodexTransportSSE:
+		resp, err = p.completeSSE(ctx, params, opts)
+	default:
+		return llm.Response{}, fmt.Errorf("openai codex responses: unsupported codex transport %q", p.transport)
+	}
+	if err != nil {
+		return llm.Response{}, fmt.Errorf("openai codex responses: %w", err)
+	}
+	return p.responseFromCodexResponses(resp), nil
+}
+
+func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions) (*responses.Response, error) {
+	maxAttempts := protocolsupport.ProviderMaxRetries + 1
+	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
+	idleAttempts := 0
+	for attempt := 0; ; attempt++ {
+		streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
+		stream := p.client.Responses.NewStreaming(streamCtx, params)
+		resp, err := readCodexResponsesStream(stream, codexResponsesStreamOptions{
+			OnDelta:   opts.OnDelta,
+			ResetIdle: resetIdle,
+		})
+		_ = stream.Close()
+		stopIdle()
+		if err == nil {
+			return resp, nil
+		}
+		if idleExpired() {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			idleAttempts++
+			idleErr := protocolsupport.NewStreamIdleTimeoutError("codex SSE", idleTimeout, err)
+			if idleAttempts >= codexSSEIdleMaxAttempts {
+				p.emitCodexSSERetryDiagnostic(opts, idleErr, idleAttempts, codexSSEIdleMaxAttempts, 0, false, true, "codex_sse_idle_timeout")
+				return nil, idleErr
+			}
+			delay := codexSSERetryDelay(idleAttempts - 1)
+			p.emitCodexSSERetryDiagnostic(opts, idleErr, idleAttempts, codexSSEIdleMaxAttempts, delay, true, false, "codex_sse_idle_timeout")
+			if err := waitCodexSSERetry(ctx, delay); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		attemptNumber := attempt + 1
+		if ctx.Err() != nil || !isRetryableCodexSSEReadError(err) {
+			return nil, err
+		}
+		if attemptNumber >= maxAttempts {
+			p.emitCodexSSERetryDiagnostic(opts, err, attemptNumber, maxAttempts, 0, false, true, "codex_sse_read")
+			return nil, fmt.Errorf("codex SSE retry exhausted after %d attempts (max_attempts=%d): %w", attemptNumber, maxAttempts, err)
+		}
+		delay := codexSSERetryDelay(attempt)
+		p.emitCodexSSERetryDiagnostic(opts, err, attemptNumber, maxAttempts, delay, true, false, "codex_sse_read")
+		if err := waitCodexSSERetry(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) responses.ResponseNewParams {
+	params := responses.ResponseNewParams{
+		Model: shared.ResponsesModel(p.profile.Model),
+		Store: param.NewOpt(false),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfInputItemList: encodeOpenAIResponseInput(history, p.profile),
+		},
+		Include:           []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent},
+		ParallelToolCalls: param.NewOpt(true),
+		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
+		},
+	}
+	if sys != "" {
+		params.Instructions = param.NewOpt(sys)
+	}
+	params.Text.SetExtraFields(map[string]any{"verbosity": "medium"})
+	if p.profile.Capabilities.Tools && len(tools) > 0 {
+		params.Tools = toOpenAIResponseTools(tools)
+	}
+	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
+		params.MaxOutputTokens = param.NewOpt(int64(opts.MaxOutputTokens))
+	}
+	if opts.CachePolicy.StablePrefixKey != "" {
+		params.PromptCacheKey = param.NewOpt(opts.CachePolicy.StablePrefixKey)
+	}
+	if opts.CachePolicy.Retention != "" {
+		params.SetExtraFields(map[string]any{"prompt_cache_retention": opts.CachePolicy.Retention})
+	}
+	if effort := protocolsupport.RequestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
+		params.Reasoning = shared.ReasoningParam{
+			Effort:  shared.ReasoningEffort(effort),
+			Summary: shared.ReasoningSummaryAuto,
+		}
+	}
+	return params
+}
+
+type codexResponsesStream interface {
+	Next() bool
+	Current() responses.ResponseStreamEventUnion
+	Err() error
+}
+
+type codexResponsesStreamOptions struct {
+	OnDelta   func(llm.StreamDelta)
+	ResetIdle func()
+}
+
+func readCodexResponsesStream(stream codexResponsesStream, opts codexResponsesStreamOptions) (*responses.Response, error) {
+	var (
+		finalResp responses.Response
+		hasFinal  bool
+		items     []responses.ResponseOutputItemUnion
+	)
+	for stream.Next() {
+		if opts.ResetIdle != nil {
+			opts.ResetIdle()
+		}
+		event := stream.Current()
+		emitResponsesStreamDelta(opts.OnDelta, event)
+		switch event.Type {
+		case "error":
+			return nil, fmt.Errorf("codex error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON()))
+		case "response.failed":
+			if msg := responseErrorMessage(event.Response); msg != "" {
+				return nil, fmt.Errorf("%s", msg)
+			}
+			return nil, fmt.Errorf("codex response failed")
+		case "response.output_item.done":
+			items = append(items, event.Item)
+		case "response.done", "response.completed", "response.incomplete":
+			finalResp = event.Response
+			hasFinal = true
+		}
+	}
+	if err := stream.Err(); err != nil {
+		return nil, &codexSSEReadError{cause: err}
+	}
+	if !hasFinal {
+		if len(items) > 0 {
+			return &responses.Response{Status: responses.ResponseStatusCompleted, Output: items}, nil
+		}
+		return nil, &codexSSEReadError{cause: errors.New("stream closed before response.completed")}
+	}
+	if len(finalResp.Output) == 0 && len(items) > 0 {
+		finalResp.Output = items
+	}
+	return &finalResp, nil
+}
+
+type codexSSEReadError struct {
+	cause error
+}
+
+func (e *codexSSEReadError) Error() string {
+	return fmt.Sprintf("codex SSE read: %v", e.cause)
+}
+
+func (e *codexSSEReadError) Unwrap() error {
+	return e.cause
+}
+
+func isRetryableCodexSSEReadError(err error) bool {
+	var readErr *codexSSEReadError
+	if !errors.As(err, &readErr) {
+		return false
+	}
+	if errors.Is(readErr.cause, context.Canceled) || errors.Is(readErr.cause, context.DeadlineExceeded) {
+		return false
+	}
+	var apiErr *openai.Error
+	return !errors.As(readErr.cause, &apiErr)
+}
+
+func codexSSERetryDelay(attempt int) time.Duration {
+	return time.Duration(attempt+1) * codexSSERetryBaseDelay
+}
+
+func waitCodexSSERetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (p *openAICodexResponsesProvider) emitCodexSSERetryDiagnostic(opts llm.CompleteOptions, err error, attempt, maxAttempts int, delay time.Duration, willRetry, exhausted bool, retryReason string) {
+	if opts.RetryObserver == nil {
+		return
+	}
+	opts.RetryObserver(llm.ProviderRetryDiagnostic{
+		Provider:    p.profile.ID,
+		Model:       p.profile.Model,
+		Protocol:    p.profile.Protocol,
+		Transport:   providerprofile.CodexTransportSSE,
+		Operation:   "responses.sse",
+		Attempt:     attempt,
+		MaxAttempts: maxAttempts,
+		DelayMS:     delay.Milliseconds(),
+		RetryReason: retryReason,
+		RawError:    err.Error(),
+		WillRetry:   willRetry,
+		Exhausted:   exhausted,
+	})
+}
+
+func responseErrorMessage(resp responses.Response) string {
+	if resp.Error.Message != "" {
+		return resp.Error.Message
+	}
+	if resp.Error.Code != "" {
+		return string(resp.Error.Code)
+	}
+	return ""
+}
+
+func (p *openAICodexResponsesProvider) responseFromCodexResponses(resp *responses.Response) llm.Response {
+	out := llm.Message{Role: llm.RoleAssistant, Model: p.Name()}
+	stop := llm.StopEndTurn
+	for _, item := range resp.Output {
+		switch item.Type {
+		case "reasoning":
+			var summaries []string
+			for _, summary := range item.Summary {
+				if summary.Text != "" {
+					summaries = append(summaries, summary.Text)
+				}
+			}
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockReasoning,
+				Text:      strings.Join(summaries, "\n"),
+				Signature: item.ID,
+				Content:   item.EncryptedContent,
+				Redacted:  item.EncryptedContent != "",
+			})
+		case "message":
+			for _, c := range item.Content {
+				switch c.Type {
+				case "output_text":
+					out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: c.Text})
+				case "refusal":
+					out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: c.Refusal})
+				}
+			}
+		case "function_call":
+			stop = llm.StopToolUse
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockToolUse,
+				ToolUseID: item.CallID,
+				ToolName:  item.Name,
+				Input:     llm.ParseToolArguments(item.Arguments),
+			})
+		}
+	}
+	if resp.Status == responses.ResponseStatusIncomplete && resp.IncompleteDetails.Reason == "max_output_tokens" {
+		stop = llm.StopMaxTokens
+	}
+	return llm.Response{
+		Message:    out,
+		StopReason: stop,
+		Usage: llm.CanonicalUsage(
+			int(resp.Usage.InputTokens),
+			int(resp.Usage.OutputTokens),
+			int(resp.Usage.InputTokensDetails.CachedTokens),
+		),
+	}
+}
+
+func openAICodexResponsesBaseURL(baseURL string) string {
+	raw := strings.TrimSpace(baseURL)
+	if raw == "" {
+		raw = defaultOpenAICodexBaseURL
+	}
+	normalized := strings.TrimRight(raw, "/")
+	if strings.HasSuffix(normalized, "/responses") {
+		normalized = strings.TrimRight(strings.TrimSuffix(normalized, "/responses"), "/")
+	}
+	if !strings.HasSuffix(normalized, "/codex") {
+		normalized += "/codex"
+	}
+	return normalized
+}
+
+func codexAccountID(profile llm.ProviderProfile) string {
+	for _, key := range []string{"chatgpt-account-id", "ChatGPT-Account-ID"} {
+		if v := strings.TrimSpace(profile.Headers[key]); v != "" {
+			return v
+		}
+	}
+	return codexAccountIDFromAccessToken(profile.APIKey)
+}
+
+func codexAccountIDFromAccessToken(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[1] == "" {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	switch v := claims["https://api.openai.com/auth"].(type) {
+	case map[string]any:
+		if accountID, _ := v["chatgpt_account_id"].(string); strings.TrimSpace(accountID) != "" {
+			return strings.TrimSpace(accountID)
+		}
+	}
+	if accountID, _ := claims["chatgpt_account_id"].(string); strings.TrimSpace(accountID) != "" {
+		return strings.TrimSpace(accountID)
+	}
+	return ""
+}

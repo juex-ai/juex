@@ -25,16 +25,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/modules/scratchpad"
-	"github.com/juex-ai/juex/internal/observable"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/web"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/scratchpad"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -47,6 +47,7 @@ type webProvider struct {
 }
 
 func (p *webProvider) Name() string { return "web-test" }
+
 func (p *webProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -104,7 +105,7 @@ func (p *interruptibleCompactWebProvider) Complete(ctx context.Context, sys stri
 
 func TestWeb_TranscriptPageReadsLatestItemsFromEOF(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
 	threadState, err := thread.New(cfg.ThreadsDir())
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +162,7 @@ func TestWeb_TranscriptPageReadsLatestItemsFromEOF(t *testing.T) {
 
 func TestWeb_ThreadListReadsOnlyAgentIndex(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
 	store := thread.NewStore(cfg.RuntimePaths().StateDir)
 	main, err := store.EnsureMain()
 	if err != nil {
@@ -191,7 +192,7 @@ func TestWeb_ThreadListReadsOnlyAgentIndex(t *testing.T) {
 
 func TestWeb_ThreadListRetriesFailedStartupIndexRecovery(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
 	store := thread.NewStore(cfg.RuntimePaths().StateDir)
 	main, err := store.EnsureMain()
 	if err != nil {
@@ -229,7 +230,7 @@ func TestWeb_ThreadListRetriesFailedStartupIndexRecovery(t *testing.T) {
 
 func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
 	server := web.NewServer(web.Options{Cfg: cfg, Provider: &webProvider{}})
 	httpServer := httptest.NewServer(server.Handler())
 
@@ -312,7 +313,7 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 }
 
 func TestWeb_ModuleResourcesFollowSwitchAcrossRestart(t *testing.T) {
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: t.TempDir(),
 		AgentStateDir: t.TempDir(),
 	}
@@ -334,7 +335,7 @@ func TestWeb_ModuleResourcesFollowSwitchAcrossRestart(t *testing.T) {
 	resource := "/api/threads/" + thread.MainID + "/modules/scratchpad/resources/files/"
 	for _, enabled := range []bool{true, false, true} {
 		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
-			cfg.Modules = config.ModulePolicy{modulecatalog.Scratchpad: {Enabled: enabled}}
+			cfg.Modules = config.ModulePolicy{scratchpad.ModuleID: {Enabled: enabled}}
 			server := web.NewServer(web.Options{Cfg: cfg, Provider: &webProvider{}})
 			defer server.Close()
 			httpServer := httptest.NewServer(server.Handler())
@@ -425,7 +426,7 @@ func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutOpeningThread(t *tes
 	}
 
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: &webProvider{},
 	})
 	t.Cleanup(srv.Close)
@@ -524,7 +525,7 @@ func TestWeb_RemoteMCPToolRoundTrip(t *testing.T) {
 		},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: provider,
 	})
 	t.Cleanup(srv.Close)
@@ -612,7 +613,7 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "noted"), StopReason: llm.StopEndTurn},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -729,7 +730,7 @@ providers:
 	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadWithOptions(config.LoadOptions{
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    work,
 		ConfigPath: configPath,
 		AgentState: config.AgentStateNone,
@@ -825,7 +826,7 @@ func TestWeb_ProviderErrorUsageSurvivesRestartAndReachesAPI(t *testing.T) {
 		errs:  []error{errors.New("provider failed after reporting Usage")},
 	}
 	work := t.TempDir()
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
 	server := web.NewServer(web.Options{Cfg: cfg, Provider: provider})
 	httpServer := httptest.NewServer(server.Handler())
 	threadID := createWebMainThread(t, httpServer.URL)
@@ -893,7 +894,7 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 	compaction := config.DefaultCompactionConfig()
 	compaction.KeepRecentTokens = 0
 	srv := web.NewServer(web.Options{
-		Cfg: config.Config{
+		Cfg: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai",
 			APIKey:     "x",
 			Model:      "m",
@@ -1049,7 +1050,7 @@ func TestWeb_ComposerImageUpload(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "image noted"), StopReason: llm.StopEndTurn},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir},
+		Cfg:      config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -1190,7 +1191,7 @@ func (p *pendingWebProvider) callCount() int {
 func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 	work := t.TempDir()
 	prov := newPendingWebProvider()
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
 	srv := web.NewServer(web.Options{
 		Cfg:      cfg,
 		Provider: prov,
@@ -1344,7 +1345,7 @@ func TestPendingInputFailureContextReportsUnavailableJournal(t *testing.T) {
 
 func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work,
 		AgentStateDir: filepath.Join(t.TempDir(), "agent"),
 	}
@@ -1432,7 +1433,7 @@ func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	work := t.TempDir()
 	stateDir := filepath.Join(t.TempDir(), "agent")
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir}
 	writeE2EObservableConfig(t, cfg)
 	prov := &webProvider{steps: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "observable handled"), StopReason: llm.StopEndTurn},
@@ -1536,7 +1537,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 
 func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work,
 		AgentStateDir: filepath.Join(t.TempDir(), "agent"),
 	}
@@ -1657,7 +1658,7 @@ func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 func TestWeb_ScheduleCatchUpAutomaticallySurfacesObservation(t *testing.T) {
 	work := t.TempDir()
 	stateDir := filepath.Join(t.TempDir(), "agent")
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:    "openai",
 		APIKey:        "x",
 		Model:         "m",
@@ -1798,7 +1799,7 @@ func TestWeb_RunMonthlyScheduleObservableOnce(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "manual schedule handled"), StopReason: llm.StopEndTurn},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -1965,7 +1966,7 @@ func TestWeb_RunMonthlyScheduleObservableOnce(t *testing.T) {
 
 func TestWeb_OldObservableShapeIsVisibleAndBlocksTaggedEdits(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work,
 		AgentStateDir: filepath.Join(t.TempDir(), "agent"),
 	}

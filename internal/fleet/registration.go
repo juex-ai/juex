@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 func (m *Manager) Add(ctx context.Context, opts AddOptions) (AddResult, error) {

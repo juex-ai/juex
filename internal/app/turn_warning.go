@@ -3,19 +3,14 @@ package app
 import (
 	"fmt"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/framework/agent"
 )
 
 const TurnWarningAttachmentVisionUnavailable = "attachment_vision_unavailable"
 
-// TurnWarning is a non-blocking application warning rendered by transports.
-type TurnWarning struct {
-	Code       string `json:"code"`
-	Message    string `json:"message"`
-	Suggestion string `json:"suggestion,omitempty"`
-}
-
 // AttachmentWarnings reports capability mismatches for an accepted image turn.
-func (a *App) AttachmentWarnings(attachmentCount int) []TurnWarning {
+func (a *App) AttachmentWarnings(attachmentCount int) []agent.TurnWarning {
 	if a == nil || attachmentCount <= 0 {
 		return nil
 	}
@@ -27,7 +22,7 @@ func (a *App) AttachmentWarnings(attachmentCount int) []TurnWarning {
 	if model == "" {
 		model = "the selected model"
 	}
-	return []TurnWarning{{
+	return []agent.TurnWarning{{
 		Code: TurnWarningAttachmentVisionUnavailable,
 		Message: fmt.Sprintf(
 			"model %q cannot view attached image content because vision is disabled",

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/modules/agentsmd"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/skills"
+	"github.com/juex-ai/juex/internal/features/agentsmd"
+	"github.com/juex-ai/juex/internal/features/skills"
+	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 type ResourceSummary struct {

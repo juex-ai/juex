@@ -9,8 +9,9 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/sandbox"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
 )
 
 func TestEndToEnd_OmittedSandboxConfigRestrictsExecCommandWrites(t *testing.T) {
@@ -283,7 +284,7 @@ shell:
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadFromFileForWorkDir(configPath, work)
+	cfg, err := config.LoadFromFileForWorkDir(modulecatalog.Inventory(), configPath, work)
 	if err != nil {
 		t.Fatal(err)
 	}

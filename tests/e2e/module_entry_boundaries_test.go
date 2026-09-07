@@ -11,18 +11,21 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/web"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type moduleEntryProvider struct{ calls atomic.Int32 }
 
 func (*moduleEntryProvider) Name() string { return "module-entry" }
+
 func (p *moduleEntryProvider) Complete(context.Context, string, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
 	p.calls.Add(1)
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "retained history"), StopReason: llm.StopEndTurn}, nil
@@ -36,7 +39,7 @@ func TestModuleEntriesKeepDisabledResourcesUnopened(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cfg := config.Config{WorkDir: work, AgentStateDir: address.Address.StateDir(), AgentAddress: address.Address, Preset: preset,
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: address.Address.StateDir(), AgentAddress: address.Address, Preset: preset,
 				Modules:    config.ModulePolicy{"mcp": {Enabled: false}, "skills": {Enabled: false}, "extensions": {Enabled: false}, "observables": {Enabled: false}, "hooks": {Enabled: false}},
 				Extensions: config.ExtensionPolicy{Configured: true, Allow: []string{"broken"}},
 			}
@@ -52,7 +55,7 @@ func TestModuleEntriesKeepDisabledResourcesUnopened(t *testing.T) {
 			for _, id := range []string{"mcp", "skills", "extensions", "observables", "hooks"} {
 				previewContent += "  " + id + ":\n    enabled: false\n"
 			}
-			preview, err := config.ValidateAgentConfig([]byte(previewContent), filepath.Join(root, ".juex"), address.Agent.ID)
+			preview, err := config.ValidateAgentConfig(modulecatalog.Inventory(), []byte(previewContent), filepath.Join(root, ".juex"), address.Agent.ID)
 			if err != nil {
 				t.Fatalf("disabled resource config preview: %v", err)
 			}
@@ -100,10 +103,10 @@ func TestModuleEntriesKeepDisabledResourcesUnopened(t *testing.T) {
 
 func TestWorkerDisabledAPIKeepsHistoryAndHostMaintenance(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
 		Modules: config.ModulePolicy{"worker-threads": {Enabled: true}},
 	}
-	if err := app.EnsureMainThread(cfg); err != nil {
+	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker("0", "retained")

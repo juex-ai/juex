@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/homestore"
+	"github.com/juex-ai/juex/internal/foundation/homestore"
 )
 
 func acquireLifecycleLock(store homestore.Store, agentID string) (maintenanceGuard, error) {

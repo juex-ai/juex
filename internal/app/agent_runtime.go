@@ -6,8 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/features/extensions"
+	"github.com/juex-ai/juex/internal/foundation/environment"
 )
 
 // AgentRuntimeResolution is the immutable process-lifetime view of selected
@@ -16,7 +17,7 @@ type AgentRuntimeResolution struct {
 	graph                   RuntimeResourceGraph
 	environment             environment.Snapshot
 	environmentDeclarations []RuntimeExtensionEnvironmentDeclaration
-	extensions              AgentExtensionsRuntime
+	extensions              extensions.RuntimeRoot
 }
 
 type RuntimeExtensionEnvironmentDeclaration struct {
@@ -49,7 +50,7 @@ func resolveAgentRuntime(cfg config.Config, allowMissingAgentData bool) (AgentRu
 		graph:                   graph,
 		environment:             resolvedEnvironment,
 		environmentDeclarations: declarations,
-		extensions:              newAgentExtensionsRuntime(cfg.AgentAddress),
+		extensions:              extensions.NewRuntimeRoot(cfg.AgentAddress.StateDir()),
 	}
 	if err != nil {
 		return resolution, err
@@ -69,7 +70,7 @@ func (r AgentRuntimeResolution) EnvironmentDeclarations() []RuntimeExtensionEnvi
 	return append([]RuntimeExtensionEnvironmentDeclaration(nil), r.environmentDeclarations...)
 }
 
-func (r AgentRuntimeResolution) ExtensionsRuntime() AgentExtensionsRuntime {
+func (r AgentRuntimeResolution) ExtensionsRuntime() extensions.RuntimeRoot {
 	return r.extensions
 }
 

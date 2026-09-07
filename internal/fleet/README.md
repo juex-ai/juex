@@ -7,14 +7,14 @@ does not own HTTP routing, CLI presentation, or native service installation.
 
 ## Boundaries
 
-- `internal/agentstate` owns registered identity and Workspace binding.
-- `internal/endpoint` verifies process and Runtime Instance identity and
+- `internal/framework/agentstate` owns registered identity and Workspace binding.
+- `internal/framework/endpoint` verifies process and Runtime Instance identity and
   provides maintenance guards.
-- `internal/processmetrics` provides best-effort process counters.
-- `internal/config` validates effective and replacement configuration.
-- `internal/fleetweb` owns HTTP, JSON, reverse proxy, and embedded Web serving.
-- `internal/cli` owns prompts, output, and exit categories.
-- `internal/fleetservice` owns launchd, systemd-user, and termux-services.
+- `internal/foundation/processmetrics` provides best-effort process counters.
+- `internal/app/config` validates effective and replacement configuration.
+- `internal/entrypoints/fleethttp` owns HTTP, JSON, reverse proxy, and embedded Web serving.
+- `internal/entrypoints/cli` owns prompts, output, and exit categories.
+- `internal/fleet/service` owns launchd, systemd-user, and termux-services.
 
 ## Invariants
 

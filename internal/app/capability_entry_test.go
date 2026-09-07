@@ -6,12 +6,15 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	extensionsmodule "github.com/juex-ai/juex/internal/features/extensions"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type capabilityProvider struct{ calls atomic.Int32 }
@@ -19,12 +22,14 @@ type capabilityProvider struct{ calls atomic.Int32 }
 type capabilityStartPolicy struct{ calls atomic.Int32 }
 
 func (*capabilityStartPolicy) ID() runtimemodule.ID { return "startup-probe" }
+
 func (p *capabilityStartPolicy) ApplyThreadStart(context.Context, runtimemodule.ThreadStartRequest) (runtimemodule.ThreadStartDecision, error) {
 	p.calls.Add(1)
 	return runtimemodule.ThreadStartDecision{}, nil
 }
 
 func (*capabilityProvider) Name() string { return "capability-test" }
+
 func (p *capabilityProvider) Complete(context.Context, string, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
 	p.calls.Add(1)
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "completed"), StopReason: llm.StopEndTurn}, nil
@@ -41,10 +46,10 @@ func capabilityApp(t *testing.T, cfg config.Config, id string, provider *capabil
 }
 
 func TestDisabledGoalRejectsDirectAndAdmittedSlash(t *testing.T) {
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
 	provider := &capabilityProvider{}
 	a := capabilityApp(t, cfg, thread.MainID, provider)
-	if result := a.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: "/goal finish this"}); result.Kind != TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
+	if result := a.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: "/goal finish this"}); result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
 		t.Errorf("disabled goal admission = %+v", result)
 	}
 	if _, err := a.Run(t.Context(), "/goal finish this"); err == nil || !strings.Contains(err.Error(), "goal module is disabled") {
@@ -57,8 +62,8 @@ func TestDisabledGoalRejectsDirectAndAdmittedSlash(t *testing.T) {
 
 func TestRuntimeExtensionEnablementDistinguishesEmptyCatalog(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
-			Modules: config.ModulePolicy{modulecatalog.Extensions: {Enabled: enabled}},
+		cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+			Modules: config.ModulePolicy{extensionsmodule.ModuleID: {Enabled: enabled}},
 		}
 		status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 		if err != nil {
@@ -71,10 +76,10 @@ func TestRuntimeExtensionEnablementDistinguishesEmptyCatalog(t *testing.T) {
 }
 
 func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T) {
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
-		Modules: config.ModulePolicy{modulecatalog.WorkerThreads: {Enabled: true}},
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+		Modules: config.ModulePolicy{workerthreadsmodule.ModuleID: {Enabled: true}},
 	}
-	if err := EnsureMainThread(cfg); err != nil {
+	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "retained")
@@ -93,37 +98,35 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	if err := first.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Modules[modulecatalog.WorkerThreads] = config.ModuleSettings{Enabled: false}
+	cfg.Modules[workerthreadsmodule.ModuleID] = config.ModuleSettings{Enabled: false}
 	pausedProvider := &capabilityProvider{}
 	paused := capabilityApp(t, cfg, id, pausedProvider)
-	if err := paused.waitPendingInputRecoveryContext(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+
 	if pausedProvider.calls.Load() != 0 {
 		t.Fatal("opening disabled Worker executed retained input")
 	}
-	if result := paused.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: "run hidden API"}); result.Kind != TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
+	if result := paused.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: "run hidden API"}); result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
 		t.Errorf("disabled Worker admission = %+v", result)
 	}
 	if _, err := paused.Run(t.Context(), "run directly"); err == nil || !strings.Contains(err.Error(), "worker-threads module is disabled") {
 		t.Errorf("disabled Worker direct execution = %v", err)
 	}
-	if result := paused.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: "retry notice", Kind: llm.MessageKindSystemNotice}); result.Kind != TurnAdmissionRejected {
+	if result := paused.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: "retry notice", Kind: llm.MessageKindSystemNotice}); result.Kind != agent.TurnAdmissionRejected {
 		t.Errorf("disabled Worker system notice = %+v", result)
 	}
 	message := llm.TextMessage(llm.RoleUser, "external input")
 	if _, err := paused.RunAdmittedTurn(t.Context(), "bypass", message); err == nil {
 		t.Error("disabled Worker admitted execution bypassed capability check")
 	}
-	paused.threadMu.RLock()
-	_, deliveryErr := paused.deliverExternalInputLocked(t.Context(), message, runtime.PendingInputOptions{}, nil, false, nil)
-	paused.threadMu.RUnlock()
+	_, deliveryErr := paused.DeliverExternalInput(t.Context(), func() (llm.Message, runtime.PendingInputOptions, error) {
+		return message, runtime.PendingInputOptions{}, nil
+	})
 	if deliveryErr == nil {
 		t.Error("disabled Worker external input was accepted")
 	}
 	for range 2 {
-		result := paused.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: SlashCompact})
-		if result.Kind != TurnAdmissionCommandCompleted || result.Start != nil {
+		result := paused.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: SlashCompact})
+		if result.Kind != agent.TurnAdmissionCommandCompleted || result.Start != nil {
 			t.Fatalf("paused Worker maintenance = %+v", result)
 		}
 	}
@@ -136,20 +139,18 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	if err := paused.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Modules[modulecatalog.WorkerThreads] = config.ModuleSettings{Enabled: true}
+	cfg.Modules[workerthreadsmodule.ModuleID] = config.ModuleSettings{Enabled: true}
 	resumedProvider := &capabilityProvider{}
 	resumed := capabilityApp(t, cfg, id, resumedProvider)
-	if err := resumed.waitPendingInputRecoveryContext(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	waitRecoveredInput(t, resumed, accepted.RecordID)
 	if resumedProvider.calls.Load() != 1 {
 		t.Fatalf("reenabled recovery calls = %d", resumedProvider.calls.Load())
 	}
 }
 
 func TestDisabledWorkerNewContextDoesNotGreet(t *testing.T) {
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
-	if err := EnsureMainThread(cfg); err != nil {
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
+	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "maintenance")
@@ -176,10 +177,10 @@ func TestDisabledWorkerNewContextDoesNotGreet(t *testing.T) {
 
 func TestDisabledWorkerSkipsThreadStartPolicies(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
-			Modules: config.ModulePolicy{modulecatalog.WorkerThreads: {Enabled: enabled}},
+		cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+			Modules: config.ModulePolicy{workerthreadsmodule.ModuleID: {Enabled: enabled}},
 		}
-		if err := EnsureMainThread(cfg); err != nil {
+		if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 			t.Fatal(err)
 		}
 		worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "startup")

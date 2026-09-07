@@ -150,9 +150,9 @@ COMMIT=${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}
 BUILD_TIME=${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 
 LDFLAGS="-s -w \
-  -X github.com/juex-ai/juex/internal/version.Version=${VERSION} \
-  -X github.com/juex-ai/juex/internal/version.Commit=${COMMIT} \
-  -X github.com/juex-ai/juex/internal/version.BuildTime=${BUILD_TIME}"
+  -X github.com/juex-ai/juex/internal/foundation/version.Version=${VERSION} \
+  -X github.com/juex-ai/juex/internal/foundation/version.Commit=${COMMIT} \
+  -X github.com/juex-ai/juex/internal/foundation/version.BuildTime=${BUILD_TIME}"
 
 GOOS=$(go env GOOS)
 GOARCH=$(go env GOARCH)

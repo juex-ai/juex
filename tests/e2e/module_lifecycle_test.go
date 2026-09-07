@@ -10,16 +10,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/modules/scratchpad"
-	"github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/web"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	"github.com/juex-ai/juex/internal/features/scratchpad"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
@@ -27,12 +29,12 @@ func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
 		t.Skip("e2e is slow")
 	}
 	modules := config.ModulePolicy{}
-	for _, definition := range modulecatalog.Definitions() {
+	for _, definition := range modulecatalog.Inventory().Definitions() {
 		modules[definition.ID] = config.ModuleSettings{Enabled: false}
 	}
 	work := t.TempDir()
 	application, err := app.New(app.Options{
-		Config: config.Config{WorkDir: work, Modules: modules}, Provider: &bareScriptProvider{}, WorkDir: work,
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Modules: modules}, Provider: &bareScriptProvider{}, WorkDir: work,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +58,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	}
 	work := t.TempDir()
 	application, err := app.New(app.Options{
-		Config:   config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
 		Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true,
 	})
 	if err != nil {
@@ -71,7 +73,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(scratchpad.Dir(before.Thread.Dir), "durable.txt"), []byte("retained"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	goal, notes := runtime.ThreadStateStoresFromModules(before.Modules)
+	goal, notes := modulestate.Stores(before.Modules)
 	if goal == nil || notes == nil {
 		t.Fatal("Goal and Notes Modules did not expose their stores")
 	}
@@ -126,7 +128,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 
 func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
 	first, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +145,7 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	goal, notes := runtime.ThreadStateStoresFromModules(first.Engine.ThreadRuntimeSnapshot().Modules)
+	goal, notes := modulestate.Stores(first.Engine.ThreadRuntimeSnapshot().Modules)
 	if err := first.Thread.Append(llm.TextMessage(llm.RoleUser, "retain history")); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +157,7 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, n := restarted.Engine.ThreadStateStatus()
+	g, n := modulestate.Status(restarted.Engine.ThreadRuntimeSnapshot().Modules)
 	if g == nil || n == nil {
 		t.Fatalf("ordinary restart lost state: %v %v", g, n)
 	}
@@ -193,7 +195,7 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = third.CloseAndWait() })
-	g, n = third.Engine.ThreadStateStatus()
+	g, n = modulestate.Status(third.Engine.ThreadRuntimeSnapshot().Modules)
 	if g != nil || n != nil {
 		t.Fatalf("re-enabled state revived from history: %v %v", g, n)
 	}
@@ -208,7 +210,7 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 	}
 	work := t.TempDir()
 	application, err := app.New(app.Options{
-		Config:   config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
 		Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true,
 	})
 	if err != nil {
@@ -221,8 +223,8 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	workerID := worker.ID
-	goal := workmem.NewGoalStateStore(worker.Dir, workmem.GoalStateOptions{})
-	notes := workmem.NewNotesStore(worker.Dir)
+	goal := goalmodule.NewGoalStateStore(worker.Dir, goalmodule.GoalStateOptions{})
+	notes := notesmodule.NewNotesStore(worker.Dir)
 	if _, err := goal.Create("preserve interrupted state", "archive after recovery"); err != nil {
 		t.Fatal(err)
 	}
@@ -247,8 +249,8 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = archived.Close() }()
-	goalSnapshot, goalErr := workmem.NewGoalStateStore(archived.Dir, workmem.GoalStateOptions{}).StatusSnapshot()
-	notesSnapshot, notesErr := workmem.NewNotesStore(archived.Dir).StatusSnapshot()
+	goalSnapshot, goalErr := goalmodule.NewGoalStateStore(archived.Dir, goalmodule.GoalStateOptions{}).StatusSnapshot()
+	notesSnapshot, notesErr := notesmodule.NewNotesStore(archived.Dir).StatusSnapshot()
 	if goalErr != nil || goalSnapshot == nil || goalSnapshot.Description != "preserve interrupted state" {
 		t.Fatalf("archived Goal = %+v, %v", goalSnapshot, goalErr)
 	}

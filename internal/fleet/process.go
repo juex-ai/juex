@@ -3,7 +3,7 @@ package fleet
 import (
 	"fmt"
 
-	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
 )
 
 type processIdentityState uint8

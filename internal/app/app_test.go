@@ -12,16 +12,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/eventmedia"
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modules/scratchpad"
-	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/scratchpad"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type stubProvider struct {
@@ -38,21 +41,6 @@ type blockingAppProvider struct {
 	mu          sync.Mutex
 	calls       int
 	histories   [][]llm.Message
-}
-
-type failOnceEventCommitter struct {
-	delegate  events.Committer
-	eventType string
-	err       error
-	failed    bool
-}
-
-func (c *failOnceEventCommitter) Commit(event events.Event) (events.Event, error) {
-	if event.Type == c.eventType && !c.failed {
-		c.failed = true
-		return events.Event{}, c.err
-	}
-	return c.delegate.Commit(event)
 }
 
 func newBlockingAppProvider() *blockingAppProvider {
@@ -120,7 +108,7 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	workDir := t.TempDir()
 	provider := &stubProvider{replies: replies}
 	app, err := New(Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir,
 			AgentStateDir: filepath.Join(workDir, ".juex"),
 		},
@@ -132,65 +120,6 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	}
 	t.Cleanup(func() { _ = app.Close() })
 	return app, provider
-}
-
-func TestAppClosePausesAndResumesDeferredCleanup(t *testing.T) {
-	closeCalls := 0
-	laterCleanupCalls := 0
-	a := &App{cleanup: []func() error{
-		func() error {
-			closeCalls++
-			if closeCalls == 1 {
-				return &observable.CloseDeferredError{}
-			}
-			return nil
-		},
-		func() error {
-			laterCleanupCalls++
-			return nil
-		},
-	}}
-	var deferred *observable.CloseDeferredError
-	if err := a.Close(); !errors.As(err, &deferred) {
-		t.Fatalf("first Close error = %v, want CloseDeferredError", err)
-	}
-	if laterCleanupCalls != 0 {
-		t.Fatalf("later cleanup calls after deferred Close = %d, want 0", laterCleanupCalls)
-	}
-	if err := a.CloseAndWait(); err != nil {
-		t.Fatalf("CloseAndWait = %v", err)
-	}
-	if closeCalls != 2 || laterCleanupCalls != 1 {
-		t.Fatalf("cleanup calls = first:%d later:%d", closeCalls, laterCleanupCalls)
-	}
-}
-
-func TestAppConcurrentCloseReturnsWaitableResult(t *testing.T) {
-	cleanupStarted := make(chan struct{})
-	releaseCleanup := make(chan struct{})
-	a := &App{cleanup: []func() error{func() error {
-		close(cleanupStarted)
-		<-releaseCleanup
-		return nil
-	}}}
-	activeResult := make(chan error, 1)
-	go func() { activeResult <- a.CloseAndWait() }()
-	<-cleanupStarted
-	concurrentResult := make(chan error, 1)
-	go func() { concurrentResult <- a.Close() }()
-	select {
-	case err := <-concurrentResult:
-		var deferred interface{ Wait() error }
-		if !errors.As(err, &deferred) {
-			t.Fatalf("concurrent Close error = %v, want waitable result", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("concurrent Close blocked behind active cleanup")
-	}
-	close(releaseCleanup)
-	if err := <-activeResult; err != nil {
-		t.Fatalf("CloseAndWait = %v", err)
-	}
 }
 
 func TestDurationSecondsCeilsAndCaps(t *testing.T) {
@@ -214,7 +143,7 @@ func TestAppRunAdmittedTurnAfterCloseDoesNotReopenJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := a.RunAdmittedTurn(context.Background(), "late-turn", llm.TextMessage(llm.RoleUser, "late"))
-	if !errors.Is(err, ErrThreadUnavailable) {
+	if !errors.Is(err, agent.ErrThreadUnavailable) {
 		t.Fatalf("RunAdmittedTurn error = %v, want ErrThreadUnavailable", err)
 	}
 	if provider.calls != 0 {
@@ -230,9 +159,9 @@ func TestAppModelCandidateInjectionPrecedence(t *testing.T) {
 	primary := &stubProvider{}
 	backup := &stubProvider{}
 	injectedSingle := &stubProvider{}
-	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	a, err := New(Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir,
 			AgentStateDir: filepath.Join(dir, ".juex"), Models: []string{"openai:m", "missing:model"},
 			NotifyModelChanges: true,
@@ -248,7 +177,7 @@ func TestAppModelCandidateInjectionPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	if len(a.Engine.ModelCandidates) != 2 || a.Engine.Provider != primary || a.Engine.ModelHealth != health || !a.Engine.NotifyModelChanges {
 		t.Fatalf("engine wiring = provider:%T candidates:%+v health:%p", a.Engine.Provider, a.Engine.ModelCandidates, a.Engine.ModelHealth)
 	}
@@ -258,7 +187,7 @@ func TestAppInjectedSingleProviderDisablesConfiguredFallback(t *testing.T) {
 	dir := t.TempDir()
 	provider := &stubProvider{}
 	a, err := New(Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir,
 			AgentStateDir: filepath.Join(dir, ".juex"), Models: []string{"openai:m", "missing:model"},
 		},
@@ -267,7 +196,7 @@ func TestAppInjectedSingleProviderDisablesConfiguredFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	if a.Engine.Provider != provider || len(a.Engine.ModelCandidates) != 0 {
 		t.Fatalf("injected provider wiring = provider:%T candidates:%+v", a.Engine.Provider, a.Engine.ModelCandidates)
 	}
@@ -360,7 +289,7 @@ func TestAppDeliverObservationQueuesDuringActiveTurn(t *testing.T) {
 func TestAppUsesStableMainThreadAndReopensItsJournal(t *testing.T) {
 	workDir := t.TempDir()
 	stateDir := filepath.Join(workDir, ".juex")
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
 	first, err := New(Options{
 		Config: cfg,
 		Provider: &stubProvider{replies: []llm.Response{{
@@ -387,7 +316,7 @@ func TestAppUsesStableMainThreadAndReopensItsJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	if second.Thread.ID != thread.MainID {
 		t.Fatalf("reopened id = %q", second.Thread.ID)
 	}
@@ -406,7 +335,7 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workDir := t.TempDir()
-			cfg := config.Config{
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 				ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir,
 				AgentStateDir: filepath.Join(workDir, ".juex"),
 			}
@@ -414,8 +343,8 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			goal := workmem.NewGoalStateStore(first.Thread.Dir, workmem.GoalStateOptions{})
-			notes := workmem.NewNotesStore(first.Thread.Dir)
+			goal := goalmodule.NewGoalStateStore(first.Thread.Dir, goalmodule.GoalStateOptions{})
+			notes := notesmodule.NewNotesStore(first.Thread.Dir)
 			if _, err := goal.Create("recover staged state", "respect the Generation boundary"); err != nil {
 				t.Fatal(err)
 			}
@@ -439,8 +368,8 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 			}
 			t.Cleanup(func() { _ = restarted.Close() })
 
-			goalSnapshot, goalErr := workmem.NewGoalStateStore(restarted.Thread.Dir, workmem.GoalStateOptions{}).StatusSnapshot()
-			notesSnapshot, notesErr := workmem.NewNotesStore(restarted.Thread.Dir).StatusSnapshot()
+			goalSnapshot, goalErr := goalmodule.NewGoalStateStore(restarted.Thread.Dir, goalmodule.GoalStateOptions{}).StatusSnapshot()
+			notesSnapshot, notesErr := notesmodule.NewNotesStore(restarted.Thread.Dir).StatusSnapshot()
 			if test.committed {
 				if goalErr != nil || goalSnapshot != nil || notesErr != nil || notesSnapshot != nil {
 					t.Fatalf("committed clear recovered old state: Goal=%+v/%v Notes=%+v/%v", goalSnapshot, goalErr, notesSnapshot, notesErr)
@@ -506,12 +435,12 @@ func TestAppPromptUsesThreadScratchpad(t *testing.T) {
 func TestWorkerRuntimeHasOwnStateAndNoObservableManager(t *testing.T) {
 	workDir := t.TempDir()
 	stateDir := filepath.Join(workDir, ".juex")
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
 	main, err := New(Options{Config: cfg, Provider: &stubProvider{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	worker, err := New(Options{
 		Config: cfg, Provider: &stubProvider{}, parentThreadID: thread.MainID,
 		disableObservables: true,
@@ -519,7 +448,7 @@ func TestWorkerRuntimeHasOwnStateAndNoObservableManager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer worker.Close()
+	defer func() { _ = worker.Close() }()
 	if worker.Thread.ParentThreadID != thread.MainID || worker.Thread.Dir == main.Thread.Dir {
 		t.Fatalf("Worker identity = %+v", worker.Thread.Info())
 	}

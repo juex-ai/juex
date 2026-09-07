@@ -9,13 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/homestore"
-	"github.com/juex-ai/juex/internal/processidentity"
-	"github.com/juex-ai/juex/internal/processmetrics"
-	"github.com/juex-ai/juex/internal/statusapi"
+	"github.com/juex-ai/juex/internal/foundation/homestore"
+	"github.com/juex-ai/juex/internal/foundation/processidentity"
+	"github.com/juex-ai/juex/internal/foundation/processmetrics"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 type BindingState string
@@ -107,13 +106,12 @@ type AgentReference struct {
 // ReadOnlyAgentState identifies the durable workspace and identity-owned state
 // roots that remain safe to inspect while the runtime process is stopped.
 type ReadOnlyAgentState struct {
-	ModuleError string
-	Preset      string
-	Modules     config.ModulePolicy
-	ID          string
-	Name        string
-	Workspace   string
-	StateDir    string
+	HomeDir    string
+	ConfigPath string
+	ID         string
+	Name       string
+	Workspace  string
+	StateDir   string
 }
 
 type Action struct {
@@ -176,7 +174,11 @@ func (m *Manager) RegisteredWorkspaces() (map[string]struct{}, error) {
 	return workspaces, nil
 }
 
+// ConfigWriter validates and atomically publishes config and imported state under the lifecycle lock.
+type ConfigWriter func(homeDir, agentID string, content []byte) error
+
 type Options struct {
+	ConfigWriter ConfigWriter
 	HomeDir      string
 	Executable   string
 	StartTimeout time.Duration
@@ -314,6 +316,7 @@ func defaultDependencies() dependencies {
 }
 
 type Manager struct {
+	configWriter   ConfigWriter
 	homeDir        string
 	homeStore      *homestore.Store
 	executable     string
@@ -358,6 +361,7 @@ func New(opts Options) (*Manager, error) {
 	}
 	store := homestore.New(homeDir)
 	return &Manager{
+		configWriter:   opts.ConfigWriter,
 		homeDir:        homeDir,
 		homeStore:      &store,
 		executable:     executable,

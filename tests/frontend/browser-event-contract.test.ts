@@ -197,6 +197,6 @@ test("compact completion leaves runtime state to the attached backend snapshot",
 
 function readJSON(name: string): unknown {
   return JSON.parse(
-    readFileSync(new URL(`../../internal/web/testdata/${name}`, import.meta.url), "utf8"),
+    readFileSync(new URL(`../../internal/entrypoints/agenthttp/testdata/${name}`, import.meta.url), "utf8"),
   );
 }

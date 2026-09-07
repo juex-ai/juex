@@ -11,9 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/statusapi"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 func TestEndpointReturnsOnlyBoundHealthyRuntime(t *testing.T) {
@@ -64,7 +67,7 @@ func TestEndpointReturnsOnlyBoundHealthyRuntime(t *testing.T) {
 			deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 				return noopGuard{}, nil
 			}
-			manager := &Manager{
+			manager := &Manager{configWriter: testConfigWriter,
 				homeDir:      t.TempDir(),
 				probeTimeout: time.Second,
 				deps:         deps,
@@ -115,7 +118,7 @@ func TestEndpointRejectsPIDReuseAfterHealthyStatusSnapshot(t *testing.T) {
 		return "reused-process", nil
 	}
 	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
-	manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
+	manager := &Manager{configWriter: testConfigWriter, homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
 
 	_, err := manager.Endpoint(context.Background(), entry.ID)
 	var conflict *ConflictError
@@ -153,7 +156,7 @@ func TestEndpointRejectsUnreadableIdentityAfterHealthyStatusSnapshot(t *testing.
 		return "", errors.New("identity unavailable")
 	}
 	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
-	manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
+	manager := &Manager{configWriter: testConfigWriter, homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
 
 	_, err := manager.Endpoint(context.Background(), entry.ID)
 	var conflict *ConflictError
@@ -182,7 +185,7 @@ func TestReadOnlyStateRequiresBoundWorkspace(t *testing.T) {
 			deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 				return agentstate.WorkspaceBinding{Kind: test.binding, Reason: "test binding"}
 			}
-			manager := &Manager{homeDir: t.TempDir(), deps: deps}
+			manager := &Manager{configWriter: testConfigWriter, homeDir: t.TempDir(), deps: deps}
 
 			got, err := manager.ReadOnlyState(entry.ID)
 			if test.wantOK {
@@ -223,7 +226,7 @@ func TestUpdateConfigPreflightsBeforeWriting(t *testing.T) {
 		shutdowns++
 		return nil
 	}
-	manager := &Manager{
+	manager := &Manager{configWriter: testConfigWriter,
 		homeDir:      home,
 		probeTimeout: time.Second,
 		stopTimeout:  time.Second,
@@ -261,7 +264,7 @@ func TestUpdateConfigRejectsInvalidModuleDeclarationsBeforeWriting(t *testing.T)
 				shutdowns++
 				return false, errors.New("unexpected restart")
 			}
-			manager := &Manager{homeDir: home, probeTimeout: time.Second, deps: deps}
+			manager := &Manager{configWriter: testConfigWriter, homeDir: home, probeTimeout: time.Second, deps: deps}
 			candidate := append(validFleetConfig("new-model"), []byte(overlay)...)
 			_, _, err := manager.UpdateConfig(context.Background(), entry.ID, candidate)
 			var validation *ConfigValidationError
@@ -303,7 +306,7 @@ func TestUpdateConfigRejectsAmbiguousRuntimeBeforeWriting(t *testing.T) {
 			},
 		}
 	}
-	manager := &Manager{
+	manager := &Manager{configWriter: testConfigWriter,
 		homeDir:      home,
 		probeTimeout: time.Second,
 		stopTimeout:  time.Second,
@@ -524,7 +527,7 @@ func configRestartTestManager(
 		}
 		return "turn-resume", nil
 	}
-	return &Manager{
+	return &Manager{configWriter: testConfigWriter,
 		homeDir:      home,
 		probeTimeout: time.Second,
 		stopTimeout:  time.Second,
@@ -597,4 +600,50 @@ providers:
     models:
       - id: ` + model + `
 `)
+}
+
+func testConfigWriter(homeDir, agentID string, content []byte) error {
+	_, err := config.WriteAgentConfig(modulecatalog.Inventory(), content, homeDir, agentID, nil)
+	var validation *config.AgentConfigValidationError
+	if errors.As(err, &validation) {
+		return &ConfigValidationError{Err: validation.Err}
+	}
+	return err
+}
+
+func TestConfigPublicationHoldsLifecycleLockBeforeRestart(t *testing.T) {
+	home, _, entry := prepareFleetConfigTest(t)
+	manager, _, _ := configRestartTestManager(t, home, entry, statusapi.ActivityIdle, "", nil)
+	wrote := false
+	manager.configWriter = func(gotHome, gotID string, content []byte) error {
+		if gotHome != home || gotID != entry.ID {
+			t.Fatalf("publication target=%s/%s", gotHome, gotID)
+		}
+		guard, err := acquireLifecycleLock(manager.store(), entry.ID)
+		if guard != nil {
+			_ = guard.Close()
+		}
+		var conflict *ConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("publication is outside the lifecycle lock: %v", err)
+		}
+		if err := testConfigWriter(gotHome, gotID, content); err != nil {
+			return err
+		}
+		wrote = true
+		return nil
+	}
+	restart := manager.deps.requestRestart
+	manager.deps.requestRestart = func(ctx context.Context, state endpoint.Runtime) (bool, error) {
+		if !wrote {
+			t.Fatal("restart preceded atomic configuration publication")
+		}
+		return restart(ctx, state)
+	}
+	if _, _, err := manager.UpdateConfig(t.Context(), entry.ID, validFleetConfig("next-model")); err != nil {
+		t.Fatal(err)
+	}
+	if !wrote {
+		t.Fatal("config writer was not called")
+	}
 }

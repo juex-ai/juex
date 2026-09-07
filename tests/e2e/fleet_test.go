@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func processExitCode(err error) int {
@@ -1212,7 +1212,7 @@ func buildJuexVersion(t *testing.T, stampedVersion string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ldflags := "-X github.com/juex-ai/juex/internal/version.Version=" + stampedVersion
+	ldflags := "-X github.com/juex-ai/juex/internal/foundation/version.Version=" + stampedVersion
 	command := exec.Command(
 		"go",
 		"build",

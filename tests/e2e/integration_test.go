@@ -17,16 +17,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/command"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/internal/providers"
+	"github.com/juex-ai/juex/tests/testsupport/toolset"
 )
 
-func e2eConfiguredShellProfile(profile config.ShellProfile) tools.ShellProfile {
-	return tools.ShellProfile{Profile: profile.Profile, Family: profile.Family, Binary: profile.Binary, Args: append([]string(nil), profile.Args...), PathStyle: profile.PathStyle, HostPathStyle: profile.HostPathStyle}
+func e2eConfiguredShellProfile(profile config.ShellProfile) command.ShellProfile {
+	return command.ShellProfile{Profile: profile.Profile, Family: profile.Family, Binary: profile.Binary, Args: append([]string(nil), profile.Args...), PathStyle: profile.PathStyle, HostPathStyle: profile.HostPathStyle}
 }
 
 var liveConfigSelectorEnvKeys = []string{
@@ -162,7 +167,7 @@ func prepareLiveProviderConfig(root, path, workDir, modelOverride string) (strin
 }
 
 func loadPreparedLiveConfig(path, selectedPath, workDir string) (liveConfig, error) {
-	cfg, err := config.LoadWithOptions(config.LoadOptions{
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    workDir,
 		ConfigPath: selectedPath,
 		AgentState: config.AgentStateNone,
@@ -219,13 +224,13 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	if err != nil {
 		t.Fatalf("provider profile: %v", err)
 	}
-	provider, err := llm.NewProvider(profile)
+	provider, err := providers.NewProvider(profile)
 	if err != nil {
 		t.Fatalf("provider: %v", err)
 	}
 
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{Shell: cfgShellProfile(cfg)})
+	reg := toolcore.NewRegistry()
+	toolset.Register(reg, toolset.Options{Shell: cfgShellProfile(cfg)})
 
 	bus := events.NewBus()
 	threadState, err := thread.New(t.TempDir())
@@ -262,8 +267,8 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	return out
 }
 
-func cfgShellProfile(cfg config.Config) tools.ShellProfile {
-	return tools.ShellProfile{
+func cfgShellProfile(cfg config.Config) command.ShellProfile {
+	return command.ShellProfile{
 		Profile:       cfg.Shell.Profile,
 		Family:        cfg.Shell.Family,
 		Binary:        cfg.Shell.Binary,
@@ -333,7 +338,7 @@ func TestLiveConfigs_ExternalizedToolResultRetrieval(t *testing.T) {
 			if err != nil {
 				t.Fatalf("provider profile: %v", err)
 			}
-			provider, err := llm.NewProvider(profile)
+			provider, err := providers.NewProvider(profile)
 			if err != nil {
 				t.Fatalf("provider: %v", err)
 			}
@@ -354,8 +359,8 @@ func TestLiveConfigs_ExternalizedToolResultRetrieval(t *testing.T) {
 			bus := events.NewBus()
 			threadState.SubscribeBus(bus)
 
-			registry := tools.NewRegistry()
-			tools.RegisterBuiltins(registry, tools.BuiltinOptions{
+			registry := toolcore.NewRegistry()
+			toolset.Register(registry, toolset.Options{
 				WorkDir: workDir, AgentStateDir: agentStateDir, MediaDir: threadState.SpoolDir(),
 				Shell: cfgShellProfile(lc.cfg),
 			})
@@ -367,7 +372,7 @@ func TestLiveConfigs_ExternalizedToolResultRetrieval(t *testing.T) {
 				strings.Repeat("tail filler without the target token\n", 4_000),
 				"END OF LARGE RESULT",
 			}, "\n")
-			registry.MustRegister(tools.Tool{
+			registry.MustRegister(toolcore.Tool{
 				Name:        toolName,
 				Description: "Return a large diagnostic document whose secret must be recovered from the persisted complete result.",
 				Schema:      map[string]any{"type": "object", "properties": map[string]any{}},

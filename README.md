@@ -90,13 +90,13 @@ Editable Observable definitions live at
 than appearing in its Workspace.
 
 Module presets and explicit switches are described in
-[Configuration](internal/config/README.md).
+[Configuration](internal/app/config/README.md).
 
 Generated Agent state lives under `$JUEX_HOME/agents/<agent-id>/`. `agent.json`
 is authoritative for Agent identity, Workspace ownership, and lifecycle
 metadata. The Agent also owns its configuration overlay, the rebuildable
 Thread index, active and archived Threads,
-media, logs, [durable Memory](internal/modules/memory/README.md), Observables, and
+media, logs, [durable Memory](internal/features/memory/README.md), Observables, and
 Extension state. Each Thread has authoritative
 metadata, Generation-segmented chronological Event history, bounded pending
 Input state, module-owned Goal and Notes state, Scratchpad, and system-managed
@@ -120,4 +120,4 @@ verification workflow. Frontend-specific setup is in
 - [ARCHITECTURE.md](ARCHITECTURE.md): module boundaries and data flow.
 - [PHILOSOPHY.md](PHILOSOPHY.md): product principles and trade-offs.
 - [DESIGN.md](DESIGN.md): stable Web interaction and visual contract.
-- [docs/adr/](docs/adr/): rationale for durable architecture decisions.
+- [docs/adr/](docs/adr): rationale for durable architecture decisions.

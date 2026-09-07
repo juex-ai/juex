@@ -12,10 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/observable"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 func TestIntegration_ExtensionObservableSandboxGrantsCurrentAgentStateDir(t *testing.T) {
@@ -108,7 +110,7 @@ func TestIntegration_ExtensionObservableSandboxGrantsCurrentAgentStateDir(t *tes
 	}
 
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol: "openai/chat",
 			WorkDir:          work,
 			HomeJuexDir:      home,

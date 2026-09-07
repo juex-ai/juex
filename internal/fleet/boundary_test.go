@@ -21,7 +21,7 @@ func TestFleetProductionCodeDoesNotDependOnRuntimeDomain(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(body), "github.com/juex-ai/juex/internal/runtime") {
+		if strings.Contains(string(body), "github.com/juex-ai/juex/internal/framework/runtime") {
 			t.Fatalf("%s imports the runtime domain instead of the L4 status contract", name)
 		}
 	}

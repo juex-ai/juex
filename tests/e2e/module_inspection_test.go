@@ -13,14 +13,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/web"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
-	cfg := config.Config{AgentID: "abcdef", WorkDir: t.TempDir(), AgentStateDir: t.TempDir()}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), AgentID: "abcdef", WorkDir: t.TempDir(), AgentStateDir: t.TempDir()}
 	store := thread.NewStore(cfg.AgentStateDir)
 	main, err := store.EnsureMain()
 	if err != nil {
@@ -40,11 +45,11 @@ func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	goals := workmem.NewGoalStateStore(worker.Dir, workmem.GoalStateOptions{})
+	goals := goalmodule.NewGoalStateStore(worker.Dir, goalmodule.GoalStateOptions{})
 	if _, err := goals.Create("read without runtime", "preserve all files"); err != nil {
 		t.Fatal(err)
 	}
-	notes := workmem.NewNotesStore(worker.Dir)
+	notes := notesmodule.NewNotesStore(worker.Dir)
 	if _, err := notes.Update("retained notes"); err != nil {
 		t.Fatal(err)
 	}

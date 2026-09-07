@@ -7,18 +7,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
 	main, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
@@ -42,8 +46,8 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		}
 	}
 	for _, dir := range dirs {
-		goal := workmem.NewGoalStateStore(dir, workmem.GoalStateOptions{})
-		notes := workmem.NewNotesStore(dir)
+		goal := goalmodule.NewGoalStateStore(dir, goalmodule.GoalStateOptions{})
+		notes := notesmodule.NewNotesStore(dir)
 		if _, err := goal.Create("retire", "include inactive scopes"); err != nil {
 			t.Fatal(err)
 		}
@@ -80,7 +84,7 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		t.Fatal("invalid candidate accepted")
 	}
 	for _, dir := range dirs {
-		if _, err := os.Stat(workmem.NewGoalStateStore(dir, workmem.GoalStateOptions{}).Path + ".context-renewal-g000001"); err != nil {
+		if _, err := os.Stat(goalmodule.NewGoalStateStore(dir, goalmodule.GoalStateOptions{}).Path + ".context-renewal-g000001"); err != nil {
 			t.Fatal("preview/rejection changed state", err)
 		}
 	}
@@ -92,11 +96,11 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		t.Fatal(err)
 	}
 	for _, dir := range dirs {
-		goal := workmem.NewGoalStateStore(dir, workmem.GoalStateOptions{})
+		goal := goalmodule.NewGoalStateStore(dir, goalmodule.GoalStateOptions{})
 		if _, err := os.Stat(filepath.Dir(goal.Path)); !os.IsNotExist(err) {
 			t.Fatalf("Goal files or renewal backup survived: %v", err)
 		}
-		notes, err := workmem.NewNotesStore(dir).StatusSnapshot()
+		notes, err := notesmodule.NewNotesStore(dir).StatusSnapshot()
 		if err != nil || notes == nil || notes.Content != "keep Notes" {
 			t.Fatalf("other owner altered: %+v %v", notes, err)
 		}
@@ -111,7 +115,7 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 		t.Fatal(err)
 	}
 	defer func() { _ = reenabled.CloseAndWait() }()
-	goal, notes := runtime.ThreadStateStoresFromModules(reenabled.Engine.ThreadRuntimeSnapshot().Modules)
+	goal, notes := modulestate.Stores(reenabled.Engine.ThreadRuntimeSnapshot().Modules)
 	if got, err := goal.StatusSnapshot(); err != nil || got != nil {
 		t.Fatalf("retired state revived: %v %v", got, err)
 	}
@@ -131,12 +135,12 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	enabled := []byte("preset: minimal\nmodules:\n  goal:\n    enabled: true\n  notes:\n    enabled: true\n  memory:\n    enabled: true\n  scratchpad:\n    enabled: true\n")
-	if _, err := config.WriteAgentConfig(enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
 		t.Fatal(err)
 	}
 	load := func() config.Config {
 		t.Helper()
-		cfg, err := config.LoadWithOptions(config.LoadOptions{HomeDir: home, AgentID: resolved.Agent.ID, AgentState: config.AgentStateExisting})
+		cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), HomeDir: home, AgentID: resolved.Agent.ID, AgentState: config.AgentStateExisting})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -146,7 +150,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goal, notes := runtime.ThreadStateStoresFromModules(running.Engine.ThreadRuntimeSnapshot().Modules)
+	goal, notes := modulestate.Stores(running.Engine.ThreadRuntimeSnapshot().Modules)
 	if _, err := goal.Create("old writer", "retire only on application"); err != nil {
 		t.Fatal(err)
 	}
@@ -176,17 +180,17 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g, n := running.Engine.ThreadStateStatus(); g == nil || n == nil {
+	if g, n := modulestate.Status(running.Engine.ThreadRuntimeSnapshot().Modules); g == nil || n == nil {
 		t.Fatalf("enabled restart lost work state: %v %v", g, n)
 	}
 	off := []byte("preset: minimal\n")
-	if _, err := config.ValidateAgentConfig(off, home, resolved.Agent.ID); err != nil {
+	if _, err := config.ValidateAgentConfig(modulecatalog.Inventory(), off, home, resolved.Agent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.WriteAgentConfig([]byte("modules:\n  unknown:\n    enabled: false\n"), home, resolved.Agent.ID, app.ValidateModuleConfig); err == nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), []byte("modules:\n  unknown:\n    enabled: false\n"), home, resolved.Agent.ID, app.ValidateModuleConfig); err == nil {
 		t.Fatal("invalid configuration was saved")
 	}
-	if _, err := config.WriteAgentConfig(off, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), off, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
 		t.Fatal(err)
 	}
 	if candidate, err := app.New(app.Options{Config: load(), Provider: &bareScriptProvider{}}); err == nil {
@@ -218,7 +222,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if got, err := notes.StatusSnapshot(); err != nil || got != nil {
 		t.Fatalf("apply retained Notes: %v %v", got, err)
 	}
-	if _, err := config.WriteAgentConfig(enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
 		t.Fatal(err)
 	}
 	fresh, err := app.New(app.Options{Config: load(), Provider: &bareScriptProvider{}})
@@ -226,7 +230,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = fresh.CloseAndWait() }()
-	g, n := fresh.Engine.ThreadStateStatus()
+	g, n := modulestate.Status(fresh.Engine.ThreadRuntimeSnapshot().Modules)
 	if g != nil || n != nil {
 		t.Fatalf("re-enable revived work state: %v %v", g, n)
 	}

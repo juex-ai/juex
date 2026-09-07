@@ -10,31 +10,42 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/hooks"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
-	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
-	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
-	"github.com/juex-ai/juex/internal/observable"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/runtime/contextbudget"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/tools"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
+
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
+	"github.com/juex-ai/juex/internal/features/mcp"
+
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	"github.com/juex-ai/juex/internal/framework/agent"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+
+	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 )
 
 type runtimeStatusTestModule struct {
 	id    runtimemodule.ID
-	tools []tools.Tool
+	tools []toolcore.Tool
 }
 
 func (m runtimeStatusTestModule) ID() runtimemodule.ID { return m.id }
 
-func (m runtimeStatusTestModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	return append([]tools.Tool(nil), m.tools...), nil
+func (m runtimeStatusTestModule) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
+	return append([]toolcore.Tool(nil), m.tools...), nil
 }
 
 func snapshotRuntimeStatus(t *testing.T, cfg config.Config, opts RuntimeStatusOptions) (RuntimeStatus, error) {
@@ -59,7 +70,7 @@ func snapshotRuntimeStatus(t *testing.T, cfg config.Config, opts RuntimeStatusOp
 		_ = manager.Close()
 	})
 	var status RuntimeStatus
-	err = a.ReadRuntimeModuleSnapshot(func(snapshot RuntimeModuleSnapshot) error {
+	err = ReadRuntimeModuleSnapshot(a, func(snapshot RuntimeModuleSnapshot) error {
 		opts.ActiveModules = &snapshot
 		var snapshotErr error
 		status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(opts)
@@ -70,12 +81,12 @@ func snapshotRuntimeStatus(t *testing.T, cfg config.Config, opts RuntimeStatusOp
 
 func mcpRuntimeStatusSnapshot(t *testing.T, serverTools map[string][]mcp.ToolDescriptor) RuntimeModuleSnapshot {
 	t.Helper()
-	var provided []tools.Tool
+	var provided []toolcore.Tool
 	for serverName, descriptors := range serverTools {
 		for _, descriptor := range descriptors {
-			provided = append(provided, tools.Tool{
+			provided = append(provided, toolcore.Tool{
 				Name:        mcp.ToolName(serverName, descriptor.Name),
-				Group:       tools.ToolGroupMCP,
+				Group:       toolcore.ToolGroupMCP,
 				Description: descriptor.Description,
 				Schema:      descriptor.InputSchema,
 				Handler:     func(context.Context, map[string]any) (string, error) { return "", nil },
@@ -95,31 +106,31 @@ func mcpRuntimeStatusSnapshot(t *testing.T, serverTools map[string][]mcp.ToolDes
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, runtimeSet, threadSet)
+	registry, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{}, runtimeSet, threadSet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return RuntimeModuleSnapshot{Runtime: runtimeSet, Thread: threadSet, Tools: registry}
+	return RuntimeModuleSnapshot{ModuleSnapshot: agent.ModuleSnapshot{Runtime: runtimeSet, Thread: threadSet, Tools: registry}}
 }
 
 func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
 	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	wantGroups := []tools.ToolGroup{
-		tools.ToolGroupFile,
-		tools.ToolGroupChunkedWrite,
-		tools.ToolGroupShell,
-		tools.ToolGroupSearch,
-		tools.ToolGroupSkill,
-		tools.ToolGroupThreadState,
-		tools.ToolGroupMemory,
-		tools.ToolGroupWorkerThread,
-		tools.ToolGroupObservable,
+	wantGroups := []toolcore.ToolGroup{
+		toolcore.ToolGroupFile,
+		toolcore.ToolGroupChunkedWrite,
+		toolcore.ToolGroupShell,
+		toolcore.ToolGroupSearch,
+		toolcore.ToolGroupSkill,
+		toolcore.ToolGroupThreadState,
+		toolcore.ToolGroupMemory,
+		toolcore.ToolGroupWorkerThread,
+		toolcore.ToolGroupObservable,
 	}
 	if len(status.Tools.Groups) != len(wantGroups) {
 		t.Fatalf("tool groups = %#v, want %v", status.Tools.Groups, wantGroups)
@@ -137,7 +148,7 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		if !sort.StringsAreSorted(names) {
 			t.Fatalf("group %q tools are not sorted: %v", group.Group, names)
 		}
-		if wantGroup == tools.ToolGroupObservable {
+		if wantGroup == toolcore.ToolGroupObservable {
 			if len(names) != 7 || !containsString(names, "schedule_create") {
 				t.Fatalf("observable tools = %v, want seven including schedule_create", names)
 			}
@@ -150,15 +161,15 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 }
 
 func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
-	status, err := snapshotRuntimeStatus(t, config.Config{WorkDir: t.TempDir()}, RuntimeStatusOptions{})
+	status, err := snapshotRuntimeStatus(t, config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir()}, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	guides := map[string]string{
-		string(tools.ToolGroupChunkedWrite): "juex-chunked-write",
-		string(tools.ToolGroupThreadState):  "juex-thread-state",
-		string(tools.ToolGroupObservable):   "juex-observables",
+		string(toolcore.ToolGroupChunkedWrite): "juex-chunked-write",
+		string(toolcore.ToolGroupThreadState):  "juex-thread-state",
+		string(toolcore.ToolGroupObservable):   "juex-observables",
 	}
 	var specs []llm.ToolSpec
 	for _, group := range status.Tools.Groups {
@@ -242,7 +253,7 @@ func containsString(values []string, want string) bool {
 
 func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
 	a, err := New(Options{Config: cfg, Provider: &stubProvider{}, WorkDir: work, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +261,7 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 	t.Cleanup(func() { _ = a.Close() })
 
 	var status RuntimeStatus
-	err = a.ReadRuntimeModuleSnapshot(func(snapshot RuntimeModuleSnapshot) error {
+	err = ReadRuntimeModuleSnapshot(a, func(snapshot RuntimeModuleSnapshot) error {
 		var snapshotErr error
 		status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &snapshot})
 		return snapshotErr
@@ -280,7 +291,7 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 
 	actualCount := 0
 	for _, actual := range a.Engine.Tools.List() {
-		if actual.Group == tools.ToolGroupMCP {
+		if actual.Group == toolcore.ToolGroupMCP {
 			continue
 		}
 		actualCount++
@@ -297,7 +308,7 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 		if info.Module == "" {
 			t.Errorf("catalog %q has no module owner", actual.Name)
 		}
-		effective := tools.EffectiveToolTimeout(definition, durationSeconds(cfg.RuntimeLimits().ToolTimeout))
+		effective := toolcore.EffectiveToolTimeout(definition, durationSeconds(cfg.RuntimeLimits().ToolTimeout))
 		if info.Timeout.Mode != string(effective.Mode) || info.Timeout.Seconds != effective.Seconds {
 			t.Errorf("catalog %q timeout = %#v, want %#v", actual.Name, info.Timeout, effective)
 		}
@@ -310,7 +321,7 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 	work := t.TempDir()
 	a, err := New(Options{
-		Config:     config.Config{WorkDir: work},
+		Config:     config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work},
 		Provider:   &stubProvider{},
 		WorkDir:    work,
 		DisableMCP: true,
@@ -341,11 +352,11 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 	}
 
 	for tool, wantOwner := range map[string]runtimemodule.ID{
-		"read":            modulecatalog.BasicFileTools,
-		"skill_search":    skillsmodule.ModuleID,
+		"read":            filetoolsmodule.ModuleID,
+		"skill_search":    skills.ModuleID,
 		"get_goal":        goalmodule.ModuleID,
 		"update_notes":    notesmodule.ModuleID,
-		"thread_create":   workerThreadModuleID,
+		"thread_create":   workerthreadsmodule.ModuleID,
 		"observable_list": observable.ModuleID,
 	} {
 		if got := owners[tool]; got != wantOwner {
@@ -357,9 +368,9 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 	work := t.TempDir()
 	a, err := New(Options{
-		Config: config.Config{WorkDir: work, Modules: config.ModulePolicy{
-			string(workerThreadModuleID): {Enabled: false},
-			string(observable.ModuleID):  {Enabled: false},
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Modules: config.ModulePolicy{
+			string(workerthreadsmodule.ModuleID): {Enabled: false},
+			string(observable.ModuleID):          {Enabled: false},
 		}},
 		Provider:   &stubProvider{},
 		WorkDir:    work,
@@ -374,7 +385,7 @@ func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.ThreadRuntimeSnapshot().Modules} {
 		for _, entry := range set.ToolCatalog().Entries() {
 			owners[entry.Tool.Name] = entry.ModuleID
-			if entry.ModuleID == workerThreadModuleID || entry.ModuleID == observable.ModuleID {
+			if entry.ModuleID == workerthreadsmodule.ModuleID || entry.ModuleID == observable.ModuleID {
 				t.Errorf("disabled module %q contributed tool %q", entry.ModuleID, entry.Tool.Name)
 			}
 		}
@@ -392,11 +403,11 @@ func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing.T) {
 	work := t.TempDir()
 	policy := config.ModulePolicy{}
-	for _, definition := range modulecatalog.Definitions() {
+	for _, definition := range modulecatalog.Inventory().Definitions() {
 		policy[definition.ID] = config.ModuleSettings{Enabled: false}
 	}
 	a, err := New(Options{
-		Config:   config.Config{WorkDir: work, Modules: policy},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Modules: policy},
 		Provider: &stubProvider{},
 		WorkDir:  work,
 	})
@@ -405,7 +416,11 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	}
 	t.Cleanup(func() { _ = a.CloseAndWait() })
 
-	if descriptors := a.runtimeModules.Descriptors(); len(descriptors) != 0 {
+	var runtimeSet *runtimemodule.Set
+	if err := a.ReadModuleSnapshot(func(snapshot agent.ModuleSnapshot) error { runtimeSet = snapshot.Runtime; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if descriptors := runtimeSet.Descriptors(); len(descriptors) != 0 {
 		t.Fatalf("Runtime Modules = %#v, want none", descriptors)
 	}
 	if descriptors := a.Engine.ThreadRuntimeSnapshot().Modules.Descriptors(); len(descriptors) != 0 {
@@ -414,10 +429,10 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	if tools := a.Engine.Tools.List(); len(tools) != 0 {
 		t.Fatalf("serving Tools = %#v, want none", tools)
 	}
-	if a.shellSessions != nil || a.workers != nil || a.obsv != nil || a.mcpManager != nil {
-		t.Fatalf("disabled resources were constructed: shell=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.workers, a.obsv, a.mcpManager)
+	if a.Workers() != nil || a.obsv != nil || a.mcpManager != nil {
+		t.Fatalf("disabled resources were constructed: worker=%p observable=%p mcp=%p", a.Workers(), a.obsv, a.mcpManager)
 	}
-	if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
+	if err := ReadRuntimeModuleSnapshot(a, func(active RuntimeModuleSnapshot) error {
 		status, statusErr := NewRuntimeCatalogService(a.cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})
 		if statusErr != nil {
 			return statusErr
@@ -434,7 +449,7 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 func TestAppRejectsUnknownModuleConfigBeforeThreadSideEffects(t *testing.T) {
 	work := t.TempDir()
 	_, err := New(Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			WorkDir: work,
 			Modules: config.ModulePolicy{
 				"typo-module": {Enabled: false},
@@ -452,13 +467,13 @@ func TestAppRejectsUnknownModuleConfigBeforeThreadSideEffects(t *testing.T) {
 }
 
 func TestRuntimeToolsStatusRejectsInvalidBuiltinGroups(t *testing.T) {
-	for _, group := range []tools.ToolGroup{"", tools.ToolGroupMCP, "unknown"} {
+	for _, group := range []toolcore.ToolGroup{"", toolcore.ToolGroupMCP, "unknown"} {
 		t.Run(string(group), func(t *testing.T) {
-			_, err := runtimeToolsStatusFromDefinitions([]tools.ToolDefinition{{
+			_, err := runtimeToolsStatusFromDefinitions([]toolcore.ToolDefinition{{
 				Name:   "bad",
 				Group:  group,
 				Schema: map[string]any{"type": "object"},
-			}}, tools.DefaultTimeoutSeconds)
+			}}, toolcore.DefaultTimeoutSeconds)
 			if err == nil {
 				t.Fatalf("group %q unexpectedly accepted", group)
 			}
@@ -482,13 +497,13 @@ func TestRuntimeMCPToolSchemaMatchesNormalizedRegistryDefinition(t *testing.T) {
 			},
 		},
 	}
-	definition := tools.ToolDefinition{
+	definition := toolcore.ToolDefinition{
 		Name:        descriptor.Name,
-		Group:       tools.ToolGroupMCP,
+		Group:       toolcore.ToolGroupMCP,
 		Description: descriptor.Description,
 		Schema:      descriptor.InputSchema,
 	}
-	registry := tools.NewRegistry()
+	registry := toolcore.NewRegistry()
 	if err := registry.Register(definition.Bind(func(context.Context, map[string]any) (string, error) {
 		return "", nil
 	})); err != nil {
@@ -530,7 +545,7 @@ type: model-invocable
 ---
 body`)
 	tools := false
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:                "openai",
 		ProviderProtocol:          "openai/responses",
 		APIKey:                    "x",
@@ -598,7 +613,7 @@ body`)
 
 func TestRuntimeCatalogServiceIncludesThreadScratchpadPrompt(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work}
 	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -629,7 +644,7 @@ func TestRuntimeCatalogServiceMCPStatusSourcesAndOverrides(t *testing.T) {
     "shared": { "command": "project-shared" }
   }
 }`)
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
 		EnableUserAgentsResources: true,
@@ -680,7 +695,7 @@ func TestRuntimeCatalogServiceMCPTransportMetadata(t *testing.T) {
   }
 }`)
 
-	status, err := snapshotRuntimeStatus(t, config.Config{WorkDir: work}, RuntimeStatusOptions{})
+	status, err := snapshotRuntimeStatus(t, config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work}, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +723,7 @@ func TestRuntimeCatalogServiceTreatsZeroToolDescriptorMembershipAsConnected(t *t
 }`)
 	descriptors := map[string][]mcp.ToolDescriptor{"empty": {}}
 	active := mcpRuntimeStatusSnapshot(t, descriptors)
-	status, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
+	status, err := NewRuntimeCatalogService(config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work}).Snapshot(RuntimeStatusOptions{
 		ActiveModules:      &active,
 		MCPToolDescriptors: map[string][]mcp.ToolDescriptor{"empty": {}},
 	})
@@ -725,11 +740,11 @@ func TestRuntimeCatalogServiceTreatsZeroToolDescriptorMembershipAsConnected(t *t
 }
 
 func TestRuntimeCatalogServiceIncludesHookStatus(t *testing.T) {
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir: t.TempDir(),
-		Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+		Hooks: hookconfig.Config{Commands: []hookconfig.CommandHook{{
 			Name:    "protect-write",
-			Events:  []hooks.EventName{hooks.EventPreToolUse, hooks.EventStop},
+			Events:  []hookconfig.EventName{hookconfig.EventPreToolUse, hookconfig.EventStop},
 			Tools:   []string{"write"},
 			Command: []string{"python3", "hooks/protect.py"},
 			Source:  "project",
@@ -753,13 +768,13 @@ func TestRuntimeCatalogServiceIncludesHookStatus(t *testing.T) {
 	if strings.Join(hook.Tools, ",") != "write" || strings.Join(hook.Command, " ") != "python3 hooks/protect.py" {
 		t.Fatalf("hook command = %+v tools=%+v", hook.Command, hook.Tools)
 	}
-	if hook.TimeoutSeconds != hooks.DefaultTimeoutSeconds || hook.MaxOutputBytes != hooks.DefaultMaxOutputBytes {
+	if hook.TimeoutSeconds != hookconfig.DefaultTimeoutSeconds || hook.MaxOutputBytes != hookconfig.DefaultMaxOutputBytes {
 		t.Fatalf("effective limits = timeout %d output %d", hook.TimeoutSeconds, hook.MaxOutputBytes)
 	}
 }
 
 func TestRuntimeCatalogServiceIncludesSandboxPolicy(t *testing.T) {
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir: t.TempDir(),
 		Sandbox: config.SandboxPolicy{
 			Enabled: true,
@@ -829,7 +844,7 @@ commands:
   ]
 }`)
 
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:      work,
 		AgentAddress: address,
 		Extensions:   allowExtensions("demo"),
@@ -868,7 +883,7 @@ name: review
 description: cached
 ---
 body`)
-	cfg := config.Config{WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work}
 	manager, err := mcp.NewManagerLayeredSoft(context.Background(), nil, mcp.ConnectOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -883,7 +898,7 @@ body`)
 	})
 	snapshot := func() RuntimeStatus {
 		var status RuntimeStatus
-		if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
+		if err := ReadRuntimeModuleSnapshot(a, func(active RuntimeModuleSnapshot) error {
 			var snapshotErr error
 			status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})
 			return snapshotErr
@@ -917,7 +932,7 @@ func TestRuntimeCatalogServiceRejectsExtensionResourceDuplicates(t *testing.T) {
     "shared": { "command": "extension" }
   }
 }`)
-		_, err := snapshotRuntimeStatus(t, config.Config{WorkDir: work, Extensions: allowExtensions("demo")}, RuntimeStatusOptions{})
+		_, err := snapshotRuntimeStatus(t, config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Extensions: allowExtensions("demo")}, RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate MCP server "shared"`) {
 			t.Fatalf("err = %v, want duplicate MCP error", err)
 		}
@@ -935,7 +950,7 @@ name: shared
 description: extension
 ---
 body`)
-		_, err := snapshotRuntimeStatus(t, config.Config{WorkDir: work, Extensions: allowExtensions("demo")}, RuntimeStatusOptions{})
+		_, err := snapshotRuntimeStatus(t, config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Extensions: allowExtensions("demo")}, RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate skill "shared"`) {
 			t.Fatalf("err = %v, want duplicate skill error", err)
 		}
@@ -949,12 +964,12 @@ commands:
     events: [Stop]
     command: ["python3", "x.py"]
 `)
-		cfg := config.Config{
+		cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 			WorkDir:    work,
 			Extensions: allowExtensions("demo"),
-			Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+			Hooks: hookconfig.Config{Commands: []hookconfig.CommandHook{{
 				Name:    "shared",
-				Events:  []hooks.EventName{hooks.EventStop},
+				Events:  []hookconfig.EventName{hookconfig.EventStop},
 				Command: []string{"python3", "base.py"},
 				Source:  "project",
 			}}},

@@ -84,12 +84,12 @@ juex agent send --wait "implement the next task"
 `$JUEX_HOME/agents/<agent-id>/observables.json`；它随 Agent 保存，不出现在
 Workspace 中。
 
-模块预设与显式开关见[配置说明](internal/config/README.zh.md)。
+模块预设与显式开关见[配置说明](internal/app/config/README.zh.md)。
 
 生成的 Agent 状态位于 `$JUEX_HOME/agents/<agent-id>/`。`agent.json` 是 Agent
 身份、Workspace 所有权与 lifecycle metadata 的权威来源。Agent 还拥有配置
 覆盖、可重建的 Thread index、active 与 archived Thread、media、日志、Observable 和
-[持久 Memory](internal/modules/memory/README.zh.md) 与 Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event
+[持久 Memory](internal/features/memory/README.zh.md) 与 Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event
 历史、有界 pending Input 状态、由 Module 拥有的 Goal 与 Notes 状态、Scratchpad
 和系统管理的 spool。当前 Provider context 只从当前 Generation 重建；Thread
 Explorer 列表来自 Agent index。
@@ -110,4 +110,4 @@ Explorer 列表来自 Agent index。
 - [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)：模块边界与数据流。
 - [PHILOSOPHY.zh.md](PHILOSOPHY.zh.md)：产品原则与取舍。
 - [DESIGN.zh.md](DESIGN.zh.md)：稳定的 Web 交互与视觉规范。
-- [docs/adr/](docs/adr/)：持久架构决策的原因。
+- [docs/adr/](docs/adr)：持久架构决策的原因。

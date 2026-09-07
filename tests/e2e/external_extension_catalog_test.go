@@ -10,17 +10,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
-	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
-	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
-	"github.com/juex-ai/juex/internal/observable"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
+
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/features/mcp"
+
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
@@ -65,7 +70,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "Module catalog flow complete"), StopReason: llm.StopEndTurn},
 	}}
 
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID: "openai", APIKey: "test", Model: "test", WorkDir: work,
 		HomeJuexDir: home, AgentAddress: address,
 		Extensions: config.ExtensionPolicy{Allow: []string{"catalog"}, Configured: true},
@@ -99,8 +104,8 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 		}
 	}
 	for name, wantOwner := range map[string]runtimemodule.ID{
-		"read":                         modulecatalog.BasicFileTools,
-		"skill_search":                 skillsmodule.ModuleID,
+		"read":                         filetoolsmodule.ModuleID,
+		"skill_search":                 skills.ModuleID,
 		goalmodule.ToolGet:             goalmodule.ModuleID,
 		notesmodule.ToolUpdate:         notesmodule.ModuleID,
 		"observable_list":              observable.ModuleID,
@@ -157,7 +162,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 		t.Fatalf("enabled extension skill is missing from prompt:\n%s", promptText)
 	}
 	var status app.RuntimeStatus
-	err = enabled.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+	err = app.ReadRuntimeModuleSnapshot(enabled, func(active app.RuntimeModuleSnapshot) error {
 		var snapshotErr error
 		status, snapshotErr = app.NewRuntimeCatalogService(cfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
 		return snapshotErr
@@ -217,7 +222,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 		t.Fatalf("disabled extension hook ran, stat err=%v", err)
 	}
 	var disabledStatus app.RuntimeStatus
-	err = disabled.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+	err = app.ReadRuntimeModuleSnapshot(disabled, func(active app.RuntimeModuleSnapshot) error {
 		var snapshotErr error
 		disabledStatus, snapshotErr = app.NewRuntimeCatalogService(disabledCfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
 		return snapshotErr

@@ -7,7 +7,7 @@
 #   export PATH="$(scripts/ensure-ripgrep.sh):$PATH"
 #
 # We provision via PATH rather than JUEX_RG on purpose. The grep tool's resolver
-# (internal/tools/ripgrep_resolver.go) treats JUEX_RG as an override that
+# (internal/features/filesearch/ripgrep_resolver.go) treats JUEX_RG as an override that
 # short-circuits every other source, so exporting it for the whole `go test`
 # process would also override the resolver's own unit tests that read the
 # ambient environment. Adding the pinned ripgrep to PATH keeps JUEX_RG unset and

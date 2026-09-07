@@ -10,9 +10,11 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	chunkedwritemodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
+	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 type bufferedWriteProvider struct{ chunkedWriteProvider }
@@ -30,10 +32,10 @@ func TestChunkedWriteModuleRecoversCurrentGenerationOnly(t *testing.T) {
 			isolateModuleConfig(t)
 			work := t.TempDir()
 			modules := config.ModulePolicy{}
-			for _, definition := range modulecatalog.Definitions() {
-				modules[definition.ID] = config.ModuleSettings{Enabled: definition.ID == modulecatalog.ChunkedWrite}
+			for _, definition := range modulecatalog.Inventory().Definitions() {
+				modules[definition.ID] = config.ModuleSettings{Enabled: definition.ID == chunkedwritemodule.ModuleID}
 			}
-			cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: modules}
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: modules}
 			writer := &bufferedWriteProvider{chunkedWriteProvider: chunkedWriteProvider{t: t, contentA: "first\n", contentB: "second\n"}}
 			application, err := app.New(app.Options{Config: cfg, Provider: writer})
 			if err != nil {
@@ -54,7 +56,7 @@ func TestChunkedWriteModuleRecoversCurrentGenerationOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			if transition == "disable-enable" {
-				modules[modulecatalog.ChunkedWrite] = config.ModuleSettings{Enabled: false}
+				modules[chunkedwritemodule.ModuleID] = config.ModuleSettings{Enabled: false}
 				application, err = app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}})
 				if err != nil {
 					t.Fatal(err)
@@ -62,7 +64,7 @@ func TestChunkedWriteModuleRecoversCurrentGenerationOnly(t *testing.T) {
 				if err := application.CloseAndWait(); err != nil {
 					t.Fatal(err)
 				}
-				modules[modulecatalog.ChunkedWrite] = config.ModuleSettings{Enabled: true}
+				modules[chunkedwritemodule.ModuleID] = config.ModuleSettings{Enabled: true}
 			}
 			reader := &bareScriptProvider{steps: []llm.Response{
 				{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "resume_commit", ToolName: "write_commit", Input: map[string]any{"write_id": writeID, "expected_chunks": 2}}}}, StopReason: llm.StopToolUse},
@@ -109,10 +111,10 @@ func TestChunkedWriteModuleDisabledKeepsHistoricalToolPairsWithoutFolding(t *tes
 			isolateModuleConfig(t)
 			work := t.TempDir()
 			modules := config.ModulePolicy{}
-			for _, definition := range modulecatalog.Definitions() {
-				modules[definition.ID] = config.ModuleSettings{Enabled: definition.ID == modulecatalog.ChunkedWrite}
+			for _, definition := range modulecatalog.Inventory().Definitions() {
+				modules[definition.ID] = config.ModuleSettings{Enabled: definition.ID == chunkedwritemodule.ModuleID}
 			}
-			cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: modules, ToolOutput: config.ToolOutputConfig{InlineMaxBytes: testCase.maxBytes}}
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: modules, ToolOutput: config.ToolOutputConfig{InlineMaxBytes: testCase.maxBytes}}
 			writer := &chunkedWriteProvider{t: t, contentA: strings.Repeat("alpha\n", 80), contentB: strings.Repeat("beta\n", 80)}
 			application, err := app.New(app.Options{Config: cfg, Provider: writer})
 			if err != nil {
@@ -133,7 +135,7 @@ func TestChunkedWriteModuleDisabledKeepsHistoricalToolPairsWithoutFolding(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			modules[modulecatalog.ChunkedWrite] = config.ModuleSettings{Enabled: false}
+			modules[chunkedwritemodule.ModuleID] = config.ModuleSettings{Enabled: false}
 			reader := &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "History remains readable."), StopReason: llm.StopEndTurn}}}
 			application, err = app.New(app.Options{Config: cfg, Provider: reader})
 			if err != nil {
@@ -183,15 +185,15 @@ func TestChunkedWriteModuleAllowsOtherToolsToReuseCompletedIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	modules := config.ModulePolicy{}
-	for _, definition := range modulecatalog.Definitions() {
-		modules[definition.ID] = config.ModuleSettings{Enabled: definition.ID == modulecatalog.ChunkedWrite || definition.ID == modulecatalog.BasicFileTools}
+	for _, definition := range modulecatalog.Inventory().Definitions() {
+		modules[definition.ID] = config.ModuleSettings{Enabled: definition.ID == chunkedwritemodule.ModuleID || definition.ID == filetoolsmodule.ModuleID}
 	}
 	provider := &bareScriptProvider{steps: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "reused", ToolName: "read", Input: map[string]any{"path": "data.txt"}}}}, StopReason: llm.StopToolUse},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "reused", ToolName: "read", Input: map[string]any{"path": "data.txt"}}}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "Read twice."), StopReason: llm.StopEndTurn},
 	}}
-	application, err := app.New(app.Options{Config: config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: modules}, Provider: provider})
+	application, err := app.New(app.Options{Config: config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: modules}, Provider: provider})
 	if err != nil {
 		t.Fatal(err)
 	}

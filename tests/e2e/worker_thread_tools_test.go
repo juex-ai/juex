@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 )
 
 type workerThreadToolProvider struct {
@@ -36,7 +37,7 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 				ToolUseID: "finish-goal",
 				ToolName:  goalmodule.ToolUpdate,
 				Input: map[string]any{
-					"status":        string(workmem.GoalStatusSuccess),
+					"status":        string(goalmodule.GoalStatusSuccess),
 					"status_reason": "subscribed worker result received",
 				},
 			}}}, StopReason: llm.StopToolUse}, nil
@@ -71,13 +72,13 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 		}}}, StopReason: llm.StopToolUse}, nil
 	}
 	if !historyHasToolResult(history, "create-worker") {
-		if !toolSpecExists(specs, app.WorkerThreadToolCreate) {
-			return llm.Response{}, fmt.Errorf("Main tool catalog missing %s", app.WorkerThreadToolCreate)
+		if !toolSpecExists(specs, workerthreadsmodule.ToolCreate) {
+			return llm.Response{}, fmt.Errorf("Main tool catalog missing %s", workerthreadsmodule.ToolCreate)
 		}
 		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 			Type:      llm.BlockToolUse,
 			ToolUseID: "create-worker",
-			ToolName:  app.WorkerThreadToolCreate,
+			ToolName:  workerthreadsmodule.ToolCreate,
 			Input: map[string]any{
 				"query":     "Reply with exactly WORKER_OK",
 				"subscribe": true,
@@ -95,7 +96,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 		releaseChild: make(chan struct{}),
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID:    "openai",
 			Model:         "test",
 			WorkDir:       workDir,
@@ -128,7 +129,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 	case <-time.After(workerThreadE2ETimeout):
 		t.Fatal("Worker Thread did not start")
 	}
-	goalState, _ := juexruntime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goalState, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalState == nil {
 		t.Fatal("active Goal Module did not provide a store")
 	}
@@ -136,7 +137,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != workmem.GoalStatusInProgress || goal.ContinuationCount != 0 {
+	if goal.Status != goalmodule.GoalStatusInProgress || goal.ContinuationCount != 0 {
 		t.Fatalf("waiting Goal = %+v", goal)
 	}
 	close(provider.releaseChild)
@@ -153,7 +154,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if goal.Status != workmem.GoalStatusSuccess || goal.ContinuationCount != 0 {
+			if goal.Status != goalmodule.GoalStatusSuccess || goal.ContinuationCount != 0 {
 				t.Fatalf("completed Goal = %+v", goal)
 			}
 			infos, err := thread.NewStore(stateDir).List()

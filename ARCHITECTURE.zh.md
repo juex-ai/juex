@@ -26,42 +26,50 @@ CLI 与 Fleet Web 都是常驻 Agent JSON/SSE 服务的 client。CLI selector �
 命令先要求 Fleet 确保该 Runtime 健康，再使用与 Web 相同的 admission 和
 subscription 接口。只有 Fleet 会调用隐藏的单 Agent Runtime 入口。
 
-## 依赖方向
+## 所有权与依赖方向
 
-Juex 分为三类职责：
+仓库保持单个 Go module。可执行入口位于 `cmd`；`internal` 下的每个生产包
+都归属于以下七个组之一：
 
-- Foundation 拥有 Provider-neutral value、持久化、Tool、Event、sandbox、
-  environment、media/spool 和进程基础能力。
-- Framework 拥有 Agent/Thread lifecycle、持久顺序、Module contract、
-  admission 和组合校验。
-- Feature 通过 Framework 接口提供 Tool、context、policy、observation、
-  status 或 scoped resource。
+| 目录组 | 所有权 |
+| --- | --- |
+| `internal/app` | 产品装配、显式 Module 清单与预设、分层配置、资源选择、进程共享服务、Provider 工厂与 API/status 投影。 |
+| `internal/entrypoints` | CLI、Agent/Fleet HTTP 适配、请求/SSE 生命周期、wire DTO 与唯一共享 Web 资源 handler。 |
+| `internal/fleet` | 已注册 Agent 的进程生命周期、验证后的 endpoint 选择、生命周期锁、重启续接与平台服务集成。 |
+| `internal/framework` | Agent 执行与 Worker 编排、Thread/Generation 存储、Module 契约、输入接纳、恢复、Provider 循环、上下文控制与被动生命周期操作。 |
+| `internal/features` | 具体 Module 的 Tool、context、policy、Observation producer、作用域状态与资源实现。 |
+| `internal/providers` | Provider 构造、厂商协议/SDK、传输适配与 Provider profile 默认值。 |
+| `internal/foundation` | 中立的 LLM/Tool/Event 值与契约、通用持久化、environment、sandbox、media artifact 与进程基础能力。 |
 
-依赖从 Feature 指向 Framework，再指向 Foundation。`internal/app` 是
-composition root，可以依赖具体 Feature。Framework 不通过全局 service
-locator 发现依赖。原因见
+Feature 依赖 Framework 与 Foundation。Provider 依赖 Foundation；Framework
+不得导入具体 Feature 或 Provider。Foundation 没有向上依赖。Fleet 依赖
+Framework 与 Foundation，通过显式回调接收应用配置发布能力。App 负责装配，
+entrypoint 负责面向用户的适配。运行时 service locator 或兼容包不能绕过边界。
+[`tests/architecture`](tests/architecture/boundary_test.go) 检查所有生产 Go 文件，
+包括其他操作系统的实现，并拒绝未分类的目录组。Module 边界的原因见
 [ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.zh.md)。
 
-## 模块所有权
+`framework/agent` 将 turn admission、恢复屏障、Thread 租约、Worker 预留与
+有序/延迟清理保留在同一个执行所有者中。App 提供已解析的输入策略、子执行
+工厂与资源释放回调。HTTP 保留绑定与订阅所有权；借用受管 Worker 时引用原有
+执行对象，不取得关闭所有权。`app.ProcessServices` 拥有共享模型健康、冻结的
+资源解析结果与 MCP 启动。HTTP 先发布 endpoint readiness，再预热；MCP 先释放
+启动等待者，再通过 Main 投递缓冲通知。
 
-| 模块 | 所有权 |
-| --- | --- |
-| `internal/agentstate` | Agent registry 身份、规范 Workspace binding、Agent state 寻址与 lifecycle metadata。 |
-| `internal/config` | 分层 YAML 加载、scope 校验、import、environment 投影与受管配置的原子发布。 |
-| `internal/jsonl` | 与领域无关的 JSONL 持久追加、修复、正向遍历和有界反向读取。 |
-| `internal/thread` | Thread metadata、Agent index、Generation EventStore、timeline paging、archive 和 delete。 |
-| `internal/runtime` | Pending Input 状态、Input/Turn lifecycle、Provider loop、context projection、compaction、status 和 Tool execution。 |
-| `internal/runtime/module` | 类型化 Module capability 与 scoped lifecycle contract。 |
-| `internal/app` | Agent 组合、Main/Worker 管理、Observation admission、slash command 和订阅。 |
-| `internal/observable` | Observable 定义、producer、Observation value 和生成状态。 |
-| `internal/mcp` | Agent 级 MCP connection、Tool catalog、调用和 Notification transport。 |
-| `internal/web` | 单 Agent JSON/SSE transport 与资源 handler。 |
-| `internal/fleet` / `internal/fleetweb` | 常驻 Agent lifecycle、registry、proxy 和 Fleet UI 服务。 |
-| `internal/cli` | Agent、Thread、Fleet、配置和诊断的 CLI adapter。 |
-| `frontend` | Fleet shell、Thread Explorer、transcript、composer 和 runtime view。 |
+Provider-neutral 消息与确定性的纯文本投影位于 `foundation/llm`；厂商 SDK
+错误保留在 Providers，通过中立接口暴露状态事实。通用 Event transport/catalog
+机制位于 `foundation/events`。Runtime、Thread、provenance、Tool fact 和各
+Feature 分别拥有 schema；`app/eventcatalog` 不受 Module 开关影响，静态组装
+全部 schema。Feature Tool 直接使用中立 registry，生产代码没有统一 builtin
+工厂。Goal/Notes store、Context Control contribution 与 Extension 私有目录均
+属于各自 Feature。
 
-Provider-neutral 消息位于 `internal/llm`。持久 Event transport 与 schema 位于
-`internal/events`、`internal/eventcatalog` 和 `internal/toolevents`。
+`frontend` 包含 Fleet shell、Thread Explorer、transcript、composer 与 runtime
+view。两个 HTTP 入口共用 `entrypoints/webassets`；构建先准备 Web 资源，再编译 Go。
+
+Fleet 的生命周期锁覆盖配置校验、Agent 文件与 import cache 的原子发布和重启。
+App 提供原子发布器；停机 Agent 的被动检查仅解析 Module 选择，不拉取远程 import、
+不发布缓存，也不启动资源。Workspace 配置保持不变。
 
 ## 持久化权威
 
@@ -107,8 +115,8 @@ registry 的权威。它还物化有界 counter、context status、Pending Input
 排序、过滤和 tooltip 数据。Thread 列表读取这份 Agent cache；启动时通过扫描
 `thread.json` 修复缺失或落后的条目，不读取 Generation 历史。
 
-`internal/thread.EventStore` 是 `generations/*.jsonl` 唯一的生产路径解析和读写
-入口；`internal/jsonl` 负责原始文件的持久性和有界读取机制。Generation commit
+`internal/framework/thread.EventStore` 是 `generations/*.jsonl` 唯一的生产路径解析和读写
+入口；`internal/foundation/jsonl` 负责原始文件的持久性和有界读取机制。Generation commit
 按时间顺序 append，每个 commit 是原子的 fact batch，并共享一条连续的 Thread
 本地 sequence。当前 Provider context 只从当前 Generation 文件重建。Timeline
 与诊断 reader 通过 EventStore snapshot 分页或捕获已注册 Generation，不自行拼接
@@ -132,7 +140,7 @@ run、delivery、idempotency 与 schedule 状态。Extension bundle 可以提供
 
 ```text
 CLI / Web / Observation
-  -> App admission
+  -> App input policy / Framework admission
   -> pending_inputs.json acceptance
   -> attempt 与 Turn
   -> prompt / Provider / Tool
@@ -193,7 +201,7 @@ Thread 自己拥有通用文件事务记录，在 rename 前登记相对路径�
 
 配置预检与检查不触发退休。资源应用提交后，清理或后续启动失败代表应用尚未完成，
 不会通过复活旧状态回滚；退休成功后才发布新 endpoint。部署前的无所有权状态边界
-见[资源生命周期约定](internal/runtime/module/state/README.zh.md)。
+见[资源生命周期约定](internal/framework/module/state/README.zh.md)。
 
 Runtime 与 Thread 工具贡献合并后，才基于完整工具名称集合生成最终描述和
 schema。解析不能改变工具身份或执行策略。Provider 请求与活动状态读取同一份
@@ -204,7 +212,7 @@ schema。解析不能改变工具身份或执行策略。Provider 请求与活�
 取消沿用正常工具分发，包含错误在内的结果保持有序。跨 Thread 的 Agent
 共享资源同步仍由所属 Module 负责。
 
-Agent scope 的 [Memory Module](internal/modules/memory/README.zh.md) 拥有持久知识
+Agent scope 的 [Memory Module](internal/features/memory/README.zh.md) 拥有持久知识
 及可重建索引。App 注入 Agent 目录，Main 与 Worker 的 Module 实例通过同一把锁
 协调文件事务。Thread 启动与压缩完成后的策略负责维护索引，不注入知识正文，普通
 维护失败不会阻断流程。
@@ -212,11 +220,11 @@ Agent scope 的 [Memory Module](internal/modules/memory/README.zh.md) 拥有持�
 工具执行可以输出显式 JSON fact。Framework 根据封存的工具 catalog 赋予所有者，
 并独立于结果展示文本持久化。启用的 Module 可以通过声明式 Provider 历史计划
 汇总自己已完成的工具对。Framework 在最终上下文投影之前验证所有权、配对、取消
-和摘要预算，Journal 保持不变。Thread 级的[分块写 Module](internal/modules/chunkedwrite/README.zh.md)
+和摘要预算，Journal 保持不变。Thread 级的[分块写 Module](internal/features/chunkedwrite/README.zh.md)
 拥有缓冲会话、当前 Generation 恢复和折叠算法。
 
-Goal 与 Notes 策略分别位于 `internal/modules/goal` 和
-`internal/modules/notes`。每次压缩中，启用的 Module 贡献一份冻结的 JSON 状态、
+Goal 与 Notes 策略分别位于 `internal/features/goal` 和
+`internal/features/notes`。每次压缩中，启用的 Module 贡献一份冻结的 JSON 状态、
 指导和自有摘要段落，只能依据该快照修正自己声明的段落。Framework 在提交
 Generation 前，检查修正后的摘要是否满足成功请求的输出预算，以及包含已准备
 待提交输入的完整 Provider 可见上下文是否满足压缩触发预算。

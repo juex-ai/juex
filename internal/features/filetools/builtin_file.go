@@ -1,0 +1,273 @@
+package filetools
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/juex-ai/juex/internal/foundation/artifact"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+)
+
+// Bound a single generated argument only when staged writing is available.
+const directWriteRecommendedMaxChars = 2000
+
+func Contributions(ctx Options) []toolcore.Tool {
+	if ctx.WorkDir != "" {
+		if abs, err := filepath.Abs(ctx.WorkDir); err == nil {
+			ctx.WorkDir = abs
+		}
+	}
+	guard := ctx.FilePolicy
+	return []toolcore.Tool{
+		readTool(ctx.WorkDir, ctx.MediaDir, guard),
+		writeTool(ctx.WorkDir, guard),
+		editTool(ctx.WorkDir, guard),
+	}
+}
+
+func readToolDefinition() toolcore.ToolDefinition {
+	return toolcore.ToolDefinition{
+		Name:        "read",
+		Group:       toolcore.ToolGroupFile,
+		Description: "Read a UTF-8 text file or image from an absolute path, a working-dir-relative path, or a read-only artifact:// URI advertised in projected context. Text reads return file contents with optional offset (1-based line) and limit (max lines). Image reads return a media reference visible to vision-capable models; offset and limit are not supported for images.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":   map[string]any{"type": "string", "description": "Absolute path, working-dir-relative path, or read-only artifact:// URI advertised in projected context"},
+				"offset": map[string]any{"type": "integer", "description": "1-based line to start at"},
+				"limit":  map[string]any{"type": "integer", "description": "Max number of lines to return"},
+			},
+			"required": []string{"path"},
+		},
+	}
+}
+
+func writeToolDefinition() toolcore.ToolDefinition {
+	return toolcore.ToolDefinition{
+		Name:        "write",
+		Group:       toolcore.ToolGroupFile,
+		Description: "Write content to a file, creating parent directories if needed. Overwrites existing files.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":    map[string]any{"type": "string"},
+				"content": map[string]any{"type": "string"},
+			},
+			"required": []string{"path", "content"},
+		},
+	}
+}
+
+func editToolDefinition() toolcore.ToolDefinition {
+	return toolcore.ToolDefinition{
+		Name:        "edit",
+		Group:       toolcore.ToolGroupFile,
+		Description: "Replace `old` with `new` in the file at `path`. By default `old` must appear exactly once; set replace_all to replace every occurrence and optionally expected_replacements to require an exact count.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":                  map[string]any{"type": "string"},
+				"old":                   map[string]any{"type": "string"},
+				"new":                   map[string]any{"type": "string"},
+				"replace_all":           map[string]any{"type": "boolean", "description": "Replace every occurrence of old instead of requiring a unique match"},
+				"expected_replacements": map[string]any{"type": "integer", "description": "If set, require exactly this many replacements before writing"},
+			},
+			"required": []string{"path", "old", "new"},
+		},
+	}
+}
+
+func readTool(workDir, mediaDir string, guard sandbox.PathGuard) toolcore.Tool {
+	return readToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (toolcore.Result, error) {
+		path, _ := in["path"].(string)
+		if path == "" {
+			return toolcore.Result{}, fmt.Errorf("read: missing path")
+		}
+		var readPath string
+		artifactPath, artifactURI, err := artifact.ParseReadURI(path)
+		var data []byte
+		if artifactURI {
+			if err != nil {
+				return toolcore.Result{}, fmt.Errorf("read: %w", err)
+			}
+			store, err := artifact.NewStore(mediaDir)
+			if err != nil {
+				return toolcore.Result{}, fmt.Errorf("read: %w", err)
+			}
+			physicalPath := filepath.Join(mediaDir, filepath.FromSlash(artifactPath))
+			if err := guard.CheckRead(physicalPath); err != nil {
+				return toolcore.Result{}, fmt.Errorf("read: %w", err)
+			}
+			data, err = store.Read(artifact.Ref{Path: artifactPath})
+			if err != nil {
+				return toolcore.Result{}, fmt.Errorf("read: %w", err)
+			}
+			readPath = artifactPath
+		} else {
+			readPath = sandbox.ResolveWorkPath(workDir, path)
+			if err := guard.CheckRead(readPath); err != nil {
+				return toolcore.Result{}, fmt.Errorf("read: %w", err)
+			}
+			data, err = os.ReadFile(readPath)
+			if err != nil {
+				return toolcore.Result{}, err
+			}
+		}
+		offset, _ := toolcore.IntArgument(in["offset"])
+		limit, _ := toolcore.IntArgument(in["limit"])
+		if kind, ok := detectReadImage(readPath, data); ok {
+			if offset > 0 || limit > 0 {
+				return toolcore.Result{}, fmt.Errorf("read: offset and limit are not supported for image files")
+			}
+			return readImageResult(mediaDir, data, kind)
+		}
+		if offset <= 0 && limit <= 0 {
+			return toolcore.Result{Text: string(data)}, nil
+		}
+		lines := strings.Split(string(data), "\n")
+		start := 0
+		if offset > 0 {
+			start = offset - 1
+		}
+		if start > len(lines) {
+			start = len(lines)
+		}
+		end := len(lines)
+		if limit > 0 && start+limit < end {
+			end = start + limit
+		}
+		return toolcore.Result{Text: strings.Join(lines[start:end], "\n")}, nil
+	})
+}
+
+func writeTool(workDir string, guard sandbox.PathGuard) toolcore.Tool {
+	tool := writeToolDefinition().Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		path, _ := in["path"].(string)
+		content, _ := in["content"].(string)
+		if path == "" {
+			return "", fmt.Errorf("write: missing path")
+		}
+		if _, artifactURI, _ := artifact.ParseReadURI(path); artifactURI {
+			return "", fmt.Errorf("write: artifact references are read-only")
+		}
+		path = sandbox.ResolveWorkPath(workDir, path)
+		if err := guard.CheckWrite(path); err != nil {
+			return "", fmt.Errorf("write: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return "", err
+		}
+		if err := guard.CheckWrite(path); err != nil {
+			return "", fmt.Errorf("write: %w", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("wrote %d bytes to %s", len(content), path), nil
+	})
+	tool.ResolveDefinition = func(available toolcore.ToolAvailability) toolcore.ToolDefinition {
+		definition := writeToolDefinition()
+		if available.HasAll("write_begin", "write_chunk", "write_commit", "write_abort") {
+			definition.Description += fmt.Sprintf(" For generated content longer than %d characters, use write_begin/write_chunk/write_commit; write_abort discards an unfinished write.", directWriteRecommendedMaxChars)
+			definition.Schema["properties"].(map[string]any)["content"].(map[string]any)["maxLength"] = directWriteRecommendedMaxChars
+		}
+		return definition
+	}
+	return tool
+}
+
+func editTool(workDir string, guard sandbox.PathGuard) toolcore.Tool {
+	return editToolDefinition().Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		path, _ := in["path"].(string)
+		oldStr, _ := in["old"].(string)
+		newStr, newOK := in["new"].(string)
+		replaceAll, _ := in["replace_all"].(bool)
+		var expected int
+		var expectedSet bool
+		if val, ok := in["expected_replacements"]; ok && val != nil {
+			var parsed bool
+			expected, parsed = toolcore.IntArgument(val)
+			if !parsed || expected <= 0 {
+				return "", fmt.Errorf("edit: expected_replacements must be a positive integer")
+			}
+			expectedSet = true
+		}
+		if missing := missingEditRequiredArgs(path, oldStr, newOK); len(missing) > 0 {
+			return "", fmt.Errorf("edit: missing required argument(s): %s (expected keys: path, old, new; received keys: %s)", strings.Join(missing, ", "), receivedArgumentKeys(in))
+		}
+		if _, artifactURI, _ := artifact.ParseReadURI(path); artifactURI {
+			return "", fmt.Errorf("edit: artifact references are read-only")
+		}
+		path = sandbox.ResolveWorkPath(workDir, path)
+		if err := guard.CheckWrite(path); err != nil {
+			return "", fmt.Errorf("edit: %w", err)
+		}
+		if expectedSet && expected != 1 && !replaceAll {
+			return "", fmt.Errorf("edit: expected_replacements greater than 1 requires replace_all")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		content := string(data)
+		count := strings.Count(content, oldStr)
+		replacements := 1
+		switch count {
+		case 0:
+			return "", fmt.Errorf("edit: %s: old string not found", path)
+		case 1:
+			content = strings.Replace(content, oldStr, newStr, 1)
+		default:
+			if !replaceAll {
+				return "", fmt.Errorf("edit: %s: old string occurs %d times; need a unique match", path, count)
+			}
+			replacements = count
+			content = strings.ReplaceAll(content, oldStr, newStr)
+		}
+		if expectedSet && count != expected {
+			return "", fmt.Errorf("edit: %s: expected %d replacements, found %d", path, expected, count)
+		}
+		if err := guard.CheckWrite(path); err != nil {
+			return "", fmt.Errorf("edit: %w", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return "", err
+		}
+		replacementLabel := "replacement"
+		if replacements != 1 {
+			replacementLabel = "replacements"
+		}
+		return fmt.Sprintf("edited %s (%d %s)", path, replacements, replacementLabel), nil
+	})
+}
+
+func missingEditRequiredArgs(path, oldStr string, newOK bool) []string {
+	missing := []string{}
+	if path == "" {
+		missing = append(missing, "path")
+	}
+	if oldStr == "" {
+		missing = append(missing, "old")
+	}
+	if !newOK {
+		missing = append(missing, "new")
+	}
+	return missing
+}
+
+func receivedArgumentKeys(in map[string]any) string {
+	if len(in) == 0 {
+		return "<none>"
+	}
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}

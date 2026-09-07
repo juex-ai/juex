@@ -8,10 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 func TestResourceModuleGatesBeforeAppStartup(t *testing.T) {
@@ -56,12 +57,12 @@ func TestResourceModuleGatesBeforeAppStartup(t *testing.T) {
 				writeE2EConfig(t, filepath.Join(resourceDir, filename), body)
 			}
 			off := []byte("modules:\n  " + tc.module + ":\n    enabled: false\n")
-			if _, err := config.WriteAgentConfig(off, home, address.Agent.ID, app.ValidateModuleConfig); err != nil {
+			if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), off, home, address.Agent.ID, app.ValidateModuleConfig); err != nil {
 				t.Fatal(err)
 			}
 			load := func() config.Config {
 				t.Helper()
-				cfg, err := config.LoadWithOptions(config.LoadOptions{HomeDir: home, AgentID: address.Agent.ID, AgentState: config.AgentStateExisting})
+				cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), HomeDir: home, AgentID: address.Agent.ID, AgentState: config.AgentStateExisting})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -89,12 +90,12 @@ func TestResourceModuleGatesBeforeAppStartup(t *testing.T) {
 			// the actual App consumer for resources validated at startup.
 			on := []byte("modules:\n  " + tc.module + ":\n    enabled: true\n")
 			if tc.module == "hooks" && tc.source == "workspace" {
-				if _, err := config.ValidateAgentConfig(on, home, address.Agent.ID); err == nil {
+				if _, err := config.ValidateAgentConfig(modulecatalog.Inventory(), on, home, address.Agent.ID); err == nil {
 					t.Fatal("enabled hook declaration accepted")
 				}
 				return
 			}
-			if _, err := config.WriteAgentConfig(on, home, address.Agent.ID, app.ValidateModuleConfig); err != nil {
+			if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), on, home, address.Agent.ID, app.ValidateModuleConfig); err != nil {
 				t.Fatal(err)
 			}
 			application, err := app.New(app.Options{Config: load(), Provider: &bareScriptProvider{}})
@@ -122,7 +123,7 @@ func TestExtensionSwitchPreservesWorkspaceMCPExecution(t *testing.T) {
 	work, home := t.TempDir(), t.TempDir()
 	writeE2EConfig(t, filepath.Join(work, ".agents", "mcp.json"), fmt.Sprintf(`{"mcpServers":{"remote":{"type":"http","url":%q}}}`, remote.URL))
 	writeE2EConfig(t, filepath.Join(work, ".juex", "extensions", "broken", "juex.extension.json"), "{")
-	cfg := config.Config{Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: home,
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: home,
 		Extensions: config.ExtensionPolicy{Allow: []string{"broken"}, Configured: true},
 		Modules:    config.ModulePolicy{"mcp": {Enabled: true}},
 	}
@@ -151,7 +152,7 @@ func TestDisabledMCPDoesNotRequireResourceEnvironment(t *testing.T) {
 				writeE2EConfig(t, filepath.Join(dir, "juex.extension.json"), `{"manifest_version":1,"name":"fixture","version":"1.0.0"}`)
 			}
 			writeE2EConfig(t, filepath.Join(dir, "mcp.json"), `{"mcpServers":{"remote":{"type":"http","url":"https://mcp.example.invalid","headers":{"Authorization":"Bearer ${MISSING_MODULE_GATE_TOKEN}"}}}}`)
-			cfg := config.Config{Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state,
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state,
 				Extensions: config.ExtensionPolicy{Allow: []string{"fixture"}, Configured: true},
 				Modules:    config.ModulePolicy{"extensions": {Enabled: true}},
 			}

@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
 )
 
 type AgentConfig struct {
@@ -98,14 +96,8 @@ func (m *Manager) ReadOnlyState(selector string) (ReadOnlyAgentState, error) {
 			Reason:  "cannot read Threads for an unbound workspace: " + binding.Reason,
 		}
 	}
-	composition, err := config.ReadModuleInspectionConfig(entry.Agent.Workspace, m.homeDir, entry.Address.ConfigPath())
-	moduleError := ""
-	if err != nil {
-		moduleError = err.Error()
-	}
 	return ReadOnlyAgentState{
-		ModuleError: moduleError,
-		Preset:      composition.Preset, Modules: composition.Modules,
+		HomeDir: m.homeDir, ConfigPath: entry.Address.ConfigPath(),
 		ID:        entry.ID,
 		Name:      entry.Agent.Name,
 		Workspace: entry.Agent.Workspace,
@@ -165,11 +157,10 @@ func (m *Manager) UpdateConfig(
 	if err != nil {
 		return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: err}
 	}
-	if _, err := config.WriteAgentConfig(content, m.homeDir, entry.ID, app.ValidateModuleConfig); err != nil {
-		var validation *config.AgentConfigValidationError
-		if errors.As(err, &validation) {
-			return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: validation.Err}
-		}
+	if m.configWriter == nil {
+		return AgentConfig{}, RestartResult{AgentStatus: status}, errors.New("fleet: config writer is not configured")
+	}
+	if err := m.configWriter(m.homeDir, entry.ID, content); err != nil {
 		return AgentConfig{}, RestartResult{AgentStatus: status}, err
 	}
 	configState, err := readAgentConfig(entry)

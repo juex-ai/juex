@@ -85,4 +85,4 @@ Feature-specific Framework slot.
 - [Architecture: Dependency Direction](../../ARCHITECTURE.md#dependency-direction)
 - [Domain Model](../../DOMAIN.md)
 - [Philosophy](../../PHILOSOPHY.md)
-- [Module contracts](../../internal/runtime/module/)
+- [Module contracts](../../internal/framework/module)

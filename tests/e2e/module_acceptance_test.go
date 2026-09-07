@@ -10,13 +10,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/runtime/contextbudget"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	chunkedwritemodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type moduleRequestBudget struct {
@@ -95,15 +97,15 @@ func acceptanceConfig(t *testing.T, preset string, workers bool) config.Config {
 		overrides += "  worker-threads:\n    enabled: true\n"
 	}
 	write(filepath.Join(resolved.Address.StateDir(), "switches.yaml"), overrides)
-	if _, err := config.WriteAgentConfig([]byte("imports:\n  - source: switches.yaml\n"), home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), []byte("imports:\n  - source: switches.yaml\n"), home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadWithOptions(config.LoadOptions{HomeDir: home, AgentID: resolved.Agent.ID, AgentState: config.AgentStateExisting})
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), HomeDir: home, AgentID: resolved.Agent.ID, AgentState: config.AgentStateExisting})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, definition := range modulecatalog.Definitions() {
-		want := preset == config.PresetStandard || definition.Minimal || (workers && definition.ID == modulecatalog.WorkerThreads)
+	for _, definition := range modulecatalog.Inventory().Definitions() {
+		want := preset == config.PresetStandard || definition.Minimal || (workers && definition.ID == workerthreadsmodule.ModuleID)
 		if cfg.ModuleEnabled(definition.ID) != want {
 			t.Fatalf("layered %s=%v, want %v", definition.ID, cfg.ModuleEnabled(definition.ID), want)
 		}
@@ -130,7 +132,7 @@ func TestModuleAcceptanceLayeredMainWorkerRequests(t *testing.T) {
 				}
 				t.Run(role, func(t *testing.T) {
 					provider := &measuredModuleProvider{moduleCapabilityProvider: &moduleCapabilityProvider{t: t, cfg: cfg, written: "draft", replacement: strings.Repeat("edited long draft\n", 220)}}
-					if !cfg.ModuleEnabled(modulecatalog.ChunkedWrite) {
+					if !cfg.ModuleEnabled(chunkedwritemodule.ModuleID) {
 						provider.written = strings.Repeat("long draft\n", 300)
 					}
 					provider.planActions()

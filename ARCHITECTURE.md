@@ -29,43 +29,53 @@ Workspace. Agent and Thread commands ask Fleet to ensure that Runtime is
 healthy, then use the same admission and subscription interfaces as Web.
 Only Fleet invokes the hidden single-Agent Runtime entrypoint.
 
-## Dependency Direction
+## Ownership And Dependency Direction
 
-Juex separates three responsibilities:
+The repository is one Go module. Executable entry points stay in `cmd`; every
+production package under `internal` belongs to one of these seven groups:
 
-- Foundation packages own Provider-neutral values, persistence, Tools, Events,
-  sandboxing, environment, media/spool storage, and process primitives.
-- Framework packages own Agent/Thread lifecycles, durable ordering, Module
-  contracts, admission, and composition validation.
-- Feature packages contribute Tools, context, policy, observation, status, or
-  scoped resources through Framework interfaces.
-
-Dependencies point from Features to Framework to Foundation.
-`internal/app` is the composition root and may depend on concrete Features.
-Framework code does not discover dependencies through a global service
-locator. See [ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.md).
-
-## Package Ownership
-
-| Package | Owns |
+| Group | Owns |
 | --- | --- |
-| `internal/agentstate` | Agent registry identity, canonical Workspace binding, Agent state addressing, and lifecycle metadata. |
-| `internal/config` | Layered YAML loading, scope validation, imports, environment projection, and atomic managed-config publication. |
-| `internal/jsonl` | Domain-neutral durable append, repair, forward iteration, and bounded reverse reads for JSONL files. |
-| `internal/thread` | Thread metadata, Agent index, Generation EventStore, timeline paging, archive, and delete. |
-| `internal/runtime` | Pending Input state, Input/Turn lifecycle, Provider loop, context projection, compaction, status, and Tool execution. |
-| `internal/runtime/module` | Typed Module capabilities and scoped lifecycle contracts. |
-| `internal/app` | Agent composition, Main/Worker management, Observation admission, slash commands, and subscriptions. |
-| `internal/observable` | Observable definitions, producers, Observation values, and generated state. |
-| `internal/mcp` | Agent-scoped MCP connections, Tool catalog, calls, and Notification transport. |
-| `internal/web` | Single-Agent JSON/SSE transport and resource handlers. |
-| `internal/fleet` / `internal/fleetweb` | Resident Agent lifecycle, registry, proxy, and Fleet UI service. |
-| `internal/cli` | CLI adapters for Agent, Thread, Fleet, config, and diagnostics. |
-| `frontend` | Fleet shell, Thread Explorer, transcript, composer, and runtime views. |
+| `internal/app` | Product composition, explicit Module inventory/presets, layered configuration, resource selection, process-shared services, Provider factories, and API/status projections. |
+| `internal/entrypoints` | CLI and Agent/Fleet HTTP adapters, request/SSE lifetimes, wire DTOs, and one shared Web asset handler. |
+| `internal/fleet` | Registered Agent process lifecycle, verified endpoint selection, lifecycle locks, restart continuation, and platform service integration. |
+| `internal/framework` | Agent execution and Worker orchestration, Thread/Generation storage, Module contracts, input admission, recovery, Provider loops, context control, and passive lifecycle operations. |
+| `internal/features` | Concrete Module Tools, context, policy, observation producers, scoped state, and resource implementations. |
+| `internal/providers` | Provider construction, vendor protocols/SDKs, transport adaptation, and Provider profile defaults. |
+| `internal/foundation` | Neutral LLM/Tool/Event values and contracts, generic persistence, environment, sandbox, media artifacts, and process primitives. |
 
-Provider-neutral messages live in `internal/llm`. Durable Event transport and
-schemas live in `internal/events`, `internal/eventcatalog`, and
-`internal/toolevents`.
+Features depend on Framework and Foundation. Providers depend on Foundation;
+Framework never imports concrete Features or Providers. Foundation has no
+upward dependency. Fleet depends on Framework and Foundation and receives
+application configuration publication as an explicit callback. App composes
+these groups; entrypoints adapt them to users. No runtime service locator or
+compatibility package bypasses these boundaries.
+[`tests/architecture`](tests/architecture/boundary_test.go) checks every
+production Go file, including other operating systems, and rejects unclassified
+package groups. See [ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.md)
+for the Module boundary rationale.
+
+`framework/agent` keeps turn admission, recovery barriers, Thread leases,
+Worker reservations and ordered/deferred cleanup in one execution owner. App
+supplies resolved input policy, child factories and resource-release callbacks.
+HTTP retains binding and subscription ownership; borrowing a managed Worker
+references the existing execution and never acquires its close ownership.
+`app.ProcessServices` owns shared model health, frozen resource resolution and
+MCP startup. HTTP publishes endpoint readiness before warmup; MCP releases its
+startup waiters before delivering buffered notifications back through Main.
+
+Provider-neutral messages and deterministic plain-text projection live in
+`foundation/llm`; vendor SDK errors remain in Providers and expose neutral
+status facts. Generic event transport/catalog machinery lives in
+`foundation/events`. Runtime, Thread, provenance, Tool facts and each Feature
+own their schemas; `app/eventcatalog` statically assembles them independently of
+Module enablement. Feature Tools use the neutral registry directly; there is no
+production aggregate builtin factory. Goal/Notes stores, Context Control
+contributions and Extension private directories stay with their Feature owners.
+
+`frontend` contains the Fleet shell, Thread Explorer, transcript, composer and
+runtime views. Both HTTP entrypoints consume `entrypoints/webassets`; builds
+prepare it before compiling Go.
 
 ## Persistence Authority
 
@@ -105,7 +115,10 @@ Agent, then an optional transient explicit override. Imports inherit the scope
 of the declaring layer. Agent `juex.yaml` uses the ordinary schema and merge
 rules, but cannot own Fleet settings. Fleet config updates validate the whole
 chain and publish the Agent file and remote-import cache atomically before
-restarting the selected Agent; Workspace configuration is unchanged.
+restarting the selected Agent under the same lifecycle lock. App provides the
+atomic publisher; passive stopped-Agent inspection resolves selection without
+fetching remote imports, publishing caches or starting resources. Workspace
+configuration is unchanged.
 
 `thread.json` is authoritative for Thread identity, topology, lifecycle,
 timestamps, and the Context Generation registry. It also materializes bounded
@@ -115,8 +128,8 @@ with the cursor through which derived values were aggregated.
 lists read this Agent cache; startup repairs a missing or stale entry by
 scanning `thread.json` files, never Generation history.
 
-`internal/thread.EventStore` is the sole production resolver and reader/writer
-for `generations/*.jsonl`; `internal/jsonl` owns the raw file durability and
+`internal/framework/thread.EventStore` is the sole production resolver and reader/writer
+for `generations/*.jsonl`; `internal/foundation/jsonl` owns the raw file durability and
 bounded-read mechanics. Generation commits are chronological, append-only,
 atomic fact batches with one continuous Thread-local sequence. Current Provider
 context is reconstructed from the current Generation file alone. Timeline and
@@ -144,7 +157,7 @@ state. Extension bundles may contribute additional read-only definitions.
 
 ```text
 CLI / Web / Observation
-  -> App admission
+  -> App input policy / Framework admission
   -> pending_inputs.json acceptance
   -> attempt and Turn
   -> prompt / Provider / Tools
@@ -224,7 +237,7 @@ and is never recreated.
 Configuration preflight and inspection do not retire resources. Once resource
 application commits, cleanup or later startup failure is an incomplete application;
 it does not roll back by resurrecting old state. The new endpoint is published
-only after retirement succeeds. See the [resource lifecycle contract](internal/runtime/module/state/README.md)
+only after retirement succeeds. See the [resource lifecycle contract](internal/framework/module/state/README.md)
 for the pre-ownership deployment boundary.
 
 Runtime and Thread tool contributions are merged before resolving their final
@@ -238,7 +251,7 @@ Thread tool-use batch and may overlap parallel tools. Cancellation uses normal
 tool dispatch and results remain ordered, including errors. Modules retain
 responsibility for synchronizing Agent resources across Threads.
 
-The Agent-scoped [Memory Module](internal/modules/memory/README.md) owns durable
+The Agent-scoped [Memory Module](internal/features/memory/README.md) owns durable
 knowledge and a rebuildable index. App supplies the Agent directory; Main and
 Worker Module instances coordinate file transactions through the same lock.
 Thread-start and post-compaction policies maintain the index without injecting
@@ -249,11 +262,11 @@ the sealed tool catalog and persists them independently of result presentation.
 Enabled Modules may summarize their completed tool pairs through declarative
 provider-history plans. Framework validates ownership, pairing, cancellation and
 summary budgets before final context projection; journals remain unchanged.
-The Thread [chunked-write Module](internal/modules/chunkedwrite/README.md) owns
+The Thread [chunked-write Module](internal/features/chunkedwrite/README.md) owns
 its buffered sessions, current-Generation recovery and folding algorithm.
 
-Goal and Notes policies live in `internal/modules/goal` and
-`internal/modules/notes`. Enabled Modules contribute one frozen JSON state,
+Goal and Notes policies live in `internal/features/goal` and
+`internal/features/notes`. Enabled Modules contribute one frozen JSON state,
 guidance, and an owned summary section per compaction operation. A Module may
 reconcile only its declared section using that snapshot. Framework checks the
 corrected summary against the successful request's output budget and the full

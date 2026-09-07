@@ -1,8 +1,8 @@
 package app
 
 import (
-	"github.com/juex-ai/juex/internal/config"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/app/config"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 // ThreadInspectionCatalog uses the same effective declarations as runtime
