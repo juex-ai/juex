@@ -1196,9 +1196,10 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 	id := map[string]any{"type": "string"}
 	return []tools.ToolDefinition{
 		{
-			Name:        WorkerThreadToolCreate,
-			Group:       tools.ToolGroupWorkerThread,
-			Description: "Create a managed Worker Thread and start its query asynchronously. Set subscribe to receive terminal results.",
+			Name:            WorkerThreadToolCreate,
+			Group:           tools.ToolGroupWorkerThread,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Create a managed Worker Thread and start its query asynchronously. Set subscribe to receive terminal results.",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1211,23 +1212,26 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 			},
 		},
 		{
-			Name:        WorkerThreadToolList,
-			Group:       tools.ToolGroupWorkerThread,
-			Description: "List direct Worker Threads currently managed by this Thread.",
-			Schema:      map[string]any{"type": "object", "properties": map[string]any{}},
+			Name:            WorkerThreadToolList,
+			Group:           tools.ToolGroupWorkerThread,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "List direct Worker Threads currently managed by this Thread.",
+			Schema:          map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{
-			Name:        WorkerThreadToolStatus,
-			Group:       tools.ToolGroupWorkerThread,
-			Description: "Read the runtime status and latest result of an active managed Worker Thread.",
+			Name:            WorkerThreadToolStatus,
+			Group:           tools.ToolGroupWorkerThread,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Read the runtime status and latest result of an active managed Worker Thread.",
 			Schema: map[string]any{
 				"type": "object", "properties": map[string]any{"thread_id": id}, "required": []string{"thread_id"},
 			},
 		},
 		{
-			Name:        WorkerThreadToolSend,
-			Group:       tools.ToolGroupWorkerThread,
-			Description: "Send a message to a managed Worker Thread; busy Threads queue it as durable pending input.",
+			Name:            WorkerThreadToolSend,
+			Group:           tools.ToolGroupWorkerThread,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Send a message to a managed Worker Thread; busy Threads queue it as durable pending input.",
 			Schema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"thread_id": id, "message": map[string]any{"type": "string"}},
@@ -1235,9 +1239,10 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 			},
 		},
 		{
-			Name:        WorkerThreadToolSubscribe,
-			Group:       tools.ToolGroupWorkerThread,
-			Description: "Enable or disable terminal result notifications for a managed Worker Thread.",
+			Name:            WorkerThreadToolSubscribe,
+			Group:           tools.ToolGroupWorkerThread,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Enable or disable terminal result notifications for a managed Worker Thread.",
 			Schema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"thread_id": id, "subscribed": map[string]any{"type": "boolean"}},
@@ -1245,17 +1250,19 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 			},
 		},
 		{
-			Name:        WorkerThreadToolStop,
-			Group:       tools.ToolGroupWorkerThread,
-			Description: "Stop and close an active managed Worker Thread while preserving its durable history.",
+			Name:            WorkerThreadToolStop,
+			Group:           tools.ToolGroupWorkerThread,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Stop and close an active managed Worker Thread while preserving its durable history.",
 			Schema: map[string]any{
 				"type": "object", "properties": map[string]any{"thread_id": id}, "required": []string{"thread_id"},
 			},
 		},
 		{
-			Name:        WorkerThreadToolArchive,
-			Group:       tools.ToolGroupWorkerThread,
-			Description: "Archive an idle, unsubscribed Worker Thread after all pending input and result deliveries have settled.",
+			Name:            WorkerThreadToolArchive,
+			Group:           tools.ToolGroupWorkerThread,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Archive an idle, unsubscribed Worker Thread after all pending input and result deliveries have settled.",
 			Schema: map[string]any{
 				"type": "object", "properties": map[string]any{"thread_id": id}, "required": []string{"thread_id"},
 			},

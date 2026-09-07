@@ -176,6 +176,11 @@ Runtime 与 Thread 工具贡献合并后，才基于完整工具名称集合生�
 schema。解析不能改变工具身份或执行策略。Provider 请求与活动状态读取同一份
 已发布 Registry，共享 Module catalog 保持不变。
 
+工具定义声明独立于展示 Group 的执行策略。默认并行；串行工具在每个 Thread
+的单次工具调用批次中共享按 Provider 顺序执行的队列，仍可与并行工具重叠。
+取消沿用正常工具分发，包含错误在内的结果保持有序。跨 Thread 的 Agent
+共享资源同步仍由所属 Module 负责。
+
 工具执行可以输出显式 JSON fact。Framework 根据封存的工具 catalog 赋予所有者，
 并独立于结果展示文本持久化。启用的 Module 可以通过声明式 Provider 历史计划
 汇总自己已完成的工具对。Framework 在最终上下文投影之前验证所有权、配对、取消

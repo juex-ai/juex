@@ -198,6 +198,12 @@ descriptions and schemas against the complete tool-name set. Resolution cannot
 change tool identity or execution policy. Provider requests and active status
 read the same published registry; shared Module catalogs remain unchanged.
 
+Tool definitions declare execution policy independently of display Group.
+Parallel is the default; serial tools share one provider-ordered queue per
+Thread tool-use batch and may overlap parallel tools. Cancellation uses normal
+tool dispatch and results remain ordered, including errors. Modules retain
+responsibility for synchronizing Agent resources across Threads.
+
 Tool execution may emit explicit JSON facts. Framework assigns their owner from
 the sealed tool catalog and persists them independently of result presentation.
 Enabled Modules may summarize their completed tool pairs through declarative

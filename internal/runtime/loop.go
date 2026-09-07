@@ -1520,19 +1520,19 @@ type toolExecutionCall struct {
 }
 
 // runToolCalls executes one assistant tool-use batch concurrently while
-// preserving provider-facing result order. Stateful tool groups are serialized
-// so dependent reads, writes, and lifecycle changes observe provider order.
+// preserving provider-facing result order. Tools declaring serial execution share
+// one queue for this batch; other calls and other Threads remain independent.
 func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []toolExecutionCall) []toolCallResult {
 	results := make([]toolCallResult, len(calls))
 	type indexedToolCall struct {
 		index int
 		call  toolExecutionCall
 	}
-	var threadStateCalls []indexedToolCall
+	var serialCalls []indexedToolCall
 	var wg sync.WaitGroup
 	for i, tc := range calls {
 		if e.isSerializedToolCall(tc.call.ToolName) {
-			threadStateCalls = append(threadStateCalls, indexedToolCall{index: i, call: tc})
+			serialCalls = append(serialCalls, indexedToolCall{index: i, call: tc})
 			continue
 		}
 		wg.Add(1)
@@ -1541,11 +1541,11 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []toolEx
 			results[idx] = e.runToolCall(ctx, turnID, call)
 		}(i, tc)
 	}
-	if len(threadStateCalls) > 0 {
+	if len(serialCalls) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for _, item := range threadStateCalls {
+			for _, item := range serialCalls {
 				results[item.index] = e.runToolCall(ctx, turnID, item.call)
 			}
 		}()
@@ -1562,7 +1562,7 @@ func (e *Engine) isSerializedToolCall(name string) bool {
 	if !ok {
 		return false
 	}
-	return tool.Group == tools.ToolGroupThreadState || tool.Group == tools.ToolGroupWorkerThread
+	return tool.ExecutionPolicy == tools.ToolExecutionSerial
 }
 
 func toolResultBlocks(results []toolCallResult) []llm.Block {

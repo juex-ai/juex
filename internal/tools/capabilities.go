@@ -38,7 +38,7 @@ func ResolveTools(input []Tool) ([]Tool, error) {
 		tool = tool.Clone()
 		if tool.ResolveDefinition != nil {
 			definition := tool.ResolveDefinition(available)
-			if definition.Name != tool.Name || definition.Group != tool.Group || definition.TimeoutPolicy != tool.TimeoutPolicy || definition.TimeoutSeconds != tool.TimeoutSeconds {
+			if definition.Name != tool.Name || definition.Group != tool.Group || definition.ExecutionPolicy != tool.ExecutionPolicy || definition.TimeoutPolicy != tool.TimeoutPolicy || definition.TimeoutSeconds != tool.TimeoutSeconds {
 				return nil, fmt.Errorf("tools: %s definition adapter changed identity or execution policy", tool.Name)
 			}
 			tool.Description = definition.Description

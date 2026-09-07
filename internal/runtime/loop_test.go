@@ -7586,8 +7586,9 @@ func TestRunToolCalls_SerializesSideThreadCallsInProviderOrder(t *testing.T) {
 	secondStarted := make(chan struct{}, 1)
 	releaseFirst := make(chan struct{})
 	eng.Tools.MustRegister(tools.Tool{
-		Name:  "side_first",
-		Group: tools.ToolGroupWorkerThread,
+		Name:            "side_first",
+		Group:           tools.ToolGroupWorkerThread,
+		ExecutionPolicy: tools.ToolExecutionSerial,
 		Handler: func(context.Context, map[string]any) (string, error) {
 			close(firstStarted)
 			<-releaseFirst
@@ -7595,8 +7596,9 @@ func TestRunToolCalls_SerializesSideThreadCallsInProviderOrder(t *testing.T) {
 		},
 	})
 	eng.Tools.MustRegister(tools.Tool{
-		Name:  "side_second",
-		Group: tools.ToolGroupWorkerThread,
+		Name:            "side_second",
+		Group:           tools.ToolGroupWorkerThread,
+		ExecutionPolicy: tools.ToolExecutionSerial,
 		Handler: func(context.Context, map[string]any) (string, error) {
 			secondStarted <- struct{}{}
 			return "second", nil
