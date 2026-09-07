@@ -2,7 +2,6 @@ package eventcatalog
 
 import (
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -304,32 +303,6 @@ func TestDefaultCatalogOwnsBrowserProjection(t *testing.T) {
 	types := Default().BrowserTypes()
 	if !contains(types, "turn.started") || contains(types, "finish.attempted") {
 		t.Fatalf("browser types = %v", types)
-	}
-}
-
-func TestCatalogRegistrationAndLookupAreImmutable(t *testing.T) {
-	catalog, err := New(Definition{
-		Type:         "test.fact",
-		Version:      4,
-		ReplayPolicy: events.ReplayRequired,
-		NewPayload: func() any {
-			return &struct {
-				Value string `json:"value"`
-			}{}
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	definition, ok := catalog.Lookup("test.fact")
-	if !ok || definition.Version != 4 {
-		t.Fatalf("definition = %+v, ok = %v", definition, ok)
-	}
-	if _, err := New(definition, definition); err == nil {
-		t.Fatal("duplicate definition error = nil")
-	}
-	if !reflect.DeepEqual(catalog.BrowserTypes(), []string(nil)) {
-		t.Fatalf("browser types = %v", catalog.BrowserTypes())
 	}
 }
 

@@ -861,7 +861,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "context.projection.applied",
 			Timestamp: ts.Add(11 * time.Second),
 			TurnID:    "turn-1",
-			Payload: eventcatalog.ContextProjectionAppliedPayload{
+			Payload: juexruntime.ContextProjectionAppliedPayload{
 				UserInputsExternalized:        1,
 				ToolResultsExternalized:       2,
 				BytesExternalized:             3000,
