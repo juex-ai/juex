@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
@@ -33,7 +34,7 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 				Type:      llm.BlockToolUse,
 				ToolUseID: "finish-goal",
-				ToolName:  juexruntime.GoalToolUpdate,
+				ToolName:  goalmodule.ToolUpdate,
 				Input: map[string]any{
 					"status":        string(workmem.GoalStatusSuccess),
 					"status_reason": "subscribed worker result received",
@@ -56,13 +57,13 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 		return llm.Response{}, fmt.Errorf("unexpected provider history: %+v", history)
 	}
 	if !historyHasToolResult(history, "create-goal") {
-		if !toolSpecExists(specs, juexruntime.GoalToolCreate) {
-			return llm.Response{}, fmt.Errorf("primary tool catalog missing %s", juexruntime.GoalToolCreate)
+		if !toolSpecExists(specs, goalmodule.ToolCreate) {
+			return llm.Response{}, fmt.Errorf("primary tool catalog missing %s", goalmodule.ToolCreate)
 		}
 		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 			Type:      llm.BlockToolUse,
 			ToolUseID: "create-goal",
-			ToolName:  juexruntime.GoalToolCreate,
+			ToolName:  goalmodule.ToolCreate,
 			Input: map[string]any{
 				"description": "finish delegated work",
 				"acceptance":  "the subscribed worker result is incorporated",

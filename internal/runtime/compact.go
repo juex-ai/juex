@@ -138,7 +138,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
 	}
-	summaryState, err := e.compactionSummaryStateLocked()
+	summaryState, err := e.compactionSummaryStateLocked(ctx, policy)
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
@@ -200,6 +200,10 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 		compactErr := newCompactionError(ctx, err)
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
+	generation.Summary, err = reconcileCompactionSummary(ctx, generation.Summary, summaryState, generation.MaxTokens)
+	if err != nil {
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
+	}
 	resp := generation.Response
 	summaryProvider := generation.Provider
 	summaryChars := len(generation.Summary)
@@ -232,7 +236,19 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	simulated := make([]llm.Message, 0, len(threadHistory)+1)
 	simulated = append(simulated, threadHistory...)
 	simulated = append(simulated, msg)
-	tokensAfter := e.estimateContextTokens(systemPrompt, tools, assembleActiveContext(simulated, nil).Messages)
+	compacted := assembleActiveContext(simulated, nil)
+	// Reuse the context already collected for this operation; callbacks must
+	// not cause a second state read between protection and Generation commit.
+	for _, message := range active.Messages {
+		if message.Kind == llm.MessageKindRuntimeContext {
+			compacted.Messages = append(compacted.Messages, message)
+		}
+	}
+	tokensAfter := e.estimateContextTokens(systemPrompt, tools, compacted.Messages)
+	if tokensAfter > policy.TriggerTokens {
+		err := fmt.Errorf("compacted context exceeds budget: %d tokens, limit %d", tokensAfter, policy.TriggerTokens)
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
+	}
 	msg.Compaction.TokensAfter = tokensAfter
 	contextUsage := llm.ContextUsage{
 		Model:         model,

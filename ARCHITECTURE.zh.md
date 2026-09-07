@@ -77,8 +77,9 @@ threads/<thread-id>/
   generations/
     g000001.jsonl
     g000002.jsonl
-  goal_state.json
-  notes.md
+  modules/
+    goal/goal_state.json
+    notes/notes.md
   scratchpad/
   spool/
 archive/threads/<thread-id>/
@@ -180,6 +181,13 @@ schema。解析不能改变工具身份或执行策略。Provider 请求与活�
 汇总自己已完成的工具对。Framework 在最终上下文投影之前验证所有权、配对、取消
 和摘要预算，Journal 保持不变。Thread 级的[分块写 Module](internal/modules/chunkedwrite/README.zh.md)
 拥有缓冲会话、当前 Generation 恢复和折叠算法。
+
+Goal 与 Notes 策略分别位于 `internal/modules/goal` 和
+`internal/modules/notes`。每次压缩中，启用的 Module 贡献一份冻结的 JSON 状态、
+指导和自有摘要段落，只能依据该快照修正自己声明的段落。Framework 在提交
+Generation 前，检查修正后的摘要是否满足成功请求的输出预算，以及完整活动
+上下文是否满足压缩触发预算。压缩不会截断受保护状态或将其写回权威文件；
+契约无法容纳时操作失败。模型重试复用同一份冻结状态。
 
 Prompt assembly 使用已注册的 context contributor。稳定 guidance、Hook
 context、Thread state 和每次请求的 recitation 在该接口汇合。Generation 边界

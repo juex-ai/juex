@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -71,10 +72,10 @@ func builtinDefinitions() []Definition {
 		required("pending_input.drained", func() any { return &juexruntime.PendingInputDrainedPayload{} }, true),
 		required("pending_input.dropped", func() any { return &juexruntime.PendingInputDroppedPayload{} }, true),
 		required("pending_input.rejected", func() any { return &juexruntime.PendingInputRejectedPayload{} }, true),
-		ignorable("goal.updated", func() any { return &juexruntime.GoalUpdatedPayload{} }, true),
-		ignorable("goal.continued", func() any { return &juexruntime.GoalContinuedPayload{} }, false),
-		ignorable("notes.updated", func() any { return &juexruntime.NotesUpdatedPayload{} }, true),
-		ignorable("notes.errored", func() any { return &juexruntime.NotesErroredPayload{} }, true),
+		ignorable("goal.updated", func() any { return &workmem.GoalUpdatedPayload{} }, true),
+		ignorable("goal.continued", func() any { return &workmem.GoalContinuedPayload{} }, false),
+		ignorable("notes.updated", func() any { return &workmem.NotesUpdatedPayload{} }, true),
+		ignorable("notes.errored", func() any { return &workmem.NotesErroredPayload{} }, true),
 		ignorable(observable.EventObservableStarted, func() any { return &observable.ObservableEventPayload{} }, true),
 		ignorable(observable.EventObservableStopped, func() any { return &observable.ObservableEventPayload{} }, true),
 		ignorable(observable.EventObservableExited, func() any { return &observable.ObservableEventPayload{} }, true),

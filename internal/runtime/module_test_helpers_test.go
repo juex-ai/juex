@@ -8,6 +8,8 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
+	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
 	"github.com/juex-ai/juex/internal/modules/operatingcontext"
 	"github.com/juex-ai/juex/internal/prompt"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -127,10 +129,10 @@ func installModuleTools(t *testing.T, registry *tools.Registry, providers ...run
 }
 
 func installThreadStateModules(t *testing.T, engine *Engine) (*workmem.GoalStateStore, *workmem.NotesStore) {
-	return installThreadStateModulesWithGoalOptions(t, engine, GoalModuleOptions{EnableContinuation: true})
+	return installThreadStateModulesWithGoalOptions(t, engine, goalmodule.Options{EnableContinuation: true})
 }
 
-func installThreadStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions GoalModuleOptions) (*workmem.GoalStateStore, *workmem.NotesStore) {
+func installThreadStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions goalmodule.Options) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
 	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, nil, nil, goalOptions)
 }
@@ -142,7 +144,7 @@ func installThreadStateModulesWithStores(
 	notes *workmem.NotesStore,
 ) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
-	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, goalState, notes, GoalModuleOptions{EnableContinuation: true})
+	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, goalState, notes, goalmodule.Options{EnableContinuation: true})
 }
 
 func installThreadStateModulesWithStoresAndGoalOptions(
@@ -150,7 +152,7 @@ func installThreadStateModulesWithStoresAndGoalOptions(
 	engine *Engine,
 	goalState *workmem.GoalStateStore,
 	notes *workmem.NotesStore,
-	goalOptions GoalModuleOptions,
+	goalOptions goalmodule.Options,
 ) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
 	if engine == nil || engine.Thread == nil {
@@ -176,11 +178,11 @@ func installThreadStateModulesWithStoresAndGoalOptions(
 		Dir: engine.Thread.Dir,
 	}
 	set, err := runtimemodule.BuildThreadSet(context.Background(), []runtimemodule.ThreadFactorySpec{
-		{ID: GoalModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-			return NewGoalModuleWithOptions(goalState, goalOptions), nil
+		{ID: goalmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+			return goalmodule.NewWithOptions(goalState, goalOptions), nil
 		}},
-		{ID: NotesModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-			return NewNotesModuleWithOptions(notes, NotesModuleOptions{EventSink: eventSink, CurrentTurnID: currentTurnID}), nil
+		{ID: notesmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+			return notesmodule.NewWithOptions(notes, notesmodule.Options{EventSink: eventSink, CurrentTurnID: currentTurnID}), nil
 		}},
 	}, threadContext, runtimemodule.ToolContext{Thread: &threadContext})
 	if err != nil {

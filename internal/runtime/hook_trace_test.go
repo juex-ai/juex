@@ -8,6 +8,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
@@ -64,9 +65,9 @@ func TestPolicyTraceMessageIsUIOnly(t *testing.T) {
 
 func TestBuiltinPolicyTraceTextRequiresPolicy(t *testing.T) {
 	payload := PolicyCompletedPayload{
-		ModuleID:    GoalModuleID,
+		ModuleID:    goalmodule.ModuleID,
 		PolicyPoint: runtimemodule.PolicyPointFinish,
-		Name:        goalCompletionGateName,
+		Name:        "goal-completion-gate",
 		Source:      "builtin",
 		DurationMS:  3,
 		ExitCode:    0,
@@ -82,9 +83,9 @@ func TestBuiltinPolicyTraceTextRequiresPolicy(t *testing.T) {
 
 func TestBuiltinPolicyTraceMessageRequiresPolicy(t *testing.T) {
 	payload := PolicyCompletedPayload{
-		ModuleID:    GoalModuleID,
+		ModuleID:    goalmodule.ModuleID,
 		PolicyPoint: runtimemodule.PolicyPointFinish,
-		Name:        goalCompletionGateName,
+		Name:        "goal-completion-gate",
 		Source:      "builtin",
 		DurationMS:  3,
 		ExitCode:    0,

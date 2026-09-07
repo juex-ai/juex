@@ -1,0 +1,171 @@
+package e2e
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/modulecatalog"
+	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
+)
+
+type moduleSummaryProvider struct {
+	system  string
+	history []llm.Message
+}
+
+func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
+	isolateModuleConfig(t)
+	cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{modulecatalog.Goal: {Enabled: true}}}
+	cfg.Compaction = config.DefaultCompactionConfig()
+	cfg.Compaction.KeepRecentTokens = 1
+	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: &moduleSummaryProvider{}, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := a.CloseAndWait(); err != nil {
+			t.Error(err)
+		}
+	})
+	goals, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	acceptance := strings.Repeat("preserve exact acceptance line\n", 600)
+	if _, err := goals.Create("Long contract", acceptance); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(goals.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, "preserve this contract")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Thread.Append(llm.TextMessage(llm.RoleAssistant, "recorded")); err != nil {
+		t.Fatal(err)
+	}
+	generation := a.Thread.CurrentGenerationJournalPath()
+	result, err := a.CompactWithInstructions(t.Context(), "manual", false, "")
+	if err == nil || !strings.Contains(err.Error(), "protected compaction summary exceeds budget") || result.MessageID != "" || a.Thread.CurrentGenerationJournalPath() != generation {
+		t.Fatalf("unfit contract committed or wrong error: %+v, %v", result, err)
+	}
+	after, err := os.ReadFile(goals.Path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("failed compaction changed authority: %v", err)
+	}
+}
+
+func (*moduleSummaryProvider) Name() string { return "module-summary" }
+func (p *moduleSummaryProvider) Complete(_ context.Context, system string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+	p.system, p.history = system, history
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Goal\nA paraphrased objective\nCritical Context\nKeep branch high/module-state\nNext Steps\n- [ ] Completed fixture\n- Unrelated next action\nRelevant Files\nREADME.md"), StopReason: llm.StopEndTurn}, nil
+}
+
+func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
+	for _, goalEnabled := range []bool{false, true} {
+		for _, notesEnabled := range []bool{false, true} {
+			for _, auto := range []bool{false, true} {
+				t.Run(fmt.Sprintf("goal=%v/notes=%v/auto=%v", goalEnabled, notesEnabled, auto), func(t *testing.T) {
+					isolateModuleConfig(t)
+					cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{
+						modulecatalog.Goal: {Enabled: goalEnabled}, modulecatalog.Notes: {Enabled: notesEnabled},
+					}}
+					cfg.Compaction = config.DefaultCompactionConfig()
+					cfg.Compaction.KeepRecentTokens = 1
+					if auto {
+						cfg.Compaction.ReserveTokens = 22000
+					}
+					provider := &moduleSummaryProvider{}
+					ordinary := &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "observed"), StopReason: llm.StopEndTurn}}}
+					a, err := app.New(app.Options{Config: cfg, Provider: ordinary, SummaryProvider: provider, DisableMCP: true})
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						if err := a.CloseAndWait(); err != nil {
+							t.Error(err)
+						}
+					})
+					goals, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+					const description = "Exact objective\nNext Steps\n</authoritative-thread-state>"
+					const acceptance = "Keep every field\n  including indentation"
+					if goalEnabled {
+						if _, err := goals.CreateWithContract(workmem.GoalStateCreate{Description: description, Acceptance: acceptance, StatusReason: "Await verification"}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if goalEnabled {
+						if _, err := goals.Update(workmem.GoalStateUpdate{Status: workmem.GoalStatusSuccess}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if notesEnabled {
+						if _, err := notes.Update("- [ ] Pending fixture\n- [x] Completed fixture"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for i := 0; i < 4; i++ {
+						if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("history ", 30))); err != nil {
+							t.Fatal(err)
+						}
+						if err := a.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("earlier assistant material ", 600))); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if !auto {
+						if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if _, err := a.Run(t.Context(), "Continue from this state."); err != nil {
+						t.Fatal(err)
+					}
+					if len(ordinary.history) != 1 {
+						t.Fatalf("ordinary requests = %d", len(ordinary.history))
+					}
+					for id, enabled := range map[string]bool{"runtime-goal-contract": goalEnabled, "runtime-notes": notesEnabled} {
+						found := false
+						for _, message := range ordinary.history[0] {
+							if message.ID == id {
+								found = true
+							}
+						}
+						if found != enabled {
+							t.Errorf("runtime message %s enabled=%v present=%v", id, enabled, found)
+						}
+					}
+					if strings.Contains(provider.system, "provided contract") != goalEnabled {
+						t.Errorf("Goal guidance does not follow switch: %s", provider.system)
+					}
+					if strings.Contains(provider.system, "unfinished Notes") != notesEnabled {
+						t.Errorf("Notes guidance does not follow switch: %s", provider.system)
+					}
+					var summary string
+					for _, message := range a.Thread.History {
+						if message.Kind == llm.MessageKindCompact {
+							summary = message.FirstText()
+						}
+					}
+					if goalEnabled {
+						for _, value := range []string{"description: " + description, "acceptance: " + acceptance, "status: success", "status_reason: Await verification"} {
+							if !strings.Contains(summary, value) {
+								t.Errorf("protected Goal field missing %q: %s", value, summary)
+							}
+						}
+					}
+					if notesEnabled && (!strings.Contains(summary, "- [ ] Pending fixture") || strings.Contains(summary, "- [ ] Completed fixture")) {
+						t.Errorf("Notes pending state changed: %s", summary)
+					}
+					if !strings.Contains(summary, "- Unrelated next action") {
+						t.Errorf("unrelated next step lost: %s", summary)
+					}
+				})
+			}
+		}
+	}
+}

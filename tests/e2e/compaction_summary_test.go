@@ -24,7 +24,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 	const acceptance = "Keep the exact branch and pending check."
 	const note = "Run the live compaction evaluation."
 	const summary = "Goal\n" + goal + "\n" + acceptance + "\nStatus: success\nCritical Context\nhigh/context-projection\nNext Steps\n" + note
-	const committedSummary = summary + "\nRelevant Files"
+	const committedSummary = "Goal\ndescription: " + goal + "\nacceptance: " + acceptance + "\nstatus: success\nCritical Context\nhigh/context-projection\nConstraints & Preferences\nProgress\nKey Decisions\nNext Steps\n- [ ] " + note + "\nRelevant Files\nTool Failures"
 	var mu sync.Mutex
 	var budgets []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

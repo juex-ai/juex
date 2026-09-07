@@ -11,6 +11,8 @@ import (
 	"github.com/juex-ai/juex/internal/modules/agentsmd"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	chunkmodule "github.com/juex-ai/juex/internal/modules/chunkedwrite"
+	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
+	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
 	"github.com/juex-ai/juex/internal/modules/operatingcontext"
 	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/modules/shelltools"
@@ -44,7 +46,7 @@ type threadModuleOptions struct {
 	goalState                *workmem.GoalStateStore
 	notes                    *workmem.NotesStore
 	goalContinuation         bool
-	goalContinuationDeferrer juexruntime.GoalContinuationDeferrer
+	goalContinuationDeferrer goalmodule.ContinuationDeferrer
 }
 
 func prepareRuntimeModules(
@@ -216,15 +218,15 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 			},
 		},
 		{
-			ID:            juexruntime.GoalModuleID,
+			ID:            goalmodule.ModuleID,
 			OwnsResources: true,
-			Enabled:       cfg.ModuleEnabled(string(juexruntime.GoalModuleID)),
+			Enabled:       cfg.ModuleEnabled(string(goalmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				goalState := opts.goalState
 				if goalState == nil {
 					goalState = goalStateStore(threadState)
 				}
-				return juexruntime.NewGoalModuleWithOptions(goalState, juexruntime.GoalModuleOptions{
+				return goalmodule.NewWithOptions(goalState, goalmodule.Options{
 					EnableContinuation:   opts.goalContinuation,
 					ContinuationDeferrer: opts.goalContinuationDeferrer,
 					EventSink:            eventSink,
@@ -233,15 +235,15 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 			},
 		},
 		{
-			ID:            juexruntime.NotesModuleID,
+			ID:            notesmodule.ModuleID,
 			OwnsResources: true,
-			Enabled:       cfg.ModuleEnabled(string(juexruntime.NotesModuleID)),
+			Enabled:       cfg.ModuleEnabled(string(notesmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				notes := opts.notes
 				if notes == nil {
 					notes = notesStore(threadState)
 				}
-				return juexruntime.NewNotesModuleWithOptions(notes, juexruntime.NotesModuleOptions{
+				return notesmodule.NewWithOptions(notes, notesmodule.Options{
 					EventSink:     eventSink,
 					CurrentTurnID: currentTurnID,
 				}), nil

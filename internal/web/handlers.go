@@ -14,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/statusapi"
@@ -196,8 +197,8 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 	goal, notes := threadStateStatus(
 		target,
 		nil,
-		s.opts.Cfg.ModuleEnabled(string(runtime.GoalModuleID)),
-		s.opts.Cfg.ModuleEnabled(string(runtime.NotesModuleID)),
+		s.opts.Cfg.ModuleEnabled(modulecatalog.Goal),
+		s.opts.Cfg.ModuleEnabled(modulecatalog.Notes),
 	)
 	info := target.Info()
 	if err := target.Close(); err != nil {
