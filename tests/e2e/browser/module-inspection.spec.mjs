@@ -98,3 +98,21 @@ test("a directory refresh preserves an in-flight module file preview", async ({ 
   releaseContent();
   await expect(page.getByText("Preview survives directory refresh", { exact: true })).toBeVisible();
 });
+
+test("module controls share one Thread subscription", async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeEventSource = window.EventSource;
+    window.moduleSources = [];
+    window.EventSource = class extends NativeEventSource {
+      constructor(url, options) {
+        super(url, options);
+        if (String(url).endsWith("/modules/events")) window.moduleSources.push(this);
+      }
+    };
+  });
+  await openModuleThread(page);
+  await expect(page.getByRole("button", { name: /^Open goal and notes:/ })).toBeVisible();
+  await page.getByRole("button", { name: "Show scratchpad", exact: true }).click();
+  await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.moduleSources.filter((source) => source.readyState !== EventSource.CLOSED).length)).toBe(1);
+});

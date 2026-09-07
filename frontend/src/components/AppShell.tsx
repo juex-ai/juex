@@ -1,4 +1,4 @@
-import { useThreadModules } from "@/hooks/use-thread-modules";
+import { ThreadModulesProvider, useThreadModuleSubscription } from "@/hooks/use-thread-modules";
 import {
   createContext,
   useCallback,
@@ -282,7 +282,8 @@ export function AppShell() {
     [threadID],
   );
 
-  const { snapshot: moduleSnapshot } = useThreadModules(threadID);
+  const moduleState = useThreadModuleSubscription(threadID);
+  const moduleSnapshot = moduleState.snapshot;
   const scratchpadAvailable = moduleSnapshot?.ui.some((item) => item.id === "scratchpad.files") ?? false;
   const loadScratchpadContent = useCallback((path: string, signal?: AbortSignal) => getModuleFileContent(threadID, "scratchpad", "files", path, signal), [threadID]);
   const scratchpadRawURL = useCallback((path: string) => getModuleFileRawURL(threadID, "scratchpad", "files", path), [threadID]);
@@ -493,7 +494,9 @@ export function AppShell() {
                     Loading agent...
                   </div>
                 ) : (
-                  <Outlet key={agentId || "fleet-settings"} />
+                  <ThreadModulesProvider value={moduleState}>
+                    <Outlet key={agentId || "fleet-settings"} />
+                  </ThreadModulesProvider>
                 )}
               </div>
               {workspaceDockOpen && workspaceAvailable ? (
