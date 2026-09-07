@@ -46,6 +46,9 @@ type inputEvalSample struct {
 	Usage         llm.Usage      `json:"usage"`
 	Unchecked     int            `json:"unchecked_after_turn"`
 	Retained      int            `json:"unchecked_after_failure"`
+	Checkpoints   int            `json:"checkpoints"`
+	Compactions   int            `json:"compactions"`
+	Interrupted   bool           `json:"interrupted"`
 	Error         string         `json:"error,omitempty"`
 	Final         string         `json:"final"`
 	ElapsedMillis int64          `json:"elapsed_ms"`
@@ -61,6 +64,10 @@ type inputEvalProvider struct {
 
 func (p *inputEvalProvider) Name() string { return p.base.Name() }
 func (p *inputEvalProvider) Complete(ctx context.Context, system string, history []llm.Message, specs []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, system, history, specs, llm.CompleteOptions{})
+}
+
+func (p *inputEvalProvider) CompleteWithOptions(ctx context.Context, system string, history []llm.Message, specs []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
 	p.before()
 	p.mu.Lock()
 	fail := p.failNext
@@ -69,7 +76,7 @@ func (p *inputEvalProvider) Complete(ctx context.Context, system string, history
 	if fail {
 		return llm.Response{}, errors.New("input-eval injected API interruption")
 	}
-	response, err := p.base.Complete(ctx, system, history, specs)
+	response, err := llm.CompleteWithOptions(ctx, p.base, system, history, specs, opts)
 	p.mu.Lock()
 	p.sample.Calls++
 	p.sample.Usage.Add(response.Usage)
@@ -103,6 +110,7 @@ func TestLiveInputTrackingAB(t *testing.T) {
 		for _, name := range []string{"new_input", "original_task", "multiple_inputs", "historical_input", "api_recovery", "compaction"} {
 			// Alternate order across repetitions to reduce warmup/order effects.
 			for _, enabled := range []bool{repeat%2 == 1, repeat%2 == 0} {
+				t.Logf("starting %s enabled=%v repeat=%d", name, enabled, repeat)
 				sample := runInputEvalSample(t, base, name, enabled, repeat)
 				samples = append(samples, sample)
 				data, _ := json.Marshal(sample)
@@ -143,7 +151,7 @@ func runInputEvalSample(t *testing.T, base llm.Provider, name string, enabled bo
 	sample := inputEvalSample{Case: name, Enabled: enabled, Repeat: repeat, Actions: map[string]int{}}
 	var mu sync.Mutex
 	requirements := map[string][]string{}
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
 	defer cancel()
 	target, err := thread.New(t.TempDir())
 	if err != nil {
@@ -266,7 +274,8 @@ func runInputEvalSample(t *testing.T, base llm.Provider, name string, enabled bo
 	}
 	closeEngine := setup()
 	sample.Final, err = engine.Turn(ctx, query)
-	if name == "api_recovery" && err != nil && checkpointCalls == 1 {
+	if name == "api_recovery" && err != nil && strings.Contains(err.Error(), "input-eval injected API interruption") && checkpointCalls == 1 {
+		sample.Interrupted = true
 		open, _ := engine.UncheckedInputs(ctx)
 		sample.Retained = len(open)
 		closeEngine()
@@ -287,6 +296,17 @@ func runInputEvalSample(t *testing.T, base llm.Provider, name string, enabled bo
 	}
 	if open, openErr := engine.UncheckedInputs(ctx); openErr == nil {
 		sample.Unchecked = len(open)
+	}
+	sample.Checkpoints = checkpointCalls
+	sample.Compactions = target.Projection().Counts.GenerationCount - 1
+	if name != "historical_input" && checkpointCalls != 1 {
+		sample.Error += " checkpoint was not exercised exactly once"
+	}
+	if name == "api_recovery" && !sample.Interrupted {
+		sample.Error += " injected API failure was not recovered"
+	}
+	if name == "compaction" && sample.Compactions == 0 {
+		sample.Error += " compaction was not exercised"
 	}
 	closeEngine()
 	for _, action := range expected {
