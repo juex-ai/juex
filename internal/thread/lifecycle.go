@@ -14,6 +14,9 @@ func (s *Store) Archive(target *Thread) error {
 	if target == nil || target.ID == MainID {
 		return fmt.Errorf("thread: Main cannot be archived")
 	}
+	lock := s.retentionLock(target.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	projection := target.Projection()
@@ -57,6 +60,9 @@ func (s *Store) Unarchive(id string) (*Thread, error) {
 	if !ValidWorkerID(id) {
 		return nil, fmt.Errorf("%w: archived id %q", ErrInvalidID, id)
 	}
+	lock := s.retentionLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	target, err := s.openLocked(filepath.Join(s.ArchiveDir(), id), id)
@@ -95,6 +101,9 @@ func (s *Store) DeleteArchived(id string) error {
 	if !ValidWorkerID(id) {
 		return fmt.Errorf("%w: delete id %q", ErrInvalidID, id)
 	}
+	lock := s.retentionLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	index, err := s.loadOrRebuildIndexLocked()

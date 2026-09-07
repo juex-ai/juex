@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -102,20 +103,27 @@ func (s *Server) dispatchModuleInspection(w http.ResponseWriter, r *http.Request
 			writeErr(w, http.StatusBadRequest, "bad_request", "valid JSON body required")
 			return
 		}
-		// Recheck after reading the request body: a slow upload may span archive.
-		current, err := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir).Inspect(id)
-		if err != nil {
-			writeThreadLookupError(w, id, err)
-			return
-		}
-		if current.Projection.RetentionState == thread.RetentionArchived {
+		// A slow upload may span archive. Check and invoke under the same
+		// retention guard so the operation's directory stays active throughout.
+		var value any
+		invoked := false
+		err = thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir).WithActiveInspection(id, func(current thread.Inspection) error {
+			invoked = true
+			scope.Dir = current.Dir
+			var operationErr error
+			value, operationErr = operation(r.Context(), scope, body)
+			return operationErr
+		})
+		if !invoked && errors.Is(err, thread.ErrArchived) {
 			writeErr(w, http.StatusForbidden, "forbidden", "Thread is read-only")
 			return
 		}
-		scope.Dir = current.Dir
-		value, err := operation(r.Context(), scope, body)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			if invoked {
+				writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			} else {
+				writeThreadLookupError(w, id, err)
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, value)
@@ -260,19 +268,25 @@ func (s *Server) handleModuleResourceEvents(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Cache-Control", "no-cache")
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
-	for {
+	publishChange := func() error {
 		if err := watcher.Refresh(); err != nil {
-			return
+			return err
 		}
 		if _, err := fmt.Fprint(w, "data: {\"type\":\"resource.changed\"}\n\n"); err != nil {
-			return
+			return err
 		}
 		flusher.Flush()
-		if s.readOnly {
-			return
-		}
+		return nil
+	}
+	if err := publishChange(); err != nil || s.readOnly {
+		return
+	}
+	for {
 		select {
 		case <-watcher.Changed():
+			if err := publishChange(); err != nil {
+				return
+			}
 		case <-watcher.Done():
 			return
 		case <-s.inspectionDone:
@@ -280,6 +294,10 @@ func (s *Server) handleModuleResourceEvents(w http.ResponseWriter, r *http.Reque
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
 		}
 	}
 }

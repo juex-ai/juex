@@ -188,6 +188,8 @@ versioned UI contribution IDs, file roots, and optional operations. App composes
 them from the same effective module set; HTTP never constructs a Module to read
 it. Active, inactive, and archived Threads use metadata-only lookup. Disabled
 modules contribute no readers or resources; archived operations are rejected.
+Thread storage holds a per-Thread retention guard across the active check and
+operation callback, excluding archival without blocking ordinary journal writes.
 Go JSON declarations generate the shared TypeScript inspection contract.
 
 Module SSE subscribes to declared replaceable state files before reading a full
@@ -200,7 +202,8 @@ The browser host shares one module snapshot subscription among the current
 Thread's UI consumers, closing it on route changes.
 Stopped-Agent streams finish after their baseline so reconnect rechecks Fleet
 endpoint selection and effective configuration. File trees and recursive resource
-subscriptions start only when selected; UI
+subscriptions start only when selected; idle heartbeats send SSE comments without
+reloading the tree. UI
 snapshots are neither model context nor a new storage authority.
 
 Resource retirement is separate from Close. The accepted configuration's factory

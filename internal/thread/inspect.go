@@ -6,13 +6,43 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+var ErrArchived = errors.New("thread: Thread is archived")
+
+var retentionLocks sync.Map
+
+func (s *Store) retentionLock(id string) *sync.RWMutex {
+	lock, _ := retentionLocks.LoadOrStore(filepath.Join(s.agentStateDir, id), &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
+}
 
 // Inspection is validated metadata only. Inspect never opens the EventStore or
 // repairs projections, generation files, indexes, or Context renewal staging.
 type Inspection struct {
 	Dir        string
 	Projection Projection
+}
+
+// WithActiveInspection keeps the active namespace stable for apply without
+// holding the Store mutex. The callback may use ordinary Thread storage APIs,
+// but must not archive, unarchive, or delete this Thread itself.
+func (s *Store) WithActiveInspection(id string, apply func(Inspection) error) error {
+	if !ValidID(id) {
+		return fmt.Errorf("%w: %q", ErrInvalidID, id)
+	}
+	lock := s.retentionLock(id)
+	lock.RLock()
+	defer lock.RUnlock()
+	metadata, err := s.Inspect(id)
+	if err != nil {
+		return err
+	}
+	if metadata.Projection.RetentionState == RetentionArchived {
+		return ErrArchived
+	}
+	return apply(metadata)
 }
 
 func (s *Store) Inspect(id string) (Inspection, error) {

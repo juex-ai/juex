@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -325,5 +326,122 @@ func TestModuleResourceStreamIsLazyAndClosesWithServer(t *testing.T) {
 	s.Close()
 	if _, err := io.ReadAll(reader); err != nil {
 		t.Fatalf("stream did not close with Server: %v", err)
+	}
+}
+
+func TestModuleResourceHeartbeatDoesNotPublishChanges(t *testing.T) {
+	s := newTestServer(t)
+	dir := filepath.Join(s.opts.Cfg.ThreadsDir(), "0", "scratchpad")
+	mustWriteFile(t, filepath.Join(dir, "draft.md"), "before")
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+	defer cancel()
+	server := httptest.NewServer(s.APIHandler())
+	defer server.Close()
+	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/api/threads/0/modules/scratchpad/resources/files/events", nil)
+	response, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	readFrame := func() string {
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return "read error: " + err.Error()
+			}
+			if strings.TrimSpace(line) != "" {
+				return line
+			}
+		}
+	}
+	if frame := readFrame(); !strings.HasPrefix(frame, "data:") {
+		t.Fatalf("baseline = %q", frame)
+	}
+	if frame := readFrame(); !strings.HasPrefix(frame, ":") {
+		t.Fatalf("heartbeat must be an SSE comment, got %q", frame)
+	}
+	frames := make(chan string, 1)
+	go func() { frames <- readFrame() }()
+	select {
+	case frame := <-frames:
+		t.Fatalf("idle heartbeat published another frame: %q", frame)
+	case <-time.After(100 * time.Millisecond):
+	}
+	mustWriteFile(t, filepath.Join(dir, "draft.md"), "after")
+	select {
+	case frame := <-frames:
+		if !strings.HasPrefix(frame, "data:") {
+			t.Fatalf("filesystem change = %q", frame)
+		}
+	case <-ctx.Done():
+		t.Fatal("filesystem change did not publish a frame")
+	}
+}
+
+func TestModuleOperationSerializesWithThreadArchive(t *testing.T) {
+	s := newTestServer(t)
+	store := thread.NewStore(s.opts.Cfg.AgentStateDir)
+	worker, err := store.CreateWorker("0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Close() }()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	s.inspectionFactories = []runtimemodule.ThreadFactorySpec{{ID: "example", Enabled: true, Inspection: &runtimemodule.Inspection{
+		Version: 1,
+		Operations: map[string]runtimemodule.Operation{"write": func(ctx context.Context, scope runtimemodule.ThreadContext, _ json.RawMessage) (any, error) {
+			// Module callbacks must remain free to use ordinary Thread storage.
+			if _, err := thread.NewStore(s.opts.Cfg.AgentStateDir).Inspect(scope.ID); err != nil {
+				return nil, err
+			}
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return scope.ID, os.WriteFile(filepath.Join(scope.Dir, "operation.txt"), []byte("completed"), 0o600)
+		}},
+	}}}
+	handler := s.APIHandler()
+	operationDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("POST", "/api/threads/"+worker.ID+"/modules/example/operations/write", strings.NewReader("{}")))
+		operationDone <- response
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("module operation did not start")
+	}
+	archiveDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("POST", "/api/threads/"+worker.ID+"/archive", nil))
+		archiveDone <- response
+	}()
+	select {
+	case response := <-archiveDone:
+		unblock()
+		<-operationDone
+		t.Fatalf("archive completed during the operation: %d %s", response.Code, response.Body.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+	unblock()
+	if response := <-operationDone; response.Code != 200 {
+		t.Fatalf("operation = %d %s", response.Code, response.Body.String())
+	}
+	if response := <-archiveDone; response.Code != 200 {
+		t.Fatalf("archive = %d %s", response.Code, response.Body.String())
+	}
+	data, err := os.ReadFile(filepath.Join(store.ArchiveDir(), worker.ID, "operation.txt"))
+	if err != nil || string(data) != "completed" {
+		t.Fatalf("archived operation result = %q, %v", data, err)
 	}
 }
