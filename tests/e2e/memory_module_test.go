@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
@@ -50,6 +51,85 @@ func memoryCall(id, name string, input map[string]any) llm.Block {
 
 func memoryWriteInput(name, body string) map[string]any {
 	return map[string]any{"name": name, "description": "Stable project fact", "type": "project", "body": body}
+}
+
+func TestEndToEnd_ManuallyCopiedMemoryKeepsExtensionDataAndOtherProviders(t *testing.T) {
+	isolateModuleConfig(t)
+	cfg := memoryConfig(t)
+	cfg.HomeJuexDir = t.TempDir()
+	address, err := agentstate.NewAgentAddress(cfg.HomeJuexDir, "abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentAddress, cfg.AgentStateDir = address, address.StateDir()
+	for _, id := range []string{modulecatalog.Extensions, modulecatalog.MCP, modulecatalog.Skills, modulecatalog.Hooks} {
+		cfg.Modules[id] = config.ModuleSettings{Enabled: true}
+	}
+	cfg.Extensions = config.ExtensionPolicy{Allow: []string{"catalog"}, Configured: true}
+	installCatalogExtensionFixture(t, filepath.Join(cfg.HomeJuexDir, "extensions", "catalog"))
+	oldInstall := filepath.Join(cfg.HomeJuexDir, "extensions", "memory")
+	oldData := filepath.Join(cfg.AgentStateDir, "extensions", "memory")
+	newData := filepath.Join(cfg.AgentStateDir, "modules", "memory")
+	for _, dir := range []string{oldInstall, oldData, newData} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	document := "---\nname: durable\ndescription: \"Compatible transferred knowledge\"\ntype: project\ncreated_at: 2026-07-01T00:00:00+00:00\nupdated_at: 2026-07-02T00:00:00+00:00\n---\nKeep the original knowledge.\n"
+	retained := map[string]string{
+		filepath.Join(oldInstall, "juex.extension.json"):                            `{"manifest_version":1,"name":"memory","version":"1.0.0"}`,
+		filepath.Join(oldInstall, "mcp.json"):                                       "invalid obsolete definition",
+		filepath.Join(oldData, "durable.md"):                                        document,
+		filepath.Join(oldData, "MEMORY.md"):                                         "old derived index",
+		filepath.Join(cfg.AgentStateDir, "extensions", "private-addon", "keep.txt"): "unrelated private data",
+	}
+	for path, data := range retained {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The operator copies selected compatible entries while the Agent is stopped.
+	if err := os.WriteFile(filepath.Join(newData, "durable.md"), []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	provider := &bareScriptProvider{steps: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			memoryCall("read-transferred", memory.ToolSearch, map[string]any{"query": "original knowledge"}),
+			memoryCall("other-provider", "mcp__catalog__catalog_write", map[string]any{"body": "Other extension still works"}),
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "Cutover complete"), StopReason: llm.StopEndTurn},
+	}}
+	a := memoryApp(t, cfg, provider)
+	if out, err := a.Run(t.Context(), "Read the transferred knowledge and exercise the other provider."); err != nil || out != "Cutover complete" {
+		t.Fatalf("cutover turn=%q, %v", out, err)
+	}
+	assertSuccessfulProviderToolResults(t, provider.history[len(provider.history)-1], map[string]string{"read-transferred": "Keep the original knowledge.", "other-provider": "saved catalog"})
+	if data, err := os.ReadFile(filepath.Join(cfg.AgentStateDir, "extensions", "catalog", "catalog-entry")); err != nil || string(data) != "Other extension still works" {
+		t.Fatalf("other Extension private output=%q, %v", data, err)
+	}
+	owned := 0
+	for _, entry := range a.Engine.RuntimeModules.ToolCatalog().Entries() {
+		if entry.ModuleID == memory.ModuleID {
+			owned++
+		}
+	}
+	if owned != 3 {
+		t.Fatalf("builtin Memory tool count=%d", owned)
+	}
+	for path, want := range retained {
+		if data, err := os.ReadFile(path); err != nil || string(data) != want {
+			t.Errorf("cutover altered %s: %q, %v", path, data, err)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(newData, "durable.md")); err != nil || string(data) != document {
+		t.Fatalf("copied authority changed: %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(newData, "MEMORY.md")); err != nil || !strings.Contains(string(data), "[durable](durable.md)") {
+		t.Fatalf("startup rebuilt index=%q, %v", data, err)
+	}
 }
 
 func TestEndToEnd_MemoryResolvesRelativeEmbeddingStateScope(t *testing.T) {

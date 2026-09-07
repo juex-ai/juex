@@ -89,15 +89,15 @@ func TestModuleContributesContextOnlyForProviderIteration(t *testing.T) {
 
 func TestModulePreservesExtensionProvenance(t *testing.T) {
 	root := t.TempDir()
-	skillDir := filepath.Join(root, "memory")
+	skillDir := filepath.Join(root, "catalog")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: memory\ndescription: Recall context\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: catalog\ndescription: Recall context\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mod, err := New(Options{
-		Dirs:    []skills.Dir{{Path: root, Source: "ext:memory", StrictConflicts: true}},
+		Dirs:    []skills.Dir{{Path: root, Source: "ext:catalog", StrictConflicts: true}},
 		WorkDir: root,
 	})
 	if err != nil {
@@ -106,15 +106,15 @@ func TestModulePreservesExtensionProvenance(t *testing.T) {
 	all := mod.All()
 	found := false
 	for _, skill := range all {
-		if skill.Name == "memory" {
+		if skill.Name == "catalog" {
 			found = true
-			if skill.Source != "ext:memory" {
-				t.Fatalf("source = %q, want ext:memory", skill.Source)
+			if skill.Source != "ext:catalog" {
+				t.Fatalf("source = %q, want ext:catalog", skill.Source)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("memory skill not loaded: %#v", all)
+		t.Fatalf("catalog skill not loaded: %#v", all)
 	}
 }
 
