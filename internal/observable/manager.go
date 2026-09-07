@@ -308,6 +308,9 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	sort.Strings(ids)
 	var firstErr error
 	for _, id := range ids {
+		if err := contextStep(ctx); err != nil {
+			return err
+		}
 		if err := m.Start(ctx, id); err != nil && firstErr == nil {
 			firstErr = err
 		}

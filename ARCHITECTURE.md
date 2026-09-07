@@ -175,6 +175,14 @@ Modules register typed capabilities once per Agent or Thread scope. The
 Framework validates and seals the set, starts resources in registration order,
 and closes or rolls back in reverse order.
 
+Runtime resource startup prepares connections and catalogs without admitting
+external input. After Main recovery publishes its Pending Input barrier, the
+Framework activates registered input owners through one lifecycle contract.
+MCP owns its early-notification buffer; Observables owns producer startup.
+Activation callbacks run without Set locks. Shutdown cancels delivery and
+quiesces input, deferring resource cleanup until activation and in-flight
+callbacks return, before closing Thread and runtime resources.
+
 Resource retirement is separate from Close. The accepted configuration's factory
 declarations identify available owners without constructing disabled Modules.
 An Agent lifecycle lease excludes old and deferred writers. Before deleting any

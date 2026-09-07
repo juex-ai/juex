@@ -291,21 +291,22 @@ func (a *App) resumePersistedInputDuringRecovery(recordID string) (externalInput
 }
 
 // activateExternalInputAfterPendingRecovery publishes and starts the recovery
-// barrier before a startup notification gate can expose external producers.
+// barrier before the sealed runtime set can expose external producers.
 func (a *App) activateExternalInputAfterPendingRecovery(
-	gate *mcpNotificationGate,
+	ctx context.Context,
 	records []runtime.PendingInputRecovery,
-	activateProducers func(),
-) {
+) error {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(a.ctx, cancel)
+	defer stop()
+	defer cancel()
 	if len(records) > 0 {
 		a.startPendingInputRecovery(records)
 	}
-	if activateProducers != nil {
-		activateProducers()
+	if err := a.runtimeModules.ActivateRuntime(ctx); err != nil {
+		return err
 	}
-	if gate != nil {
-		gate.Activate()
-	}
+	return a.ctx.Err()
 }
 
 func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {
