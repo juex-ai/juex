@@ -187,6 +187,11 @@ schema。解析不能改变工具身份或执行策略。Provider 请求与活�
 取消沿用正常工具分发，包含错误在内的结果保持有序。跨 Thread 的 Agent
 共享资源同步仍由所属 Module 负责。
 
+Agent scope 的 [Memory Module](internal/modules/memory/README.zh.md) 拥有持久知识
+及可重建索引。App 注入 Agent 目录，Main 与 Worker 的 Module 实例通过同一把锁
+协调文件事务。Thread 启动与压缩完成后的策略负责维护索引，不注入知识正文，普通
+维护失败不会阻断流程。
+
 工具执行可以输出显式 JSON fact。Framework 根据封存的工具 catalog 赋予所有者，
 并独立于结果展示文本持久化。启用的 Module 可以通过声明式 Provider 历史计划
 汇总自己已完成的工具对。Framework 在最终上下文投影之前验证所有权、配对、取消

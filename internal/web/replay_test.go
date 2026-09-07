@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/thread"
@@ -70,6 +71,8 @@ func TestReplaySince_SkipsMalformedLines(t *testing.T) {
 
 func TestCaptureCommittedEventReplayReadsBeforeLatestCheckpoint(t *testing.T) {
 	server := newTestServer(t)
+	// The checkpoint fixture counts only its manually committed events.
+	server.opts.Cfg.Preset = config.PresetMinimal
 	store := thread.NewStore(server.opts.Cfg.RuntimePaths().StateDir)
 	target, err := store.OpenActive(thread.MainID)
 	if err != nil {

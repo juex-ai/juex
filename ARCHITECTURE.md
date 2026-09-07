@@ -212,6 +212,12 @@ Thread tool-use batch and may overlap parallel tools. Cancellation uses normal
 tool dispatch and results remain ordered, including errors. Modules retain
 responsibility for synchronizing Agent resources across Threads.
 
+The Agent-scoped [Memory Module](internal/modules/memory/README.md) owns durable
+knowledge and a rebuildable index. App supplies the Agent directory; Main and
+Worker Module instances coordinate file transactions through the same lock.
+Thread-start and post-compaction policies maintain the index without injecting
+knowledge bodies or blocking progress on ordinary maintenance failures.
+
 Tool execution may emit explicit JSON facts. Framework assigns their owner from
 the sealed tool catalog and persists them independently of result presentation.
 Enabled Modules may summarize their completed tool pairs through declarative

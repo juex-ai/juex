@@ -89,7 +89,7 @@ Workspace 中。
 生成的 Agent 状态位于 `$JUEX_HOME/agents/<agent-id>/`。`agent.json` 是 Agent
 身份、Workspace 所有权与 lifecycle metadata 的权威来源。Agent 还拥有配置
 覆盖、可重建的 Thread index、active 与 archived Thread、media、日志、Observable 和
-Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event
+[持久 Memory](internal/modules/memory/README.zh.md) 与 Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event
 历史、有界 pending Input 状态、由 Module 拥有的 Goal 与 Notes 状态、Scratchpad
 和系统管理的 spool。当前 Provider context 只从当前 Generation 重建；Thread
 Explorer 列表来自 Agent index。

@@ -44,6 +44,7 @@ const (
 	ToolGroupSearch       ToolGroup = "search"
 	ToolGroupSkill        ToolGroup = "skill"
 	ToolGroupThreadState  ToolGroup = "thread_state"
+	ToolGroupMemory       ToolGroup = "memory"
 	ToolGroupWorkerThread ToolGroup = "worker_thread"
 	ToolGroupObservable   ToolGroup = "observable"
 	ToolGroupMCP          ToolGroup = "mcp"

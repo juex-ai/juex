@@ -12,6 +12,7 @@ const groupLabels: Record<string, string> = {
   search: "Search",
   skill: "Skill",
   thread_state: "Thread State",
+  memory: "Memory",
   worker_thread: "Worker Thread",
   observable: "Observable",
 };

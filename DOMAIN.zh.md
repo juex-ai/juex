@@ -10,7 +10,7 @@
 | 所有者 | 职责 |
 | --- | --- |
 | Workspace | 用户维护的项目文件、Workspace 配置、Skill 和 Hook。 |
-| Agent | 长期身份、Workspace 所有权、配置覆盖、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、Observable 定义与状态，以及 Extension 状态。 |
+| Agent | 长期身份、Workspace 所有权、配置覆盖、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、持久 Memory、Observable 定义与状态，以及 Extension 状态。 |
 | Thread | 身份、拓扑、lifecycle、Context Generation registry、pending Input、Turn、消息、Event、Usage 和 spool。 |
 | Thread Module | 可选的 Thread scope 状态，例如 Goal、Notes 与 Scratchpad，以及其资源、context 和 Generation lifecycle 行为。 |
 | Agent Runtime | 可替换的进程资源：Provider、MCP client、Tool、Observable、scheduler 和实时订阅。 |

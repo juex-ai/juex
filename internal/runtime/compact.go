@@ -318,12 +318,13 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 		Auto:     auto,
 		Observer: e.policyObserver(turnID),
 	}, e.policySets()...)
-	// Policy failures are observational after commit; keep context produced by
-	// earlier successful policies when a later policy fails.
+	// Ordinary policy failures are observational after commit. Cancellation still
+	// reaches the caller, while the committed Generation and earlier context remain.
 	if err := e.queuePolicyRuntimeContext(postPolicy.Context); err != nil {
 		return result, err
 	}
-	if runtimemodule.IsPolicyCheckpointError(postErr) || runtimemodule.IsPolicyContextValidationError(postErr) {
+	if runtimemodule.IsPolicyCheckpointError(postErr) || runtimemodule.IsPolicyContextValidationError(postErr) ||
+		errors.Is(postErr, context.Canceled) || errors.Is(postErr, context.DeadlineExceeded) {
 		return result, postErr
 	}
 	return result, nil
