@@ -15,14 +15,17 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	agentsmdmodule "github.com/juex-ai/juex/internal/features/agentsmd"
 	"github.com/juex-ai/juex/internal/features/mcp"
+	observablesmodule "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/version"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
+
 	statusapi "github.com/juex-ai/juex/internal/framework/status"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -106,12 +109,12 @@ var errThreadInactive = errors.New("web: Thread is archived")
 
 func NewServer(opts Options) *Server {
 	observablesPath := ""
-	if opts.Cfg.ModuleEnabled(modulecatalog.Observables) {
+	if opts.Cfg.ModuleEnabled(observablesmodule.ModuleID) {
 		observablesPath = opts.Cfg.ObservablesConfigPath()
 	}
 	resources := newResourceEventHub(opts.Cfg.WorkDir, observablesPath)
 	resources.setRuntimeInputs([]string{opts.Cfg.ThreadIndexPath()})
-	if opts.Cfg.ModuleEnabled(modulecatalog.AgentsMD) {
+	if opts.Cfg.ModuleEnabled(agentsmdmodule.ModuleID) {
 		resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath()})
 	}
 	return &Server{

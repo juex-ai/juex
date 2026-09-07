@@ -13,8 +13,9 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/app/providerreadiness"
+	shellmodule "github.com/juex-ai/juex/internal/features/shell"
+
 	filesearchfeature "github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/skills"
@@ -200,7 +201,7 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 	checks = append(checks, doctorConnectivityCheck(ctx, cfg, offline))
 	checks = append(checks, doctorShellCheck(cfg))
 	checks = append(checks, doctorSandboxCheck(ctx, cfg.SandboxPolicy(), runtime.GOOS, cfg.LaunchEnvironmentSnapshot().LookPath))
-	if cfg.ModuleEnabled(modulecatalog.FileSearch) {
+	if cfg.ModuleEnabled(filesearchfeature.ModuleID) {
 		checks = append(checks, doctorRipgrepCheck(func() (filesearchfeature.ResolvedRipgrep, error) {
 			return filesearchfeature.ResolveRipgrepWithEnvironment(runtimeEnvironment)
 		}))
@@ -423,7 +424,7 @@ func doctorConnectivityCheckWithOptions(
 }
 
 func doctorShellCheck(cfg config.Config) doctorCheck {
-	if !cfg.ModuleEnabled(modulecatalog.Shell) {
+	if !cfg.ModuleEnabled(shellmodule.ModuleID) {
 		return doctorDisabledCheck("shell")
 	}
 	if strings.TrimSpace(cfg.Shell.Binary) == "" {
@@ -485,7 +486,7 @@ func doctorWorkdirCheck(workDir string) doctorCheck {
 }
 
 func doctorMCPCheck(ctx context.Context, cfg config.Config, agentRuntime app.AgentRuntimeResolution, runtimeErr error, offline bool) doctorCheck {
-	if !cfg.ModuleEnabled(modulecatalog.MCP) {
+	if !cfg.ModuleEnabled(mcp.ModuleID) {
 		return doctorDisabledCheck("mcp")
 	}
 	opts := mcp.RemoteReadinessOptions{Offline: offline}
@@ -519,7 +520,7 @@ func doctorMCPCheckWithAgentRuntimeOptions(
 	agentRuntime app.AgentRuntimeResolution,
 	opts mcp.RemoteReadinessOptions,
 ) doctorCheck {
-	if !cfg.ModuleEnabled(modulecatalog.MCP) {
+	if !cfg.ModuleEnabled(mcp.ModuleID) {
 		return doctorDisabledCheck("mcp")
 	}
 	configs, err := app.LoadMCPConfigs(agentRuntime, cfg.WorkDir)
@@ -624,7 +625,7 @@ func appendUniqueString(values []string, value string) []string {
 }
 
 func doctorSkillsCheck(cfg config.Config) doctorCheck {
-	if !cfg.ModuleEnabled(modulecatalog.Skills) {
+	if !cfg.ModuleEnabled(skills.ModuleID) {
 		return doctorDisabledCheck("skills")
 	}
 	graph, err := app.ResolveRuntimeResourceGraph(cfg)

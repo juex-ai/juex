@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/spf13/cobra"
 )
 
 type agentSelectorFlags struct {
@@ -75,12 +75,12 @@ func resolveSelectedAgent(flags *agentSelectorFlags) (*fleet.Manager, fleet.Read
 }
 
 func loadSelectedAgentConfig(state fleet.ReadOnlyAgentState) (config.Config, error) {
-	cfg, err := config.LoadWithOptions(config.LoadOptions{
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		AgentID:    state.ID,
 		AgentState: config.AgentStateExisting,
 	})
 	if err != nil {
-		return config.Config{}, err
+		return config.Config{ModuleInventory: modulecatalog.Inventory()}, err
 	}
 	return cfg, nil
 }

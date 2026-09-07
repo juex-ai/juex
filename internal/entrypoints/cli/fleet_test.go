@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/fleet"
 	fleetservice "github.com/juex-ai/juex/internal/fleet/service"
@@ -425,7 +427,7 @@ func TestFleetInstallUsesCurrentDefaultWithoutPersisting(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	setFleetTestHome(t, home)
-	fleetCfg, err := config.LoadHomeFleetConfig()
+	fleetCfg, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +446,7 @@ func TestFleetInstallUsesCurrentDefaultWithoutPersisting(t *testing.T) {
 		settings.ConfigPath != "" {
 		t.Fatalf("settings = %+v", settings)
 	}
-	loaded, err := config.LoadHomeFleetConfig()
+	loaded, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +461,7 @@ func TestFleetInstallRequiresExplicitUnsafeBindForNonLoopbackHomeConfig(t *testi
 	if _, err := config.SetHomeFleetSettings("0.0.0.0:6843", false); err != nil {
 		t.Fatal(err)
 	}
-	fleetCfg, err := config.LoadHomeFleetConfig()
+	fleetCfg, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +491,7 @@ func TestFleetInstallRequiresExplicitUnsafeBindForNonLoopbackHomeConfig(t *testi
 		settings.ConfigPath == "" {
 		t.Fatalf("settings = %+v", settings)
 	}
-	loaded, err := config.LoadHomeFleetConfig()
+	loaded, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +537,7 @@ func TestFleetInstallExplicitAddressDoesNotInheritHomeUnsafeBind(t *testing.T) {
 	if _, err := config.SetHomeFleetSettings("0.0.0.0:6843", true); err != nil {
 		t.Fatal(err)
 	}
-	fleetCfg, err := config.LoadHomeFleetConfig()
+	fleetCfg, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +558,7 @@ func TestFleetInstallExplicitAddressDoesNotInheritHomeUnsafeBind(t *testing.T) {
 func TestFleetInstallExplicitFlagsOverrideExistingServiceOptions(t *testing.T) {
 	home := t.TempDir()
 	setFleetTestHome(t, home)
-	fleetCfg, err := config.LoadHomeFleetConfig()
+	fleetCfg, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,7 +663,7 @@ func TestFleetInstallExplicitAddressPersistsThroughCommand(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := config.LoadHomeFleetConfig()
+	loaded, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 	if err != nil {
 		t.Fatal(err)
 	}

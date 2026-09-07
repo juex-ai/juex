@@ -7,7 +7,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "basic-file-tools"
+const ModuleID = "basic-file-tools"
 
 type Module struct{ options Options }
 

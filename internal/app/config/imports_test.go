@@ -79,7 +79,7 @@ skills:
   include: []
 `)
 
-	cfg := Config{HomeJuexDir: t.TempDir()}
+	cfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: t.TempDir()}
 	source := yamlConfigSource{Path: mainPath, Scope: configScopeInstanceHome}
 	if err := applyYAMLFile(&cfg, source); err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ skills:
   include: [main-skill]
 `, firstPath))
 
-	cfg := Config{HomeJuexDir: t.TempDir()}
+	cfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: t.TempDir()}
 	if err := applyYAMLFile(&cfg, explicitYAMLSource(mainPath)); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ extensions:
   allow: [workspace]
 `)
 
-			cfg, err := LoadWithOptions(LoadOptions{
+			cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 				WorkDir:    workDir,
 				ConfigPath: homePath,
 				AgentState: AgentStateNone,
@@ -360,7 +360,7 @@ providers:
 	writeTextFile(t, homePath, "imports:\n  - source: "+server.URL+"/config.yaml\n")
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\n")
 	load := func() (Config, error) {
-		return LoadWithOptions(LoadOptions{
+		return LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 			WorkDir:    workDir,
 			ConfigPath: homePath,
 			AgentState: AgentStateNone,
@@ -403,7 +403,7 @@ func TestExplicitLoadedHomeConfigReusesLocalImportBytesDuringReplay(t *testing.T
 	workDir := t.TempDir()
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
 
-	cfg, err := loadConfigFilesForWorkDir(workDir, "", homePath)
+	cfg, err := loadConfigFilesForWorkDir(testModuleInventory(), workDir, "", homePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func TestExplicitLoadedHomeConfigReusesDeclaringBytesDuringReplay(t *testing.T) 
 	workDir := t.TempDir()
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
 
-	cfg, err := loadConfigFilesForWorkDir(workDir, "", homePath)
+	cfg, err := loadConfigFilesForWorkDir(testModuleInventory(), workDir, "", homePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ providers:
 	workDir := t.TempDir()
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		ConfigPath: aliasPath,
 		AgentState: AgentStateNone,
@@ -539,7 +539,7 @@ func TestExplicitLoadedHomeConfigSelectsExactOrHighestPriorityMatchingSource(t *
 
 			workDir := t.TempDir()
 			writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
-			cfg, err := LoadWithOptions(LoadOptions{
+			cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 				WorkDir:    workDir,
 				ConfigPath: tc.configPath(defaultHomePath, instanceHomePath, aliasPath),
 				AgentState: AgentStateNone,
@@ -583,7 +583,7 @@ func TestExplicitConfigSelectsExactHomeBeforeSameFileWorkspaceFallback(t *testin
 		{name: "same-file alias fallback", configPath: aliasPath, wantTimeout: 33 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := LoadWithOptions(LoadOptions{
+			cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 				WorkDir:    workDir,
 				ConfigPath: tc.configPath,
 				AgentState: AgentStateNone,
@@ -620,7 +620,7 @@ func TestExplicitConfigMatchesHomePathWithFilesystemCaseSemantics(t *testing.T) 
 		t.Skipf("create hard-linked Home/workspace configs: %v", err)
 	}
 
-	cfg, err := LoadWithOptions(LoadOptions{
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		ConfigPath: caseVariantHomePath,
 		AgentState: AgentStateNone,
@@ -662,7 +662,7 @@ func TestExplicitConfigMatchesCaseVariantOfSymlinkedHomePath(t *testing.T) {
 		t.Skipf("create same-file workspace config: %v", err)
 	}
 
-	cfg, err := LoadWithOptions(LoadOptions{
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		ConfigPath: caseVariantHomePath,
 		AgentState: AgentStateNone,
@@ -709,7 +709,7 @@ func TestConfigImportsTreatColonContainingRelativeFilenameAsLocal(t *testing.T) 
 	mainPath := filepath.Join(dir, "juex.yaml")
 	writeTextFile(t, mainPath, "imports:\n  - source: "+importedName+"\n")
 
-	cfg := Config{HomeJuexDir: t.TempDir()}
+	cfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: t.TempDir()}
 	if err := applyYAMLFile(&cfg, explicitYAMLSource(mainPath)); err != nil {
 		t.Fatal(err)
 	}
@@ -752,7 +752,7 @@ func TestConfigImportsRejectNestedImportsIncludingEmptyList(t *testing.T) {
 			writeTextFile(t, importedPath, importedBody)
 			writeTextFile(t, mainPath, "imports:\n  - source: ./imported.yaml\n")
 
-			cfg := Config{HomeJuexDir: t.TempDir()}
+			cfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: t.TempDir()}
 			err := applyYAMLFile(&cfg, explicitYAMLSource(mainPath))
 			if err == nil {
 				t.Fatal("applyYAMLFile() error = nil, want nested imports rejection")
@@ -781,7 +781,7 @@ environment:
 	writeTextFile(t, secondPath, "unknown_field: true\n")
 	writeTextFile(t, mainPath, "imports:\n  - source: ./first.yaml\n  - source: ./second.yaml\n")
 
-	cfg := Config{
+	cfg := Config{ModuleInventory: testModuleInventory(),
 		Models:          []string{"local:original"},
 		ToolTimeout:     7 * time.Second,
 		ProviderHeaders: map[string]string{"X-Original": "yes"},
@@ -812,7 +812,7 @@ func TestConfigImportsParseMainBeforeFetchingRemoteSources(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "juex.yaml")
 	writeTextFile(t, mainPath, "imports:\n  - source: "+server.URL+"/config.yaml\nunknown_field: true\n")
-	cfg := Config{HomeJuexDir: t.TempDir()}
+	cfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: t.TempDir()}
 	err := applyYAMLFile(&cfg, explicitYAMLSource(mainPath))
 	if err == nil || !strings.Contains(err.Error(), "field unknown_field not found") {
 		t.Fatalf("applyYAMLFile() error = %v, want main parse failure", err)
@@ -849,7 +849,7 @@ func TestConfigHTTPSImportCachesValidatedContentAndRevalidatesWithETag(t *testin
 	now := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
 	loader.now = func() time.Time { return now }
 
-	first := Config{HomeJuexDir: home}
+	first := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
@@ -882,7 +882,7 @@ func TestConfigHTTPSImportCachesValidatedContentAndRevalidatesWithETag(t *testin
 
 	now = now.Add(time.Hour)
 	resetImportLoaderMemoForTest(loader)
-	second := Config{HomeJuexDir: home}
+	second := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
@@ -910,20 +910,20 @@ func TestConfigRemoteImportCachesAreScopedToDeclaringConfig(t *testing.T) {
 	writeTextFile(t, firstPath, declaration)
 	writeTextFile(t, secondPath, declaration)
 
-	first := Config{HomeJuexDir: home}
+	first := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(firstPath), newConfigImportLoaderForTest(t, home)); err != nil {
 		t.Fatal(err)
 	}
 	commitImportCacheForTest(t, &first)
 	body.Store("runtime:\n  tool_timeout: 42s\n")
-	second := Config{HomeJuexDir: home}
+	second := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(secondPath), newConfigImportLoaderForTest(t, home)); err != nil {
 		t.Fatal(err)
 	}
 	commitImportCacheForTest(t, &second)
 	server.Close()
 
-	firstOffline := Config{HomeJuexDir: home}
+	firstOffline := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	firstOfflineLoader := newConfigImportLoaderForTest(t, home)
 	if err := applyYAMLFileWithImportLoader(&firstOffline, explicitYAMLSource(firstPath), firstOfflineLoader); err != nil {
 		t.Fatal(err)
@@ -934,7 +934,7 @@ func TestConfigRemoteImportCachesAreScopedToDeclaringConfig(t *testing.T) {
 	if err := firstOfflineLoader.closeConfigImportCacheLock(); err != nil {
 		t.Fatal(err)
 	}
-	secondOffline := Config{HomeJuexDir: home}
+	secondOffline := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	secondOfflineLoader := newConfigImportLoaderForTest(t, home)
 	defer func() {
 		if err := secondOfflineLoader.closeConfigImportCacheLock(); err != nil {
@@ -952,11 +952,11 @@ func TestConfigRemoteImportCachesAreScopedToDeclaringConfig(t *testing.T) {
 	}
 
 	sharedOfflineLoader := newConfigImportLoaderForTest(t, home)
-	sharedFirst := Config{HomeJuexDir: home}
+	sharedFirst := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&sharedFirst, explicitYAMLSource(firstPath), sharedOfflineLoader); err != nil {
 		t.Fatal(err)
 	}
-	sharedSecond := Config{HomeJuexDir: home}
+	sharedSecond := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&sharedSecond, explicitYAMLSource(secondPath), sharedOfflineLoader); err != nil {
 		t.Fatal(err)
 	}
@@ -997,20 +997,20 @@ func TestConfigHomeImportCachesAreScopedToDownstreamWorkspace(t *testing.T) {
     models: [{id: model}]
 `)
 
-	if _, err := LoadForWorkDirForValidation(workspaceA); err != nil {
+	if _, err := LoadForWorkDirForValidation(testModuleInventory(), workspaceA); err != nil {
 		t.Fatal(err)
 	}
 	body.Store("models: [workspace-b:model]\n")
-	if _, err := LoadForWorkDirForValidation(workspaceB); err != nil {
+	if _, err := LoadForWorkDirForValidation(testModuleInventory(), workspaceB); err != nil {
 		t.Fatal(err)
 	}
 	offline.Store(true)
 
-	first, err := LoadForWorkDirForValidation(workspaceA)
+	first, err := LoadForWorkDirForValidation(testModuleInventory(), workspaceA)
 	if err != nil {
 		t.Fatalf("workspace A offline load: %v", err)
 	}
-	second, err := LoadForWorkDirForValidation(workspaceB)
+	second, err := LoadForWorkDirForValidation(testModuleInventory(), workspaceB)
 	if err != nil {
 		t.Fatalf("workspace B offline load: %v", err)
 	}
@@ -1040,20 +1040,20 @@ func TestConfigHomeImportCachesAreScopedToDownstreamExplicitConfig(t *testing.T)
 	writeTextFile(t, explicitA, "providers:\n  - id: explicit-a\n    protocol: openai/chat\n    models: [{id: model}]\n")
 	writeTextFile(t, explicitB, "providers:\n  - id: explicit-b\n    protocol: openai/chat\n    models: [{id: model}]\n")
 
-	if _, err := LoadFromFileForWorkDirForValidation(explicitA, workDir); err != nil {
+	if _, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), explicitA, workDir); err != nil {
 		t.Fatal(err)
 	}
 	body.Store("models: [explicit-b:model]\n")
-	if _, err := LoadFromFileForWorkDirForValidation(explicitB, workDir); err != nil {
+	if _, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), explicitB, workDir); err != nil {
 		t.Fatal(err)
 	}
 	offline.Store(true)
 
-	first, err := LoadFromFileForWorkDirForValidation(explicitA, workDir)
+	first, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), explicitA, workDir)
 	if err != nil {
 		t.Fatalf("explicit A offline load: %v", err)
 	}
-	second, err := LoadFromFileForWorkDirForValidation(explicitB, workDir)
+	second, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), explicitB, workDir)
 	if err != nil {
 		t.Fatalf("explicit B offline load: %v", err)
 	}
@@ -1082,7 +1082,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	now := time.Date(2026, 8, 22, 11, 0, 0, 0, time.UTC)
 	loader.now = func() time.Time { return now }
 
-	first := Config{HomeJuexDir: home}
+	first := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
@@ -1090,7 +1090,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	status.Store(http.StatusInternalServerError)
 	now = now.Add(time.Hour)
 	resetImportLoaderMemoForTest(loader)
-	stale := Config{HomeJuexDir: home}
+	stale := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&stale, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
@@ -1100,7 +1100,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 
 	status.Store(http.StatusNotFound)
 	resetImportLoaderMemoForTest(loader)
-	nonRetryable := Config{HomeJuexDir: home}
+	nonRetryable := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	err := applyYAMLFileWithImportLoader(&nonRetryable, explicitYAMLSource(mainPath), loader)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("404 error = %v", err)
@@ -1112,7 +1112,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	status.Store(http.StatusInternalServerError)
 	now = now.Add(8 * 24 * time.Hour)
 	resetImportLoaderMemoForTest(loader)
-	expired := Config{HomeJuexDir: home}
+	expired := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	err = applyYAMLFileWithImportLoader(&expired, explicitYAMLSource(mainPath), loader)
 	if err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expired cache error = %v", err)
@@ -1132,7 +1132,7 @@ func TestConfigRemoteImportRejectsNonRepresentationSuccessStatuses(t *testing.T)
 	for _, code := range []int{http.StatusNoContent, http.StatusPartialContent} {
 		status.Store(int32(code))
 		err := applyYAMLFile(
-			&Config{HomeJuexDir: t.TempDir()},
+			&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: t.TempDir()},
 			explicitYAMLSource(mainPath),
 		)
 		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", code)) {
@@ -1159,7 +1159,7 @@ func TestConfigRemoteImportDoesNotReplaceLKGWithInvalidContent(t *testing.T) {
 	writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
 	loader := newConfigImportLoaderForTest(t, home)
 	loader.now = func() time.Time { return time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC) }
-	first := Config{HomeJuexDir: home}
+	first := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
@@ -1167,14 +1167,14 @@ func TestConfigRemoteImportDoesNotReplaceLKGWithInvalidContent(t *testing.T) {
 
 	body.Store("unknown_field: invalid\n")
 	resetImportLoaderMemoForTest(loader)
-	invalid := Config{HomeJuexDir: home}
+	invalid := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	err := applyYAMLFileWithImportLoader(&invalid, explicitYAMLSource(mainPath), loader)
 	if err == nil || !strings.Contains(err.Error(), "unknown_field") {
 		t.Fatalf("invalid update error = %v", err)
 	}
 	body.Store("retry")
 	resetImportLoaderMemoForTest(loader)
-	stale := Config{HomeJuexDir: home}
+	stale := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&stale, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
@@ -1207,7 +1207,7 @@ providers:
 	mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 	writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
 	workDir := t.TempDir()
-	first, err := LoadFromFileForWorkDirForValidation(mainPath, workDir)
+	first, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), mainPath, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1217,13 +1217,13 @@ providers:
 
 	for _, invalid := range []string{"models: [missing:model]\n", "hooks: broken\n", "skills:\n  prompt_budget_chars: -1\n"} {
 		body.Store(invalid)
-		if _, err := LoadFromFileForWorkDirForValidation(mainPath, workDir); err == nil {
+		if _, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), mainPath, workDir); err == nil {
 			t.Fatalf("invalid remote update accepted: %q", invalid)
 		}
 	}
 
 	body.Store("retry")
-	stale, err := LoadFromFileForWorkDirForValidation(mainPath, workDir)
+	stale, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), mainPath, workDir)
 	if err != nil {
 		t.Fatalf("stale load after rejected update: %v", err)
 	}
@@ -1262,7 +1262,7 @@ providers:
 	explicitPath := filepath.Join(t.TempDir(), "juex.yaml")
 	writeTextFile(t, explicitPath, importLine)
 	workDir := t.TempDir()
-	first, err := LoadFromFileForWorkDirForValidation(explicitPath, workDir)
+	first, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), explicitPath, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1274,7 +1274,7 @@ providers:
 	}
 
 	offline.Store(true)
-	stale, err := LoadFromFileForWorkDirForValidation(explicitPath, workDir)
+	stale, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), explicitPath, workDir)
 	if err != nil {
 		t.Fatalf("offline repeated-identity load: %v", err)
 	}
@@ -1307,12 +1307,12 @@ fleet:
 	defer server.Close()
 	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "imports:\n  - source: "+server.URL+"/config.yaml\n")
 	workDir := t.TempDir()
-	if _, err := LoadForWorkDirForValidation(workDir); err != nil {
+	if _, err := LoadForWorkDirForValidation(testModuleInventory(), workDir); err != nil {
 		t.Fatal(err)
 	}
 
 	body.Store("models: [missing:model]\nfleet:\n  addr: 127.0.0.1:5999\n")
-	fleet, err := LoadHomeFleetConfig()
+	fleet, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1321,7 +1321,7 @@ fleet:
 	}
 
 	body.Store("retry")
-	stale, err := LoadForWorkDirForValidation(workDir)
+	stale, err := LoadForWorkDirForValidation(testModuleInventory(), workDir)
 	if err != nil {
 		t.Fatalf("runtime stale load after fleet-only update: %v", err)
 	}
@@ -1353,13 +1353,13 @@ fleet:
 	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "imports:\n  - source: "+server.URL+"/config.yaml\n")
 
 	runtimeWorkDir := t.TempDir()
-	if _, err := LoadForWorkDirForValidation(runtimeWorkDir); err != nil {
+	if _, err := LoadForWorkDirForValidation(testModuleInventory(), runtimeWorkDir); err != nil {
 		t.Fatal(err)
 	}
 	unavailable.Store(true)
 	t.Chdir(t.TempDir())
 
-	fleet, err := LoadHomeFleetConfig()
+	fleet, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatalf("fleet-only load from runtime LKG: %v", err)
 	}
@@ -1411,23 +1411,23 @@ providers:
 `)
 
 	contextA := t.TempDir()
-	if _, err := LoadForWorkDirForValidation(contextA); err != nil {
+	if _, err := LoadForWorkDirForValidation(testModuleInventory(), contextA); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
 	phase.Store(1)
 	contextB := t.TempDir()
-	if _, err := LoadForWorkDirForValidation(contextB); err != nil {
+	if _, err := LoadForWorkDirForValidation(testModuleInventory(), contextB); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
 	phase.Store(2)
-	if _, err := LoadForWorkDirForValidation(contextA); err != nil {
+	if _, err := LoadForWorkDirForValidation(testModuleInventory(), contextA); err != nil {
 		t.Fatal(err)
 	}
 	phase.Store(3)
 
-	fleet, err := LoadHomeFleetConfig()
+	fleet, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1446,7 +1446,7 @@ func TestConfigRemoteImportBoundsTimeoutAndResponseSize(t *testing.T) {
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
 		loader := newConfigImportLoaderForTest(t, t.TempDir())
 		loader.maxBytes = 64
-		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
+		err := applyYAMLFileWithImportLoader(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "64 byte limit") {
 			t.Fatalf("oversize error = %v", err)
 		}
@@ -1462,7 +1462,7 @@ func TestConfigRemoteImportBoundsTimeoutAndResponseSize(t *testing.T) {
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
 		loader := newConfigImportLoaderForTest(t, t.TempDir())
 		loader.timeout = 10 * time.Millisecond
-		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
+		err := applyYAMLFileWithImportLoader(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "no valid Last-Known-Good cache") {
 			t.Fatalf("timeout error = %v", err)
 		}
@@ -1485,7 +1485,7 @@ func TestConfigRemoteImportControlsRedirects(t *testing.T) {
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml?token=query-secret\n", origin.URL))
 		loader := newConfigImportLoaderForTest(t, t.TempDir())
-		if err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader); err != nil {
+		if err := applyYAMLFileWithImportLoader(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader); err != nil {
 			t.Fatal(err)
 		}
 		if got := referer.Load().(string); got != "" {
@@ -1522,14 +1522,14 @@ func TestConfigRemoteImportControlsRedirects(t *testing.T) {
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
 		loader := newConfigImportLoaderForTest(t, home)
-		first := Config{HomeJuexDir: home}
+		first := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 		if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
 			t.Fatal(err)
 		}
 		commitImportCacheForTest(t, &first)
 
 		resetImportLoaderMemoForTest(loader)
-		second := Config{HomeJuexDir: home}
+		second := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 		if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(mainPath), loader); err != nil {
 			t.Fatal(err)
 		}
@@ -1545,7 +1545,7 @@ func TestConfigRemoteImportControlsRedirects(t *testing.T) {
 		defer server.Close()
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
-		err := applyYAMLFile(&Config{HomeJuexDir: t.TempDir()}, explicitYAMLSource(mainPath))
+		err := applyYAMLFile(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: t.TempDir()}, explicitYAMLSource(mainPath))
 		if err == nil || !strings.Contains(err.Error(), "too many redirects") || !strings.Contains(err.Error(), "maximum 3") {
 			t.Fatalf("redirect error = %v", err)
 		}
@@ -1564,7 +1564,7 @@ func TestConfigRemoteImportControlsRedirects(t *testing.T) {
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", secure.URL))
 		loader := newConfigImportLoaderForTest(t, t.TempDir())
 		loader.client = secure.Client()
-		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
+		err := applyYAMLFileWithImportLoader(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "redirect from https to http is not allowed") {
 			t.Fatalf("downgrade redirect error = %v", err)
 		}
@@ -1587,7 +1587,7 @@ func TestConfigRemoteImportControlsRedirects(t *testing.T) {
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", origin.URL))
 		loader := newConfigImportLoaderForTest(t, t.TempDir())
 		loader.client = secure.Client()
-		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
+		err := applyYAMLFileWithImportLoader(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "redirect from https to http is not allowed") {
 			t.Fatalf("intermediate downgrade redirect error = %v", err)
 		}
@@ -1606,7 +1606,7 @@ func TestConfigRemoteImportRejectsTamperedCacheAndRedactsInvalidSource(t *testin
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
 		loader := newConfigImportLoaderForTest(t, home)
-		cfg := Config{HomeJuexDir: home}
+		cfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
 		if err := applyYAMLFileWithImportLoader(&cfg, explicitYAMLSource(mainPath), loader); err != nil {
 			t.Fatal(err)
 		}
@@ -1621,7 +1621,7 @@ func TestConfigRemoteImportRejectsTamperedCacheAndRedactsInvalidSource(t *testin
 			t.Fatal(err)
 		}
 		resetImportLoaderMemoForTest(loader)
-		err = applyYAMLFileWithImportLoader(&Config{HomeJuexDir: home}, explicitYAMLSource(mainPath), loader)
+		err = applyYAMLFileWithImportLoader(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "permissions") {
 			t.Fatalf("tampered cache error = %v", err)
 		}
@@ -1630,7 +1630,7 @@ func TestConfigRemoteImportRejectsTamperedCacheAndRedactsInvalidSource(t *testin
 	t.Run("invalid URL", func(t *testing.T) {
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, "imports:\n  - source: http://example.invalid/%zz?token=url-secret\n")
-		err := applyYAMLFile(&Config{HomeJuexDir: t.TempDir()}, explicitYAMLSource(mainPath))
+		err := applyYAMLFile(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: t.TempDir()}, explicitYAMLSource(mainPath))
 		if err == nil || !strings.Contains(err.Error(), "invalid source syntax") {
 			t.Fatalf("invalid URL error = %v", err)
 		}
@@ -1683,7 +1683,7 @@ func TestCommitConfigImportCachesPreservesEarlierRecordsWhenLaterWriteFails(t *t
 	secondOld.Content = "runtime:\n  tool_timeout: 40s\n"
 	secondOld.ContentSHA256 = contentDigest([]byte(secondOld.Content))
 	secondOld.cachePath = secondPath
-	seed := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{old, secondOld}}
+	seed := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{old, secondOld}}
 	if err := commitConfigImportCaches(&seed); err != nil {
 		t.Fatal(err)
 	}
@@ -1703,7 +1703,7 @@ func TestCommitConfigImportCachesPreservesEarlierRecordsWhenLaterWriteFails(t *t
 	secondUpdate.Content = "runtime:\n  tool_timeout: 43s\n"
 	secondUpdate.ContentSHA256 = contentDigest([]byte(secondUpdate.Content))
 
-	cfg := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstUpdate, secondUpdate}}
+	cfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstUpdate, secondUpdate}}
 	writes := 0
 	err = commitConfigImportCachesWithWriter(&cfg, func(path string, data []byte) error {
 		writes++
@@ -1763,7 +1763,7 @@ func TestConfigImportCacheRecoversInterruptedPublication(t *testing.T) {
 	secondSource := "https://config.example/second.yaml"
 	firstOld := newRecord(firstSource, "runtime:\n  tool_timeout: 40s\n")
 	secondOld := newRecord(secondSource, "runtime:\n  tool_timeout: 41s\n")
-	if err := commitConfigImportCaches(&Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstOld, secondOld}}); err != nil {
+	if err := commitConfigImportCaches(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstOld, secondOld}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1863,7 +1863,7 @@ func TestConfigImportCacheReaderObservesOnePublishedGeneration(t *testing.T) {
 	secondSource := "https://config.example/second.yaml"
 	firstOld := newRecord(firstSource, "runtime:\n  tool_timeout: 40s\n")
 	secondOld := newRecord(secondSource, "runtime:\n  tool_timeout: 41s\n")
-	seed := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstOld, secondOld}}
+	seed := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstOld, secondOld}}
 	if err := commitConfigImportCaches(&seed); err != nil {
 		t.Fatal(err)
 	}
@@ -1873,7 +1873,7 @@ func TestConfigImportCacheReaderObservesOnePublishedGeneration(t *testing.T) {
 	firstPublished := make(chan struct{})
 	continuePublish := make(chan struct{})
 	writerDone := make(chan error, 1)
-	writerCfg := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstNew, secondNew}}
+	writerCfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstNew, secondNew}}
 	go func() {
 		writes := 0
 		writerDone <- commitConfigImportCachesWithWriter(&writerCfg, func(path string, data []byte) error {
@@ -1951,7 +1951,7 @@ func TestConfigImportFailureDoesNotCreateAgentStateOrPublishRemoteCache(t *testi
 		workDir := t.TempDir()
 		writeTextFile(t, filepath.Join(workDir, ".juex", "bad.yaml"), "unknown_field: true\n")
 		writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "imports:\n  - source: bad.yaml\n")
-		if _, err := LoadForWorkDir(workDir); err == nil {
+		if _, err := LoadForWorkDir(testModuleInventory(), workDir); err == nil {
 			t.Fatal("LoadForWorkDir() error = nil, want imported config failure")
 		}
 		if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !os.IsNotExist(err) {
@@ -1967,7 +1967,7 @@ func TestConfigImportFailureDoesNotCreateAgentStateOrPublishRemoteCache(t *testi
 		home := t.TempDir()
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\nfleet:\n  addr: 127.0.0.1:5999\n", server.URL))
-		err := applyYAMLFile(&Config{HomeJuexDir: home}, explicitYAMLSource(mainPath))
+		err := applyYAMLFile(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}, explicitYAMLSource(mainPath))
 		if err == nil || !strings.Contains(err.Error(), "fleet is only supported") {
 			t.Fatalf("main scope error = %v", err)
 		}
@@ -1993,7 +1993,7 @@ func TestConfigImportsPreserveHomeWorkspaceExplicitPriorityAndProvenance(t *test
 	explicitPath := filepath.Join(explicitDir, "juex.yaml")
 	writeTextFile(t, explicitPath, "imports:\n  - source: explicit-import.yaml\nruntime:\n  tool_timeout: 60s\n")
 
-	cfg, err := LoadFromFileForWorkDirForValidation(explicitPath, workDir)
+	cfg, err := LoadFromFileForWorkDirForValidation(testModuleInventory(), explicitPath, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2047,7 +2047,7 @@ hooks:
       command: [echo, declaring]
 `)
 
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: workspacePath, AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, ConfigPath: workspacePath, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2095,7 +2095,7 @@ sandbox:
 	workDir := t.TempDir()
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\nsandbox:\n  file_system:\n    blocked_paths: [workspace-secret]\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: homePath, AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, ConfigPath: homePath, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2127,7 +2127,7 @@ func TestConfigImportedDocumentInheritsDeclaringScope(t *testing.T) {
 	mainPath := filepath.Join(workDir, ".juex", "juex.yaml")
 	writeTextFile(t, mainPath, "imports:\n  - source: imported.yaml\n")
 
-	_, err := LoadForWorkDirForValidation(workDir)
+	_, err := LoadForWorkDirForValidation(testModuleInventory(), workDir)
 	if err == nil || !strings.Contains(err.Error(), importedPath) || !strings.Contains(err.Error(), "fleet is only supported") {
 		t.Fatalf("workspace scope error = %v", err)
 	}

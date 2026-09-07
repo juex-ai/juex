@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/mcp"
+
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
@@ -101,7 +104,7 @@ func (p *recoveryProvider) snapshot() (int, [][]llm.Message) {
 
 func recoveryAppOptions(dir string, provider llm.Provider) Options {
 	return Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID:    "openai",
 			APIKey:        "x",
 			Model:         "m",

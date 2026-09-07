@@ -13,12 +13,16 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -190,7 +194,7 @@ func (p *executionWorkerProvider) Complete(ctx context.Context, _ string, histor
 func TestEndToEnd_WorkerBatchesKeepIndependentStateAndProgress(t *testing.T) {
 	isolateModuleConfig(t)
 	provider := &executionWorkerProvider{started: make(chan string, 2), release: make(chan struct{})}
-	a, err := app.New(app.Options{Config: config.Config{ProviderID: "openai", Model: "test", Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Modules: config.ModulePolicy{modulecatalog.WorkerThreads: {Enabled: true}, modulecatalog.Notes: {Enabled: true}}}, Provider: provider, DisableMCP: true})
+	a, err := app.New(app.Options{Config: config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", Model: "test", Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Modules: config.ModulePolicy{workerthreadsmodule.ModuleID: {Enabled: true}, notesmodule.ModuleID: {Enabled: true}}}, Provider: provider, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}

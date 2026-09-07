@@ -13,6 +13,13 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	applypatchmodule "github.com/juex-ai/juex/internal/features/applypatch"
+	chunkedwritemodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
+	filesearchmodule "github.com/juex-ai/juex/internal/features/filesearch"
+	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
+	scratchpadmodule "github.com/juex-ai/juex/internal/features/scratchpad"
+	shellmodule "github.com/juex-ai/juex/internal/features/shell"
+	skillsmodule "github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -36,12 +43,12 @@ func (p *moduleCapabilityProvider) Complete(_ context.Context, system string, hi
 		available[spec.Name] = spec
 	}
 	for module, names := range map[string][]string{
-		modulecatalog.BasicFileTools: {"read", "write", "edit"},
-		modulecatalog.Shell:          {"exec_command", "write_stdin", "list_shell_sessions"},
-		modulecatalog.ApplyPatch:     {"apply_patch"},
-		modulecatalog.FileSearch:     {"grep"},
-		modulecatalog.ChunkedWrite:   {"write_begin", "write_chunk", "write_commit", "write_abort"},
-		modulecatalog.Skills:         {"skill_search", "skill_load"},
+		filetoolsmodule.ModuleID:    {"read", "write", "edit"},
+		shellmodule.ModuleID:        {"exec_command", "write_stdin", "list_shell_sessions"},
+		applypatchmodule.ModuleID:   {"apply_patch"},
+		filesearchmodule.ModuleID:   {"grep"},
+		chunkedwritemodule.ModuleID: {"write_begin", "write_chunk", "write_commit", "write_abort"},
+		skillsmodule.ModuleID:       {"skill_search", "skill_load"},
 	} {
 		for _, name := range names {
 			_, exists := available[name]
@@ -50,8 +57,8 @@ func (p *moduleCapabilityProvider) Complete(_ context.Context, system string, hi
 			}
 		}
 	}
-	chunked := p.cfg.ModuleEnabled(modulecatalog.ChunkedWrite)
-	skills := p.cfg.ModuleEnabled(modulecatalog.Skills)
+	chunked := p.cfg.ModuleEnabled(chunkedwritemodule.ModuleID)
+	skills := p.cfg.ModuleEnabled(skillsmodule.ModuleID)
 	write := available["write"]
 	_, limited := write.Schema["properties"].(map[string]any)["content"].(map[string]any)["maxLength"]
 	if limited != chunked || strings.Contains(write.Description, "write_begin") != chunked {
@@ -69,10 +76,10 @@ func (p *moduleCapabilityProvider) Complete(_ context.Context, system string, hi
 			p.t.Errorf("disabled chunk suggestion in %s: %s", spec.Name, data)
 		}
 	}
-	if strings.Contains(system, "Use the `exec_command` tool") != p.cfg.ModuleEnabled(modulecatalog.Shell) {
+	if strings.Contains(system, "Use the `exec_command` tool") != p.cfg.ModuleEnabled(shellmodule.ModuleID) {
 		p.t.Errorf("shell guidance does not match shell capability: %s", system)
 	}
-	if strings.Contains(system, "## Thread Scratchpad") != p.cfg.ModuleEnabled(modulecatalog.Scratchpad) {
+	if strings.Contains(system, "## Thread Scratchpad") != p.cfg.ModuleEnabled(scratchpadmodule.ModuleID) {
 		p.t.Errorf("scratchpad context does not match effective module")
 	}
 	step := p.calls
@@ -127,14 +134,14 @@ func (p *moduleCapabilityProvider) planActions() {
 		{ToolName: "edit", Input: map[string]any{"path": "draft.txt", "old": p.written, "new": p.replacement}},
 		{ToolName: "read", Input: map[string]any{"path": "draft.txt"}},
 	}
-	if p.cfg.ModuleEnabled(modulecatalog.ApplyPatch) {
+	if p.cfg.ModuleEnabled(applypatchmodule.ModuleID) {
 		p.actions = append(p.actions, llm.Block{ToolName: "apply_patch", Input: map[string]any{"patch_text": "*** Begin Patch\n*** Add File: patched.txt\n+patch result\n*** End Patch"}})
 	}
-	if p.cfg.ModuleEnabled(modulecatalog.FileSearch) {
+	if p.cfg.ModuleEnabled(filesearchmodule.ModuleID) {
 		p.actions = append(p.actions, llm.Block{ToolName: "grep", Input: map[string]any{"pattern": "edited long draft", "path": "draft.txt", "max_results": 1}})
 	}
 	errorTool := "write"
-	if p.cfg.ModuleEnabled(modulecatalog.ChunkedWrite) {
+	if p.cfg.ModuleEnabled(chunkedwritemodule.ModuleID) {
 		p.actions = append(p.actions,
 			llm.Block{ToolName: "write_begin", Input: map[string]any{"path": "chunked.txt", "mode": "create"}},
 			llm.Block{ToolName: "write_chunk", Input: map[string]any{"write_id": "$write_id", "index": 0, "content": "chunk result"}},
@@ -153,16 +160,16 @@ func TestToolModulesExposeEffectiveCapabilitiesToProvider(t *testing.T) {
 		enabled              bool
 	}{
 		{name: "minimal", preset: config.PresetMinimal},
-		{name: "basic_file_only", preset: config.PresetMinimal, module: modulecatalog.Shell},
+		{name: "basic_file_only", preset: config.PresetMinimal, module: shellmodule.ModuleID},
 		{name: "standard", preset: config.PresetStandard},
 	}
-	for _, module := range []string{modulecatalog.ChunkedWrite, modulecatalog.ApplyPatch, modulecatalog.FileSearch, modulecatalog.Skills, modulecatalog.Shell, modulecatalog.Scratchpad} {
+	for _, module := range []string{chunkedwritemodule.ModuleID, applypatchmodule.ModuleID, filesearchmodule.ModuleID, skillsmodule.ModuleID, shellmodule.ModuleID, scratchpadmodule.ModuleID} {
 		cases = append(cases, struct {
 			name, preset, module string
 			enabled              bool
 		}{name: "standard_without_" + module, preset: config.PresetStandard, module: module})
 	}
-	for _, module := range []string{modulecatalog.ChunkedWrite, modulecatalog.ApplyPatch, modulecatalog.FileSearch, modulecatalog.Skills} {
+	for _, module := range []string{chunkedwritemodule.ModuleID, applypatchmodule.ModuleID, filesearchmodule.ModuleID, skillsmodule.ModuleID} {
 		cases = append(cases, struct {
 			name, preset, module string
 			enabled              bool
@@ -182,13 +189,13 @@ func TestToolModulesExposeEffectiveCapabilitiesToProvider(t *testing.T) {
 			if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 				t.Fatal(err)
 			}
-			cfg, err := config.LoadWithOptions(config.LoadOptions{WorkDir: work, HomeDir: t.TempDir(), ConfigPath: path, AgentState: config.AgentStateNone})
+			cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, HomeDir: t.TempDir(), ConfigPath: path, AgentState: config.AgentStateNone})
 			if err != nil {
 				t.Fatal(err)
 			}
 			cfg.AgentStateDir = filepath.Join(work, "state")
 			provider := &moduleCapabilityProvider{t: t, cfg: cfg, written: strings.Repeat("long draft\n", 300), replacement: strings.Repeat("edited long draft\n", 220)}
-			if cfg.ModuleEnabled(modulecatalog.ChunkedWrite) {
+			if cfg.ModuleEnabled(chunkedwritemodule.ModuleID) {
 				provider.written = "short draft"
 			}
 			provider.planActions()
@@ -213,7 +220,7 @@ func TestToolModulesExposeEffectiveCapabilitiesToProvider(t *testing.T) {
 			if provider.calls != len(provider.actions)+1 {
 				t.Fatalf("provider calls=%d", provider.calls)
 			}
-			for module, file := range map[string]string{modulecatalog.ApplyPatch: "patched.txt", modulecatalog.ChunkedWrite: "chunked.txt"} {
+			for module, file := range map[string]string{applypatchmodule.ModuleID: "patched.txt", chunkedwritemodule.ModuleID: "chunked.txt"} {
 				if cfg.ModuleEnabled(module) {
 					data, err := os.ReadFile(filepath.Join(work, file))
 					if err != nil || !strings.Contains(string(data), "result") {

@@ -11,7 +11,7 @@ import (
 )
 
 func TestModulePresets(t *testing.T) {
-	ids := []string{"basic-file-tools", "shell", "apply-patch", "chunked-write", "file-search", "operating-context", "agents-md", "skills", "scratchpad", "goal", "notes", "memory", "context-control", "worker-threads", "observables", "mcp", "hooks", "extensions"}
+
 	for _, tc := range []struct {
 		name, yaml string
 		minimal    bool
@@ -24,14 +24,15 @@ func TestModulePresets(t *testing.T) {
 		{name: "standard override", yaml: "preset: standard\nmodules:\n  notes:\n    enabled: false\n", overrides: map[string]bool{"notes": false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{}
+			cfg := Config{ModuleInventory: testModuleInventory()}
 			if tc.yaml != "" {
 				if err := applyYAMLData(&cfg, []byte(tc.yaml), workspaceYAMLSource("test.yaml")); err != nil {
 					t.Fatal(err)
 				}
 			}
-			for _, id := range ids {
-				want := !tc.minimal || id == "basic-file-tools" || id == "shell" || id == "operating-context"
+			for _, definition := range testModuleInventory().Definitions() {
+				id := definition.ID
+				want := !tc.minimal || definition.Minimal
 				if value, ok := tc.overrides[id]; ok {
 					want = value
 				}
@@ -47,7 +48,7 @@ func TestModulePresets(t *testing.T) {
 }
 
 func TestModulePresetLayeringPreservesExplicitSwitches(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{ModuleInventory: testModuleInventory()}
 	layers := []string{
 		"preset: standard\nmodules:\n  skills:\n    enabled: true\n  shell:\n    enabled: false\n",
 		"preset: minimal\n",
@@ -79,7 +80,7 @@ func TestModulePresetValidation(t *testing.T) {
 		{"unknown setting", "modules:\n  goal:\n    active: true\n", "active"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{}
+			cfg := Config{ModuleInventory: testModuleInventory()}
 			err := applyYAMLData(&cfg, []byte(tc.yaml), workspaceYAMLSource("invalid.yaml"))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
@@ -101,11 +102,11 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 	}
 	writeTextFile(t, filepath.Join(resolved.Address.StateDir(), "switches.yaml"), "modules:\n  notes:\n    enabled: false\n")
 	content := []byte("imports:\n  - source: switches.yaml\npreset: minimal\nmodules:\n  goal:\n    enabled: true\n")
-	validated, err := ValidateAgentConfig(content, home, resolved.Agent.ID)
+	validated, err := ValidateAgentConfig(testModuleInventory(), content, home, resolved.Agent.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := WriteAgentConfig(content, home, resolved.Agent.ID, nil)
+	path, err := WriteAgentConfig(testModuleInventory(), content, home, resolved.Agent.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +117,7 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 	if string(got) != string(content) {
 		t.Fatalf("sparse YAML changed: %q", got)
 	}
-	loaded, err := LoadWithOptions(LoadOptions{HomeDir: home, WorkDir: work, AgentState: AgentStateExisting})
+	loaded, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), HomeDir: home, WorkDir: work, AgentState: AgentStateExisting})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 		t.Fatalf("wrong effective policy: %+v", loaded.Modules)
 	}
 	for _, invalid := range []string{"preset: typo\n", "modules:\n  typo: {}\n"} {
-		if _, err := WriteAgentConfig([]byte(invalid), home, resolved.Agent.ID, nil); err == nil {
+		if _, err := WriteAgentConfig(testModuleInventory(), []byte(invalid), home, resolved.Agent.ID, nil); err == nil {
 			t.Fatalf("saved invalid configuration %q", invalid)
 		}
 		got, err := os.ReadFile(path)
@@ -138,7 +139,7 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 }
 
 func TestModulePresetDoesNotChangeCoreConfiguration(t *testing.T) {
-	cfg := Config{Model: "unchanged", ProviderID: "provider", Compaction: DefaultCompactionConfig(), ToolOutput: DefaultToolOutputConfig()}
+	cfg := Config{ModuleInventory: testModuleInventory(), Model: "unchanged", ProviderID: "provider", Compaction: DefaultCompactionConfig(), ToolOutput: DefaultToolOutputConfig()}
 	before := cfg
 	if err := applyYAMLData(&cfg, []byte("preset: minimal\n"), workspaceYAMLSource("preset.yaml")); err != nil {
 		t.Fatal(err)
@@ -150,14 +151,14 @@ func TestModulePresetDoesNotChangeCoreConfiguration(t *testing.T) {
 
 func TestModulePresetProgrammaticValidation(t *testing.T) {
 	for _, cfg := range []Config{
-		{Preset: "typo"},
-		{Modules: ModulePolicy{"typo": {Enabled: true}}},
+		{ModuleInventory: testModuleInventory(), Preset: "typo"},
+		{ModuleInventory: testModuleInventory(), Modules: ModulePolicy{"typo": {Enabled: true}}},
 	} {
 		if err := cfg.ValidateModules(); err == nil {
 			t.Fatal("invalid programmatic configuration accepted")
 		}
 	}
-	if (Config{}).ModuleEnabled("unknown-future-module") {
+	if (Config{ModuleInventory: testModuleInventory()}).ModuleEnabled("unknown-future-module") {
 		t.Fatal("unknown module enabled by default")
 	}
 }

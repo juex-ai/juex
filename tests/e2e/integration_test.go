@@ -18,9 +18,11 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -165,7 +167,7 @@ func prepareLiveProviderConfig(root, path, workDir, modelOverride string) (strin
 }
 
 func loadPreparedLiveConfig(path, selectedPath, workDir string) (liveConfig, error) {
-	cfg, err := config.LoadWithOptions(config.LoadOptions{
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    workDir,
 		ConfigPath: selectedPath,
 		AgentState: config.AgentStateNone,

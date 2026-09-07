@@ -12,14 +12,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
-
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/providers"
+
 	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
 
@@ -105,7 +107,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 	compaction.KeepRecentTokens = 1
 	compaction.SummaryMaxTokens = 2048
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol: "anthropic/messages", ContextWindow: 32000,
 			WorkDir: work, HomeJuexDir: t.TempDir(), AgentStateDir: t.TempDir(), Compaction: compaction,
 		},

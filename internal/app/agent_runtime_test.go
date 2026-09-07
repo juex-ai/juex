@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
@@ -33,7 +34,7 @@ func TestResolveAgentRuntimeExpandsDefaultsAndKeepsSnapshotStable(t *testing.T) 
     "LARK_WORKDIR":"${WORKDIR}:${JUEX_WORKDIR}"
   }}}
 }`)
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir: work, AgentAddress: address,
 		Extensions: config.ExtensionPolicy{Allow: []string{"lark-cli"}, Configured: true},
 	}
@@ -86,7 +87,7 @@ func TestInspectAgentRuntimeValidatesDefaultsBeforeAgentCreation(t *testing.T) {
     "DEMO_DATA":"${JUEX_EXT_DATA_DIR}/cache"
   }}}
 }`)
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    work,
 		Extensions: config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true},
 	}
@@ -126,7 +127,7 @@ func TestResolveAgentRuntimeShadowsAndDeduplicatesWithoutValues(t *testing.T) {
   }}}
 }`)
 	}
-	resolution, err := ResolveAgentRuntime(config.Config{
+	resolution, err := ResolveAgentRuntime(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir: work, AgentAddress: address,
 		Extensions: config.ExtensionPolicy{Allow: []string{"alpha", "beta"}, Configured: true},
 	})
@@ -222,7 +223,7 @@ func TestResolveAgentRuntimeRejectsConflictsAndUnsupportedExpansionWithoutValues
 				mustWriteAppTestFile(t, filepath.Join(dir, "juex.extension.json"), body)
 			}
 			sortStringsForTest(allow)
-			_, err = ResolveAgentRuntime(config.Config{
+			_, err = ResolveAgentRuntime(config.Config{ModuleInventory: modulecatalog.Inventory(),
 				WorkDir: work, AgentAddress: address,
 				Extensions: config.ExtensionPolicy{Allow: allow, Configured: true},
 			})
@@ -252,7 +253,7 @@ func TestResolveAgentRuntimeUsesDistinctAgentDataDirectories(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resolution, err := ResolveAgentRuntime(config.Config{
+		resolution, err := ResolveAgentRuntime(config.Config{ModuleInventory: modulecatalog.Inventory(),
 			WorkDir: work, AgentAddress: address,
 			Extensions: config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true},
 		})

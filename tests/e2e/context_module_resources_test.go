@@ -11,7 +11,12 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	agentsmdmodule "github.com/juex-ai/juex/internal/features/agentsmd"
+	operatingcontextmodule "github.com/juex-ai/juex/internal/features/operatingcontext"
+	scratchpadmodule "github.com/juex-ai/juex/internal/features/scratchpad"
+	shellmodule "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -28,16 +33,16 @@ func (*contextResourceProvider) Name() string { return "context-resources" }
 func (p *contextResourceProvider) Complete(_ context.Context, system string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	p.t.Helper()
 	for module, marker := range map[string]string{
-		modulecatalog.OperatingContext: "## Operating Context",
-		modulecatalog.Scratchpad:       "## Thread Scratchpad",
-		modulecatalog.AgentsMD:         "guidance-fixture-725",
-		modulecatalog.Shell:            "Use the `exec_command` tool",
+		operatingcontextmodule.ModuleID: "## Operating Context",
+		scratchpadmodule.ModuleID:       "## Thread Scratchpad",
+		agentsmdmodule.ModuleID:         "guidance-fixture-725",
+		shellmodule.ModuleID:            "Use the `exec_command` tool",
 	} {
 		if strings.Contains(system, marker) != p.cfg.ModuleEnabled(module) {
 			p.t.Errorf("%s context does not match enabled=%v: %s", module, p.cfg.ModuleEnabled(module), system)
 		}
 	}
-	if !p.cfg.ModuleEnabled(modulecatalog.Scratchpad) && strings.Contains(system, p.path) {
+	if !p.cfg.ModuleEnabled(scratchpadmodule.ModuleID) && strings.Contains(system, p.path) {
 		p.t.Errorf("disabled scratchpad path published: %s", system)
 	}
 	if strings.Contains(system, "private-draft-725") {
@@ -73,8 +78,8 @@ func TestContextModulesOwnThreadResources(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(work, "AGENTS.md"), []byte("guidance-fixture-725"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				cfg := config.Config{Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: config.ModulePolicy{
-					modulecatalog.Scratchpad: {Enabled: enabled.scratch}, modulecatalog.AgentsMD: {Enabled: enabled.agents}, modulecatalog.OperatingContext: {Enabled: enabled.operating}, modulecatalog.Shell: {Enabled: enabled.shell},
+				cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: config.ModulePolicy{
+					scratchpadmodule.ModuleID: {Enabled: enabled.scratch}, agentsmdmodule.ModuleID: {Enabled: enabled.agents}, operatingcontextmodule.ModuleID: {Enabled: enabled.operating}, shellmodule.ModuleID: {Enabled: enabled.shell},
 				}}
 				cfg.Compaction = config.DefaultCompactionConfig()
 				cfg.Compaction.KeepRecentTokens = 0
@@ -113,7 +118,7 @@ func TestContextModulesOwnThreadResources(t *testing.T) {
 							found[string(descriptor.ID)] = true
 						}
 					}
-					for _, id := range []string{modulecatalog.OperatingContext, modulecatalog.Scratchpad, modulecatalog.AgentsMD, modulecatalog.Shell} {
+					for _, id := range []string{operatingcontextmodule.ModuleID, scratchpadmodule.ModuleID, agentsmdmodule.ModuleID, shellmodule.ModuleID} {
 						if found[id] != cfg.ModuleEnabled(id) {
 							t.Errorf("module descriptor %s=%v enabled=%v", id, found[id], cfg.ModuleEnabled(id))
 						}
@@ -166,7 +171,7 @@ func TestDisabledScratchpadPreservesUnavailableExistingDirectory(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(work, "AGENTS.md"), []byte("guidance-fixture-725"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			cfg := config.Config{Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: config.ModulePolicy{modulecatalog.Scratchpad: {Enabled: true}}}
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: config.ModulePolicy{scratchpadmodule.ModuleID: {Enabled: true}}}
 			id := thread.MainID
 			if worker {
 				store := thread.NewStore(cfg.AgentStateDir)
@@ -203,7 +208,7 @@ func TestDisabledScratchpadPreservesUnavailableExistingDirectory(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = os.Chmod(path, 0755) })
-			cfg.Modules[modulecatalog.Scratchpad] = config.ModuleSettings{Enabled: false}
+			cfg.Modules[scratchpadmodule.ModuleID] = config.ModuleSettings{Enabled: false}
 			provider := &contextResourceProvider{t: t, cfg: cfg, path: path}
 			disabled, err := app.New(app.Options{Config: cfg, Provider: provider, ThreadID: id, DisableMCP: true})
 			if err != nil {

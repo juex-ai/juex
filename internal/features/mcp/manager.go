@@ -11,7 +11,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "mcp"
+const ModuleID = "mcp"
 
 type Module struct {
 	mu      sync.RWMutex

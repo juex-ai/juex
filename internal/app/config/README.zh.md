@@ -2,6 +2,9 @@
 
 > [English](README.md) | 中文
 
+组合根在解析任何配置层之前传入不可变的模块清单。本包负责声明校验与合并，
+不选择或构造产品能力。运行时加载、保存、被动检查及 Fleet 导入校验使用同一份清单。
+
 `preset` 接受 `standard`（默认值）或 `minimal`。standard 默认启用
 `internal/app/modulecatalog` 声明的所有能力；minimal 默认只启用
 `basic-file-tools`、`shell` 和 `operating-context`。显式

@@ -11,7 +11,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "memory"
+const ModuleID = "memory"
 
 const (
 	ToolSearch = "memory_search"

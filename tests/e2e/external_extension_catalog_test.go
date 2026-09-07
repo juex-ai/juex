@@ -13,13 +13,18 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
+
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/mcp"
+
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
@@ -65,7 +70,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "Module catalog flow complete"), StopReason: llm.StopEndTurn},
 	}}
 
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID: "openai", APIKey: "test", Model: "test", WorkDir: work,
 		HomeJuexDir: home, AgentAddress: address,
 		Extensions: config.ExtensionPolicy{Allow: []string{"catalog"}, Configured: true},
@@ -99,7 +104,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 		}
 	}
 	for name, wantOwner := range map[string]runtimemodule.ID{
-		"read":                         modulecatalog.BasicFileTools,
+		"read":                         filetoolsmodule.ModuleID,
 		"skill_search":                 skills.ModuleID,
 		goalmodule.ToolGet:             goalmodule.ModuleID,
 		notesmodule.ToolUpdate:         notesmodule.ModuleID,

@@ -12,7 +12,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "shell"
+const ModuleID = "shell"
 
 type Module struct {
 	mu           sync.RWMutex

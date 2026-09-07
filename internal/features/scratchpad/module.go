@@ -11,7 +11,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "scratchpad"
+const ModuleID = "scratchpad"
 
 type Module struct {
 	WorkDir string

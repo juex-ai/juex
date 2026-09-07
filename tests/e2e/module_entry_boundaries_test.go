@@ -13,6 +13,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
@@ -37,7 +39,7 @@ func TestModuleEntriesKeepDisabledResourcesUnopened(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cfg := config.Config{WorkDir: work, AgentStateDir: address.Address.StateDir(), AgentAddress: address.Address, Preset: preset,
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: address.Address.StateDir(), AgentAddress: address.Address, Preset: preset,
 				Modules:    config.ModulePolicy{"mcp": {Enabled: false}, "skills": {Enabled: false}, "extensions": {Enabled: false}, "observables": {Enabled: false}, "hooks": {Enabled: false}},
 				Extensions: config.ExtensionPolicy{Configured: true, Allow: []string{"broken"}},
 			}
@@ -53,7 +55,7 @@ func TestModuleEntriesKeepDisabledResourcesUnopened(t *testing.T) {
 			for _, id := range []string{"mcp", "skills", "extensions", "observables", "hooks"} {
 				previewContent += "  " + id + ":\n    enabled: false\n"
 			}
-			preview, err := config.ValidateAgentConfig([]byte(previewContent), filepath.Join(root, ".juex"), address.Agent.ID)
+			preview, err := config.ValidateAgentConfig(modulecatalog.Inventory(), []byte(previewContent), filepath.Join(root, ".juex"), address.Agent.ID)
 			if err != nil {
 				t.Fatalf("disabled resource config preview: %v", err)
 			}
@@ -101,7 +103,7 @@ func TestModuleEntriesKeepDisabledResourcesUnopened(t *testing.T) {
 
 func TestWorkerDisabledAPIKeepsHistoryAndHostMaintenance(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
 		Modules: config.ModulePolicy{"worker-threads": {Enabled: true}},
 	}
 	if err := app.EnsureMainThread(cfg); err != nil {

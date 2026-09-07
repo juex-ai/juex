@@ -2,7 +2,8 @@ package app
 
 import (
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -20,8 +21,8 @@ func CheckTurnCapability(cfg config.Config, threadID string, req TurnAdmissionRe
 			case SlashStatus, SlashNew, SlashCompact:
 				return nil
 			case SlashGoal:
-				if !cfg.ModuleEnabled(modulecatalog.Goal) {
-					return &moduleUnavailableError{ModuleID: modulecatalog.Goal}
+				if !cfg.ModuleEnabled(goalmodule.ModuleID) {
+					return &moduleUnavailableError{ModuleID: goalmodule.ModuleID}
 				}
 			}
 		}
@@ -30,8 +31,8 @@ func CheckTurnCapability(cfg config.Config, threadID string, req TurnAdmissionRe
 }
 
 func workerExecutionError(cfg config.Config, threadID string) error {
-	if threadID != "" && threadID != thread.MainID && !cfg.ModuleEnabled(modulecatalog.WorkerThreads) {
-		return &moduleUnavailableError{ModuleID: modulecatalog.WorkerThreads}
+	if threadID != "" && threadID != thread.MainID && !cfg.ModuleEnabled(workerthreadsmodule.ModuleID) {
+		return &moduleUnavailableError{ModuleID: workerthreadsmodule.ModuleID}
 	}
 	return nil
 }

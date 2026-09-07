@@ -27,7 +27,7 @@ func TestLoadAgentConfigAfterWorkspaceWithInheritedImportScope(t *testing.T) {
 	writeTextFile(t, importPath, "enable_user_agents_resources: false\nenvironment:\n  variables:\n    AGENT_IMPORTED: agent\n")
 	writeTextFile(t, resolved.Address.ConfigPath(), "imports:\n  - source: agent-import.yaml\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		HomeDir:    home,
 		WorkDir:    workspace,
 		AgentState: AgentStateExisting,
@@ -58,17 +58,17 @@ func TestAgentConfigRejectsFleetAndWriteLeavesWorkspaceUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := ValidateAgentConfig([]byte("fleet:\n  addr: 127.0.0.1:7337\n"), home, resolved.Agent.ID); err == nil || !strings.Contains(err.Error(), "fleet") {
+	if _, err := ValidateAgentConfig(testModuleInventory(), []byte("fleet:\n  addr: 127.0.0.1:7337\n"), home, resolved.Agent.ID); err == nil || !strings.Contains(err.Error(), "fleet") {
 		t.Fatalf("ValidateAgentConfig() error = %v, want fleet rejection", err)
 	}
 	fleetImport := filepath.Join(resolved.Address.StateDir(), "fleet.yaml")
 	writeTextFile(t, fleetImport, "fleet:\n  addr: 127.0.0.1:7337\n")
-	if _, err := ValidateAgentConfig([]byte("imports:\n  - source: fleet.yaml\n"), home, resolved.Agent.ID); err == nil || !strings.Contains(err.Error(), "fleet") {
+	if _, err := ValidateAgentConfig(testModuleInventory(), []byte("imports:\n  - source: fleet.yaml\n"), home, resolved.Agent.ID); err == nil || !strings.Contains(err.Error(), "fleet") {
 		t.Fatalf("ValidateAgentConfig() imported error = %v, want Agent-scope fleet rejection", err)
 	}
 	oldAgent := []byte("enable_user_agents_resources: true\n")
 	writeTextFile(t, resolved.Address.ConfigPath(), string(oldAgent))
-	if _, err := WriteAgentConfig([]byte("unknown_field: true\n"), home, resolved.Agent.ID, nil); err == nil {
+	if _, err := WriteAgentConfig(testModuleInventory(), []byte("unknown_field: true\n"), home, resolved.Agent.ID, nil); err == nil {
 		t.Fatal("WriteAgentConfig() accepted an invalid field")
 	}
 	unchangedAgent, err := os.ReadFile(resolved.Address.ConfigPath())
@@ -78,7 +78,7 @@ func TestAgentConfigRejectsFleetAndWriteLeavesWorkspaceUnchanged(t *testing.T) {
 	if string(unchangedAgent) != string(oldAgent) {
 		t.Fatalf("invalid update changed Agent config: %q", unchangedAgent)
 	}
-	written, err := WriteAgentConfig([]byte("enable_user_agents_resources: false\n"), home, resolved.Agent.ID, nil)
+	written, err := WriteAgentConfig(testModuleInventory(), []byte("enable_user_agents_resources: false\n"), home, resolved.Agent.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestWriteAgentConfigRuntimeValidationPrecedesPublication(t *testing.T) {
 		}
 		return rejection
 	}
-	_, err = WriteAgentConfig(candidate, home, resolved.Agent.ID, validate)
+	_, err = WriteAgentConfig(testModuleInventory(), candidate, home, resolved.Agent.ID, validate)
 	var validation *AgentConfigValidationError
 	if !errors.As(err, &validation) || !errors.Is(err, rejection) || calls != 1 {
 		t.Fatalf("runtime validation = %v, calls = %d", err, calls)
@@ -143,7 +143,7 @@ func TestWriteAgentConfigRuntimeValidationPrecedesPublication(t *testing.T) {
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WriteAgentConfig(candidate, home, resolved.Agent.ID, nil); err != nil {
+	if _, err := WriteAgentConfig(testModuleInventory(), candidate, home, resolved.Agent.ID, nil); err != nil {
 		t.Fatalf("subsequent config publication: %v", err)
 	}
 	got, err = os.ReadFile(resolved.Address.ConfigPath())
@@ -194,7 +194,7 @@ func TestAgentConfigRecoveryDoesNotRecreateDeletedAgent(t *testing.T) {
 				cachePath:       loader.cachePath(source, configPath),
 			}
 			oldCache.ContentSHA256 = contentDigest([]byte(oldCache.Content))
-			seed := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{oldCache}}
+			seed := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{oldCache}}
 			if err := commitConfigImportCaches(&seed); err != nil {
 				t.Fatal(err)
 			}
@@ -271,7 +271,7 @@ func TestAgentConfigRecoveryWaitsForFailedDeleteRestoration(t *testing.T) {
 		cachePath:       loader.cachePath(source, configPath),
 	}
 	oldCache.ContentSHA256 = contentDigest([]byte(oldCache.Content))
-	if err := commitConfigImportCaches(&Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{oldCache}}); err != nil {
+	if err := commitConfigImportCaches(&Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{oldCache}}); err != nil {
 		t.Fatal(err)
 	}
 	oldCacheData, err := os.ReadFile(oldCache.cachePath)
@@ -371,7 +371,7 @@ func TestAgentConfigsRemainIsolatedAcrossWorkspaces(t *testing.T) {
 		writeTextFile(t, resolved.Address.ConfigPath(), "runtime:\n  tool_timeout: "+wantTimeouts[index].String()+"\n")
 	}
 	for index, resolved := range resolutions {
-		cfg, err := LoadWithOptions(LoadOptions{HomeDir: home, AgentID: resolved.Agent.ID, AgentState: AgentStateExisting})
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), HomeDir: home, AgentID: resolved.Agent.ID, AgentState: AgentStateExisting})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -404,7 +404,7 @@ func TestLoadConfigPriorityEndsWithAgentThenExplicitOverride(t *testing.T) {
 	explicitPath := filepath.Join(root, "explicit.yaml")
 	writeTextFile(t, explicitPath, "runtime:\n  tool_timeout: 5s\n")
 
-	agentConfig, err := LoadWithOptions(LoadOptions{
+	agentConfig, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		HomeDir:    effectiveHome,
 		AgentID:    resolved.Agent.ID,
 		AgentState: AgentStateExisting,
@@ -415,7 +415,7 @@ func TestLoadConfigPriorityEndsWithAgentThenExplicitOverride(t *testing.T) {
 	if agentConfig.ToolTimeout != 4*time.Second {
 		t.Fatalf("Agent config priority = %s, want 4s", agentConfig.ToolTimeout)
 	}
-	explicitConfig, err := LoadWithOptions(LoadOptions{
+	explicitConfig, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		HomeDir:    effectiveHome,
 		AgentID:    resolved.Agent.ID,
 		ConfigPath: explicitPath,
@@ -449,7 +449,7 @@ func TestExplicitWorkspaceConfigOverridesAgentLayer(t *testing.T) {
 	}
 	writeTextFile(t, resolved.Address.ConfigPath(), "runtime:\n  tool_timeout: 4s\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		HomeDir:    effectiveHome,
 		AgentID:    resolved.Agent.ID,
 		ConfigPath: workspacePath,

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 )
 
 func ensureTestWorkspaceAgent(t *testing.T, work string) config.Config {
@@ -15,7 +16,7 @@ func ensureTestWorkspaceAgent(t *testing.T, work string) config.Config {
 	t.Setenv("JUEX_HOME", testHome)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(testHome, "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	cfg, err := config.LoadWithOptions(config.LoadOptions{WorkDir: work, AgentState: config.AgentStateMint})
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentState: config.AgentStateMint})
 	if err != nil {
 		t.Fatal(err)
 	}

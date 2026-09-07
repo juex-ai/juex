@@ -13,14 +13,19 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/mcp"
+
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
+
 	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -122,7 +127,7 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	workDir := t.TempDir()
 	provider := &stubProvider{replies: replies}
 	app, err := New(Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir,
 			AgentStateDir: filepath.Join(workDir, ".juex"),
 		},
@@ -234,7 +239,7 @@ func TestAppModelCandidateInjectionPrecedence(t *testing.T) {
 	injectedSingle := &stubProvider{}
 	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	a, err := New(Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir,
 			AgentStateDir: filepath.Join(dir, ".juex"), Models: []string{"openai:m", "missing:model"},
 			NotifyModelChanges: true,
@@ -260,7 +265,7 @@ func TestAppInjectedSingleProviderDisablesConfiguredFallback(t *testing.T) {
 	dir := t.TempDir()
 	provider := &stubProvider{}
 	a, err := New(Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir,
 			AgentStateDir: filepath.Join(dir, ".juex"), Models: []string{"openai:m", "missing:model"},
 		},
@@ -362,7 +367,7 @@ func TestAppDeliverObservationQueuesDuringActiveTurn(t *testing.T) {
 func TestAppUsesStableMainThreadAndReopensItsJournal(t *testing.T) {
 	workDir := t.TempDir()
 	stateDir := filepath.Join(workDir, ".juex")
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
 	first, err := New(Options{
 		Config: cfg,
 		Provider: &stubProvider{replies: []llm.Response{{
@@ -408,7 +413,7 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workDir := t.TempDir()
-			cfg := config.Config{
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 				ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir,
 				AgentStateDir: filepath.Join(workDir, ".juex"),
 			}
@@ -508,7 +513,7 @@ func TestAppPromptUsesThreadScratchpad(t *testing.T) {
 func TestWorkerRuntimeHasOwnStateAndNoObservableManager(t *testing.T) {
 	workDir := t.TempDir()
 	stateDir := filepath.Join(workDir, ".juex")
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
 	main, err := New(Options{Config: cfg, Provider: &stubProvider{}})
 	if err != nil {
 		t.Fatal(err)

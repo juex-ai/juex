@@ -11,17 +11,19 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
-const workerThreadModuleID runtimemodule.ID = modulecatalog.WorkerThreads
+const workerThreadModuleID runtimemodule.ID = workerthreadsmodule.ModuleID
 
 type workerThreadModule struct {
 	manager *workerThreadManager

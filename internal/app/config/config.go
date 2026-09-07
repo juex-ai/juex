@@ -30,6 +30,7 @@ import (
 // WorkDir hosts work-local resources. Project AGENTS.md, skills, and mcp.json
 // live under .agents. Agent-owned runtime data lives under AgentStateDir.
 type Config struct {
+	ModuleInventory           ModuleInventory `json:"-" yaml:"-"`
 	ProviderID                string
 	ProviderProtocol          string
 	BaseURL                   string
@@ -96,12 +97,13 @@ const (
 )
 
 type LoadOptions struct {
-	WorkDir    string
-	HomeDir    string
-	AgentID    string
-	ConfigPath string
-	ModelRefs  []string
-	AgentState AgentStateMode
+	ModuleInventory ModuleInventory
+	WorkDir         string
+	HomeDir         string
+	AgentID         string
+	ConfigPath      string
+	ModelRefs       []string
+	AgentState      AgentStateMode
 }
 
 // EnvironmentStatus contains value-free diagnostics for the runtime
@@ -397,14 +399,17 @@ const allowedThinkingEffortText = "low, medium, high, xhigh, max"
 // --config override.
 // Runtime-environment priority is documented by internal/foundation/environment and the
 // architecture guide; config loading itself does not mutate os.Environ.
-func Load() (Config, error) {
-	return LoadForWorkDir("")
+func Load(inventory ModuleInventory) (Config, error) {
+	return LoadForWorkDir(inventory, "")
 }
 
 // LoadWithOptions loads runtime configuration with an explicit Workspace
 // identity policy. AgentStateMint creates a Registry entry only after the
 // effective configuration passes validation.
 func LoadWithOptions(opts LoadOptions) (Config, error) {
+	if err := opts.ModuleInventory.validate(); err != nil {
+		return Config{}, err
+	}
 	workDir := opts.WorkDir
 	var selectedAgent *agentstate.Resolution
 	mintAfterValidation := false
@@ -429,7 +434,7 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 		workDir = resolution.Agent.Workspace
 		selectedAgent = &resolution
 	}
-	cfg, err := loadConfigFilesForWorkDir(workDir, opts.HomeDir, opts.ConfigPath)
+	cfg, err := loadConfigFilesForWorkDir(opts.ModuleInventory, workDir, opts.HomeDir, opts.ConfigPath)
 	if err != nil {
 		return cfg, err
 	}
@@ -492,24 +497,24 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 }
 
 // LoadForWorkDir is Load with an explicit working directory.
-func LoadForWorkDir(workDir string) (Config, error) {
-	return LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateMint})
+func LoadForWorkDir(inventory ModuleInventory, workDir string) (Config, error) {
+	return LoadWithOptions(LoadOptions{ModuleInventory: inventory, WorkDir: workDir, AgentState: AgentStateMint})
 }
 
 // LoadForWorkDirForValidation loads and validates runtime configuration
 // without resolving or creating a workspace agent identity.
-func LoadForWorkDirForValidation(workDir string) (Config, error) {
-	return LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+func LoadForWorkDirForValidation(inventory ModuleInventory, workDir string) (Config, error) {
+	return LoadWithOptions(LoadOptions{ModuleInventory: inventory, WorkDir: workDir, AgentState: AgentStateNone})
 }
 
 // LoadForWorkDirWithModelsOverride is LoadForWorkDir with an explicit ordered
 // model chain that wins over YAML and provider selector environment values.
-func LoadForWorkDirWithModelsOverride(workDir string, modelRefs []string) (Config, error) {
-	return LoadWithOptions(LoadOptions{WorkDir: workDir, ModelRefs: modelRefs, AgentState: AgentStateMint})
+func LoadForWorkDirWithModelsOverride(inventory ModuleInventory, workDir string, modelRefs []string) (Config, error) {
+	return LoadWithOptions(LoadOptions{ModuleInventory: inventory, WorkDir: workDir, ModelRefs: modelRefs, AgentState: AgentStateMint})
 }
 
-func loadConfigFilesForWorkDir(workDir, homeDir string, explicitPaths ...string) (Config, error) {
-	cfg, err := loadUserConfigForWorkDir(workDir, homeDir, explicitPaths...)
+func loadConfigFilesForWorkDir(inventory ModuleInventory, workDir, homeDir string, explicitPaths ...string) (Config, error) {
+	cfg, err := loadUserConfigForWorkDir(inventory, workDir, homeDir, explicitPaths...)
 	if err != nil {
 		return cfg, err
 	}
@@ -519,8 +524,12 @@ func loadConfigFilesForWorkDir(workDir, homeDir string, explicitPaths ...string)
 	return cfg, nil
 }
 
-func loadUserConfigForWorkDir(workDir, homeDir string, explicitPaths ...string) (Config, error) {
+func loadUserConfigForWorkDir(inventory ModuleInventory, workDir, homeDir string, explicitPaths ...string) (Config, error) {
+	if err := inventory.validate(); err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
+		ModuleInventory:           inventory,
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
 		ToolOutput:                DefaultToolOutputConfig(),
@@ -571,26 +580,26 @@ func loadUserConfigForWorkDir(workDir, homeDir string, explicitPaths ...string) 
 
 // LoadFromFile is a convenience for tests and explicit CLI configuration.
 // It applies overrides from path on top of Load(); WorkDir is unaffected.
-func LoadFromFile(path string) (Config, error) {
-	return LoadFromFileForWorkDir(path, "")
+func LoadFromFile(inventory ModuleInventory, path string) (Config, error) {
+	return LoadFromFileForWorkDir(inventory, path, "")
 }
 
 // LoadFromFileForWorkDir is LoadFromFile with an explicit working directory.
-func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
-	return LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: path, AgentState: AgentStateMint})
+func LoadFromFileForWorkDir(inventory ModuleInventory, path, workDir string) (Config, error) {
+	return LoadWithOptions(LoadOptions{ModuleInventory: inventory, WorkDir: workDir, ConfigPath: path, AgentState: AgentStateMint})
 }
 
 // LoadFromFileForWorkDirForValidation is LoadFromFileForWorkDir without
 // resolving or creating a workspace agent identity.
-func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
-	return LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: path, AgentState: AgentStateNone})
+func LoadFromFileForWorkDirForValidation(inventory ModuleInventory, path, workDir string) (Config, error) {
+	return LoadWithOptions(LoadOptions{ModuleInventory: inventory, WorkDir: workDir, ConfigPath: path, AgentState: AgentStateNone})
 }
 
 // LoadFromFileForWorkDirWithModelsOverride is LoadFromFileForWorkDir with an
 // explicit ordered model chain that wins over YAML and provider selector
 // environment values.
-func LoadFromFileForWorkDirWithModelsOverride(path, workDir string, modelRefs []string) (Config, error) {
-	return LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: path, ModelRefs: modelRefs, AgentState: AgentStateMint})
+func LoadFromFileForWorkDirWithModelsOverride(inventory ModuleInventory, path, workDir string, modelRefs []string) (Config, error) {
+	return LoadWithOptions(LoadOptions{ModuleInventory: inventory, WorkDir: workDir, ConfigPath: path, ModelRefs: modelRefs, AgentState: AgentStateMint})
 }
 
 func finalizeConfigLoadForValidationRetainingImportCacheLock(

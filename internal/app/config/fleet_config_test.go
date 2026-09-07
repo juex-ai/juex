@@ -17,7 +17,7 @@ func TestLoadHomeFleetConfigDefaultsAndLoadsAddress(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 
-	got, err := LoadHomeFleetConfig()
+	got, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestLoadHomeFleetConfigDefaultsAndLoadsAddress(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	got, err = LoadHomeFleetConfig()
+	got, err = LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestLoadHomeFleetConfigMergesDefaultAndInstanceHomes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := LoadHomeFleetConfig()
+	got, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ fleet:
   addr: 127.0.0.1:5999
 `)
 
-	got, err := LoadHomeFleetConfig()
+	got, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestLoadHomeFleetConfigRejectsNestedImportedDocumentAtomically(t *testing.T
 	mainPath := filepath.Join(home, "juex.yaml")
 	writeTextFile(t, mainPath, "imports:\n  - source: fleet-base.yaml\nfleet:\n  addr: 127.0.0.1:5999\n")
 
-	_, err := LoadHomeFleetConfig()
+	_, err := LoadHomeFleetConfig(testModuleInventory())
 	hasExpectedPaths := err != nil && strings.Contains(err.Error(), mainPath) && strings.Contains(err.Error(), importedPath)
 	if runtime.GOOS == "windows" && err != nil {
 		hasExpectedPaths = strings.Contains(err.Error(), filepath.Base(mainPath)) && strings.Contains(err.Error(), filepath.Base(importedPath))
@@ -150,7 +150,7 @@ func TestLoadHomeFleetConfigDoesNotPublishRuntimeImportCache(t *testing.T) {
 	instancePath := filepath.Join(instanceHome, "juex.yaml")
 	writeTextFile(t, instancePath, "fleet: [invalid]\n")
 
-	if _, err := LoadHomeFleetConfig(); err == nil {
+	if _, err := LoadHomeFleetConfig(testModuleInventory()); err == nil {
 		t.Fatal("LoadHomeFleetConfig() error = nil, want later source failure")
 	}
 	cacheDir := filepath.Join(instanceHome, "cache", "config-imports")
@@ -159,7 +159,7 @@ func TestLoadHomeFleetConfigDoesNotPublishRuntimeImportCache(t *testing.T) {
 	}
 
 	writeTextFile(t, instancePath, "fleet:\n  unsafe_bind_any: false\n")
-	got, err := LoadHomeFleetConfig()
+	got, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestLoadHomeFleetConfigInstanceFalseOverridesDefaultTrue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := LoadHomeFleetConfig()
+	got, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestLoadHomeFleetConfigEmptyInstanceAddressKeepsDefaultHomeAddress(t *testi
 		t.Fatal(err)
 	}
 
-	got, err := LoadHomeFleetConfig()
+	got, err := LoadHomeFleetConfig(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestLoadHomeFleetConfigRejectsInvalidDefaultBeforeInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := LoadHomeFleetConfig()
+	_, err := LoadHomeFleetConfig(testModuleInventory())
 	if err == nil ||
 		!strings.Contains(err.Error(), "fleet.addr") ||
 		!strings.Contains(err.Error(), `got "invalid"`) {
@@ -379,7 +379,7 @@ func TestRuntimeConfigLoadsFleetUnsafeBindSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestWorkspaceFleetConfigIsRejectedAsMisplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := LoadForWorkDirForValidation(work)
+	_, err := LoadForWorkDirForValidation(testModuleInventory(), work)
 	if err == nil || !strings.Contains(err.Error(), "fleet is only supported") {
 		t.Fatalf("error = %v, want misplaced fleet config", err)
 	}

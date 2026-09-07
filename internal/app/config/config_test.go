@@ -41,7 +41,7 @@ func TestLoadWithOptionsResolvesRuntimeEnvironmentPrecedenceAndMetadata(t *testi
 `)
 	t.Setenv("SHARED", "inherited")
 
-	cfg, err := LoadWithOptions(LoadOptions{
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		ConfigPath: explicitPath,
 		AgentState: AgentStateNone,
@@ -123,7 +123,7 @@ fleet:
 `)
 	t.Setenv("JUEX_HOME", instanceHome)
 
-	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ fleet:
 }
 
 func TestModulePolicyDefaultsEnabledAndLayersByCanonicalID(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{ModuleInventory: testModuleInventory()}
 	if !cfg.ModuleEnabled("skills") {
 		t.Fatal("unconfigured Module must default to enabled")
 	}
@@ -205,7 +205,7 @@ func TestModulePolicyDefaultsEnabledAndLayersByCanonicalID(t *testing.T) {
 
 func TestModulePolicyRejectsUnknownEnvelopeFieldAndUnsupportedID(t *testing.T) {
 	t.Run("unknown envelope field", func(t *testing.T) {
-		cfg := Config{}
+		cfg := Config{ModuleInventory: testModuleInventory()}
 		err := applyYAMLData(&cfg, []byte(`modules:
   skills:
     enabled: false
@@ -217,7 +217,7 @@ func TestModulePolicyRejectsUnknownEnvelopeFieldAndUnsupportedID(t *testing.T) {
 	})
 
 	t.Run("non-canonical id", func(t *testing.T) {
-		cfg := Config{}
+		cfg := Config{ModuleInventory: testModuleInventory()}
 		err := applyYAMLData(&cfg, []byte(`modules:
   " skills ":
     enabled: false
@@ -228,7 +228,7 @@ func TestModulePolicyRejectsUnknownEnvelopeFieldAndUnsupportedID(t *testing.T) {
 	})
 
 	t.Run("unsupported id", func(t *testing.T) {
-		cfg := Config{}
+		cfg := Config{ModuleInventory: testModuleInventory()}
 		err := applyYAMLData(&cfg, []byte(`modules:
   skillz:
     enabled: false
@@ -269,7 +269,7 @@ providers:
 		if modelRef != "" {
 			modelRefs = []string{modelRef}
 		}
-		cfg, err := LoadWithOptions(LoadOptions{
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 			WorkDir:    workDir,
 			ConfigPath: explicitPath,
 			ModelRefs:  modelRefs,
@@ -316,7 +316,7 @@ hooks:
 `)
 	t.Setenv("JUEX_HOME", instanceHome)
 
-	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ hooks:
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ hooks:
 	}
 	t.Setenv("JUEX_HOME", caseVariant)
 
-	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestLoadWithOptionsDotenvPolicyAndProviderOverrides(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		cfg, err := LoadWithOptions(LoadOptions{
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 			WorkDir:    workDir,
 			ConfigPath: explicitPath,
 			AgentState: AgentStateNone,
@@ -442,7 +442,7 @@ func TestLoadWithOptionsDotenvPolicyAndProviderOverrides(t *testing.T) {
 		writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), "environment:\n  load_dotenv: false\n")
 		writeTextFile(t, filepath.Join(workDir, ".env"), "SHOULD_NOT_LOAD=value\n")
 
-		cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -464,7 +464,7 @@ func TestLoadWithOptionsRedactsConfiguredValuesFromValidationErrors(t *testing.T
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
 	if err == nil {
 		t.Fatal("expected invalid configured thinking effort")
 	}
@@ -505,7 +505,7 @@ func TestLoadWithOptionsRejectsMalformedOrReservedEnvironment(t *testing.T) {
 			if tc.dotenvBody != "" {
 				writeTextFile(t, filepath.Join(workDir, ".env"), tc.dotenvBody)
 			}
-			_, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+			_, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
@@ -519,7 +519,7 @@ func TestLoadFromFile(t *testing.T) {
 	configPath := filepath.Join(dir, "juex.yaml")
 	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestLoadFromFile(t *testing.T) {
 func TestConfigObservablesPaths(t *testing.T) {
 	workDir := t.TempDir()
 	agentStateDir := filepath.Join(t.TempDir(), "agent")
-	cfg := Config{WorkDir: workDir, AgentStateDir: agentStateDir}
+	cfg := Config{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentStateDir: agentStateDir}
 	if got, want := cfg.ObservablesConfigPath(), filepath.Join(agentStateDir, "observables.json"); got != want {
 		t.Fatalf("ObservablesConfigPath() = %q, want %q", got, want)
 	}
@@ -556,7 +556,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +582,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +598,7 @@ providers:
 }
 
 func TestConfigSkillPolicyUsesContextBudgetCap(t *testing.T) {
-	cfg := Config{ContextWindow: 1000, Skills: DefaultSkillsConfig()}
+	cfg := Config{ModuleInventory: testModuleInventory(), ContextWindow: 1000, Skills: DefaultSkillsConfig()}
 	policy := cfg.SkillPolicy()
 	if policy.PromptBudgetChars != 80 {
 		t.Fatalf("prompt budget = %d, want 80", policy.PromptBudgetChars)
@@ -636,7 +636,7 @@ models:
   - local:qwen-backup
 `))
 
-	cfg, err := LoadFromFile(path)
+	cfg, err := LoadFromFile(testModuleInventory(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -671,7 +671,7 @@ func TestLoadFromFileModelsValidation(t *testing.T) {
 			prepareConfigTest(t)
 			path := filepath.Join(t.TempDir(), "juex.yaml")
 			writeTextFile(t, path, modelListTestConfig("\nmodels:\n"+tt.models+"\n"))
-			_, err := LoadFromFile(path)
+			_, err := LoadFromFile(testModuleInventory(), path)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
@@ -690,7 +690,7 @@ models:
 	workDir := t.TempDir()
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [anthropic:claude-backup]\n")
 
-	cfg, err := LoadForWorkDir(workDir)
+	cfg, err := LoadForWorkDir(testModuleInventory(), workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +702,7 @@ models:
 		t.Fatalf("model chain = %q", got)
 	}
 
-	cfg, err = LoadWithOptions(LoadOptions{
+	cfg, err = LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		ModelRefs:  []string{"openai:gpt-env", "local:qwen-backup"},
 		AgentState: AgentStateNone,
@@ -730,7 +730,7 @@ models:
 `))
 
 	t.Setenv("PROVIDER_API_MODEL", "gpt-env")
-	cfg, err := LoadFromFile(path)
+	cfg, err := LoadFromFile(testModuleInventory(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +753,7 @@ models:
 	override := filepath.Join(t.TempDir(), "juex.yaml")
 	writeTextFile(t, override, "models: []\n")
 
-	cfg, err := LoadFromFile(override)
+	cfg, err := LoadFromFile(testModuleInventory(), override)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +808,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil || !strings.Contains(err.Error(), `provider "bad:provider" id must not contain ':'`) {
 		t.Fatalf("err = %v, want provider id separator error", err)
 	}
@@ -835,7 +835,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -853,7 +853,7 @@ func TestConfigApplyModelOverrideRejectsUnknownModel(t *testing.T) {
 	configPath := filepath.Join(dir, "juex.yaml")
 	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -886,7 +886,7 @@ providers:
 	t.Setenv("PROVIDER_API_BASE", "https://env.example")
 	t.Setenv("PROVIDER_API_KEY", "sk-env")
 
-	cfg, err := LoadFromFileForWorkDirWithModelsOverride(configPath, dir, []string{"anthropic:claude-sonnet"})
+	cfg, err := LoadFromFileForWorkDirWithModelsOverride(testModuleInventory(), configPath, dir, []string{"anthropic:claude-sonnet"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -901,7 +901,7 @@ func TestLoadFromFile_RejectsScalarShellConfig(t *testing.T) {
 	configPath := filepath.Join(dir, "juex.yaml")
 	writeTextFile(t, configPath, "shell: powershell\n")
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil || !strings.Contains(err.Error(), "shell") {
 		t.Fatalf("err = %v, want scalar shell config rejection", err)
 	}
@@ -918,7 +918,7 @@ func TestLoadFromFile_OSEnvOverridesExplicitConfig(t *testing.T) {
 	t.Setenv("PROVIDER_API_KEY", "sk-env")
 	t.Setenv("PROVIDER_API_MODEL", "claude-env")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -933,7 +933,7 @@ func TestLoadFromFile_EnvYAMLExtensionUsesYAMLParser(t *testing.T) {
 	configPath := filepath.Join(dir, ".env.yaml")
 	writeJuexConfig(t, configPath, "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -956,7 +956,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	if _, err := LoadFromFile(configPath); err == nil {
+	if _, err := LoadFromFile(testModuleInventory(), configPath); err == nil {
 		t.Fatal("expected unknown YAML field error")
 	}
 }
@@ -967,7 +967,7 @@ func TestLoad_GlobalRuntimeConfigFallback(t *testing.T) {
 	t.Chdir(work)
 	writeJuexConfig(t, filepath.Join(home, ".juex", "juex.yaml"), "openai", "https://global.example", "sk-global", "gpt-global")
 
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,7 +994,7 @@ providers:
 `
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
 
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1022,7 +1022,7 @@ runtime:
 `
 	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
 
-	_, err := Load()
+	_, err := Load(testModuleInventory())
 	if err == nil || !strings.Contains(err.Error(), "runtime.max_iters") {
 		t.Fatalf("Load error = %v, want runtime.max_iters", err)
 	}
@@ -1033,7 +1033,7 @@ func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
 	work := t.TempDir()
 	t.Chdir(work)
 	writeJuexConfig(t, filepath.Join(home, ".juex", "juex.yaml"), "openai", "https://global.example", "sk-global", "gpt-global")
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1058,7 +1058,7 @@ func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
     enabled: false
 `
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
-	cfg, err = Load()
+	cfg, err = Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1086,7 +1086,7 @@ func TestLoad_SandboxExplicitSectionInheritsPlatformDefaults(t *testing.T) {
 			prepareConfigTest(t)
 			work := t.TempDir()
 			writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), tc.body)
-			cfg, err := LoadForWorkDir(work)
+			cfg, err := LoadForWorkDir(testModuleInventory(), work)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1135,7 +1135,7 @@ sandbox:
 	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
 
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1157,7 +1157,7 @@ func TestLoad_SandboxRejectsInvalidOutsideWorkspace(t *testing.T) {
 `
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
 
-	_, err := LoadForWorkDir(work)
+	_, err := LoadForWorkDir(testModuleInventory(), work)
 	if err == nil || !strings.Contains(err.Error(), "sandbox.file_system.outside_workspace") || !strings.Contains(err.Error(), "read_write, read_only") {
 		t.Fatalf("err = %v, want sandbox enum error", err)
 	}
@@ -1172,7 +1172,7 @@ func TestLoad_SandboxRejectsDeniedOutsideWorkspace(t *testing.T) {
 `
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
 
-	_, err := LoadForWorkDir(work)
+	_, err := LoadForWorkDir(testModuleInventory(), work)
 	if err == nil || !strings.Contains(err.Error(), "outside_workspace") || !strings.Contains(err.Error(), "read_write, read_only") {
 		t.Fatalf("err = %v, want denied to be rejected", err)
 	}
@@ -1188,7 +1188,7 @@ func TestLoad_SandboxRejectsEmptyBlockedPath(t *testing.T) {
 `
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
 
-	_, err := LoadForWorkDir(work)
+	_, err := LoadForWorkDir(testModuleInventory(), work)
 	if err == nil || !strings.Contains(err.Error(), "blocked_paths") {
 		t.Fatalf("err = %v, want blocked_paths validation error", err)
 	}
@@ -1212,7 +1212,7 @@ hooks:
 `
 	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), body)
 
-	cfg, err := LoadForWorkDir(work)
+	cfg, err := LoadForWorkDir(testModuleInventory(), work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1239,7 +1239,7 @@ hooks:
 `
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
 
-	_, err := LoadForWorkDir(work)
+	_, err := LoadForWorkDir(testModuleInventory(), work)
 	if err == nil || !strings.Contains(err.Error(), "hooks.trusted: true") {
 		t.Fatalf("err = %v, want project trust error", err)
 	}
@@ -1272,7 +1272,7 @@ hooks:
 	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
 
-	cfg, err := LoadForWorkDir(work)
+	cfg, err := LoadForWorkDir(testModuleInventory(), work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1310,7 +1310,7 @@ shell:
 	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
 
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1328,7 +1328,7 @@ func TestLoad_DefaultWorkspaceConfigPath(t *testing.T) {
 	t.Chdir(dir)
 	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://default.example", "sk-default", "gpt-default")
 
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1344,7 +1344,7 @@ func TestLoad_WorkspaceConfigPathWhenWorkDirIsDotJuex(t *testing.T) {
 	writeJuexConfig(t, filepath.Join(work, "juex.yaml"), "openai", "https://dotjuex.example", "sk-dot", "gpt-dot")
 	t.Chdir(work)
 
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1366,7 +1366,7 @@ func TestLoad_DoesNotReadProjectDotEnvByDefault(t *testing.T) {
 	writeTextFile(t, filepath.Join(dir, ".env"), "PROVIDER_API_ID=anthropic\nPROVIDER_API_MODEL=claude\n")
 	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
 
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1386,7 +1386,7 @@ func TestLoad_OSEnvOverridesFile(t *testing.T) {
 	t.Setenv("PROVIDER_API_KEY", "k")
 	t.Setenv("PROVIDER_API_MODEL", "claude")
 
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1401,7 +1401,7 @@ func TestLoad_DefaultsWorkDirToCwd(t *testing.T) {
 	t.Setenv("PROVIDER_API_BASE", "https://x")
 	t.Setenv("PROVIDER_API_KEY", "k")
 	t.Setenv("PROVIDER_API_MODEL", "m")
-	cfg, err := Load()
+	cfg, err := Load(testModuleInventory())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1532,7 +1532,7 @@ func TestLoad_EnableUserAgentsResourcesDefaultsAndOverrides(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()
 
-	cfg, err := LoadForWorkDir(work)
+	cfg, err := LoadForWorkDir(testModuleInventory(), work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1541,7 +1541,7 @@ func TestLoad_EnableUserAgentsResourcesDefaultsAndOverrides(t *testing.T) {
 	}
 
 	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), "enable_user_agents_resources: 0\n")
-	cfg, err = LoadForWorkDir(work)
+	cfg, err = LoadForWorkDir(testModuleInventory(), work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1562,7 +1562,7 @@ func TestLoad_EnableUserAgentsResourcesDefaultsAndOverrides(t *testing.T) {
 	}
 
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), "enable_user_agents_resources: 1\n")
-	cfg, err = LoadForWorkDir(work)
+	cfg, err = LoadForWorkDir(testModuleInventory(), work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1572,7 +1572,7 @@ func TestLoad_EnableUserAgentsResourcesDefaultsAndOverrides(t *testing.T) {
 
 	override := filepath.Join(work, "override.yaml")
 	writeTextFile(t, override, "enable_user_agents_resources: false\n")
-	cfg, err = LoadFromFileForWorkDir(override, work)
+	cfg, err = LoadFromFileForWorkDir(testModuleInventory(), override, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1594,7 +1594,7 @@ func TestLoadFromFile_EnableUserAgentsResourcesBoolValues(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "juex.yaml")
 			writeTextFile(t, path, "enable_user_agents_resources: "+value+"\n")
-			cfg, err := LoadFromFile(path)
+			cfg, err := LoadFromFile(testModuleInventory(), path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1611,7 +1611,7 @@ func TestLoadFromFile_EnableUserAgentsResourcesRejectsInvalidBool(t *testing.T) 
 	path := filepath.Join(dir, "juex.yaml")
 	writeTextFile(t, path, "enable_user_agents_resources: maybe\n")
 
-	_, err := LoadFromFile(path)
+	_, err := LoadFromFile(testModuleInventory(), path)
 	if err == nil || !strings.Contains(err.Error(), "expected boolean value") {
 		t.Fatalf("err = %v, want boolean parse error", err)
 	}
@@ -1629,7 +1629,7 @@ func TestLoadForWorkDirNormalizesRelativeWorkDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadForWorkDir("workspace")
+	cfg, err := LoadForWorkDir(testModuleInventory(), "workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1652,7 +1652,7 @@ func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadForWorkDir(workDir)
+	cfg, err := LoadForWorkDir(testModuleInventory(), workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1699,7 +1699,7 @@ func TestLoadForWorkDirDoesNotCreateIdentityBeforeConfigValidation(t *testing.T)
 	workDir := filepath.Join(home, "workspace")
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "unknown_field: true\n")
 
-	if _, err := LoadForWorkDir(workDir); err == nil {
+	if _, err := LoadForWorkDir(testModuleInventory(), workDir); err == nil {
 		t.Fatal("expected invalid config error")
 	}
 	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
@@ -1712,7 +1712,7 @@ func TestLoadForWorkDirDoesNotCreateIdentityBeforeSemanticValidation(t *testing.
 	workDir := filepath.Join(home, "workspace")
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [missing:model]\n")
 
-	if _, err := LoadForWorkDir(workDir); err == nil {
+	if _, err := LoadForWorkDir(testModuleInventory(), workDir); err == nil {
 		t.Fatal("expected invalid model reference error")
 	}
 	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
@@ -1727,7 +1727,7 @@ func TestLoadWithOptionsAgentStateNoneDoesNotUseWorkspaceFallback(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadWithOptions(LoadOptions{
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		AgentState: AgentStateNone,
 	})
@@ -1752,7 +1752,7 @@ func TestLoadWithOptionsExistingRequiresRegisteredAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := LoadWithOptions(LoadOptions{
+	_, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		AgentState: AgentStateExisting,
 	})
@@ -1769,7 +1769,7 @@ func TestLoadWithOptionsExistingRequiresRegisteredAgent(t *testing.T) {
 }
 
 func TestSkillDirs_AndPaths(t *testing.T) {
-	cfg := Config{
+	cfg := Config{ModuleInventory: testModuleInventory(),
 		HomeAgentsDir:             filepath.Join("/u", ".agents"),
 		HomeJuexDir:               filepath.Join("/u", ".juex"),
 		WorkDir:                   filepath.Join("/proj"),
@@ -1823,7 +1823,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 }
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
-	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserAgentsResources: true}
+	cfg := Config{ModuleInventory: testModuleInventory(), HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserAgentsResources: true}
 	if cfg.ThreadsDir() != "" || cfg.ThreadIndexPath() != "" || cfg.WorkspaceConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
@@ -1853,19 +1853,19 @@ func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 
 func TestRuntimePathsMediaDirRequiresExplicitAgentStateDir(t *testing.T) {
 	workDir := filepath.Join("/proj")
-	manual := Config{WorkDir: workDir}
+	manual := Config{ModuleInventory: testModuleInventory(), WorkDir: workDir}
 	if got := manual.RuntimePaths().MediaDir; got != "" {
 		t.Fatalf("manual MediaDir = %q, want empty", got)
 	}
 	stateDir := filepath.Join("/state", "agents", "abcdef")
-	resident := Config{WorkDir: workDir, AgentStateDir: stateDir}
+	resident := Config{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentStateDir: stateDir}
 	if got, want := resident.RuntimePaths().MediaDir, filepath.Join(stateDir, "media"); got != want {
 		t.Fatalf("resident MediaDir = %q, want %q", got, want)
 	}
 }
 
 func TestPaths_DisabledUserAgentsResourcesOmitsHomeResources(t *testing.T) {
-	cfg := Config{
+	cfg := Config{ModuleInventory: testModuleInventory(),
 		HomeAgentsDir:             filepath.Join("/u", ".agents"),
 		HomeJuexDir:               filepath.Join("/u", ".juex"),
 		WorkDir:                   filepath.Join("/proj"),
@@ -1889,14 +1889,14 @@ func TestPaths_DisabledUserAgentsResourcesOmitsHomeResources(t *testing.T) {
 }
 
 func TestProviderSelection_RequiresProviderSelector(t *testing.T) {
-	cfg := Config{APIKey: "x", Model: "m"}
+	cfg := Config{ModuleInventory: testModuleInventory(), APIKey: "x", Model: "m"}
 	if _, err := cfg.ProviderSelection().ProviderProfile(); err == nil {
 		t.Fatal("expected error for empty provider selector")
 	}
 }
 
 func TestRuntimeLimits_ResolvedValues(t *testing.T) {
-	cfg := Config{
+	cfg := Config{ModuleInventory: testModuleInventory(),
 		ContextWindow: 1234,
 		Compaction:    DefaultCompactionConfig(),
 		ToolOutput: ToolOutputConfig{
@@ -1935,7 +1935,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1961,7 +1961,7 @@ providers:
 `, effort)
 			writeTextFile(t, configPath, body)
 
-			cfg, err := LoadFromFile(configPath)
+			cfg, err := LoadFromFile(testModuleInventory(), configPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1987,7 +1987,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2011,7 +2011,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil {
 		t.Fatal("expected invalid thinking_effort error")
 	}
@@ -2027,7 +2027,7 @@ func TestLoadFromFile_TrimsThinkingEffortEnv(t *testing.T) {
 	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
 	t.Setenv("PROVIDER_THINKING_EFFORT", " medium ")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2043,7 +2043,7 @@ func TestLoadFromFile_RejectsInvalidThinkingEffortEnv(t *testing.T) {
 	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
 	t.Setenv("PROVIDER_THINKING_EFFORT", "turbo")
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil {
 		t.Fatal("expected invalid PROVIDER_THINKING_EFFORT error")
 	}
@@ -2067,7 +2067,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2098,7 +2098,7 @@ compaction:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2127,7 +2127,7 @@ tool_output:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2155,14 +2155,14 @@ compaction:
 `
 	writeTextFile(t, configPath, body)
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil || !strings.Contains(err.Error(), "tool_result_inline_max_bytes") {
 		t.Fatalf("LoadFromFile error = %v, want rejected old compaction key", err)
 	}
 }
 
 func TestApplyCompactionConfigExplicitEmptyClearsInstructions(t *testing.T) {
-	cfg := Config{Compaction: DefaultCompactionConfig()}
+	cfg := Config{ModuleInventory: testModuleInventory(), Compaction: DefaultCompactionConfig()}
 	global := "Preserve the global release focus."
 	applyCompactionConfig(&cfg, compactionConfig{Instructions: &global})
 	if cfg.Compaction.Instructions != global {
@@ -2199,7 +2199,7 @@ compaction:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFileForWorkDir(configPath, dir)
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), configPath, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2237,7 +2237,7 @@ compaction:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFileForWorkDir(configPath, dir)
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), configPath, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2269,7 +2269,7 @@ compaction:
 	t.Setenv("PROVIDER_API_BASE", "https://env.example.com")
 	t.Setenv("PROVIDER_API_KEY", "sk-env")
 
-	cfg, err := LoadFromFileForWorkDir(configPath, dir)
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), configPath, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2288,7 +2288,7 @@ func TestLoadFromFile_CompactionDefaults(t *testing.T) {
 	configPath := filepath.Join(dir, "juex.yaml")
 	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2316,7 +2316,7 @@ runtime:
 `
 	writeTextFile(t, configPath, body)
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil || !strings.Contains(err.Error(), "runtime.max_duration") {
 		t.Fatalf("LoadFromFile error = %v, want runtime.max_duration", err)
 	}
@@ -2343,7 +2343,7 @@ runtime:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2378,7 +2378,7 @@ runtime:
   notify_model_changes: false
 `)
 
-	cfg, err := LoadForWorkDir(workDir)
+	cfg, err := LoadForWorkDir(testModuleInventory(), workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2400,7 +2400,7 @@ runtime:
   notify_model_changes: sometimes
 `)
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil || !strings.Contains(err.Error(), "runtime.notify_model_changes") {
 		t.Fatalf("err = %v, want runtime.notify_model_changes parse error", err)
 	}
@@ -2422,7 +2422,7 @@ runtime:
 `
 	writeTextFile(t, configPath, body)
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil || !strings.Contains(err.Error(), "pending_input_ttl") {
 		t.Fatalf("err = %v, want pending_input_ttl parse error", err)
 	}
@@ -2444,7 +2444,7 @@ runtime:
 `
 	writeTextFile(t, configPath, body)
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil || !strings.Contains(err.Error(), "tool_timeout") {
 		t.Fatalf("err = %v, want tool_timeout parse error", err)
 	}
@@ -2457,7 +2457,7 @@ func TestLoadFromFile_ContextWindowDefaultAndEnvOverride(t *testing.T) {
 	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
 	t.Setenv("PROVIDER_CONTEXT_WINDOW", "64000")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2466,7 +2466,7 @@ func TestLoadFromFile_ContextWindowDefaultAndEnvOverride(t *testing.T) {
 	}
 
 	t.Setenv("PROVIDER_CONTEXT_WINDOW", "")
-	cfg, err = LoadFromFile(configPath)
+	cfg, err = LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2481,7 +2481,7 @@ func TestLoadFromFile_ThinkingEffortEmpty(t *testing.T) {
 	configPath := filepath.Join(dir, "juex.yaml")
 	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2525,7 +2525,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2588,7 +2588,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	_, err := LoadFromFile(configPath)
+	_, err := LoadFromFile(testModuleInventory(), configPath)
 	if err == nil || !strings.Contains(err.Error(), "unsupported codex transport") {
 		t.Fatalf("err = %v, want invalid codex transport", err)
 	}
@@ -2611,7 +2611,7 @@ providers:
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2636,7 +2636,7 @@ func TestLoadFromFile_OpenAICodexIDUsesDefaultCodexAuth(t *testing.T) {
 	writeOpenAICodexConfig(t, configPath, "")
 	t.Setenv("CODEX_HOME", codexHome)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2660,7 +2660,7 @@ func TestLoadFromFile_ProviderProfileEnvOverrides(t *testing.T) {
 	t.Setenv("PROVIDER_API_ID", "openai")
 	t.Setenv("PROVIDER_API_PROTOCOL", "openai/responses")
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2685,7 +2685,7 @@ func TestLoadFromFile_CodexAuthUsesDefaultCachedAPIKey(t *testing.T) {
 	writeOpenAICodexConfig(t, configPath, "")
 	t.Setenv("CODEX_HOME", codexHome)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2720,7 +2720,7 @@ func TestLoadFromFile_CodexAuthUsesChatGPTTokenHeaders(t *testing.T) {
 	writeOpenAICodexConfig(t, configPath, "")
 	t.Setenv("CODEX_HOME", codexHome)
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2742,7 +2742,7 @@ func TestLoadFromFile_CodexAuthExplicitAPIKeyWins(t *testing.T) {
 	writeOpenAICodexConfig(t, configPath, "sk-explicit")
 	t.Setenv("CODEX_HOME", filepath.Join(dir, "missing-codex-home"))
 
-	cfg, err := LoadFromFile(configPath)
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2758,7 +2758,7 @@ func TestLoadFromFile_CodexAuthRuntimeConfigCanBeOverridden(t *testing.T) {
 	overrideConfig := filepath.Join(work, "override.yaml")
 	writeJuexConfig(t, overrideConfig, "openai", "https://example.com", "sk-override", "gpt-test")
 
-	cfg, err := LoadFromFileForWorkDir(overrideConfig, work)
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), overrideConfig, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2783,7 +2783,7 @@ providers:
 `
 	writeTextFile(t, overrideConfig, body)
 
-	cfg, err := LoadFromFileForWorkDir(overrideConfig, work)
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), overrideConfig, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2808,7 +2808,7 @@ func TestLoadFromFile_CodexAuthMissingCredentialErrors(t *testing.T) {
 	writeOpenAICodexConfig(t, configPath, "")
 	t.Setenv("CODEX_HOME", codexHome)
 
-	if _, err := LoadFromFile(configPath); err == nil {
+	if _, err := LoadFromFile(testModuleInventory(), configPath); err == nil {
 		t.Fatal("expected missing codex credential error")
 	}
 }

@@ -29,7 +29,7 @@ providers:
       - id: new-model
 `)
 
-	cfg, err := ValidateWorkspaceConfig(candidate, workDir)
+	cfg, err := ValidateWorkspaceConfig(testModuleInventory(), candidate, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestWriteWorkspaceConfigPreservesOldFileOnValidationFailure(t *testing.T) {
 	old := []byte("models: [existing:model]\n")
 	writeTextFile(t, configPath, string(old))
 
-	if _, err := WriteWorkspaceConfig([]byte("unknown_field: true\n"), workDir); err == nil {
+	if _, err := WriteWorkspaceConfig(testModuleInventory(), []byte("unknown_field: true\n"), workDir); err == nil {
 		t.Fatal("WriteWorkspaceConfig accepted an unknown field")
 	}
 	got, err := os.ReadFile(configPath)
@@ -70,7 +70,7 @@ providers:
       - id: new-model
 `)
 
-	path, err := WriteWorkspaceConfig(candidate, workDir)
+	path, err := WriteWorkspaceConfig(testModuleInventory(), candidate, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,14 +101,14 @@ func TestValidateAndWriteWorkspaceConfigResolveCandidateImports(t *testing.T) {
 	writeTextFile(t, importPath, "runtime:\n  tool_timeout: 44s\n")
 	candidate := []byte("imports:\n  - source: shared.yaml\n")
 
-	cfg, err := ValidateWorkspaceConfig(candidate, workDir)
+	cfg, err := ValidateWorkspaceConfig(testModuleInventory(), candidate, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.ToolTimeout != 44*time.Second {
 		t.Fatalf("tool timeout = %s, want imported 44s", cfg.ToolTimeout)
 	}
-	path, err := WriteWorkspaceConfig(candidate, workDir)
+	path, err := WriteWorkspaceConfig(testModuleInventory(), candidate, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestValidateWorkspaceConfigDoesNotPublishRemoteImportCache(t *testing.T) {
 	source := server.URL + "/shared.yaml"
 	candidate := []byte("imports:\n  - source: " + source + "\n")
 	workDir := t.TempDir()
-	cfg, err := ValidateWorkspaceConfig(candidate, workDir)
+	cfg, err := ValidateWorkspaceConfig(testModuleInventory(), candidate, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestValidateWorkspaceConfigReleasesImportCacheLockOnCandidateFailure(t *tes
 	defer server.Close()
 
 	candidate := []byte("imports:\n  - source: " + server.URL + "/shared.yaml\nunknown_field: true\n")
-	if _, err := ValidateWorkspaceConfig(candidate, t.TempDir()); err == nil {
+	if _, err := ValidateWorkspaceConfig(testModuleInventory(), candidate, t.TempDir()); err == nil {
 		t.Fatal("ValidateWorkspaceConfig() accepted an unknown candidate field")
 	}
 	homeDir, err := EffectiveHomeDir()
@@ -192,7 +192,7 @@ func TestWriteWorkspaceConfigPublishesRemoteImportCacheOnlyAfterWriteSucceeds(t 
 			t.Fatal(err)
 		}
 		candidate := []byte("imports:\n  - source: " + source + "\n")
-		if _, err := WriteWorkspaceConfig(candidate, workDir); err == nil {
+		if _, err := WriteWorkspaceConfig(testModuleInventory(), candidate, workDir); err == nil {
 			t.Fatal("WriteWorkspaceConfig succeeded with a file blocking the workspace config directory")
 		}
 		homeDir, err := EffectiveHomeDir()
@@ -219,7 +219,7 @@ func TestWriteWorkspaceConfigPublishesRemoteImportCacheOnlyAfterWriteSucceeds(t 
 		source := server.URL + "/shared.yaml"
 		candidate := []byte("imports:\n  - source: " + source + "\n")
 		workDir := t.TempDir()
-		path, err := WriteWorkspaceConfig(candidate, workDir)
+		path, err := WriteWorkspaceConfig(testModuleInventory(), candidate, workDir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -262,7 +262,7 @@ func TestWriteWorkspaceConfigRollsBackWorkspaceWhenImportCachePublicationFails(t
 			}
 			candidate := []byte("imports:\n  - source: " + server.URL + "/shared.yaml\n")
 			publishErr := errors.New("injected cache publication failure")
-			_, err := writeWorkspaceConfig(candidate, workDir, func(cfg *Config) error {
+			_, err := writeWorkspaceConfig(testModuleInventory(), candidate, workDir, func(cfg *Config) error {
 				if len(cfg.pendingImportCache) != 1 {
 					t.Fatalf("pending import cache records = %d, want 1", len(cfg.pendingImportCache))
 				}
@@ -311,7 +311,7 @@ func TestWriteWorkspaceConfigRetainsImportCacheLockForStaleCandidate(t *testing.
 
 	workDir := t.TempDir()
 	candidate := []byte("imports:\n  - source: " + server.URL + "/shared.yaml\n")
-	if _, err := WriteWorkspaceConfig(candidate, workDir); err != nil {
+	if _, err := WriteWorkspaceConfig(testModuleInventory(), candidate, workDir); err != nil {
 		t.Fatal(err)
 	}
 	homeDir, err := EffectiveHomeDir()
@@ -329,7 +329,7 @@ func TestWriteWorkspaceConfigRetainsImportCacheLockForStaleCandidate(t *testing.
 	}
 	unavailable.Store(true)
 
-	if _, err := writeWorkspaceConfig(candidate, workDir, func(cfg *Config) error {
+	if _, err := writeWorkspaceConfig(testModuleInventory(), candidate, workDir, func(cfg *Config) error {
 		if len(cfg.pendingImportCache) != 0 {
 			t.Fatalf("stale candidate pending cache records = %d, want 0", len(cfg.pendingImportCache))
 		}
@@ -377,7 +377,7 @@ func TestWorkspaceConfigRecoversInterruptedPublicationBeforeLoad(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cfg, err := loadConfigFilesForWorkDir(workDir, "")
+			cfg, err := loadConfigFilesForWorkDir(testModuleInventory(), workDir, "")
 			if err != nil {
 				t.Fatal(err)
 			}

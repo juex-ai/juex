@@ -25,7 +25,10 @@ type fleetFileConfig struct {
 	UnsafeBindAny optionalBool `yaml:"unsafe_bind_any"`
 }
 
-func LoadHomeFleetConfig() (cfg FleetConfig, returnErr error) {
+func LoadHomeFleetConfig(inventory ModuleInventory) (cfg FleetConfig, returnErr error) {
+	if err := inventory.validate(); err != nil {
+		return cfg, err
+	}
 	cfg = FleetConfig{Addr: DefaultFleetAddr}
 	resolution, err := resolveHomeConfigSources("")
 	if err != nil {
@@ -48,7 +51,7 @@ func LoadHomeFleetConfig() (cfg FleetConfig, returnErr error) {
 	}
 	loader.contextDigest = contextDigest
 	for _, source := range resolution.Sources {
-		if err := applyHomeFleetConfig(&cfg, source, loader); err != nil {
+		if err := applyHomeFleetConfig(inventory, &cfg, source, loader); err != nil {
 			return cfg, err
 		}
 	}
@@ -79,7 +82,7 @@ func fleetConfigImportCacheReferences(sources []yamlConfigSource) ([]configImpor
 	return references, nil
 }
 
-func applyHomeFleetConfig(cfg *FleetConfig, source yamlConfigSource, loader *configImportLoader) error {
+func applyHomeFleetConfig(inventory ModuleInventory, cfg *FleetConfig, source yamlConfigSource, loader *configImportLoader) error {
 	_, root, _, err := readFleetConfigDocument(source.Path)
 	if err != nil {
 		return err
@@ -104,7 +107,7 @@ func applyHomeFleetConfig(cfg *FleetConfig, source yamlConfigSource, loader *con
 		if _, parseErr := decodeFileConfig(document.data, document.source.Path); parseErr != nil {
 			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, parseErr)
 		}
-		validation := Config{providerConfigs: map[string]providerConfig{}}
+		validation := Config{ModuleInventory: inventory, providerConfigs: map[string]providerConfig{}}
 		if parseErr := applyYAMLData(&validation, document.data, document.source); parseErr != nil {
 			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, parseErr)
 		}

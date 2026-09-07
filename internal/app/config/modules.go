@@ -3,8 +3,6 @@ package config
 import (
 	"fmt"
 	"sort"
-
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 )
 
 const (
@@ -34,7 +32,7 @@ func (c Config) EffectivePreset() string {
 // ModuleEnabled reports effective configuration, not the active tool catalog.
 // Unknown identities fail closed; ValidateModules reports configuration errors.
 func (c Config) ModuleEnabled(id string) bool {
-	definition, ok := modulecatalog.Lookup(id)
+	definition, ok := c.ModuleInventory.Lookup(id)
 	if !ok {
 		return false
 	}
@@ -52,6 +50,9 @@ func (c Config) ModuleEnabled(id string) bool {
 }
 
 func (c Config) ValidateModules() error {
+	if err := c.ModuleInventory.validate(); err != nil {
+		return err
+	}
 	if err := validatePreset(c.EffectivePreset()); err != nil {
 		return err
 	}
@@ -61,7 +62,7 @@ func (c Config) ValidateModules() error {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		if _, ok := modulecatalog.Lookup(id); !ok {
+		if _, ok := c.ModuleInventory.Lookup(id); !ok {
 			return fmt.Errorf("config: unsupported module %q", id)
 		}
 	}
@@ -76,13 +77,16 @@ func validatePreset(preset string) error {
 }
 
 func applyModulesConfig(cfg *Config, modules map[string]moduleConfig) error {
+	if err := cfg.ModuleInventory.validate(); err != nil {
+		return err
+	}
 	ids := make([]string, 0, len(modules))
 	for id := range modules {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		if _, ok := modulecatalog.Lookup(id); !ok {
+		if _, ok := cfg.ModuleInventory.Lookup(id); !ok {
 			return fmt.Errorf("unsupported module %q", id)
 		}
 		fileSettings := modules[id]

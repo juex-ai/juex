@@ -16,9 +16,12 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
+
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/tests/testsupport/modulestate"
@@ -233,7 +236,7 @@ func TestRuntimeAPIAlwaysRedactsConfiguredEnvironmentValues(t *testing.T) {
     RUNTIME_API_MARKER: runtime-api-environment-secret
     RUNTIME_API_BOOLEAN_COLLISION: "false"
 `)
-	cfg, err := config.LoadWithOptions(config.LoadOptions{
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    work,
 		AgentState: config.AgentStateNone,
 	})

@@ -2,6 +2,11 @@
 
 > English | [中文](README.zh.md)
 
+The composition root supplies an immutable module inventory before parsing any
+configuration layer. This package validates and merges declarations; it does
+not select or construct product capabilities. Runtime loading, saving and
+passive inspection use the same inventory, including Fleet import validation.
+
 `preset` accepts `standard` (the default) or `minimal`. Standard enables every
 capability declared in `internal/app/modulecatalog`; minimal enables only
 `basic-file-tools`, `shell`, and `operating-context` by default. Explicit

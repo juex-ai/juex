@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 )
 
@@ -84,7 +85,7 @@ runtime:
   tool_timeout: 60s
 `)
 
-	cfg, err := config.LoadFromFileForWorkDirForValidation(explicitPath, workDir)
+	cfg, err := config.LoadFromFileForWorkDirForValidation(modulecatalog.Inventory(), explicitPath, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,7 +18,7 @@ const (
 	ToolUpdate = "update_goal"
 )
 
-const ModuleID runtimemodule.ID = "goal"
+const ModuleID = "goal"
 
 const goalCompletionGateName = "goal-completion-gate"
 

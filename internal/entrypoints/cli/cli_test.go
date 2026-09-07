@@ -15,8 +15,11 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/app/providerreadiness"
+
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+
 	filesearchfeature "github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
@@ -437,7 +440,7 @@ func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 			t.Fatalf("config missing %q:\n%s", want, body)
 		}
 	}
-	cfg, err := config.LoadWithOptions(config.LoadOptions{WorkDir: work, AgentState: config.AgentStateNone})
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentState: config.AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,7 +560,7 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 			t.Fatalf("merge should not overwrite existing provider with %q:\n%s", forbidden, body)
 		}
 	}
-	cfg, err := config.LoadWithOptions(config.LoadOptions{
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir: work, ModelRefs: []string{"openai:gpt-new"}, AgentState: config.AgentStateNone,
 	})
 	if err != nil {
@@ -975,7 +978,7 @@ func TestDoctorConfigCheckDistinguishesDefaultAndInstanceHomePaths(t *testing.T)
 		t.Fatal(err)
 	}
 
-	cfg, err := config.LoadForWorkDirForValidation(t.TempDir())
+	cfg, err := config.LoadForWorkDirForValidation(modulecatalog.Inventory(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,11 +1022,11 @@ providers:
 	}
 
 	workDir := t.TempDir()
-	if _, err := config.LoadForWorkDirForValidation(workDir); err != nil {
+	if _, err := config.LoadForWorkDirForValidation(modulecatalog.Inventory(), workDir); err != nil {
 		t.Fatal(err)
 	}
 	server.Close()
-	cfg, err := config.LoadForWorkDirForValidation(workDir)
+	cfg, err := config.LoadForWorkDirForValidation(modulecatalog.Inventory(), workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1074,7 +1077,7 @@ func TestDoctorConnectivityCheckActivatesRuntimeEnvironmentForProbe(t *testing.T
 	if err := writeTextFile(filepath.Join(work, ".env"), "HTTP_PROXY="+proxy+"\n"); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadWithOptions(config.LoadOptions{
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    work,
 		AgentState: config.AgentStateNone,
 	})
@@ -1129,7 +1132,7 @@ func TestDoctorCmdReportsMalformedDotenvWithoutPartialValues(t *testing.T) {
 }
 
 func TestDoctorCredentialsCheckWarnsForLocalOrCustomProvidersWithoutAPIKey(t *testing.T) {
-	local := doctorCredentialsCheck(config.Config{
+	local := doctorCredentialsCheck(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:       "openai",
 		ProviderProtocol: string(llm.ProtocolOpenAIChat),
 		BaseURL:          "http://127.0.0.1:11434/v1",
@@ -1139,7 +1142,7 @@ func TestDoctorCredentialsCheckWarnsForLocalOrCustomProvidersWithoutAPIKey(t *te
 		t.Fatalf("local status = %s, want warn", local.Status)
 	}
 
-	custom := doctorCredentialsCheck(config.Config{
+	custom := doctorCredentialsCheck(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:       "local-proxy",
 		ProviderProtocol: string(llm.ProtocolOpenAIChat),
 		BaseURL:          "https://proxy.example",
@@ -1149,7 +1152,7 @@ func TestDoctorCredentialsCheckWarnsForLocalOrCustomProvidersWithoutAPIKey(t *te
 		t.Fatalf("custom status = %s, want warn", custom.Status)
 	}
 
-	cloud := doctorCredentialsCheck(config.Config{
+	cloud := doctorCredentialsCheck(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:       "openai",
 		ProviderProtocol: string(llm.ProtocolOpenAIResponses),
 		Model:            "gpt-4.1",

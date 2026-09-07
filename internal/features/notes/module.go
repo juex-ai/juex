@@ -13,7 +13,7 @@ import (
 
 const ToolUpdate = "update_notes"
 
-const ModuleID runtimemodule.ID = "notes"
+const ModuleID = "notes"
 
 type Options struct {
 	EventSink     func(events.Event) error

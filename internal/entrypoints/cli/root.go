@@ -10,13 +10,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
 	"github.com/juex-ai/juex/internal/foundation/version"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/spf13/cobra"
 )
 
 // Exit code conventions (principle 6 from the agent-CLI guide). Stable
@@ -226,7 +226,7 @@ func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (conf
 	default:
 		return cfg, fmt.Errorf("juex: unsupported agent-state policy %d", policy)
 	}
-	cfg, err = config.LoadWithOptions(config.LoadOptions{
+	cfg, err = config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    flags.cwd,
 		AgentID:    flags.agentID,
 		ConfigPath: flags.configPath,

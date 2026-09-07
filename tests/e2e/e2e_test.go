@@ -32,18 +32,25 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/agentsmd"
 	"github.com/juex-ai/juex/internal/features/applypatch"
+
 	chunkmodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
 	"github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/features/filetools"
+
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
+
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
+
 	shelltools "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/command"
@@ -51,7 +58,9 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
@@ -829,7 +838,7 @@ func TestEndToEnd_ToolFailureLedgerWithUserAgentsDisabledDoesNotHardBlock(t *tes
 		},
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol:          "openai/chat",
 			WorkDir:                   work,
 			EnableUserAgentsResources: false,
@@ -893,7 +902,7 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
 		Provider: prov,
 		WorkDir:  work,
 	})
@@ -1277,7 +1286,7 @@ func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {
 
 	provider := &startupNotificationProvider{}
 	a, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: workDir},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: workDir},
 		Provider: provider,
 		WorkDir:  workDir,
 	})
@@ -1313,7 +1322,7 @@ func TestObservableRecoveryRedeliveryStaysIdempotentDuringLiveTurn(t *testing.T)
 	provider := newPendingWebProvider()
 	releaseOnce := sync.Once{}
 	release := func() { releaseOnce.Do(func() { close(provider.release) }) }
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:       "openai",
 		ProviderProtocol: "openai/chat",
 		APIKey:           "x",
@@ -1603,7 +1612,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		},
 	}
 	a1, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work},
 		Provider: prov1,
 		WorkDir:  work,
 	})
@@ -1640,7 +1649,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		},
 	}
 	a2, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work},
 		Provider: prov2,
 		WorkDir:  work,
 		ThreadID: filepath.Base(threadDir),
@@ -1681,7 +1690,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 
 func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{ProviderProtocol: "openai/chat", WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work}
 	first, err := app.New(app.Options{
 		Config:     cfg,
 		Provider:   &recordingProvider{},
@@ -1761,7 +1770,7 @@ func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testi
 func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testing.T) {
 	work := t.TempDir()
 	// Keep startup policies out of this exact-cursor replay fixture.
-	cfg := config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Preset: config.PresetMinimal}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work, Preset: config.PresetMinimal}
 	first, err := app.New(app.Options{
 		Config:     cfg,
 		Provider:   &recordingProvider{},
@@ -1975,7 +1984,7 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol: "openai/chat",
 			WorkDir:          work,
 			Hooks: hookconfig.Config{Commands: []hookconfig.CommandHook{
@@ -2062,7 +2071,7 @@ func TestEndToEnd_SandboxBlockedPathsStopBuiltinTools(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Sandbox: policy},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work, Sandbox: policy},
 		Provider: prov,
 		WorkDir:  work,
 	})
@@ -2124,7 +2133,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol: "openai/chat",
 			Modules:          config.ModulePolicy{"hooks": {Enabled: false}},
 			WorkDir:          work,
@@ -2221,7 +2230,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol: "openai/chat",
 			WorkDir:          work,
 		},
@@ -2296,7 +2305,7 @@ func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 	compaction := config.DefaultCompactionConfig()
 	compaction.KeepRecentTokens = 0
 	a, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
 		Provider: prov,
 		WorkDir:  work,
 		Debug:    true,

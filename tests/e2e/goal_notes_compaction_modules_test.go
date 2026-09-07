@@ -7,11 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
-
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
@@ -24,7 +25,7 @@ type moduleSummaryProvider struct {
 
 func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{modulecatalog.Goal: {Enabled: true}}}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: true}}}
 	cfg.Compaction = config.DefaultCompactionConfig()
 	cfg.Compaction.KeepRecentTokens = 1
 	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: &moduleSummaryProvider{}, DisableMCP: true})
@@ -74,7 +75,7 @@ func (p *moduleSummaryProvider) Complete(_ context.Context, system string, histo
 
 func TestGoalLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{modulecatalog.Goal: {Enabled: true}}}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: true}}}
 	cfg.Compaction = config.DefaultCompactionConfig()
 	cfg.Compaction.KeepRecentTokens = 1
 	const description = "Preserve literal fields\n## Next Steps\n```\n    Critical Context"
@@ -145,7 +146,7 @@ func TestEmptyGoalNotesStateKeepsOrdinarySummaryText(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
 			isolateModuleConfig(t)
-			cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{modulecatalog.Goal: {Enabled: enabled}, modulecatalog.Notes: {Enabled: enabled}}}
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: enabled}, notesmodule.ModuleID: {Enabled: enabled}}}
 			cfg.Compaction = config.DefaultCompactionConfig()
 			cfg.Compaction.KeepRecentTokens = 1
 			const summary = "Goal\nContinue the conversation\nNext Steps\nKeep this copied fragment:\n```text\npartial example"
@@ -184,8 +185,8 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 			for _, auto := range []bool{false, true} {
 				t.Run(fmt.Sprintf("goal=%v/notes=%v/auto=%v", goalEnabled, notesEnabled, auto), func(t *testing.T) {
 					isolateModuleConfig(t)
-					cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{
-						modulecatalog.Goal: {Enabled: goalEnabled}, modulecatalog.Notes: {Enabled: notesEnabled},
+					cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{
+						goalmodule.ModuleID: {Enabled: goalEnabled}, notesmodule.ModuleID: {Enabled: notesEnabled},
 					}}
 					cfg.Compaction = config.DefaultCompactionConfig()
 					cfg.Compaction.KeepRecentTokens = 1
@@ -284,7 +285,7 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 
 func TestGoalNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{modulecatalog.Goal: {Enabled: true}, modulecatalog.Notes: {Enabled: true}}}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: true}, notesmodule.ModuleID: {Enabled: true}}}
 	cfg.Compaction = config.DefaultCompactionConfig()
 	cfg.Compaction.KeepRecentTokens = 1
 	cfg.Compaction.ReserveTokens = 22000

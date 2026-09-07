@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -29,22 +30,22 @@ func TestCheckSelection(t *testing.T) {
 		message string
 	}{
 		"empty config": {
-			cfg:     config.Config{},
+			cfg:     config.Config{ModuleInventory: modulecatalog.Inventory()},
 			want:    StatusFail,
 			message: "no Juex runtime config found",
 		},
 		"missing model": {
-			cfg:     config.Config{ProviderID: "openai"},
+			cfg:     config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai"},
 			want:    StatusFail,
 			message: "no selected model",
 		},
 		"missing provider": {
-			cfg:     config.Config{Model: "gpt-4.1"},
+			cfg:     config.Config{ModuleInventory: modulecatalog.Inventory(), Model: "gpt-4.1"},
 			want:    StatusFail,
 			message: "no selected provider",
 		},
 		"selected": {
-			cfg:  config.Config{ProviderID: "openai", Model: "gpt-4.1"},
+			cfg:  config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", Model: "gpt-4.1"},
 			want: StatusOK,
 		},
 	}
@@ -70,19 +71,19 @@ func TestCheckCredentials(t *testing.T) {
 		want Status
 	}{
 		"api key present": {
-			cfg:  config.Config{ProviderID: "openai", APIKey: "sk-test", Model: "gpt-4.1"},
+			cfg:  config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "sk-test", Model: "gpt-4.1"},
 			want: StatusOK,
 		},
 		"cloud preset missing key fails": {
-			cfg:  config.Config{ProviderID: "openai", ProviderProtocol: string(llm.ProtocolOpenAIResponses), Model: "gpt-4.1"},
+			cfg:  config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", ProviderProtocol: string(llm.ProtocolOpenAIResponses), Model: "gpt-4.1"},
 			want: StatusFail,
 		},
 		"loopback provider missing key warns": {
-			cfg:  config.Config{ProviderID: "openai", ProviderProtocol: string(llm.ProtocolOpenAIChat), BaseURL: "http://127.0.0.1:11434/v1", Model: "local"},
+			cfg:  config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", ProviderProtocol: string(llm.ProtocolOpenAIChat), BaseURL: "http://127.0.0.1:11434/v1", Model: "local"},
 			want: StatusWarn,
 		},
 		"custom provider missing key warns": {
-			cfg:  config.Config{ProviderID: "local-proxy", ProviderProtocol: string(llm.ProtocolOpenAIChat), BaseURL: "https://proxy.example", Model: "model"},
+			cfg:  config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "local-proxy", ProviderProtocol: string(llm.ProtocolOpenAIChat), BaseURL: "https://proxy.example", Model: "model"},
 			want: StatusWarn,
 		},
 	}
@@ -98,7 +99,7 @@ func TestCheckCredentials(t *testing.T) {
 
 func TestCheckConnectivityOfflineSkipsProbe(t *testing.T) {
 	probe := &recordingProbe{}
-	got := CheckConnectivity(context.Background(), config.Config{
+	got := CheckConnectivity(context.Background(), config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID: "openai",
 		APIKey:     "sk-test",
 		Model:      "gpt-4.1",
@@ -113,7 +114,7 @@ func TestCheckConnectivityOfflineSkipsProbe(t *testing.T) {
 
 func TestCheckConnectivityResolvesProfileBeforeProbe(t *testing.T) {
 	probe := &recordingProbe{}
-	got := CheckConnectivity(context.Background(), config.Config{
+	got := CheckConnectivity(context.Background(), config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID: "unknown",
 		APIKey:     "k",
 		Model:      "m",
@@ -131,7 +132,7 @@ func TestCheckConnectivityResolvesProfileBeforeProbe(t *testing.T) {
 
 func TestCheckConnectivityUsesProbe(t *testing.T) {
 	probe := &recordingProbe{}
-	got := CheckConnectivity(context.Background(), config.Config{
+	got := CheckConnectivity(context.Background(), config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:       "local-proxy",
 		ProviderProtocol: string(llm.ProtocolOpenAIChat),
 		BaseURL:          "http://127.0.0.1:11434/v1",
@@ -151,7 +152,7 @@ func TestCheckConnectivityUsesProbe(t *testing.T) {
 
 func TestCheckConnectivityReportsProbeError(t *testing.T) {
 	probeErr := errors.New("provider unavailable")
-	got := CheckConnectivity(context.Background(), config.Config{
+	got := CheckConnectivity(context.Background(), config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:       "local-proxy",
 		ProviderProtocol: string(llm.ProtocolOpenAIChat),
 		APIKey:           "k",

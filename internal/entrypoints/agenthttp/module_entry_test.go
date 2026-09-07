@@ -10,13 +10,14 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	observablesmodule "github.com/juex-ai/juex/internal/features/observables"
 )
 
 func TestDisabledObservableEndpointsDoNotOpenMain(t *testing.T) {
 	for _, preset := range []string{config.PresetMinimal, config.PresetStandard} {
 		t.Run(preset, func(t *testing.T) {
-			cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: preset,
-				Modules: config.ModulePolicy{modulecatalog.Observables: {Enabled: false}},
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: preset,
+				Modules: config.ModulePolicy{observablesmodule.ModuleID: {Enabled: false}},
 			}
 			broken := cfg.ObservablesConfigPath()
 			if err := os.WriteFile(broken, []byte("[invalid"), 0600); err != nil {
@@ -54,7 +55,7 @@ func TestDisabledObservableEndpointsDoNotOpenMain(t *testing.T) {
 }
 
 func TestDisabledTurnEndpointsRejectBeforeOpeningThread(t *testing.T) {
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
 	srv := NewServer(Options{Cfg: cfg, Provider: stubProvider{}})
 	t.Cleanup(srv.Close)
 	for _, request := range []struct{ id, body string }{

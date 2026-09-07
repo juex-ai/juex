@@ -29,12 +29,12 @@ func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
 		t.Skip("e2e is slow")
 	}
 	modules := config.ModulePolicy{}
-	for _, definition := range modulecatalog.Definitions() {
+	for _, definition := range modulecatalog.Inventory().Definitions() {
 		modules[definition.ID] = config.ModuleSettings{Enabled: false}
 	}
 	work := t.TempDir()
 	application, err := app.New(app.Options{
-		Config: config.Config{WorkDir: work, Modules: modules}, Provider: &bareScriptProvider{}, WorkDir: work,
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Modules: modules}, Provider: &bareScriptProvider{}, WorkDir: work,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	}
 	work := t.TempDir()
 	application, err := app.New(app.Options{
-		Config:   config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
 		Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true,
 	})
 	if err != nil {
@@ -128,7 +128,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 
 func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
 	first, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 	}
 	work := t.TempDir()
 	application, err := app.New(app.Options{
-		Config:   config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")},
 		Provider: &bareScriptProvider{}, WorkDir: work, DisableMCP: true,
 	})
 	if err != nil {

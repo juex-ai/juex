@@ -15,6 +15,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/events"
@@ -41,7 +42,7 @@ func (stubProvider) Complete(ctx context.Context, sys string, h []llm.Message, t
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	work := t.TempDir()
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: filepath.Join(work, ".juex"), Compaction: config.DefaultCompactionConfig()}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: filepath.Join(work, ".juex"), Compaction: config.DefaultCompactionConfig()}
 	if err := os.MkdirAll(cfg.AgentStateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestRunEnsuresMainThread(t *testing.T) {
 
 func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	srv := NewServer(Options{
-		Cfg: config.Config{WorkDir: t.TempDir()},
+		Cfg: config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir()},
 	})
 	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
@@ -424,7 +425,7 @@ func TestRunPublishesExplicitTCPAPI(t *testing.T) {
 	// This test covers listener publication and routing, not Thread startup.
 	// Keeping the server provider-free avoids coupling shutdown to asynchronous
 	// active-Thread creation after OnReady has already fired.
-	srv := NewServer(Options{Cfg: config.Config{WorkDir: t.TempDir()}})
+	srv := NewServer(Options{Cfg: config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir()}})
 	t.Cleanup(srv.Close)
 	srv.opts.Addr = "127.0.0.1:0"
 	setTestAgentAddress(t, &srv.opts.Cfg)
@@ -600,7 +601,7 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 		release:  make(chan struct{}),
 	}
 	srv := NewServer(Options{
-		Cfg: config.Config{
+		Cfg: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai",
 			APIKey:     "x",
 			Model:      "m",

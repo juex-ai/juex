@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/extensions"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
@@ -75,13 +74,13 @@ type RuntimeResourceGraph struct {
 func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error) {
 	paths := cfg.ResourcePaths()
 	selection := extensions.ResourceSelection{
-		Skills:      cfg.ModuleEnabled(modulecatalog.Skills),
-		Hooks:       cfg.ModuleEnabled(modulecatalog.Hooks),
-		MCP:         cfg.ModuleEnabled(modulecatalog.MCP),
-		Observables: cfg.ModuleEnabled(modulecatalog.Observables),
+		Skills:      cfg.ModuleEnabled(skills.ModuleID),
+		Hooks:       cfg.ModuleEnabled(hooks.ModuleID),
+		MCP:         cfg.ModuleEnabled(mcp.ModuleID),
+		Observables: cfg.ModuleEnabled(observable.ModuleID),
 	}
 	var extResources extensions.Resources
-	if cfg.ModuleEnabled(modulecatalog.Extensions) && len(cfg.ExtensionPolicy().Allow) > 0 {
+	if cfg.ModuleEnabled(extensions.ModuleID) && len(cfg.ExtensionPolicy().Allow) > 0 {
 		var err error
 		extResources, err = extensions.Discover(extensions.DiscoverOptions{
 			Roots: []extensions.Root{

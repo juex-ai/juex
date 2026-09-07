@@ -1,65 +1,47 @@
-// Package modulecatalog declares configurable capabilities independently of
-// their runtime factories. Enabled configuration does not imply tool availability.
+// Package modulecatalog assembles the product capability inventory.
 package modulecatalog
 
-const (
-	BasicFileTools   = "basic-file-tools"
-	Shell            = "shell"
-	ApplyPatch       = "apply-patch"
-	ChunkedWrite     = "chunked-write"
-	FileSearch       = "file-search"
-	OperatingContext = "operating-context"
-	AgentsMD         = "agents-md"
-	Skills           = "skills"
-	Scratchpad       = "scratchpad"
-	Goal             = "goal"
-	Notes            = "notes"
-	Memory           = "memory"
-	ContextControl   = "context-control"
-	WorkerThreads    = "worker-threads"
-	Observables      = "observables"
-	MCP              = "mcp"
-	Hooks            = "hooks"
-	Extensions       = "extensions"
+import (
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/features/agentsmd"
+	"github.com/juex-ai/juex/internal/features/applypatch"
+	"github.com/juex-ai/juex/internal/features/chunkedwrite"
+	"github.com/juex-ai/juex/internal/features/contextcontrol"
+	"github.com/juex-ai/juex/internal/features/extensions"
+	"github.com/juex-ai/juex/internal/features/filesearch"
+	"github.com/juex-ai/juex/internal/features/filetools"
+	"github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/features/hooks"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	"github.com/juex-ai/juex/internal/features/memory"
+	"github.com/juex-ai/juex/internal/features/notes"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/operatingcontext"
+	"github.com/juex-ai/juex/internal/features/scratchpad"
+	"github.com/juex-ai/juex/internal/features/shell"
+	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/features/workerthreads"
 )
 
-// Definition opts a capability into minimal explicitly. Standard enables all
-// declared capabilities, subject to resource configuration and source policies.
-type Definition struct {
-	ID      string
-	Minimal bool
-}
+var inventory = config.NewModuleInventory([]config.ModuleDefinition{
+	{ID: filetools.ModuleID, Minimal: true},
+	{ID: shell.ModuleID, Minimal: true},
+	{ID: applypatch.ModuleID},
+	{ID: chunkedwrite.ModuleID},
+	{ID: filesearch.ModuleID},
+	{ID: operatingcontext.ModuleID, Minimal: true},
+	{ID: agentsmd.ModuleID},
+	{ID: skills.ModuleID},
+	{ID: scratchpad.ModuleID},
+	{ID: goal.ModuleID},
+	{ID: notes.ModuleID},
+	{ID: memory.ModuleID},
+	{ID: contextcontrol.ModuleID},
+	{ID: workerthreads.ModuleID},
+	{ID: observable.ModuleID},
+	{ID: mcp.ModuleID},
+	{ID: hooks.ModuleID},
+	{ID: extensions.ModuleID},
+})
 
-var definitions = [...]Definition{
-	{ID: BasicFileTools, Minimal: true},
-	{ID: Shell, Minimal: true},
-	{ID: ApplyPatch},
-	{ID: ChunkedWrite},
-	{ID: FileSearch},
-	{ID: OperatingContext, Minimal: true},
-	{ID: AgentsMD},
-	{ID: Skills},
-	{ID: Scratchpad},
-	{ID: Goal},
-	{ID: Notes},
-	{ID: Memory},
-	{ID: ContextControl},
-	{ID: WorkerThreads},
-	{ID: Observables},
-	{ID: MCP},
-	{ID: Hooks},
-	{ID: Extensions},
-}
-
-func Definitions() []Definition {
-	return append([]Definition(nil), definitions[:]...)
-}
-
-func Lookup(id string) (Definition, bool) {
-	for _, definition := range definitions {
-		if definition.ID == id {
-			return definition, true
-		}
-	}
-	return Definition{}, false
-}
+func Inventory() config.ModuleInventory { return inventory }

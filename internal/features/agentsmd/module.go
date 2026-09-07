@@ -11,7 +11,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "agents-md"
+const ModuleID = "agents-md"
 
 type Module struct {
 	GlobalAgentsMDPath string

@@ -13,7 +13,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "operating-context"
+const ModuleID = "operating-context"
 
 type Module struct {
 	WorkDir string

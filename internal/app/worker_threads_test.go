@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 
-	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -53,7 +54,7 @@ func newWorkerTestApp(t *testing.T, parentProvider llm.Provider, children ...llm
 	t.Helper()
 	workDir := t.TempDir()
 	stateDir := filepath.Join(workDir, ".juex")
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
 	var mu sync.Mutex
 	next := 0
 	app, err := New(Options{

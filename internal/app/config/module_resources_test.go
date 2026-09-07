@@ -28,13 +28,13 @@ func TestDisabledModuleDeclarationsWaitForFinalLayers(t *testing.T) {
 				t.Fatal(err)
 			}
 			off := []byte("modules:\n  " + tc.module + ":\n    enabled: false\n")
-			if _, err := ValidateAgentConfig(off, home, resolution.Agent.ID); err != nil {
+			if _, err := ValidateAgentConfig(testModuleInventory(), off, home, resolution.Agent.ID); err != nil {
 				t.Fatalf("preview disabled: %v", err)
 			}
-			if _, err := WriteAgentConfig(off, home, resolution.Agent.ID, nil); err != nil {
+			if _, err := WriteAgentConfig(testModuleInventory(), off, home, resolution.Agent.ID, nil); err != nil {
 				t.Fatalf("save disabled: %v", err)
 			}
-			cfg, err := LoadWithOptions(LoadOptions{HomeDir: home, AgentID: resolution.Agent.ID, AgentState: AgentStateExisting})
+			cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), HomeDir: home, AgentID: resolution.Agent.ID, AgentState: AgentStateExisting})
 			if err != nil {
 				t.Fatalf("load disabled: %v", err)
 			}
@@ -42,7 +42,7 @@ func TestDisabledModuleDeclarationsWaitForFinalLayers(t *testing.T) {
 				t.Fatalf("disabled declarations published: %+v", cfg.Hooks)
 			}
 			on := []byte("modules:\n  " + tc.module + ":\n    enabled: true\n")
-			if _, err := WriteAgentConfig(on, home, resolution.Agent.ID, nil); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := WriteAgentConfig(testModuleInventory(), on, home, resolution.Agent.ID, nil); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("reenable error = %v, want %s", err, tc.want)
 			}
 			got, err := os.ReadFile(filepath.Join(resolution.Address.StateDir(), "juex.yaml"))
@@ -61,7 +61,7 @@ func TestDisabledModulesStillValidateCommonYAML(t *testing.T) {
 		prepareConfigTest(t)
 		work := t.TempDir()
 		writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), "preset: minimal\n"+content)
-		if _, err := LoadWithOptions(LoadOptions{WorkDir: work, AgentState: AgentStateNone}); err == nil {
+		if _, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: work, AgentState: AgentStateNone}); err == nil {
 			t.Fatalf("accepted invalid common YAML %q", content)
 		}
 	}
@@ -82,7 +82,7 @@ modules:
   skills:
     enabled: false
 `)
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: work, AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: work, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}

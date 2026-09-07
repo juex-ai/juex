@@ -11,12 +11,13 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 )
 
 // GenerateModuleTypeScript emits the inspection contract and payloads from Go
 // JSON declarations. Unsupported kinds fail rather than silently inventing TS.
 func GenerateModuleTypeScript() ([]byte, error) {
-	catalog, err := app.ThreadInspectionCatalog(config.Config{})
+	catalog, err := app.ThreadInspectionCatalog(config.Config{ModuleInventory: modulecatalog.Inventory()})
 	if err != nil {
 		return nil, err
 	}

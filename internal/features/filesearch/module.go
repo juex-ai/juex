@@ -7,7 +7,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "file-search"
+const ModuleID = "file-search"
 
 type Module struct{ options Options }
 

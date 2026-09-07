@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -152,7 +151,7 @@ func observablePathID(path string) (id, rest string) {
 }
 
 func (s *Server) observableManager(w http.ResponseWriter, r *http.Request) (*observable.Manager, bool) {
-	if !s.requireModule(w, modulecatalog.Observables) {
+	if !s.requireModule(w, observable.ModuleID) {
 		return nil, false
 	}
 	active, err := s.mainObservableThread(r)

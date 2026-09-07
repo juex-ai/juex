@@ -12,7 +12,9 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/mcp"
+
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
@@ -32,7 +34,7 @@ func TestModuleInputActivationRestoresMainBeforeIndependentSources(t *testing.T)
 	for _, source := range []string{"mcp", "schedule", "command"} {
 		t.Run(source, func(t *testing.T) {
 			work, state := t.TempDir(), t.TempDir()
-			cfg := config.Config{Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}
 			original, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}})
 			if err != nil {
 				t.Fatal(err)

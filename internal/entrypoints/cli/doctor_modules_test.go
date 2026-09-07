@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/mcp"
+	skillsmodule "github.com/juex-ai/juex/internal/features/skills"
 )
 
 func TestDoctorDisabledResourcesSkipInspection(t *testing.T) {
@@ -28,8 +29,8 @@ func TestDoctorDisabledResourcesSkipInspection(t *testing.T) {
 	}
 	for _, preset := range []string{config.PresetMinimal, config.PresetStandard} {
 		t.Run(preset, func(t *testing.T) {
-			cfg := config.Config{WorkDir: work, Preset: preset, Modules: config.ModulePolicy{
-				modulecatalog.Skills: {Enabled: false}, modulecatalog.MCP: {Enabled: false},
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Preset: preset, Modules: config.ModulePolicy{
+				skillsmodule.ModuleID: {Enabled: false}, mcp.ModuleID: {Enabled: false},
 			}}
 			checks := []doctorCheck{doctorSkillsCheck(cfg)}
 			for _, offline := range []bool{false, true} {

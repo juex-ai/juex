@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 )
 
 func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
@@ -19,7 +20,7 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 	if err := os.WriteFile(configPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadWithOptions(config.LoadOptions{WorkDir: work, HomeDir: t.TempDir(), ConfigPath: configPath, AgentState: config.AgentStateNone})
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, HomeDir: t.TempDir(), ConfigPath: configPath, AgentState: config.AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,11 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
-
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
@@ -20,7 +22,7 @@ import (
 
 func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
 	main, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
@@ -133,12 +135,12 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	enabled := []byte("preset: minimal\nmodules:\n  goal:\n    enabled: true\n  notes:\n    enabled: true\n  memory:\n    enabled: true\n  scratchpad:\n    enabled: true\n")
-	if _, err := config.WriteAgentConfig(enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
 		t.Fatal(err)
 	}
 	load := func() config.Config {
 		t.Helper()
-		cfg, err := config.LoadWithOptions(config.LoadOptions{HomeDir: home, AgentID: resolved.Agent.ID, AgentState: config.AgentStateExisting})
+		cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(), HomeDir: home, AgentID: resolved.Agent.ID, AgentState: config.AgentStateExisting})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,13 +184,13 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 		t.Fatalf("enabled restart lost work state: %v %v", g, n)
 	}
 	off := []byte("preset: minimal\n")
-	if _, err := config.ValidateAgentConfig(off, home, resolved.Agent.ID); err != nil {
+	if _, err := config.ValidateAgentConfig(modulecatalog.Inventory(), off, home, resolved.Agent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.WriteAgentConfig([]byte("modules:\n  unknown:\n    enabled: false\n"), home, resolved.Agent.ID, app.ValidateModuleConfig); err == nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), []byte("modules:\n  unknown:\n    enabled: false\n"), home, resolved.Agent.ID, app.ValidateModuleConfig); err == nil {
 		t.Fatal("invalid configuration was saved")
 	}
-	if _, err := config.WriteAgentConfig(off, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), off, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
 		t.Fatal(err)
 	}
 	if candidate, err := app.New(app.Options{Config: load(), Provider: &bareScriptProvider{}}); err == nil {
@@ -220,7 +222,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if got, err := notes.StatusSnapshot(); err != nil || got != nil {
 		t.Fatalf("apply retained Notes: %v %v", got, err)
 	}
-	if _, err := config.WriteAgentConfig(enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
+	if _, err := config.WriteAgentConfig(modulecatalog.Inventory(), enabled, home, resolved.Agent.ID, app.ValidateModuleConfig); err != nil {
 		t.Fatal(err)
 	}
 	fresh, err := app.New(app.Options{Config: load(), Provider: &bareScriptProvider{}})

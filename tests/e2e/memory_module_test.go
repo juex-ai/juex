@@ -13,7 +13,12 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	extensionsmodule "github.com/juex-ai/juex/internal/features/extensions"
+	hooksmodule "github.com/juex-ai/juex/internal/features/hooks"
+	mcpmodule "github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/memory"
+	skillsmodule "github.com/juex-ai/juex/internal/features/skills"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -23,8 +28,8 @@ import (
 
 func memoryConfig(t *testing.T) config.Config {
 	t.Helper()
-	cfg := config.Config{ProviderID: "openai", Model: "test", Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000,
-		Modules: config.ModulePolicy{modulecatalog.Memory: {Enabled: true}, modulecatalog.Extensions: {Enabled: false}, modulecatalog.MCP: {Enabled: false}, modulecatalog.Skills: {Enabled: false}, modulecatalog.Hooks: {Enabled: false}},
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", Model: "test", Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000,
+		Modules: config.ModulePolicy{memory.ModuleID: {Enabled: true}, extensionsmodule.ModuleID: {Enabled: false}, mcpmodule.ModuleID: {Enabled: false}, skillsmodule.ModuleID: {Enabled: false}, hooksmodule.ModuleID: {Enabled: false}},
 	}
 	cfg.Compaction = config.DefaultCompactionConfig()
 	cfg.Compaction.KeepRecentTokens = 1
@@ -62,7 +67,7 @@ func TestEndToEnd_ManuallyCopiedMemoryKeepsExtensionDataAndOtherProviders(t *tes
 		t.Fatal(err)
 	}
 	cfg.AgentAddress, cfg.AgentStateDir = address, address.StateDir()
-	for _, id := range []string{modulecatalog.Extensions, modulecatalog.MCP, modulecatalog.Skills, modulecatalog.Hooks} {
+	for _, id := range []string{extensionsmodule.ModuleID, mcpmodule.ModuleID, skillsmodule.ModuleID, hooksmodule.ModuleID} {
 		cfg.Modules[id] = config.ModuleSettings{Enabled: true}
 	}
 	cfg.Extensions = config.ExtensionPolicy{Allow: []string{"catalog"}, Configured: true}
@@ -143,7 +148,7 @@ func TestEndToEnd_MemoryResolvesRelativeEmbeddingStateScope(t *testing.T) {
 			}
 			cfg := memoryConfig(t)
 			cfg.Preset = config.PresetStandard
-			delete(cfg.Modules, modulecatalog.Memory)
+			delete(cfg.Modules, memory.ModuleID)
 			cfg.WorkDir, cfg.AgentStateDir = "work", ""
 			if explicitState {
 				cfg.WorkDir, cfg.AgentStateDir = filepath.Join(root, "work"), "agent-state"
@@ -204,7 +209,7 @@ func TestEndToEnd_MemoryIndependentToolsAndRetainedKnowledge(t *testing.T) {
 	}
 	for id, want := range map[string]string{"write": "Original knowledge", "search": "Original knowledge", "replace": "Durable unique fixture content", "search-replaced": "Durable unique fixture content", "temporary": "Delete only explicitly", "delete": "delete-me", "search-deleted": `"memories":[]`} {
 		result, ok := results[id]
-		if !ok || result.IsError || !strings.Contains(result.Content, want) || result.ResultFact == nil || result.ResultFact.Owner != modulecatalog.Memory {
+		if !ok || result.IsError || !strings.Contains(result.Content, want) || result.ResultFact == nil || result.ResultFact.Owner != memory.ModuleID {
 			t.Errorf("%s outcome=%+v", id, result)
 		}
 	}
@@ -239,7 +244,7 @@ func TestEndToEnd_MemoryIndependentToolsAndRetainedKnowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg.Modules[modulecatalog.Memory] = config.ModuleSettings{Enabled: false}
+	cfg.Modules[memory.ModuleID] = config.ModuleSettings{Enabled: false}
 	disabled := memoryApp(t, cfg, &bareScriptProvider{})
 	if _, ok := disabled.Engine.Tools.Get(memory.ToolSearch); ok {
 		t.Fatal("disabled tool exposed")
@@ -254,7 +259,7 @@ func TestEndToEnd_MemoryIndependentToolsAndRetainedKnowledge(t *testing.T) {
 	if err := disabled.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Modules[modulecatalog.Memory] = config.ModuleSettings{Enabled: true}
+	cfg.Modules[memory.ModuleID] = config.ModuleSettings{Enabled: true}
 	restarted := memoryApp(t, cfg, &bareScriptProvider{})
 	search, ok := restarted.Engine.Tools.Get(memory.ToolSearch)
 	if !ok {
@@ -324,7 +329,7 @@ func TestEndToEnd_MemoryMaintenanceFailureDoesNotBlockAndDisabledDoesNoFileWork(
 	for _, enabled := range []bool{true, false} {
 		t.Run(map[bool]string{true: "enabled", false: "disabled"}[enabled], func(t *testing.T) {
 			cfg := memoryConfig(t)
-			cfg.Modules[modulecatalog.Memory] = config.ModuleSettings{Enabled: enabled}
+			cfg.Modules[memory.ModuleID] = config.ModuleSettings{Enabled: enabled}
 			index := filepath.Join(cfg.AgentStateDir, "modules", "memory", "MEMORY.md")
 			if enabled {
 				if err := os.MkdirAll(index, 0700); err != nil {
@@ -396,7 +401,7 @@ func (p *memoryWorkerProvider) Complete(ctx context.Context, _ string, history [
 func TestEndToEnd_MemoryMainAndConcurrentWorkersShareAgentStore(t *testing.T) {
 	isolateModuleConfig(t)
 	cfg := memoryConfig(t)
-	cfg.Modules[modulecatalog.WorkerThreads] = config.ModuleSettings{Enabled: true}
+	cfg.Modules[workerthreadsmodule.ModuleID] = config.ModuleSettings{Enabled: true}
 	provider := &memoryWorkerProvider{ready: make(chan string, 2), release: make(chan struct{})}
 	a := memoryApp(t, cfg, provider)
 	defer close(provider.release)

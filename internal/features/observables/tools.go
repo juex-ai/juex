@@ -19,7 +19,7 @@ const (
 	maxObservationToolLimit     = 100
 )
 
-const ModuleID runtimemodule.ID = "observables"
+const ModuleID = "observables"
 
 type Module struct {
 	mu      sync.RWMutex

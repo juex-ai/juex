@@ -11,9 +11,11 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/app/providerreadiness"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/spf13/cobra"
+
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -152,7 +154,7 @@ func initTargetPath(scope, workDir string) (string, error) {
 		}
 		return filepath.Join(home, "juex.yaml"), nil
 	case "workspace", "project", "local":
-		paths := (config.Config{WorkDir: workDir}).RuntimePaths()
+		paths := (config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: workDir}).RuntimePaths()
 		return paths.WorkspaceConfigPath, nil
 	default:
 		return "", &usageError{msg: "--scope must be user or workspace"}
@@ -513,13 +515,13 @@ func loadInitConfigForCheck(path, workDir string) (config.Config, error) {
 	checkWorkDir, cleanup := initConfigCheckWorkDir(path, workDir)
 	defer cleanup()
 	if scope == "workspace" || scope == "user" {
-		return config.LoadForWorkDirForValidation(checkWorkDir)
+		return config.LoadForWorkDirForValidation(modulecatalog.Inventory(), checkWorkDir)
 	}
-	return config.LoadFromFileForWorkDirForValidation(path, checkWorkDir)
+	return config.LoadFromFileForWorkDirForValidation(modulecatalog.Inventory(), path, checkWorkDir)
 }
 
 func initConfigTargetScope(path, workDir string) string {
-	workspaceConfig := (config.Config{WorkDir: workDir}).RuntimePaths().WorkspaceConfigPath
+	workspaceConfig := (config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: workDir}).RuntimePaths().WorkspaceConfigPath
 	if cleanPath(path) == cleanPath(workspaceConfig) {
 		return "workspace"
 	}

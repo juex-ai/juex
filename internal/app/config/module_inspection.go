@@ -10,7 +10,10 @@ import (
 // ReadModuleInspectionConfig resolves only module selection, without provider
 // setup, Agent registration, remote fetching, cache publication, or recovery.
 // Remote imports require the existing validated cache for this Workspace.
-func ReadModuleInspectionConfig(workDir, homeDir, agentConfigPath string) (Config, error) {
+func ReadModuleInspectionConfig(inventory ModuleInventory, workDir, homeDir, agentConfigPath string) (Config, error) {
+	if err := inventory.validate(); err != nil {
+		return Config{}, err
+	}
 	resolution, err := resolveHomeConfigSources(homeDir)
 	if err != nil {
 		return Config{}, err
@@ -22,7 +25,7 @@ func ReadModuleInspectionConfig(workDir, homeDir, agentConfigPath string) (Confi
 	} else if !os.IsNotExist(err) {
 		return Config{}, err
 	}
-	cfg := Config{WorkDir: workDir}
+	cfg := Config{WorkDir: workDir, ModuleInventory: inventory}
 	sources := append(resolution.Sources, workspaceYAMLSource(cfg.WorkspaceConfigPath()), agentYAMLSource(agentConfigPath))
 	for _, source := range sources {
 		if source.Path == "" {

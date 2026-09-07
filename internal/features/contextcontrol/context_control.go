@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	ModuleID    runtimemodule.ID = "context-control"
-	ToolNew     string           = "context_new"
-	ToolCompact string           = "context_compact"
+	ModuleID           = "context-control"
+	ToolNew     string = "context_new"
+	ToolCompact string = "context_compact"
 )
 
 type Module struct {

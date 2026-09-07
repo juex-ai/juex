@@ -18,9 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/entrypoints/webassets"
 
-	"github.com/juex-ai/juex/internal/app/config"
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/foundation/processmetrics"
@@ -529,7 +530,7 @@ func (s *Server) readOnlyAgentHandler(state fleet.ReadOnlyAgentState) http.Handl
 		cached.stateDirModifiedAt.Equal(stateDirInfo.ModTime()) {
 		return cached.handler
 	}
-	handler := web.NewReadOnlyAPIHandler(config.Config{
+	handler := web.NewReadOnlyAPIHandler(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir: state.Workspace,
 		Preset:  state.Preset, Modules: state.Modules,
 		AgentID:       state.ID,

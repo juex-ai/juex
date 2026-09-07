@@ -242,7 +242,7 @@ func TestThreadScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := NewServer(Options{
-		Cfg: config.Config{
+		Cfg: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID: "openai",
 			APIKey:     "x",
 			Model:      "m",
@@ -1011,7 +1011,7 @@ func seedScratchpadThread(t *testing.T, workDir, id, _ string) {
 
 func TestDisabledScratchpadEndpointSkipsStoredResources(t *testing.T) {
 	srv := newTestServer(t)
-	srv.opts.Cfg.Modules = config.ModulePolicy{modulecatalog.Scratchpad: {Enabled: false}}
+	srv.opts.Cfg.Modules = config.ModulePolicy{scratchpad.ModuleID: {Enabled: false}}
 	id := thread.MainID
 	dir := filepath.Join(srv.opts.Cfg.ThreadsDir(), id)
 	mustWriteFile(t, filepath.Join(dir, "thread.json"), "malformed metadata must not be opened")

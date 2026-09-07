@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/agentsmd"
 	"github.com/juex-ai/juex/internal/features/applypatch"
 	chunkmodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
@@ -72,7 +71,7 @@ func prepareRuntimeModules(
 	composition.specs = []runtimemodule.RuntimeFactorySpec{
 		{
 			ID:      memory.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.Memory),
+			Enabled: cfg.ModuleEnabled(memory.ModuleID),
 			New: func(_ context.Context, ctx runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				if ctx.AgentStateDir == "" {
 					return nil, fmt.Errorf("memory module requires an Agent state directory")
@@ -85,29 +84,29 @@ func prepareRuntimeModules(
 			},
 		},
 		{
-			ID:      modulecatalog.BasicFileTools,
-			Enabled: cfg.ModuleEnabled(modulecatalog.BasicFileTools),
+			ID:      filetools.ModuleID,
+			Enabled: cfg.ModuleEnabled(filetools.ModuleID),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				return filetools.New(filetools.Options{WorkDir: runtimePaths.WorkDir, MediaDir: runtimePaths.MediaDir, FilePolicy: filePolicy}), nil
 			},
 		},
 		{
-			ID:      modulecatalog.ApplyPatch,
-			Enabled: cfg.ModuleEnabled(modulecatalog.ApplyPatch),
+			ID:      applypatch.ModuleID,
+			Enabled: cfg.ModuleEnabled(applypatch.ModuleID),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				return applypatch.New(applypatch.Options{WorkDir: runtimePaths.WorkDir, FilePolicy: filePolicy}), nil
 			},
 		},
 		{
-			ID:      modulecatalog.FileSearch,
-			Enabled: cfg.ModuleEnabled(modulecatalog.FileSearch),
+			ID:      filesearch.ModuleID,
+			Enabled: cfg.ModuleEnabled(filesearch.ModuleID),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				return filesearch.New(filesearch.Options{WorkDir: runtimePaths.WorkDir, Environment: runtimeEnvironment, Sandbox: cfg.SandboxPolicy(), SandboxRunner: sandboxRunner, FilePolicy: filePolicy}), nil
 			},
 		},
 		{
 			ID:      shelltools.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.Shell),
+			Enabled: cfg.ModuleEnabled(shelltools.ModuleID),
 			New: func(ctx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				constructed.shell = shelltools.New(ctx, shelltools.Options{WorkDir: runtimePaths.WorkDir, Environment: runtimeEnvironment, Shell: toolsShellProfile(cfg.Shell), Sandbox: cfg.SandboxPolicy(), SandboxRunner: sandboxRunner, FilePolicy: filePolicy, MediaDir: runtimePaths.MediaDir})
 				return constructed.shell, nil
@@ -197,7 +196,7 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 	builtinSpecs := []runtimemodule.ThreadFactorySpec{
 		{
 			ID:      chunkmodule.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.ChunkedWrite),
+			Enabled: cfg.ModuleEnabled(chunkmodule.ModuleID),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				paths := cfg.RuntimePaths()
 				return chunkmodule.New(chunkmodule.Options{WorkDir: workDir, FilePolicy: sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: cfg.SandboxPolicy(), WorkDir: workDir, AgentStateDir: paths.StateDir, ReadOnlyPaths: []string{paths.MediaDir}})}), nil
@@ -212,7 +211,7 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		},
 		{
 			ID:      operatingcontext.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.OperatingContext),
+			Enabled: cfg.ModuleEnabled(operatingcontext.ModuleID),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				return &operatingcontext.Module{WorkDir: workDir}, nil
 			},
@@ -220,7 +219,7 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		{
 			ID:         scratchpad.ModuleID,
 			Inspection: scratchpad.Inspection(),
-			Enabled:    cfg.ModuleEnabled(modulecatalog.Scratchpad),
+			Enabled:    cfg.ModuleEnabled(scratchpad.ModuleID),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				return &scratchpad.Module{WorkDir: workDir}, nil
 			},

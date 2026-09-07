@@ -7,7 +7,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "apply-patch"
+const ModuleID = "apply-patch"
 
 type Module struct{ options Options }
 

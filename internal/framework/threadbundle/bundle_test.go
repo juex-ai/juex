@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -19,7 +20,7 @@ func bundleThreadFixture(t *testing.T) (config.Config, *thread.Thread) {
 	t.Helper()
 	work := t.TempDir()
 	state := filepath.Join(work, ".juex")
-	cfg := config.Config{WorkDir: work, AgentStateDir: state}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: state}
 	target, err := thread.NewStore(state).EnsureMain()
 	if err != nil {
 		t.Fatal(err)

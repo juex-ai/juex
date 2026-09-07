@@ -10,7 +10,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "hooks"
+const ModuleID = "hooks"
 
 type PolicyRunner interface {
 	Run(context.Context, Request) ([]Result, error)

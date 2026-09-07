@@ -8,17 +8,22 @@ import (
 	"sort"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	extensionsmodule "github.com/juex-ai/juex/internal/features/extensions"
 	"github.com/juex-ai/juex/internal/features/hooks"
+
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
+
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 )
 
@@ -308,7 +313,7 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	extensionsStatus.Enabled = s.cfg.ModuleEnabled(modulecatalog.Extensions)
+	extensionsStatus.Enabled = s.cfg.ModuleEnabled(extensionsmodule.ModuleID)
 	return RuntimeStatus{
 		WorkDir:      s.absoluteWorkDir(),
 		Modules:      runtimeModuleStatuses(*active),

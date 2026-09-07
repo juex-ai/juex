@@ -18,6 +18,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/app/config"
@@ -174,7 +176,7 @@ func resolveFleetServeSettings(
 	addr := strings.TrimSpace(flagAddr)
 	unsafeBindAny := flagUnsafeBindAny
 	if !explicitAddr {
-		fleetCfg, err := config.LoadHomeFleetConfig()
+		fleetCfg, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 		if err != nil {
 			return fleetServeSettings{}, err
 		}
@@ -282,7 +284,7 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			explicitAddr := cmd.Flags().Changed("addr")
-			fleetCfg, err := config.LoadHomeFleetConfig()
+			fleetCfg, err := config.LoadHomeFleetConfig(modulecatalog.Inventory())
 			if err != nil {
 				return err
 			}
@@ -436,7 +438,7 @@ type fleetServiceStatus struct {
 func defaultFleetStatusCommandDeps() fleetStatusCommandDeps {
 	return fleetStatusCommandDeps{
 		loadHome:   config.EffectiveHomeDir,
-		loadConfig: config.LoadHomeFleetConfig,
+		loadConfig: func() (config.FleetConfig, error) { return config.LoadHomeFleetConfig(modulecatalog.Inventory()) },
 		newServiceManager: func() (fleetStatusService, error) {
 			return newFleetServiceManager()
 		},

@@ -28,7 +28,7 @@ func TestModuleInspectionConfigUsesLayeredSelectionWithoutRuntimeSetup(t *testin
 	write(filepath.Join(work, ".juex", "juex.yaml"), "imports:\n  - source: ./shared.yaml\nmodules:\n  notes:\n    enabled: false\n")
 	write(filepath.Join(work, ".juex", "shared.yaml"), "modules:\n  scratchpad:\n    enabled: true\n")
 	write(agent, "modules:\n  goal:\n    enabled: false\n")
-	cfg, err := ReadModuleInspectionConfig(work, home, agent)
+	cfg, err := ReadModuleInspectionConfig(testModuleInventory(), work, home, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestModuleInspectionConfigReadsValidatedRemoteContentWithoutFetchingOrRecov
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := ReadModuleInspectionConfig(work, home, "")
+	cfg, err := ReadModuleInspectionConfig(testModuleInventory(), work, home, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestModuleInspectionConfigReadsValidatedRemoteContentWithoutFetchingOrRecov
 	if err := os.WriteFile(journal, []byte("pending publication"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadModuleInspectionConfig(work, home, ""); err == nil {
+	if _, err := ReadModuleInspectionConfig(testModuleInventory(), work, home, ""); err == nil {
 		t.Fatal("pending publication must be unavailable")
 	}
 	if after, _ := os.ReadFile(journal); string(after) != "pending publication" {

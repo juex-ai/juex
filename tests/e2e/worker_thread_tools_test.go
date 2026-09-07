@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
-
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -95,7 +96,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 		releaseChild: make(chan struct{}),
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderID:    "openai",
 			Model:         "test",
 			WorkDir:       workDir,

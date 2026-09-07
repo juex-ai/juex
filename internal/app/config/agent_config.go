@@ -22,8 +22,8 @@ func (e *AgentConfigValidationError) Unwrap() error {
 	return e.Err
 }
 
-func ValidateAgentConfig(content []byte, homeDir, agentID string) (cfg Config, returnErr error) {
-	cfg, returnErr = validateAgentConfig(content, homeDir, agentID)
+func ValidateAgentConfig(inventory ModuleInventory, content []byte, homeDir, agentID string) (cfg Config, returnErr error) {
+	cfg, returnErr = validateAgentConfig(inventory, content, homeDir, agentID)
 	if returnErr != nil {
 		return cfg, &AgentConfigValidationError{Err: returnErr}
 	}
@@ -35,12 +35,12 @@ func ValidateAgentConfig(content []byte, homeDir, agentID string) (cfg Config, r
 	return cfg, returnErr
 }
 
-func validateAgentConfig(content []byte, homeDir, agentID string) (Config, error) {
+func validateAgentConfig(inventory ModuleInventory, content []byte, homeDir, agentID string) (Config, error) {
 	resolution, err := agentstate.ResolveByID(agentstate.Options{HomeDir: homeDir}, agentID)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg, err := loadConfigFilesForWorkDir(resolution.Agent.Workspace, homeDir)
+	cfg, err := loadConfigFilesForWorkDir(inventory, resolution.Agent.Workspace, homeDir)
 	if err != nil {
 		return cfg, err
 	}
@@ -67,8 +67,8 @@ func validateAgentConfig(content []byte, homeDir, agentID string) (Config, error
 // Workspace chain, then atomically publishes the sparse Agent overlay and any
 // remote-import cache generation under one recovery journal. validateRuntime,
 // when provided, checks the merged configuration before either is published.
-func WriteAgentConfig(content []byte, homeDir, agentID string, validateRuntime func(Config) error) (string, error) {
-	cfg, err := validateAgentConfig(content, homeDir, agentID)
+func WriteAgentConfig(inventory ModuleInventory, content []byte, homeDir, agentID string, validateRuntime func(Config) error) (string, error) {
+	cfg, err := validateAgentConfig(inventory, content, homeDir, agentID)
 	if err != nil {
 		return "", &AgentConfigValidationError{Err: err}
 	}

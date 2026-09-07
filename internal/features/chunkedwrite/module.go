@@ -14,7 +14,7 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = "chunked-write"
+const ModuleID = "chunked-write"
 
 type Module struct {
 	options Options

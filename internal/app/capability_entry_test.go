@@ -8,7 +8,10 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	extensionsmodule "github.com/juex-ai/juex/internal/features/extensions"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -43,7 +46,7 @@ func capabilityApp(t *testing.T, cfg config.Config, id string, provider *capabil
 }
 
 func TestDisabledGoalRejectsDirectAndAdmittedSlash(t *testing.T) {
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
 	provider := &capabilityProvider{}
 	a := capabilityApp(t, cfg, thread.MainID, provider)
 	if result := a.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: "/goal finish this"}); result.Kind != TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
@@ -59,8 +62,8 @@ func TestDisabledGoalRejectsDirectAndAdmittedSlash(t *testing.T) {
 
 func TestRuntimeExtensionEnablementDistinguishesEmptyCatalog(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
-			Modules: config.ModulePolicy{modulecatalog.Extensions: {Enabled: enabled}},
+		cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+			Modules: config.ModulePolicy{extensionsmodule.ModuleID: {Enabled: enabled}},
 		}
 		status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 		if err != nil {
@@ -73,8 +76,8 @@ func TestRuntimeExtensionEnablementDistinguishesEmptyCatalog(t *testing.T) {
 }
 
 func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T) {
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
-		Modules: config.ModulePolicy{modulecatalog.WorkerThreads: {Enabled: true}},
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+		Modules: config.ModulePolicy{workerthreadsmodule.ModuleID: {Enabled: true}},
 	}
 	if err := EnsureMainThread(cfg); err != nil {
 		t.Fatal(err)
@@ -95,7 +98,7 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	if err := first.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Modules[modulecatalog.WorkerThreads] = config.ModuleSettings{Enabled: false}
+	cfg.Modules[workerthreadsmodule.ModuleID] = config.ModuleSettings{Enabled: false}
 	pausedProvider := &capabilityProvider{}
 	paused := capabilityApp(t, cfg, id, pausedProvider)
 	if err := paused.waitPendingInputRecoveryContext(t.Context()); err != nil {
@@ -138,7 +141,7 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	if err := paused.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Modules[modulecatalog.WorkerThreads] = config.ModuleSettings{Enabled: true}
+	cfg.Modules[workerthreadsmodule.ModuleID] = config.ModuleSettings{Enabled: true}
 	resumedProvider := &capabilityProvider{}
 	resumed := capabilityApp(t, cfg, id, resumedProvider)
 	if err := resumed.waitPendingInputRecoveryContext(t.Context()); err != nil {
@@ -150,7 +153,7 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 }
 
 func TestDisabledWorkerNewContextDoesNotGreet(t *testing.T) {
-	cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
 	if err := EnsureMainThread(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -178,8 +181,8 @@ func TestDisabledWorkerNewContextDoesNotGreet(t *testing.T) {
 
 func TestDisabledWorkerSkipsThreadStartPolicies(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
-			Modules: config.ModulePolicy{modulecatalog.WorkerThreads: {Enabled: enabled}},
+		cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+			Modules: config.ModulePolicy{workerthreadsmodule.ModuleID: {Enabled: enabled}},
 		}
 		if err := EnsureMainThread(cfg); err != nil {
 			t.Fatal(err)

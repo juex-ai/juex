@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/extensions"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/skills"
@@ -27,7 +28,7 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 	mustWriteRuntimeStatusFile(t, filepath.Join(homeJuex, "extensions", "chanwire", "mcp.json"), `{"mcpServers":{"ext":{"command":"ext"}}}`)
 	mustWriteRuntimeStatusFile(t, filepath.Join(homeJuex, "extensions", "chanwire", "observables.json"), `{"observables":[]}`)
 
-	graph, err := ResolveRuntimeResourceGraph(config.Config{
+	graph, err := ResolveRuntimeResourceGraph(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
 		HomeJuexDir:               homeJuex,
@@ -92,7 +93,7 @@ func TestResolveRuntimeResourceGraphUsesLayeredExtensionPolicyAndWinningBundle(t
 	projectExtensionDir := filepath.Join(work, ".juex", "extensions", "shared")
 	mustWriteRuntimeStatusFile(t, filepath.Join(projectExtensionDir, "hooks.yaml"), "trusted: true\ncommands: []\n")
 
-	cfg, err := config.LoadWithOptions(config.LoadOptions{
+	cfg, err := config.LoadWithOptions(config.LoadOptions{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    work,
 		AgentState: config.AgentStateNone,
 	})
@@ -150,7 +151,7 @@ func TestResolveRuntimeResourceGraphExcludesUserResourcesWhenDisabled(t *testing
 	mustWriteRuntimeStatusFile(t, filepath.Join(homeJuex, "extensions", "home", "skills", "ext", "SKILL.md"), "---\nname: ext\n---\n")
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "skills", "project", "SKILL.md"), "---\nname: project\n---\n")
 
-	graph, err := ResolveRuntimeResourceGraph(config.Config{
+	graph, err := ResolveRuntimeResourceGraph(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
 		HomeJuexDir:               homeJuex,
@@ -183,7 +184,7 @@ commands:
     command: ["${JUEX_EXT_DIR}/demo.py", "${JUEX_EXT_DATA_DIR}"]
 `)
 
-	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, AgentAddress: address, Extensions: allowExtensions("demo")})
+	graph, err := ResolveRuntimeResourceGraph(config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentAddress: address, Extensions: allowExtensions("demo")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +249,7 @@ func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithout
   "version":"1.0.0",
   "agent":{"environment":{"variables":{"MCP_EXTENSION_DEFAULT":"runtime-default"}}}
 }`)
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:      work,
 		HomeJuexDir:  home,
 		AgentAddress: address,
@@ -326,7 +327,7 @@ func TestLoadMCPConfigRefsDoesNotCreateDataDirForRemoteOnlyExtension(t *testing.
     }
   }
 }`)
-	graph, err := ResolveRuntimeResourceGraph(config.Config{
+	graph, err := ResolveRuntimeResourceGraph(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:      t.TempDir(),
 		HomeJuexDir:  home,
 		AgentAddress: address,
@@ -364,7 +365,7 @@ func TestLoadMCPConfigRefsDoesNotCreateDataDirWhenMixedExtensionPreparationFails
     }
   }
 }`)
-	graph, err := ResolveRuntimeResourceGraph(config.Config{
+	graph, err := ResolveRuntimeResourceGraph(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:      t.TempDir(),
 		HomeJuexDir:  home,
 		AgentAddress: address,
@@ -420,7 +421,7 @@ func TestLoadMCPConfigRefsDoesNotPrepareOverriddenLocalExtension(t *testing.T) {
 func TestResolveRuntimeResourceGraphStateFreePreviewHasNoExtensionDataDir(t *testing.T) {
 	work := t.TempDir()
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "demo", "mcp.json"), `{"mcpServers":{"local":{"command":"server"}}}`)
-	graph, err := ResolveRuntimeResourceGraph(config.Config{
+	graph, err := ResolveRuntimeResourceGraph(config.Config{ModuleInventory: modulecatalog.Inventory(),
 		WorkDir:    work,
 		Extensions: allowExtensions("demo"),
 	})
@@ -452,7 +453,7 @@ func TestLoadMCPConfigRefsPreparesRemoteExtensionCredentials(t *testing.T) {
 	    }
   }
 }`)
-	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, Extensions: allowExtensions("remote")})
+	graph, err := ResolveRuntimeResourceGraph(config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Extensions: allowExtensions("remote")})
 	if err != nil {
 		t.Fatal(err)
 	}

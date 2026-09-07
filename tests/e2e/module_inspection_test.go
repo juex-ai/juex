@@ -14,14 +14,18 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
-	cfg := config.Config{AgentID: "abcdef", WorkDir: t.TempDir(), AgentStateDir: t.TempDir()}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), AgentID: "abcdef", WorkDir: t.TempDir(), AgentStateDir: t.TempDir()}
 	store := thread.NewStore(cfg.AgentStateDir)
 	main, err := store.EnsureMain()
 	if err != nil {

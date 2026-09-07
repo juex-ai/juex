@@ -18,7 +18,7 @@ func TestLoadExtensionPolicyInheritsWhenLowerLayersOmitAllow(t *testing.T) {
 	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), "sandbox:\n  enabled: true\n")
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "skills:\n  include: []\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestLoadExtensionPolicyReplacesInheritedAllowlistAsAWhole(t *testing.T) {
 	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), "extensions:\n  allow: [fleet, shared]\n")
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "extensions:\n  allow: [agent]\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestLoadExtensionPolicyExplicitEmptyListDisablesInheritedExtensions(t *test
 	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "extensions:\n  allow: [base]\n")
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "extensions:\n  allow: []\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestLoadExtensionPolicyExplicitEmptyListDisablesInheritedExtensions(t *test
 
 func TestLoadExtensionPolicyDefaultsToUnconfiguredEmptyAllowlist(t *testing.T) {
 	prepareConfigTest(t)
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: t.TempDir(), AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: t.TempDir(), AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestLoadExtensionPolicyDefaultsToUnconfiguredEmptyAllowlist(t *testing.T) {
 }
 
 func TestExtensionPolicyIgnoresNamesWhenPolicyIsNotConfigured(t *testing.T) {
-	policy := (Config{Extensions: ExtensionPolicy{Allow: []string{"demo"}}}).ExtensionPolicy()
+	policy := (Config{ModuleInventory: testModuleInventory(), Extensions: ExtensionPolicy{Allow: []string{"demo"}}}).ExtensionPolicy()
 	if policy.Configured || len(policy.Allow) != 0 {
 		t.Fatalf("extension allowlist = %+v, want unconfigured policy to expose no allowed names", policy)
 	}
@@ -95,7 +95,7 @@ func TestLoadExtensionPolicyNormalizesDuplicatesWithoutReordering(t *testing.T) 
 	workDir := t.TempDir()
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "extensions:\n  allow: [beta, alpha, beta]\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestLoadExtensionPolicyRejectsNonPortableExtensionNames(t *testing.T) {
 				"extensions:\n  allow:\n    - "+yamlName+"\n",
 			)
 
-			_, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+			_, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
 			if err == nil || !strings.Contains(err.Error(), "extensions.allow") {
 				t.Fatalf("err = %v, want extensions.allow validation error for %q", err, name)
 			}
@@ -133,7 +133,7 @@ func TestLoadExtensionPolicyRejectsAdHocExplicitOverride(t *testing.T) {
 	explicitPath := filepath.Join(t.TempDir(), "override.yaml")
 	writeTextFile(t, explicitPath, "extensions:\n  allow: [demo]\n")
 
-	_, err := LoadWithOptions(LoadOptions{
+	_, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		ConfigPath: explicitPath,
 		AgentState: AgentStateNone,
@@ -151,7 +151,7 @@ func TestLoadExtensionPolicyAcceptsExplicitReferenceToWorkspaceConfig(t *testing
 	workspacePath := filepath.Join(workDir, ".juex", "juex.yaml")
 	writeTextFile(t, workspacePath, "extensions:\n  allow: [demo]\n")
 
-	cfg, err := LoadWithOptions(LoadOptions{
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 		WorkDir:    workDir,
 		ConfigPath: workspacePath,
 		AgentState: AgentStateNone,
@@ -187,7 +187,7 @@ extensions:
 			"models: [local:workspace]\nextensions:\n  allow: [workspace]\n",
 		)
 
-		cfg, err := LoadWithOptions(LoadOptions{
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 			WorkDir:    workDir,
 			ConfigPath: defaultPath,
 			AgentState: AgentStateNone,
@@ -210,7 +210,7 @@ extensions:
 		t.Setenv("JUEX_HOME", instanceHome)
 		writeTextFile(t, instancePath, "extensions:\n  allow: [instance]\n")
 
-		cfg, err := LoadWithOptions(LoadOptions{
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
 			WorkDir:    t.TempDir(),
 			ConfigPath: instancePath,
 			AgentState: AgentStateNone,
@@ -229,7 +229,7 @@ func TestResourcePathsExposeReadOnlyDefaultAndEffectiveHomeExtensionRoots(t *tes
 	instanceHome := t.TempDir()
 	t.Setenv("JUEX_HOME", instanceHome)
 
-	cfg, err := LoadWithOptions(LoadOptions{WorkDir: t.TempDir(), AgentState: AgentStateNone})
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: t.TempDir(), AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}

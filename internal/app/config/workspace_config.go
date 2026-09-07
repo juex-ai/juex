@@ -10,8 +10,8 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 )
 
-func ValidateWorkspaceConfig(content []byte, workDir string) (cfg Config, returnErr error) {
-	cfg, returnErr = validateWorkspaceConfig(content, workDir)
+func ValidateWorkspaceConfig(inventory ModuleInventory, content []byte, workDir string) (cfg Config, returnErr error) {
+	cfg, returnErr = validateWorkspaceConfig(inventory, content, workDir)
 	if returnErr != nil {
 		return cfg, returnErr
 	}
@@ -23,8 +23,8 @@ func ValidateWorkspaceConfig(content []byte, workDir string) (cfg Config, return
 	return cfg, returnErr
 }
 
-func validateWorkspaceConfig(content []byte, workDir string) (Config, error) {
-	cfg, err := loadUserConfigForWorkDir(workDir, "")
+func validateWorkspaceConfig(inventory ModuleInventory, content []byte, workDir string) (Config, error) {
+	cfg, err := loadUserConfigForWorkDir(inventory, workDir, "")
 	if err != nil {
 		return cfg, err
 	}
@@ -46,16 +46,16 @@ func validateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 	return cfg, nil
 }
 
-func WriteWorkspaceConfig(content []byte, workDir string) (string, error) {
-	return writeWorkspaceConfig(content, workDir, func(cfg *Config) error {
+func WriteWorkspaceConfig(inventory ModuleInventory, content []byte, workDir string) (string, error) {
+	return writeWorkspaceConfig(inventory, content, workDir, func(cfg *Config) error {
 		return publishPendingConfigImportCachesWhileLocked(cfg, func(path string, data []byte) error {
 			return homestore.WriteFileAtomic(path, data, 0o600, 0o700)
 		})
 	})
 }
 
-func writeWorkspaceConfig(content []byte, workDir string, commitImportCache func(*Config) error) (writtenPath string, returnErr error) {
-	cfg, err := validateWorkspaceConfig(content, workDir)
+func writeWorkspaceConfig(inventory ModuleInventory, content []byte, workDir string, commitImportCache func(*Config) error) (writtenPath string, returnErr error) {
+	cfg, err := validateWorkspaceConfig(inventory, content, workDir)
 	if err != nil {
 		return "", err
 	}
