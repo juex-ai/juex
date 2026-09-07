@@ -48,6 +48,49 @@ func memoryWriteInput(name, body string) map[string]any {
 	return map[string]any{"name": name, "description": "Stable project fact", "type": "project", "body": body}
 }
 
+func TestEndToEnd_MemoryResolvesRelativeEmbeddingStateScope(t *testing.T) {
+	isolateModuleConfig(t)
+	for _, explicitState := range []bool{false, true} {
+		t.Run(map[bool]string{false: "relative-workdir", true: "relative-agent-state"}[explicitState], func(t *testing.T) {
+			root := t.TempDir()
+			t.Chdir(root)
+			if err := os.Mkdir("work", 0700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := memoryConfig(t)
+			cfg.Preset = config.PresetStandard
+			delete(cfg.Modules, modulecatalog.Memory)
+			cfg.WorkDir, cfg.AgentStateDir = "work", ""
+			if explicitState {
+				cfg.WorkDir, cfg.AgentStateDir = filepath.Join(root, "work"), "agent-state"
+			}
+			a := memoryApp(t, cfg, &bareScriptProvider{})
+			index := filepath.Join(cfg.RuntimePaths().StateDir, "modules", "memory", "MEMORY.md")
+			if data, err := os.ReadFile(index); err != nil || !strings.Contains(string(data), "# Memory Index") {
+				t.Fatalf("relative scope startup index=%q, %v", data, err)
+			}
+			write, _ := a.Engine.Tools.Get(memory.ToolWrite)
+			search, _ := a.Engine.Tools.Get(memory.ToolSearch)
+			remove, _ := a.Engine.Tools.Get(memory.ToolDelete)
+			if _, err := write.Handler(t.Context(), memoryWriteInput("embedded", "Embedding scope")); err != nil {
+				t.Fatal(err)
+			}
+			if result, err := search.Handler(t.Context(), map[string]any{"query": "Embedding scope"}); err != nil || !strings.Contains(result, "Embedding scope") {
+				t.Fatalf("relative scope search=%q, %v", result, err)
+			}
+			if err := a.Engine.RunThreadStartPolicies(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := remove.Handler(t.Context(), map[string]any{"name": "embedded"}); err != nil {
+				t.Fatal(err)
+			}
+			if result, err := search.Handler(t.Context(), map[string]any{"query": ""}); err != nil || result != `{"memories":[]}` {
+				t.Fatalf("relative scope delete=%q, %v", result, err)
+			}
+		})
+	}
+}
+
 func TestEndToEnd_MemoryIndependentToolsAndRetainedKnowledge(t *testing.T) {
 	isolateModuleConfig(t)
 	cfg := memoryConfig(t)

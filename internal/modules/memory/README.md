@@ -7,6 +7,7 @@ directory. Main and Worker Threads share that directory; different Agents do
 not. `standard` enables Memory and `minimal` disables it. Set
 `modules.memory.enabled` explicitly to override the preset. Memory works with
 Extensions, MCP, Skills, and Hooks disabled and provides its own brief guidance.
+App resolves relative embedding paths before supplying the absolute Agent scope.
 
 Entry Markdown files are authoritative. Their YAML frontmatter contains name,
 single-line description, type (`user`, `feedback`, `project`, or `reference`),

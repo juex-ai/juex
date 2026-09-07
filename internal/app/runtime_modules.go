@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
@@ -82,7 +84,14 @@ func prepareRuntimeModules(
 			ID:      memory.ModuleID,
 			Enabled: cfg.ModuleEnabled(modulecatalog.Memory),
 			New: func(_ context.Context, ctx runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return memory.New(ctx.AgentStateDir), nil
+				if ctx.AgentStateDir == "" {
+					return nil, fmt.Errorf("memory module requires an Agent state directory")
+				}
+				agentDir, err := filepath.Abs(ctx.AgentStateDir)
+				if err != nil {
+					return nil, fmt.Errorf("resolve memory Agent state directory: %w", err)
+				}
+				return memory.New(agentDir), nil
 			},
 		},
 		{

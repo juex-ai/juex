@@ -6,6 +6,7 @@ Memory 拥有 Agent 状态目录下 `modules/memory/` 中的持久知识。Main 
 Thread 共享该目录，不同 Agent 相互隔离。`standard` 启用 Memory，`minimal`
 关闭它；可用 `modules.memory.enabled` 显式覆盖预设。关闭 Extensions、MCP、
 Skills 与 Hooks 后，Memory 仍可运行，并提供自身的简短使用指导。
+App 会先解析嵌入式调用的相对路径，再注入绝对的 Agent 存储作用域。
 
 条目 Markdown 文件是权威数据。YAML frontmatter 包含名称、单行描述、类型
 （`user`、`feedback`、`project` 或 `reference`）、创建时间和更新时间。同名写入
