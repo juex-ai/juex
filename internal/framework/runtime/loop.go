@@ -151,7 +151,7 @@ type Engine struct {
 	tokenCalibration   tokenEstimateCalibration
 
 	contextControlMu         sync.Mutex
-	pendingContextTransition *contextTransitionRequest
+	pendingContextTransition *runtimemodule.ContextTransitionRequest
 	contextPromptMu          sync.Mutex
 	contextPromptInputs      contextPromptInputs
 }

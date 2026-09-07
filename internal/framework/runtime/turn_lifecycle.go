@@ -146,7 +146,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		if err != nil {
 			return err
 		}
-		if transition == contextTransitionNew {
+		if transition == runtimemodule.ContextTransitionNew {
 			outcome, err := l.finishOrContinueLocked("Context renewed.")
 			if err != nil {
 				return err

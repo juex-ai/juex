@@ -9,6 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/agentsmd"
 	chunkmodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
+	"github.com/juex-ai/juex/internal/features/contextcontrol"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/memory"
@@ -213,10 +214,10 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 			},
 		},
 		{
-			ID:      juexruntime.ContextControlModuleID,
-			Enabled: cfg.ModuleEnabled(string(juexruntime.ContextControlModuleID)),
+			ID:      contextcontrol.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(contextcontrol.ModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-				return juexruntime.NewContextControlModule(engine), nil
+				return contextcontrol.New(engine), nil
 			},
 		},
 		{

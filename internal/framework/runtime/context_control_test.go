@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/features/contextcontrol"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -103,12 +104,12 @@ func TestNewContextStopsBeforeGenerationWhenModuleStateCannotClear(t *testing.T)
 func TestContextNewToolCreatesGenerationAndEndsTurn(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{
 		Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
-			Type: llm.BlockToolUse, ToolUseID: "renew", ToolName: ContextToolNew, Input: map[string]any{},
+			Type: llm.BlockToolUse, ToolUseID: "renew", ToolName: contextcontrol.ToolNew, Input: map[string]any{},
 		}}},
 		StopReason: llm.StopToolUse,
 	}}}
 	engine, _ := newEngine(t, provider, false)
-	module := NewContextControlModule(engine)
+	module := contextcontrol.New(engine)
 	installModuleTools(t, engine.Tools, module)
 
 	output, err := engine.Turn(context.Background(), "finish this task")
@@ -134,7 +135,7 @@ func TestContextCompactToolRunsBetweenProviderIterations(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{
 		{
 			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
-				Type: llm.BlockToolUse, ToolUseID: "compact", ToolName: ContextToolCompact,
+				Type: llm.BlockToolUse, ToolUseID: "compact", ToolName: contextcontrol.ToolCompact,
 				Input: map[string]any{"instructions": "retain the implementation state"},
 			}}},
 			StopReason: llm.StopToolUse,
@@ -145,7 +146,7 @@ func TestContextCompactToolRunsBetweenProviderIterations(t *testing.T) {
 	engine, _ := newEngine(t, provider, false)
 	engine.ContextWindow = 8192
 	engine.Compaction = DefaultCompactionPolicy()
-	module := NewContextControlModule(engine)
+	module := contextcontrol.New(engine)
 	installModuleTools(t, engine.Tools, module)
 
 	output, err := engine.Turn(context.Background(), "continue after reducing context")
@@ -171,7 +172,7 @@ func TestContextControlRecitationReportsWindowAndGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.setContextPromptInputs("system guidance", []llm.ToolSpec{{Name: "read"}})
-	sections, err := NewContextControlModule(engine).Context(context.Background(), runtimemodule.ContextRequest{
+	sections, err := contextcontrol.New(engine).Context(context.Background(), runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 	})
 	if err != nil {

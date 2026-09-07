@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/features/contextcontrol"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -95,9 +97,9 @@ func TestRunToolCalls_DeclaredExecutionPolicy(t *testing.T) {
 
 func TestRunToolCalls_ContextTransitionsFollowProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	installModuleTools(t, eng.Tools, NewContextControlModule(eng))
+	installModuleTools(t, eng.Tools, contextcontrol.New(eng))
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, request hooks.Request) ([]hooks.Result, error) {
-		if request.EventName == hooks.EventPreToolUse && request.ToolName == ContextToolCompact {
+		if request.EventName == hooks.EventPreToolUse && request.ToolName == contextcontrol.ToolCompact {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():
@@ -107,14 +109,14 @@ func TestRunToolCalls_ContextTransitionsFollowProviderOrder(t *testing.T) {
 		return nil, nil
 	}))
 	results := eng.runToolCalls(t.Context(), "context-order", testToolExecutions([]llm.Block{
-		{Type: llm.BlockToolUse, ToolUseID: "compact-first", ToolName: ContextToolCompact, Input: map[string]any{}},
-		{Type: llm.BlockToolUse, ToolUseID: "new-second", ToolName: ContextToolNew, Input: map[string]any{}},
+		{Type: llm.BlockToolUse, ToolUseID: "compact-first", ToolName: contextcontrol.ToolCompact, Input: map[string]any{}},
+		{Type: llm.BlockToolUse, ToolUseID: "new-second", ToolName: contextcontrol.ToolNew, Input: map[string]any{}},
 	}))
 	if len(results) != 2 || results[0].Block.IsError || !results[1].Block.IsError {
 		t.Fatalf("context results=%+v", results)
 	}
 	transition := eng.takeContextTransition()
-	if transition == nil || transition.Kind != contextTransitionCompact {
+	if transition == nil || transition.Kind != runtimemodule.ContextTransitionCompact {
 		t.Fatalf("context transition=%+v", transition)
 	}
 }
