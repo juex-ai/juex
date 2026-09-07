@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
@@ -95,7 +95,7 @@ func newTurnTransportTestThread(t *testing.T, provider llm.Provider) (*Server, *
 		Provider: provider,
 	})
 	t.Cleanup(srv.Close)
-	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+	if err := agent.EnsureMainThread(srv.opts.Cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	as, err := srv.openThread(context.Background(), "0")

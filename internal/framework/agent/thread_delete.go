@@ -1,10 +1,9 @@
-package app
+package agent
 
 import (
 	"fmt"
 	"path"
 
-	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -24,12 +23,12 @@ func (e *PartialThreadDeleteError) Unwrap() error { return e.Err }
 
 // DeleteThread permanently removes an archived Worker. Store enforces that
 // Main, active Workers, and Workers with children cannot be deleted.
-func DeleteThread(cfg config.Config, id string) error {
-	store := thread.NewStore(cfg.RuntimePaths().StateDir)
+func DeleteThread(stateDir, mediaDir, id string) error {
+	store := thread.NewStore(stateDir)
 	if err := store.DeleteArchived(id); err != nil {
 		return err
 	}
-	if mediaDir := cfg.MediaDir(); mediaDir != "" {
+	if mediaDir != "" {
 		artifactStore, err := artifact.NewStore(mediaDir)
 		if err != nil {
 			return &PartialThreadDeleteError{ThreadID: id, Err: err}

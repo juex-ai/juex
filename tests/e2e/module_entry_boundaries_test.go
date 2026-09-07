@@ -14,9 +14,9 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -106,7 +106,7 @@ func TestWorkerDisabledAPIKeepsHistoryAndHostMaintenance(t *testing.T) {
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
 		Modules: config.ModulePolicy{"worker-threads": {Enabled: true}},
 	}
-	if err := app.EnsureMainThread(cfg); err != nil {
+	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker("0", "retained")

@@ -14,12 +14,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	usermedia "github.com/juex-ai/juex/internal/framework/inputmedia"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -140,7 +140,7 @@ func TestThreadScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Cfg.AgentStateDir = filepath.Join(t.TempDir(), "agent")
 	id := thread.MainID
-	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+	if err := agent.EnsureMainThread(srv.opts.Cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	threadDir := filepath.Join(srv.opts.Cfg.ThreadsDir(), id)
@@ -252,7 +252,7 @@ func TestThreadScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
 		Provider: stubProvider{},
 	})
 	t.Cleanup(srv.Close)
-	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+	if err := agent.EnsureMainThread(srv.opts.Cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -753,7 +753,7 @@ func TestMediaRequiresExplicitRoot(t *testing.T) {
 func TestModuleResourceRawReadsThreadScratchpad(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Cfg.AgentStateDir = filepath.Join(t.TempDir(), "agent")
-	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+	if err := agent.EnsureMainThread(srv.opts.Cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	id := thread.MainID

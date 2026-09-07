@@ -372,7 +372,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 	}()
 
-	attachment, err := AttachWorkspaceThread(cfg, ThreadAttachmentRequest{
+	attachment, err := agent.AttachThread(cfg.RuntimePaths().StateDir, agent.ThreadAttachmentRequest{
 		ThreadID:       opts.ThreadID,
 		ParentThreadID: opts.parentThreadID,
 		Alias:          opts.Alias,

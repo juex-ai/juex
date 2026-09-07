@@ -309,7 +309,7 @@ func (s *Server) handleDeleteThread(w http.ResponseWriter, _ *http.Request, id s
 		writeErr(w, http.StatusConflict, "conflict", "Main Thread cannot be deleted")
 		return
 	}
-	if err := app.DeleteThread(s.opts.Cfg, id); err != nil {
+	if err := agent.DeleteThread(s.opts.Cfg.RuntimePaths().StateDir, s.opts.Cfg.MediaDir(), id); err != nil {
 		writeThreadLookupError(w, id, err)
 		return
 	}

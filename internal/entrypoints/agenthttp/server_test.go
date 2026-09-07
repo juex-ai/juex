@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/runtime"
@@ -50,7 +50,7 @@ func newTestServer(t *testing.T) *Server {
 		Cfg:      cfg,
 		Provider: stubProvider{},
 	})
-	if err := app.EnsureMainThread(cfg); err != nil {
+	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(srv.Close)
@@ -611,7 +611,7 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 		Provider: provider,
 	})
 	defer srv.Close()
-	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
+	if err := agent.EnsureMainThread(srv.opts.Cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 

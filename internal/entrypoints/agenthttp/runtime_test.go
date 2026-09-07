@@ -17,12 +17,11 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
-
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 )
@@ -250,7 +249,7 @@ func TestRuntimeAPIAlwaysRedactsConfiguredEnvironmentValues(t *testing.T) {
 	cfg.Model = secret
 
 	srv := NewServer(Options{Cfg: cfg})
-	if err := app.EnsureMainThread(cfg); err != nil {
+	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(srv.Close)

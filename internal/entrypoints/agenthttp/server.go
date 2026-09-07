@@ -20,12 +20,11 @@ import (
 	observablesmodule "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/version"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
-
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-
 	statusapi "github.com/juex-ai/juex/internal/framework/status"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -338,7 +337,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = resourceLease.Close() }()
-	if err := app.EnsureMainThread(s.opts.Cfg); err != nil {
+	if err := agent.EnsureMainThread(s.opts.Cfg.RuntimePaths().StateDir); err != nil {
 		return err
 	}
 	shutdownCh := s.setEndpointControl(binding.Runtime())

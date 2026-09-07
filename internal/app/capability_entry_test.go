@@ -79,7 +79,7 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
 		Modules: config.ModulePolicy{workerthreadsmodule.ModuleID: {Enabled: true}},
 	}
-	if err := EnsureMainThread(cfg); err != nil {
+	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "retained")
@@ -154,7 +154,7 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 
 func TestDisabledWorkerNewContextDoesNotGreet(t *testing.T) {
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
-	if err := EnsureMainThread(cfg); err != nil {
+	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "maintenance")
@@ -184,7 +184,7 @@ func TestDisabledWorkerSkipsThreadStartPolicies(t *testing.T) {
 		cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
 			Modules: config.ModulePolicy{workerthreadsmodule.ModuleID: {Enabled: enabled}},
 		}
-		if err := EnsureMainThread(cfg); err != nil {
+		if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 			t.Fatal(err)
 		}
 		worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "startup")

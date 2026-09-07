@@ -1,9 +1,8 @@
-package app
+package agent
 
 import (
 	"fmt"
 
-	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -23,8 +22,7 @@ type ThreadAttachment struct {
 
 // AttachWorkspaceThread applies the Agent-owned Thread identity rules. Main
 // has the stable id "0"; Worker identity and parentage are owned by Store.
-func AttachWorkspaceThread(cfg config.Config, request ThreadAttachmentRequest) (ThreadAttachment, error) {
-	stateDir := cfg.RuntimePaths().StateDir
+func AttachThread(stateDir string, request ThreadAttachmentRequest) (ThreadAttachment, error) {
 	if stateDir == "" {
 		return ThreadAttachment{}, fmt.Errorf("app: Agent state directory is required")
 	}
@@ -57,8 +55,8 @@ func AttachWorkspaceThread(cfg config.Config, request ThreadAttachmentRequest) (
 	return ThreadAttachment{Thread: target, Store: store, Created: created}, nil
 }
 
-func EnsureMainThread(cfg config.Config) error {
-	attachment, err := AttachWorkspaceThread(cfg, ThreadAttachmentRequest{})
+func EnsureMainThread(stateDir string) error {
+	attachment, err := AttachThread(stateDir, ThreadAttachmentRequest{})
 	if err != nil {
 		return err
 	}
