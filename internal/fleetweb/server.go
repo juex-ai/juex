@@ -12,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -496,10 +497,23 @@ func (s *Server) serveReadOnlyAgent(
 	if err != nil {
 		return false
 	}
+	if state.ModuleError != "" && strings.Contains(upstreamPath, "/modules") {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", state.ModuleError)
+		return true
+	}
 	request := r.Clone(r.Context())
 	request.URL.Path = upstreamPath
 	request.URL.RawPath = ""
-	s.readOnlyAgentHandler(state).ServeHTTP(w, request)
+	handler := s.readOnlyAgentHandler(state)
+	handler.ServeHTTP(w, request)
+	if info, err := os.Stat(state.StateDir); err == nil {
+		s.readOnlyMu.Lock()
+		if cached, ok := s.readOnlyAgents[state.ID]; ok && cached.handler == handler {
+			cached.stateDirModifiedAt = info.ModTime()
+			s.readOnlyAgents[state.ID] = cached
+		}
+		s.readOnlyMu.Unlock()
+	}
 	return true
 }
 
@@ -509,12 +523,13 @@ func (s *Server) readOnlyAgentHandler(state fleet.ReadOnlyAgentState) http.Handl
 	defer s.readOnlyMu.Unlock()
 	if cached, ok := s.readOnlyAgents[state.ID]; ok &&
 		stateDirErr == nil &&
-		cached.state == state &&
+		reflect.DeepEqual(cached.state, state) &&
 		cached.stateDirModifiedAt.Equal(stateDirInfo.ModTime()) {
 		return cached.handler
 	}
 	handler := web.NewReadOnlyAPIHandler(config.Config{
-		WorkDir:       state.Workspace,
+		WorkDir: state.Workspace,
+		Preset:  state.Preset, Modules: state.Modules,
 		AgentID:       state.ID,
 		AgentName:     state.Name,
 		AgentStateDir: state.StateDir,
@@ -564,9 +579,19 @@ func isReadOnlyAgentPath(path string) bool {
 	if len(parts) == 1 {
 		return thread.ValidID(parts[0])
 	}
-	return len(parts) == 2 &&
-		thread.ValidID(parts[0]) &&
-		(parts[1] == "context" || parts[1] == "scratchpad")
+	if !thread.ValidID(parts[0]) {
+		return false
+	}
+	if len(parts) == 2 {
+		return parts[1] == "context" || parts[1] == "modules"
+	}
+	if parts[1] != "modules" {
+		return false
+	}
+	if len(parts) == 3 {
+		return parts[2] == "events"
+	}
+	return len(parts) == 6 && parts[3] == "resources" && (parts[5] == "tree" || parts[5] == "content" || parts[5] == "raw" || parts[5] == "events")
 }
 
 func parseAgentAPIPath(path string) (string, string, bool) {

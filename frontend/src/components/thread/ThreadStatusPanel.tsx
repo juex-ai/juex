@@ -1,3 +1,4 @@
+import { useThreadModules } from "@/hooks/use-thread-modules";
 import type { ReactNode } from "react";
 import { CircleGaugeIcon, LoaderCircleIcon } from "lucide-react";
 
@@ -58,8 +59,19 @@ export function ThreadStatusPanel({
 }
 
 function ThreadRuntimeStateBadge({ data }: { data: ThreadShowResponse }) {
-  const label = runtimeThreadStateBadgeLabel(data.goal, data.notes);
-  const active = runtimeThreadStateIsActive(data.goal, data.notes);
+  const { snapshot, error } = useThreadModules(data.id);
+  if (error) return <span role="status">Module state unavailable</span>;
+  if (!snapshot) return <StatusLoading />;
+  const goalState = snapshot.modules.goal;
+  const notesState = snapshot.modules.notes;
+  if (!goalState && !notesState) return null;
+  const goal = goalState?.status === "ready" ? goalState.value as GoalStatusSnapshot | null : null;
+  const notes = notesState?.status === "ready" ? notesState.value as NotesSnapshot | null : null;
+  if ([goalState, notesState].some((state) => state && (state.status === "error" || state.version !== 1))) {
+    return <span role="status">Module state unavailable</span>;
+  }
+  const label = runtimeThreadStateBadgeLabel(goal ?? undefined, notes ?? undefined);
+  const active = runtimeThreadStateIsActive(goal ?? undefined, notes ?? undefined);
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -78,7 +90,7 @@ function ThreadRuntimeStateBadge({ data }: { data: ThreadShowResponse }) {
         align="start"
         className="block !w-[min(34rem,calc(100vw-2rem))] !max-w-[calc(100vw-2rem)] max-h-[24rem] overflow-auto text-left text-xs"
       >
-        <ThreadStateTooltip goal={data.goal} notes={data.notes} />
+        <ThreadStateTooltip goal={goal ?? undefined} notes={notes ?? undefined} />
       </PopoverContent>
     </Popover>
   );

@@ -2,6 +2,7 @@ package workmem
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,18 +129,23 @@ func (s *NotesStore) snapshotLocked() (NotesSnapshot, bool, error) {
 		return NotesSnapshot{}, false, nil
 	}
 	path := s.Path
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return NotesSnapshot{}, false, nil
 		}
 		return NotesSnapshot{}, false, fmt.Errorf("notes read: %w", err)
 	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return NotesSnapshot{}, false, fmt.Errorf("notes read: %w", err)
+	}
 	content := string(data)
 	if err := validateNotesContent(content); err != nil {
 		return NotesSnapshot{}, false, fmt.Errorf("notes read: %w", err)
 	}
-	info, err := os.Stat(path)
+	info, err := file.Stat()
 	if err != nil {
 		return NotesSnapshot{}, false, fmt.Errorf("notes stat: %w", err)
 	}

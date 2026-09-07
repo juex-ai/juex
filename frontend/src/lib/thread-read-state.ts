@@ -189,7 +189,6 @@ export function projectLiveBrowserEvent(
   state: ThreadReadState,
   event: BrowserEvent,
 ): ThreadReadResult {
-  const metadataState = projectThreadMetadataEvent(state, event);
   if (
     eventTranscriptAlreadyLoaded(
       state.data?.messages ?? [],
@@ -197,11 +196,11 @@ export function projectLiveBrowserEvent(
       event,
     )
   ) {
-    return { state: metadataState, effects: [] };
+    return { state, effects: [] };
   }
   const result = projectLiveThreadEvent(state.projection, event);
   return withProjectionResult(
-    metadataState,
+    state,
     result.state,
     result.effects,
   );
@@ -385,30 +384,6 @@ function projectCommandTurnSucceeded(
       ),
     },
     effects: [],
-  };
-}
-
-function projectThreadMetadataEvent(
-  state: ThreadReadState,
-  event: BrowserEvent,
-): ThreadReadState {
-  if (!state.data) return state;
-  if (event.type === "goal.updated") {
-    return {
-      ...state,
-      data: {
-        ...state.data,
-        goal: event.payload,
-      },
-    };
-  }
-  if (event.type !== "notes.updated") return state;
-  return {
-    ...state,
-    data: {
-      ...state.data,
-      notes: event.payload,
-    },
   };
 }
 

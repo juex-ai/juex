@@ -21,7 +21,6 @@ const resourceChangeDebounce = 120 * time.Millisecond
 
 const (
 	resourceWorkspace  = "workspace"
-	resourceScratchpad = "scratchpad"
 	resourceObservable = "observables"
 	resourceRuntime    = "runtime"
 )
@@ -79,7 +78,6 @@ func (s *resourceSubscriber) take() agentResourceEvent {
 
 type resourceEventHub struct {
 	workDir               string
-	threadsDir            string
 	observablesConfigPath string
 	runtimeFiles          map[string]struct{}
 
@@ -100,10 +98,9 @@ type resourceSubscription struct {
 	cancel  func()
 }
 
-func newResourceEventHub(workDir, threadsDir, observablesConfigPath string) *resourceEventHub {
+func newResourceEventHub(workDir, observablesConfigPath string) *resourceEventHub {
 	hub := &resourceEventHub{
 		workDir:      filepath.Clean(workDir),
-		threadsDir:   filepath.Clean(threadsDir),
 		runtimeFiles: map[string]struct{}{},
 		subscribers:  map[uint64]*resourceSubscriber{},
 		addWatch: func(watcher *fsnotify.Watcher, path string) error {
@@ -139,11 +136,6 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			return resourceSubscription{}, err
 		}
 		if err := h.addRoot(watcher, h.workDir); err != nil {
-			_ = watcher.Close()
-			h.mu.Unlock()
-			return resourceSubscription{}, err
-		}
-		if err := h.addRoot(watcher, h.threadsDir); err != nil {
 			_ = watcher.Close()
 			h.mu.Unlock()
 			return resourceSubscription{}, err
@@ -346,7 +338,7 @@ func (h *resourceEventHub) runWatcher(
 
 func (h *resourceEventHub) shouldWatchCreatedDirectory(path string) bool {
 	path = filepath.Clean(path)
-	if pathWithin(h.workDir, path) || pathWithin(h.threadsDir, path) {
+	if pathWithin(h.workDir, path) {
 		return true
 	}
 	for file := range h.runtimeFiles {
@@ -358,7 +350,7 @@ func (h *resourceEventHub) shouldWatchCreatedDirectory(path string) bool {
 }
 
 func (h *resourceEventHub) resyncAfterWatcherError() {
-	h.publish(resourceObservable, resourceRuntime, resourceScratchpad, resourceWorkspace)
+	h.publish(resourceObservable, resourceRuntime, resourceWorkspace)
 }
 
 func (h *resourceEventHub) failWatcher(failed *fsnotify.Watcher) {
@@ -390,9 +382,6 @@ func (h *resourceEventHub) resourceForPath(path string) string {
 	if h.observablesConfigPath != "" && path == h.observablesConfigPath {
 		return resourceObservable
 	}
-	if pathWithin(h.threadsDir, path) && strings.Contains(path, string(filepath.Separator)+"scratchpad") {
-		return resourceScratchpad
-	}
 	if !pathWithin(h.workDir, path) {
 		return ""
 	}
@@ -416,7 +405,7 @@ func (h *resourceEventHub) resourcesForPath(path string) []string {
 		return nil
 	}
 	resources := []string{resource}
-	if resource == resourceScratchpad || (resource == resourceWorkspace && h.isMutableRuntimeInput(path)) {
+	if resource == resourceWorkspace && h.isMutableRuntimeInput(path) {
 		resources = append(resources, resourceRuntime)
 	}
 	return resources
@@ -472,7 +461,7 @@ func (h *resourceEventHub) Publish(event events.Event) {
 		name := toolEventName(event.Payload)
 		switch name {
 		case "write", "edit", "apply_patch", "write_commit":
-			h.invalidate(resourceWorkspace, resourceScratchpad, resourceRuntime)
+			h.invalidate(resourceWorkspace, resourceRuntime)
 		}
 	}
 }
@@ -550,7 +539,7 @@ func (s *Server) handleResourceEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	if err := writeResourceSSE(w, agentResourceEvent{
 		Type:      "resource.changed",
-		Resources: []string{resourceObservable, resourceRuntime, resourceScratchpad, resourceWorkspace},
+		Resources: []string{resourceObservable, resourceRuntime, resourceWorkspace},
 	}); err != nil {
 		return
 	}

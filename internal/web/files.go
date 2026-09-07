@@ -14,15 +14,11 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/artifact"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/modules/scratchpad"
-	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 const maxFilePreviewBytes = 256 * 1024
 const maxFileTreeDepth = 12
-const scratchpadLogicalRoot = ".juex"
 
 type FileNode struct {
 	Name              string      `json:"name"`
@@ -122,48 +118,7 @@ func buildFileTreeWithSkip(root, relPath string, depth int, skip func(string) bo
 	return node, nil
 }
 
-func (s *Server) handleThreadScratchpad(w http.ResponseWriter, r *http.Request, id string) {
-	dir, ok := s.threadScratchpadDir(id)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "not_found", "Thread not found: "+id)
-		return
-	}
-
-	root := s.opts.Cfg.RuntimePaths().StateDir
-	root, relPath, err := resolveScratchpadTreePath(root, dir)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-
-	tree, err := buildFileTreeWithSkip(root, relPath, 0, nil)
-	if os.IsNotExist(err) {
-		tree = &FileNode{
-			Name:  scratchpadName(dir),
-			Path:  filepath.ToSlash(relPath),
-			IsDir: true,
-		}
-		err = nil
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	prefixFileTreePaths(tree, scratchpadLogicalRoot)
-	writeJSON(w, http.StatusOK, tree)
-}
-
-func prefixFileTreePaths(node *FileNode, prefix string) {
-	if node == nil {
-		return
-	}
-	node.Path = filepath.ToSlash(filepath.Join(filepath.FromSlash(prefix), filepath.FromSlash(node.Path)))
-	for _, child := range node.Children {
-		prefixFileTreePaths(child, prefix)
-	}
-}
-
-func resolveScratchpadTreePath(root, dir string) (string, string, error) {
+func resolveModuleTreePath(root, dir string) (string, string, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return "", "", err
@@ -174,7 +129,7 @@ func resolveScratchpadTreePath(root, dir string) (string, string, error) {
 	}
 	relPath, err := relativeInside(root, dir)
 	if err != nil {
-		return "", "", errors.New("scratchpad is outside workspace")
+		return "", "", errors.New("module resource is outside Thread")
 	}
 
 	resolvedRoot, err := filepath.EvalSymlinks(root)
@@ -182,21 +137,21 @@ func resolveScratchpadTreePath(root, dir string) (string, string, error) {
 		return root, relPath, nil
 	}
 	root = resolvedRoot
-	if err := rejectScratchpadTreeSymlinks(root, relPath); err != nil {
+	if err := rejectModuleTreeSymlinks(root, relPath); err != nil {
 		return "", "", err
 	}
 	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		// A missing scratchpad directory remains a valid empty tree.
+		// A missing module directory remains a valid empty tree.
 		return root, relPath, nil
 	}
 	if _, err := relativeInside(root, resolvedDir); err != nil {
-		return "", "", errors.New("scratchpad is outside workspace")
+		return "", "", errors.New("module resource is outside Thread")
 	}
 	return root, relPath, nil
 }
 
-func rejectScratchpadTreeSymlinks(root, relPath string) error {
+func rejectModuleTreeSymlinks(root, relPath string) error {
 	current := root
 	for _, part := range strings.Split(filepath.Clean(relPath), string(filepath.Separator)) {
 		current = filepath.Join(current, part)
@@ -208,51 +163,10 @@ func rejectScratchpadTreeSymlinks(root, relPath string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("scratchpad path contains a symlink")
+			return errors.New("module path contains a symlink")
 		}
 	}
 	return nil
-}
-
-func (s *Server) threadScratchpadDir(id string) (string, bool) {
-	if !s.opts.Cfg.ModuleEnabled(modulecatalog.Scratchpad) {
-		return "", false
-	}
-	if active, ok := s.threads.Load(id); ok {
-		as := active.(*activeThread)
-		var scratchpadDir string
-		err := as.app.ReadThreadID(id, func(target *thread.Thread) error {
-			scratchpadDir = scratchpad.Dir(target.Dir)
-			return nil
-		})
-		if err == nil {
-			return scratchpadDir, true
-		}
-	}
-	if !thread.ValidID(id) {
-		return "", false
-	}
-	store := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir)
-	target, err := store.OpenActive(id)
-	if os.IsNotExist(err) {
-		target, err = store.OpenArchived(id)
-	}
-	if err != nil {
-		return "", false
-	}
-	scratchpadDir := scratchpad.Dir(target.Dir)
-	if err := target.Close(); err != nil {
-		return "", false
-	}
-	return scratchpadDir, true
-}
-
-func scratchpadName(dir string) string {
-	name := filepath.Base(dir)
-	if name == "." || name == string(filepath.Separator) || name == "" {
-		return "scratchpad"
-	}
-	return name
 }
 
 func shouldSkipTreeEntry(name string) bool {
@@ -283,6 +197,10 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 		reqErr.write(w)
 		return
 	}
+	serveFileContent(w, file)
+}
+
+func serveFileContent(w http.ResponseWriter, file resolvedFileRequest) {
 	f, err := os.Open(file.resolvedPath)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -384,6 +302,10 @@ func (s *Server) handleFilesRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	serveFileRaw(w, r, file)
+}
+
+func serveFileRaw(w http.ResponseWriter, r *http.Request, file resolvedFileRequest) {
 	f, err := os.Open(file.resolvedPath)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -543,16 +465,7 @@ func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *file
 	if root == "" {
 		root = "."
 	}
-	displayPath := ""
-	if scratchpadPath, logicalPath, ok := resolveScratchpadRequestPath(reqPath); ok {
-		if !s.opts.Cfg.ModuleEnabled(modulecatalog.Scratchpad) {
-			return resolvedFileRequest{}, &fileRequestError{status: http.StatusNotFound, code: "not_found", message: "file not found"}
-		}
-		root = s.opts.Cfg.ThreadsDir()
-		reqPath = scratchpadPath
-		displayPath = logicalPath
-	}
-	return resolveFileAtRoot(root, reqPath, displayPath)
+	return resolveFileAtRoot(root, reqPath, "")
 }
 
 func resolveFileAtRoot(root, reqPath, displayPath string) (resolvedFileRequest, *fileRequestError) {
@@ -599,24 +512,6 @@ func resolveFileAtRoot(root, reqPath, displayPath string) (resolvedFileRequest, 
 
 func (s *Server) resolveWorkspaceFileRequest(r *http.Request) (resolvedFileRequest, *fileRequestError) {
 	return s.resolveFileRequest(r)
-}
-
-func resolveScratchpadRequestPath(reqPath string) (physicalPath, logicalPath string, ok bool) {
-	if strings.HasPrefix(reqPath, "/") {
-		return "", "", false
-	}
-	clean := filepath.Clean(filepath.FromSlash(reqPath))
-	parts := strings.Split(clean, string(filepath.Separator))
-	if len(parts) < 5 ||
-		parts[0] != ".juex" ||
-		parts[1] != "threads" ||
-		parts[2] == "" ||
-		parts[2] == "." ||
-		parts[2] == ".." ||
-		parts[3] != "scratchpad" {
-		return "", "", false
-	}
-	return filepath.Join(parts[2:]...), filepath.ToSlash(clean), true
 }
 
 func resolveWorkPath(root, reqPath string) (string, string, error) {

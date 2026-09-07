@@ -183,6 +183,24 @@ Activation callbacks run without Set locks. Shutdown cancels delivery and
 quiesces input, deferring resource cleanup until activation and in-flight
 callbacks return, before closing Thread and runtime resources.
 
+Thread factory declarations also own passive inspection: typed state readers,
+versioned UI contribution IDs, file roots, and optional operations. App composes
+them from the same effective module set; HTTP never constructs a Module to read
+it. Active, inactive, and archived Threads use metadata-only lookup. Disabled
+modules contribute no readers or resources; archived operations are rejected.
+Go JSON declarations generate the shared TypeScript inspection contract.
+
+Module SSE subscribes to declared replaceable state files before reading a full
+snapshot. Each connection serializes complete replacements and deduplicates by
+opaque content revision; reconnect always replaces the baseline. Its transport
+cursor is independent of durable-event replay. The observed durable cursor is a
+lower bound, not an as-of position for module files. Clients discard prior-scope
+responses and do not let a pending GET overwrite a received stream baseline.
+Stopped-Agent streams finish after their baseline so reconnect rechecks Fleet
+endpoint selection and effective configuration. File trees and recursive resource
+subscriptions start only when selected; UI
+snapshots are neither model context nor a new storage authority.
+
 Resource retirement is separate from Close. The accepted configuration's factory
 declarations identify available owners without constructing disabled Modules.
 An Agent lifecycle lease excludes old and deferred writers. Before deleting any

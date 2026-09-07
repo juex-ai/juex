@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/processidentity"
@@ -106,10 +107,13 @@ type AgentReference struct {
 // ReadOnlyAgentState identifies the durable workspace and identity-owned state
 // roots that remain safe to inspect while the runtime process is stopped.
 type ReadOnlyAgentState struct {
-	ID        string
-	Name      string
-	Workspace string
-	StateDir  string
+	ModuleError string
+	Preset      string
+	Modules     config.ModulePolicy
+	ID          string
+	Name        string
+	Workspace   string
+	StateDir    string
 }
 
 type Action struct {

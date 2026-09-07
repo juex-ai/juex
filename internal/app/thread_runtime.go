@@ -9,7 +9,6 @@ import (
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
@@ -118,15 +117,6 @@ func (a *App) ActiveContextForThread(id string) (runtime.ActiveContextSnapshot, 
 		return nil
 	})
 	return snapshot, err == nil
-}
-
-func (a *App) ThreadStateStatus() (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
-	if a == nil || a.Engine == nil {
-		return nil, nil
-	}
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	return a.Engine.ThreadStateStatus()
 }
 
 func (a *App) PendingInputStatus() runtime.PendingInputStatus {

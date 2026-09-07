@@ -14,7 +14,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -312,7 +311,7 @@ func TestWeb_ThreadMetadataLifecycleSurvivesServerRestart(t *testing.T) {
 	}
 }
 
-func TestWeb_ScratchpadReadAliasesFollowModuleSwitchAcrossRestart(t *testing.T) {
+func TestWeb_ModuleResourcesFollowSwitchAcrossRestart(t *testing.T) {
 	cfg := config.Config{
 		ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: t.TempDir(),
 		AgentStateDir: t.TempDir(),
@@ -332,7 +331,7 @@ func TestWeb_ScratchpadReadAliasesFollowModuleSwitchAcrossRestart(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	alias := url.QueryEscape(".juex/threads/" + thread.MainID + "/scratchpad/image.png")
+	resource := "/api/threads/" + thread.MainID + "/modules/scratchpad/resources/files/"
 	for _, enabled := range []bool{true, false, true} {
 		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
 			cfg.Modules = config.ModulePolicy{modulecatalog.Scratchpad: {Enabled: enabled}}
@@ -341,10 +340,9 @@ func TestWeb_ScratchpadReadAliasesFollowModuleSwitchAcrossRestart(t *testing.T) 
 			httpServer := httptest.NewServer(server.Handler())
 			defer httpServer.Close()
 			for _, endpoint := range []string{
-				"/api/threads/" + thread.MainID + "/scratchpad",
-				"/api/files/content?path=" + alias,
-				"/api/files/raw?path=" + alias,
-				"/api/media?root=workspace&path=" + alias,
+				resource + "tree",
+				resource + "content?path=image.png",
+				resource + "raw?path=image.png",
 				"/api/media?root=workspace&path=workspace.png",
 			} {
 				methods := []string{http.MethodGet}

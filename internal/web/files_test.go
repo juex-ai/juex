@@ -111,7 +111,7 @@ func TestThreadScratchpadTreeReturnsScopedFiles(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/modules/scratchpad/resources/files/tree")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,14 +124,14 @@ func TestThreadScratchpadTreeReturnsScopedFiles(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.ToSlash(filepath.Join(".juex", "threads", id, "scratchpad"))
+	wantPath := "/"
 	if tree.Name != "scratchpad" || tree.Path != wantPath || !tree.IsDir {
 		t.Fatalf("root = %+v, want scoped scratchpad %q", tree, wantPath)
 	}
 	if got, want := strings.Join(childNames(tree.Children), ","), "dist,draft.md"; got != want {
 		t.Fatalf("children = %q, want %q", got, want)
 	}
-	if got := tree.Children[0].Children[0].Path; got != wantPath+"/dist/result.txt" {
+	if got := tree.Children[0].Children[0].Path; got != "dist/result.txt" {
 		t.Fatalf("nested path = %q", got)
 	}
 }
@@ -149,7 +149,7 @@ func TestThreadScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/modules/scratchpad/resources/files/tree")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,12 +162,12 @@ func TestThreadScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.ToSlash(filepath.Join(".juex", "threads", id, "scratchpad"))
-	if tree.Path != wantPath || len(tree.Children) != 1 || tree.Children[0].Path != wantPath+"/draft.md" {
+	wantPath := "/"
+	if tree.Path != wantPath || len(tree.Children) != 1 || tree.Children[0].Path != "draft.md" {
 		t.Fatalf("tree = %+v, want logical path %q with draft.md", tree, wantPath)
 	}
 
-	preview, err := http.Get(ts.URL + "/api/files/content?path=" + url.QueryEscape(tree.Children[0].Path))
+	preview, err := http.Get(ts.URL + "/api/threads/" + id + "/modules/scratchpad/resources/files/content?path=" + url.QueryEscape(tree.Children[0].Path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestThreadScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
 	if err := json.NewDecoder(preview.Body).Decode(&content); err != nil {
 		t.Fatal(err)
 	}
-	if content.Path != wantPath+"/draft.md" || content.Content != "agent-home draft" {
+	if content.Path != "draft.md" || content.Content != "agent-home draft" {
 		t.Fatalf("preview = %+v", content)
 	}
 }
@@ -197,7 +197,7 @@ func TestThreadScratchpadReadKeepsEmptyDirectory(t *testing.T) {
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/threads/" + as.app.Thread.ID + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + as.app.Thread.ID + "/modules/scratchpad/resources/files/tree")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestThreadScratchpadTreeRejectsUnknownThread(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/threads/missing/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/123456/modules/scratchpad/resources/files/tree")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestThreadScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/modules/scratchpad/resources/files/tree")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestThreadScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.ToSlash(filepath.Join(".juex", "threads", id, "scratchpad"))
+	wantPath := "/"
 	if tree.Path != wantPath || len(tree.Children) != 1 || tree.Children[0].Name != "draft.md" {
 		t.Fatalf("tree = %+v, want path %q with draft.md", tree, wantPath)
 	}
@@ -298,12 +298,12 @@ func TestThreadScratchpadTreeRejectsOutsideSymlink(t *testing.T) {
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/modules/scratchpad/resources/files/tree")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
+	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
@@ -323,12 +323,12 @@ func TestThreadScratchpadTreeRejectsInsideSymlink(t *testing.T) {
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/scratchpad")
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/modules/scratchpad/resources/files/tree")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
+	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
@@ -750,19 +750,19 @@ func TestMediaRequiresExplicitRoot(t *testing.T) {
 	}
 }
 
-func TestWorkspaceMediaResolvesThreadScratchpadAliases(t *testing.T) {
+func TestModuleResourceRawReadsThreadScratchpad(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Cfg.AgentStateDir = filepath.Join(t.TempDir(), "agent")
 	if err := app.EnsureMainThread(srv.opts.Cfg); err != nil {
 		t.Fatal(err)
 	}
 	id := thread.MainID
-	logical := filepath.ToSlash(filepath.Join(".juex", "threads", id, "scratchpad", "image.png"))
+	logical := "image.png"
 	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.ThreadsDir(), id, "scratchpad", "image.png"), tinyPNG)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/media?root=workspace&path=" + url.QueryEscape(logical))
+	resp, err := http.Get(ts.URL + "/api/threads/" + id + "/modules/scratchpad/resources/files/raw?path=" + url.QueryEscape(logical))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1016,12 +1016,11 @@ func TestDisabledScratchpadEndpointSkipsStoredResources(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "thread.json"), "malformed metadata must not be opened")
 	mustWriteFile(t, filepath.Join(dir, "scratchpad", "draft.md"), "private-draft-529")
 	mustWriteBytes(t, filepath.Join(dir, "scratchpad", "image.png"), tinyPNG)
-	alias := ".juex/threads/" + id + "/scratchpad/"
+	resource := "/api/threads/" + id + "/modules/scratchpad/resources/files/"
 	for _, endpoint := range []string{
-		"/api/threads/" + id + "/scratchpad",
-		"/api/files/content?path=" + url.QueryEscape(alias+"draft.md"),
-		"/api/files/raw?path=" + url.QueryEscape(alias+"image.png"),
-		"/api/media?root=workspace&path=" + url.QueryEscape(alias+"image.png"),
+		"/api/threads/" + id + "/modules/scratchpad/resources/files/tree",
+		resource + "content?path=draft.md",
+		resource + "raw?path=image.png",
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, endpoint, nil)

@@ -1,3 +1,5 @@
+import type { GoalStatusSnapshot, NotesSnapshot } from "./module-schema";
+export type { GoalStatusSnapshot, NotesSnapshot } from "./module-schema";
 // Mirror of Go API/thread DTOs and the internal/web browser event contract.
 // When the Go side changes, update this file in the same PR.
 
@@ -158,8 +160,6 @@ export interface ThreadShowResponse extends ThreadInfo {
   event_cursor: string;
   has_more_before?: boolean;
   oldest_message_id?: string;
-  goal?: GoalStatusSnapshot;
-  notes?: NotesSnapshot;
 }
 
 export interface ThreadsListResponse {
@@ -1153,14 +1153,6 @@ export type ObservableCreateRequest =
       command_config?: never;
     };
 
-export interface GoalStatusSnapshot {
-  description?: string;
-  acceptance?: string;
-  continuation_count?: number;
-  status?: string;
-  status_reason?: string;
-  updated_at?: string;
-}
 
 export interface RuntimeHooksStatus {
   configured: number;
@@ -1178,10 +1170,6 @@ export interface RuntimeHookInfo {
   max_output_bytes: number;
 }
 
-export interface NotesSnapshot {
-  content: string;
-  updated_at?: string;
-}
 
 export interface SystemPromptEntry {
   key: string;
@@ -1294,7 +1282,6 @@ export type FleetEvent =
 
 export type AgentResourceName =
   | "workspace"
-  | "scratchpad"
   | "observables"
   | "runtime";
 
