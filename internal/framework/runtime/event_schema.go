@@ -18,7 +18,7 @@ type ContextProjectionAppliedPayload struct {
 
 func EventDefinitions() []events.Definition {
 	return []events.Definition{
-		events.Required(InputCheckedType, func() any { return &InputCheckedPayload{} }, true),
+		events.Required(InputCheckedType, func() any { return &InputCheckedPayload{} }, false),
 		events.Required(TurnAdmittedType, func() any { return &TurnAdmittedPayload{} }, true),
 		events.Required("turn.started", func() any { return &TurnStartedPayload{} }, true),
 		events.Required(TurnPhaseType, func() any { return &TurnPhasePayload{} }, true),
