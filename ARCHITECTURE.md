@@ -87,7 +87,7 @@ juex.yaml
 threads.index.json
 threads/<thread-id>/
   thread.json
-  pending_inputs.json
+  inputs.json
   generations/
     g000001.jsonl
     g000002.jsonl
@@ -137,8 +137,15 @@ diagnostic readers use EventStore snapshots to page or capture registered
 Generations without inventing storage paths. A torn final write may be repaired;
 a complete malformed commit is corruption.
 
-`pending_inputs.json` is an atomic, bounded current-state document owned by
-runtime. Goal and Notes own their current-state files in Framework-assigned
+`inputs.json` is an atomic current-state document owned by Runtime. It retains
+inputs needed for execution recovery and the bounded unchecked input checklist.
+Framework records checks as Generation facts before updating the current set
+and publishing them; loading reconciles a committed check after an interrupted
+state write. Settled unchecked records do not count as pending or enter recovery
+execution. Context Generation seeds preserve a scope ID across compaction and
+replace it on `/new`. `features/inputtracking` contributes only the tool,
+recitation and compaction guidance through a narrow Framework interface.
+Goal and Notes own their current-state files in Framework-assigned
 `modules/<owner>/` directories inside the Thread. Core Thread storage does not
 interpret their schemas. Before the first state write, the resource owner
 durably records its identity, scope, relative directory and retention policy.
@@ -158,7 +165,7 @@ state. Extension bundles may contribute additional read-only definitions.
 ```text
 CLI / Web / Observation
   -> App input policy / Framework admission
-  -> pending_inputs.json acceptance
+  -> inputs.json acceptance
   -> attempt and Turn
   -> prompt / Provider / Tools
   -> terminal Generation commit

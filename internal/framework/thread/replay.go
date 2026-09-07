@@ -74,6 +74,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 			return fmt.Errorf("%w: duplicate or late thread.created", ErrInvalidTransition)
 		}
 		p.Version = ProjectionVersion
+		state.ContextScopeID = InitialGeneration
 		p.ThreadID = threadID
 		p.Alias = fact.Alias
 		p.ParentThreadID = fact.ParentThreadID
@@ -156,6 +157,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 }
 
 func applyGenerationSeed(state *ReplayState, seed GenerationSeed) {
+	state.ContextScopeID = seed.ContextScopeID
 	state.Messages = nil
 	state.ProviderMessages = append([]llm.Message(nil), seed.ProviderMessages...)
 	state.Events = append([]events.Event(nil), seed.RecoveryEvents...)

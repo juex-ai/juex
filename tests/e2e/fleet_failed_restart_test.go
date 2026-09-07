@@ -111,7 +111,8 @@ func TestFleetRestartContinuesFailedTurnOnce(t *testing.T) {
 						continue
 					}
 					content, _ := json.Marshal(message["content"])
-					if strings.Contains(string(content), "work until restarted") {
+					// Checklist recitation repeats content without redelivering the input.
+					if strings.Contains(string(content), "work until restarted") && !strings.Contains(string(content), "Unchecked input [") {
 						originalInputs++
 					}
 					if strings.Contains(string(content), "System notice") && strings.Contains(string(content), "failed") {

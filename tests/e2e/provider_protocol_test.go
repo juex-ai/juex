@@ -677,7 +677,7 @@ providers:
 		t.Fatalf("provider requests=%d, want 2", requests.Load())
 	}
 	conversation := threadJournalText(t, result.ThreadDir)
-	if strings.Contains(conversation, "partial") || !strings.Contains(conversation, "recovered") {
+	if strings.Contains(conversation, `"text":"partial"`) || !strings.Contains(conversation, `"text":"recovered"`) {
 		t.Fatalf("conversation retained provisional output or lost recovery:\n%s", conversation)
 	}
 	eventLog := conversation
@@ -1313,7 +1313,7 @@ func TestLiveBinary_ProviderErrorPersistsThreadFailure(t *testing.T) {
 	if !strings.Contains(journal, `"type":"turn.errored"`) {
 		t.Fatalf("Thread journal missing terminal failure after provider error:\n%s", journal)
 	}
-	pendingPath := filepath.Join(result.ThreadDir, "pending_inputs.json")
+	pendingPath := filepath.Join(result.ThreadDir, "inputs.json")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		pending, err := os.ReadFile(pendingPath)

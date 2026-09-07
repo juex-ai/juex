@@ -755,6 +755,7 @@ func applyRuntimeCommit(threadID, generationID string, state *ReplayState, commi
 			if !first || generationID != InitialGeneration || fact.ThreadID != threadID {
 				return fmt.Errorf("%w: misplaced Thread creation", ErrInvalidTransition)
 			}
+			state.ContextScopeID = InitialGeneration
 		case FactContextRenewed, FactContextCompacted:
 			if !first || fact.Seed == nil {
 				return fmt.Errorf("%w: misplaced Generation boundary", ErrInvalidTransition)

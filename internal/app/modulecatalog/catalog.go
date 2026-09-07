@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/filetools"
 	"github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	"github.com/juex-ai/juex/internal/features/inputtracking"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/memory"
 	"github.com/juex-ai/juex/internal/features/notes"
@@ -35,6 +36,7 @@ var inventory = config.NewModuleInventory([]config.ModuleDefinition{
 	{ID: scratchpad.ModuleID},
 	{ID: goal.ModuleID},
 	{ID: notes.ModuleID},
+	{ID: inputtracking.ModuleID},
 	{ID: memory.ModuleID},
 	{ID: contextcontrol.ModuleID},
 	{ID: workerthreads.ModuleID},

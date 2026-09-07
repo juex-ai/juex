@@ -87,6 +87,8 @@ type Engine struct {
 	// directory. When omitted, the engine creates a thread-local queue on
 	// first use.
 	PendingInputQueue *PendingInputQueue
+	// TrackUserInputs is fixed by the composed Module set before admission starts.
+	TrackUserInputs bool
 	// ShowBuiltinPolicyTraces includes built-in runtime gates in UI-only policy
 	// trace messages. Module-provided policy traces are always shown.
 	ShowBuiltinPolicyTraces bool
@@ -402,6 +404,9 @@ func (e *Engine) PersistedPendingMessage(id string) (PendingInputRecord, bool, e
 		return PendingInputRecord{}, false, err
 	}
 	record, ok := records[id]
+	if ok && record.State == PendingInputStateSettled {
+		return PendingInputRecord{}, false, nil
+	}
 	return record, ok, nil
 }
 
@@ -2170,7 +2175,7 @@ func (e *Engine) markPendingInputMessageProcessed(msg llm.Message) error {
 	if queue == nil {
 		return nil
 	}
-	return queue.MarkMessageProcessed(msg.ID)
+	return queue.MarkMessageProcessed(msg)
 }
 
 func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) error {

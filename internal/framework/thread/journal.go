@@ -99,6 +99,13 @@ func validateFactShape(threadID string, fact Fact) error {
 		if fact.Seed == nil || fact.Seed.Version != ProjectionVersion {
 			return fmt.Errorf("%w: Generation seed required", ErrInvalidFact)
 		}
+		scopeOrdinal, scopeErr := parseGenerationID(fact.Seed.ContextScopeID)
+		fromOrdinal, fromErr := parseGenerationID(fact.FromGenerationID)
+		if scopeErr != nil || fromErr != nil ||
+			(fact.Type == FactContextRenewed && fact.Seed.ContextScopeID != fact.ToGenerationID) ||
+			(fact.Type == FactContextCompacted && scopeOrdinal > fromOrdinal) {
+			return fmt.Errorf("%w: invalid Generation work scope", ErrInvalidFact)
+		}
 		if fact.Type == FactContextRenewed {
 			if len(fact.Seed.ProviderMessages) != 0 || fact.Seed.ContextUsage != nil {
 				return fmt.Errorf("%w: renewed Generation context is not empty", ErrInvalidFact)

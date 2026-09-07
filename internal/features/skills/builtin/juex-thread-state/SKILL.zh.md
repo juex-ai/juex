@@ -27,3 +27,7 @@ type: builtin-guide
 ## 工作笔记
 
 `update_notes` 会替换完整的模型自有 Thread 笔记，而不是追加。内容保持在 2048 个字符以内，并使用简洁 Markdown 记录当前计划、已验证进展和未解决问题。复选框条目（`- [ ]` 和 `- [x]`）适合表示状态会变化的工作。长期或大体量材料应放在 scratchpad 文件中，而不是 notes。
+
+## 输入清单
+
+启用 `input-tracking` 后，每次请求都会提供已投递但尚未勾选的输入。处理完成后用 `input_ids` 调用 `check_inputs`；问题应先回答再勾选。部分完成、失败、等待中的请求和仍有效的约束保持未勾选。新问题不代表替换原任务。勾选幂等且不会取消 Turn。Compaction 保留清单；仍有未完成工作时使用 `context_compact`。

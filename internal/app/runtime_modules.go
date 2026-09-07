@@ -14,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/filetools"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	"github.com/juex-ai/juex/internal/features/inputtracking"
 	"github.com/juex-ai/juex/internal/features/memory"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
@@ -195,6 +196,13 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		return engine.PendingInputStatus().TurnID
 	}
 	builtinSpecs := []runtimemodule.ThreadFactorySpec{
+		{
+			ID:      inputtracking.ModuleID,
+			Enabled: cfg.ModuleEnabled(inputtracking.ModuleID),
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				return inputtracking.New(engine), nil
+			},
+		},
 		{
 			ID:      chunkmodule.ModuleID,
 			Enabled: cfg.ModuleEnabled(chunkmodule.ModuleID),

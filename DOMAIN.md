@@ -68,6 +68,15 @@ Thread Event sequence, even when that sequence spans Context Generations. It
 is not inherently attached to an Input, Turn, or client type. Higher-level
 waiters may follow an `input_id` to the Turn that consumes it.
 
+Optional input tracking distinguishes delivery from the model's judgement
+that an input has been handled. Direct user inputs accepted while enabled
+remain unchecked until the model checks them. A settled Turn does not imply
+a checked input, and an unchecked settled input is not a queued execution.
+Failures and compaction preserve unchecked inputs. Disablement retains existing
+records while stopping new registration and reminders; these core input records
+are not disposable Goal/Notes resources. Host `/new` starts a new work scope,
+while compaction retains it. Checking cannot cancel execution or prove correctness.
+
 ## Context Generations And Thread Work State
 
 A Context Generation is one Provider-visible context epoch inside a Thread.

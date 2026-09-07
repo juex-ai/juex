@@ -10,6 +10,8 @@
 `basic-file-tools`、`shell` 和 `operating-context`。显式
 `modules.<id>.enabled` 开关覆盖这些默认值。
 
+`input-tracking` 同样采用标准模式开、最简模式关的默认值。[输入清单](../../features/inputtracking/README.zh.md) 在关闭后再开启时保留未勾选输入，不改变待投递计数。
+
 preset 和显式开关分别沿既有配置层级与 imports 合并。高层仅设置 preset
 会保留低层的显式开关。高层显式值覆盖同名低层字段；空模块配置继承原值。
 保存 Agent 配置时保留提交的稀疏 YAML，不展开默认值。读取和保存共用配置

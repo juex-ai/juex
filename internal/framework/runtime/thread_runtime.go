@@ -79,7 +79,7 @@ func (e *Engine) ReplaceThreadRuntimeBundle(threadState *thread.Thread, replacem
 	}
 
 	current := e.threadRuntimeStateLocked()
-	next := buildThreadRuntimeState(current, threadState, replacement)
+	next := buildThreadRuntimeState(current, threadState, replacement, e.TrackUserInputs)
 	e.publishThreadRuntimeLocked(next)
 	pendingPolicyContext := tracker.PendingPolicyContext()
 	e.policyRuntimeContextMu.Lock()
@@ -219,7 +219,7 @@ func (e *Engine) currentPendingInputQueue() *PendingInputQueue {
 	state := e.threadRuntimeStateLocked()
 	queue := state.PendingInputQueue
 	if queue == nil && state.Thread != nil && state.Thread.Dir != "" {
-		queue = NewPendingInputQueue(state.Thread.Dir, PendingInputQueueOptions{Thread: state.Thread})
+		queue = NewPendingInputQueue(state.Thread.Dir, PendingInputQueueOptions{Thread: state.Thread, TrackUserInputs: e.TrackUserInputs})
 		e.PendingInputQueue = queue
 		if e.threadRuntime != nil {
 			next := *e.threadRuntime
@@ -245,13 +245,13 @@ func (e *Engine) threadRuntimeStateLocked() threadRuntimeState {
 	}
 }
 
-func buildThreadRuntimeState(current threadRuntimeState, threadState *thread.Thread, replacement ThreadRuntimeReplacement) threadRuntimeState {
+func buildThreadRuntimeState(current threadRuntimeState, threadState *thread.Thread, replacement ThreadRuntimeReplacement, trackUserInputs bool) threadRuntimeState {
 	builder := clonePromptBuilder(current.prompt)
 	if builder == nil {
 		builder = &prompt.Builder{}
 	}
 
-	queue := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState})
+	queue := NewPendingInputQueue(threadState.Dir, PendingInputQueueOptions{Thread: threadState, TrackUserInputs: trackUserInputs})
 	if current.PendingInputQueue != nil && current.PendingInputQueue.thread == threadState {
 		queue = current.PendingInputQueue
 	}

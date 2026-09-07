@@ -859,9 +859,11 @@ func TestAppStartupDoesNotReplayExpiredOrExplicitlyDroppedInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	observation := llm.TextMessage(llm.RoleUser, "expired input")
+	observation.Kind = llm.MessageKindObservation
 	expired, err := first.Engine.PersistPendingMessageWithOptions(
 		context.Background(),
-		llm.TextMessage(llm.RoleUser, "expired input"),
+		observation,
 		runtime.PendingInputOptions{ID: "expired-recovery", TTL: time.Millisecond},
 	)
 	if err != nil {

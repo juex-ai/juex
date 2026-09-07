@@ -84,6 +84,7 @@ type Fact struct {
 // Generation boundary. Authoritative Thread metadata stays in thread.json.
 type GenerationSeed struct {
 	Version          int               `json:"v"`
+	ContextScopeID   string            `json:"context_scope_id"`
 	ProviderMessages []llm.Message     `json:"provider_messages,omitempty"`
 	RecoveryEvents   []events.Event    `json:"recovery_events,omitempty"`
 	CompactionCount  int               `json:"compaction_count,omitempty"`
@@ -197,6 +198,7 @@ type Activity struct {
 }
 
 type ReplayState struct {
+	ContextScopeID   string
 	Projection       Projection
 	Messages         []llm.Message
 	ProviderMessages []llm.Message
