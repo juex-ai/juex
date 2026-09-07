@@ -19,15 +19,9 @@ const fileTreeSource = readFileSync(
   "utf8",
 );
 
-test("thread scratchpad uses a thread-scoped tree API", () => {
-  assert.match(apiSource, /export async function getThreadScratchpad/);
-  assert.match(apiSource, /api\/threads\/\$\{encodeURIComponent\(id\)\}\/scratchpad/);
-});
-
 test("thread controls leave scratchpad browsing to the file panel", () => {
   assert.doesNotMatch(threadSource, /ScratchpadButton/);
   assert.doesNotMatch(threadSource, /Browse thread scratchpad/);
-  assert.doesNotMatch(threadSource, /getThreadScratchpad/);
 });
 
 test("thread routes switch the shared file panel between roots", () => {
@@ -36,7 +30,7 @@ test("thread routes switch the shared file panel between roots", () => {
     /useMatch\("\/agents\/:agentId\/threads\/:threadId"\)/,
   );
   assert.match(shellSource, /type FilePanelMode = "workspace" \| "scratchpad"/);
-  assert.match(shellSource, /getThreadScratchpad\(threadID, signal\)/);
+  assert.match(shellSource, /getModuleFileTree\(threadID, "scratchpad", "files", signal\)/);
   assert.match(shellSource, /filePanelMode === "scratchpad"/);
   assert.match(
     shellSource,

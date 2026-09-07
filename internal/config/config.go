@@ -984,13 +984,7 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyToolOutputConfig(cfg, fc.ToolOutput)
 	applyRuntimeConfig(cfg, fc.Runtime)
-	if fc.Preset != nil {
-		if err := validatePreset(*fc.Preset); err != nil {
-			return fmt.Errorf("config: parse %s: %w", source.Path, err)
-		}
-		cfg.Preset = *fc.Preset
-	}
-	if err := applyModulesConfig(cfg, fc.Modules); err != nil {
+	if err := applyModuleSelection(cfg, fc.Preset, fc.Modules); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
 	if !opts.SkipExtensionPolicy {

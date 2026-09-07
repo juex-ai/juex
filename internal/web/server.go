@@ -19,6 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/version"
@@ -46,12 +47,15 @@ type ReadyInfo struct {
 
 // Server is a long-running HTTP server for one WorkDir.
 type Server struct {
-	opts         Options
-	modelHealth  *llm.ModelHealth
-	threads      sync.Map // Thread id (string) → *activeThread
-	startedAt    time.Time
-	statusStream *statusapi.ActivityStore
-	resources    *resourceEventHub
+	inspectionDone      chan struct{}
+	readOnly            bool
+	inspectionFactories []runtimemodule.ThreadFactorySpec
+	opts                Options
+	modelHealth         *llm.ModelHealth
+	threads             sync.Map // Thread id (string) → *activeThread
+	startedAt           time.Time
+	statusStream        *statusapi.ActivityStore
+	resources           *resourceEventHub
 
 	// createMu serializes live Thread creation and restoration.
 	createMu        sync.Mutex
@@ -99,15 +103,16 @@ type activeThread struct {
 var errThreadInactive = errors.New("web: Thread is archived")
 
 func NewServer(opts Options) *Server {
-	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.ThreadsDir(), opts.Cfg.ObservablesConfigPath())
+	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.ObservablesConfigPath())
 	resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.ThreadIndexPath()})
 	return &Server{
-		opts:          opts,
-		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
-		startedAt:     time.Now().UTC(),
-		statusStream:  statusapi.NewActivityStore(),
-		resources:     resources,
-		runtimeMCPErr: map[string]string{},
+		inspectionDone: make(chan struct{}),
+		opts:           opts,
+		modelHealth:    llm.NewModelHealth(llm.ModelHealthOptions{}),
+		startedAt:      time.Now().UTC(),
+		statusStream:   statusapi.NewActivityStore(),
+		resources:      resources,
+		runtimeMCPErr:  map[string]string{},
 	}
 }
 
@@ -133,7 +138,7 @@ func (s *Server) APIHandler() http.Handler {
 // inspect stopped agents through the fleet UI.
 func NewReadOnlyAPIHandler(cfg config.Config) http.Handler {
 	server := NewServer(Options{Cfg: cfg})
-	server.prepareThreadIndex()
+	server.readOnly = true
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/threads", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -215,13 +220,15 @@ func (s *Server) dispatchReadOnlyThread(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, "bad_request", "missing Thread id")
 		return
 	}
+	if rest == "modules" || strings.HasPrefix(rest, "modules/") {
+		s.dispatchModuleInspection(w, r, id, rest)
+		return
+	}
 	switch rest {
 	case "":
 		s.handleThreadShow(w, r, id)
 	case "context":
 		s.handleThreadContext(w, r, id)
-	case "scratchpad":
-		s.handleThreadScratchpad(w, r, id)
 	default:
 		writeErr(w, http.StatusNotFound, "not_found", "read-only API route not found")
 	}
@@ -285,8 +292,8 @@ func (s *Server) dispatchThread(w http.ResponseWriter, r *http.Request) {
 		s.handleCompactThread(w, r, id)
 	case rest == "context" && r.Method == http.MethodGet:
 		s.handleThreadContext(w, r, id)
-	case rest == "scratchpad" && r.Method == http.MethodGet:
-		s.handleThreadScratchpad(w, r, id)
+	case rest == "modules" || strings.HasPrefix(rest, "modules/"):
+		s.dispatchModuleInspection(w, r, id, rest)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method or sub-path")
 	}
@@ -508,6 +515,7 @@ func (s *Server) Close() {
 		return
 	}
 	s.closed = true
+	close(s.inspectionDone)
 	s.closeMu.Unlock()
 	s.threads.Range(func(_, v any) bool {
 		v.(*activeThread).beginClose()

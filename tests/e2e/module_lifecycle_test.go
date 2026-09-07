@@ -155,7 +155,7 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, n := restarted.ThreadStateStatus()
+	g, n := restarted.Engine.ThreadStateStatus()
 	if g == nil || n == nil {
 		t.Fatalf("ordinary restart lost state: %v %v", g, n)
 	}
@@ -193,7 +193,7 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = third.CloseAndWait() })
-	g, n = third.ThreadStateStatus()
+	g, n = third.Engine.ThreadStateStatus()
 	if g != nil || n != nil {
 		t.Fatalf("re-enabled state revived from history: %v %v", g, n)
 	}

@@ -192,7 +192,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = fresh.CloseAndWait() }()
-	g, n := fresh.ThreadStateStatus()
+	g, n := fresh.Engine.ThreadStateStatus()
 	if g != nil || n != nil {
 		t.Fatalf("re-enable revived work state: %v %v", g, n)
 	}

@@ -24,9 +24,8 @@ import (
 
 func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {
 	workDir := t.TempDir()
-	threadsDir := filepath.Join(t.TempDir(), "threads")
 	observablesConfigPath := filepath.Join(t.TempDir(), "agent", "observables.json")
-	hub := newResourceEventHub(workDir, threadsDir, observablesConfigPath)
+	hub := newResourceEventHub(workDir, observablesConfigPath)
 
 	tests := []struct {
 		path string
@@ -36,7 +35,6 @@ func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {
 		{path: filepath.Join(workDir, ".git", "index")},
 		{path: filepath.Join(workDir, ".juex", "events.jsonl")},
 		{path: observablesConfigPath, want: resourceObservable},
-		{path: filepath.Join(threadsDir, "123456", "scratchpad", "notes.md"), want: resourceScratchpad},
 	}
 	for _, test := range tests {
 		if got := hub.resourceForPath(test.path); got != test.want {
@@ -45,21 +43,9 @@ func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {
 	}
 }
 
-func TestResourceEventHubClassifiesScratchpadAsRuntimeInput(t *testing.T) {
-	threadsDir := filepath.Join(t.TempDir(), "threads")
-	hub := newResourceEventHub(t.TempDir(), threadsDir, "")
-	path := filepath.Join(threadsDir, "123456", "scratchpad", "notes.md")
-
-	got := hub.resourcesForPath(path)
-	want := []string{resourceScratchpad, resourceRuntime}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("resourcesForPath(%q) = %v, want %v", path, got, want)
-	}
-}
-
 func TestResourceEventHubClassifiesMutableRuntimeInputs(t *testing.T) {
 	workDir := t.TempDir()
-	hub := newResourceEventHub(workDir, t.TempDir(), "")
+	hub := newResourceEventHub(workDir, "")
 	tests := []struct {
 		path string
 		want []string
@@ -82,7 +68,7 @@ func TestResourceEventHubClassifiesExternalRuntimeInputs(t *testing.T) {
 	workDir := t.TempDir()
 	globalAgentsDir := t.TempDir()
 	historyPath := filepath.Join(t.TempDir(), "history.json")
-	hub := newResourceEventHub(workDir, t.TempDir(), "")
+	hub := newResourceEventHub(workDir, "")
 	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md"), historyPath})
 
 	tests := []struct {
@@ -102,7 +88,7 @@ func TestResourceEventHubClassifiesExternalRuntimeInputs(t *testing.T) {
 }
 
 func TestResourceEventHubProjectsObservableAndWriteEvents(t *testing.T) {
-	hub := newResourceEventHub(t.TempDir(), t.TempDir(), "")
+	hub := newResourceEventHub(t.TempDir(), "")
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +107,7 @@ func TestResourceEventHubProjectsObservableAndWriteEvents(t *testing.T) {
 		t.Fatal("resource subscriber was not notified")
 	}
 	got := subscription.take().Resources
-	want := []string{resourceObservable, resourceRuntime, resourceScratchpad, resourceWorkspace}
+	want := []string{resourceObservable, resourceRuntime, resourceWorkspace}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("resources = %v, want %v", got, want)
 	}
@@ -133,7 +119,7 @@ func TestResourceEventHubCoalescesProjectedAndFilesystemChanges(t *testing.T) {
 	if err := os.MkdirAll(threadsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hub := newResourceEventHub(workDir, threadsDir, "")
+	hub := newResourceEventHub(workDir, "")
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +137,7 @@ func TestResourceEventHubCoalescesProjectedAndFilesystemChanges(t *testing.T) {
 	select {
 	case <-subscription.updates:
 		got := subscription.take().Resources
-		want := []string{resourceRuntime, resourceScratchpad, resourceWorkspace}
+		want := []string{resourceRuntime, resourceWorkspace}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("resources = %v, want %v", got, want)
 		}
@@ -171,7 +157,7 @@ func TestResourceEventHubWatchesWorkspaceOnDemand(t *testing.T) {
 	if err := os.MkdirAll(threadsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hub := newResourceEventHub(workDir, threadsDir, "")
+	hub := newResourceEventHub(workDir, "")
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +182,7 @@ func TestResourceEventHubWatchesWorkspaceOnDemand(t *testing.T) {
 
 func TestResourceEventHubWatchesMutableRuntimeInput(t *testing.T) {
 	workDir := t.TempDir()
-	hub := newResourceEventHub(workDir, t.TempDir(), "")
+	hub := newResourceEventHub(workDir, "")
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +206,7 @@ func TestResourceEventHubWatchesMutableRuntimeInput(t *testing.T) {
 
 func TestResourceEventHubWatchesLateAgentsDirectory(t *testing.T) {
 	workDir := t.TempDir()
-	hub := newResourceEventHub(workDir, t.TempDir(), "")
+	hub := newResourceEventHub(workDir, "")
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +230,7 @@ func TestResourceEventHubWatchesLateAgentsDirectory(t *testing.T) {
 
 func TestResourceEventHubWatchesExternalGlobalAgentsFile(t *testing.T) {
 	globalAgentsDir := t.TempDir()
-	hub := newResourceEventHub(t.TempDir(), t.TempDir(), "")
+	hub := newResourceEventHub(t.TempDir(), "")
 	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")})
 	subscription, err := hub.subscribe()
 	if err != nil {
@@ -272,7 +258,7 @@ func TestResourceEventHubReanchorsRecreatedExternalRuntimeDirectory(t *testing.T
 	if err := os.Mkdir(globalAgentsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hub := newResourceEventHub(t.TempDir(), t.TempDir(), "")
+	hub := newResourceEventHub(t.TempDir(), "")
 	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")})
 	subscription, err := hub.subscribe()
 	if err != nil {
@@ -297,7 +283,7 @@ func TestResourceEventHubReanchorsRecreatedExternalRuntimeDirectory(t *testing.T
 func TestResourceEventHubWatchesLateExternalGlobalAgentsDirectory(t *testing.T) {
 	existingRoot := t.TempDir()
 	globalAgentsDir := filepath.Join(existingRoot, "missing", ".agents")
-	hub := newResourceEventHub(t.TempDir(), t.TempDir(), "")
+	hub := newResourceEventHub(t.TempDir(), "")
 	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")})
 	subscription, err := hub.subscribe()
 	if err != nil {
@@ -365,7 +351,7 @@ func TestResourceEventHubWatchesLateAgentObservableConfig(t *testing.T) {
 	stateRoot := t.TempDir()
 	agentStateDir := filepath.Join(stateRoot, "missing", "agent")
 	configPath := filepath.Join(agentStateDir, "observables.json")
-	hub := newResourceEventHub(workDir, threadsDir, configPath)
+	hub := newResourceEventHub(workDir, configPath)
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -397,7 +383,7 @@ func TestResourceEventHubWatchesLateAgentObservableConfig(t *testing.T) {
 
 func TestResourceEventHubRejectsIncompleteInitialWatchTree(t *testing.T) {
 	workDir := t.TempDir()
-	hub := newResourceEventHub(workDir, t.TempDir(), "")
+	hub := newResourceEventHub(workDir, "")
 	hub.addWatch = func(_ *fsnotify.Watcher, path string) error {
 		if filepath.Clean(path) == filepath.Clean(workDir) {
 			return errors.New("watch limit reached")
@@ -415,7 +401,7 @@ func TestResourceEventHubRejectsIncompleteInitialWatchTree(t *testing.T) {
 
 func TestResourceEventHubEndsStreamWhenLateDirectoryCannotBeWatched(t *testing.T) {
 	workDir := t.TempDir()
-	hub := newResourceEventHub(workDir, t.TempDir(), "")
+	hub := newResourceEventHub(workDir, "")
 	hub.addWatch = func(watcher *fsnotify.Watcher, path string) error {
 		if strings.HasPrefix(filepath.Clean(path), filepath.Join(workDir, "late")) {
 			return errors.New("watch limit reached")
@@ -439,7 +425,7 @@ func TestResourceEventHubEndsStreamWhenLateDirectoryCannotBeWatched(t *testing.T
 }
 
 func TestResourceEventHubResynchronizesAfterWatcherError(t *testing.T) {
-	hub := newResourceEventHub(t.TempDir(), t.TempDir(), "")
+	hub := newResourceEventHub(t.TempDir(), "")
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -450,7 +436,7 @@ func TestResourceEventHubResynchronizesAfterWatcherError(t *testing.T) {
 	select {
 	case <-subscription.updates:
 		got := subscription.take().Resources
-		want := []string{resourceObservable, resourceRuntime, resourceScratchpad, resourceWorkspace}
+		want := []string{resourceObservable, resourceRuntime, resourceWorkspace}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("resources = %v, want %v", got, want)
 		}
@@ -483,14 +469,14 @@ func TestResourceEventsEndpointStartsWithAuthoritativeInvalidation(t *testing.T)
 	if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{resourceObservable, resourceRuntime, resourceScratchpad, resourceWorkspace}
+	want := []string{resourceObservable, resourceRuntime, resourceWorkspace}
 	if event.Type != "resource.changed" || !reflect.DeepEqual(event.Resources, want) {
 		t.Fatalf("event = %+v, want resources %v", event, want)
 	}
 }
 
 func TestResourceEventHubCloseEndsActiveSubscriptions(t *testing.T) {
-	hub := newResourceEventHub(t.TempDir(), t.TempDir(), "")
+	hub := newResourceEventHub(t.TempDir(), "")
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)

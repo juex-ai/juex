@@ -42,6 +42,9 @@ type FileTreePanelProps = {
   emptyLabel?: string;
   headerAction?: ReactNode;
   loadTree?: LoadFileTree;
+  loadContent?: typeof getFileContent;
+  rawURL?: typeof getFileRawURL;
+  subscribeChanges?: (receive: () => void) => () => void;
   refreshLabel?: string;
   refreshRevision?: number;
   rootKey?: string;
@@ -53,6 +56,9 @@ export function FileTreePanel({
   emptyLabel = "This directory is empty.",
   headerAction,
   loadTree = getFileTree,
+  loadContent = getFileContent,
+  rawURL = getFileRawURL,
+  subscribeChanges,
   refreshLabel = "Refresh workspace",
   refreshRevision = 0,
   rootKey = "workspace",
@@ -89,7 +95,7 @@ export function FileTreePanel({
     if (!treeRef.current) setLoading(true);
     loadWorkspaceSnapshot({
       loadTree,
-      loadContent: getFileContent,
+      loadContent,
       previewPath: previewFile?.path,
       signal: controller.signal,
     })
@@ -112,7 +118,7 @@ export function FileTreePanel({
         setLoading(false);
         setRefreshing(false);
       });
-  }, [active, loadTree, previewFile?.path]);
+  }, [active, loadTree, loadContent, previewFile?.path]);
 
   useEffect(() => {
     if (!active) return;
@@ -120,9 +126,17 @@ export function FileTreePanel({
     return () => {
       refreshAbortRef.current?.abort();
       refreshAbortRef.current = null;
-      previewAbortRef.current?.abort();
     };
   }, [active, refreshWorkspace, refreshRevision, rootKey]);
+
+  useEffect(() => () => {
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+  }, [active, loadContent, rootKey]);
+
+  useEffect(() => {
+    if (active && subscribeChanges) return subscribeChanges(refreshWorkspace);
+  }, [active, subscribeChanges, refreshWorkspace]);
 
   const handleRefreshClick = () => {
     refreshWorkspace();
@@ -133,7 +147,7 @@ export function FileTreePanel({
     const controller = new AbortController();
     previewAbortRef.current = controller;
     try {
-      const content = await getFileContent(path, controller.signal);
+      const content = await loadContent(path, controller.signal);
       if (previewAbortRef.current === controller) {
         setPreviewFile(content);
       }
@@ -229,7 +243,7 @@ export function FileTreePanel({
             {previewFile?.kind === "image" ? (
               <div className="flex min-h-full items-center justify-center">
                 <img
-                  src={getFileRawURL(previewFile.path)}
+                  src={rawURL(previewFile.path)}
                   alt={`Preview of ${previewFile.path}`}
                   className="max-h-full max-w-full rounded-md object-contain shadow-[var(--shadow-sm)]"
                 />

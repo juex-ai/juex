@@ -98,7 +98,14 @@ func (m *Manager) ReadOnlyState(selector string) (ReadOnlyAgentState, error) {
 			Reason:  "cannot read Threads for an unbound workspace: " + binding.Reason,
 		}
 	}
+	composition, err := config.ReadModuleInspectionConfig(entry.Agent.Workspace, m.homeDir, entry.Address.ConfigPath())
+	moduleError := ""
+	if err != nil {
+		moduleError = err.Error()
+	}
 	return ReadOnlyAgentState{
+		ModuleError: moduleError,
+		Preset:      composition.Preset, Modules: composition.Modules,
 		ID:        entry.ID,
 		Name:      entry.Agent.Name,
 		Workspace: entry.Agent.Workspace,

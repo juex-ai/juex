@@ -14,9 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/thread"
 	"github.com/juex-ai/juex/internal/usermedia"
@@ -129,12 +127,10 @@ func (s *Server) createWorkerThread(w http.ResponseWriter, r *http.Request) {
 
 type threadShowResponse struct {
 	thread.Info
-	Items          []thread.TimelineItem       `json:"items"`
-	EventCursor    string                      `json:"event_cursor,omitempty"`
-	HasMoreBefore  bool                        `json:"has_more_before"`
-	PreviousCursor string                      `json:"previous_cursor,omitempty"`
-	Goal           *workmem.GoalStatusSnapshot `json:"goal,omitempty"`
-	Notes          *workmem.NotesSnapshot      `json:"notes,omitempty"`
+	Items          []thread.TimelineItem `json:"items"`
+	EventCursor    string                `json:"event_cursor,omitempty"`
+	HasMoreBefore  bool                  `json:"has_more_before"`
+	PreviousCursor string                `json:"previous_cursor,omitempty"`
 }
 
 func parseTimelineWindow(r *http.Request) (string, int, error) {
@@ -168,7 +164,6 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 			response.Items = page.Items
 			response.HasMoreBefore = page.HasMoreBefore
 			response.PreviousCursor = page.PreviousCursor
-			response.Goal, response.Notes = active.app.ThreadStateStatus()
 			if active.app.Status != nil {
 				response.EventCursor = active.app.Status.Snapshot().Cursor
 			}
@@ -194,12 +189,6 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	goal, notes := threadStateStatus(
-		target,
-		nil,
-		s.opts.Cfg.ModuleEnabled(modulecatalog.Goal),
-		s.opts.Cfg.ModuleEnabled(modulecatalog.Notes),
-	)
 	info := target.Info()
 	if err := target.Close(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -207,23 +196,8 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 	}
 	writeJSON(w, http.StatusOK, threadShowResponse{
 		Info: info, Items: page.Items, HasMoreBefore: page.HasMoreBefore,
-		PreviousCursor: page.PreviousCursor, Goal: goal, Notes: notes,
+		PreviousCursor: page.PreviousCursor,
 	})
-}
-
-func threadStateStatus(target *thread.Thread, active *activeThread, goalEnabled, notesEnabled bool) (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
-	if active != nil && active.app != nil {
-		return active.app.ThreadStateStatus()
-	}
-	var goal *workmem.GoalStatusSnapshot
-	var notes *workmem.NotesSnapshot
-	if target != nil && goalEnabled {
-		goal, _ = workmem.NewGoalStateStore(target.Dir, workmem.GoalStateOptions{}).StatusSnapshot()
-	}
-	if target != nil && notesEnabled {
-		notes, _ = workmem.NewNotesStore(target.Dir).StatusSnapshot()
-	}
-	return goal, notes
 }
 
 func (s *Server) handleArchiveThread(w http.ResponseWriter, r *http.Request, id string) {

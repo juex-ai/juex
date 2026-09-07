@@ -136,6 +136,7 @@ type RuntimeFactorySpec struct {
 }
 
 type ThreadFactorySpec struct {
+	Inspection *Inspection
 	// OwnsResources declares this implementation as an available durable resource owner.
 	OwnsResources bool
 	ID            ID

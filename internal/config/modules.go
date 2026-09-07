@@ -96,3 +96,13 @@ func applyModulesConfig(cfg *Config, modules map[string]moduleConfig) error {
 	}
 	return nil
 }
+
+func applyModuleSelection(cfg *Config, preset *string, modules map[string]moduleConfig) error {
+	if preset != nil {
+		if err := validatePreset(*preset); err != nil {
+			return err
+		}
+		cfg.Preset = *preset
+	}
+	return applyModulesConfig(cfg, modules)
+}

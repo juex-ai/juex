@@ -183,6 +183,32 @@ Activation callbacks run without Set locks. Shutdown cancels delivery and
 quiesces input, deferring resource cleanup until activation and in-flight
 callbacks return, before closing Thread and runtime resources.
 
+Thread factory declarations also own passive inspection: typed state readers,
+versioned UI contribution IDs, file roots, and optional operations. App composes
+them from the same effective module set; HTTP never constructs a Module to read
+it. Active, inactive, and archived Threads use metadata-only lookup. Disabled
+modules contribute no readers or resources; archived operations are rejected.
+Thread storage holds a per-Thread retention guard across the active check and
+operation callback, excluding archival without blocking ordinary journal writes.
+Go JSON declarations generate the shared TypeScript inspection contract.
+
+Module SSE subscribes to declared replaceable state files before reading a full
+snapshot. Each connection serializes complete replacements and deduplicates by
+opaque content revision; reconnect always replaces the baseline. Its transport
+cursor is independent of durable-event replay. The observed durable cursor is a
+lower bound, not an as-of position for module files. Clients discard prior-scope
+responses and do not let a pending GET overwrite a received stream baseline.
+Stream failures mark retained snapshots unavailable until a new baseline arrives,
+including a reconnect whose content revision is unchanged.
+The browser host shares one module snapshot subscription among the current
+Thread's UI consumers, closing it on route changes.
+Stopped-Agent streams explicitly signal revalidation before finishing their baseline
+so reconnect rechecks Fleet endpoint selection and effective configuration without
+marking the expected close as a failure. File trees and recursive resource
+subscriptions start only when selected; idle heartbeats send SSE comments without
+reloading the tree. UI
+snapshots are neither model context nor a new storage authority.
+
 Resource retirement is separate from Close. The accepted configuration's factory
 declarations identify available owners without constructing disabled Modules.
 An Agent lifecycle lease excludes old and deferred writers. Before deleting any

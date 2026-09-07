@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/juex-ai/juex/internal/config"
 	"io"
 	"net"
 	"net/http"
@@ -393,7 +394,10 @@ func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
 		{path: "/api/threads", want: true},
 		{path: "/api/threads/" + threadID, want: true},
 		{path: "/api/threads/" + threadID + "/context", want: true},
-		{path: "/api/threads/" + threadID + "/scratchpad", want: true},
+		{path: "/api/threads/" + threadID + "/modules", want: true},
+		{path: "/api/threads/" + threadID + "/modules/events", want: true},
+		{path: "/api/threads/" + threadID + "/modules/example/resources/files/tree", want: true},
+		{path: "/api/threads/" + threadID + "/modules/example/operations/run", want: false},
 		{path: "/api/media", want: true},
 		{path: "/api/files/content", want: true},
 		{path: "/api/runtime", want: false},
@@ -1222,5 +1226,44 @@ func waitForFleetConnectionCount(t *testing.T, count *atomic.Int32, want int32) 
 	}
 	if got := count.Load(); got != want {
 		t.Fatalf("open agent connections = %d, want %d", got, want)
+	}
+}
+
+func TestStoppedAgentModuleInspectionUsesEffectiveComposition(t *testing.T) {
+	stateDir := t.TempDir()
+	main, err := thread.NewStore(stateDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := main.Dir
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "modules", "goal"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "modules", "goal", "goal_state.json"), []byte("unreadable module body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backend := &fakeBackend{endpointErr: errors.New("stopped"), readOnly: fleet.ReadOnlyAgentState{ID: "aaaaaa", Workspace: t.TempDir(), StateDir: stateDir, Preset: "minimal"}}
+	handler := newServer(backend, Options{}).Handler()
+	request := func() *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/api/threads/0/modules", nil))
+		return response
+	}
+	response := request()
+	if response.Code != 200 || strings.Contains(response.Body.String(), `"goal"`) {
+		t.Fatalf("disabled response=%d %s", response.Code, response.Body.String())
+	}
+	backend.readOnly.Modules = config.ModulePolicy{"goal": {Enabled: true}}
+	response = request()
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"status": "error"`) {
+		t.Fatalf("enabled response=%d %s", response.Code, response.Body.String())
+	}
+	backend.readOnly.ModuleError = "configuration unavailable"
+	response = request()
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable=%d %s", response.Code, response.Body.String())
 	}
 }

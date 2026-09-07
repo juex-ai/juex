@@ -1,3 +1,4 @@
+import { ThreadModulesProvider, useThreadModuleSubscription } from "@/hooks/use-thread-modules";
 import {
   createContext,
   useCallback,
@@ -18,7 +19,10 @@ import {
 import { AlertTriangle, ArrowLeftRight, Plus } from "lucide-react";
 
 import {
-  getThreadScratchpad,
+  getModuleFileTree,
+  getModuleFileContent,
+  getModuleFileRawURL,
+  subscribeModuleResource,
   listAgents,
   runAgentAction,
   subscribeAgentResourceEvents,
@@ -59,7 +63,6 @@ const LAST_AGENT_KEY = "juex:fleet:last-agent";
 const SIDEBAR_COLLAPSED_KEY = "juex:fleet:sidebar-collapsed";
 const INITIAL_RESOURCE_REVISION: Record<AgentResourceName, number> = {
   workspace: 0,
-  scratchpad: 0,
   observables: 0,
   runtime: 0,
 };
@@ -275,9 +278,16 @@ export function AppShell() {
   }, [location.pathname]);
 
   const loadScratchpadTree = useCallback(
-    (signal?: AbortSignal) => getThreadScratchpad(threadID, signal),
+    (signal?: AbortSignal) => getModuleFileTree(threadID, "scratchpad", "files", signal),
     [threadID],
   );
+
+  const moduleState = useThreadModuleSubscription(threadID);
+  const moduleSnapshot = moduleState.snapshot;
+  const scratchpadAvailable = moduleSnapshot?.ui.some((item) => item.id === "scratchpad.files") ?? false;
+  const loadScratchpadContent = useCallback((path: string, signal?: AbortSignal) => getModuleFileContent(threadID, "scratchpad", "files", path, signal), [threadID]);
+  const scratchpadRawURL = useCallback((path: string) => getModuleFileRawURL(threadID, "scratchpad", "files", path), [threadID]);
+  const subscribeScratchpad = useCallback((receive: () => void) => subscribeModuleResource(threadID, "scratchpad", "files", receive), [threadID]);
 
   const runLifecycle = useCallback(
     async (agent: AgentStatus) => {
@@ -338,10 +348,10 @@ export function AppShell() {
   const workspaceOpen = workspaceDocked
     ? workspaceDockOpen && workspaceAvailable
     : workspaceSheetOpen && workspaceAvailable;
-  const scratchpadMode = filePanelMode === "scratchpad";
+  const scratchpadMode = scratchpadAvailable && filePanelMode === "scratchpad";
   const filePanelTitle = scratchpadMode ? "Scratchpad" : "Workspace";
-  const filePanelKey = `${agentId}:${threadID || "workspace"}:${filePanelMode}`;
-  const filePanelHeaderAction = threadID ? (
+  const filePanelKey = `${agentId}:${threadID || "workspace"}:${scratchpadMode ? "scratchpad" : "workspace"}`;
+  const filePanelHeaderAction = threadID && scratchpadAvailable ? (
     <FilePanelModeToggle
       mode={filePanelMode}
       onToggle={() =>
@@ -358,11 +368,14 @@ export function AppShell() {
       : "This directory is empty.",
     headerAction: filePanelHeaderAction,
     loadTree: scratchpadMode ? loadScratchpadTree : undefined,
+    loadContent: scratchpadMode ? loadScratchpadContent : undefined,
+    rawURL: scratchpadMode ? scratchpadRawURL : undefined,
+    subscribeChanges: scratchpadMode ? subscribeScratchpad : undefined,
     refreshLabel: scratchpadMode
       ? "Refresh scratchpad"
       : "Refresh workspace",
     title: filePanelTitle,
-    refreshRevision: resourceRevision[scratchpadMode ? "scratchpad" : "workspace"],
+    refreshRevision: resourceRevision.workspace,
   };
 
   const sidebar = (
@@ -481,7 +494,9 @@ export function AppShell() {
                     Loading agent...
                   </div>
                 ) : (
-                  <Outlet key={agentId || "fleet-settings"} />
+                  <ThreadModulesProvider value={moduleState}>
+                    <Outlet key={agentId || "fleet-settings"} />
+                  </ThreadModulesProvider>
                 )}
               </div>
               {workspaceDockOpen && workspaceAvailable ? (

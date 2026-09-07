@@ -163,6 +163,7 @@ func TestEndpointRejectsUnreadableIdentityAfterHealthyStatusSnapshot(t *testing.
 }
 
 func TestReadOnlyStateRequiresBoundWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	entry := registryEntry("aaaaaa", "agent")
 	tests := []struct {
 		name    string

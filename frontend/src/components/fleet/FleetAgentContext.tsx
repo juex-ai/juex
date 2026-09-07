@@ -35,7 +35,7 @@ export function useFleetAgent(): FleetAgentContextValue {
       agentsLoaded: false,
       statusStore: null,
       lifecycleBusy: false,
-      resourceRevision: { workspace: 0, scratchpad: 0, observables: 0, runtime: 0 },
+      resourceRevision: { workspace: 0, observables: 0, runtime: 0 },
       startAgent: async () => {},
     };
   }

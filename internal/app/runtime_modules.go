@@ -228,14 +228,16 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 			},
 		},
 		{
-			ID:      scratchpad.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.Scratchpad),
+			ID:         scratchpad.ModuleID,
+			Inspection: scratchpad.Inspection(),
+			Enabled:    cfg.ModuleEnabled(modulecatalog.Scratchpad),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				return &scratchpad.Module{WorkDir: workDir}, nil
 			},
 		},
 		{
 			ID:            goalmodule.ModuleID,
+			Inspection:    goalmodule.Inspection(),
 			OwnsResources: true,
 			Enabled:       cfg.ModuleEnabled(string(goalmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
@@ -253,6 +255,7 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		},
 		{
 			ID:            notesmodule.ModuleID,
+			Inspection:    notesmodule.Inspection(),
 			OwnsResources: true,
 			Enabled:       cfg.ModuleEnabled(string(notesmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {

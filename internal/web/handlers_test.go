@@ -315,11 +315,10 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 	if _, err := notesStore.Update("- [ ] verify archived state"); err != nil {
 		t.Fatal(err)
 	}
-	var activeDetail threadShowResponse
-	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID, "", http.StatusOK, &activeDetail)
-	if activeDetail.Goal == nil || activeDetail.Goal.Description != "preserve worker state" ||
-		activeDetail.Notes == nil || activeDetail.Notes.Content != "- [ ] verify archived state" {
-		t.Fatalf("active module state = Goal:%+v Notes:%+v", activeDetail.Goal, activeDetail.Notes)
+	var activeDetail ThreadModulesSnapshot
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID+"/modules", "", http.StatusOK, &activeDetail)
+	if !strings.Contains(string(activeDetail.Modules["goal"].Value), "preserve worker state") || !strings.Contains(string(activeDetail.Modules["notes"].Value), "verify archived state") {
+		t.Fatalf("module state = %+v", activeDetail)
 	}
 	var renamed thread.Info
 	doJSON(t, http.MethodPatch, httpServer.URL+"/api/threads/"+created.ID, `{"alias":"renamed"}`, http.StatusOK, &renamed)
@@ -334,11 +333,10 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 		list.Archived[0].RetentionState != thread.RetentionArchived || list.Archived[0].ExecutionState != "" {
 		t.Fatalf("archived list = %+v", list)
 	}
-	var archivedDetail threadShowResponse
-	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID, "", http.StatusOK, &archivedDetail)
-	if archivedDetail.Goal == nil || archivedDetail.Goal.Description != "preserve worker state" ||
-		archivedDetail.Notes == nil || archivedDetail.Notes.Content != "- [ ] verify archived state" {
-		t.Fatalf("archived module state = Goal:%+v Notes:%+v", archivedDetail.Goal, archivedDetail.Notes)
+	var archivedDetail ThreadModulesSnapshot
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID+"/modules", "", http.StatusOK, &archivedDetail)
+	if !strings.Contains(string(archivedDetail.Modules["goal"].Value), "preserve worker state") || !strings.Contains(string(archivedDetail.Modules["notes"].Value), "verify archived state") {
+		t.Fatalf("module state = %+v", archivedDetail)
 	}
 	archivedDir := filepath.Join(server.opts.Cfg.RuntimePaths().StateDir, "archive", "threads", created.ID)
 	for _, name := range []string{"modules/goal/goal_state.json", "modules/notes/notes.md"} {
@@ -350,10 +348,13 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 		"goal":  {Enabled: false},
 		"notes": {Enabled: false},
 	}
-	var disabledDetail threadShowResponse
-	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID, "", http.StatusOK, &disabledDetail)
-	if disabledDetail.Goal != nil || disabledDetail.Notes != nil {
-		t.Fatalf("disabled archived module state leaked: Goal:%+v Notes:%+v", disabledDetail.Goal, disabledDetail.Notes)
+	var disabledDetail ThreadModulesSnapshot
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID+"/modules", "", http.StatusOK, &disabledDetail)
+	if _, ok := disabledDetail.Modules["goal"]; ok {
+		t.Fatalf("disabled module state leaked: %+v", disabledDetail)
+	}
+	if _, ok := disabledDetail.Modules["notes"]; ok {
+		t.Fatalf("disabled notes leaked: %+v", disabledDetail)
 	}
 	server.opts.Cfg.Modules = nil
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/inputs", `{"prompt":"no"}`, http.StatusConflict, nil)
