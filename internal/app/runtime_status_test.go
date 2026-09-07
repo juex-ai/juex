@@ -117,6 +117,7 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		tools.ToolGroupSearch,
 		tools.ToolGroupSkill,
 		tools.ToolGroupThreadState,
+		tools.ToolGroupMemory,
 		tools.ToolGroupWorkerThread,
 		tools.ToolGroupObservable,
 	}
@@ -143,8 +144,8 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		}
 		count += len(group.Tools)
 	}
-	if status.Tools.Count != count || count != 34 {
-		t.Fatalf("tool count = %d, grouped=%d, want 34", status.Tools.Count, count)
+	if status.Tools.Count != count || count != 37 {
+		t.Fatalf("tool count = %d, grouped=%d, want 37", status.Tools.Count, count)
 	}
 }
 

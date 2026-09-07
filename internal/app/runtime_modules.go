@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	chunkmodule "github.com/juex-ai/juex/internal/modules/chunkedwrite"
 	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
+	"github.com/juex-ai/juex/internal/modules/memory"
 	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
 	"github.com/juex-ai/juex/internal/modules/operatingcontext"
 	"github.com/juex-ai/juex/internal/modules/scratchpad"
@@ -77,6 +78,13 @@ func prepareRuntimeModules(
 		MediaDir:           runtimePaths.MediaDir,
 	}
 	composition.specs = []runtimemodule.RuntimeFactorySpec{
+		{
+			ID:      memory.ModuleID,
+			Enabled: cfg.ModuleEnabled(modulecatalog.Memory),
+			New: func(_ context.Context, ctx runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return memory.New(ctx.AgentStateDir), nil
+			},
+		},
 		{
 			ID:      modulecatalog.BasicFileTools,
 			Enabled: cfg.ModuleEnabled(modulecatalog.BasicFileTools),

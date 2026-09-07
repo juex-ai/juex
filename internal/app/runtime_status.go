@@ -439,6 +439,7 @@ func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defau
 		tools.ToolGroupSearch,
 		tools.ToolGroupSkill,
 		tools.ToolGroupThreadState,
+		tools.ToolGroupMemory,
 		tools.ToolGroupWorkerThread,
 		tools.ToolGroupObservable,
 	}
