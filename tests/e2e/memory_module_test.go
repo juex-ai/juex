@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
@@ -56,6 +57,11 @@ func TestEndToEnd_ManuallyCopiedMemoryKeepsExtensionDataAndOtherProviders(t *tes
 	isolateModuleConfig(t)
 	cfg := memoryConfig(t)
 	cfg.HomeJuexDir = t.TempDir()
+	address, err := agentstate.NewAgentAddress(cfg.HomeJuexDir, "abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentAddress, cfg.AgentStateDir = address, address.StateDir()
 	for _, id := range []string{modulecatalog.Extensions, modulecatalog.MCP, modulecatalog.Skills, modulecatalog.Hooks} {
 		cfg.Modules[id] = config.ModuleSettings{Enabled: true}
 	}
@@ -101,6 +107,9 @@ func TestEndToEnd_ManuallyCopiedMemoryKeepsExtensionDataAndOtherProviders(t *tes
 		t.Fatalf("cutover turn=%q, %v", out, err)
 	}
 	assertSuccessfulProviderToolResults(t, provider.history[len(provider.history)-1], map[string]string{"read-transferred": "Keep the original knowledge.", "other-provider": "saved catalog"})
+	if data, err := os.ReadFile(filepath.Join(cfg.AgentStateDir, "extensions", "catalog", "catalog-entry")); err != nil || string(data) != "Other extension still works" {
+		t.Fatalf("other Extension private output=%q, %v", data, err)
+	}
 	owned := 0
 	for _, entry := range a.Engine.RuntimeModules.ToolCatalog().Entries() {
 		if entry.ModuleID == memory.ModuleID {

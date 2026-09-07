@@ -336,6 +336,10 @@ func TestExternalCatalogMCPHelperProcess(t *testing.T) {
 		return
 	}
 	dataDir := os.Getenv("JUEX_EXT_DATA_DIR")
+	if dataDir == "" {
+		fmt.Fprintln(os.Stderr, "fixture requires an Agent-private Extension data directory")
+		os.Exit(2)
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var request map[string]any
