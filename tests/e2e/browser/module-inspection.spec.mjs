@@ -191,7 +191,14 @@ async function publishModules(page, change = {}) {
     }
     if (change.unknown) next.ui.push({ id: "future.status", module_id: "future", version: 1 });
     if (change.version) next.ui.find((item) => item.id === "goal.status").version = 2;
-    if (change.broken) next.modules.notes.value = { content: {} };
+    if (change.broken) {
+      next.modules.notes.value = { content: {} };
+      next.modules.notes.revision = `broken-${next.revision}`;
+    }
+    if (change.notes) {
+      next.modules.notes.value = { content: change.notes };
+      next.modules.notes.revision = `notes-${next.revision}`;
+    }
     window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).send(next);
   }, change);
 }
@@ -266,8 +273,11 @@ test("unsupported and broken renderers leave other contributions usable", async 
   await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
-  await publishModules(page, { composition: "recovered" });
+  await publishModules(page);
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
+  await page.getByRole("button", { name: /^Open notes:/ }).click();
+  await publishModules(page, { notes: "Updated notes stay open" });
+  await expect(page.getByText("Updated notes stay open", { exact: true })).toBeVisible();
 });
 
 for (const mode of ["readOnly", "stopped"]) {
