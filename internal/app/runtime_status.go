@@ -16,9 +16,9 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 // RuntimeCatalogService assembles read-only runtime facts for presentation
@@ -43,7 +43,7 @@ type RuntimeStatusOptions struct {
 // Callers obtain it through App.ReadRuntimeModuleSnapshot so Thread
 // replacement and shutdown cannot invalidate the sets during projection.
 type RuntimeModuleSnapshot struct {
-	Tools          *tools.Registry
+	Tools          *toolcore.Registry
 	Runtime        *runtimemodule.Set
 	Thread         *runtimemodule.Set
 	RuntimeContext runtimemodule.RuntimeContext
@@ -406,7 +406,7 @@ func activeToolEntries(active RuntimeModuleSnapshot) ([]runtimemodule.ToolEntry,
 func runtimeToolsStatusFromActiveCatalogs(defaultTimeoutSeconds int, entries []runtimemodule.ToolEntry) (RuntimeToolsStatus, error) {
 	filtered := make([]runtimemodule.ToolEntry, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Tool.Group == tools.ToolGroupMCP {
+		if entry.Tool.Group == toolcore.ToolGroupMCP {
 			continue
 		}
 		filtered = append(filtered, entry)
@@ -415,7 +415,7 @@ func runtimeToolsStatusFromActiveCatalogs(defaultTimeoutSeconds int, entries []r
 }
 
 func runtimeToolsStatusFromEntries(defaultTimeoutSeconds int, entries []runtimemodule.ToolEntry) (RuntimeToolsStatus, error) {
-	definitions := make([]tools.ToolDefinition, 0, len(entries))
+	definitions := make([]toolcore.ToolDefinition, 0, len(entries))
 	owners := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		definition := entry.Tool.Definition()
@@ -434,20 +434,20 @@ func runtimeToolsStatusFromEntries(defaultTimeoutSeconds int, entries []runtimem
 	return status, nil
 }
 
-func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defaultTimeoutSeconds int) (RuntimeToolsStatus, error) {
-	groupOrder := []tools.ToolGroup{
-		tools.ToolGroupFile,
-		tools.ToolGroupChunkedWrite,
-		tools.ToolGroupShell,
-		tools.ToolGroupSearch,
-		tools.ToolGroupSkill,
-		tools.ToolGroupThreadState,
-		tools.ToolGroupMemory,
-		tools.ToolGroupWorkerThread,
-		tools.ToolGroupObservable,
+func runtimeToolsStatusFromDefinitions(definitions []toolcore.ToolDefinition, defaultTimeoutSeconds int) (RuntimeToolsStatus, error) {
+	groupOrder := []toolcore.ToolGroup{
+		toolcore.ToolGroupFile,
+		toolcore.ToolGroupChunkedWrite,
+		toolcore.ToolGroupShell,
+		toolcore.ToolGroupSearch,
+		toolcore.ToolGroupSkill,
+		toolcore.ToolGroupThreadState,
+		toolcore.ToolGroupMemory,
+		toolcore.ToolGroupWorkerThread,
+		toolcore.ToolGroupObservable,
 	}
 	groups := make([]RuntimeToolGroupStatus, len(groupOrder))
-	groupIndexes := make(map[tools.ToolGroup]int, len(groupOrder))
+	groupIndexes := make(map[toolcore.ToolGroup]int, len(groupOrder))
 	for i, group := range groupOrder {
 		groups[i] = RuntimeToolGroupStatus{Group: string(group), Tools: []RuntimeToolInfo{}}
 		groupIndexes[group] = i
@@ -472,9 +472,9 @@ func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defau
 	return RuntimeToolsStatus{Count: len(definitions), Groups: groups}, nil
 }
 
-func runtimeToolInfoFromDefinition(definition tools.ToolDefinition, defaultTimeoutSeconds int) RuntimeToolInfo {
+func runtimeToolInfoFromDefinition(definition toolcore.ToolDefinition, defaultTimeoutSeconds int) RuntimeToolInfo {
 	definition = definition.Normalized()
-	effective := tools.EffectiveToolTimeout(definition, defaultTimeoutSeconds)
+	effective := toolcore.EffectiveToolTimeout(definition, defaultTimeoutSeconds)
 	return RuntimeToolInfo{
 		Name:        definition.Name,
 		Description: definition.Description,

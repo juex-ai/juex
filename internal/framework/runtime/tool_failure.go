@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 const (
@@ -98,7 +98,7 @@ func toolFailureObservationFromToolResult(result toolCallResult) toolFailureObse
 	return toolFailureObservationFromToolsObservation(obs)
 }
 
-func toolFailureObservationFromToolsObservation(obs tools.Observation) toolFailureObservation {
+func toolFailureObservationFromToolsObservation(obs toolcore.Observation) toolFailureObservation {
 	errText := firstNonEmptyString(obs.Error, extractToolError(obs.Content))
 	if errText == "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(obs.Content)), "hooks:") {
 		errText = strings.TrimSpace(obs.Content)

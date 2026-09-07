@@ -29,11 +29,14 @@ import (
 	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
+	shellfeature "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	usermedia "github.com/juex-ai/juex/internal/framework/inputmedia"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -44,7 +47,6 @@ import (
 	"github.com/juex-ai/juex/internal/framework/thread"
 	observability "github.com/juex-ai/juex/internal/framework/threadlog"
 	modelproviders "github.com/juex-ai/juex/internal/providers"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 // Options bundles the inputs to New.
@@ -123,7 +125,7 @@ type App struct {
 	skillFilteredItems    []skills.FilteredSkill
 	mcp                   MCPStatus
 	obsv                  *observable.Manager
-	shellSessions         *tools.ShellSessionManager
+	shellSessions         *shellfeature.ShellSessionManager
 	workers               *workerThreadManager
 	workerFactory         workerThreadFactory
 	mcpManager            *mcp.Manager
@@ -332,12 +334,12 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 	}()
 	toolTimeoutSeconds := durationSeconds(runtimeLimits.ToolTimeout)
-	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{
+	reg := toolcore.NewRegistryWithOptions(toolcore.RegistryOptions{
 		DefaultTimeoutSeconds: toolTimeoutSeconds,
 	})
 	runtimeEnvironment := agentRuntime.Environment()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
-	runtimeModules, err = prepareRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner, toolTimeoutSeconds)
+	runtimeModules, err = prepareRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner)
 	if err != nil {
 		return nil, err
 	}
@@ -668,7 +670,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		_ = a.Close()
 		return nil, err
 	}
-	reg, err = runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds}, runtimeModules.set, threadModules)
+	reg, err = runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds}, runtimeModules.set, threadModules)
 	if err != nil {
 		_ = threadModules.CloseThread(context.Background())
 		_ = a.Close()
@@ -721,8 +723,8 @@ func notesStore(threadState *thread.Thread) *notesmodule.NotesStore {
 	return notesmodule.NewNotesStore(threadState.Dir)
 }
 
-func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
-	return tools.ShellProfile{
+func toolsShellProfile(p config.ShellProfile) command.ShellProfile {
+	return command.ShellProfile{
 		Profile:       p.Profile,
 		Family:        p.Family,
 		Binary:        p.Binary,
@@ -1503,9 +1505,9 @@ func durationSeconds(d time.Duration) int {
 	if d <= 0 {
 		return 0
 	}
-	max := time.Duration(tools.MaxTimeoutSeconds) * time.Second
+	max := time.Duration(toolcore.MaxTimeoutSeconds) * time.Second
 	if d >= max {
-		return tools.MaxTimeoutSeconds
+		return toolcore.MaxTimeoutSeconds
 	}
 	seconds := d / time.Second
 	if d%time.Second > 0 {

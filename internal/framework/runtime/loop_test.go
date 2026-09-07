@@ -21,18 +21,20 @@ import (
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/thread"
 	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/tests/testsupport/toolset"
 )
 
 // errorProvider always fails — used to test the engine's error-bubbling.
@@ -385,11 +387,10 @@ func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *ev
 
 func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool, toolTimeoutSeconds int) (*Engine, *events.Bus) {
 	t.Helper()
-	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds})
+	reg := toolcore.NewRegistryWithOptions(toolcore.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds})
 	if builtinTools {
-		tools.RegisterBuiltins(reg, tools.BuiltinOptions{
-			Shell:              tools.DefaultShellProfile(),
-			ToolTimeoutSeconds: toolTimeoutSeconds,
+		toolset.Register(reg, toolset.Options{
+			Shell: command.DefaultShellProfile(),
 		})
 	}
 	bus := events.NewBus()
@@ -821,7 +822,7 @@ func TestTurn_DurableToolRequestFailurePreventsToolCall(t *testing.T) {
 	}}}
 	eng, bus := newEngine(t, prov, false)
 	toolCalls := 0
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "side_effect",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			toolCalls++
@@ -854,7 +855,7 @@ func TestTurn_DurableToolStartedFailurePreventsToolCall(t *testing.T) {
 	}}
 	installHookRunner(t, eng, hookRunner)
 	toolCalls := 0
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "side_effect",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			toolCalls++
@@ -884,7 +885,7 @@ func TestTurn_ToolExecutionEventsCarryStableIdentityAndRecoverableOutcome(t *tes
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
+	eng.Tools.MustRegister(toolcore.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
 		return "recorded once", nil
 	}})
 	var requested toolevents.RequestedPayload
@@ -933,7 +934,7 @@ func TestTurn_TransformedToolInputIsDurableBeforeHandlerExecution(t *testing.T) 
 		}
 	})
 	handlerSawCheckpoint := false
-	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(_ context.Context, input map[string]any) (string, error) {
+	eng.Tools.MustRegister(toolcore.Tool{Name: "side_effect", Handler: func(_ context.Context, input map[string]any) (string, error) {
 		handlerSawCheckpoint = durableEffectiveInput.Load()
 		if input["path"] != "effective.txt" {
 			return "", fmt.Errorf("handler input = %#v", input)
@@ -971,7 +972,7 @@ func TestTurn_TransformedToolInputIsDurableBeforeLaterPolicyExecution(t *testing
 		}
 	})
 	laterPolicySawCheckpoint := false
-	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
+	eng.Tools.MustRegister(toolcore.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
 		return "recorded once", nil
 	}})
 	installRuntimeTestModules(t, eng,
@@ -1007,7 +1008,7 @@ func TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution(t *test
 	eng, bus := newEngine(t, prov, false)
 	toolCalls := 0
 	laterPolicyCalls := 0
-	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
+	eng.Tools.MustRegister(toolcore.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
 		toolCalls++
 		return "must not run", nil
 	}})
@@ -1052,7 +1053,7 @@ func TestTurn_DeclaresWholeToolBatchBeforeAnyToolStarts(t *testing.T) {
 			}}
 			eng, bus := newEngine(t, prov, false)
 			for _, name := range toolNames {
-				eng.Tools.MustRegister(tools.Tool{Name: name, Handler: func(context.Context, map[string]any) (string, error) {
+				eng.Tools.MustRegister(toolcore.Tool{Name: name, Handler: func(context.Context, map[string]any) (string, error) {
 					return "ok", nil
 				}})
 			}
@@ -1108,7 +1109,7 @@ func TestTurn_DurableToolResultFailurePreventsNextProviderCall(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, false)
 	toolCalls := 0
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "side_effect",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			toolCalls++
@@ -1143,7 +1144,7 @@ func TestTurn_DurableToolErrorFailurePersistsActualResult(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "side_effect",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return "partial output", errors.New("side effect failed")
@@ -1175,7 +1176,7 @@ func TestTurn_DurableToolProjectionFailurePersistsProjectedResult(t *testing.T) 
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 8, PreviewHeadBytes: 4, PreviewTailBytes: 4}
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "large_result",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return "head-" + strings.Repeat("payload-", 20) + "tail", nil
@@ -1326,7 +1327,7 @@ func TestTurn_EmitsLLMOutputDeltaEvents(t *testing.T) {
 
 func newEngineForThread(t *testing.T, threadState *thread.Thread, prov llm.Provider) *Engine {
 	t.Helper()
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	bus := events.NewBus()
 	threadState.SubscribeBus(bus)
 	pb := newTestPromptBuilder("", func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) })
@@ -1853,7 +1854,7 @@ func TestTurn_ExternalizesLargeToolResultBeforeNextProviderRequest(t *testing.T)
 		PreviewHeadBytes: 10,
 		PreviewTailBytes: 10,
 	}
-	if err := eng.Tools.Register(tools.Tool{
+	if err := eng.Tools.Register(toolcore.Tool{
 		Name:        "big",
 		Description: "return a big result",
 		Handler: func(context.Context, map[string]any) (string, error) {
@@ -2371,7 +2372,7 @@ func TestTurn_LaterIterationOverflowCompactsAndRetriesOnce(t *testing.T) {
 	eng.ContextWindow = 10_000
 	eng.Compaction = DefaultCompactionPolicy()
 	var toolCalls atomic.Int32
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "counted",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			toolCalls.Add(1)
@@ -2646,7 +2647,7 @@ func TestTurn_RecordsEachIterationUsageForTheServingModel(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 7, OutputTokens: 2}},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{Name: "echo", Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil }})
+	eng.Tools.MustRegister(toolcore.Tool{Name: "echo", Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil }})
 
 	if out, err := eng.Turn(context.Background(), "use echo"); err != nil || out != "done" {
 		t.Fatalf("Turn() = %q, %v", out, err)
@@ -2681,7 +2682,7 @@ func TestTurn_LLMRespondedCarriesOrderedBlocks(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "echo",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -3158,7 +3159,7 @@ func TestCompactStartedIncludesToolSchemaBudget(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:        "large_schema_tool",
 		Description: strings.Repeat("tool schema description ", 80),
 		Schema: map[string]any{
@@ -4684,10 +4685,11 @@ func TestTurn_GuidedToolErrorAddsRecoveryHintAfterDiagnosticEvent(t *testing.T) 
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{Name: "skill_load", Handler: func(context.Context, map[string]any) (string, error) { return "guide", nil }})
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{Name: "skill_load", Handler: func(context.Context, map[string]any) (string, error) { return "guide", nil }})
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:  "guided_test",
-		Group: tools.ToolGroupObservable,
+		Group: toolcore.ToolGroupObservable,
+		Guide: toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return "partial output", errors.New("guided failure")
 		},
@@ -4733,13 +4735,13 @@ func TestTurn_ToolStructuredMediaBecomesToolResultMedia(t *testing.T) {
 		Width:         2,
 		Height:        1,
 	}
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "read_image",
 		Schema: map[string]any{"type": "object"},
-		ResultHandler: func(ctx context.Context, in map[string]any) (tools.Result, error) {
-			return tools.Result{
+		ResultHandler: func(ctx context.Context, in map[string]any) (toolcore.Result, error) {
+			return toolcore.Result{
 				Text:       "[image 2x1, 12 bytes, image/png]",
-				Structured: tools.MediaResult{Media: media},
+				Structured: toolcore.MediaResult{Media: media},
 			}, nil
 		},
 	})
@@ -4826,7 +4828,7 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "inspect",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return "inspection complete", nil
@@ -4863,7 +4865,7 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "danger",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			t.Fatal("tool should not run when denied")
@@ -4898,7 +4900,7 @@ func TestTurn_PostToolUseExitTwoAddsCorrectiveContext(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "audit",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return "sensitive output", nil
@@ -4933,7 +4935,7 @@ func TestTurn_PostToolUseRetainsSuccessfulContextBeforeRequiredFailure(t *testin
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "audit",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return "tool output", nil
@@ -4970,7 +4972,7 @@ func TestTurn_PostExecutionPolicyDenyBecomesToolErrorAndStopsLaterPolicies(t *te
 	}}
 	eng, _ := newEngine(t, prov, false)
 	handlerRan := false
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "audit",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			handlerRan = true
@@ -5015,7 +5017,7 @@ func TestTurn_PostExecutionTransformOwnsTerminalObservation(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "audit",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return rawResult, nil
@@ -5065,10 +5067,10 @@ func TestTurn_PostExecutionTransformSuppressesRawOutputDelta(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "stream-audit",
 		Handler: func(ctx context.Context, _ map[string]any) (string, error) {
-			tools.ToolCallEventsFromContext(ctx).Emit(tools.OutputDelta{Text: rawResult})
+			toolcore.ToolCallEventsFromContext(ctx).Emit(toolcore.OutputDelta{Text: rawResult})
 			return rawResult, nil
 		},
 	})
@@ -5470,7 +5472,7 @@ func TestTurn_DrainsPendingInputAfterToolResults(t *testing.T) {
 		},
 	}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "echo",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -7228,7 +7230,7 @@ func TestEngine_DropPersistedPendingMessagePreventsReplay(t *testing.T) {
 
 func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "echo_status_test",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return "hello", nil
@@ -7271,7 +7273,7 @@ func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 func TestRecordToolBatchUsesServingCandidateContextWindowForProjection(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.ContextWindow = 30_000
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "large_candidate_output",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return strings.Repeat("x", 2_400), nil
@@ -7298,15 +7300,17 @@ func TestRecordToolBatchUsesServingCandidateContextWindowForProjection(t *testin
 }
 
 func TestNormalizeGuidedToolFailureResults(t *testing.T) {
-	reg := tools.NewRegistry()
-	for name, group := range map[string]tools.ToolGroup{
-		"skill_load": tools.ToolGroupSkill,
-		"observe":    tools.ToolGroupObservable,
-		"chunk":      tools.ToolGroupChunkedWrite,
-		"goal":       tools.ToolGroupThreadState,
-		"read":       tools.ToolGroupFile,
+	reg := toolcore.NewRegistry()
+	for name, group := range map[string]toolcore.ToolGroup{
+		"skill_load": toolcore.ToolGroupSkill,
+		"observe":    toolcore.ToolGroupObservable,
+		"chunk":      toolcore.ToolGroupChunkedWrite,
+		"goal":       toolcore.ToolGroupThreadState,
+		"read":       toolcore.ToolGroupFile,
 	} {
-		reg.MustRegister(tools.Tool{
+		guides := map[string]string{"observe": "juex-observables", "chunk": "juex-chunked-write", "goal": "juex-thread-state"}
+		reg.MustRegister(toolcore.Tool{
+			Guide:   toolcore.ToolGuide{Loader: "skill_load", Name: guides[name]},
 			Name:    name,
 			Group:   group,
 			Handler: func(context.Context, map[string]any) (string, error) { return "", nil },
@@ -7376,7 +7380,7 @@ func TestNormalizeGuidedToolFailureResults(t *testing.T) {
 					Content:  tt.content,
 					IsError:  tt.isError,
 				},
-				Observation: tools.Observation{
+				Observation: toolcore.Observation{
 					ToolName:  tt.toolName,
 					Content:   tt.content,
 					Error:     errorText,
@@ -7400,7 +7404,7 @@ func TestNormalizeGuidedToolFailureResults(t *testing.T) {
 
 	input := []toolCallResult{{
 		Block:       llm.Block{Type: llm.BlockToolResult, ToolName: "observe", Content: "boom", IsError: true},
-		Observation: tools.Observation{ToolName: "observe", Content: "boom"},
+		Observation: toolcore.Observation{ToolName: "observe", Content: "boom"},
 	}}
 	got := (&Engine{}).normalizeGuidedToolFailureResults(input)
 	if !reflect.DeepEqual(got, input) {
@@ -7412,8 +7416,8 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 	const toolCallCount = 3
 	started := make(chan struct{}, toolCallCount)
 	release := make(chan struct{})
-	reg := tools.NewRegistry()
-	reg.MustRegister(tools.Tool{
+	reg := toolcore.NewRegistry()
+	reg.MustRegister(toolcore.Tool{
 		Name:   "slow",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -7587,20 +7591,20 @@ func TestRunToolCalls_SerializesSideThreadCallsInProviderOrder(t *testing.T) {
 	firstStarted := make(chan struct{})
 	secondStarted := make(chan struct{}, 1)
 	releaseFirst := make(chan struct{})
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:            "side_first",
-		Group:           tools.ToolGroupWorkerThread,
-		ExecutionPolicy: tools.ToolExecutionSerial,
+		Group:           toolcore.ToolGroupWorkerThread,
+		ExecutionPolicy: toolcore.ToolExecutionSerial,
 		Handler: func(context.Context, map[string]any) (string, error) {
 			close(firstStarted)
 			<-releaseFirst
 			return "first", nil
 		},
 	})
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:            "side_second",
-		Group:           tools.ToolGroupWorkerThread,
-		ExecutionPolicy: tools.ToolExecutionSerial,
+		Group:           toolcore.ToolGroupWorkerThread,
+		ExecutionPolicy: toolcore.ToolExecutionSerial,
 		Handler: func(context.Context, map[string]any) (string, error) {
 			secondStarted <- struct{}{}
 			return "second", nil
@@ -7646,7 +7650,7 @@ func TestTurn_AllowsLongToolSequence(t *testing.T) {
 	script = append(script, llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
 	prov := &mockProvider{script: script}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:    "echo",
 		Schema:  map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) { return "x", nil },
@@ -7819,7 +7823,7 @@ func TestTurn_DoesNotDispatchToolAfterProviderCancelsContext(t *testing.T) {
 		errored = event.Payload.(LLMErroredPayload)
 	})
 	var toolCalls atomic.Int32
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "should_not_run",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -7864,7 +7868,7 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 		erroredPayload, _ = e.Payload.(toolevents.ErroredPayload)
 	})
 	toolStarted := make(chan struct{}, 1)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "slow",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -7919,7 +7923,7 @@ func TestTurn_ToolTimeoutPersistsErrorWithoutFailureLedgerContinuation(t *testin
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:           "slow",
 		Schema:         map[string]any{"type": "object"},
 		TimeoutSeconds: 1,
@@ -7999,7 +8003,7 @@ func TestTurn_DirectToolDeadlineUsesTimeoutContract(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:           "deadline",
 		Schema:         map[string]any{"type": "object"},
 		TimeoutSeconds: 1,
@@ -8049,12 +8053,12 @@ func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "streamer",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			events := tools.ToolCallEventsFromContext(ctx)
-			events.Emit(tools.OutputDelta{
+			events := toolcore.ToolCallEventsFromContext(ctx)
+			events.Emit(toolcore.OutputDelta{
 				Name:      "streamer",
 				ToolUseID: "stream_1",
 				SessionID: "sh_test",
@@ -8106,7 +8110,7 @@ func TestTurn_ToolOutputDeltaCannotAmplifyActiveJournal(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "read_journal",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -8116,7 +8120,7 @@ func TestTurn_ToolOutputDeltaCannotAmplifyActiveJournal(t *testing.T) {
 				if err != nil {
 					return "", err
 				}
-				tools.ToolCallEventsFromContext(ctx).Emit(tools.OutputDelta{Text: string(data)})
+				toolcore.ToolCallEventsFromContext(ctx).Emit(toolcore.OutputDelta{Text: string(data)})
 			}
 			return "journal inspected", nil
 		},
@@ -8163,7 +8167,7 @@ func TestTurn_BuiltinShellCompletedEventCarriesAuthoritativeContentWithoutStruct
 	if out != "done" {
 		t.Fatalf("out = %q, want done", out)
 	}
-	result, ok := completedPayload.Result.(tools.ShellResult)
+	result, ok := completedPayload.Result.(toolcore.CommandResult)
 	if !ok {
 		t.Fatalf("completed result = %#v, want tools.ShellResult", completedPayload.Result)
 	}
@@ -8195,19 +8199,19 @@ func TestEmitToolFinishedHandlesPointerShellResult(t *testing.T) {
 	bus.Subscribe(toolevents.CompletedType, func(event events.Event) {
 		completed, _ = event.Payload.(toolevents.CompletedPayload)
 	})
-	original := &tools.ShellResult{Output: "duplicate raw output", OriginalBytes: 20}
+	original := &toolcore.CommandResult{Output: "duplicate raw output", OriginalBytes: 20}
 	call := llm.Block{Type: llm.BlockToolUse, ToolUseID: "pointer-shell", ToolName: "exec_command"}
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName, Content: "finalized bounded output"}
-	observation := tools.NewObservation(tools.ObservationOptions{Content: "earlier output", StructuredResult: original})
+	observation := toolcore.NewObservation(toolcore.ObservationOptions{Content: "earlier output", StructuredResult: original})
 
 	if err := eng.emitToolFinished("turn-1", toolExecutionCall{
 		call:    call,
 		payload: toolCallPayload(call, 0, 0, "assistant-pointer"),
-	}, "result-pointer", block, observation, tools.CallInfo{}); err != nil {
+	}, "result-pointer", block, observation, toolcore.CallInfo{}); err != nil {
 		t.Fatal(err)
 	}
 
-	result, ok := completed.Result.(*tools.ShellResult)
+	result, ok := completed.Result.(*toolcore.CommandResult)
 	if !ok {
 		t.Fatalf("completed result = %#v, want *tools.ShellResult", completed.Result)
 	}
@@ -8569,7 +8573,7 @@ func TestTurn_FinishGateAllowsNonblockingExploratoryFailure(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "read",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -8605,7 +8609,7 @@ func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuati
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "check_ready",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -8665,7 +8669,7 @@ func TestTurn_FailureLedgerUsesBeforePolicyTransformedInput(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, false)
 	var handlerPath string
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "check_ready",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(_ context.Context, input map[string]any) (string, error) {
@@ -8715,11 +8719,11 @@ func TestTurn_FailureLedgerUsesToolObservationExitCode(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "check_ready",
 		Schema: map[string]any{"type": "object"},
-		ResultHandler: func(ctx context.Context, in map[string]any) (tools.Result, error) {
-			return tools.Result{
+		ResultHandler: func(ctx context.Context, in map[string]any) (toolcore.Result, error) {
+			return toolcore.Result{
 				Text:       "opaque failure output",
 				Structured: runtimeExitCodeStructuredResult{code: 9},
 			}, fmt.Errorf("check failed")
@@ -8803,7 +8807,7 @@ func TestTurn_SuccessfulCheckResolvesToolFailure(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, false)
 	var attempts int
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "check_ready",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -8845,7 +8849,7 @@ func TestTurn_FileMutationMarksToolFailureStale(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "updated"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "check_ready",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -8949,7 +8953,7 @@ func TestTurn_RepeatedFailureRecordsRepeatedStuckWithoutContinuation(t *testing.
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "check_ready",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
@@ -8992,7 +8996,7 @@ func TestTurn_FailureLedgerDoesNotRequestBlockedReasonOnRepeatedFinishAttempt(t 
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name:   "check_ready",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {

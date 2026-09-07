@@ -9,8 +9,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestModuleContributesSkillToolsAndContext(t *testing.T) {
@@ -38,7 +38,7 @@ func TestModuleContributesSkillToolsAndContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := tools.NewRegistry()
+	registry := toolcore.NewRegistry()
 	for _, tool := range provided {
 		if err := registry.Register(tool); err != nil {
 			t.Fatal(err)

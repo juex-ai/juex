@@ -11,9 +11,9 @@ import (
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	"github.com/juex-ai/juex/internal/framework/provenance"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 type fallbackProviderResult struct {
@@ -465,7 +465,7 @@ func TestTurnFallbackAfterToolResultDoesNotRerunTool(t *testing.T) {
 	}
 	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	toolCalls := 0
-	if err := eng.Tools.Register(tools.Tool{
+	if err := eng.Tools.Register(toolcore.Tool{
 		Name: "once",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			toolCalls++
@@ -836,7 +836,7 @@ func TestTurnFallbackAfterStreamedDeltaExecutesRecoveredToolOnce(t *testing.T) {
 	}
 	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	toolCalls := 0
-	if err := eng.Tools.Register(tools.Tool{
+	if err := eng.Tools.Register(toolcore.Tool{
 		Name: "once",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			toolCalls++

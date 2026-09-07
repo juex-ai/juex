@@ -11,7 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
@@ -63,7 +63,7 @@ func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
 		{
 			Name:   "permission-denial-recovery",
 			Prompt: "recover from a protected path denial",
-			ExtraTools: []tools.Tool{{
+			ExtraTools: []toolcore.Tool{{
 				Name:        "guarded_read",
 				Description: "eval-only permission denial tool",
 				Schema: map[string]any{

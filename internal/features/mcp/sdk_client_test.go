@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -25,7 +25,7 @@ func TestMCPClient_RemoteToolRoundTrip(t *testing.T) {
 	cfg := Config{MCPServers: map[string]ServerSpec{
 		"remote": {URL: server.URL},
 	}}
-	registry := tools.NewRegistry()
+	registry := toolcore.NewRegistry()
 	manager, err := connectAndInstallManager(t.Context(), cfg, registry)
 	if err != nil {
 		t.Fatal(err)
@@ -36,8 +36,8 @@ func TestMCPClient_RemoteToolRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("registered tools = %#v", registry.List())
 	}
-	if tool.Group != tools.ToolGroupMCP {
-		t.Fatalf("tool group = %q, want %q", tool.Group, tools.ToolGroupMCP)
+	if tool.Group != toolcore.ToolGroupMCP {
+		t.Fatalf("tool group = %q, want %q", tool.Group, toolcore.ToolGroupMCP)
 	}
 	output, err := tool.Handler(t.Context(), map[string]any{"text": "hello"})
 	if err != nil {

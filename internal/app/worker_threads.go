@@ -15,10 +15,10 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const workerThreadModuleID runtimemodule.ID = modulecatalog.WorkerThreads
@@ -47,7 +47,7 @@ func (m *workerThreadModule) CloseRuntime(context.Context) error {
 	return m.manager.WaitClose()
 }
 
-func (m *workerThreadModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *workerThreadModule) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	return workerThreadTools(m.manager), nil
 }
 
@@ -1117,19 +1117,19 @@ func (m *workerThreadManager) ensureParentActive() error {
 	return nil
 }
 
-func workerThreadTools(manager *workerThreadManager) []tools.Tool {
+func workerThreadTools(manager *workerThreadManager) []toolcore.Tool {
 	definitions := WorkerThreadToolDefinitions()
 	unavailable := func(context.Context, map[string]any) (string, error) {
 		return "", errors.New("worker thread manager is unavailable")
 	}
 	if manager == nil {
-		tools := make([]tools.Tool, 0, len(definitions))
+		tools := make([]toolcore.Tool, 0, len(definitions))
 		for _, definition := range definitions {
 			tools = append(tools, definition.Bind(unavailable))
 		}
 		return tools
 	}
-	handlers := []tools.Handler{
+	handlers := []toolcore.Handler{
 		func(ctx context.Context, input map[string]any) (string, error) {
 			subscribe := false
 			if raw, ok := input["subscribe"]; ok {
@@ -1185,20 +1185,20 @@ func workerThreadTools(manager *workerThreadManager) []tools.Tool {
 			return marshalWorkerToolResult(map[string]any{"thread_id": id, "archived": true}, nil)
 		},
 	}
-	provided := make([]tools.Tool, 0, len(definitions))
+	provided := make([]toolcore.Tool, 0, len(definitions))
 	for i, definition := range definitions {
 		provided = append(provided, definition.Bind(handlers[i]))
 	}
 	return provided
 }
 
-func WorkerThreadToolDefinitions() []tools.ToolDefinition {
+func WorkerThreadToolDefinitions() []toolcore.ToolDefinition {
 	id := map[string]any{"type": "string"}
-	return []tools.ToolDefinition{
+	return []toolcore.ToolDefinition{
 		{
 			Name:            WorkerThreadToolCreate,
-			Group:           tools.ToolGroupWorkerThread,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupWorkerThread,
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Create a managed Worker Thread and start its query asynchronously. Set subscribe to receive terminal results.",
 			Schema: map[string]any{
 				"type": "object",
@@ -1213,15 +1213,15 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:            WorkerThreadToolList,
-			Group:           tools.ToolGroupWorkerThread,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupWorkerThread,
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "List direct Worker Threads currently managed by this Thread.",
 			Schema:          map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		{
 			Name:            WorkerThreadToolStatus,
-			Group:           tools.ToolGroupWorkerThread,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupWorkerThread,
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Read the runtime status and latest result of an active managed Worker Thread.",
 			Schema: map[string]any{
 				"type": "object", "properties": map[string]any{"thread_id": id}, "required": []string{"thread_id"},
@@ -1229,8 +1229,8 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:            WorkerThreadToolSend,
-			Group:           tools.ToolGroupWorkerThread,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupWorkerThread,
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Send a message to a managed Worker Thread; busy Threads queue it as durable pending input.",
 			Schema: map[string]any{
 				"type":       "object",
@@ -1240,8 +1240,8 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:            WorkerThreadToolSubscribe,
-			Group:           tools.ToolGroupWorkerThread,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupWorkerThread,
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Enable or disable terminal result notifications for a managed Worker Thread.",
 			Schema: map[string]any{
 				"type":       "object",
@@ -1251,8 +1251,8 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:            WorkerThreadToolStop,
-			Group:           tools.ToolGroupWorkerThread,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupWorkerThread,
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Stop and close an active managed Worker Thread while preserving its durable history.",
 			Schema: map[string]any{
 				"type": "object", "properties": map[string]any{"thread_id": id}, "required": []string{"thread_id"},
@@ -1260,8 +1260,8 @@ func WorkerThreadToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:            WorkerThreadToolArchive,
-			Group:           tools.ToolGroupWorkerThread,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupWorkerThread,
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Archive an idle, unsubscribed Worker Thread after all pending input and result deliveries have settled.",
 			Schema: map[string]any{
 				"type": "object", "properties": map[string]any{"thread_id": id}, "required": []string{"thread_id"},

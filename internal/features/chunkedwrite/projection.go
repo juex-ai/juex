@@ -8,7 +8,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	writefacts "github.com/juex-ai/juex/internal/chunkedwrite"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
@@ -88,7 +87,7 @@ func buildChunkedWriteProjectionPlan(pairs []runtimemodule.ToolResultPair) provi
 			continue
 		}
 		switch event.Kind {
-		case writefacts.EventBegin:
+		case EventBegin:
 			writeID := event.WriteID
 			if writeID == "" {
 				continue
@@ -97,7 +96,7 @@ func buildChunkedWriteProjectionPlan(pairs []runtimemodule.ToolResultPair) provi
 			session.beginCallID = toolUseID
 			session.path = providerProjectionFirstNonEmpty(event.Path, providerToolInputString(use.Input, "path"), session.path)
 			session.mode = providerProjectionFirstNonEmpty(event.Mode, providerToolInputString(use.Input, "mode"), session.mode)
-		case writefacts.EventChunk:
+		case EventChunk:
 			writeID := event.WriteID
 			if writeID == "" {
 				continue
@@ -114,7 +113,7 @@ func buildChunkedWriteProjectionPlan(pairs []runtimemodule.ToolResultPair) provi
 				}
 			}
 			session.chunks = append(session.chunks, chunk)
-		case writefacts.EventCommit:
+		case EventCommit:
 			writeID := event.WriteID
 			if writeID == "" {
 				continue
@@ -127,7 +126,7 @@ func buildChunkedWriteProjectionPlan(pairs []runtimemodule.ToolResultPair) provi
 			session.commitBytes = event.Bytes
 			session.commitChars = event.Chars
 			session.commitChunks = event.Chunks
-		case writefacts.EventAbort:
+		case EventAbort:
 			writeID := event.WriteID
 			if writeID == "" {
 				continue

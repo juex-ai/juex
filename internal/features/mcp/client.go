@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 
 	"github.com/juex-ai/juex/internal/foundation/environment"
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -33,14 +33,14 @@ type ToolDescriptor struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
-func toolDefinition(name string, descriptor ToolDescriptor) tools.ToolDefinition {
+func toolDefinition(name string, descriptor ToolDescriptor) toolcore.ToolDefinition {
 	schema := descriptor.InputSchema
 	if schema == nil {
 		schema = map[string]any{"type": "object"}
 	}
-	return tools.ToolDefinition{
+	return toolcore.ToolDefinition{
 		Name:        name,
-		Group:       tools.ToolGroupMCP,
+		Group:       toolcore.ToolGroupMCP,
 		Description: descriptor.Description,
 		Schema:      schema,
 	}

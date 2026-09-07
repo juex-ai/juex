@@ -10,8 +10,8 @@ import (
 	"github.com/juex-ai/juex/internal/features/contextcontrol"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestRunToolCalls_DeclaredExecutionPolicy(t *testing.T) {
@@ -24,7 +24,7 @@ func TestRunToolCalls_DeclaredExecutionPolicy(t *testing.T) {
 			release := make(chan struct{})
 			firstFinished := make(chan struct{})
 			var secondRan atomic.Bool
-			eng.Tools.MustRegister(tools.Tool{Name: "first", Group: tools.ToolGroupThreadState, ExecutionPolicy: tools.ToolExecutionSerial, Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+			eng.Tools.MustRegister(toolcore.Tool{Name: "first", Group: toolcore.ToolGroupThreadState, ExecutionPolicy: toolcore.ToolExecutionSerial, Handler: func(ctx context.Context, _ map[string]any) (string, error) {
 				started <- "first"
 				defer close(firstFinished)
 				select {
@@ -37,7 +37,7 @@ func TestRunToolCalls_DeclaredExecutionPolicy(t *testing.T) {
 				}
 				return "first", nil
 			}})
-			eng.Tools.MustRegister(tools.Tool{Name: "second", Group: "independent-module", ExecutionPolicy: tools.ToolExecutionSerial, Handler: func(context.Context, map[string]any) (string, error) {
+			eng.Tools.MustRegister(toolcore.Tool{Name: "second", Group: "independent-module", ExecutionPolicy: toolcore.ToolExecutionSerial, Handler: func(context.Context, map[string]any) (string, error) {
 				secondRan.Store(true)
 				select {
 				case <-firstFinished:
@@ -46,7 +46,7 @@ func TestRunToolCalls_DeclaredExecutionPolicy(t *testing.T) {
 					return "", errors.New("second overtook first")
 				}
 			}})
-			eng.Tools.MustRegister(tools.Tool{Name: "parallel", Group: tools.ToolGroupThreadState, Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+			eng.Tools.MustRegister(toolcore.Tool{Name: "parallel", Group: toolcore.ToolGroupThreadState, Handler: func(ctx context.Context, _ map[string]any) (string, error) {
 				started <- "parallel"
 				select {
 				case <-release:

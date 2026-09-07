@@ -9,27 +9,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
-
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 )
 
-type executionPolicyModule struct{ tools []tools.Tool }
+type executionPolicyModule struct{ tools []toolcore.Tool }
 
 func (*executionPolicyModule) ID() runtimemodule.ID { return "execution-policy-fixture" }
 
-func (m *executionPolicyModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *executionPolicyModule) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	return m.tools, nil
 }
 
@@ -51,25 +51,25 @@ func TestEndToEnd_ModuleExecutionPolicyPersistsOrderedOutcomes(t *testing.T) {
 			firstStarted := make(chan struct{})
 			parallelStarted := make(chan struct{})
 			var firstFinished, secondRan atomic.Bool
-			mod := &executionPolicyModule{tools: []tools.Tool{
-				(tools.ToolDefinition{Name: "state_write", Group: "fixture-state", ExecutionPolicy: tools.ToolExecutionSerial}).BindResult(func(ctx context.Context, _ map[string]any) (tools.Result, error) {
+			mod := &executionPolicyModule{tools: []toolcore.Tool{
+				(toolcore.ToolDefinition{Name: "state_write", Group: "fixture-state", ExecutionPolicy: toolcore.ToolExecutionSerial}).BindResult(func(ctx context.Context, _ map[string]any) (toolcore.Result, error) {
 					close(firstStarted)
 					select {
 					case <-parallelStarted:
 					case <-ctx.Done():
-						return tools.Result{}, ctx.Err()
+						return toolcore.Result{}, ctx.Err()
 					}
 					firstFinished.Store(true)
-					return tools.Result{Text: "partial result", Fact: json.RawMessage(`{"attempted":true}`)}, errors.New("fixture failure")
+					return toolcore.Result{Text: "partial result", Fact: json.RawMessage(`{"attempted":true}`)}, errors.New("fixture failure")
 				}),
-				(tools.ToolDefinition{Name: "state_read", Group: tools.ToolGroupFile, ExecutionPolicy: tools.ToolExecutionSerial}).Bind(func(context.Context, map[string]any) (string, error) {
+				(toolcore.ToolDefinition{Name: "state_read", Group: toolcore.ToolGroupFile, ExecutionPolicy: toolcore.ToolExecutionSerial}).Bind(func(context.Context, map[string]any) (string, error) {
 					secondRan.Store(true)
 					if !firstFinished.Load() {
 						return "", errors.New("read overtook write")
 					}
 					return "observed attempted write", nil
 				}),
-				(tools.ToolDefinition{Name: "parallel_probe", Group: "fixture-state"}).Bind(func(ctx context.Context, _ map[string]any) (string, error) {
+				(toolcore.ToolDefinition{Name: "parallel_probe", Group: "fixture-state"}).Bind(func(ctx context.Context, _ map[string]any) (string, error) {
 					select {
 					case <-firstStarted:
 					case <-ctx.Done():
@@ -90,7 +90,7 @@ func TestEndToEnd_ModuleExecutionPolicyPersistsOrderedOutcomes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, set)
+			registry, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{}, set)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,7 +107,7 @@ func TestEndToEnd_ModuleExecutionPolicyPersistsOrderedOutcomes(t *testing.T) {
 			sink.SetCatalog(eventcatalog.Default())
 			bus.SetCommitter(sink)
 			defer func() { _ = sink.Close() }()
-			engine := &runtime.Engine{Provider: provider, Tools: registry, RuntimeModules: set, Thread: state, Bus: bus, WorkDir: root, MediaDir: filepath.Join(root, "media"), Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, time.Now, state)}
+			engine := &runtime.Engine{Provider: provider, Tools: registry, RuntimeModules: set, Thread: state, Bus: bus, WorkDir: root, MediaDir: filepath.Join(root, "media"), Prompt: e2ePromptBuilder(t, "", []string{root}, root, command.ShellProfile{}, time.Now, state)}
 			_, err = engine.Turn(ctx, "Execute all three calls in one batch.")
 			if cancelBatch && !cancellation.IsUserCancelled(err) {
 				t.Fatalf("canceled Turn=%v", err)

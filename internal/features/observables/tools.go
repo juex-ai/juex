@@ -11,8 +11,8 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const (
@@ -40,7 +40,7 @@ func NewRuntimeModule(options ManagerOptions) *Module {
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	if m == nil {
 		return unavailableObservableTools(), nil
 	}
@@ -111,9 +111,9 @@ func (m *Module) closeOwned() error {
 	return manager.Close()
 }
 
-func unavailableObservableTools() []tools.Tool {
+func unavailableObservableTools() []toolcore.Tool {
 	definitions := ToolDefinitions()
-	provided := make([]tools.Tool, 0, len(definitions))
+	provided := make([]toolcore.Tool, 0, len(definitions))
 	for _, definition := range definitions {
 		provided = append(provided, definition.Bind(func(context.Context, map[string]any) (string, error) {
 			return "", fmt.Errorf("observable manager is unavailable")
@@ -122,53 +122,60 @@ func unavailableObservableTools() []tools.Tool {
 	return provided
 }
 
-func ToolDefinitions() []tools.ToolDefinition {
+func ToolDefinitions() []toolcore.ToolDefinition {
 	idSchema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"required":             []any{"id"},
 		"properties":           map[string]any{"id": map[string]any{"type": "string"}},
 	}
-	return []tools.ToolDefinition{
+	return []toolcore.ToolDefinition{
 		{
 			Name:        "observable_list",
-			Group:       tools.ToolGroupObservable,
+			Group:       toolcore.ToolGroupObservable,
+			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
 			Description: "List configured Observables and runtime status; call before creating one. ",
 			Schema:      map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		},
 		{
 			Name:        "observable_create",
-			Group:       tools.ToolGroupObservable,
+			Group:       toolcore.ToolGroupObservable,
+			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
 			Description: "Create and start a command Observable; use schedule_create for timed work. ",
 			Schema:      commandCreateSchema(),
 		},
 		{
 			Name:        "schedule_create",
-			Group:       tools.ToolGroupObservable,
+			Group:       toolcore.ToolGroupObservable,
+			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
 			Description: "Read observable_list results; reuse matches; no probe/poll. ",
 			Schema:      scheduleCreateSchema(),
 		},
 		{
 			Name:        "observable_start",
-			Group:       tools.ToolGroupObservable,
+			Group:       toolcore.ToolGroupObservable,
+			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
 			Description: "Temporarily start an Observable for this process. ",
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_stop",
-			Group:       tools.ToolGroupObservable,
+			Group:       toolcore.ToolGroupObservable,
+			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
 			Description: "Temporarily stop an Observable; delete for permanent removal. ",
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_delete",
-			Group:       tools.ToolGroupObservable,
+			Group:       toolcore.ToolGroupObservable,
+			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
 			Description: "Permanently delete and stop a project-owned Observable; extension definitions are read-only. Use stop for temporary pause. ",
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_observations",
-			Group:       tools.ToolGroupObservable,
+			Group:       toolcore.ToolGroupObservable,
+			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
 			Description: "List recent durable Observations, optionally for one Observable. ",
 			Schema: map[string]any{
 				"type":                 "object",
@@ -182,9 +189,9 @@ func ToolDefinitions() []tools.ToolDefinition {
 	}
 }
 
-func observableTools(manager *Manager) []tools.Tool {
+func observableTools(manager *Manager) []toolcore.Tool {
 	definitions := ToolDefinitions()
-	return []tools.Tool{
+	return []toolcore.Tool{
 		definitions[0].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			_ = ctx
 			_ = in

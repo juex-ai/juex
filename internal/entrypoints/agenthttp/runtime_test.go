@@ -14,15 +14,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
-
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 )
 
 func TestGetRuntimeStatus_ReturnsConfiguredMCPAndSkills(t *testing.T) {
@@ -90,7 +89,7 @@ body`)
 	}
 	var observableToolNames []string
 	for _, group := range got.Tools.Groups {
-		if group.Group != string(tools.ToolGroupObservable) {
+		if group.Group != string(toolcore.ToolGroupObservable) {
 			continue
 		}
 		for _, tool := range group.Tools {
@@ -104,7 +103,7 @@ body`)
 	if len(mcpTools) != 1 || mcpTools[0].Name != "echo" || mcpTools[0].Description != "Echo input" {
 		t.Fatalf("mcp tools = %+v", mcpTools)
 	}
-	if mcpTools[0].Schema["type"] != "object" || mcpTools[0].Timeout.Mode != "bounded" || mcpTools[0].Timeout.Seconds != tools.DefaultTimeoutSeconds {
+	if mcpTools[0].Schema["type"] != "object" || mcpTools[0].Timeout.Mode != "bounded" || mcpTools[0].Timeout.Seconds != toolcore.DefaultTimeoutSeconds {
 		t.Fatalf("mcp echo metadata = %+v", mcpTools[0])
 	}
 	if got.Skills.Count != 4 || got.Skills.Items[0].Name != "review" {
@@ -213,7 +212,7 @@ func TestRuntimeStatusOmitsConfigDisabledModulesAndResources(t *testing.T) {
 		t.Fatalf("disabled status still exposes feature resources: mcp=%+v hooks=%+v", got.MCP, got.Hooks)
 	}
 	for _, group := range got.Tools.Groups {
-		if (group.Group == string(tools.ToolGroupObservable) || group.Group == string(tools.ToolGroupWorkerThread)) && len(group.Tools) != 0 {
+		if (group.Group == string(toolcore.ToolGroupObservable) || group.Group == string(toolcore.ToolGroupWorkerThread)) && len(group.Tools) != 0 {
 			t.Fatalf("disabled Module tools remain in group %q: %+v", group.Group, group.Tools)
 		}
 	}
@@ -615,10 +614,10 @@ func TestRuntimeStatusIgnoresActiveThreadRegistryForMCPCatalog(t *testing.T) {
 	"alpha": { "command": "__juex_missing_mcp_command__" }
   }
 }`)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	for _, name := range []string{"mcp__alpha__one", "mcp__alpha__two", "mcp__gamma__orphan"} {
 		n := name
-		if err := reg.Register(tools.Tool{
+		if err := reg.Register(toolcore.Tool{
 			Name:    n,
 			Schema:  map[string]any{"type": "object"},
 			Handler: func(context.Context, map[string]any) (string, error) { return "", nil },

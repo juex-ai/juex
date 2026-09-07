@@ -8,16 +8,16 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
-type factToolModule struct{ testTool tools.Tool }
+type factToolModule struct{ testTool toolcore.Tool }
 
 func (*factToolModule) ID() runtimemodule.ID { return "fact-owner" }
 
-func (m *factToolModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	return []tools.Tool{m.testTool}, nil
+func (m *factToolModule) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
+	return []toolcore.Tool{m.testTool}, nil
 }
 
 type runtimeHistoryModule struct {
@@ -94,12 +94,12 @@ func TestTurnPersistsOwnedExecutionFactsAcrossResultPolicies(t *testing.T) {
 			eng, _ := newEngine(t, prov, false)
 			called := false
 			fact := json.RawMessage(`{"kind":"committed","id":"resource"}`)
-			owner := &factToolModule{testTool: tools.Tool{Name: "fact_tool", Schema: map[string]any{"type": "object"}, ResultHandler: func(context.Context, map[string]any) (tools.Result, error) {
+			owner := &factToolModule{testTool: toolcore.Tool{Name: "fact_tool", Schema: map[string]any{"type": "object"}, ResultHandler: func(context.Context, map[string]any) (toolcore.Result, error) {
 				called = true
 				if mode == "handler-error" {
-					return tools.Result{Text: "failed before execution"}, errors.New("operation failed")
+					return toolcore.Result{Text: "failed before execution"}, errors.New("operation failed")
 				}
-				return tools.Result{Text: "original presentation", Fact: fact}, nil
+				return toolcore.Result{Text: "original presentation", Fact: fact}, nil
 			}}}
 			policy := &runtimeToolPolicyModule{id: "presentation", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
 				if mode == "deny-before" && request.Stage == runtimemodule.ToolPolicyBeforeExecution {
@@ -116,7 +116,7 @@ func TestTurnPersistsOwnedExecutionFactsAcrossResultPolicies(t *testing.T) {
 				return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
 			}}
 			installRuntimeTestModules(t, eng, owner, policy)
-			reg, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, eng.RuntimeModules)
+			reg, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{}, eng.RuntimeModules)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1,5 +1,5 @@
-// Package shelltools owns shell execution tools, sessions, and prompt guidance.
-package shelltools
+// Package shell owns shell execution tools, sessions, and prompt guidance.
+package shell
 
 import (
 	"context"
@@ -7,34 +7,32 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.Shell
+const ModuleID runtimemodule.ID = "shell"
 
 type Module struct {
 	mu           sync.RWMutex
 	baseContext  context.Context
-	options      tools.BuiltinOptions
-	ownedSession *tools.ShellSessionManager
+	options      Options
+	ownedSession *ShellSessionManager
 	closeOnce    sync.Once
 	closeErr     error
 }
 
-func New(ctx context.Context, options tools.BuiltinOptions) *Module {
+func New(ctx context.Context, options Options) *Module {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	options.Providers = []tools.BuiltinProvider{tools.ShellToolProvider{}}
 	return &Module{baseContext: ctx, options: options}
 }
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -45,10 +43,10 @@ func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool
 	if needsOwnedSession {
 		return nil, fmt.Errorf("shell module has not started")
 	}
-	return tools.BuiltinTools(options), nil
+	return Contributions(options), nil
 }
 
-func (m *Module) ShellSessions() *tools.ShellSessionManager {
+func (m *Module) ShellSessions() *ShellSessionManager {
 	if m == nil {
 		return nil
 	}
@@ -73,7 +71,7 @@ func (m *Module) StartRuntime(context.Context, runtimemodule.RuntimeContext) err
 		}
 	}
 	if m.options.ShellSessions == nil {
-		m.ownedSession = tools.NewShellSessionManager(m.baseContext)
+		m.ownedSession = NewShellSessionManager(m.baseContext)
 		m.options.ShellSessions = m.ownedSession
 	}
 	return nil

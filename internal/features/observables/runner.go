@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	commandexec "github.com/juex-ai/juex/internal/foundation/command"
+
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 )
@@ -125,7 +127,7 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	cmd := exec.CommandContext(runCtx, spec.Binary, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
-	configureObservableCommand(cmd)
+	commandexec.ConfigureContext(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

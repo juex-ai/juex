@@ -11,9 +11,9 @@ import (
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 type HookRunner = hooks.PolicyRunner
@@ -112,7 +112,7 @@ func newTestPromptBuilder(workDir string, now func() time.Time) *prompt.Builder 
 	}}
 }
 
-func installModuleTools(t *testing.T, registry *tools.Registry, providers ...runtimemodule.ToolProvider) {
+func installModuleTools(t *testing.T, registry *toolcore.Registry, providers ...runtimemodule.ToolProvider) {
 	t.Helper()
 	for _, provider := range providers {
 		provided, err := provider.Tools(context.Background(), runtimemodule.ToolContext{})

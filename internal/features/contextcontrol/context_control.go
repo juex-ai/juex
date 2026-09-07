@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const (
@@ -26,15 +26,15 @@ func New(controller runtimemodule.ContextController) *Module {
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	definitions := contextToolDefinitions()
 	if m == nil || m.controller == nil {
 		unavailable := func(context.Context, map[string]any) (string, error) {
 			return "", fmt.Errorf("context control is unavailable")
 		}
-		return []tools.Tool{definitions[0].Bind(unavailable), definitions[1].Bind(unavailable)}, nil
+		return []toolcore.Tool{definitions[0].Bind(unavailable), definitions[1].Bind(unavailable)}, nil
 	}
-	return []tools.Tool{
+	return []toolcore.Tool{
 		definitions[0].Bind(func(context.Context, map[string]any) (string, error) {
 			return m.request(runtimemodule.ContextTransitionRequest{Kind: runtimemodule.ContextTransitionNew})
 		}),
@@ -80,20 +80,22 @@ func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest
 	}}, nil
 }
 
-func contextToolDefinitions() []tools.ToolDefinition {
-	return []tools.ToolDefinition{
+func contextToolDefinitions() []toolcore.ToolDefinition {
+	return []toolcore.ToolDefinition{
 		{
 			Name:            ToolNew,
-			Group:           tools.ToolGroupThreadState,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupThreadState,
+			Guide:           toolcore.ToolGuide{Loader: "skill_load", Name: "juex-thread-state"},
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "End the current task context and start an empty Context Generation. Goal and Notes are cleared; Thread working files and journal are retained. ",
 			Schema:          map[string]any{"type": "object", "properties": map[string]any{}},
-			TimeoutPolicy:   tools.ToolTimeoutDisabled,
+			TimeoutPolicy:   toolcore.ToolTimeoutDisabled,
 		},
 		{
 			Name:            ToolCompact,
-			Group:           tools.ToolGroupThreadState,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupThreadState,
+			Guide:           toolcore.ToolGuide{Loader: "skill_load", Name: "juex-thread-state"},
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Summarize the current task context into a new Context Generation while retaining Goal, Notes, and Thread working files. ",
 			Schema: map[string]any{
 				"type": "object",
@@ -101,7 +103,7 @@ func contextToolDefinitions() []tools.ToolDefinition {
 					"instructions": map[string]any{"type": "string"},
 				},
 			},
-			TimeoutPolicy: tools.ToolTimeoutDisabled,
+			TimeoutPolicy: toolcore.ToolTimeoutDisabled,
 		},
 	}
 }

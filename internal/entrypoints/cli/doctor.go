@@ -11,18 +11,17 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/app/providerreadiness"
+	filesearchfeature "github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
-	toolruntime "github.com/juex-ai/juex/internal/tools"
+	"github.com/spf13/cobra"
 )
 
 type doctorStatus string
@@ -202,8 +201,8 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 	checks = append(checks, doctorShellCheck(cfg))
 	checks = append(checks, doctorSandboxCheck(ctx, cfg.SandboxPolicy(), runtime.GOOS, cfg.LaunchEnvironmentSnapshot().LookPath))
 	if cfg.ModuleEnabled(modulecatalog.FileSearch) {
-		checks = append(checks, doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
-			return toolruntime.ResolveRipgrepWithEnvironment(runtimeEnvironment)
+		checks = append(checks, doctorRipgrepCheck(func() (filesearchfeature.ResolvedRipgrep, error) {
+			return filesearchfeature.ResolveRipgrepWithEnvironment(runtimeEnvironment)
 		}))
 	} else {
 		checks = append(checks, doctorDisabledCheck("ripgrep"))
@@ -442,7 +441,7 @@ func doctorShellCheck(cfg config.Config) doctorCheck {
 	}
 }
 
-func doctorRipgrepCheck(resolve func() (toolruntime.ResolvedRipgrep, error)) doctorCheck {
+func doctorRipgrepCheck(resolve func() (filesearchfeature.ResolvedRipgrep, error)) doctorCheck {
 	resolved, err := resolve()
 	if err != nil {
 		return doctorCheck{

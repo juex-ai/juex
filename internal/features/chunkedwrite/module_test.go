@@ -6,15 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	writefacts "github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
-func startTestModule(t *testing.T, work string, history []llm.Message) (*Module, map[string]tools.Tool) {
+func startTestModule(t *testing.T, work string, history []llm.Message) (*Module, map[string]toolcore.Tool) {
 	t.Helper()
-	m := New(tools.BuiltinOptions{WorkDir: work})
+	m := New(Options{WorkDir: work})
 	if err := m.StartThread(t.Context(), runtimemodule.ThreadContext{}); err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +25,7 @@ func startTestModule(t *testing.T, work string, history []llm.Message) (*Module,
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog := map[string]tools.Tool{}
+	catalog := map[string]toolcore.Tool{}
 	for _, tool := range definitions {
 		catalog[tool.Name] = tool
 	}
@@ -36,9 +35,9 @@ func startTestModule(t *testing.T, work string, history []llm.Message) (*Module,
 func activeTestHistory(content string) []llm.Message {
 	return []llm.Message{
 		{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "begin", ToolName: "write_begin", Input: map[string]any{"path": "out.txt"}}}},
-		{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "begin", ResultFact: testResultFact(writefacts.Event{Kind: writefacts.EventBegin, WriteID: "same-id", Path: "out.txt", Mode: writefacts.ModeOverwrite})}}},
+		{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "begin", ResultFact: testResultFact(Event{Kind: EventBegin, WriteID: "same-id", Path: "out.txt", Mode: ModeOverwrite})}}},
 		{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "chunk", ToolName: "write_chunk", Input: map[string]any{"write_id": "same-id", "index": 0, "content": content}}}},
-		{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "chunk", ResultFact: testResultFact(writefacts.Event{Kind: writefacts.EventChunk, WriteID: "same-id", Index: 0})}}},
+		{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "chunk", ResultFact: testResultFact(Event{Kind: EventChunk, WriteID: "same-id", Index: 0})}}},
 	}
 }
 
@@ -70,17 +69,17 @@ func TestRecoveryUsesExecutionFactsIncludingPostExecutionErrors(t *testing.T) {
 			history := activeTestHistory("content")
 			switch mode {
 			case "commit", "abort":
-				kind := writefacts.EventCommit
+				kind := EventCommit
 				if mode == "abort" {
-					kind = writefacts.EventAbort
+					kind = EventAbort
 				}
 				history = append(history,
 					llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "terminal", ToolName: "write_" + mode}}},
-					llm.Message{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "terminal", IsError: true, Content: "post-execution policy failed", ResultFact: testResultFact(writefacts.Event{Kind: kind, WriteID: "same-id"})}}})
+					llm.Message{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "terminal", IsError: true, Content: "post-execution policy failed", ResultFact: testResultFact(Event{Kind: kind, WriteID: "same-id"})}}})
 			case "foreign":
 				history[1].Blocks[0].ResultFact.Owner = "another-module"
 			case "bad-hash":
-				history[3].Blocks[0].ResultFact = testResultFact(writefacts.Event{Kind: writefacts.EventChunk, WriteID: "same-id", SHA256: "incorrect"})
+				history[3].Blocks[0].ResultFact = testResultFact(Event{Kind: EventChunk, WriteID: "same-id", SHA256: "incorrect"})
 			}
 			_, catalog := startTestModule(t, t.TempDir(), history)
 			_, err := catalog["write_commit"].ResultHandler(t.Context(), map[string]any{"write_id": "same-id", "expected_chunks": 1})
@@ -109,7 +108,7 @@ func TestNewGenerationDiscardsBufferedSession(t *testing.T) {
 func TestRecoveryPairsRepeatedToolIDsInResultOrder(t *testing.T) {
 	history := activeTestHistory("first")
 	history[2].Blocks = append(history[2].Blocks, llm.Block{Type: llm.BlockToolUse, ToolUseID: "chunk", ToolName: "write_chunk", Input: map[string]any{"write_id": "same-id", "index": 1, "content": "second"}})
-	history[3].Blocks = append(history[3].Blocks, llm.Block{Type: llm.BlockToolResult, ToolUseID: "chunk", ResultFact: testResultFact(writefacts.Event{Kind: writefacts.EventChunk, WriteID: "same-id", Index: 1})})
+	history[3].Blocks = append(history[3].Blocks, llm.Block{Type: llm.BlockToolResult, ToolUseID: "chunk", ResultFact: testResultFact(Event{Kind: EventChunk, WriteID: "same-id", Index: 1})})
 	if err := llm.ValidateToolTranscript(history); err != nil {
 		t.Fatal(err)
 	}

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 type ParsedUnit struct {
@@ -85,7 +85,7 @@ func (p *Pipeline) Accept(stream string, data []byte) ([]ParsedUnit, error) {
 	case ParserJSONL:
 		return p.acceptJSONL(stream, data)
 	default:
-		text := tools.SanitizeOutputBytes(data).Text
+		text := toolcore.SanitizeOutputBytes(data).Text
 		return p.filterUnit(ParsedUnit{
 			Stream:     stream,
 			Content:    text,
@@ -196,7 +196,7 @@ func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) (
 			}
 		}
 	}
-	content = tools.SanitizeOutputText(content).Text
+	content = toolcore.SanitizeOutputText(content).Text
 	return ParsedUnit{
 		Stream:           stream,
 		Content:          content,

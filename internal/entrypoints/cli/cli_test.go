@@ -17,11 +17,11 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/providerreadiness"
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	filesearchfeature "github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	"github.com/juex-ai/juex/internal/foundation/version"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
-	toolruntime "github.com/juex-ai/juex/internal/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -1187,11 +1187,11 @@ func TestDoctorSandboxCheckReportsDisabledAndUnavailable(t *testing.T) {
 }
 
 func TestDoctorRipgrepCheckReportsResolvedRuntime(t *testing.T) {
-	check := doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
-		return toolruntime.ResolvedRipgrep{
+	check := doctorRipgrepCheck(func() (filesearchfeature.ResolvedRipgrep, error) {
+		return filesearchfeature.ResolvedRipgrep{
 			Path:    "/managed/juex-path/rg",
 			Version: "15.1.0",
-			Source:  toolruntime.RipgrepSourcePackage,
+			Source:  filesearchfeature.RipgrepSourcePackage,
 		}, nil
 	})
 	if check.Status != doctorStatusOK || check.Name != "ripgrep" {
@@ -1201,8 +1201,8 @@ func TestDoctorRipgrepCheckReportsResolvedRuntime(t *testing.T) {
 		t.Fatalf("details = %+v", check.Details)
 	}
 
-	missing := doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
-		return toolruntime.ResolvedRipgrep{}, errors.New("not found")
+	missing := doctorRipgrepCheck(func() (filesearchfeature.ResolvedRipgrep, error) {
+		return filesearchfeature.ResolvedRipgrep{}, errors.New("not found")
 	})
 	if missing.Status != doctorStatusWarn || !strings.Contains(missing.Suggestion, "release package") {
 		t.Fatalf("missing check = %+v", missing)

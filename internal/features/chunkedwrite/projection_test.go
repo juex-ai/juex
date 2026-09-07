@@ -8,13 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	writefacts "github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
-func testResultFact(event writefacts.Event) *llm.ResultFact {
+func testResultFact(event Event) *llm.ResultFact {
 	data, _ := json.Marshal(event)
 	return &llm.ResultFact{Owner: string(ModuleID), Data: data}
 }
@@ -31,7 +29,7 @@ func projectTestHistory(t *testing.T, history []llm.Message) []llm.Message {
 	}
 	tc := runtimemodule.ThreadContext{ID: "test", Dir: t.TempDir()}
 	set, err := runtimemodule.BuildAndStartThreadSet(t.Context(), []runtimemodule.ThreadFactorySpec{{ID: ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-		return New(tools.BuiltinOptions{WorkDir: t.TempDir()}), nil
+		return New(Options{WorkDir: t.TempDir()}), nil
 	}}}, tc, runtimemodule.ToolContext{Thread: &tc})
 	if err != nil {
 		t.Fatal(err)
@@ -62,11 +60,11 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteSession(t *testing.T
 			Type:      llm.BlockToolResult,
 			ToolUseID: "begin_1",
 			Content:   "write_begin: write_id=" + writeID + " path=reports/long.md mode=create max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventBegin,
+			ResultFact: testResultFact(Event{
+				Kind:    EventBegin,
 				WriteID: writeID,
 				Path:    "reports/long.md",
-				Mode:    writefacts.ModeCreate,
+				Mode:    ModeCreate,
 			}),
 		}}},
 	}
@@ -83,8 +81,8 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteSession(t *testing.T
 				Type:      llm.BlockToolResult,
 				ToolUseID: toolUseID,
 				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
-				ResultFact: testResultFact(writefacts.Event{
-					Kind:    writefacts.EventChunk,
+				ResultFact: testResultFact(Event{
+					Kind:    EventChunk,
 					WriteID: writeID,
 					Index:   i,
 					Bytes:   len(chunk),
@@ -106,8 +104,8 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteSession(t *testing.T
 			Type:      llm.BlockToolResult,
 			ToolUseID: "commit_1",
 			Content:   "write_commit: write_id=write-committed path=reports/long.md bytes=320 chars=320 chunks=3 sha256=final-hash",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventCommit,
+			ResultFact: testResultFact(Event{
+				Kind:    EventCommit,
 				WriteID: writeID,
 				Path:    "reports/long.md",
 				Bytes:   320,
@@ -156,11 +154,11 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteFromLifecycleFacts(t
 			Type:      llm.BlockToolResult,
 			ToolUseID: "begin_fact",
 			Content:   "presentation text changed",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventBegin,
+			ResultFact: testResultFact(Event{
+				Kind:    EventBegin,
 				WriteID: writeID,
 				Path:    "reports/fact.md",
-				Mode:    writefacts.ModeCreate,
+				Mode:    ModeCreate,
 			}),
 		}}},
 	}
@@ -177,8 +175,8 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteFromLifecycleFacts(t
 				Type:      llm.BlockToolResult,
 				ToolUseID: toolUseID,
 				Content:   "chunk accepted",
-				ResultFact: testResultFact(writefacts.Event{
-					Kind:    writefacts.EventChunk,
+				ResultFact: testResultFact(Event{
+					Kind:    EventChunk,
 					WriteID: writeID,
 					Index:   i,
 					Bytes:   len(chunk),
@@ -199,8 +197,8 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteFromLifecycleFacts(t
 			Type:      llm.BlockToolResult,
 			ToolUseID: "commit_fact",
 			Content:   "commit presentation changed",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventCommit,
+			ResultFact: testResultFact(Event{
+				Kind:    EventCommit,
 				WriteID: writeID,
 				Path:    "reports/fact.md",
 				Bytes:   111,
@@ -241,11 +239,11 @@ func TestProjectProviderTranscriptFoldsFailedChunkAttemptsAfterCommit(t *testing
 			Type:      llm.BlockToolResult,
 			ToolUseID: "begin_failed_chunk",
 			Content:   "begin ok",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventBegin,
+			ResultFact: testResultFact(Event{
+				Kind:    EventBegin,
 				WriteID: writeID,
 				Path:    "reports/failed-chunk.md",
-				Mode:    writefacts.ModeCreate,
+				Mode:    ModeCreate,
 			}),
 		}}},
 		{Role: llm.RoleAssistant, Blocks: []llm.Block{{
@@ -270,8 +268,8 @@ func TestProjectProviderTranscriptFoldsFailedChunkAttemptsAfterCommit(t *testing
 			Type:      llm.BlockToolResult,
 			ToolUseID: "chunk_valid",
 			Content:   "chunk accepted",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventChunk,
+			ResultFact: testResultFact(Event{
+				Kind:    EventChunk,
 				WriteID: writeID,
 				Index:   0,
 				Bytes:   len(validContent),
@@ -289,8 +287,8 @@ func TestProjectProviderTranscriptFoldsFailedChunkAttemptsAfterCommit(t *testing
 			Type:      llm.BlockToolResult,
 			ToolUseID: "commit_failed_chunk",
 			Content:   "commit ok",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventCommit,
+			ResultFact: testResultFact(Event{
+				Kind:    EventCommit,
 				WriteID: writeID,
 				Path:    "reports/failed-chunk.md",
 				Bytes:   len(validContent),
@@ -364,11 +362,11 @@ func TestProjectProviderTranscriptFoldsOnlyOldActiveChunkedWriteChunks(t *testin
 			Type:      llm.BlockToolResult,
 			ToolUseID: "begin_1",
 			Content:   "write_begin: write_id=" + writeID + " path=drafts/live.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventBegin,
+			ResultFact: testResultFact(Event{
+				Kind:    EventBegin,
 				WriteID: writeID,
 				Path:    "drafts/live.md",
-				Mode:    writefacts.ModeOverwrite,
+				Mode:    ModeOverwrite,
 			}),
 		}}},
 	}
@@ -388,8 +386,8 @@ func TestProjectProviderTranscriptFoldsOnlyOldActiveChunkedWriteChunks(t *testin
 				Type:      llm.BlockToolResult,
 				ToolUseID: toolUseID,
 				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
-				ResultFact: testResultFact(writefacts.Event{
-					Kind:    writefacts.EventChunk,
+				ResultFact: testResultFact(Event{
+					Kind:    EventChunk,
 					WriteID: writeID,
 					Index:   i,
 					Bytes:   len(chunk),
@@ -447,11 +445,11 @@ func TestProjectProviderTranscriptDoesNotFoldUnresolvedChunkedWriteCommit(t *tes
 			Type:      llm.BlockToolResult,
 			ToolUseID: "begin_1",
 			Content:   "write_begin: write_id=" + writeID + " path=drafts/unresolved.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventBegin,
+			ResultFact: testResultFact(Event{
+				Kind:    EventBegin,
 				WriteID: writeID,
 				Path:    "drafts/unresolved.md",
-				Mode:    writefacts.ModeOverwrite,
+				Mode:    ModeOverwrite,
 			}),
 		}}},
 	}
@@ -468,8 +466,8 @@ func TestProjectProviderTranscriptDoesNotFoldUnresolvedChunkedWriteCommit(t *tes
 				Type:      llm.BlockToolResult,
 				ToolUseID: toolUseID,
 				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
-				ResultFact: testResultFact(writefacts.Event{
-					Kind:    writefacts.EventChunk,
+				ResultFact: testResultFact(Event{
+					Kind:    EventChunk,
 					WriteID: writeID,
 					Index:   i,
 					Bytes:   len(chunk),
@@ -515,11 +513,11 @@ func TestProjectProviderTranscriptDefersActiveChunkedWriteSummaryUntilToolResult
 			Type:      llm.BlockToolResult,
 			ToolUseID: "begin_1",
 			Content:   "write_begin: write_id=" + writeID + " path=drafts/batch.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventBegin,
+			ResultFact: testResultFact(Event{
+				Kind:    EventBegin,
 				WriteID: writeID,
 				Path:    "drafts/batch.md",
-				Mode:    writefacts.ModeOverwrite,
+				Mode:    ModeOverwrite,
 			}),
 		}}},
 		{Role: llm.RoleAssistant},
@@ -538,8 +536,8 @@ func TestProjectProviderTranscriptDefersActiveChunkedWriteSummaryUntilToolResult
 			Type:      llm.BlockToolResult,
 			ToolUseID: toolUseID,
 			Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
-			ResultFact: testResultFact(writefacts.Event{
-				Kind:    writefacts.EventChunk,
+			ResultFact: testResultFact(Event{
+				Kind:    EventChunk,
 				WriteID: writeID,
 				Index:   i,
 				Bytes:   len(chunk),

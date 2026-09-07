@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestModuleCatalogAndGuidanceArePure(t *testing.T) {
@@ -20,7 +20,7 @@ func TestModuleCatalogAndGuidanceArePure(t *testing.T) {
 		t.Fatalf("tools=%+v, %v", catalog, err)
 	}
 	for _, tool := range catalog {
-		if tool.ExecutionPolicy != tools.ToolExecutionSerial {
+		if tool.ExecutionPolicy != toolcore.ToolExecutionSerial {
 			t.Errorf("%s does not preserve batch order", tool.Name)
 		}
 	}
@@ -49,10 +49,13 @@ func (o *maintenanceObserver) Requested(e runtimemodule.PolicyExecution) error {
 	o.last = e
 	return o.checkpoint
 }
+
 func (o *maintenanceObserver) Started(runtimemodule.PolicyExecution) { o.started++ }
+
 func (o *maintenanceObserver) Completed(runtimemodule.PolicyExecution, runtimemodule.PolicyResult) {
 	o.completed++
 }
+
 func (o *maintenanceObserver) Errored(runtimemodule.PolicyExecution, runtimemodule.PolicyResult, error) {
 	o.failed++
 }

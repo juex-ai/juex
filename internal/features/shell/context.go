@@ -1,12 +1,12 @@
-package shelltools
+package shell
 
 import (
 	"context"
 	"fmt"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/foundation/command"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
@@ -17,14 +17,14 @@ func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest
 	shell, sessions := m.options.Shell, m.options.ShellSessions
 	m.mu.RUnlock()
 	if shell.Binary == "" {
-		shell = tools.DefaultShellProfile()
+		shell = command.DefaultShellProfile()
 	}
 	sections := []runtimemodule.ContextSection{{
 		Key: "shell_guidance", Label: "Shell", Source: "runtime", Text: shellGuidance(shell),
 		Projection: runtimemodule.ContextProjectionSystemPrompt, Budget: runtimemodule.UnboundedContextBudget(),
 	}}
 	if sessions != nil {
-		if text := tools.FormatActiveShellSessionsPrompt(sessions.List(false)); text != "" {
+		if text := FormatActiveShellSessionsPrompt(sessions.List(false)); text != "" {
 			sections = append(sections, runtimemodule.ContextSection{
 				Key:        "active_shell_sessions",
 				Label:      "Active Shell Sessions",
@@ -39,7 +39,7 @@ func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest
 	return sections, nil
 }
 
-func shellGuidance(shell tools.ShellProfile) string {
+func shellGuidance(shell command.ShellProfile) string {
 	lines := []string{"## Shell"}
 	if shell.Binary != "" || shell.Profile != "" || shell.Family != "" {
 		profile := shell.Profile

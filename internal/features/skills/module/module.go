@@ -13,8 +13,8 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const ModuleID runtimemodule.ID = modulecatalog.Skills
@@ -48,13 +48,13 @@ func NewWithLoader(loader *skills.Loader, workDir string, policy sandbox.Policy)
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	if m == nil || m.loader == nil {
 		return nil, fmt.Errorf("skills module: loader is required")
 	}
 	guard := sandbox.NewPathGuard(m.workDir, m.policy)
 	definitions := ToolDefinitions()
-	return []tools.Tool{
+	return []toolcore.Tool{
 		definitions[0].Bind(func(ctx context.Context, input map[string]any) (string, error) {
 			_ = ctx
 			query, _ := input["query"].(string)
@@ -155,11 +155,11 @@ func (m *Module) Filtered() []skills.FilteredSkill {
 	return m.loader.Filtered()
 }
 
-func ToolDefinitions() []tools.ToolDefinition {
-	return []tools.ToolDefinition{
+func ToolDefinitions() []toolcore.ToolDefinition {
+	return []toolcore.ToolDefinition{
 		{
 			Name:        "skill_search",
-			Group:       tools.ToolGroupSkill,
+			Group:       toolcore.ToolGroupSkill,
 			Description: "Search the loaded skill catalog by name, description, type, or source. Use this when the compact skill prompt does not list the skill you need.",
 			Schema: map[string]any{
 				"type": "object",
@@ -177,7 +177,7 @@ func ToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:        "skill_load",
-			Group:       tools.ToolGroupSkill,
+			Group:       toolcore.ToolGroupSkill,
 			Description: "Load a skill by name, including its SKILL.md path, directory, source, and full markdown body. Call this before following a skill from the compact skill catalog.",
 			Schema: map[string]any{
 				"type":     "object",

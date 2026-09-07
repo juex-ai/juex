@@ -12,11 +12,11 @@ import (
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestReplaceThreadRuntimePublishesCoherentBundle(t *testing.T) {
@@ -391,10 +391,10 @@ func newThreadRuntimeTestModuleSet(t *testing.T, target *thread.Thread) *runtime
 	return set
 }
 
-func threadRuntimeTestTools(t *testing.T, name string) *tools.Registry {
+func threadRuntimeTestTools(t *testing.T, name string) *toolcore.Registry {
 	t.Helper()
-	registry := tools.NewRegistry()
-	if err := registry.Register(tools.Tool{
+	registry := toolcore.NewRegistry()
+	if err := registry.Register(toolcore.Tool{
 		Name:    name,
 		Handler: func(context.Context, map[string]any) (string, error) { return name, nil },
 	}); err != nil {

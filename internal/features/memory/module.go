@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const ModuleID runtimemodule.ID = modulecatalog.Memory
@@ -24,11 +24,12 @@ const (
 // directory. Construction, catalog reads, and guidance never open that store.
 type Module struct{ store *Store }
 
-func New(agentDir string) *Module    { return &Module{store: NewStore(agentDir)} }
+func New(agentDir string) *Module { return &Module{store: NewStore(agentDir)} }
+
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	definitions := []tools.ToolDefinition{
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
+	definitions := []toolcore.ToolDefinition{
 		{Name: ToolSearch, Description: "Search durable Agent memory by literal, case-insensitive substring across metadata and body. An empty query returns all entries.", Schema: objectSchema(map[string]any{
 			"query": map[string]any{"type": "string"},
 		}, "query")},
@@ -42,11 +43,11 @@ func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool
 			"name": map[string]any{"type": "string"},
 		}, "name")},
 	}
-	handlers := []tools.Handler{m.search, m.write, m.delete}
-	bound := make([]tools.Tool, len(definitions))
+	handlers := []toolcore.Handler{m.search, m.write, m.delete}
+	bound := make([]toolcore.Tool, len(definitions))
 	for i, definition := range definitions {
-		definition.Group = tools.ToolGroupMemory
-		definition.ExecutionPolicy = tools.ToolExecutionSerial
+		definition.Group = toolcore.ToolGroupMemory
+		definition.ExecutionPolicy = toolcore.ToolExecutionSerial
 		bound[i] = definition.Bind(handlers[i])
 	}
 	return bound, nil

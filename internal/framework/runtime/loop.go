@@ -38,12 +38,12 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const (
@@ -64,7 +64,7 @@ type Engine struct {
 	SummaryContextWindow int
 	ModelCandidates      []ModelCandidate
 	ModelHealth          *modelhealth.ModelHealth
-	Tools                *tools.Registry
+	Tools                *toolcore.Registry
 	RuntimeModules       *runtimemodule.Set
 	RuntimeContext       runtimemodule.RuntimeContext
 	Bus                  *events.Bus
@@ -1509,9 +1509,9 @@ func (e *Engine) publishStagedTerminalError(err error) error {
 type toolCallResult struct {
 	Call             llm.Block
 	Block            llm.Block
-	Observation      tools.Observation
-	EventObservation tools.Observation
-	Info             tools.CallInfo
+	Observation      toolcore.Observation
+	EventObservation toolcore.Observation
+	Info             toolcore.CallInfo
 	FatalError       error
 }
 
@@ -1563,7 +1563,7 @@ func (e *Engine) isSerializedToolCall(name string) bool {
 	if !ok {
 		return false
 	}
-	return tool.ExecutionPolicy == tools.ToolExecutionSerial
+	return tool.ExecutionPolicy == toolcore.ToolExecutionSerial
 }
 
 func toolResultBlocks(results []toolCallResult) []llm.Block {
@@ -1578,9 +1578,6 @@ func (e *Engine) normalizeGuidedToolFailureResults(results []toolCallResult) []t
 	if e == nil || e.Tools == nil {
 		return results
 	}
-	if _, available := e.Tools.Get("skill_load"); !available {
-		return results
-	}
 	for i := range results {
 		if !results[i].Block.IsError {
 			continue
@@ -1590,13 +1587,14 @@ func (e *Engine) normalizeGuidedToolFailureResults(results []toolCallResult) []t
 		if !ok {
 			continue
 		}
-		guideSkill, ok := tool.Group.GuideSkill()
-		if !ok {
+		guide := tool.Guide
+		_, available := e.Tools.Get(guide.Loader)
+		if guide.Name == "" || !available {
 			continue
 		}
 		hint := fmt.Sprintf(
-			`For workflows, constraints, and examples, load the full guide with skill_load("%s").`,
-			guideSkill,
+			`For workflows, constraints, and examples, load the full guide with %s("%s").`,
+			guide.Loader, guide.Name,
 		)
 		originalBlockContent := results[i].Block.Content
 		results[i].Block.Content = appendGuidedToolFailureHint(originalBlockContent, hint)
@@ -1649,13 +1647,13 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 		return e.policyToolErrorResult(call, fmt.Errorf("tool policy denied %q%s", call.ToolName, policyReasonSuffix(prePolicy.Reason)), prePolicy.Context)
 	}
 	emitOutputDeltas := runtimemodule.AllowsLiveToolOutput(e.policySets()...)
-	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
+	toolCtx := toolcore.WithToolCallEvents(ctx, toolcore.ToolCallEvents{
 		Name:      call.ToolName,
 		ToolUseID: call.ToolUseID,
 		Iter:      execution.payload.Iter,
 		CallIndex: execution.payload.CallIndex,
 		MessageID: execution.payload.MessageID,
-		Emit: func(delta tools.OutputDelta) {
+		Emit: func(delta toolcore.OutputDelta) {
 			if emitOutputDeltas {
 				_ = e.emit(toolevents.OutputDeltaEvent(turnID, execution.payload, delta))
 			}
@@ -1725,7 +1723,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 		block.Content = finalizedShellContent(shellBaseContent, block.Content)
 	}
 	if !block.IsError && !postPolicy.ResultTransformed {
-		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
+		if media, ok := toolcore.MediaRefFromStructuredResult(info.StructuredResult); ok {
 			block.Media = media
 		}
 	}
@@ -1736,16 +1734,16 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	}
 }
 
-func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error, resultTransformed bool) tools.Observation {
+func toolObservationForResult(call llm.Block, block llm.Block, info toolcore.CallInfo, err error, resultTransformed bool) toolcore.Observation {
 	if resultTransformed {
-		return tools.NewObservation(tools.ObservationOptions{
+		return toolcore.NewObservation(toolcore.ObservationOptions{
 			ToolName:  call.ToolName,
 			ToolUseID: call.ToolUseID,
 			Input:     call.Input,
 			Content:   block.Content,
 		})
 	}
-	var obs tools.Observation
+	var obs toolcore.Observation
 	if info.Observation != nil {
 		obs = info.Observation.Clone()
 	}
@@ -1774,20 +1772,20 @@ func (e *Engine) emitToolFinished(
 	execution toolExecutionCall,
 	outcomeMessageID string,
 	block llm.Block,
-	observation tools.Observation,
-	info tools.CallInfo,
+	observation toolcore.Observation,
+	info toolcore.CallInfo,
 ) error {
 	outcome := &toolevents.RecordedOutcome{MessageID: outcomeMessageID, Block: block}
 	eventResult := observation.StructuredResult
 	terminalContent := ""
 	isShellResult := false
 	switch shellResult := eventResult.(type) {
-	case tools.ShellResult:
+	case toolcore.CommandResult:
 		isShellResult = true
 		shellResult.Output = ""
 		eventResult = shellResult
 		terminalContent = block.Content
-	case *tools.ShellResult:
+	case *toolcore.CommandResult:
 		if shellResult != nil {
 			isShellResult = true
 			metadata := *shellResult
@@ -1847,7 +1845,7 @@ func (e *Engine) policyToolErrorResult(call llm.Block, err error, contexts []run
 		IsError:   true,
 	}
 	appendToolPolicyContext(&block, contexts)
-	observation := toolObservationForResult(call, block, tools.CallInfo{}, err, false)
+	observation := toolObservationForResult(call, block, toolcore.CallInfo{}, err, false)
 	return toolCallResult{Call: call, Block: block, Observation: observation, EventObservation: observation}
 }
 
@@ -2692,15 +2690,15 @@ func toolCallPayload(call llm.Block, iter, callIndex int, messageID string) tool
 	}
 }
 
-func prepareToolInputs(blocks []llm.Block, registry *tools.Registry) []llm.Block {
+func prepareToolInputs(blocks []llm.Block, registry *toolcore.Registry) []llm.Block {
 	if len(blocks) == 0 {
 		return blocks
 	}
 	out := append([]llm.Block(nil), blocks...)
 	for i := range out {
 		if out[i].Type == llm.BlockToolUse {
-			out[i].Input = tools.NormalizeCallInput(out[i].Input)
-			out[i].TimeoutSeconds = tools.DefaultTimeoutSeconds
+			out[i].Input = toolcore.NormalizeCallInput(out[i].Input)
+			out[i].TimeoutSeconds = toolcore.DefaultTimeoutSeconds
 			if registry != nil {
 				out[i].TimeoutSeconds = registry.TimeoutSecondsFor(out[i].ToolName)
 			}
@@ -2764,9 +2762,9 @@ func finalizedShellContent(base, finalized string) string {
 	}
 	suffix, ok := strings.CutPrefix(finalized, base)
 	if !ok {
-		return tools.BoundShellContent(finalized, maxShellPolicyContent)
+		return toolcore.BoundCommandContent(finalized, maxShellPolicyContent)
 	}
-	return base + tools.BoundShellContent(suffix, maxShellPolicyContent)
+	return base + toolcore.BoundCommandContent(suffix, maxShellPolicyContent)
 }
 
 func boundedRuntimeDiagnostic(value string, maxBytes int) string {
@@ -2792,7 +2790,7 @@ func validUTF8Cut(value string, limit int) int {
 
 func isShellStructuredResult(result any) bool {
 	switch result.(type) {
-	case tools.ShellResult, *tools.ShellResult:
+	case toolcore.CommandResult, *toolcore.CommandResult:
 		return true
 	default:
 		return false

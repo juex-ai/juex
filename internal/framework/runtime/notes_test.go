@@ -13,19 +13,19 @@ import (
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 func TestNotesToolDefinitionsBindThreadStateGroup(t *testing.T) {
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installModuleTools(t, reg, notesmodule.New(notesmodule.NewNotesStore(t.TempDir())))
 	definitions := notesmodule.ToolDefinitions()
 	if len(definitions) != 1 {
 		t.Fatalf("definition count = %d, want 1", len(definitions))
 	}
 	definition := definitions[0]
-	if definition.Group != tools.ToolGroupThreadState {
-		t.Fatalf("definition group = %q, want %q", definition.Group, tools.ToolGroupThreadState)
+	if definition.Group != toolcore.ToolGroupThreadState {
+		t.Fatalf("definition group = %q, want %q", definition.Group, toolcore.ToolGroupThreadState)
 	}
 	registered, ok := reg.Get(definition.Name)
 	if !ok {
@@ -366,7 +366,7 @@ func runtimeContextMessage(messages []llm.Message, id string) *llm.Message {
 }
 
 func TestNotesModuleRejectsMissingStore(t *testing.T) {
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installModuleTools(t, reg, notesmodule.New(nil))
 	if _, err := reg.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{"content": "hi"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("missing store error = %v", err)

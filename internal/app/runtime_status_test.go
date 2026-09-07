@@ -19,22 +19,22 @@ import (
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	skillsmodule "github.com/juex-ai/juex/internal/features/skills/module"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 type runtimeStatusTestModule struct {
 	id    runtimemodule.ID
-	tools []tools.Tool
+	tools []toolcore.Tool
 }
 
 func (m runtimeStatusTestModule) ID() runtimemodule.ID { return m.id }
 
-func (m runtimeStatusTestModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	return append([]tools.Tool(nil), m.tools...), nil
+func (m runtimeStatusTestModule) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
+	return append([]toolcore.Tool(nil), m.tools...), nil
 }
 
 func snapshotRuntimeStatus(t *testing.T, cfg config.Config, opts RuntimeStatusOptions) (RuntimeStatus, error) {
@@ -70,12 +70,12 @@ func snapshotRuntimeStatus(t *testing.T, cfg config.Config, opts RuntimeStatusOp
 
 func mcpRuntimeStatusSnapshot(t *testing.T, serverTools map[string][]mcp.ToolDescriptor) RuntimeModuleSnapshot {
 	t.Helper()
-	var provided []tools.Tool
+	var provided []toolcore.Tool
 	for serverName, descriptors := range serverTools {
 		for _, descriptor := range descriptors {
-			provided = append(provided, tools.Tool{
+			provided = append(provided, toolcore.Tool{
 				Name:        mcp.ToolName(serverName, descriptor.Name),
-				Group:       tools.ToolGroupMCP,
+				Group:       toolcore.ToolGroupMCP,
 				Description: descriptor.Description,
 				Schema:      descriptor.InputSchema,
 				Handler:     func(context.Context, map[string]any) (string, error) { return "", nil },
@@ -95,7 +95,7 @@ func mcpRuntimeStatusSnapshot(t *testing.T, serverTools map[string][]mcp.ToolDes
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, runtimeSet, threadSet)
+	registry, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{}, runtimeSet, threadSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,16 +110,16 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantGroups := []tools.ToolGroup{
-		tools.ToolGroupFile,
-		tools.ToolGroupChunkedWrite,
-		tools.ToolGroupShell,
-		tools.ToolGroupSearch,
-		tools.ToolGroupSkill,
-		tools.ToolGroupThreadState,
-		tools.ToolGroupMemory,
-		tools.ToolGroupWorkerThread,
-		tools.ToolGroupObservable,
+	wantGroups := []toolcore.ToolGroup{
+		toolcore.ToolGroupFile,
+		toolcore.ToolGroupChunkedWrite,
+		toolcore.ToolGroupShell,
+		toolcore.ToolGroupSearch,
+		toolcore.ToolGroupSkill,
+		toolcore.ToolGroupThreadState,
+		toolcore.ToolGroupMemory,
+		toolcore.ToolGroupWorkerThread,
+		toolcore.ToolGroupObservable,
 	}
 	if len(status.Tools.Groups) != len(wantGroups) {
 		t.Fatalf("tool groups = %#v, want %v", status.Tools.Groups, wantGroups)
@@ -137,7 +137,7 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		if !sort.StringsAreSorted(names) {
 			t.Fatalf("group %q tools are not sorted: %v", group.Group, names)
 		}
-		if wantGroup == tools.ToolGroupObservable {
+		if wantGroup == toolcore.ToolGroupObservable {
 			if len(names) != 7 || !containsString(names, "schedule_create") {
 				t.Fatalf("observable tools = %v, want seven including schedule_create", names)
 			}
@@ -156,9 +156,9 @@ func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 	}
 
 	guides := map[string]string{
-		string(tools.ToolGroupChunkedWrite): "juex-chunked-write",
-		string(tools.ToolGroupThreadState):  "juex-thread-state",
-		string(tools.ToolGroupObservable):   "juex-observables",
+		string(toolcore.ToolGroupChunkedWrite): "juex-chunked-write",
+		string(toolcore.ToolGroupThreadState):  "juex-thread-state",
+		string(toolcore.ToolGroupObservable):   "juex-observables",
 	}
 	var specs []llm.ToolSpec
 	for _, group := range status.Tools.Groups {
@@ -280,7 +280,7 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 
 	actualCount := 0
 	for _, actual := range a.Engine.Tools.List() {
-		if actual.Group == tools.ToolGroupMCP {
+		if actual.Group == toolcore.ToolGroupMCP {
 			continue
 		}
 		actualCount++
@@ -297,7 +297,7 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 		if info.Module == "" {
 			t.Errorf("catalog %q has no module owner", actual.Name)
 		}
-		effective := tools.EffectiveToolTimeout(definition, durationSeconds(cfg.RuntimeLimits().ToolTimeout))
+		effective := toolcore.EffectiveToolTimeout(definition, durationSeconds(cfg.RuntimeLimits().ToolTimeout))
 		if info.Timeout.Mode != string(effective.Mode) || info.Timeout.Seconds != effective.Seconds {
 			t.Errorf("catalog %q timeout = %#v, want %#v", actual.Name, info.Timeout, effective)
 		}
@@ -452,13 +452,13 @@ func TestAppRejectsUnknownModuleConfigBeforeThreadSideEffects(t *testing.T) {
 }
 
 func TestRuntimeToolsStatusRejectsInvalidBuiltinGroups(t *testing.T) {
-	for _, group := range []tools.ToolGroup{"", tools.ToolGroupMCP, "unknown"} {
+	for _, group := range []toolcore.ToolGroup{"", toolcore.ToolGroupMCP, "unknown"} {
 		t.Run(string(group), func(t *testing.T) {
-			_, err := runtimeToolsStatusFromDefinitions([]tools.ToolDefinition{{
+			_, err := runtimeToolsStatusFromDefinitions([]toolcore.ToolDefinition{{
 				Name:   "bad",
 				Group:  group,
 				Schema: map[string]any{"type": "object"},
-			}}, tools.DefaultTimeoutSeconds)
+			}}, toolcore.DefaultTimeoutSeconds)
 			if err == nil {
 				t.Fatalf("group %q unexpectedly accepted", group)
 			}
@@ -482,13 +482,13 @@ func TestRuntimeMCPToolSchemaMatchesNormalizedRegistryDefinition(t *testing.T) {
 			},
 		},
 	}
-	definition := tools.ToolDefinition{
+	definition := toolcore.ToolDefinition{
 		Name:        descriptor.Name,
-		Group:       tools.ToolGroupMCP,
+		Group:       toolcore.ToolGroupMCP,
 		Description: descriptor.Description,
 		Schema:      descriptor.InputSchema,
 	}
-	registry := tools.NewRegistry()
+	registry := toolcore.NewRegistry()
 	if err := registry.Register(definition.Bind(func(context.Context, map[string]any) (string, error) {
 		return "", nil
 	})); err != nil {

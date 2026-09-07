@@ -9,22 +9,19 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	writefacts "github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.ChunkedWrite
+const ModuleID runtimemodule.ID = "chunked-write"
 
 type Module struct {
-	options tools.BuiltinOptions
-	manager *tools.ChunkedWriteManager
+	options Options
+	manager *ChunkedWriteManager
 }
 
-func New(options tools.BuiltinOptions) *Module { return &Module{options: options} }
+func New(options Options) *Module { return &Module{options: options} }
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
@@ -32,8 +29,8 @@ func (m *Module) StartThread(context.Context, runtimemodule.ThreadContext) error
 	if m.manager != nil {
 		return fmt.Errorf("chunked-write: Thread already started")
 	}
-	guard := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: m.options.Sandbox, WorkDir: m.options.WorkDir, AgentStateDir: m.options.AgentStateDir, ReadOnlyPaths: []string{m.options.MediaDir}})
-	m.manager = tools.NewChunkedWriteManager(m.options.WorkDir, guard)
+	guard := m.options.FilePolicy
+	m.manager = NewChunkedWriteManager(m.options.WorkDir, guard)
 	return nil
 }
 
@@ -42,19 +39,18 @@ func (m *Module) CloseThread(context.Context) error { return m.manager.Close() }
 // Buffered sessions belong to the committed Generation's tool history.
 func (m *Module) ContextRenewed(context.Context) { m.manager.RestoreActiveSessions(nil) }
 
-func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	if m.manager == nil {
 		return nil, fmt.Errorf("chunked-write: Thread has not started")
 	}
 	options := m.options
-	options.Providers = []tools.BuiltinProvider{tools.ChunkedWriteToolProvider{}}
 	options.ChunkedWrites = m.manager
-	contributions := tools.BuiltinTools(options)
+	contributions := Contributions(options)
 	for i := range contributions {
 		handler := contributions[i].ResultHandler
-		contributions[i].ResultHandler = func(ctx context.Context, input map[string]any) (tools.Result, error) {
+		contributions[i].ResultHandler = func(ctx context.Context, input map[string]any) (toolcore.Result, error) {
 			result, err := handler(ctx, input)
-			if event, ok := writefacts.EventFromStructured(result.Structured); ok {
+			if event, ok := EventFromStructured(result.Structured); ok {
 				result.Fact, _ = json.Marshal(event)
 			}
 			return result, err
@@ -74,25 +70,25 @@ func (m *Module) ApplyThreadStart(ctx context.Context, request runtimemodule.Thr
 	return runtimemodule.ThreadStartDecision{}, ctx.Err()
 }
 
-func eventFromResult(block llm.Block) *writefacts.Event {
+func eventFromResult(block llm.Block) *Event {
 	if block.ResultFact == nil || block.ResultFact.Owner != string(ModuleID) || len(block.ResultFact.Data) == 0 {
 		return nil
 	}
-	var event writefacts.Event
+	var event Event
 	if err := json.Unmarshal(block.ResultFact.Data, &event); err != nil || event.WriteID == "" {
 		return nil
 	}
 	switch event.Kind {
-	case writefacts.EventBegin, writefacts.EventChunk, writefacts.EventCommit, writefacts.EventAbort:
+	case EventBegin, EventChunk, EventCommit, EventAbort:
 		return &event
 	default:
 		return nil
 	}
 }
 
-func recoverActiveSessions(history []llm.Message) []tools.ChunkedWriteRecoverySession {
+func recoverActiveSessions(history []llm.Message) []ChunkedWriteRecoverySession {
 	uses := map[string][]llm.Block{}
-	sessions := map[string]tools.ChunkedWriteRecoverySession{}
+	sessions := map[string]ChunkedWriteRecoverySession{}
 	invalid := map[string]bool{}
 	for _, message := range history {
 		for _, result := range message.Blocks {
@@ -114,10 +110,10 @@ func recoverActiveSessions(history []llm.Message) []tools.ChunkedWriteRecoverySe
 				continue
 			}
 			switch event.Kind {
-			case writefacts.EventBegin:
-				sessions[event.WriteID] = tools.ChunkedWriteRecoverySession{WriteID: event.WriteID, Path: event.Path, Mode: event.Mode, FileMode: event.FileMode}
+			case EventBegin:
+				sessions[event.WriteID] = ChunkedWriteRecoverySession{WriteID: event.WriteID, Path: event.Path, Mode: event.Mode, FileMode: event.FileMode}
 				delete(invalid, event.WriteID)
-			case writefacts.EventChunk:
+			case EventChunk:
 				session, active := sessions[event.WriteID]
 				if !active || invalid[event.WriteID] {
 					continue
@@ -128,7 +124,7 @@ func recoverActiveSessions(history []llm.Message) []tools.ChunkedWriteRecoverySe
 					invalid[event.WriteID] = true
 					continue
 				}
-				chunk := tools.ChunkedWriteRecoveryChunk{Index: event.Index, Content: content}
+				chunk := ChunkedWriteRecoveryChunk{Index: event.Index, Content: content}
 				replaced := false
 				for i := range session.Chunks {
 					if session.Chunks[i].Index == event.Index {
@@ -140,13 +136,13 @@ func recoverActiveSessions(history []llm.Message) []tools.ChunkedWriteRecoverySe
 					session.Chunks = append(session.Chunks, chunk)
 				}
 				sessions[event.WriteID] = session
-			case writefacts.EventCommit, writefacts.EventAbort:
+			case EventCommit, EventAbort:
 				delete(sessions, event.WriteID)
 				delete(invalid, event.WriteID)
 			}
 		}
 	}
-	out := make([]tools.ChunkedWriteRecoverySession, 0, len(sessions))
+	out := make([]ChunkedWriteRecoverySession, 0, len(sessions))
 	for id, session := range sessions {
 		if !invalid[id] {
 			out = append(out, session)

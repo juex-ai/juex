@@ -30,7 +30,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+	"github.com/juex-ai/juex/internal/features/applypatch"
+	"github.com/juex-ai/juex/internal/features/filesearch"
+	"github.com/juex-ai/juex/internal/features/filetools"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
@@ -46,17 +48,19 @@ import (
 	shelltools "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/features/skills"
 	skillsmodule "github.com/juex-ai/juex/internal/features/skills/module"
+	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/modules/builtintools"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+	"github.com/juex-ai/juex/tests/testsupport/toolset"
 )
 
 // scriptProvider drives the engine through a deterministic script. Each call
@@ -187,10 +191,10 @@ func TestEndToEnd_RuntimeAppliesDefaultStreamIdleTimeout(t *testing.T) {
 	provider := &optionsCaptureProvider{}
 	engine := &runtime.Engine{
 		Provider: provider,
-		Tools:    tools.NewRegistry(),
+		Tools:    toolcore.NewRegistry(),
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt:   e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, time.Now, threadState),
+		Prompt:   e2ePromptBuilder(t, "", []string{root}, root, command.ShellProfile{}, time.Now, threadState),
 	}
 
 	if output, err := engine.Turn(context.Background(), "hello"); err != nil || output != "done" {
@@ -429,9 +433,9 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 	bus := events.NewBus()
 	threadState.SubscribeBus(bus)
 
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: tools.DefaultShellProfile()})
-	reg.MustRegister(tools.Tool{
+	reg := toolcore.NewRegistry()
+	toolset.Register(reg, toolset.Options{WorkDir: root, Shell: command.DefaultShellProfile()})
+	reg.MustRegister(toolcore.Tool{
 		Name:        "check_ready",
 		Description: "test-only readiness check",
 		Schema: map[string]any{
@@ -484,7 +488,7 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -550,8 +554,8 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 	t.Cleanup(func() { _ = threadState.Close() })
 	bus := events.NewBus()
 	threadState.SubscribeBus(bus)
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: work, Shell: tools.DefaultShellProfile()})
+	reg := toolcore.NewRegistry()
+	toolset.Register(reg, toolset.Options{WorkDir: work, Shell: command.DefaultShellProfile()})
 
 	patchText := strings.Join([]string{
 		"*** Begin Patch",
@@ -584,7 +588,7 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{work}, work, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -645,13 +649,13 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 	threadState.SubscribeBus(bus)
 	tc := runtimemodule.ThreadContext{ID: threadState.ID, Dir: threadState.Dir}
 	set, err := runtimemodule.BuildAndStartThreadSet(t.Context(), []runtimemodule.ThreadFactorySpec{{ID: chunkmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-		return chunkmodule.New(tools.BuiltinOptions{WorkDir: work}), nil
+		return chunkmodule.New(chunkmodule.Options{WorkDir: work}), nil
 	}}}, tc, runtimemodule.ToolContext{Thread: &tc})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = set.CloseThread(context.Background()) })
-	reg, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, set)
+	reg, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{}, set)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +669,7 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{work}, work, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -1122,7 +1126,7 @@ func e2ePromptBuilder(
 	globalAgentsMDPath string,
 	agentsMDDirs []string,
 	workDir string,
-	shell tools.ShellProfile,
+	shell command.ShellProfile,
 	now func() time.Time,
 	threadState *thread.Thread,
 	runtimeModules ...runtimemodule.Module,
@@ -1130,7 +1134,7 @@ func e2ePromptBuilder(
 	t.Helper()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
 	if shell.Binary != "" {
-		runtimeModules = append(runtimeModules, shelltools.New(context.Background(), tools.BuiltinOptions{WorkDir: workDir, Shell: shell}))
+		runtimeModules = append(runtimeModules, shelltools.New(context.Background(), shelltools.Options{WorkDir: workDir, Shell: shell}))
 	}
 	runtimeModules = append([]runtimemodule.Module{&agentsmd.Module{
 		GlobalAgentsMDPath: globalAgentsMDPath,
@@ -1194,7 +1198,7 @@ func e2ePromptBuilder(
 	}}
 }
 
-func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cfg mcp.Config, state *thread.Thread) (*runtimemodule.Set, *runtimemodule.Set, *tools.Registry) {
+func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cfg mcp.Config, state *thread.Thread) (*runtimemodule.Set, *runtimemodule.Set, *toolcore.Registry) {
 	t.Helper()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
 	runtimeSet, err := runtimemodule.BuildAndStartRuntimeSet(ctx, []runtimemodule.RuntimeFactorySpec{
@@ -1202,17 +1206,17 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 			ID:      "basic-file-tools",
 			Enabled: true,
 			New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.NewBasicFiles(tools.BuiltinOptions{WorkDir: workDir}), nil
+				return filetools.New(filetools.Options{WorkDir: workDir}), nil
 			},
 		},
 		{ID: shelltools.ModuleID, Enabled: true, New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return shelltools.New(factoryCtx, tools.BuiltinOptions{WorkDir: workDir, Shell: e2eToolShellProfile()}), nil
+			return shelltools.New(factoryCtx, shelltools.Options{WorkDir: workDir, Shell: e2eToolShellProfile()}), nil
 		}},
 		{ID: "apply-patch", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return builtintools.NewApplyPatch(tools.BuiltinOptions{WorkDir: workDir}), nil
+			return applypatch.New(applypatch.Options{WorkDir: workDir}), nil
 		}},
 		{ID: "file-search", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return builtintools.NewFileSearch(tools.BuiltinOptions{WorkDir: workDir}), nil
+			return filesearch.New(filesearch.Options{WorkDir: workDir}), nil
 		}},
 
 		{
@@ -1233,7 +1237,7 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 	})
 	tc := runtimemodule.ThreadContext{ID: state.ID, Dir: state.Dir}
 	threadSet, err := runtimemodule.BuildAndStartThreadSet(ctx, []runtimemodule.ThreadFactorySpec{{ID: chunkmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-		return chunkmodule.New(tools.BuiltinOptions{WorkDir: workDir}), nil
+		return chunkmodule.New(chunkmodule.Options{WorkDir: workDir}), nil
 	}}}, tc, runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &tc})
 	if err != nil {
 		t.Fatal(err)
@@ -1243,7 +1247,7 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 			t.Error(err)
 		}
 	})
-	registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: tools.DefaultTimeoutSeconds}, runtimeSet, threadSet)
+	registry, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{DefaultTimeoutSeconds: toolcore.DefaultTimeoutSeconds}, runtimeSet, threadSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1454,8 +1458,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func e2eToolShellProfile() tools.ShellProfile {
-	return tools.ShellProfile{
+func e2eToolShellProfile() command.ShellProfile {
+	return command.ShellProfile{
 		Profile:   "fake-posix",
 		Family:    "posix",
 		Binary:    os.Args[0],
@@ -1464,8 +1468,8 @@ func e2eToolShellProfile() tools.ShellProfile {
 	}
 }
 
-func e2ePromptShellProfile() tools.ShellProfile {
-	return tools.ShellProfile{
+func e2ePromptShellProfile() command.ShellProfile {
+	return command.ShellProfile{
 		Profile:   "fake-posix",
 		Family:    "posix",
 		Binary:    os.Args[0],

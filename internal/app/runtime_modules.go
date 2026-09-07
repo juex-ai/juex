@@ -1,6 +1,10 @@
 package app
 
 import (
+	"github.com/juex-ai/juex/internal/features/applypatch"
+	"github.com/juex-ai/juex/internal/features/filesearch"
+	"github.com/juex-ai/juex/internal/features/filetools"
+
 	"context"
 	"fmt"
 	"path/filepath"
@@ -25,8 +29,6 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/modules/builtintools"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 type runtimeModuleComposition struct {
@@ -59,7 +61,6 @@ func prepareRuntimeModules(
 	runtimePaths config.RuntimePaths,
 	runtimeEnvironment environment.Snapshot,
 	sandboxRunner sandbox.Runner,
-	toolTimeoutSeconds int,
 ) (runtimeModuleComposition, error) {
 	runtimeContext := runtimemodule.RuntimeContext{
 		ID:            cfg.AgentAddress.ID(),
@@ -69,16 +70,7 @@ func prepareRuntimeModules(
 	}
 	constructed := &constructedRuntimeModules{}
 	composition := runtimeModuleComposition{runtimeContext: runtimeContext, constructed: constructed}
-	toolOptions := tools.BuiltinOptions{
-		WorkDir:            runtimePaths.WorkDir,
-		Environment:        runtimeEnvironment,
-		Shell:              toolsShellProfile(cfg.Shell),
-		Sandbox:            cfg.SandboxPolicy(),
-		SandboxRunner:      sandboxRunner,
-		ToolTimeoutSeconds: toolTimeoutSeconds,
-		AgentStateDir:      runtimePaths.StateDir,
-		MediaDir:           runtimePaths.MediaDir,
-	}
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: cfg.SandboxPolicy(), WorkDir: runtimePaths.WorkDir, AgentStateDir: runtimePaths.StateDir, ReadOnlyPaths: []string{runtimePaths.MediaDir}})
 	composition.specs = []runtimemodule.RuntimeFactorySpec{
 		{
 			ID:      memory.ModuleID,
@@ -98,28 +90,28 @@ func prepareRuntimeModules(
 			ID:      modulecatalog.BasicFileTools,
 			Enabled: cfg.ModuleEnabled(modulecatalog.BasicFileTools),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.NewBasicFiles(toolOptions), nil
+				return filetools.New(filetools.Options{WorkDir: runtimePaths.WorkDir, MediaDir: runtimePaths.MediaDir, FilePolicy: filePolicy}), nil
 			},
 		},
 		{
 			ID:      modulecatalog.ApplyPatch,
 			Enabled: cfg.ModuleEnabled(modulecatalog.ApplyPatch),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.NewApplyPatch(toolOptions), nil
+				return applypatch.New(applypatch.Options{WorkDir: runtimePaths.WorkDir, FilePolicy: filePolicy}), nil
 			},
 		},
 		{
 			ID:      modulecatalog.FileSearch,
 			Enabled: cfg.ModuleEnabled(modulecatalog.FileSearch),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.NewFileSearch(toolOptions), nil
+				return filesearch.New(filesearch.Options{WorkDir: runtimePaths.WorkDir, Environment: runtimeEnvironment, Sandbox: cfg.SandboxPolicy(), SandboxRunner: sandboxRunner, FilePolicy: filePolicy}), nil
 			},
 		},
 		{
 			ID:      shelltools.ModuleID,
 			Enabled: cfg.ModuleEnabled(modulecatalog.Shell),
 			New: func(ctx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				constructed.shell = shelltools.New(ctx, toolOptions)
+				constructed.shell = shelltools.New(ctx, shelltools.Options{WorkDir: runtimePaths.WorkDir, Environment: runtimeEnvironment, Shell: toolsShellProfile(cfg.Shell), Sandbox: cfg.SandboxPolicy(), SandboxRunner: sandboxRunner, FilePolicy: filePolicy, MediaDir: runtimePaths.MediaDir})
 				return constructed.shell, nil
 			},
 		},
@@ -210,7 +202,7 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 			Enabled: cfg.ModuleEnabled(modulecatalog.ChunkedWrite),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				paths := cfg.RuntimePaths()
-				return chunkmodule.New(tools.BuiltinOptions{WorkDir: workDir, Sandbox: cfg.SandboxPolicy(), AgentStateDir: paths.StateDir, MediaDir: paths.MediaDir}), nil
+				return chunkmodule.New(chunkmodule.Options{WorkDir: workDir, FilePolicy: sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: cfg.SandboxPolicy(), WorkDir: workDir, AgentStateDir: paths.StateDir, ReadOnlyPaths: []string{paths.MediaDir}})}), nil
 			},
 		},
 		{

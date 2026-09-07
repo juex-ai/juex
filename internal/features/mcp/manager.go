@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const ModuleID runtimemodule.ID = modulecatalog.MCP
@@ -41,7 +41,7 @@ func NewRuntimeModule(configs []Config, options ConnectOptions) *Module {
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -246,7 +246,7 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 	return mgr
 }
 
-func (m *Manager) Tools() ([]tools.Tool, error) {
+func (m *Manager) Tools() ([]toolcore.Tool, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -255,7 +255,7 @@ func (m *Manager) Tools() ([]tools.Tool, error) {
 	if m.closed {
 		return nil, fmt.Errorf("mcp: manager closed")
 	}
-	var provided []tools.Tool
+	var provided []toolcore.Tool
 	serverNames := make([]string, 0, len(m.tools))
 	for serverName := range m.tools {
 		serverNames = append(serverNames, serverName)

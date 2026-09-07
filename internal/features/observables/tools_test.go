@@ -11,14 +11,13 @@ import (
 	"time"
 
 	observable "github.com/juex-ai/juex/internal/features/observables"
-
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
-func installObservableModuleTools(t *testing.T, registry *tools.Registry, manager *observable.Manager) {
+func installObservableModuleTools(t *testing.T, registry *toolcore.Registry, manager *observable.Manager) {
 	t.Helper()
 	provided, err := observable.NewModule(manager).Tools(context.Background(), runtimemodule.ToolContext{})
 	if err != nil {
@@ -33,7 +32,7 @@ func installObservableModuleTools(t *testing.T, registry *tools.Registry, manage
 
 func TestRegisterToolsAndDescriptions(t *testing.T) {
 	mgr := newToolTestManager(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	want := []string{
 		"observable_create",
@@ -56,8 +55,8 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 		t.Fatalf("definition count = %d, want %d", len(definitions), len(want))
 	}
 	for _, definition := range definitions {
-		if definition.Group != tools.ToolGroupObservable {
-			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, tools.ToolGroupObservable)
+		if definition.Group != toolcore.ToolGroupObservable {
+			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, toolcore.ToolGroupObservable)
 		}
 		registered, ok := reg.Get(definition.Name)
 		if !ok {
@@ -100,7 +99,7 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 
 func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 	mgr := newToolTestManager(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	create, ok := reg.Get("observable_create")
 	if !ok {
@@ -245,7 +244,7 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 
 func TestCreateToolSchemaCostsAreMeasuredWithoutOldUnion(t *testing.T) {
 	mgr := newToolTestManager(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	var commandTokens, scheduleTokens int
 	for _, spec := range reg.Specs() {
@@ -264,7 +263,7 @@ func TestCreateToolSchemaCostsAreMeasuredWithoutOldUnion(t *testing.T) {
 
 func TestObservableToolsCreateListDelete(t *testing.T) {
 	mgr := newToolTestManager(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	input := map[string]any{
 		"id":      "lark-events",
@@ -305,7 +304,7 @@ func TestObservableToolsCreateListDelete(t *testing.T) {
 
 func TestScheduleCreatePersistsTaggedSpecAndStartsSchedule(t *testing.T) {
 	mgr, config := newToolTestManagerWithConfigPath(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	input := map[string]any{
 		"id":       "weekday-brief",
@@ -362,7 +361,7 @@ func TestScheduleCreatePersistsTaggedSpecAndStartsSchedule(t *testing.T) {
 
 func TestScheduleCreatePersistsMonthlySpecAndListsStatus(t *testing.T) {
 	mgr, config := newToolTestManagerWithConfigPath(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	input := map[string]any{
 		"id":       "monthly-brief",
@@ -402,7 +401,7 @@ func TestScheduleCreatePersistsMonthlySpecAndListsStatus(t *testing.T) {
 
 func TestScheduleCreateDerivesIDFromName(t *testing.T) {
 	mgr := newToolTestManager(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	out, _, err := reg.CallWithInfo(context.Background(), "schedule_create", map[string]any{
 		"name":     "Morning Brief!",
@@ -421,7 +420,7 @@ func TestScheduleCreateDerivesIDFromName(t *testing.T) {
 
 func TestObservableCreatePersistsTaggedSpecAndStartsCommand(t *testing.T) {
 	mgr, config := newToolTestManagerWithConfigPath(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	input := map[string]any{
 		"id":      "lark-events",
@@ -464,7 +463,7 @@ func TestObservableCreatePersistsTaggedSpecAndStartsCommand(t *testing.T) {
 
 func TestCreateHandlersRejectUnknownCrossSourceFields(t *testing.T) {
 	mgr := newToolTestManager(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	if _, _, err := reg.CallWithInfo(context.Background(), "schedule_create", map[string]any{
 		"id": "bad-schedule", "command": "echo",
@@ -507,7 +506,7 @@ func TestCreateHandlersRejectUnknownCrossSourceFields(t *testing.T) {
 
 func TestCreateHandlersRequireOneFilterAndRecurrenceBranch(t *testing.T) {
 	mgr := newToolTestManager(t)
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	if _, _, err := reg.CallWithInfo(context.Background(), "observable_create", map[string]any{
 		"id": "bad-filter", "command": "echo",
@@ -533,7 +532,7 @@ func TestObservableToolsObservations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	out, _, err := reg.CallWithInfo(context.Background(), "observable_observations", map[string]any{
 		"id":    "lark-events",
@@ -555,7 +554,7 @@ func TestObservableToolsObservationsBoundsLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	installObservableModuleTools(t, reg, mgr)
 	out, _, err := reg.CallWithInfo(context.Background(), "observable_observations", map[string]any{
 		"id": "lark-events",

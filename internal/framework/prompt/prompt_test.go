@@ -13,8 +13,8 @@ import (
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	shelltools "github.com/juex-ai/juex/internal/features/shell"
+	"github.com/juex-ai/juex/internal/foundation/command"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestBuilder_AllSourcesPresent(t *testing.T) {
@@ -286,7 +286,7 @@ func TestBuilder_OperatingContextUsesWorkDir(t *testing.T) {
 func TestBuilder_IncludesShellModuleContext(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		shelltools.New(context.Background(), tools.BuiltinOptions{Shell: tools.ShellProfile{
+		shelltools.New(context.Background(), shelltools.Options{Shell: command.ShellProfile{
 			Profile:   "powershell",
 			Family:    "powershell",
 			Binary:    "pwsh",

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 var ErrSealed = errors.New("runtime modules: registry is sealed")
@@ -98,7 +98,7 @@ type ContextSection struct {
 }
 
 type ToolProvider interface {
-	Tools(context.Context, ToolContext) ([]tools.Tool, error)
+	Tools(context.Context, ToolContext) ([]toolcore.Tool, error)
 }
 
 type ContextProvider interface {
@@ -245,7 +245,7 @@ func (r *Registry) freeze() (*Set, error) {
 
 type ToolEntry struct {
 	ModuleID ID
-	Tool     tools.Tool
+	Tool     toolcore.Tool
 }
 
 type ToolCatalog struct {
@@ -271,7 +271,7 @@ func (c ToolCatalog) Names() []string {
 
 // BuildToolRegistry validates every catalog before returning a new serving
 // registry. A failed build never exposes a partially installed registry.
-func BuildToolRegistry(options tools.RegistryOptions, sets ...*Set) (*tools.Registry, error) {
+func BuildToolRegistry(options toolcore.RegistryOptions, sets ...*Set) (*toolcore.Registry, error) {
 	owners := make(map[string]ID)
 	var entries []ToolEntry
 	for _, set := range sets {
@@ -286,12 +286,12 @@ func BuildToolRegistry(options tools.RegistryOptions, sets ...*Set) (*tools.Regi
 			entries = append(entries, entry)
 		}
 	}
-	registry := tools.NewRegistryWithOptions(options)
-	contributions := make([]tools.Tool, 0, len(entries))
+	registry := toolcore.NewRegistryWithOptions(options)
+	contributions := make([]toolcore.Tool, 0, len(entries))
 	for _, entry := range entries {
 		contributions = append(contributions, entry.Tool)
 	}
-	resolved, err := tools.ResolveTools(contributions)
+	resolved, err := toolcore.ResolveTools(contributions)
 	if err != nil {
 		return nil, fmt.Errorf("runtime modules: resolve tool definitions: %w", err)
 	}
@@ -305,7 +305,7 @@ func BuildToolRegistry(options tools.RegistryOptions, sets ...*Set) (*tools.Regi
 
 func buildToolCatalog(ctx context.Context, toolContext ToolContext, providers []registeredModule) (ToolCatalog, error) {
 	owners := make(map[string]ID)
-	validator := tools.NewRegistry()
+	validator := toolcore.NewRegistry()
 	var entries []ToolEntry
 	for _, registered := range providers {
 		provided, err := registered.module.(ToolProvider).Tools(ctx, toolContext)

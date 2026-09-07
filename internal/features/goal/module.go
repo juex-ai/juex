@@ -9,8 +9,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/events"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 const (
@@ -58,7 +58,7 @@ func NewWithOptions(store *GoalStateStore, opts Options) *Module {
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	return BoundTools(m), nil
 }
 
@@ -182,12 +182,13 @@ func (m *Module) shouldDeferContinuation() bool {
 	return m.continuationDeferrer != nil && m.continuationDeferrer.ShouldDeferGoalContinuation()
 }
 
-func ToolDefinitions() []tools.ToolDefinition {
-	return []tools.ToolDefinition{
+func ToolDefinitions() []toolcore.ToolDefinition {
+	return []toolcore.ToolDefinition{
 		{
 			Name:            ToolGet,
-			Group:           tools.ToolGroupThreadState,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupThreadState,
+			Guide:           toolcore.ToolGuide{Loader: "skill_load", Name: "juex-thread-state"},
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Read the current thread goal before changing it. ",
 			Schema: map[string]any{
 				"type":       "object",
@@ -196,8 +197,9 @@ func ToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:            ToolCreate,
-			Group:           tools.ToolGroupThreadState,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupThreadState,
+			Guide:           toolcore.ToolGuide{Loader: "skill_load", Name: "juex-thread-state"},
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Create or replace this thread's in-progress goal contract. ",
 			Schema: map[string]any{
 				"type": "object",
@@ -211,8 +213,9 @@ func ToolDefinitions() []tools.ToolDefinition {
 		},
 		{
 			Name:            ToolUpdate,
-			Group:           tools.ToolGroupThreadState,
-			ExecutionPolicy: tools.ToolExecutionSerial,
+			Group:           toolcore.ToolGroupThreadState,
+			Guide:           toolcore.ToolGuide{Loader: "skill_load", Name: "juex-thread-state"},
+			ExecutionPolicy: toolcore.ToolExecutionSerial,
 			Description:     "Update goal fields or status (in_progress, wait_for_user, success, or failure). Use wait_for_user only when progress requires new external input; success requires acceptance. ",
 			Schema: map[string]any{
 				"type": "object",
@@ -227,15 +230,15 @@ func ToolDefinitions() []tools.ToolDefinition {
 	}
 }
 
-func BoundTools(module *Module) []tools.Tool {
+func BoundTools(module *Module) []toolcore.Tool {
 	definitions := ToolDefinitions()
 	unavailable := func(context.Context, map[string]any) (string, error) {
 		return "", fmt.Errorf("goal state is not configured")
 	}
 	if module == nil || module.store == nil {
-		return []tools.Tool{definitions[0].Bind(unavailable), definitions[1].Bind(unavailable), definitions[2].Bind(unavailable)}
+		return []toolcore.Tool{definitions[0].Bind(unavailable), definitions[1].Bind(unavailable), definitions[2].Bind(unavailable)}
 	}
-	return []tools.Tool{
+	return []toolcore.Tool{
 		definitions[0].Bind(func(context.Context, map[string]any) (string, error) { return module.handleGetGoal() }),
 		definitions[1].Bind(func(_ context.Context, in map[string]any) (string, error) { return module.handleCreateGoal(in) }),
 		definitions[2].Bind(func(_ context.Context, in map[string]any) (string, error) { return module.handleUpdateGoal(in) }),

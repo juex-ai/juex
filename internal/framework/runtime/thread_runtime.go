@@ -7,11 +7,11 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 var ErrThreadRuntimeBusy = errors.New("runtime: thread runtime is busy")
@@ -23,12 +23,12 @@ type ThreadRuntimeSnapshot struct {
 	Thread            *thread.Thread
 	PendingInputQueue *PendingInputQueue
 	Modules           *runtimemodule.Set
-	Tools             *tools.Registry
+	Tools             *toolcore.Registry
 }
 
 type ThreadRuntimeReplacement struct {
 	Modules *runtimemodule.Set
-	Tools   *tools.Registry
+	Tools   *toolcore.Registry
 }
 
 // ThreadRuntimeCheckpoint captures an already-published runtime bundle and

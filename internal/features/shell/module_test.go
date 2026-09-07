@@ -1,4 +1,4 @@
-package shelltools
+package shell
 
 import (
 	"context"
@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/foundation/command"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestModuleOwnsShellTools(t *testing.T) {
-	mod := New(context.Background(), tools.BuiltinOptions{
+	mod := New(context.Background(), Options{
 		WorkDir:  t.TempDir(),
-		Shell:    tools.DefaultShellProfile(),
+		Shell:    command.DefaultShellProfile(),
 		MediaDir: t.TempDir(),
 	})
 	if mod.ID() != ModuleID {
@@ -49,9 +49,9 @@ func TestModuleStartCreatesMediaRootBeforeShellSessions(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(mediaDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	mod := New(context.Background(), tools.BuiltinOptions{
+	mod := New(context.Background(), Options{
 		MediaDir: mediaDir,
-		Shell:    tools.DefaultShellProfile(),
+		Shell:    command.DefaultShellProfile(),
 	})
 	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
 		t.Fatal(err)
@@ -63,8 +63,8 @@ func TestModuleStartCreatesMediaRootBeforeShellSessions(t *testing.T) {
 }
 
 func TestModulePreservesInjectedShellSessionOwnership(t *testing.T) {
-	sessions := tools.NewShellSessionManager(context.Background())
-	mod := New(context.Background(), tools.BuiltinOptions{ShellSessions: sessions})
+	sessions := NewShellSessionManager(context.Background())
+	mod := New(context.Background(), Options{ShellSessions: sessions})
 	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +78,8 @@ func TestModulePreservesInjectedShellSessionOwnership(t *testing.T) {
 }
 
 func TestModuleIncludesShellProfile(t *testing.T) {
-	sections, err := New(context.Background(), tools.BuiltinOptions{
-		Shell: tools.ShellProfile{
+	sections, err := New(context.Background(), Options{
+		Shell: command.ShellProfile{
 			Profile:   "powershell",
 			Family:    "powershell",
 			Binary:    "pwsh",

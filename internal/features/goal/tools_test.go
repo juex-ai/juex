@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestGoalToolDefinitionsBindThreadStateGroup(t *testing.T) {
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
 	installModuleTools(t, reg, New(store))
 	definitions := ToolDefinitions()
@@ -19,8 +19,8 @@ func TestGoalToolDefinitionsBindThreadStateGroup(t *testing.T) {
 		t.Fatalf("definition count = %d, want 3", len(definitions))
 	}
 	for _, definition := range definitions {
-		if definition.Group != tools.ToolGroupThreadState {
-			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, tools.ToolGroupThreadState)
+		if definition.Group != toolcore.ToolGroupThreadState {
+			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, toolcore.ToolGroupThreadState)
 		}
 		registered, ok := reg.Get(definition.Name)
 		if !ok {
@@ -34,7 +34,7 @@ func TestGoalToolDefinitionsBindThreadStateGroup(t *testing.T) {
 }
 
 func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
-	reg := tools.NewRegistry()
+	reg := toolcore.NewRegistry()
 	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
 	installModuleTools(t, reg, New(store))
 	createTool, ok := reg.Get(ToolCreate)
@@ -121,7 +121,7 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 	}
 }
 
-func installModuleTools(t *testing.T, registry *tools.Registry, provider runtimemodule.ToolProvider) {
+func installModuleTools(t *testing.T, registry *toolcore.Registry, provider runtimemodule.ToolProvider) {
 	t.Helper()
 	provided, err := provider.Tools(t.Context(), runtimemodule.ToolContext{})
 	if err != nil {

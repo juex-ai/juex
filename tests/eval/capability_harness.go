@@ -16,13 +16,15 @@ import (
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	shelltools "github.com/juex-ai/juex/internal/features/shell"
+	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/tests/testsupport/toolset"
 )
 
 type CapabilityCase struct {
@@ -30,7 +32,7 @@ type CapabilityCase struct {
 	Prompt     string
 	Files      map[string]string
 	Hooks      func(workDir string) hooks.Config
-	ExtraTools []tools.Tool
+	ExtraTools []toolcore.Tool
 	Script     []CapabilityStep
 	Contract   ContractExpectations
 	Assert     func(*testing.T, CapabilityResult)
@@ -129,8 +131,8 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 		writeCapabilityFile(t, filepath.Join(workDir, rel), body)
 	}
 
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: workDir, Shell: tools.DefaultShellProfile()})
+	reg := toolcore.NewRegistry()
+	toolset.Register(reg, toolset.Options{WorkDir: workDir, Shell: command.DefaultShellProfile()})
 	for _, tool := range tc.ExtraTools {
 		if err := reg.Register(tool); err != nil {
 			t.Fatalf("register extra tool %q: %v", tool.Name, err)
@@ -202,7 +204,7 @@ func capabilityPromptBuilder(workDir string, worker *thread.Thread) *prompt.Buil
 		WorkDir: workDir,
 		Now:     func() time.Time { return time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC) },
 	}
-	shellContext := shelltools.New(context.Background(), tools.BuiltinOptions{WorkDir: workDir, Shell: tools.DefaultShellProfile()})
+	shellContext := shelltools.New(context.Background(), shelltools.Options{WorkDir: workDir, Shell: command.DefaultShellProfile()})
 	request := runtimemodule.ContextRequest{
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 		Thread:  &runtimemodule.ThreadContext{ID: worker.ID, Dir: worker.Dir},

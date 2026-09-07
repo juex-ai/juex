@@ -14,7 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 func TestTurn_BuiltinExecCommandYieldDoesNotWaitForChildPipe(t *testing.T) {
@@ -61,7 +61,7 @@ func TestTurn_BuiltinExecCommandYieldDoesNotWaitForChildPipe(t *testing.T) {
 		!strings.Contains(block.Content, "Process running with session ID") {
 		t.Fatalf("tool result content = %q, want running shell result", block.Content)
 	}
-	shellResult, ok := completedPayload.Result.(tools.ShellResult)
+	shellResult, ok := completedPayload.Result.(toolcore.CommandResult)
 	if !ok {
 		t.Fatalf("completed result = %#v, want tools.ShellResult", completedPayload.Result)
 	}
@@ -129,7 +129,7 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 	if errored.Preview != "" {
 		t.Fatalf("errored preview = %q, want no duplicate shell output", errored.Preview)
 	}
-	result, ok := errored.Result.(tools.ShellResult)
+	result, ok := errored.Result.(toolcore.CommandResult)
 	if !ok {
 		t.Fatalf("errored result = %#v, want tools.ShellResult", errored.Result)
 	}

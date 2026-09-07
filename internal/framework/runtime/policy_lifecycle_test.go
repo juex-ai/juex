@@ -11,9 +11,9 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/provenance"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 type lifecycleOrder struct {
@@ -160,7 +160,7 @@ func TestTypedPolicyLifecycleGoldenOrder(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, provider, false)
-	eng.Tools.MustRegister(tools.Tool{
+	eng.Tools.MustRegister(toolcore.Tool{
 		Name: "ordered_tool",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			order.add("tool.handler")

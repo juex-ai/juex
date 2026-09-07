@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
+	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.T) {
@@ -81,9 +82,9 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Message:    llm.TextMessage(llm.RoleAssistant, "continued safely"),
 		StopReason: llm.StopEndTurn,
 	}}}
-	registry := tools.NewRegistry()
+	registry := toolcore.NewRegistry()
 	toolCalls := 0
-	registry.MustRegister(tools.Tool{
+	registry.MustRegister(toolcore.Tool{
 		Name: "mcp__remote__send",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			toolCalls++
@@ -100,7 +101,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Tools:    registry,
 		Bus:      bus,
 		Thread:   recovered,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 		}, recovered),
 		WorkDir:  root,
@@ -195,10 +196,10 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 	provider := &bareScriptProvider{steps: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "continued safely"), StopReason: llm.StopEndTurn,
 	}}}
-	registry := tools.NewRegistry()
+	registry := toolcore.NewRegistry()
 	toolCalls := 0
 	for _, name := range []string{"effect_recorded", "effect_unknown", "effect_not_started"} {
-		registry.MustRegister(tools.Tool{Name: name, Handler: func(context.Context, map[string]any) (string, error) {
+		registry.MustRegister(toolcore.Tool{Name: name, Handler: func(context.Context, map[string]any) (string, error) {
 			toolCalls++
 			return "unexpected duplicate", nil
 		}})
@@ -210,7 +211,7 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 	defer func() { _ = sink.Close() }()
 	engine := &runtime.Engine{
 		Provider: provider, Tools: registry, Bus: bus, Thread: recovered,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 		}, recovered),
 		WorkDir: root, MediaDir: filepath.Join(root, "media"),

@@ -59,7 +59,7 @@ var foundationDirs = []string{
 	"internal/foundation/statusstream",
 	"internal/framework/thread",
 	"internal/foundation/toolevents",
-	"internal/tools",
+	"internal/foundation/tools",
 	"internal/foundation/version",
 }
 

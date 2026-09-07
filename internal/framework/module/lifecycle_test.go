@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 type lifecycleModule struct {
@@ -39,25 +39,28 @@ func (m *startDiscoveredToolModule) CloseRuntime(context.Context) error {
 	return nil
 }
 
-func (m *startDiscoveredToolModule) Tools(context.Context, ToolContext) ([]tools.Tool, error) {
+func (m *startDiscoveredToolModule) Tools(context.Context, ToolContext) ([]toolcore.Tool, error) {
 	if !m.started {
 		return nil, errors.New("resource has not started")
 	}
-	return []tools.Tool{{Name: m.name, Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil }}}, nil
+	return []toolcore.Tool{{Name: m.name, Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil }}}, nil
 }
 
 type deferredLifecycleError struct{}
 
 func (*deferredLifecycleError) Error() string { return "cleanup deferred" }
-func (*deferredLifecycleError) Wait() error   { return nil }
+
+func (*deferredLifecycleError) Wait() error { return nil }
 
 type deferredQuiesceModule struct {
 	log      *[]string
 	deferred bool
 }
 
-func (*deferredQuiesceModule) ID() ID                                             { return "deferred" }
+func (*deferredQuiesceModule) ID() ID { return "deferred" }
+
 func (*deferredQuiesceModule) StartRuntime(context.Context, RuntimeContext) error { return nil }
+
 func (m *deferredQuiesceModule) QuiesceRuntime(context.Context) error {
 	*m.log = append(*m.log, "quiesce")
 	if !m.deferred {
@@ -66,6 +69,7 @@ func (m *deferredQuiesceModule) QuiesceRuntime(context.Context) error {
 	}
 	return nil
 }
+
 func (m *deferredQuiesceModule) CloseRuntime(context.Context) error {
 	*m.log = append(*m.log, "close")
 	return nil

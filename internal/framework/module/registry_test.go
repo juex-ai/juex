@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/tools"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 type testModule struct {
@@ -23,8 +23,8 @@ type schemaToolModule struct {
 
 func (schemaToolModule) ID() ID { return "schema-tool" }
 
-func (m schemaToolModule) Tools(context.Context, ToolContext) ([]tools.Tool, error) {
-	return []tools.Tool{{
+func (m schemaToolModule) Tools(context.Context, ToolContext) ([]toolcore.Tool, error) {
+	return []toolcore.Tool{{
 		Name:    "schema_tool",
 		Schema:  m.schema,
 		Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil },
@@ -49,14 +49,14 @@ func (m testModule) Context(context.Context, ContextRequest) ([]ContextSection, 
 	return sections, m.contextErr
 }
 
-func (m testModule) Tools(context.Context, ToolContext) ([]tools.Tool, error) {
+func (m testModule) Tools(context.Context, ToolContext) ([]toolcore.Tool, error) {
 	if m.toolErr != nil {
 		return nil, m.toolErr
 	}
-	provided := make([]tools.Tool, 0, len(m.toolNames))
+	provided := make([]toolcore.Tool, 0, len(m.toolNames))
 	for _, name := range m.toolNames {
 		name := name
-		provided = append(provided, tools.Tool{
+		provided = append(provided, toolcore.Tool{
 			Name:    name,
 			Handler: func(context.Context, map[string]any) (string, error) { return name, nil },
 		})
@@ -140,7 +140,7 @@ func TestToolCatalogEntriesDeepCopySchemas(t *testing.T) {
 	}
 
 	catalog := set.ToolCatalog()
-	installed, err := BuildToolRegistry(tools.RegistryOptions{}, set)
+	installed, err := BuildToolRegistry(toolcore.RegistryOptions{}, set)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestContextRejectsInvalidContributionMetadata(t *testing.T) {
 func TestBuildToolRegistryIsAtomicAcrossSets(t *testing.T) {
 	runtimeSet := mustToolSet(t, ScopeRuntime, testModule{id: "runtime", toolNames: []string{"first"}})
 	threadSet := mustToolSet(t, ScopeThread, testModule{id: "thread", toolNames: []string{"first"}})
-	registry, err := BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, threadSet)
+	registry, err := BuildToolRegistry(toolcore.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, threadSet)
 	if err == nil || !strings.Contains(err.Error(), `tool "first"`) {
 		t.Fatalf("BuildToolRegistry() error = %v", err)
 	}
@@ -324,7 +324,7 @@ func TestBuildToolRegistryIsAtomicAcrossSets(t *testing.T) {
 	}
 
 	threadSet = mustToolSet(t, ScopeThread, testModule{id: "thread", toolNames: []string{"second"}})
-	registry, err = BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, threadSet)
+	registry, err = BuildToolRegistry(toolcore.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, threadSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,17 +339,18 @@ func TestBuildToolRegistryIsAtomicAcrossSets(t *testing.T) {
 type adaptedToolModule struct{}
 
 func (adaptedToolModule) ID() ID { return "adapted" }
-func (adaptedToolModule) Tools(context.Context, ToolContext) ([]tools.Tool, error) {
-	definition := tools.ToolDefinition{Name: "adapted", Description: "standalone"}
+
+func (adaptedToolModule) Tools(context.Context, ToolContext) ([]toolcore.Tool, error) {
+	definition := toolcore.ToolDefinition{Name: "adapted", Description: "standalone"}
 	tool := definition.Bind(func(context.Context, map[string]any) (string, error) { return "executed", nil })
-	tool.ResolveDefinition = func(available tools.ToolAvailability) tools.ToolDefinition {
+	tool.ResolveDefinition = func(available toolcore.ToolAvailability) toolcore.ToolDefinition {
 		resolved := definition
 		if available.Has("other_scope") {
 			resolved.Description = "composed"
 		}
 		return resolved
 	}
-	return []tools.Tool{tool}, nil
+	return []toolcore.Tool{tool}, nil
 }
 
 func TestBuildToolRegistryResolvesAfterMergingScopes(t *testing.T) {
@@ -358,7 +359,7 @@ func TestBuildToolRegistryResolvesAfterMergingScopes(t *testing.T) {
 	if got := runtimeSet.ToolCatalog().Entries()[0].Tool.Description; got != "standalone" {
 		t.Fatalf("early resolution=%s", got)
 	}
-	combined, err := BuildToolRegistry(tools.RegistryOptions{}, runtimeSet, threadSet)
+	combined, err := BuildToolRegistry(toolcore.RegistryOptions{}, runtimeSet, threadSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +370,7 @@ func TestBuildToolRegistryResolvesAfterMergingScopes(t *testing.T) {
 	if got, err := combined.Call(context.Background(), "adapted", nil); err != nil || got != "executed" {
 		t.Fatalf("handler=%q err=%v", got, err)
 	}
-	alone, err := BuildToolRegistry(tools.RegistryOptions{}, runtimeSet)
+	alone, err := BuildToolRegistry(toolcore.RegistryOptions{}, runtimeSet)
 	if err != nil {
 		t.Fatal(err)
 	}
