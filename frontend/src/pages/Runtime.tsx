@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useOutletContext } from "react-router-dom";
+import { runtimeModuleEnabled, type RuntimeView } from "@/lib/runtime-view";
 import { RuntimeDisclosureButton } from "@/components/RuntimeDisclosureButton";
 import { Badge } from "@/components/ui/badge";
 import {
   RuntimeToolGroups,
   RuntimeToolList,
 } from "@/components/RuntimeToolCatalog";
-import { getRuntimeStatus } from "@/api";
 import type {
   MCPServerInfo,
   RuntimeHookInfo,
@@ -13,8 +14,6 @@ import type {
   SystemPromptEntry,
 } from "@/types";
 import { useShellTitle } from "@/components/AppShell";
-import { LoadingState } from "@/components/LoadingState";
-import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import {
   formatRuntimeTimestamp,
   formatRuntimeTokenCount,
@@ -24,47 +23,9 @@ import {
 } from "@/lib/runtime-display";
 
 export function Runtime() {
-  const [data, setData] = useState<RuntimeStatusResponse | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const { resourceRevision } = useFleetAgent();
+  const { data, error, lastUpdated } = useOutletContext<RuntimeView>();
   useShellTitle("Runtime");
-
-  useEffect(() => {
-    let live = true;
-    void getRuntimeStatus()
-        .then((status) => {
-          if (!live) return;
-          setData(status);
-          setLastUpdated(new Date());
-          setError(null);
-        })
-        .catch((e) => {
-          console.error("getRuntimeStatus failed", e);
-          if (live) setError(e instanceof Error ? e.message : String(e));
-        });
-    return () => {
-      live = false;
-    };
-  }, [resourceRevision.runtime]);
-
-  if (error && !data) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-        <div
-          role="alert"
-          className="w-full max-w-xl rounded-lg border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-        >
-          <p className="font-medium">Runtime status is unavailable.</p>
-          <p className="mt-1 break-words font-mono text-xs">{error}</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!data) {
-    return <LoadingState label="Loading runtime" />;
-  }
+  const enabled = (id: string) => runtimeModuleEnabled(data, id);
 
   const systemPrompt = data.system_prompt ?? { count: 0, items: [] };
   const systemPromptItems = systemPrompt.items ?? [];
@@ -100,10 +61,10 @@ export function Runtime() {
               <dd className="border-t px-3 py-2">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <Badge variant="outline" className="font-mono text-[11px]">
-                    {shellLabel(data)}
+                    {enabled("shell") ? shellLabel(data) : "disabled"}
                   </Badge>
                   <span className="min-w-0 break-all font-mono text-xs">
-                    {shellCommand(data)}
+                    {enabled("shell") ? shellCommand(data) : "Shell module is disabled."}
                   </span>
                 </div>
               </dd>
@@ -258,12 +219,12 @@ export function Runtime() {
               variant={data.mcp.errors > 0 ? "destructive" : "secondary"}
               className="font-mono text-[11px]"
             >
-              {mcpSummaryLabel(data)}
+              {enabled("mcp") ? mcpSummaryLabel(data) : "disabled"}
             </Badge>
           </div>
           {mcpServers.length === 0 ? (
             <div className="text-muted-foreground rounded-lg border bg-card px-3 py-3 text-sm shadow-[var(--shadow-sm)]">
-              No MCP servers configured.
+              {enabled("mcp") ? "No MCP servers configured." : "MCP module is disabled."}
             </div>
           ) : (
             <div className="overflow-x-auto rounded-lg border bg-card shadow-[var(--shadow-sm)]">
@@ -278,7 +239,7 @@ export function Runtime() {
               Skills
             </h2>
             <Badge variant="secondary" className="font-mono text-[11px]">
-              {data.skills.count}
+              {enabled("skills") ? data.skills.count : "disabled"}
             </Badge>
           </div>
           <div className="overflow-x-auto rounded-lg border bg-card shadow-[var(--shadow-sm)]">
@@ -295,7 +256,7 @@ export function Runtime() {
                 {data.skills.items.length === 0 ? (
                   <tr>
                     <td className="text-muted-foreground px-3 py-3" colSpan={4}>
-                      No skills loaded.
+                      {enabled("skills") ? "No skills loaded." : "Skills module is disabled."}
                     </td>
                   </tr>
                 ) : (
@@ -329,7 +290,7 @@ export function Runtime() {
               Hooks
             </h2>
             <Badge variant="secondary" className="font-mono text-[11px]">
-              {runtimeHooksSummaryLabel(hooks)}
+              {enabled("hooks") ? runtimeHooksSummaryLabel(hooks) : "disabled"}
             </Badge>
           </div>
           <div className="overflow-x-auto rounded-lg border bg-card shadow-[var(--shadow-sm)]">
@@ -349,7 +310,7 @@ export function Runtime() {
                 {hookCommands.length === 0 ? (
                   <tr>
                     <td className="text-muted-foreground px-3 py-3" colSpan={7}>
-                      No hooks configured.
+                      {enabled("hooks") ? "No hooks configured." : "Hooks module is disabled."}
                     </td>
                   </tr>
                 ) : (

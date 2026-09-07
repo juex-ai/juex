@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/statusapi"
@@ -103,8 +104,15 @@ type activeThread struct {
 var errThreadInactive = errors.New("web: Thread is archived")
 
 func NewServer(opts Options) *Server {
-	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.ObservablesConfigPath())
-	resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.ThreadIndexPath()})
+	observablesPath := ""
+	if opts.Cfg.ModuleEnabled(modulecatalog.Observables) {
+		observablesPath = opts.Cfg.ObservablesConfigPath()
+	}
+	resources := newResourceEventHub(opts.Cfg.WorkDir, observablesPath)
+	resources.setRuntimeInputs([]string{opts.Cfg.ThreadIndexPath()})
+	if opts.Cfg.ModuleEnabled(modulecatalog.AgentsMD) {
+		resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath()})
+	}
 	return &Server{
 		inspectionDone: make(chan struct{}),
 		opts:           opts,

@@ -17,6 +17,7 @@ const fileTreeSource = source(
 );
 const fleetSource = source("../../frontend/src/pages/Fleet.tsx");
 const runtimeSource = source("../../frontend/src/pages/Runtime.tsx");
+const runtimeLayoutSource = source("../../frontend/src/pages/RuntimeLayout.tsx");
 const extensionsSource = source("../../frontend/src/pages/Extensions.tsx");
 const observablesSource = source("../../frontend/src/pages/Observables.tsx");
 const observableDetailSource = source(
@@ -29,6 +30,7 @@ test("live read models use SSE instead of recurring browser timers", () => {
     ["file tree", fileTreeSource],
     ["fleet", fleetSource],
     ["runtime", runtimeSource],
+    ["runtime layout", runtimeLayoutSource],
     ["extensions", extensionsSource],
     ["observables", observablesSource],
     ["observable detail", observableDetailSource],
@@ -46,8 +48,9 @@ test("live read models use SSE instead of recurring browser timers", () => {
   assert.match(fileTreeSource, /refreshRevision/);
   assert.match(observablesSource, /resourceRevision\.observables/);
   assert.match(observableDetailSource, /resourceRevision\.observables/);
-  assert.match(runtimeSource, /resourceRevision\.runtime/);
-  assert.match(extensionsSource, /resourceRevision\.runtime/);
+  assert.match(runtimeLayoutSource, /resourceRevision\.runtime/);
+  assert.match(runtimeSource, /useOutletContext<RuntimeView>/);
+  assert.match(extensionsSource, /useOutletContext<RuntimeView>/);
 });
 
 test("typed EventSource helpers isolate fleet and agent resources", () => {

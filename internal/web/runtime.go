@@ -38,8 +38,9 @@ type runtimeModuleInfo struct {
 }
 
 type extensionsStatus struct {
-	Count int             `json:"count"`
-	Items []extensionInfo `json:"items"`
+	Enabled bool            `json:"enabled"`
+	Count   int             `json:"count"`
+	Items   []extensionInfo `json:"items"`
 }
 
 type extensionInfo struct {
@@ -348,7 +349,7 @@ func extensionsStatusFromApp(status app.RuntimeExtensionsStatus) extensionsStatu
 			},
 		})
 	}
-	return extensionsStatus{Count: len(items), Items: items}
+	return extensionsStatus{Enabled: status.Enabled, Count: len(items), Items: items}
 }
 
 func runtimeToolsStatusFromApp(status app.RuntimeToolsStatus) runtimeToolsStatus {

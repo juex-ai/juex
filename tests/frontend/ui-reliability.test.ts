@@ -6,7 +6,7 @@ function source(path: string): string {
   return readFileSync(new URL(path, import.meta.url), "utf8");
 }
 
-const runtimeSource = source("../../frontend/src/pages/Runtime.tsx");
+const runtimeSource = source("../../frontend/src/pages/RuntimeLayout.tsx");
 const promptInputSource = source(
   "../../frontend/src/components/ai-elements/prompt-input.tsx",
 );
@@ -24,7 +24,7 @@ const conversationSource = source(
 test("runtime and Thread Explorer expose initial request failures", () => {
   assert.match(
     runtimeSource,
-    /if \(error && !data\)[\s\S]*role="alert"[\s\S]*if \(!data\)/,
+    /needsCatalog && !data[\s\S]*error \? \([\s\S]*role="alert"[\s\S]*LoadingState/,
   );
   assert.match(threadExplorerSource, /setError\(/);
   assert.match(threadExplorerSource, /role="alert"/);

@@ -14,15 +14,16 @@ var errTurnAdmissionBusy = errors.New("app: Thread busy")
 // turnAdmissionQueue keeps only App-owned command and compaction exclusion.
 // Runtime is the sole authority for ordinary input start-versus-queue state.
 type turnAdmissionQueue struct {
-	state  *turnAdmission
-	engine *runtime.Engine
+	state        *turnAdmission
+	engine       *runtime.Engine
+	executionErr error
 }
 
 func (a *App) admissionQueue() turnAdmissionQueue {
 	if a == nil || a.Engine == nil {
 		return turnAdmissionQueue{}
 	}
-	return turnAdmissionQueue{state: &a.turnAdmission, engine: a.Engine}
+	return turnAdmissionQueue{state: &a.turnAdmission, engine: a.Engine, executionErr: a.executionError()}
 }
 
 func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) TurnAdmissionResult {
@@ -32,6 +33,9 @@ func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) 
 func (q turnAdmissionQueue) admitUserWithRetry(ctx context.Context, message llm.Message, retryTurnID string) TurnAdmissionResult {
 	if q.state == nil || q.engine == nil {
 		return errorResult(fmt.Errorf("turn admission: app, engine, or Thread is not initialized"), nil)
+	}
+	if q.executionErr != nil {
+		return moduleUnavailableResult(q.executionErr)
 	}
 	q.state.transitionMu.Lock()
 	defer q.state.transitionMu.Unlock()

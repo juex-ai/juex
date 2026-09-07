@@ -1,59 +1,18 @@
-import { useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
+import type { RuntimeView } from "@/lib/runtime-view";
 
-import { getRuntimeStatus } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
-import { LoadingState } from "@/components/LoadingState";
-import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { Badge } from "@/components/ui/badge";
 import { safeRuntimeExternalURL } from "@/lib/runtime-display";
 import type {
   ExtensionEnvironmentVariable,
   ExtensionInfo,
   ExtensionRequirement,
-  RuntimeStatusResponse,
 } from "@/types";
 
 export function Extensions() {
-  const [data, setData] = useState<RuntimeStatusResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const { resourceRevision } = useFleetAgent();
+  const { data, error } = useOutletContext<RuntimeView>();
   useShellTitle("Extensions");
-
-  useEffect(() => {
-    let live = true;
-    void getRuntimeStatus()
-        .then((status) => {
-          if (!live) return;
-          setData(status);
-          setError(null);
-        })
-        .catch((cause) => {
-          console.error("getRuntimeStatus failed", cause);
-          if (live) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-          }
-        });
-    return () => {
-      live = false;
-    };
-  }, [resourceRevision.runtime]);
-
-  if (error && !data) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-        <div
-          role="alert"
-          className="w-full max-w-xl rounded-lg border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-        >
-          <p className="font-medium">Extensions are unavailable.</p>
-          <p className="mt-1 break-words font-mono text-xs">{error}</p>
-        </div>
-      </div>
-    );
-  }
-  if (!data) {
-    return <LoadingState label="Loading extensions" />;
-  }
 
   const extensions = data.extensions?.items ?? [];
   return (

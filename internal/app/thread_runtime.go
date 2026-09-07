@@ -141,6 +141,9 @@ func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Me
 	if a == nil || a.Engine == nil {
 		return "", errors.New("app: admitted turn requires an initialized engine")
 	}
+	if err := a.executionError(); err != nil {
+		return "", err
+	}
 	a.threadMu.RLock()
 	defer a.threadMu.RUnlock()
 	if a.Thread == nil {

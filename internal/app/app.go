@@ -686,9 +686,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	status.RecoverAfterRestart()
-	if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
-		_ = a.Close()
-		return nil, err
+	if a.executionError() == nil {
+		if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
+			_ = a.Close()
+			return nil, err
+		}
 	}
 	if err := startupCtx.Err(); err != nil {
 		_ = a.Close()
@@ -877,6 +879,15 @@ func (a *App) detachObservability() error {
 
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
+	if a != nil && a.Engine != nil {
+		identity, ok := a.ThreadIdentity()
+		if !ok {
+			return "", ErrThreadUnavailable
+		}
+		if err := CheckTurnCapability(a.cfg, identity.ID, TurnAdmissionRequest{Prompt: prompt}); err != nil {
+			return "", err
+		}
+	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
 		return "", err
 	}
@@ -891,7 +902,7 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if cmd.Name == SlashNew {
+		if cmd.Name == SlashNew && a.executionError() == nil {
 			return a.runEngineTurnMessage(ctx, NewThreadGreetingMessage())
 		}
 		return result.Text, nil
@@ -922,6 +933,9 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 	if a.Thread == nil {
 		return "", errors.New("app: attachment turn requires an initialized Thread and engine")
 	}
+	if err := a.executionError(); err != nil {
+		return "", err
+	}
 	if err := usermedia.ValidateThreadMediaRefs(a.cfg.MediaDir(), a.Thread.ID, attachments, usermedia.Limits{}); err != nil {
 		return "", err
 	}
@@ -937,6 +951,9 @@ func (a *App) runEngineTurn(ctx context.Context, input string) (string, error) {
 	if a.Thread == nil {
 		return "", ErrThreadUnavailable
 	}
+	if err := a.executionError(); err != nil {
+		return "", err
+	}
 	return a.Engine.Turn(ctx, input)
 }
 
@@ -948,6 +965,9 @@ func (a *App) runEngineTurnMessage(ctx context.Context, message llm.Message) (st
 	defer a.threadMu.RUnlock()
 	if a.Thread == nil {
 		return "", ErrThreadUnavailable
+	}
+	if err := a.executionError(); err != nil {
+		return "", err
 	}
 	return a.Engine.TurnMessage(ctx, message)
 }

@@ -67,6 +67,9 @@ func (a *App) deliverExternalInputLockedWithStart(
 	valid func() error,
 	onStarted func(),
 ) (externalInputDelivery, error) {
+	if err := a.executionError(); err != nil {
+		return externalInputDelivery{}, err
+	}
 	accepted, err := a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{
 		Message:       message,
 		Options:       &opts,
@@ -105,6 +108,9 @@ func (a *App) resumePersistedInputLocked(ctx context.Context, recordID string) (
 }
 
 func (a *App) resumePersistedInputLockedWithStart(ctx context.Context, recordID string, onStarted func()) (externalInputDelivery, error) {
+	if err := a.executionError(); err != nil {
+		return externalInputDelivery{RecordID: recordID}, err
+	}
 	queue := a.admissionQueue()
 	queue.state.transitionMu.Lock()
 	queue.state.mu.Lock()
@@ -296,6 +302,11 @@ func (a *App) activateExternalInputAfterPendingRecovery(
 	ctx context.Context,
 	records []runtime.PendingInputRecovery,
 ) error {
+	if a.executionError() != nil {
+		// Retain durable input without hydrating the execution queue. Host
+		// maintenance can then reserve and release admission normally.
+		return ctx.Err()
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(a.ctx, cancel)
 	defer stop()
