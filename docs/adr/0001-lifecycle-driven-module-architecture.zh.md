@@ -45,9 +45,7 @@ capability。Juex 不加载第三方 Go plugin 或动态库。可变 Extension �
 Agent 与对应 Extension。
 
 Memory 是使用同一套类型化 capability 的第一方 Go Feature Module，拥有 Agent
-持久知识和派生索引维护，不需要 Feature-specific Framework slot。旧第一方
-Memory Extension 分发已退役；已有知识仅通过操作者显式复制进行切换，具体步骤
-见 [Memory Module 指南](../../internal/modules/memory/README.zh.md)。
+持久知识和派生索引维护，不需要 Feature-specific Framework slot。
 
 ## 结果
 

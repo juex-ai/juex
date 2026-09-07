@@ -51,9 +51,7 @@ under the owning Agent and Extension.
 
 Memory is a first-party Go Feature Module using the same typed capabilities.
 It owns durable Agent knowledge and derived index maintenance without a
-Feature-specific Framework slot. The former first-party Memory Extension
-distribution is retired; existing knowledge moves only through an explicit
-operator copy described in the [Memory Module guide](../../internal/modules/memory/README.md).
+Feature-specific Framework slot.
 
 ## Consequences
 
