@@ -288,8 +288,13 @@ func readEntry(root *os.Root, name string) (Entry, error) {
 }
 
 func validateName(name string) error {
-	if !safeName.MatchString(name) || strings.EqualFold(name, "MEMORY") {
-		return fmt.Errorf("memory name must be a safe 1-128 character slug; MEMORY is reserved")
+	// Device basenames remain reserved with extensions on Windows. Apply the
+	// same contract everywhere so knowledge files can move between platforms.
+	base, _, _ := strings.Cut(strings.ToUpper(name), ".")
+	reserved := strings.EqualFold(name, "MEMORY") || base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" ||
+		(len(base) == 4 && (base[:3] == "COM" || base[:3] == "LPT") && base[3] >= '1' && base[3] <= '9')
+	if !safeName.MatchString(name) || reserved {
+		return fmt.Errorf("memory name must be a safe 1-128 character slug; MEMORY and Windows device names are reserved")
 	}
 	return nil
 }

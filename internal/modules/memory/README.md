@@ -11,8 +11,10 @@ App resolves relative embedding paths before supplying the absolute Agent scope.
 
 Entry Markdown files are authoritative. Their YAML frontmatter contains name,
 single-line description, type (`user`, `feedback`, `project`, or `reference`),
-creation time, and update time. Same-name writes preserve creation time. Search
-uses literal substrings with Unicode simple case folding across metadata and
+creation time, and update time. Same-name writes preserve creation time.
+Names exclude `MEMORY` and Windows device basenames on every platform, including
+device names followed by a dot and suffix. Search uses literal substrings with
+Unicode simple case folding across metadata and
 body; it does not expand characters such as `ß` into `ss`. Malformed or unreadable
 individual entries are skipped; a directory read failure is an operation error.
 Physical directory and regular-entry boundaries reject symlinked storage.

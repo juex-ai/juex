@@ -75,7 +75,7 @@ func TestStoreValidationAndBadEntries(t *testing.T) {
 	if _, err := store.Write(t.Context(), valid); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"", "../escape", "a/b", "a\\b", ".hidden", "MEMORY", "memory", strings.Repeat("a", 129)} {
+	for _, name := range []string{"", "../escape", "a/b", "a\\b", ".hidden", "MEMORY", "memory", strings.Repeat("a", 129), "CON", "nul.txt", "PrN", "AUX", "COM1", "com9.notes", "LPT1", "lpt9.notes"} {
 		entry := valid
 		entry.Name = name
 		if _, err := store.Write(t.Context(), entry); err == nil {
@@ -115,6 +115,19 @@ func TestStoreValidationAndBadEntries(t *testing.T) {
 	hits, err := store.Search(t.Context(), "")
 	if err != nil || len(hits) != 1 || hits[0].Name != "good" {
 		t.Fatalf("bad entries affected valid data: %+v %v", hits, err)
+	}
+}
+
+func TestStoreAcceptsPortableNamesContainingDeviceText(t *testing.T) {
+	store := NewStore(t.TempDir())
+	for _, name := range []string{"console", "auxiliary", "COM0", "COM10", "LPT0", "LPT10", "project.CON"} {
+		entry := Entry{Name: name, Description: "Portable name", Type: "reference", Body: "Stored knowledge"}
+		if _, err := store.Write(t.Context(), entry); err != nil {
+			t.Fatalf("write %q: %v", name, err)
+		}
+		if err := store.Delete(t.Context(), name); err != nil {
+			t.Fatalf("delete %q: %v", name, err)
+		}
 	}
 }
 
