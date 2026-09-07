@@ -64,3 +64,37 @@ test("empty state and unreadable state have distinct presentation", async ({ pag
   await openModuleThread(page, "error");
   await expect(page.getByText("Module state unavailable", { exact: true })).toBeVisible();
 });
+
+test("a directory refresh preserves an in-flight module file preview", async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeEventSource = window.EventSource;
+    window.EventSource = class extends NativeEventSource {
+      constructor(url, options) {
+        super(url, options);
+        if (String(url).endsWith("/resource-events")) window.resourceSource = this;
+      }
+    };
+  });
+  await openModuleThread(page);
+  let releaseContent;
+  let markContentStarted;
+  const contentStarted = new Promise((resolve) => { markContentStarted = resolve; });
+  const contentReleased = new Promise((resolve) => { releaseContent = resolve; });
+  await page.route("**/resources/files/content?*", async (route) => {
+    markContentStarted();
+    await contentReleased;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      path: "draft.md", content: "Preview survives directory refresh", kind: "text", size: 34, truncated: false,
+    }) });
+  });
+  await page.getByRole("button", { name: "Show scratchpad", exact: true }).click();
+  await page.getByRole("button", { name: "draft.md", exact: true }).click();
+  await contentStarted;
+  const refreshed = page.waitForResponse("**/resources/files/tree");
+  await page.evaluate(() => window.resourceSource.dispatchEvent(new MessageEvent("message", {
+    data: JSON.stringify({ type: "resource.changed", resources: ["workspace"] }),
+  })));
+  await refreshed;
+  releaseContent();
+  await expect(page.getByText("Preview survives directory refresh", { exact: true })).toBeVisible();
+});

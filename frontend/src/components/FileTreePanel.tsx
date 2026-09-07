@@ -126,9 +126,13 @@ export function FileTreePanel({
     return () => {
       refreshAbortRef.current?.abort();
       refreshAbortRef.current = null;
-      previewAbortRef.current?.abort();
     };
   }, [active, refreshWorkspace, refreshRevision, rootKey]);
+
+  useEffect(() => () => {
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+  }, [active, loadContent, rootKey]);
 
   useEffect(() => {
     if (active && subscribeChanges) return subscribeChanges(refreshWorkspace);
