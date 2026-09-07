@@ -191,13 +191,13 @@ func TestThreadScratchpadReadKeepsEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(as.app.Thread.Dir, "scratchpad")); err != nil {
+	if _, err := os.Stat(filepath.Join(as.agent.Thread.Dir, "scratchpad")); err != nil {
 		t.Fatalf("scratchpad stat: %v", err)
 	}
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/threads/" + as.app.Thread.ID + "/modules/scratchpad/resources/files/tree")
+	resp, err := http.Get(ts.URL + "/api/threads/" + as.agent.Thread.ID + "/modules/scratchpad/resources/files/tree")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestThreadScratchpadReadKeepsEmptyDirectory(t *testing.T) {
 	if tree.Name != "scratchpad" || !tree.IsDir || len(tree.Children) != 0 {
 		t.Fatalf("empty scratchpad tree = %+v", tree)
 	}
-	entries, err := os.ReadDir(filepath.Join(as.app.Thread.Dir, "scratchpad"))
+	entries, err := os.ReadDir(filepath.Join(as.agent.Thread.Dir, "scratchpad"))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("scratchpad changed after read: entries=%v err=%v", entries, err)
 	}

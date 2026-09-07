@@ -1,4 +1,4 @@
-package app
+package agent
 
 import (
 	"context"
@@ -25,30 +25,30 @@ type ThreadIdentitySnapshot struct {
 	ParentThreadID string
 }
 
-func (a *App) ReadThread(read func(*thread.Thread) error) error {
+func (a *Agent) ReadThread(read func(*thread.Thread) error) error {
 	return a.readThread("", read)
 }
 
-func (a *App) ReadThreadID(id string, read func(*thread.Thread) error) error {
+func (a *Agent) ReadThreadID(id string, read func(*thread.Thread) error) error {
 	return a.readThread(id, read)
 }
 
-func (a *App) readThread(expectedID string, read func(*thread.Thread) error) error {
+func (a *Agent) readThread(expectedID string, read func(*thread.Thread) error) error {
 	if a == nil || read == nil {
 		return ErrThreadUnavailable
 	}
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	if a.Thread == nil {
-		return ErrThreadUnavailable
-	}
-	if expectedID != "" && a.Thread.ID != expectedID {
-		return ErrThreadChanged
-	}
-	return read(a.Thread)
+	return a.ReadThreadState(func(target *thread.Thread) error {
+		if target == nil {
+			return ErrThreadUnavailable
+		}
+		if expectedID != "" && target.ID != expectedID {
+			return ErrThreadChanged
+		}
+		return read(target)
+	})
 }
 
-func (a *App) ThreadIdentity() (ThreadIdentitySnapshot, bool) {
+func (a *Agent) ThreadIdentity() (ThreadIdentitySnapshot, bool) {
 	var snapshot ThreadIdentitySnapshot
 	err := a.ReadThread(func(target *thread.Thread) error {
 		info := target.Info()
@@ -61,7 +61,7 @@ func (a *App) ThreadIdentity() (ThreadIdentitySnapshot, bool) {
 	return snapshot, err == nil
 }
 
-func (a *App) ThreadInfo() (thread.Info, bool) {
+func (a *Agent) ThreadInfo() (thread.Info, bool) {
 	var info thread.Info
 	err := a.ReadThread(func(target *thread.Thread) error {
 		info = target.Info()
@@ -70,7 +70,7 @@ func (a *App) ThreadInfo() (thread.Info, bool) {
 	return info, err == nil
 }
 
-func (a *App) ThreadSnapshot() (thread.Info, []llm.Message, bool) {
+func (a *Agent) ThreadSnapshot() (thread.Info, []llm.Message, bool) {
 	var info thread.Info
 	var history []llm.Message
 	err := a.ReadThread(func(target *thread.Thread) error {
@@ -81,7 +81,7 @@ func (a *App) ThreadSnapshot() (thread.Info, []llm.Message, bool) {
 	return info, history, err == nil
 }
 
-func (a *App) ThreadTimeline(before string, limit int) (thread.TimelinePage, error) {
+func (a *Agent) ThreadTimeline(before string, limit int) (thread.TimelinePage, error) {
 	var page thread.TimelinePage
 	err := a.ReadThread(func(target *thread.Thread) error {
 		var err error
@@ -91,7 +91,7 @@ func (a *App) ThreadTimeline(before string, limit int) (thread.TimelinePage, err
 	return page, err
 }
 
-func (a *App) ThreadTokenUsage() llm.Usage {
+func (a *Agent) ThreadTokenUsage() llm.Usage {
 	var usage llm.Usage
 	_ = a.ReadThread(func(target *thread.Thread) error {
 		usage = target.TokenUsageSnapshot()
@@ -100,7 +100,7 @@ func (a *App) ThreadTokenUsage() llm.Usage {
 	return usage
 }
 
-func (a *App) ActiveContext() runtime.ActiveContextSnapshot {
+func (a *Agent) ActiveContext() runtime.ActiveContextSnapshot {
 	if a == nil || a.Engine == nil {
 		return runtime.ActiveContextSnapshot{}
 	}
@@ -109,7 +109,7 @@ func (a *App) ActiveContext() runtime.ActiveContextSnapshot {
 	return a.Engine.ActiveContext()
 }
 
-func (a *App) ActiveContextForThread(id string) (runtime.ActiveContextSnapshot, bool) {
+func (a *Agent) ActiveContextForThread(id string) (runtime.ActiveContextSnapshot, bool) {
 	if a == nil || a.Engine == nil {
 		return runtime.ActiveContextSnapshot{}, false
 	}
@@ -121,7 +121,7 @@ func (a *App) ActiveContextForThread(id string) (runtime.ActiveContextSnapshot, 
 	return snapshot, err == nil
 }
 
-func (a *App) PendingInputStatus() runtime.PendingInputStatus {
+func (a *Agent) PendingInputStatus() runtime.PendingInputStatus {
 	if a == nil || a.Engine == nil {
 		return runtime.PendingInputStatus{}
 	}
@@ -130,7 +130,7 @@ func (a *App) PendingInputStatus() runtime.PendingInputStatus {
 	return a.Engine.PendingInputStatus()
 }
 
-func (a *App) CancelActiveTurn(cause error) bool {
+func (a *Agent) CancelActiveTurn(cause error) bool {
 	if a == nil || a.Engine == nil {
 		return false
 	}
@@ -139,7 +139,7 @@ func (a *App) CancelActiveTurn(cause error) bool {
 	return a.Engine.CancelActiveTurn(cause)
 }
 
-func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Message) (string, error) {
+func (a *Agent) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Message) (string, error) {
 	if a == nil || a.Engine == nil {
 		return "", errors.New("app: admitted turn requires an initialized engine")
 	}
@@ -165,4 +165,15 @@ func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Me
 		return "", cause
 	}
 	return a.Engine.TurnMessageWithID(ctx, message, turnID)
+}
+
+// ReadThreadState holds the read lease even after the Thread has been released.
+// A nil Thread represents that released state to application projections.
+func (a *Agent) ReadThreadState(read func(*thread.Thread) error) error {
+	if a == nil || read == nil {
+		return ErrThreadUnavailable
+	}
+	a.threadMu.RLock()
+	defer a.threadMu.RUnlock()
+	return read(a.Thread)
 }

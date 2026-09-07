@@ -4,13 +4,14 @@ import (
 	"context"
 	"sync"
 
-	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/framework/agent"
+
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 type webTurnTransport struct {
-	app *app.App
+	agent *agent.Agent
 
 	lifecycleMu sync.Mutex
 	closed      bool
@@ -21,12 +22,12 @@ type webTurnTransport struct {
 	wg         sync.WaitGroup
 }
 
-func newWebTurnTransport(a *app.App) *webTurnTransport {
-	return &webTurnTransport{app: a}
+func newWebTurnTransport(a *agent.Agent) *webTurnTransport {
+	return &webTurnTransport{agent: a}
 }
 
 func (t *webTurnTransport) start(turnID string, msg llm.Message) {
-	if t == nil || t.app == nil || t.app.Engine == nil || turnID == "" {
+	if t == nil || t.agent == nil || t.agent.Engine == nil || turnID == "" {
 		return
 	}
 	t.lifecycleMu.Lock()
@@ -59,7 +60,7 @@ func (t *webTurnTransport) interruptWithCause(cause error) bool {
 	if t == nil {
 		return false
 	}
-	runtimeCancelled := t.app != nil && t.app.CancelActiveTurn(cause)
+	runtimeCancelled := t.agent != nil && t.agent.CancelActiveTurn(cause)
 	t.cancelMu.Lock()
 	cancel := t.cancel
 	if cancel != nil {
@@ -101,7 +102,7 @@ func (t *webTurnTransport) wait() {
 
 func (t *webTurnTransport) run(ctx context.Context, turnID string, msg llm.Message) {
 	defer t.wg.Done()
-	_, _ = t.app.RunAdmittedTurn(ctx, turnID, msg)
+	_, _ = t.agent.RunAdmittedTurn(ctx, turnID, msg)
 
 	t.cancelMu.Lock()
 	if t.activeTurn == turnID {

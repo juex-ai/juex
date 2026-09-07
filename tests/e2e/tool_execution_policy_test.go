@@ -234,7 +234,7 @@ func TestEndToEnd_WorkerBatchesKeepIndependentStateAndProgress(t *testing.T) {
 		t.Fatalf("ordered create/create/list=%s, %v", list, err)
 	}
 	for _, status := range listed.Threads {
-		worker, ok := a.ManagedWorkerApp(status.ThreadID)
+		worker, ok := a.ManagedWorkerAgent(status.ThreadID)
 		if !ok {
 			t.Fatalf("missing Worker %s", status.ThreadID)
 		}

@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/framework/agent"
+
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
@@ -28,7 +29,7 @@ func TestAgentStatusReportsRunningThread(t *testing.T) {
 		Payload: runtime.TurnAdmittedPayload{},
 	})
 	server.threads.Store("123456", &activeThread{
-		app: &app.App{
+		agent: &agent.Agent{
 			Status: status,
 		},
 		StartedAt: time.Now().UTC(),
@@ -78,7 +79,7 @@ func TestAgentStatusAggregatesWorkingPendingAndSelectsThread(t *testing.T) {
 			},
 		})
 		server.threads.Store(id, &activeThread{
-			app: &app.App{
+			agent: &agent.Agent{
 				Status: status,
 			},
 			StartedAt: started,
@@ -121,7 +122,7 @@ func TestAgentStatusStreamReturnsCurrentSnapshotOnSameCursorReconnect(t *testing
 		Timestamp: time.Now().UTC(),
 	})
 	server.threads.Store("123456", &activeThread{
-		app: &app.App{
+		agent: &agent.Agent{
 			Status: status,
 		},
 		StartedAt: time.Now().UTC(),

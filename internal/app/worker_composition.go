@@ -51,13 +51,13 @@ func (parent *App) newWorkerChild(child workerThreadChildOptions) (*App, error) 
 	return New(opts)
 }
 
-func (a *App) prepareWorkerChild(model string) (PreparedChild, error) {
+func (a *App) prepareWorkerChild(model string) (agent.PreparedChild, error) {
 	model = strings.TrimSpace(model)
 	useParentProvider := model == ""
 	cfg := a.cfg
 	if model != "" {
 		if err := cfg.ApplyModelOverride(model); err != nil {
-			return PreparedChild{}, fmt.Errorf("worker thread model: %w", err)
+			return agent.PreparedChild{}, fmt.Errorf("worker thread model: %w", err)
 		}
 	} else {
 		model = config.ModelRef{ProviderID: cfg.ProviderID, ModelID: cfg.Model}.String()
@@ -66,7 +66,11 @@ func (a *App) prepareWorkerChild(model string) (PreparedChild, error) {
 	if factory == nil {
 		factory = a.newWorkerChild
 	}
-	return PreparedChild{Model: model, Open: func(request ChildRequest) (*App, error) {
-		return factory(workerThreadChildOptions{Context: request.Context, Config: cfg, ThreadID: request.ThreadID, Alias: request.Alias, Model: model, UseParentProvider: useParentProvider})
+	return agent.PreparedChild{Model: model, Open: func(request agent.ChildRequest) (*agent.Agent, error) {
+		child, err := factory(workerThreadChildOptions{Context: request.Context, Config: cfg, ThreadID: request.ThreadID, Alias: request.Alias, Model: model, UseParentProvider: useParentProvider})
+		if child == nil {
+			return nil, err
+		}
+		return child.Agent, err
 	}}, nil
 }

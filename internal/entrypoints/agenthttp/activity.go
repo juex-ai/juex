@@ -63,10 +63,10 @@ func (s *Server) agentActivity() agentActivityResponse {
 	var latestWorking *activeThread
 	s.threads.Range(func(_, value any) bool {
 		active, ok := value.(*activeThread)
-		if !ok || active == nil || active.app == nil || active.app.Status == nil {
+		if !ok || active == nil || active.agent == nil || active.agent.Status == nil {
 			return true
 		}
-		snapshot := active.app.Status.Snapshot()
+		snapshot := active.agent.Status.Snapshot()
 		if snapshot.Thread.State.IsWorking() {
 			response.State = agentActivityWorking
 			response.PendingInputCount += snapshot.Thread.PendingCount
@@ -83,8 +83,8 @@ func (s *Server) agentActivity() agentActivityResponse {
 	if selected == nil {
 		selected = latest
 	}
-	if selected != nil && selected.app != nil && selected.app.Status != nil {
-		snapshot := selected.app.Status.Snapshot()
+	if selected != nil && selected.agent != nil && selected.agent.Status != nil {
+		snapshot := selected.agent.Status.Snapshot()
 		publicStatus := statusapi.FromRuntime(snapshot)
 		response.SelectedStatus = &publicStatus
 	}

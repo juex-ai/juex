@@ -22,24 +22,3 @@ func (a *App) applicationInputPolicy(cfg config.Config) agent.InputPolicy {
 		NewContextInput:    NewThreadGreetingMessage(),
 	}
 }
-
-func (a *App) checkInput(id string, request agent.TurnAdmissionRequest) error {
-	if a.executionPolicy.CheckInput == nil {
-		return nil
-	}
-	return a.executionPolicy.CheckInput(id, request)
-}
-
-func (a *App) parseCommand(input string) (agent.Command, bool, error) {
-	if a.executionPolicy.ParseCommand == nil {
-		return agent.Command{}, false, nil
-	}
-	return a.executionPolicy.ParseCommand(input)
-}
-
-func (a *App) attachmentWarnings(count int) []agent.TurnWarning {
-	if a.executionPolicy.AttachmentWarnings == nil {
-		return nil
-	}
-	return a.executionPolicy.AttachmentWarnings(count)
-}

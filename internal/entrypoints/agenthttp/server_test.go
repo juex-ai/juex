@@ -215,8 +215,8 @@ func TestServerThreadsShareProcessModelHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.app.Engine.ModelHealth == nil || first.app.Engine.ModelHealth != second.app.Engine.ModelHealth || first.app.Engine.ModelHealth != srv.modelHealth {
-		t.Fatalf("model health is not process-shared: first=%p second=%p server=%p", first.app.Engine.ModelHealth, second.app.Engine.ModelHealth, srv.modelHealth)
+	if first.agent.Engine.ModelHealth == nil || first.agent.Engine.ModelHealth != second.agent.Engine.ModelHealth || first.agent.Engine.ModelHealth != srv.modelHealth {
+		t.Fatalf("model health is not process-shared: first=%p second=%p server=%p", first.agent.Engine.ModelHealth, second.agent.Engine.ModelHealth, srv.modelHealth)
 	}
 }
 
@@ -384,7 +384,7 @@ func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T)
 	defer srv.clearEndpointControl(expected)
 
 	response, err := http.Post(
-		ts.URL+"/api/threads/"+as.app.Thread.ID+"/inputs",
+		ts.URL+"/api/threads/"+as.agent.Thread.ID+"/inputs",
 		"application/json",
 		strings.NewReader(`{"prompt":"work until restart"}`),
 	)
@@ -412,7 +412,7 @@ func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T)
 	}
 	as.turns.wait()
 
-	snapshot := as.app.Status.Snapshot()
+	snapshot := as.agent.Status.Snapshot()
 	if snapshot.Turn == nil ||
 		snapshot.Turn.State != runtime.TurnLifecycleCancelled ||
 		snapshot.Turn.Error == nil ||
@@ -503,7 +503,7 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	sub := as.bcast.subscribe()
 	defer sub.unsubscribe()
 
-	if err := as.app.Bus.Emit(events.Event{
+	if err := as.agent.Bus.Emit(events.Event{
 		ID:      "evt-committed",
 		Type:    "turn.started",
 		Payload: runtime.TurnStartedPayload{},
@@ -522,7 +522,7 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live event")
 	}
-	data, err := os.ReadFile(as.app.Thread.CurrentGenerationJournalPath())
+	data, err := os.ReadFile(as.agent.Thread.CurrentGenerationJournalPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,17 +544,17 @@ func TestWebEventsSkipLiveDeliveryWhenJournalCommitFails(t *testing.T) {
 	sub := as.bcast.subscribe()
 	defer sub.unsubscribe()
 
-	if err := as.app.Thread.Close(); err != nil {
+	if err := as.agent.Thread.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(as.app.Thread.Dir); err != nil {
+	if err := os.RemoveAll(as.agent.Thread.Dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(as.app.Thread.Dir, []byte("not a directory"), 0o644); err != nil {
+	if err := os.WriteFile(as.agent.Thread.Dir, []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := as.app.Bus.Emit(events.Event{
+	if err := as.agent.Bus.Emit(events.Event{
 		ID:      "evt-uncommitted",
 		Type:    "turn.started",
 		Payload: runtime.TurnStartedPayload{},

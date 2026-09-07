@@ -100,52 +100,6 @@ func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (agent.Comm
 	return result, true, err
 }
 
-func (a *App) ExecuteCommand(ctx context.Context, cmd agent.Command) (agent.CommandResult, error) {
-	switch cmd.Kind {
-	case agent.CommandKindCompact:
-		return a.executeCompactCommand(ctx, cmd, "")
-	case agent.CommandKindStatus:
-		status, err := a.executionPolicy.Status()
-		if err != nil {
-			return agent.CommandResult{}, err
-		}
-		return agent.CommandResult{Name: cmd.Name, Text: status.Text, Status: status.JSON}, nil
-	case agent.CommandKindNew:
-		if err := a.NewContext(ctx); err != nil {
-			return agent.CommandResult{}, err
-		}
-		status, err := a.executionPolicy.Status()
-		if err != nil {
-			return agent.CommandResult{}, err
-		}
-		text := fmt.Sprintf("New context generation: %s", status.GenerationID)
-		return agent.CommandResult{Name: cmd.Name, Text: text, Status: status.JSON}, nil
-	default:
-		return agent.CommandResult{}, fmt.Errorf("unknown command %q", cmd.Name)
-	}
-}
-
-func (a *App) executeCompactCommand(ctx context.Context, cmd agent.Command, admittedTurnID string) (agent.CommandResult, error) {
-	var (
-		compact runtime.CompactionResult
-		err     error
-	)
-	if admittedTurnID == "" {
-		compact, err = a.CompactWithInstructions(ctx, "manual", false, cmd.Args)
-	} else {
-		compact, err = a.CompactAdmittedWithInstructions(ctx, admittedTurnID, "manual", false, cmd.Args)
-	}
-	if err != nil {
-		return agent.CommandResult{}, err
-	}
-	text := "No eligible context to compact."
-	if compact.MessageID != "" {
-		text = fmt.Sprintf("Context compacted: %d -> %d tokens (%d summary chars).",
-			compact.TokensBefore, compact.TokensAfter, compact.SummaryChars)
-	}
-	return agent.CommandResult{Name: cmd.Name, Text: text, Compact: &compact}, nil
-}
-
 type StatusSnapshot struct {
 	ThreadID     string                         `json:"thread_id"`
 	ThreadDir    string                         `json:"thread_dir,omitempty"`
@@ -214,68 +168,71 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 	if a == nil {
 		return StatusSnapshot{}
 	}
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	var (
-		threadID     string
-		threadDir    string
-		threadAlias  string
-		generationID string
-		threadState  string
-		turns        int
-		startedAt    time.Time
-		lastActiveAt time.Time
-		tokenUsage   llm.Usage
-		contextUsage *llm.ContextUsage
-		compaction   StatusCompactionSnapshot
-	)
-	if a.Thread != nil {
-		info := a.Thread.Info()
-		replay := a.Thread.ReplaySnapshot()
-		threadID = info.ID
-		threadDir = info.Dir
-		threadAlias = info.Alias
-		generationID = info.GenerationID
-		threadState = string(info.ExecutionState)
-		turns = info.TurnCount
-		startedAt = info.CreatedAt.Time
-		lastActiveAt = replay.Projection.LastActivityAt.Time
-		tokenUsage = info.TokenUsage.Total
-		if info.ContextUsage != nil {
-			copied := *info.ContextUsage
-			copied.Breakdown = append([]llm.ContextUsagePart(nil), info.ContextUsage.Breakdown...)
-			contextUsage = &copied
+	var result StatusSnapshot
+	_ = a.ReadThreadState(func(target *thread.Thread) error {
+		var (
+			threadID     string
+			threadDir    string
+			threadAlias  string
+			generationID string
+			threadState  string
+			turns        int
+			startedAt    time.Time
+			lastActiveAt time.Time
+			tokenUsage   llm.Usage
+			contextUsage *llm.ContextUsage
+			compaction   StatusCompactionSnapshot
+		)
+		if target != nil {
+			info := target.Info()
+			replay := target.ReplaySnapshot()
+			threadID = info.ID
+			threadDir = info.Dir
+			threadAlias = info.Alias
+			generationID = info.GenerationID
+			threadState = string(info.ExecutionState)
+			turns = info.TurnCount
+			startedAt = info.CreatedAt.Time
+			lastActiveAt = replay.Projection.LastActivityAt.Time
+			tokenUsage = info.TokenUsage.Total
+			if info.ContextUsage != nil {
+				copied := *info.ContextUsage
+				copied.Breakdown = append([]llm.ContextUsagePart(nil), info.ContextUsage.Breakdown...)
+				contextUsage = &copied
+			}
+			compaction = compactionStatusFromReplay(replay)
 		}
-		compaction = compactionStatusFromReplay(replay)
-	}
-	observables := observablesStatusFromManager(a.obsv)
-	pending := runtime.PendingInputStatus{}
-	var goal *goalmodule.GoalStatusSnapshot
-	if a.Engine != nil {
-		pending = a.Engine.PendingInputStatus()
-		goal, _ = goalmodule.StatusFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
-	}
-	return StatusSnapshot{
-		ThreadID:     threadID,
-		ThreadDir:    threadDir,
-		ThreadAlias:  threadAlias,
-		GenerationID: generationID,
-		State:        threadState,
-		WorkDir:      a.cfg.WorkDir,
-		Turns:        turns,
-		StartedAt:    startedAt,
-		LastActiveAt: lastActiveAt,
-		Provider:     a.providerStatusSnapshot(),
-		MCP:          a.MCPStatus(),
-		Observables:  observables,
-		SkillCount:   len(a.skills),
-		TokenUsage:   tokenUsage,
-		TokenTotal:   tokenUsage.TotalTokens(),
-		ContextUsage: contextUsage,
-		Compaction:   compaction,
-		PendingInput: pending,
-		Goal:         goal,
-	}
+		observables := observablesStatusFromManager(a.obsv)
+		pending := runtime.PendingInputStatus{}
+		var goal *goalmodule.GoalStatusSnapshot
+		if a.Engine != nil {
+			pending = a.Engine.PendingInputStatus()
+			goal, _ = goalmodule.StatusFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+		}
+		result = StatusSnapshot{
+			ThreadID:     threadID,
+			ThreadDir:    threadDir,
+			ThreadAlias:  threadAlias,
+			GenerationID: generationID,
+			State:        threadState,
+			WorkDir:      a.cfg.WorkDir,
+			Turns:        turns,
+			StartedAt:    startedAt,
+			LastActiveAt: lastActiveAt,
+			Provider:     a.providerStatusSnapshot(),
+			MCP:          a.MCPStatus(),
+			Observables:  observables,
+			SkillCount:   len(a.skills),
+			TokenUsage:   tokenUsage,
+			TokenTotal:   tokenUsage.TotalTokens(),
+			ContextUsage: contextUsage,
+			Compaction:   compaction,
+			PendingInput: pending,
+			Goal:         goal,
+		}
+		return nil
+	})
+	return result
 }
 
 func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {

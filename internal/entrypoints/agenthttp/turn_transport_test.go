@@ -28,7 +28,7 @@ func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 		t.Fatal("second interrupt returned true")
 	}
 	as.turns.wait()
-	status := as.app.Status.Snapshot()
+	status := as.agent.Status.Snapshot()
 	if status.Turn == nil || status.Turn.ID != "turn-1" ||
 		status.Turn.State != runtime.TurnLifecycleCancelled {
 		t.Fatalf("interrupted canonical status = %+v", status)
@@ -41,7 +41,7 @@ func TestWebTurnTransportInterruptPreservesQueuedInput(t *testing.T) {
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "active"))
 	waitPendingProviderStarted(t, prov, "provider did not start")
-	if _, err := as.app.Engine.ReceivePendingInput(context.Background(), runtime.PendingInputRequest{
+	if _, err := as.agent.Engine.ReceivePendingInput(context.Background(), runtime.PendingInputRequest{
 		Message: llm.TextMessage(llm.RoleUser, "preserve me"),
 		Options: &runtime.PendingInputOptions{ID: "queued-before-interrupt", TTL: time.Hour},
 	}); err != nil {
@@ -52,14 +52,14 @@ func TestWebTurnTransportInterruptPreservesQueuedInput(t *testing.T) {
 	}
 	as.turns.wait()
 
-	_, history := as.app.Thread.Snapshot()
+	_, history := as.agent.Thread.Snapshot()
 	if got := len(history); got != 2 {
 		t.Fatalf("history len = %d, want active and preserved pending input: %+v", got, history)
 	}
 	if got := history[1].FirstText(); got != "preserve me" {
 		t.Fatalf("preserved message = %q", got)
 	}
-	records, err := as.app.Engine.PendingInputQueue.Records()
+	records, err := as.agent.Engine.PendingInputQueue.Records()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestWebTurnTransportStartCancelsExistingTurn(t *testing.T) {
 	as.turns.start("turn-2", llm.TextMessage(llm.RoleUser, "second"))
 	as.turns.wait()
 
-	status := as.app.Status.Snapshot()
+	status := as.agent.Status.Snapshot()
 	if status.Turn == nil || status.Turn.ID != "turn-2" ||
 		status.Turn.State != runtime.TurnLifecycleCompleted {
 		t.Fatalf("final canonical status = %+v", status)

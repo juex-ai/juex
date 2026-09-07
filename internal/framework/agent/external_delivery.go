@@ -1,17 +1,16 @@
-package app
+package agent
 
 import (
 	"context"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 // DeliverExternalInput holds the target Thread lease through preparation and durable admission.
-func (a *App) DeliverExternalInput(ctx context.Context, prepare func() (llm.Message, runtime.PendingInputOptions, error)) (agent.ExternalDelivery, error) {
+func (a *Agent) DeliverExternalInput(ctx context.Context, prepare func() (llm.Message, runtime.PendingInputOptions, error)) (ExternalDelivery, error) {
 	if a == nil || a.Engine == nil {
-		return agent.ExternalDelivery{}, nil
+		return ExternalDelivery{}, nil
 	}
 	threadLease := a.acquireExternalInputThreadLease()
 	defer threadLease.Release()
@@ -23,13 +22,13 @@ func (a *App) DeliverExternalInput(ctx context.Context, prepare func() (llm.Mess
 	}
 	select {
 	case <-ctx.Done():
-		return agent.ExternalDelivery{}, ctx.Err()
+		return ExternalDelivery{}, ctx.Err()
 	default:
 	}
 	message, options, err := prepare()
 	if err != nil {
-		return agent.ExternalDelivery{}, err
+		return ExternalDelivery{}, err
 	}
 	delivery, err := a.deliverExternalInputLocked(ctx, message, options, threadLease, true, nil)
-	return agent.ExternalDelivery{RecordID: options.ID, TargetThread: targetThread, Queued: delivery.Queued, Delivered: delivery.Delivered}, err
+	return ExternalDelivery{RecordID: options.ID, TargetThread: targetThread, Queued: delivery.Queued, Delivered: delivery.Delivered}, err
 }

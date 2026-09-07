@@ -51,11 +51,11 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &status); err != nil {
 		t.Fatal(err)
 	}
-	worker, ok := main.ManagedWorkerApp(status.ThreadID)
+	worker, ok := main.ManagedWorkerAgent(status.ThreadID)
 	if !ok {
 		t.Fatalf("Worker not managed: %s", result)
 	}
-	for name, application := range map[string]*app.App{"Main": main, "Worker": worker} {
+	for name, application := range map[string]*agent.Agent{"Main": main.Agent, "Worker": worker} {
 		for module, tool := range map[string]string{"goal": "get_goal", "notes": "update_notes", "context-control": "context_new", "skills": "skill_search", "basic-file-tools": "read", "worker-threads": "thread_create"} {
 			_, available := application.Engine.Tools.Get(tool)
 			if available != cfg.ModuleEnabled(module) {

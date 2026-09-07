@@ -464,7 +464,7 @@ func TestRuntimeStatusOmitsActiveThreadState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goalState, notes := modulestate.Stores(as.app.Engine.ThreadRuntimeSnapshot().Modules)
+	goalState, notes := modulestate.Stores(as.agent.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalState == nil || notes == nil {
 		t.Fatal("active Thread Modules did not provide Goal and Notes stores")
 	}
@@ -508,7 +508,7 @@ func TestRuntimeStatusIncludesActiveThreadScratchpadPrompt(t *testing.T) {
 	}
 	for _, item := range got.SystemPrompt.Items {
 		if item.Key == "thread_scratchpad" {
-			wantPath := scratchpad.Dir(as.app.Thread.Dir)
+			wantPath := scratchpad.Dir(as.agent.Thread.Dir)
 			if item.Path != wantPath || !strings.Contains(item.Text, wantPath) {
 				t.Fatalf("scratchpad prompt = %+v, want path %q", item, wantPath)
 			}
@@ -628,11 +628,11 @@ func TestRuntimeStatusIgnoresActiveThreadRegistryForMCPCatalog(t *testing.T) {
 		}
 	}
 	srv.threads.Store("active", &activeThread{
-		app:   &app.App{Engine: &runtime.Engine{Tools: reg}},
+		agent: &agent.Agent{Engine: &runtime.Engine{Tools: reg}},
 		bcast: newBroadcaster(),
 	})
 	srv.threads.Store("second", &activeThread{
-		app:   &app.App{Engine: &runtime.Engine{Tools: reg}},
+		agent: &agent.Agent{Engine: &runtime.Engine{Tools: reg}},
 		bcast: newBroadcaster(),
 	})
 

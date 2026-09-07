@@ -1,4 +1,4 @@
-package app
+package agent
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
@@ -20,18 +19,18 @@ type turnAdmissionQueue struct {
 	executionErr error
 }
 
-func (a *App) admissionQueue() turnAdmissionQueue {
+func (a *Agent) admissionQueue() turnAdmissionQueue {
 	if a == nil || a.Engine == nil {
 		return turnAdmissionQueue{}
 	}
 	return turnAdmissionQueue{state: &a.turnAdmission, engine: a.Engine, executionErr: a.executionError()}
 }
 
-func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) agent.TurnAdmissionResult {
+func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) TurnAdmissionResult {
 	return q.admitUserWithRetry(ctx, message, "")
 }
 
-func (q turnAdmissionQueue) admitUserWithRetry(ctx context.Context, message llm.Message, retryTurnID string) agent.TurnAdmissionResult {
+func (q turnAdmissionQueue) admitUserWithRetry(ctx context.Context, message llm.Message, retryTurnID string) TurnAdmissionResult {
 	if q.state == nil || q.engine == nil {
 		return errorResult(fmt.Errorf("turn admission: app, engine, or Thread is not initialized"), nil)
 	}
@@ -51,14 +50,14 @@ func (q turnAdmissionQueue) admitUserWithRetry(ctx context.Context, message llm.
 	}))
 }
 
-func admissionResultFromPendingInput(result runtime.PendingInputResult, err error) agent.TurnAdmissionResult {
+func admissionResultFromPendingInput(result runtime.PendingInputResult, err error) TurnAdmissionResult {
 	if result.Retry == runtime.PendingInputRetryAfterTurn && errors.Is(err, runtime.ErrActiveTurnExists) {
 		return conflictResult("Thread busy", err, result.Status)
 	}
 	switch result.Disposition {
 	case runtime.PendingInputStarted:
-		start := &agent.AdmittedTurn{TurnID: result.TurnID, Message: result.Message}
-		return agent.TurnAdmissionResult{Kind: agent.TurnAdmissionStarted, InputID: result.RecordID, TurnID: result.TurnID, Start: start}
+		start := &AdmittedTurn{TurnID: result.TurnID, Message: result.Message}
+		return TurnAdmissionResult{Kind: TurnAdmissionStarted, InputID: result.RecordID, TurnID: result.TurnID, Start: start}
 	case runtime.PendingInputQueued:
 		if errors.Is(err, runtime.ErrPendingInputQueueFull) {
 			return rejectedResult(
@@ -106,7 +105,7 @@ func (q turnAdmissionQueue) beginCompact() (string, error) {
 	return turnID, nil
 }
 
-func (q turnAdmissionQueue) finishCompact(compactTurnID string) (*agent.AdmittedTurn, error) {
+func (q turnAdmissionQueue) finishCompact(compactTurnID string) (*AdmittedTurn, error) {
 	if q.state == nil || q.engine == nil {
 		return nil, nil
 	}
@@ -123,7 +122,7 @@ func (q turnAdmissionQueue) finishCompact(compactTurnID string) (*agent.Admitted
 	if result.Disposition != runtime.PendingInputStarted {
 		return nil, err
 	}
-	return &agent.AdmittedTurn{TurnID: result.TurnID, Message: result.Message}, err
+	return &AdmittedTurn{TurnID: result.TurnID, Message: result.Message}, err
 }
 
 func (q turnAdmissionQueue) beginExclusiveCommand() bool {

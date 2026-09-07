@@ -82,17 +82,17 @@ func newWorkerTestApp(t *testing.T, parentProvider llm.Provider, children ...llm
 	return app
 }
 
-func waitWorkerState(t *testing.T, app *App, id string, want agent.WorkerThreadState) agent.WorkerThreadStatus {
+func waitWorkerState(t *testing.T, app interface{ Workers() *agent.WorkerManager }, id string, want agent.WorkerThreadState) agent.WorkerThreadStatus {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		status, err := app.workers.Status(id)
+		status, err := app.Workers().Status(id)
 		if err == nil && status.State == want {
 			return status
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	status, err := app.workers.Status(id)
+	status, err := app.Workers().Status(id)
 	t.Fatalf("Worker %s = %+v, %v; want %s", id, status, err, want)
 	return agent.WorkerThreadStatus{}
 }
@@ -112,7 +112,7 @@ func TestWorkerToolsRegisterOnEveryActiveThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer worker.Close()
+	defer func() { _ = worker.Close() }()
 	if _, ok := worker.Engine.Tools.Get(workerthreadsmodule.ToolCreate); !ok {
 		t.Fatal("Worker missing Worker creation tools")
 	}
@@ -121,24 +121,26 @@ func TestWorkerToolsRegisterOnEveryActiveThread(t *testing.T) {
 func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 	childProvider := &workerProvider{response: "done"}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, childProvider)
-	childStatus, err := main.workers.Create(context.Background(), "first", "reviewer", "", false)
+	childStatus, err := main.Workers().Create(context.Background(), "first", "reviewer", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitWorkerState(t, main, childStatus.ThreadID, agent.WorkerThreadStateIdle)
 
-	main.workers.mu.Lock()
-	childApp := main.workers.threads[childStatus.ThreadID].app
-	main.workers.mu.Unlock()
-	grandchildStatus, err := childApp.workers.Create(context.Background(), "second", "fact-checker", "", false)
+	childApp, ok := main.ManagedWorkerAgent(childStatus.ThreadID)
+	if !ok {
+		t.Fatal("Worker is not managed")
+	}
+	grandchildStatus, err := childApp.Workers().Create(context.Background(), "second", "fact-checker", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitWorkerState(t, childApp, grandchildStatus.ThreadID, agent.WorkerThreadStateIdle)
-	childApp.workers.mu.Lock()
-	grandchildApp := childApp.workers.threads[grandchildStatus.ThreadID].app
-	childApp.workers.mu.Unlock()
-	managedGrandchild, ok := main.ManagedWorkerApp(grandchildStatus.ThreadID)
+	grandchildApp, ok := childApp.ManagedWorkerAgent(grandchildStatus.ThreadID)
+	if !ok {
+		t.Fatal("Worker is not managed")
+	}
+	managedGrandchild, ok := main.ManagedWorkerAgent(grandchildStatus.ThreadID)
 	if !ok || managedGrandchild != grandchildApp {
 		t.Fatalf("managed grandchild = %p, %v; want %p, true", managedGrandchild, ok, grandchildApp)
 	}
@@ -160,27 +162,27 @@ func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 func TestManagedWorkerParentArchiveKeepsRuntimeWhenChildIsActive(t *testing.T) {
 	childProvider := &workerProvider{response: "done"}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, childProvider)
-	parentStatus, err := main.workers.Create(context.Background(), "parent", "parent-worker", "", false)
+	parentStatus, err := main.Workers().Create(context.Background(), "parent", "parent-worker", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitWorkerState(t, main, parentStatus.ThreadID, agent.WorkerThreadStateIdle)
-	parentApp, ok := main.ManagedWorkerApp(parentStatus.ThreadID)
+	parentApp, ok := main.ManagedWorkerAgent(parentStatus.ThreadID)
 	if !ok {
 		t.Fatal("parent Worker is not managed")
 	}
-	childStatus, err := parentApp.workers.Create(context.Background(), "child", "child-worker", "", false)
+	childStatus, err := parentApp.Workers().Create(context.Background(), "child", "child-worker", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitWorkerState(t, parentApp, childStatus.ThreadID, agent.WorkerThreadStateIdle)
-	if err := main.workers.Archive(context.Background(), parentStatus.ThreadID); err == nil || !strings.Contains(err.Error(), childStatus.ThreadID) {
+	if err := main.Workers().Archive(context.Background(), parentStatus.ThreadID); err == nil || !strings.Contains(err.Error(), childStatus.ThreadID) {
 		t.Fatalf("archive parent error = %v, want active child %s", err, childStatus.ThreadID)
 	}
-	if managed, ok := main.ManagedWorkerApp(parentStatus.ThreadID); !ok || managed != parentApp {
+	if managed, ok := main.ManagedWorkerAgent(parentStatus.ThreadID); !ok || managed != parentApp {
 		t.Fatalf("parent runtime was lost after rejected archive: %p, %v", managed, ok)
 	}
-	if _, err := parentApp.workers.Status(childStatus.ThreadID); err != nil {
+	if _, err := parentApp.Workers().Status(childStatus.ThreadID); err != nil {
 		t.Fatalf("child manager remained in transition: %v", err)
 	}
 }
@@ -188,7 +190,7 @@ func TestManagedWorkerParentArchiveKeepsRuntimeWhenChildIsActive(t *testing.T) {
 func TestWorkerCreationPersistsParentAndIsolatesThreadState(t *testing.T) {
 	child := &workerProvider{response: "review complete"}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, child)
-	status, err := main.workers.Create(context.Background(), "review", "reviewer", "", false)
+	status, err := main.Workers().Create(context.Background(), "review", "reviewer", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,12 +201,12 @@ func TestWorkerCreationPersistsParentAndIsolatesThreadState(t *testing.T) {
 		t.Fatalf("Worker alias = %q, want reviewer", status.Alias)
 	}
 	status = waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateIdle)
-	managed := main.workers.threads[status.ThreadID]
-	if managed == nil || managed.app.Thread.ParentThreadID != thread.MainID {
+	managed, _ := main.ManagedWorkerAgent(status.ThreadID)
+	if managed == nil || managed.Thread.ParentThreadID != thread.MainID {
 		t.Fatalf("managed Worker = %+v", managed)
 	}
 	parentGoal, parentNotes := modulestate.Stores(main.Engine.ThreadRuntimeSnapshot().Modules)
-	childGoal, childNotes := modulestate.Stores(managed.app.Engine.ThreadRuntimeSnapshot().Modules)
+	childGoal, childNotes := modulestate.Stores(managed.Engine.ThreadRuntimeSnapshot().Modules)
 	if parentGoal == childGoal || parentNotes == childNotes {
 		t.Fatal("Worker unexpectedly shares Goal or Notes stores with Main")
 	}
@@ -247,7 +249,7 @@ func TestManagedWorkerLookupWaitsForCreationOwnership(t *testing.T) {
 	}
 	createDone := make(chan error, 1)
 	go func() {
-		_, err := main.workers.Create(context.Background(), "work", "owned-worker", "", false)
+		_, err := main.Workers().Create(context.Background(), "work", "owned-worker", "", false)
 		createDone <- err
 	}()
 	child := <-created
@@ -256,12 +258,12 @@ func TestManagedWorkerLookupWaitsForCreationOwnership(t *testing.T) {
 		t.Fatal("created child lost its Thread identity")
 	}
 	type lookupResult struct {
-		app *App
+		app *agent.Agent
 		ok  bool
 	}
 	lookupDone := make(chan lookupResult, 1)
 	go func() {
-		worker, found := main.ManagedWorkerApp(childIdentity.ID)
+		worker, found := main.ManagedWorkerAgent(childIdentity.ID)
 		lookupDone <- lookupResult{app: worker, ok: found}
 	}()
 	select {
@@ -274,7 +276,7 @@ func TestManagedWorkerLookupWaitsForCreationOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := <-lookupDone
-	if !result.ok || result.app != child {
+	if !result.ok || result.app != child.Agent {
 		t.Fatalf("managed lookup = %p, %v; want %p, true", result.app, result.ok, child)
 	}
 }
@@ -295,7 +297,7 @@ func TestWorkerFactoryInitializationFailureRollsBackReservedIdentity(t *testing.
 			disableObservables: true, threadModuleFactories: failureFactories,
 		})
 	}
-	if _, err := main.workers.Create(context.Background(), "work", "retry-worker", "", false); !errors.Is(err, wantErr) {
+	if _, err := main.Workers().Create(context.Background(), "work", "retry-worker", "", false); !errors.Is(err, wantErr) {
 		t.Fatalf("create error = %v, want %v", err, wantErr)
 	}
 	entries, err := main.ThreadStore.List()
@@ -306,7 +308,7 @@ func TestWorkerFactoryInitializationFailureRollsBackReservedIdentity(t *testing.
 		t.Fatalf("failed Worker remains published: %+v", entries)
 	}
 	main.workerFactory = nil
-	status, err := main.workers.Create(context.Background(), "work", "retry-worker", "", false)
+	status, err := main.Workers().Create(context.Background(), "work", "retry-worker", "", false)
 	if err != nil {
 		t.Fatalf("retry same alias: %v", err)
 	}
@@ -344,7 +346,7 @@ func TestNewRollsBackWorkerCreatedBeforeThreadInitializationFailure(t *testing.T
 func TestSubscribedWorkerPublishesTerminalResult(t *testing.T) {
 	child := &workerProvider{response: "review complete"}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, child)
-	status, err := main.workers.Create(context.Background(), "review", "", "", true)
+	status, err := main.Workers().Create(context.Background(), "review", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +366,7 @@ func TestSubscribedWorkerPublishesTerminalResult(t *testing.T) {
 func TestNewContextClearsWorkerResultSubscription(t *testing.T) {
 	child := &workerProvider{response: "review complete", started: make(chan struct{}), release: make(chan struct{})}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, child)
-	status, err := main.workers.Create(context.Background(), "review", "", "", true)
+	status, err := main.Workers().Create(context.Background(), "review", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +375,7 @@ func TestNewContextClearsWorkerResultSubscription(t *testing.T) {
 	if err := main.NewContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	status, err = main.workers.Status(status.ThreadID)
+	status, err = main.Workers().Status(status.ThreadID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,12 +395,12 @@ func TestNewContextClearsWorkerResultSubscription(t *testing.T) {
 func TestWorkerStopClosesRuntimeButPreservesActiveThread(t *testing.T) {
 	child := &workerProvider{response: "done", started: make(chan struct{}), release: make(chan struct{})}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, child)
-	status, err := main.workers.Create(context.Background(), "long work", "", "", false)
+	status, err := main.Workers().Create(context.Background(), "long work", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-child.started
-	if err := main.workers.Stop(context.Background(), status.ThreadID); err != nil {
+	if err := main.Workers().Stop(context.Background(), status.ThreadID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := main.ThreadStore.OpenActive(status.ThreadID); err != nil {
@@ -409,7 +411,7 @@ func TestWorkerStopClosesRuntimeButPreservesActiveThread(t *testing.T) {
 func TestFailedWorkerReportsFailedAndCanBeArchived(t *testing.T) {
 	wantErr := errors.New("review failed")
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, &workerProvider{err: wantErr})
-	status, err := main.workers.Create(context.Background(), "review", "", "", false)
+	status, err := main.Workers().Create(context.Background(), "review", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +419,7 @@ func TestFailedWorkerReportsFailedAndCanBeArchived(t *testing.T) {
 	if !strings.Contains(status.LastError, wantErr.Error()) {
 		t.Fatalf("Worker error = %q, want %q", status.LastError, wantErr)
 	}
-	if err := main.workers.Archive(context.Background(), status.ThreadID); err != nil {
+	if err := main.Workers().Archive(context.Background(), status.ThreadID); err != nil {
 		t.Fatalf("archive failed Worker: %v", err)
 	}
 	archived, err := main.ThreadStore.OpenArchived(status.ThreadID)
@@ -433,29 +435,26 @@ func TestFailedWorkerReportsFailedAndCanBeArchived(t *testing.T) {
 func TestWorkerArchiveRequiresSettledSubscriptionAndMovesHistory(t *testing.T) {
 	child := &workerProvider{response: "done"}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, child)
-	status, err := main.workers.Create(context.Background(), "work", "archive-me", "", true)
+	status, err := main.Workers().Create(context.Background(), "work", "archive-me", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateIdle)
-	if err := main.workers.Archive(context.Background(), status.ThreadID); err == nil {
+	if err := main.Workers().Archive(context.Background(), status.ThreadID); err == nil {
 		t.Fatal("subscribed Worker was archived")
 	}
-	if _, err := main.workers.Subscribe(status.ThreadID, false); err != nil {
+	if _, err := main.Workers().Subscribe(status.ThreadID, false); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		main.workers.mu.Lock()
-		managed := main.workers.threads[status.ThreadID]
-		settled := managed != nil && managed.resultHandoffs == 0
-		main.workers.mu.Unlock()
+		settled := !main.Workers().ShouldDeferContinuation()
 		if settled {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := main.workers.Archive(context.Background(), status.ThreadID); err != nil {
+	if err := main.Workers().Archive(context.Background(), status.ThreadID); err != nil {
 		t.Fatal(err)
 	}
 	archived, err := main.ThreadStore.OpenArchived(status.ThreadID)
@@ -476,7 +475,7 @@ func TestWorkerModelValidationPrecedesIdentityReservationAndFactory(t *testing.T
 		factoryCalls++
 		return original(options)
 	}
-	if _, err := main.workers.Create(context.Background(), "work", "model-check", "not-configured:missing", false); err == nil || !strings.Contains(err.Error(), "worker thread model") {
+	if _, err := main.Workers().Create(context.Background(), "work", "model-check", "not-configured:missing", false); err == nil || !strings.Contains(err.Error(), "worker thread model") {
 		t.Fatalf("invalid model error = %v", err)
 	}
 	if factoryCalls != 0 {
@@ -489,7 +488,7 @@ func TestWorkerModelValidationPrecedesIdentityReservationAndFactory(t *testing.T
 	if len(entries) != 1 || entries[0].ThreadID != thread.MainID {
 		t.Fatalf("invalid model reserved a Worker: %+v", entries)
 	}
-	status, err := main.workers.Create(context.Background(), "work", "model-check", "", false)
+	status, err := main.Workers().Create(context.Background(), "work", "model-check", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -136,8 +136,8 @@ func TestOpenThreadWaitsForInFlightMCPStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := as.app.Engine.Tools.Get("mcp__alpha__echo"); !ok {
-		t.Fatalf("Thread tools missing mcp__alpha__echo: %+v", as.app.Engine.Tools.List())
+	if _, ok := as.agent.Engine.Tools.Get("mcp__alpha__echo"); !ok {
+		t.Fatalf("Thread tools missing mcp__alpha__echo: %+v", as.agent.Engine.Tools.List())
 	}
 	if err := <-startErrCh; err != nil {
 		t.Fatal(err)

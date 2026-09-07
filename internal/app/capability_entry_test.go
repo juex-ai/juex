@@ -101,9 +101,7 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	cfg.Modules[workerthreadsmodule.ModuleID] = config.ModuleSettings{Enabled: false}
 	pausedProvider := &capabilityProvider{}
 	paused := capabilityApp(t, cfg, id, pausedProvider)
-	if err := paused.waitPendingInputRecoveryContext(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+
 	if pausedProvider.calls.Load() != 0 {
 		t.Fatal("opening disabled Worker executed retained input")
 	}
@@ -120,9 +118,9 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	if _, err := paused.RunAdmittedTurn(t.Context(), "bypass", message); err == nil {
 		t.Error("disabled Worker admitted execution bypassed capability check")
 	}
-	paused.threadMu.RLock()
-	_, deliveryErr := paused.deliverExternalInputLocked(t.Context(), message, runtime.PendingInputOptions{}, nil, false, nil)
-	paused.threadMu.RUnlock()
+	_, deliveryErr := paused.DeliverExternalInput(t.Context(), func() (llm.Message, runtime.PendingInputOptions, error) {
+		return message, runtime.PendingInputOptions{}, nil
+	})
 	if deliveryErr == nil {
 		t.Error("disabled Worker external input was accepted")
 	}
@@ -144,9 +142,7 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	cfg.Modules[workerthreadsmodule.ModuleID] = config.ModuleSettings{Enabled: true}
 	resumedProvider := &capabilityProvider{}
 	resumed := capabilityApp(t, cfg, id, resumedProvider)
-	if err := resumed.waitPendingInputRecoveryContext(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	waitRecoveredInput(t, resumed, accepted.RecordID)
 	if resumedProvider.calls.Load() != 1 {
 		t.Fatalf("reenabled recovery calls = %d", resumedProvider.calls.Load())
 	}

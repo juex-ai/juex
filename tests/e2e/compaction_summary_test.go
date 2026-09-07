@@ -116,7 +116,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	goals, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goals == nil || notes == nil {
 		t.Fatal("missing authoritative Thread state stores")

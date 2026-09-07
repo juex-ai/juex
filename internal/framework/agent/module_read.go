@@ -1,13 +1,12 @@
-package app
+package agent
 
 import (
 	"fmt"
 
-	"github.com/juex-ai/juex/internal/framework/agent"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-func (a *App) ReadModuleSnapshot(fn func(agent.ModuleSnapshot) error) error {
+func (a *Agent) ReadModuleSnapshot(fn func(ModuleSnapshot) error) error {
 	if a == nil || fn == nil {
 		return fmt.Errorf("runtime status: active App and snapshot reader are required")
 	}
@@ -22,7 +21,7 @@ func (a *App) ReadModuleSnapshot(fn func(agent.ModuleSnapshot) error) error {
 	if threadRuntime.Modules == nil || threadRuntime.Thread == nil {
 		return fmt.Errorf("runtime status: active Thread Module set is unavailable")
 	}
-	return fn(agent.ModuleSnapshot{
+	return fn(ModuleSnapshot{
 		Tools:          threadRuntime.Tools,
 		Runtime:        a.runtimeModules,
 		Thread:         threadRuntime.Modules,

@@ -850,7 +850,7 @@ func TestEndToEnd_ToolFailureLedgerWithUserAgentsDisabledDoesNotHardBlock(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	out, err := a.Run(context.Background(), "record the command failure")
 	if err != nil {
@@ -909,7 +909,7 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	_, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if notes == nil {
@@ -1657,7 +1657,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a2.Close()
+	defer func() { _ = a2.Close() }()
 	out, err := a2.Run(context.Background(), "who am I?")
 	if err != nil {
 		t.Fatal(err)
@@ -1897,7 +1897,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resumed.Close()
+	defer func() { _ = resumed.Close() }()
 
 	snapshot := resumed.Status.Snapshot()
 	if snapshot.Cursor != "5" ||
@@ -2000,7 +2000,7 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	out, err := a.Run(context.Background(), "start")
 	if err != nil {
@@ -2078,7 +2078,7 @@ func TestEndToEnd_SandboxBlockedPathsStopBuiltinTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	out, err := a.Run(context.Background(), "try blocked write")
 	if err != nil {
@@ -2144,7 +2144,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	out, err := a.Run(context.Background(), "ship goal state")
 	if err != nil {
@@ -2240,7 +2240,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	first, err := a.Run(context.Background(), "deploy the service")
 	if err != nil {

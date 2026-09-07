@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/framework/agent"
+
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -17,7 +18,7 @@ type committedEventReplay struct {
 	authoritative *runtime.StatusSnapshot
 }
 
-func captureCommittedEventReplay(runtimeApp *app.App, threadID string) (*committedEventReplay, error) {
+func captureCommittedEventReplay(runtimeApp *agent.Agent, threadID string) (*committedEventReplay, error) {
 	var replay *committedEventReplay
 	err := runtimeApp.ReadThreadID(threadID, func(target *thread.Thread) error {
 		return runtimeApp.ReadCommittedEvents(func() error {

@@ -87,7 +87,7 @@ func TestAppInputActivationCallbackCanCloseWithoutDeadlock(t *testing.T) {
 		}
 		return nil
 	})
-	if err := a.activateExternalInputAfterPendingRecovery(context.Background(), nil); !errors.Is(err, context.Canceled) {
+	if err := a.RestoreAndActivate(context.Background()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("activation = %v, want canceled", err)
 	}
 	_ = deferred.Wait()

@@ -416,7 +416,11 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	}
 	t.Cleanup(func() { _ = a.CloseAndWait() })
 
-	if descriptors := a.runtimeModules.Descriptors(); len(descriptors) != 0 {
+	var runtimeSet *runtimemodule.Set
+	if err := a.ReadModuleSnapshot(func(snapshot agent.ModuleSnapshot) error { runtimeSet = snapshot.Runtime; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if descriptors := runtimeSet.Descriptors(); len(descriptors) != 0 {
 		t.Fatalf("Runtime Modules = %#v, want none", descriptors)
 	}
 	if descriptors := a.Engine.ThreadRuntimeSnapshot().Modules.Descriptors(); len(descriptors) != 0 {
@@ -425,8 +429,8 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	if tools := a.Engine.Tools.List(); len(tools) != 0 {
 		t.Fatalf("serving Tools = %#v, want none", tools)
 	}
-	if a.shellSessions != nil || a.workers != nil || a.obsv != nil || a.mcpManager != nil {
-		t.Fatalf("disabled resources were constructed: shell=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.workers, a.obsv, a.mcpManager)
+	if a.shellSessions != nil || a.Workers() != nil || a.obsv != nil || a.mcpManager != nil {
+		t.Fatalf("disabled resources were constructed: shell=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.Workers(), a.obsv, a.mcpManager)
 	}
 	if err := ReadRuntimeModuleSnapshot(a, func(active RuntimeModuleSnapshot) error {
 		status, statusErr := NewRuntimeCatalogService(a.cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})

@@ -5,7 +5,6 @@ import (
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/framework/agent"
-	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -36,22 +35,4 @@ func workerExecutionError(cfg config.Config, threadID string) error {
 		return &moduleUnavailableError{ModuleID: workerthreadsmodule.ModuleID}
 	}
 	return nil
-}
-
-func (a *App) executionError() error {
-	if a == nil || a.Engine == nil {
-		return nil
-	}
-	snapshot := a.Engine.ThreadRuntimeSnapshot()
-	if snapshot.Thread == nil {
-		return nil
-	}
-	if a.executionPolicy.CheckExecution == nil {
-		return nil
-	}
-	return a.executionPolicy.CheckExecution(snapshot.Thread.ID)
-}
-
-func moduleUnavailableResult(err error) agent.TurnAdmissionResult {
-	return rejectedResult("module_disabled", err.Error(), "", false, err, runtime.PendingInputStatus{})
 }

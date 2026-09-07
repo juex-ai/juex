@@ -14,18 +14,14 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/mcp"
-
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
-
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
-	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
-
 	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -45,21 +41,6 @@ type blockingAppProvider struct {
 	mu          sync.Mutex
 	calls       int
 	histories   [][]llm.Message
-}
-
-type failOnceEventCommitter struct {
-	delegate  events.Committer
-	eventType string
-	err       error
-	failed    bool
-}
-
-func (c *failOnceEventCommitter) Commit(event events.Event) (events.Event, error) {
-	if event.Type == c.eventType && !c.failed {
-		c.failed = true
-		return events.Event{}, c.err
-	}
-	return c.delegate.Commit(event)
 }
 
 func newBlockingAppProvider() *blockingAppProvider {
@@ -141,65 +122,6 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	return app, provider
 }
 
-func TestAppClosePausesAndResumesDeferredCleanup(t *testing.T) {
-	closeCalls := 0
-	laterCleanupCalls := 0
-	a := &App{cleanup: []func() error{
-		func() error {
-			closeCalls++
-			if closeCalls == 1 {
-				return &observable.CloseDeferredError{}
-			}
-			return nil
-		},
-		func() error {
-			laterCleanupCalls++
-			return nil
-		},
-	}}
-	var deferred *observable.CloseDeferredError
-	if err := a.Close(); !errors.As(err, &deferred) {
-		t.Fatalf("first Close error = %v, want CloseDeferredError", err)
-	}
-	if laterCleanupCalls != 0 {
-		t.Fatalf("later cleanup calls after deferred Close = %d, want 0", laterCleanupCalls)
-	}
-	if err := a.CloseAndWait(); err != nil {
-		t.Fatalf("CloseAndWait = %v", err)
-	}
-	if closeCalls != 2 || laterCleanupCalls != 1 {
-		t.Fatalf("cleanup calls = first:%d later:%d", closeCalls, laterCleanupCalls)
-	}
-}
-
-func TestAppConcurrentCloseReturnsWaitableResult(t *testing.T) {
-	cleanupStarted := make(chan struct{})
-	releaseCleanup := make(chan struct{})
-	a := &App{cleanup: []func() error{func() error {
-		close(cleanupStarted)
-		<-releaseCleanup
-		return nil
-	}}}
-	activeResult := make(chan error, 1)
-	go func() { activeResult <- a.CloseAndWait() }()
-	<-cleanupStarted
-	concurrentResult := make(chan error, 1)
-	go func() { concurrentResult <- a.Close() }()
-	select {
-	case err := <-concurrentResult:
-		var deferred interface{ Wait() error }
-		if !errors.As(err, &deferred) {
-			t.Fatalf("concurrent Close error = %v, want waitable result", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("concurrent Close blocked behind active cleanup")
-	}
-	close(releaseCleanup)
-	if err := <-activeResult; err != nil {
-		t.Fatalf("CloseAndWait = %v", err)
-	}
-}
-
 func TestDurationSecondsCeilsAndCaps(t *testing.T) {
 	if got := durationSeconds(1500 * time.Millisecond); got != 2 {
 		t.Fatalf("durationSeconds(1.5s) = %d, want 2", got)
@@ -221,7 +143,7 @@ func TestAppRunAdmittedTurnAfterCloseDoesNotReopenJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := a.RunAdmittedTurn(context.Background(), "late-turn", llm.TextMessage(llm.RoleUser, "late"))
-	if !errors.Is(err, ErrThreadUnavailable) {
+	if !errors.Is(err, agent.ErrThreadUnavailable) {
 		t.Fatalf("RunAdmittedTurn error = %v, want ErrThreadUnavailable", err)
 	}
 	if provider.calls != 0 {
@@ -255,7 +177,7 @@ func TestAppModelCandidateInjectionPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	if len(a.Engine.ModelCandidates) != 2 || a.Engine.Provider != primary || a.Engine.ModelHealth != health || !a.Engine.NotifyModelChanges {
 		t.Fatalf("engine wiring = provider:%T candidates:%+v health:%p", a.Engine.Provider, a.Engine.ModelCandidates, a.Engine.ModelHealth)
 	}
@@ -274,7 +196,7 @@ func TestAppInjectedSingleProviderDisablesConfiguredFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	if a.Engine.Provider != provider || len(a.Engine.ModelCandidates) != 0 {
 		t.Fatalf("injected provider wiring = provider:%T candidates:%+v", a.Engine.Provider, a.Engine.ModelCandidates)
 	}
@@ -394,7 +316,7 @@ func TestAppUsesStableMainThreadAndReopensItsJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	if second.Thread.ID != thread.MainID {
 		t.Fatalf("reopened id = %q", second.Thread.ID)
 	}
@@ -518,7 +440,7 @@ func TestWorkerRuntimeHasOwnStateAndNoObservableManager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	worker, err := New(Options{
 		Config: cfg, Provider: &stubProvider{}, parentThreadID: thread.MainID,
 		disableObservables: true,
@@ -526,7 +448,7 @@ func TestWorkerRuntimeHasOwnStateAndNoObservableManager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer worker.Close()
+	defer func() { _ = worker.Close() }()
 	if worker.Thread.ParentThreadID != thread.MainID || worker.Thread.Dir == main.Thread.Dir {
 		t.Fatalf("Worker identity = %+v", worker.Thread.Info())
 	}

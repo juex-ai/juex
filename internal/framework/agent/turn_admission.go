@@ -1,4 +1,4 @@
-package app
+package agent
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
@@ -27,7 +26,7 @@ type turnAdmission struct {
 	turnID       string
 }
 
-func (a *App) AdmitTurn(ctx context.Context, req agent.TurnAdmissionRequest) agent.TurnAdmissionResult {
+func (a *Agent) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmissionResult {
 	if a == nil || a.Engine == nil {
 		return errorResult(fmt.Errorf("turn admission: app, engine, or Thread is not initialized"), nil)
 	}
@@ -67,7 +66,7 @@ func (a *App) AdmitTurn(ctx context.Context, req agent.TurnAdmissionRequest) age
 			return rejectedResult("bad_request", "slash commands cannot include attachments", "send the image as a normal message or run the slash command without attachments", false, nil, runtime.PendingInputStatus{})
 		}
 		result := a.admitUserTurn(ctx, userTurnMessage(req.Prompt, req.Attachments))
-		if result.Kind == agent.TurnAdmissionStarted || result.Kind == agent.TurnAdmissionQueued {
+		if result.Kind == TurnAdmissionStarted || result.Kind == TurnAdmissionQueued {
 			result.Warnings = a.attachmentWarnings(len(req.Attachments))
 		}
 		return result
@@ -83,34 +82,34 @@ func (a *App) AdmitTurn(ctx context.Context, req agent.TurnAdmissionRequest) age
 	return a.admitUserTurn(ctx, userTurnMessage(req.Prompt, nil))
 }
 
-func (a *App) BeginCompactAdmission(ctx context.Context) (string, error) {
+func (a *Agent) BeginCompactAdmission(ctx context.Context) (string, error) {
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
 		return "", err
 	}
 	return a.beginCompactAdmission()
 }
 
-func (a *App) FinishCompactAdmission(compactTurnID string) (*agent.AdmittedTurn, error) {
+func (a *Agent) FinishCompactAdmission(compactTurnID string) (*AdmittedTurn, error) {
 	return a.finishCompactAdmission(compactTurnID)
 }
 
-func (a *App) admitUserTurn(ctx context.Context, msg llm.Message) agent.TurnAdmissionResult {
+func (a *Agent) admitUserTurn(ctx context.Context, msg llm.Message) TurnAdmissionResult {
 	return a.admissionQueue().admitUser(ctx, msg)
 }
 
-func (a *App) admitCommand(ctx context.Context, cmd agent.Command) agent.TurnAdmissionResult {
+func (a *Agent) admitCommand(ctx context.Context, cmd Command) TurnAdmissionResult {
 	switch cmd.Kind {
-	case agent.CommandKindStatus:
+	case CommandKindStatus:
 		result, err := a.ExecuteCommand(ctx, cmd)
 		if err != nil {
 			return errorResult(err, nil)
 		}
 		return commandResult(result, nil)
-	case agent.CommandKindNew:
+	case CommandKindNew:
 		return a.admitNewCommand(ctx, cmd)
-	case agent.CommandKindCompact:
+	case CommandKindCompact:
 		return a.admitCompactCommand(ctx, cmd)
-	case agent.CommandKindPrompt:
+	case CommandKindPrompt:
 		msg := llm.TextMessage(llm.RoleUser, cmd.Prompt)
 		msg.Kind = llm.MessageKindDirect
 		return a.admitUserTurn(ctx, msg)
@@ -134,7 +133,7 @@ func userTurnMessageWithKind(prompt string, attachments []llm.MediaRef, kind str
 	return llm.Message{Role: llm.RoleUser, Kind: kind, Blocks: blocks}
 }
 
-func (a *App) admitNewCommand(ctx context.Context, cmd agent.Command) agent.TurnAdmissionResult {
+func (a *Agent) admitNewCommand(ctx context.Context, cmd Command) TurnAdmissionResult {
 	if !a.beginExclusiveCommand() {
 		return conflictResult("Thread busy", errTurnAdmissionBusy, runtime.PendingInputStatus{})
 	}
@@ -146,7 +145,7 @@ func (a *App) admitNewCommand(ctx context.Context, cmd agent.Command) agent.Turn
 	return commandResult(result, nil)
 }
 
-func (a *App) admitCompactCommand(ctx context.Context, cmd agent.Command) agent.TurnAdmissionResult {
+func (a *Agent) admitCompactCommand(ctx context.Context, cmd Command) TurnAdmissionResult {
 	compactTurnID, err := a.beginCompactAdmission()
 	if err != nil {
 		return conflictResult("Thread busy", err, runtime.PendingInputStatus{})
@@ -159,25 +158,25 @@ func (a *App) admitCompactCommand(ctx context.Context, cmd agent.Command) agent.
 	return commandResult(result, start)
 }
 
-func (a *App) beginCompactAdmission() (string, error) {
+func (a *Agent) beginCompactAdmission() (string, error) {
 	return a.admissionQueue().beginCompact()
 }
 
-func (a *App) finishCompactAdmission(compactTurnID string) (*agent.AdmittedTurn, error) {
+func (a *Agent) finishCompactAdmission(compactTurnID string) (*AdmittedTurn, error) {
 	return a.admissionQueue().finishCompact(compactTurnID)
 }
 
-func (a *App) beginExclusiveCommand() bool {
+func (a *Agent) beginExclusiveCommand() bool {
 	return a.admissionQueue().beginExclusiveCommand()
 }
 
-func (a *App) finishExclusiveCommand() {
+func (a *Agent) finishExclusiveCommand() {
 	a.admissionQueue().finishExclusiveCommand()
 }
 
-func queuedResult(inputID string, status runtime.PendingInputStatus) agent.TurnAdmissionResult {
-	return agent.TurnAdmissionResult{
-		Kind:             agent.TurnAdmissionQueued,
+func queuedResult(inputID string, status runtime.PendingInputStatus) TurnAdmissionResult {
+	return TurnAdmissionResult{
+		Kind:             TurnAdmissionQueued,
 		InputID:          inputID,
 		Queued:           true,
 		PendingCount:     status.PendingCount,
@@ -185,33 +184,33 @@ func queuedResult(inputID string, status runtime.PendingInputStatus) agent.TurnA
 	}
 }
 
-func commandResult(result agent.CommandResult, start *agent.AdmittedTurn) agent.TurnAdmissionResult {
-	return agent.TurnAdmissionResult{
-		Kind:    agent.TurnAdmissionCommandCompleted,
+func commandResult(result CommandResult, start *AdmittedTurn) TurnAdmissionResult {
+	return TurnAdmissionResult{
+		Kind:    TurnAdmissionCommandCompleted,
 		TurnID:  turnIDFromStart(start),
 		Start:   start,
 		Command: &result,
 	}
 }
 
-func conflictResult(msg string, err error, status runtime.PendingInputStatus) agent.TurnAdmissionResult {
-	return agent.TurnAdmissionResult{
-		Kind:             agent.TurnAdmissionConflict,
+func conflictResult(msg string, err error, status runtime.PendingInputStatus) TurnAdmissionResult {
+	return TurnAdmissionResult{
+		Kind:             TurnAdmissionConflict,
 		TurnID:           status.TurnID,
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
-		Error:            agent.TurnAdmissionErrorInfo{Kind: "conflict", Message: msg, Retryable: true},
+		Error:            TurnAdmissionErrorInfo{Kind: "conflict", Message: msg, Retryable: true},
 		Err:              err,
 	}
 }
 
-func rejectedResult(kind, msg, suggestion string, retryable bool, err error, status runtime.PendingInputStatus) agent.TurnAdmissionResult {
-	return agent.TurnAdmissionResult{
-		Kind:             agent.TurnAdmissionRejected,
+func rejectedResult(kind, msg, suggestion string, retryable bool, err error, status runtime.PendingInputStatus) TurnAdmissionResult {
+	return TurnAdmissionResult{
+		Kind:             TurnAdmissionRejected,
 		TurnID:           status.TurnID,
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
-		Error: agent.TurnAdmissionErrorInfo{
+		Error: TurnAdmissionErrorInfo{
 			Kind:       kind,
 			Message:    msg,
 			Suggestion: suggestion,
@@ -221,21 +220,21 @@ func rejectedResult(kind, msg, suggestion string, retryable bool, err error, sta
 	}
 }
 
-func errorResult(err error, start *agent.AdmittedTurn) agent.TurnAdmissionResult {
+func errorResult(err error, start *AdmittedTurn) TurnAdmissionResult {
 	msg := ""
 	if err != nil {
 		msg = err.Error()
 	}
-	return agent.TurnAdmissionResult{
-		Kind:   agent.TurnAdmissionError,
+	return TurnAdmissionResult{
+		Kind:   TurnAdmissionError,
 		TurnID: turnIDFromStart(start),
 		Start:  start,
-		Error:  agent.TurnAdmissionErrorInfo{Kind: "general_error", Message: msg},
+		Error:  TurnAdmissionErrorInfo{Kind: "general_error", Message: msg},
 		Err:    err,
 	}
 }
 
-func turnIDFromStart(start *agent.AdmittedTurn) string {
+func turnIDFromStart(start *AdmittedTurn) string {
 	if start == nil {
 		return ""
 	}

@@ -88,11 +88,12 @@ type Server struct {
 	endpointShutdown chan struct{}
 }
 
-// activeThread wraps an app.App with the bookkeeping the web server
+// activeThread wraps an Agent with the bookkeeping the web server
 // needs for SSE fan-out and turn cancellation.
 type activeThread struct {
-	app       *app.App
-	ownsApp   bool
+	agent     *agent.Agent
+	main      *app.App
+	ownsAgent bool
 	bcast     *broadcaster
 	StartedAt time.Time
 
@@ -464,10 +465,10 @@ func (as *activeThread) beginClose() {
 	}
 	as.cancelWork()
 	if as.turns != nil {
-		as.turns.interruptWithCause(app.ErrThreadStopped)
+		as.turns.interruptWithCause(agent.ErrThreadStopped)
 	}
-	if as.app != nil && as.ownsApp {
-		_ = as.app.BeginClose()
+	if as.agent != nil && as.ownsAgent {
+		_ = as.agent.BeginClose()
 	}
 }
 
@@ -488,8 +489,8 @@ func (as *activeThread) close() {
 		if as.bcast != nil {
 			as.bcast.close()
 		}
-		if as.app != nil && as.ownsApp {
-			_ = as.app.CloseAndWait()
+		if as.agent != nil && as.ownsAgent {
+			_ = as.agent.CloseAndWait()
 		}
 	})
 }
@@ -599,7 +600,7 @@ func (s *Server) openThreadLocked(ctx context.Context, id string) (*activeThread
 	}
 	if value, ok := s.threads.Load(id); ok {
 		active := value.(*activeThread)
-		if active.ownsApp || s.isManagedWorkerApp(id, active.app) {
+		if active.ownsAgent || s.isManagedWorkerAgent(id, active.agent) {
 			return active, nil
 		}
 		s.threads.Delete(id)
@@ -623,8 +624,8 @@ func (s *Server) openThreadLocked(ctx context.Context, id string) (*activeThread
 		return nil, err
 	}
 	_ = probe.Close()
-	if managed := s.managedWorkerApp(id); managed != nil {
-		return s.bindThreadApp(managed, false)
+	if managed := s.managedWorkerAgent(id); managed != nil {
+		return s.bindThreadAgent(managed, nil, false)
 	}
 	agentRuntime, err := s.resolveAgentRuntime()
 	if err != nil {
@@ -649,30 +650,31 @@ func (s *Server) openThreadLocked(ctx context.Context, id string) (*activeThread
 		s.logVerbose("juex listen: open Thread failed: %v", err)
 		return nil, err
 	}
-	return s.bindThreadApp(a, true)
+	return s.bindThreadAgent(a.Agent, a, true)
 }
 
-func (s *Server) managedWorkerApp(id string) *app.App {
+func (s *Server) managedWorkerAgent(id string) *agent.Agent {
 	value, ok := s.threads.Load(thread.MainID)
 	if !ok {
 		return nil
 	}
-	worker, ok := value.(*activeThread).app.ManagedWorkerApp(id)
+	worker, ok := value.(*activeThread).agent.ManagedWorkerAgent(id)
 	if !ok {
 		return nil
 	}
 	return worker
 }
 
-func (s *Server) isManagedWorkerApp(id string, candidate *app.App) bool {
-	return candidate != nil && s.managedWorkerApp(id) == candidate
+func (s *Server) isManagedWorkerAgent(id string, candidate *agent.Agent) bool {
+	return candidate != nil && s.managedWorkerAgent(id) == candidate
 }
 
-func (s *Server) bindThreadApp(a *app.App, ownsApp bool) (*activeThread, error) {
+func (s *Server) bindThreadAgent(a *agent.Agent, main *app.App, ownsAgent bool) (*activeThread, error) {
 	workCtx, workCancel := context.WithCancel(context.Background())
 	as := &activeThread{
-		app:        a,
-		ownsApp:    ownsApp,
+		agent:      a,
+		main:       main,
+		ownsAgent:  ownsAgent,
 		bcast:      newBroadcaster(),
 		StartedAt:  time.Now(),
 		workCtx:    workCtx,
@@ -686,10 +688,10 @@ func (s *Server) bindThreadApp(a *app.App, ownsApp bool) (*activeThread, error) 
 	})
 	identity, ok := a.ThreadIdentity()
 	if !ok {
-		if ownsApp {
+		if ownsAgent {
 			_ = a.CloseAndWait()
 		}
-		return nil, app.ErrThreadUnavailable
+		return nil, agent.ErrThreadUnavailable
 	}
 	s.threads.Store(identity.ID, as)
 	if a.Status != nil {
@@ -906,7 +908,7 @@ func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) 
 	s.createMu.Unlock()
 	defer as.workWG.Done()
 	defer cancel()
-	_, err = as.app.DeliverObservation(workCtx, as.app.ObservationFromMCPNotification(n))
+	_, err = as.main.DeliverObservation(workCtx, as.main.ObservationFromMCPNotification(n))
 	return err
 }
 

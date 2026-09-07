@@ -163,11 +163,11 @@ func (s *Server) observableManager(w http.ResponseWriter, r *http.Request) (*obs
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return nil, false
 	}
-	if active == nil || active.app == nil || active.app.Observables() == nil {
+	if active == nil || active.main == nil || active.main.Observables() == nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", "observable manager unavailable")
 		return nil, false
 	}
-	return active.app.Observables(), true
+	return active.main.Observables(), true
 }
 
 func (s *Server) mainObservableThread(r *http.Request) (*activeThread, error) {

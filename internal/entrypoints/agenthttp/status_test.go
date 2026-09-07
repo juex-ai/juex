@@ -82,9 +82,9 @@ func TestStatusRoutesExposePublicDTOOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	active.app.Status = runtime.NewStatusStore(runtime.StatusSeed{ThreadID: thread.MainID, ThreadAlias: thread.MainAlias, MaxPendingInputs: 4})
-	active.app.Status.Publish(events.Event{ID: "event-admitted", Type: runtime.TurnAdmittedType, TurnID: "turn-one", Timestamp: now})
-	active.app.Status.Publish(events.Event{
+	active.agent.Status = runtime.NewStatusStore(runtime.StatusSeed{ThreadID: thread.MainID, ThreadAlias: thread.MainAlias, MaxPendingInputs: 4})
+	active.agent.Status.Publish(events.Event{ID: "event-admitted", Type: runtime.TurnAdmittedType, TurnID: "turn-one", Timestamp: now})
+	active.agent.Status.Publish(events.Event{
 		ID: "event-tool-phase", Type: runtime.TurnPhaseType, TurnID: "turn-one", Timestamp: now,
 		Payload: runtime.TurnPhasePayload{Phase: runtime.TurnPhaseToolBatch},
 	})
@@ -119,10 +119,10 @@ func TestThreadStatusStreamResumesAfterSnapshotCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := active.app.Engine.ReserveTurnID("turn-1"); err != nil {
+	if err := active.agent.Engine.ReserveTurnID("turn-1"); err != nil {
 		t.Fatal(err)
 	}
-	cursor := active.app.Status.Snapshot().Cursor
+	cursor := active.agent.Status.Snapshot().Cursor
 	httpServer := httptest.NewServer(server.APIHandler())
 	defer httpServer.Close()
 
@@ -138,7 +138,7 @@ func TestThreadStatusStreamResumesAfterSnapshotCursor(t *testing.T) {
 	}
 	defer response.Body.Close()
 
-	if err := active.app.Bus.Emit(events.Event{
+	if err := active.agent.Bus.Emit(events.Event{
 		Type: runtime.TurnPhaseType, TurnID: "turn-1",
 		Payload: runtime.TurnPhasePayload{Phase: runtime.TurnPhaseToolBatch},
 	}); err != nil {

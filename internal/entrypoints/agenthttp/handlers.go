@@ -156,7 +156,7 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 	if value, ok := s.threads.Load(id); ok {
 		active := value.(*activeThread)
 		var response threadShowResponse
-		err := active.app.ReadThreadID(id, func(target *thread.Thread) error {
+		err := active.agent.ReadThreadID(id, func(target *thread.Thread) error {
 			response.Info = target.Info()
 			page, pageErr := target.Timeline(cursor, limit)
 			if pageErr != nil {
@@ -165,8 +165,8 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 			response.Items = page.Items
 			response.HasMoreBefore = page.HasMoreBefore
 			response.PreviousCursor = page.PreviousCursor
-			if active.app.Status != nil {
-				response.EventCursor = active.app.Status.Snapshot().Cursor
+			if active.agent.Status != nil {
+				response.EventCursor = active.agent.Status.Snapshot().Cursor
 			}
 			return nil
 		})
@@ -208,8 +208,8 @@ func (s *Server) handleArchiveThread(w http.ResponseWriter, r *http.Request, id 
 	}
 	if value, ok := s.threads.Load(id); ok {
 		active := value.(*activeThread)
-		if active.app.Status != nil {
-			status := active.app.Status.Snapshot().Thread
+		if active.agent.Status != nil {
+			status := active.agent.Status.Snapshot().Thread
 			if status.State.IsWorking() || status.PendingCount != 0 {
 				writeErr(w, http.StatusConflict, "conflict", "Thread must be idle without pending input before archive")
 				return
@@ -217,7 +217,7 @@ func (s *Server) handleArchiveThread(w http.ResponseWriter, r *http.Request, id 
 		}
 	}
 	if mainValue, ok := s.threads.Load(thread.MainID); ok {
-		managed, err := mainValue.(*activeThread).app.ArchiveManagedWorker(r.Context(), id)
+		managed, err := mainValue.(*activeThread).agent.ArchiveManagedWorker(r.Context(), id)
 		if managed {
 			if err != nil {
 				writeErr(w, http.StatusConflict, "conflict", err.Error())
@@ -231,7 +231,7 @@ func (s *Server) handleArchiveThread(w http.ResponseWriter, r *http.Request, id 
 		}
 	}
 	if active, ok := s.deferCloseActiveThread(id); ok {
-		if err := active.app.WaitThreadReleased(r.Context()); err != nil {
+		if err := active.agent.WaitThreadReleased(r.Context()); err != nil {
 			writeErr(w, http.StatusRequestTimeout, "request_cancelled", err.Error())
 			return
 		}
@@ -274,7 +274,7 @@ func (s *Server) handleRenameThread(w http.ResponseWriter, r *http.Request, id s
 	var info thread.Info
 	var err error
 	if value, ok := s.threads.Load(id); ok {
-		err = value.(*activeThread).app.ReadThreadID(id, func(target *thread.Thread) error {
+		err = value.(*activeThread).agent.ReadThreadID(id, func(target *thread.Thread) error {
 			if applyErr := target.ApplyAlias(strings.TrimSpace(request.Alias)); applyErr != nil {
 				return applyErr
 			}
@@ -360,7 +360,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		}
 	}
 	admissionCursor := latestDurableEventCursor(active)
-	result := active.app.AdmitTurn(r.Context(), req)
+	result := active.agent.AdmitTurn(r.Context(), req)
 	if result.Start != nil {
 		active.turns.start(result.Start.TurnID, result.Start.Message)
 	}
@@ -368,10 +368,10 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func latestDurableEventCursor(active *activeThread) string {
-	if active == nil || active.app == nil || active.app.Thread == nil {
+	if active == nil || active.agent == nil || active.agent.Thread == nil {
 		return ""
 	}
-	return active.app.Thread.LatestEventCursor()
+	return active.agent.Thread.LatestEventCursor()
 }
 
 func writeTurnAdmissionResult(w http.ResponseWriter, threadID string, result agent.TurnAdmissionResult, admissionCursor string) {
@@ -473,7 +473,7 @@ func (s *Server) handleCompactThread(w http.ResponseWriter, r *http.Request, id 
 	if request.Reason == "" {
 		request.Reason = "manual"
 	}
-	result, err := active.app.CompactWithInstructions(r.Context(), request.Reason, false, request.Instructions)
+	result, err := active.agent.CompactWithInstructions(r.Context(), request.Reason, false, request.Instructions)
 	if err != nil {
 		writeErr(w, http.StatusConflict, "conflict", err.Error())
 		return
@@ -483,7 +483,7 @@ func (s *Server) handleCompactThread(w http.ResponseWriter, r *http.Request, id 
 
 func (s *Server) handleThreadContext(w http.ResponseWriter, _ *http.Request, id string) {
 	if value, ok := s.threads.Load(id); ok {
-		if snapshot, ok := value.(*activeThread).app.ActiveContextForThread(id); ok {
+		if snapshot, ok := value.(*activeThread).agent.ActiveContextForThread(id); ok {
 			writeJSON(w, http.StatusOK, snapshot)
 			return
 		}
@@ -524,7 +524,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	}
 	var replayDeduper *browserReplayDeduplicator
 	if since, requested := sseResumeCursorWithPresence(r); requested {
-		replay, replayErr := captureCommittedEventReplay(active.app, id)
+		replay, replayErr := captureCommittedEventReplay(active.agent, id)
 		if replayErr == nil {
 			journal, journalErr := replay.readJournal()
 			closeErr := replay.Close()
@@ -576,11 +576,11 @@ func (s *Server) handleThreadStatus(w http.ResponseWriter, _ *http.Request, id s
 
 func (s *Server) handleThreadStatusEvents(w http.ResponseWriter, r *http.Request, id string) {
 	active, err := s.getThread(r.Context(), id)
-	if err != nil || active.app.Status == nil {
+	if err != nil || active.agent.Status == nil {
 		writeThreadLookupError(w, id, err)
 		return
 	}
-	stream := active.app.Status.OpenStream(runtime.StatusStreamOptions{After: sseResumeCursor(r), Follow: true})
+	stream := active.agent.Status.OpenStream(runtime.StatusStreamOptions{After: sseResumeCursor(r), Follow: true})
 	defer stream.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	for {
@@ -594,8 +594,8 @@ func (s *Server) handleThreadStatusEvents(w http.ResponseWriter, r *http.Request
 func (s *Server) statusSnapshotForThread(id string) (runtime.StatusSnapshot, error) {
 	if value, ok := s.threads.Load(id); ok {
 		active := value.(*activeThread)
-		if active.app.Status != nil {
-			return active.app.Status.Snapshot(), nil
+		if active.agent.Status != nil {
+			return active.agent.Status.Snapshot(), nil
 		}
 	}
 	store := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir)

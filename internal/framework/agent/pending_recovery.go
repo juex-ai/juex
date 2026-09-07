@@ -1,4 +1,4 @@
-package app
+package agent
 
 import (
 	"context"
@@ -21,11 +21,11 @@ type externalInputDelivery struct {
 const maxExternalInputStorageAttempts = 8
 
 type externalInputThreadLease struct {
-	app  *App
+	app  *Agent
 	refs atomic.Int32
 }
 
-func (a *App) acquireExternalInputThreadLease() *externalInputThreadLease {
+func (a *Agent) acquireExternalInputThreadLease() *externalInputThreadLease {
 	a.threadHandoffMu.RLock()
 	lease := &externalInputThreadLease{app: a}
 	lease.refs.Store(1)
@@ -47,7 +47,7 @@ func (l *externalInputThreadLease) Release() {
 // deliverExternalInputLocked durably accepts transport input before asking the
 // runtime lifecycle whether to attach it or start an idle Turn.
 // The caller holds threadMu.RLock for the complete attached-Thread lifetime.
-func (a *App) deliverExternalInputLocked(
+func (a *Agent) deliverExternalInputLocked(
 	ctx context.Context,
 	message llm.Message,
 	opts runtime.PendingInputOptions,
@@ -58,7 +58,7 @@ func (a *App) deliverExternalInputLocked(
 	return a.deliverExternalInputLockedWithStart(ctx, message, opts, threadLease, handoff, valid, nil)
 }
 
-func (a *App) deliverExternalInputLockedWithStart(
+func (a *Agent) deliverExternalInputLockedWithStart(
 	ctx context.Context,
 	message llm.Message,
 	opts runtime.PendingInputOptions,
@@ -103,11 +103,11 @@ func (a *App) deliverExternalInputLockedWithStart(
 
 // resumePersistedInputLocked follows the Framework-owned lifecycle outcome;
 // App owns only the Thread lease and execution of a returned start action.
-func (a *App) resumePersistedInputLocked(ctx context.Context, recordID string) (externalInputDelivery, error) {
+func (a *Agent) resumePersistedInputLocked(ctx context.Context, recordID string) (externalInputDelivery, error) {
 	return a.resumePersistedInputLockedWithStart(ctx, recordID, nil)
 }
 
-func (a *App) resumePersistedInputLockedWithStart(ctx context.Context, recordID string, onStarted func()) (externalInputDelivery, error) {
+func (a *Agent) resumePersistedInputLockedWithStart(ctx context.Context, recordID string, onStarted func()) (externalInputDelivery, error) {
 	if err := a.executionError(); err != nil {
 		return externalInputDelivery{RecordID: recordID}, err
 	}
@@ -145,7 +145,7 @@ func externalInputDeliveryFromRuntime(result runtime.PendingInputResult) externa
 // deliverExternalInputUntilSettled is the shared App delivery Adapter for
 // sources that must retain their own validity check while following runtime
 // retry instructions. It never interprets durable Pending states.
-func (a *App) deliverExternalInputUntilSettled(
+func (a *Agent) deliverExternalInputUntilSettled(
 	ctx context.Context,
 	message llm.Message,
 	opts runtime.PendingInputOptions,
@@ -212,7 +212,7 @@ func (a *App) deliverExternalInputUntilSettled(
 	}
 }
 
-func (a *App) discardExternalInput(recordID string) error {
+func (a *Agent) discardExternalInput(recordID string) error {
 	if a == nil || a.Engine == nil || recordID == "" {
 		return nil
 	}
@@ -237,7 +237,7 @@ func (a *App) discardExternalInput(recordID string) error {
 	return last
 }
 
-func (a *App) startPendingInputRecovery(records []runtime.PendingInputRecovery) {
+func (a *Agent) startPendingInputRecovery(records []runtime.PendingInputRecovery) {
 	if a == nil || a.Engine == nil || len(records) == 0 {
 		return
 	}
@@ -268,7 +268,7 @@ func (a *App) startPendingInputRecovery(records []runtime.PendingInputRecovery) 
 // ownership until a replayable admission either attaches or becomes inert.
 // A generic handoff cannot own this retry because handoffs wait for the startup
 // barrier and would release newer inputs before they finish.
-func (a *App) resumePersistedInputDuringRecovery(recordID string) (externalInputDelivery, error) {
+func (a *Agent) resumePersistedInputDuringRecovery(recordID string) (externalInputDelivery, error) {
 	delay := 25 * time.Millisecond
 	for {
 		if err := a.ctx.Err(); err != nil {
@@ -298,7 +298,7 @@ func (a *App) resumePersistedInputDuringRecovery(recordID string) (externalInput
 
 // activateExternalInputAfterPendingRecovery publishes and starts the recovery
 // barrier before the sealed runtime set can expose external producers.
-func (a *App) activateExternalInputAfterPendingRecovery(
+func (a *Agent) activateExternalInputAfterPendingRecovery(
 	ctx context.Context,
 	records []runtime.PendingInputRecovery,
 ) error {
@@ -320,7 +320,7 @@ func (a *App) activateExternalInputAfterPendingRecovery(
 	return a.ctx.Err()
 }
 
-func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {
+func (a *Agent) waitPendingInputRecoveryContext(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
@@ -363,7 +363,7 @@ func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {
 // handoffPersistedInputAfterRecovery transfers caller-canceled delivery to
 // App-owned work. The durable record remains available for restart if the App
 // is already closing, and duplicate callers share one handoff by record ID.
-func (a *App) handoffPersistedInputAfterRecovery(
+func (a *Agent) handoffPersistedInputAfterRecovery(
 	recordID string,
 	threadLease *externalInputThreadLease,
 ) bool {
@@ -447,7 +447,7 @@ func shouldDiscardCanceledExternalInput(delivery externalInputDelivery, err erro
 		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
 
-func (a *App) waitPendingInputRecovery() error {
+func (a *Agent) waitPendingInputRecovery() error {
 	if a == nil {
 		return nil
 	}
@@ -455,7 +455,7 @@ func (a *App) waitPendingInputRecovery() error {
 	return nil
 }
 
-func (a *App) closeAndWaitPendingInputWork() error {
+func (a *Agent) closeAndWaitPendingInputWork() error {
 	if a == nil {
 		return nil
 	}

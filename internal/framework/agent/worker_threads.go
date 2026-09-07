@@ -1,4 +1,4 @@
-package app
+package agent
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -25,12 +24,12 @@ type ChildRequest struct {
 
 type PreparedChild struct {
 	Model string
-	Open  func(ChildRequest) (*App, error)
+	Open  func(ChildRequest) (*Agent, error)
 }
 
 type managedWorkerThread struct {
 	operationMu      sync.Mutex
-	app              *App
+	app              *Agent
 	ctx              context.Context
 	deliveryCtx      context.Context
 	deliveryWait     *sync.WaitGroup
@@ -40,15 +39,15 @@ type managedWorkerThread struct {
 	runGeneration    uint64
 	resultHandoffs   int
 
-	status agent.WorkerThreadStatus
+	status WorkerThreadStatus
 }
 
 type workerThreadReservation struct {
 	ready chan struct{}
 }
 
-type workerThreadManager struct {
-	parent  *App
+type WorkerManager struct {
+	parent  *Agent
 	prepare func(string) (PreparedChild, error)
 
 	lifecycleMu     sync.RWMutex
@@ -71,8 +70,8 @@ type workerThreadManager struct {
 	cleanupErr      error
 }
 
-func newWorkerThreadManager(parent *App) *workerThreadManager {
-	m := &workerThreadManager{
+func newWorkerThreadManager(parent *Agent, prepare func(string) (PreparedChild, error)) *WorkerManager {
+	m := &WorkerManager{
 		parent:         parent,
 		threads:        map[string]*managedWorkerThread{},
 		reservations:   map[string]*workerThreadReservation{},
@@ -86,40 +85,40 @@ func newWorkerThreadManager(parent *App) *workerThreadManager {
 	m.deliveryCtx, m.deliveryCancel = context.WithCancel(baseCtx)
 	m.deliveryWait = &sync.WaitGroup{}
 	if parent != nil {
-		m.prepare = parent.prepareWorkerChild
+		m.prepare = prepare
 	}
 
 	return m
 }
 
-func (m *workerThreadManager) Create(ctx context.Context, query, alias, model string, subscribe bool) (agent.WorkerThreadStatus, error) {
+func (m *WorkerManager) Create(ctx context.Context, query, alias, model string, subscribe bool) (WorkerThreadStatus, error) {
 	createCtx, cancelCreate := workerThreadCreateContext(ctx, m.parent.ctx)
 	defer cancelCreate()
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
-		return agent.WorkerThreadStatus{}, err
+		return WorkerThreadStatus{}, err
 	}
 	if err := createCtx.Err(); err != nil {
-		return agent.WorkerThreadStatus{}, err
+		return WorkerThreadStatus{}, err
 	}
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return agent.WorkerThreadStatus{}, errors.New("thread_create requires a non-empty query")
+		return WorkerThreadStatus{}, errors.New("thread_create requires a non-empty query")
 	}
 	prepared, err := m.prepare(model)
 	if err != nil {
-		return agent.WorkerThreadStatus{}, err
+		return WorkerThreadStatus{}, err
 	}
 	model = prepared.Model
 	identity, err := m.reserveWorkerThread(strings.TrimSpace(alias))
 	if err != nil {
-		return agent.WorkerThreadStatus{}, fmt.Errorf("create Worker Thread identity: %w", err)
+		return WorkerThreadStatus{}, fmt.Errorf("create Worker Thread identity: %w", err)
 	}
 	finishReservation := func() {
 		m.finishWorkerThreadReservation(identity.ID)
 	}
-	rollback := func(child *App) error {
+	rollback := func(child *Agent) error {
 		var closeErr error
 		if child != nil {
 			closeErr = child.CloseAndWait()
@@ -127,7 +126,7 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 		return errors.Join(closeErr, m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
 	}
 	type factoryResult struct {
-		child *App
+		child *Agent
 		err   error
 	}
 	resultCh := make(chan factoryResult, 1)
@@ -135,7 +134,7 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 		child, err := prepared.Open(ChildRequest{Context: createCtx, ThreadID: identity.ID, Alias: strings.TrimSpace(alias)})
 		resultCh <- factoryResult{child: child, err: err}
 	}()
-	var child *App
+	var child *Agent
 	var factoryErr error
 	select {
 	case result := <-resultCh:
@@ -146,33 +145,33 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 			defer finishReservation()
 			return rollback(result.child)
 		})
-		return agent.WorkerThreadStatus{}, createCtx.Err()
+		return WorkerThreadStatus{}, createCtx.Err()
 	}
 	if factoryErr != nil {
 		cleanupErr := rollback(child)
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(fmt.Errorf("create Worker Thread: %w", factoryErr), cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(fmt.Errorf("create Worker Thread: %w", factoryErr), cleanupErr)
 	}
 	if child == nil {
 		cleanupErr := rollback(nil)
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(errors.New("create Worker Thread: factory returned no App"), cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(errors.New("create Worker Thread: factory returned no App"), cleanupErr)
 	}
 	if err := createCtx.Err(); err != nil {
 		cleanupErr := rollback(child)
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(err, cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	childIdentity, ok := child.ThreadIdentity()
 	if !ok || childIdentity.ID != identity.ID || childIdentity.ParentThreadID != m.parent.Thread.ID {
 		cleanupErr := rollback(child)
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(errors.New("create Worker Thread: child runtime does not own the reserved Worker Thread"), cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(errors.New("create Worker Thread: child runtime does not own the reserved Worker Thread"), cleanupErr)
 	}
 	if err := createCtx.Err(); err != nil {
 		cleanupErr := rollback(child)
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(err, cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	now := thread.NewTimestamp(time.Now())
 	managedCtx, cancel := context.WithCancelCause(child.ctx)
@@ -182,10 +181,10 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 		deliveryCtx:  m.deliveryCtx,
 		deliveryWait: m.deliveryWait,
 		cancel:       cancel,
-		status: agent.WorkerThreadStatus{
+		status: WorkerThreadStatus{
 			ThreadID:   childIdentity.ID,
 			Alias:      childIdentity.Alias,
-			State:      agent.WorkerThreadStateRunning,
+			State:      WorkerThreadStateRunning,
 			Model:      model,
 			Subscribed: subscribe,
 			CreatedAt:  now,
@@ -195,10 +194,10 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		cancel(agent.ErrWorkerThreadStopped)
+		cancel(ErrWorkerThreadStopped)
 		cleanupErr := rollback(child)
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(agent.ErrWorkerThreadManagerClosed, cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(ErrWorkerThreadManagerClosed, cleanupErr)
 	}
 	m.threads[childIdentity.ID] = managed
 	m.mu.Unlock()
@@ -207,35 +206,35 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 		m.removeIfCurrent(managed)
 		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(err, cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	result := child.admitUserTurn(createCtx, userTurnMessage(query, nil))
-	if result.Kind != agent.TurnAdmissionStarted || result.Start == nil {
+	if result.Kind != TurnAdmissionStarted || result.Start == nil {
 		m.removeIfCurrent(managed)
 		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
 		finishReservation()
 		if result.Err != nil {
-			return agent.WorkerThreadStatus{}, errors.Join(fmt.Errorf("start Worker Thread: %w", result.Err), cleanupErr)
+			return WorkerThreadStatus{}, errors.Join(fmt.Errorf("start Worker Thread: %w", result.Err), cleanupErr)
 		}
-		return agent.WorkerThreadStatus{}, errors.Join(fmt.Errorf("start Worker Thread: unexpected admission %q", result.Kind), cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(fmt.Errorf("start Worker Thread: unexpected admission %q", result.Kind), cleanupErr)
 	}
 	if err := createCtx.Err(); err != nil {
 		m.removeIfCurrent(managed)
 		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(err, cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	if err := m.startRun(createCtx, managed, result.Start); err != nil {
 		m.removeIfCurrent(managed)
 		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
 		finishReservation()
-		return agent.WorkerThreadStatus{}, errors.Join(err, cleanupErr)
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	finishReservation()
 	return m.snapshot(managed), nil
 }
 
-func (m *workerThreadManager) reserveWorkerThread(alias string) (ThreadIdentitySnapshot, error) {
+func (m *WorkerManager) reserveWorkerThread(alias string) (ThreadIdentitySnapshot, error) {
 	m.creationMu.Lock()
 	defer m.creationMu.Unlock()
 	target, err := m.parent.ThreadStore.CreateWorker(m.parent.Thread.ID, alias)
@@ -259,7 +258,7 @@ func (m *workerThreadManager) reserveWorkerThread(alias string) (ThreadIdentityS
 	return identity, nil
 }
 
-func (m *workerThreadManager) finishWorkerThreadReservation(id string) {
+func (m *WorkerManager) finishWorkerThreadReservation(id string) {
 	m.mu.Lock()
 	reservation := m.reservations[id]
 	delete(m.reservations, id)
@@ -287,14 +286,14 @@ func workerThreadCreateContext(callCtx, parentCtx context.Context) (context.Cont
 	}
 }
 
-func (m *workerThreadManager) List() ([]agent.WorkerThreadStatus, error) {
+func (m *WorkerManager) List() ([]WorkerThreadStatus, error) {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
-	items := make([]agent.WorkerThreadStatus, 0, len(m.threads))
+	items := make([]WorkerThreadStatus, 0, len(m.threads))
 	for _, managed := range m.threads {
 		items = append(items, m.snapshotLocked(managed))
 	}
@@ -308,7 +307,7 @@ func (m *workerThreadManager) List() ([]agent.WorkerThreadStatus, error) {
 	return items, nil
 }
 
-func (m *workerThreadManager) shouldDeferContinuation() bool {
+func (m *WorkerManager) shouldDeferContinuation() bool {
 	if m == nil {
 		return false
 	}
@@ -318,45 +317,45 @@ func (m *workerThreadManager) shouldDeferContinuation() bool {
 		return false
 	}
 	for _, managed := range m.threads {
-		if managed.status.State == agent.WorkerThreadStateStopping {
+		if managed.status.State == WorkerThreadStateStopping {
 			continue
 		}
-		if managed.resultHandoffs > 0 || (managed.status.Subscribed && managed.status.State == agent.WorkerThreadStateRunning) {
+		if managed.resultHandoffs > 0 || (managed.status.Subscribed && managed.status.State == WorkerThreadStateRunning) {
 			return true
 		}
 	}
 	return false
 }
 
-func (m *workerThreadManager) ShouldDeferContinuation() bool {
+func (m *WorkerManager) ShouldDeferContinuation() bool {
 	return m.shouldDeferContinuation()
 }
 
-func (m *workerThreadManager) Status(id string) (agent.WorkerThreadStatus, error) {
+func (m *WorkerManager) Status(id string) (WorkerThreadStatus, error) {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
-		return agent.WorkerThreadStatus{}, err
+		return WorkerThreadStatus{}, err
 	}
 	m.mu.Lock()
 	managed := m.threads[strings.TrimSpace(id)]
 	if managed == nil {
 		m.mu.Unlock()
-		return agent.WorkerThreadStatus{}, agent.ErrWorkerThreadNotActive
+		return WorkerThreadStatus{}, ErrWorkerThreadNotActive
 	}
 	status := m.snapshotLocked(managed)
 	m.mu.Unlock()
 	return status, nil
 }
 
-// ManagedWorkerApp returns the single runtime owner for an active descendant
+// ManagedWorkerAgent returns the single runtime owner for an active descendant
 // Worker Thread. Transports may borrow this App, but must not close it.
-func (a *App) ManagedWorkerApp(id string) (*App, bool) {
-	worker, _, ok := a.managedWorker(strings.TrimSpace(id), make(map[*App]struct{}))
+func (a *Agent) ManagedWorkerAgent(id string) (*Agent, bool) {
+	worker, _, ok := a.managedWorker(strings.TrimSpace(id), make(map[*Agent]struct{}))
 	return worker, ok
 }
 
-func (a *App) managedWorker(id string, visited map[*App]struct{}) (*App, *workerThreadManager, bool) {
+func (a *Agent) managedWorker(id string, visited map[*Agent]struct{}) (*Agent, *WorkerManager, bool) {
 	if a == nil || a.workers == nil || id == "" {
 		return nil, nil, false
 	}
@@ -365,22 +364,22 @@ func (a *App) managedWorker(id string, visited map[*App]struct{}) (*App, *worker
 	}
 	visited[a] = struct{}{}
 
-	var children []*App
+	var children []*Agent
 	for {
 		a.workers.creationMu.RLock()
 		a.workers.mu.Lock()
 		reservation := a.workers.reservations[id]
 		if reservation == nil {
 			managed := a.workers.threads[id]
-			if managed != nil && managed.status.State != agent.WorkerThreadStateStopping && managed.app != nil {
+			if managed != nil && managed.status.State != WorkerThreadStateStopping && managed.app != nil {
 				worker := managed.app
 				a.workers.mu.Unlock()
 				a.workers.creationMu.RUnlock()
 				return worker, a.workers, true
 			}
-			children = make([]*App, 0, len(a.workers.threads))
+			children = make([]*Agent, 0, len(a.workers.threads))
 			for _, child := range a.workers.threads {
-				if child != nil && child.status.State != agent.WorkerThreadStateStopping && child.app != nil {
+				if child != nil && child.status.State != WorkerThreadStateStopping && child.app != nil {
 					children = append(children, child.app)
 				}
 			}
@@ -403,60 +402,60 @@ func (a *App) managedWorker(id string, visited map[*App]struct{}) (*App, *worker
 
 // ArchiveManagedWorker archives id when this App owns its runtime tree.
 // The boolean distinguishes a non-managed Worker from an archive failure.
-func (a *App) ArchiveManagedWorker(ctx context.Context, id string) (bool, error) {
+func (a *Agent) ArchiveManagedWorker(ctx context.Context, id string) (bool, error) {
 	if a == nil {
 		return false, nil
 	}
-	_, owner, ok := a.managedWorker(strings.TrimSpace(id), make(map[*App]struct{}))
+	_, owner, ok := a.managedWorker(strings.TrimSpace(id), make(map[*Agent]struct{}))
 	if !ok {
 		return false, nil
 	}
 	return true, owner.Archive(ctx, id)
 }
 
-func (m *workerThreadManager) Send(id, message string) (agent.WorkerThreadStatus, bool, error) {
+func (m *WorkerManager) Send(id, message string) (WorkerThreadStatus, bool, error) {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
-		return agent.WorkerThreadStatus{}, false, err
+		return WorkerThreadStatus{}, false, err
 	}
 	message = strings.TrimSpace(message)
 	if message == "" {
-		return agent.WorkerThreadStatus{}, false, errors.New("thread_send requires a non-empty message")
+		return WorkerThreadStatus{}, false, errors.New("thread_send requires a non-empty message")
 	}
 	managed, unlock, err := m.lockActive(id)
 	if err != nil {
-		return agent.WorkerThreadStatus{}, false, err
+		return WorkerThreadStatus{}, false, err
 	}
 	defer unlock()
 	result := managed.app.admitUserTurn(managed.ctx, userTurnMessage(message, nil))
 	switch result.Kind {
-	case agent.TurnAdmissionStarted:
+	case TurnAdmissionStarted:
 		if err := m.startRun(managed.ctx, managed, result.Start); err != nil {
-			return agent.WorkerThreadStatus{}, false, err
+			return WorkerThreadStatus{}, false, err
 		}
 		return m.snapshot(managed), false, nil
-	case agent.TurnAdmissionQueued:
+	case TurnAdmissionQueued:
 		return m.snapshot(managed), true, nil
-	case agent.TurnAdmissionRejected, agent.TurnAdmissionConflict, agent.TurnAdmissionError:
+	case TurnAdmissionRejected, TurnAdmissionConflict, TurnAdmissionError:
 		if result.Err != nil {
-			return agent.WorkerThreadStatus{}, false, result.Err
+			return WorkerThreadStatus{}, false, result.Err
 		}
-		return agent.WorkerThreadStatus{}, false, errors.New(result.Error.Message)
+		return WorkerThreadStatus{}, false, errors.New(result.Error.Message)
 	default:
-		return agent.WorkerThreadStatus{}, false, fmt.Errorf("worker thread send: unexpected admission %q", result.Kind)
+		return WorkerThreadStatus{}, false, fmt.Errorf("worker thread send: unexpected admission %q", result.Kind)
 	}
 }
 
-func (m *workerThreadManager) Subscribe(id string, subscribed bool) (agent.WorkerThreadStatus, error) {
+func (m *WorkerManager) Subscribe(id string, subscribed bool) (WorkerThreadStatus, error) {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
-		return agent.WorkerThreadStatus{}, err
+		return WorkerThreadStatus{}, err
 	}
 	managed, unlock, err := m.lockActive(id)
 	if err != nil {
-		return agent.WorkerThreadStatus{}, err
+		return WorkerThreadStatus{}, err
 	}
 	defer unlock()
 	m.mu.Lock()
@@ -469,7 +468,7 @@ func (m *workerThreadManager) Subscribe(id string, subscribed bool) (agent.Worke
 // ClearSubscriptions ends parent-owned interest in future Worker settlements.
 // A result already handed off to a durable parent Input remains ordinary queued
 // work and is governed by the Input lifecycle rather than by this flag.
-func (m *workerThreadManager) ClearSubscriptions() {
+func (m *WorkerManager) ClearSubscriptions() {
 	if m == nil {
 		return
 	}
@@ -484,7 +483,7 @@ func (m *workerThreadManager) ClearSubscriptions() {
 	}
 }
 
-func (m *workerThreadManager) Stop(ctx context.Context, id string) error {
+func (m *WorkerManager) Stop(ctx context.Context, id string) error {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
@@ -496,12 +495,12 @@ func (m *workerThreadManager) Stop(ctx context.Context, id string) error {
 	}
 	defer unlock()
 	if !m.removeCurrent(managed) {
-		return agent.ErrWorkerThreadNotActive
+		return ErrWorkerThreadNotActive
 	}
 	return stopManagedWorkerThreadContext(ctx, managed, &m.deferred)
 }
 
-func (m *workerThreadManager) Archive(ctx context.Context, id string) error {
+func (m *WorkerManager) Archive(ctx context.Context, id string) error {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
@@ -514,7 +513,7 @@ func (m *workerThreadManager) Archive(ctx context.Context, id string) error {
 	defer unlock()
 	m.mu.Lock()
 	status := m.snapshotLocked(managed)
-	settled := status.State == agent.WorkerThreadStateIdle || status.State == agent.WorkerThreadStateFailed
+	settled := status.State == WorkerThreadStateIdle || status.State == WorkerThreadStateFailed
 	blocked := !settled || status.PendingCount != 0 || status.Subscribed || managed.resultHandoffs != 0
 	m.mu.Unlock()
 	if blocked {
@@ -543,7 +542,7 @@ func (m *workerThreadManager) Archive(ctx context.Context, id string) error {
 		}
 	}
 	if !m.removeCurrent(managed) {
-		return agent.ErrWorkerThreadNotActive
+		return ErrWorkerThreadNotActive
 	}
 	rollbackTransition = false
 	if err := stopManagedWorkerThreadContext(ctx, managed, &m.deferred); err != nil {
@@ -556,7 +555,7 @@ func (m *workerThreadManager) Archive(ctx context.Context, id string) error {
 	return m.parent.ThreadStore.Archive(target)
 }
 
-func (m *workerThreadManager) beginArchiveTransition() error {
+func (m *WorkerManager) beginArchiveTransition() error {
 	if m == nil {
 		return nil
 	}
@@ -565,7 +564,7 @@ func (m *workerThreadManager) beginArchiveTransition() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return agent.ErrWorkerThreadManagerClosed
+		return ErrWorkerThreadManagerClosed
 	}
 	if m.transitioning {
 		return errors.New("worker thread manager is changing parent Thread")
@@ -574,7 +573,7 @@ func (m *workerThreadManager) beginArchiveTransition() error {
 	return nil
 }
 
-func (m *workerThreadManager) cancelArchiveTransition() {
+func (m *WorkerManager) cancelArchiveTransition() {
 	if m == nil {
 		return
 	}
@@ -587,7 +586,7 @@ func (m *workerThreadManager) cancelArchiveTransition() {
 	m.lifecycleMu.Unlock()
 }
 
-func (m *workerThreadManager) beginClose() []*managedWorkerThread {
+func (m *WorkerManager) beginClose() []*managedWorkerThread {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
@@ -598,7 +597,7 @@ func (m *workerThreadManager) beginClose() []*managedWorkerThread {
 	}
 	items := make([]*managedWorkerThread, 0, len(m.threads))
 	for id, managed := range m.threads {
-		managed.status.State = agent.WorkerThreadStateStopping
+		managed.status.State = WorkerThreadStateStopping
 		managed.status.Subscribed = false
 		managed.resultHandoffs = 0
 		items = append(items, managed)
@@ -609,7 +608,7 @@ func (m *workerThreadManager) beginClose() []*managedWorkerThread {
 	return items
 }
 
-func (m *workerThreadManager) finishClose() {
+func (m *WorkerManager) finishClose() {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
@@ -617,7 +616,7 @@ func (m *workerThreadManager) finishClose() {
 	m.mu.Unlock()
 }
 
-func (m *workerThreadManager) Close() error {
+func (m *WorkerManager) Close() error {
 	if m == nil {
 		return nil
 	}
@@ -627,7 +626,7 @@ func (m *workerThreadManager) Close() error {
 // StartClose cancels owned work and schedules final child cleanup without
 // waiting. App cleanup can therefore release the parent Thread resources
 // before a provider that ignores cancellation finally returns.
-func (m *workerThreadManager) StartClose() error {
+func (m *WorkerManager) StartClose() error {
 	if m == nil {
 		return nil
 	}
@@ -653,7 +652,7 @@ func (m *workerThreadManager) StartClose() error {
 
 // WaitDeliveryWriters waits until no Worker Thread result can write the owning
 // parent Thread directory. Child runtimes may still be draining.
-func (m *workerThreadManager) WaitDeliveryWriters(ctx context.Context) error {
+func (m *WorkerManager) WaitDeliveryWriters(ctx context.Context) error {
 	if m == nil || m.deliveryDone == nil {
 		return nil
 	}
@@ -669,7 +668,7 @@ func (m *workerThreadManager) WaitDeliveryWriters(ctx context.Context) error {
 }
 
 // WaitClose joins cleanup previously started by StartClose.
-func (m *workerThreadManager) WaitClose() error {
+func (m *WorkerManager) WaitClose() error {
 	if m == nil {
 		return nil
 	}
@@ -679,7 +678,7 @@ func (m *workerThreadManager) WaitClose() error {
 	return m.cleanupErr
 }
 
-func (m *workerThreadManager) startRun(ctx context.Context, managed *managedWorkerThread, start *agent.AdmittedTurn) error {
+func (m *WorkerManager) startRun(ctx context.Context, managed *managedWorkerThread, start *AdmittedTurn) error {
 	if start == nil {
 		return errors.New("worker thread run: missing admitted turn")
 	}
@@ -688,13 +687,13 @@ func (m *workerThreadManager) startRun(ctx context.Context, managed *managedWork
 		m.mu.Unlock()
 		return err
 	}
-	if current := m.threads[managed.status.ThreadID]; current != managed || managed.status.State == agent.WorkerThreadStateStopping {
+	if current := m.threads[managed.status.ThreadID]; current != managed || managed.status.State == WorkerThreadStateStopping {
 		m.mu.Unlock()
-		return agent.ErrWorkerThreadNotActive
+		return ErrWorkerThreadNotActive
 	}
 	managed.runGeneration++
 	generation := managed.runGeneration
-	managed.status.State = agent.WorkerThreadStateRunning
+	managed.status.State = WorkerThreadStateRunning
 	managed.status.UpdatedAt = thread.NewTimestamp(time.Now())
 	managed.done.Add(1)
 	m.mu.Unlock()
@@ -702,24 +701,24 @@ func (m *workerThreadManager) startRun(ctx context.Context, managed *managedWork
 	return nil
 }
 
-func (m *workerThreadManager) run(managed *managedWorkerThread, generation uint64, turnID string, message llm.Message) {
+func (m *WorkerManager) run(managed *managedWorkerThread, generation uint64, turnID string, message llm.Message) {
 	go func() {
 		defer managed.done.Done()
 		out, err := managed.app.RunAdmittedTurn(managed.ctx, turnID, message)
 
 		m.mu.Lock()
 		current := m.threads[managed.status.ThreadID]
-		if current != managed || managed.status.State == agent.WorkerThreadStateStopping || managed.runGeneration != generation {
+		if current != managed || managed.status.State == WorkerThreadStateStopping || managed.runGeneration != generation {
 			m.mu.Unlock()
 			return
 		}
-		managed.status.State = agent.WorkerThreadStateIdle
+		managed.status.State = WorkerThreadStateIdle
 		managed.status.LastTurnID = turnID
 		managed.status.LastResult = out
 		managed.status.LastError = ""
 		managed.status.NotificationError = ""
 		if err != nil {
-			managed.status.State = agent.WorkerThreadStateFailed
+			managed.status.State = WorkerThreadStateFailed
 			managed.status.LastError = err.Error()
 		}
 		managed.status.PendingCount = managed.app.PendingInputStatus().PendingCount
@@ -745,7 +744,7 @@ func (m *workerThreadManager) run(managed *managedWorkerThread, generation uint6
 	}()
 }
 
-func (m *workerThreadManager) FinishResultHandoffs(ids []string) {
+func (m *WorkerManager) FinishResultHandoffs(ids []string) {
 	if m == nil || len(ids) == 0 {
 		return
 	}
@@ -763,7 +762,7 @@ func (m *workerThreadManager) FinishResultHandoffs(ids []string) {
 	}
 }
 
-func (m *workerThreadManager) deliverResult(ctx context.Context, managed *managedWorkerThread, status agent.WorkerThreadStatus, handoffID string) {
+func (m *WorkerManager) deliverResult(ctx context.Context, managed *managedWorkerThread, status WorkerThreadStatus, handoffID string) {
 	finishOnReturn := true
 	defer func() {
 		if finishOnReturn {
@@ -806,7 +805,7 @@ func (m *workerThreadManager) deliverResult(ctx context.Context, managed *manage
 	}
 }
 
-func (m *workerThreadManager) recordNotificationFailure(managed *managedWorkerThread, status agent.WorkerThreadStatus, err error) {
+func (m *WorkerManager) recordNotificationFailure(managed *managedWorkerThread, status WorkerThreadStatus, err error) {
 	m.mu.Lock()
 	if current := m.threads[status.ThreadID]; current == managed && managed.status.LastTurnID == status.LastTurnID {
 		managed.status.NotificationError = err.Error()
@@ -825,37 +824,37 @@ func (m *workerThreadManager) recordNotificationFailure(managed *managedWorkerTh
 	})
 }
 
-func (m *workerThreadManager) lockActive(id string) (*managedWorkerThread, func(), error) {
+func (m *WorkerManager) lockActive(id string) (*managedWorkerThread, func(), error) {
 	m.mu.Lock()
 	managed := m.threads[strings.TrimSpace(id)]
-	if managed == nil || managed.status.State == agent.WorkerThreadStateStopping {
+	if managed == nil || managed.status.State == WorkerThreadStateStopping {
 		m.mu.Unlock()
-		return nil, nil, agent.ErrWorkerThreadNotActive
+		return nil, nil, ErrWorkerThreadNotActive
 	}
 	m.mu.Unlock()
 	managed.operationMu.Lock()
 	m.mu.Lock()
 	current := m.threads[managed.status.ThreadID]
-	active := current == managed && managed.status.State != agent.WorkerThreadStateStopping
+	active := current == managed && managed.status.State != WorkerThreadStateStopping
 	m.mu.Unlock()
 	if !active {
 		managed.operationMu.Unlock()
-		return nil, nil, agent.ErrWorkerThreadNotActive
+		return nil, nil, ErrWorkerThreadNotActive
 	}
 	return managed, managed.operationMu.Unlock, nil
 }
 
-func (m *workerThreadManager) removeCurrent(managed *managedWorkerThread) bool {
+func (m *WorkerManager) removeCurrent(managed *managedWorkerThread) bool {
 	if managed == nil {
 		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id := managed.status.ThreadID
-	if m.threads[id] != managed || managed.status.State == agent.WorkerThreadStateStopping {
+	if m.threads[id] != managed || managed.status.State == WorkerThreadStateStopping {
 		return false
 	}
-	managed.status.State = agent.WorkerThreadStateStopping
+	managed.status.State = WorkerThreadStateStopping
 	managed.status.Subscribed = false
 	managed.status.UpdatedAt = thread.NewTimestamp(time.Now())
 	for handoffID, owner := range m.resultHandoffs {
@@ -868,7 +867,7 @@ func (m *workerThreadManager) removeCurrent(managed *managedWorkerThread) bool {
 	return true
 }
 
-func (m *workerThreadManager) removeIfCurrent(managed *managedWorkerThread) {
+func (m *WorkerManager) removeIfCurrent(managed *managedWorkerThread) {
 	if managed == nil {
 		return
 	}
@@ -918,15 +917,15 @@ func cancelManagedWorkerThread(managed *managedWorkerThread) {
 	if managed == nil || managed.app == nil {
 		return
 	}
-	managed.cancel(agent.ErrWorkerThreadStopped)
+	managed.cancel(ErrWorkerThreadStopped)
 	if managed.unsubscribeState != nil {
 		managed.unsubscribeState()
 		managed.unsubscribeState = nil
 	}
-	managed.app.CancelActiveTurn(agent.ErrWorkerThreadStopped)
+	managed.app.CancelActiveTurn(ErrWorkerThreadStopped)
 }
 
-func (m *workerThreadManager) deferCleanup(cleanup func()) {
+func (m *WorkerManager) deferCleanup(cleanup func()) {
 	if cleanup == nil {
 		return
 	}
@@ -937,7 +936,7 @@ func (m *workerThreadManager) deferCleanup(cleanup func()) {
 	}()
 }
 
-func (m *workerThreadManager) deferCleanupError(cleanup func() error) {
+func (m *WorkerManager) deferCleanupError(cleanup func() error) {
 	if cleanup == nil {
 		return
 	}
@@ -950,13 +949,13 @@ func (m *workerThreadManager) deferCleanupError(cleanup func() error) {
 	})
 }
 
-func (m *workerThreadManager) snapshot(managed *managedWorkerThread) agent.WorkerThreadStatus {
+func (m *WorkerManager) snapshot(managed *managedWorkerThread) WorkerThreadStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.snapshotLocked(managed)
 }
 
-func (m *workerThreadManager) snapshotLocked(managed *managedWorkerThread) agent.WorkerThreadStatus {
+func (m *WorkerManager) snapshotLocked(managed *managedWorkerThread) WorkerThreadStatus {
 	status := managed.status
 	if managed.app != nil {
 		status.PendingCount = managed.app.PendingInputStatus().PendingCount
@@ -964,16 +963,16 @@ func (m *workerThreadManager) snapshotLocked(managed *managedWorkerThread) agent
 	return status
 }
 
-func (m *workerThreadManager) ensureParentActive() error {
+func (m *WorkerManager) ensureParentActive() error {
 	if m == nil || m.parent == nil {
-		return agent.ErrWorkerThreadManagerClosed
+		return ErrWorkerThreadManagerClosed
 	}
 	m.mu.Lock()
 	closed := m.closed
 	transitioning := m.transitioning
 	m.mu.Unlock()
 	if closed {
-		return agent.ErrWorkerThreadManagerClosed
+		return ErrWorkerThreadManagerClosed
 	}
 	if transitioning {
 		return errors.New("worker thread manager is changing parent Thread")

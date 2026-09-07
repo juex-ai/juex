@@ -100,10 +100,10 @@ func TestCaptureCommittedEventReplayReadsBeforeLatestCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if projected := active.app.Thread.ReplaySnapshot().Events; len(projected) != 2 {
+	if projected := active.agent.Thread.ReplaySnapshot().Events; len(projected) != 2 {
 		t.Fatalf("checkpoint projection retained %d events, want 2", len(projected))
 	}
-	replay, err := captureCommittedEventReplay(active.app, thread.MainID)
+	replay, err := captureCommittedEventReplay(active.agent, thread.MainID)
 	if err != nil {
 		t.Fatal(err)
 	}

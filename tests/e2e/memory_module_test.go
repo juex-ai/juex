@@ -409,7 +409,7 @@ func TestEndToEnd_MemoryMainAndConcurrentWorkersShareAgentStore(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	create, _ := a.Engine.Tools.Get(workerthreadsmodule.ToolCreate)
-	var workers []*app.App
+	var workers []*agent.Agent
 	for _, name := range []string{"worker-one", "worker-two"} {
 		result, err := create.Handler(ctx, map[string]any{"query": name})
 		if err != nil {
@@ -419,7 +419,7 @@ func TestEndToEnd_MemoryMainAndConcurrentWorkersShareAgentStore(t *testing.T) {
 		if err := json.Unmarshal([]byte(result), &status); err != nil {
 			t.Fatal(err)
 		}
-		worker, ok := a.ManagedWorkerApp(status.ThreadID)
+		worker, ok := a.ManagedWorkerAgent(status.ThreadID)
 		if !ok {
 			t.Fatal("missing Worker")
 		}
@@ -432,7 +432,7 @@ func TestEndToEnd_MemoryMainAndConcurrentWorkersShareAgentStore(t *testing.T) {
 			t.Fatal(ctx.Err())
 		}
 	}
-	for _, reader := range append(workers, a) {
+	for _, reader := range append(workers, a.Agent) {
 		search, ok := reader.Engine.Tools.Get(memory.ToolSearch)
 		if !ok {
 			t.Fatal("missing shared Memory")
