@@ -25,6 +25,7 @@ export function RuntimeLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const section = runtimeSectionFromPath(location.pathname);
+  const needsCatalog = section !== "config" && section !== "logs";
   const { resourceRevision } = useFleetAgent();
   const [snapshot, setSnapshot] = useState<{
     agentId: string;
@@ -35,6 +36,7 @@ export function RuntimeLayout() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
+    if (!needsCatalog) return;
     let live = true;
     void getRuntimeStatus()
       .then((status) => {
@@ -49,12 +51,11 @@ export function RuntimeLayout() {
     return () => {
       live = false;
     };
-  }, [agentId, resourceRevision.runtime]);
+  }, [agentId, resourceRevision.runtime, needsCatalog]);
 
   const sectionEnabled = (id: RuntimeSection) =>
     (id !== "extensions" && id !== "observables") ||
     (data !== null && runtimeModuleEnabled(data, id));
-  const needsCatalog = section !== "config" && section !== "logs";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -80,7 +81,7 @@ export function RuntimeLayout() {
               <SelectItem
                 key={item.id}
                 value={item.id}
-                disabled={!sectionEnabled(item.id)}
+                disabled={data !== null && !sectionEnabled(item.id)}
               >
                 {item.label}
               </SelectItem>

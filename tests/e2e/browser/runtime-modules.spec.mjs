@@ -71,3 +71,13 @@ test("runtime catalog failure is an error and leaves configuration reachable", a
   await page.getByRole("combobox", { name: "Runtime section" }).click();
   await expect(page.getByRole("option", { name: "Config", exact: true })).not.toHaveAttribute("aria-disabled", "true");
 });
+
+test("configuration and logs do not request the execution catalog", async ({ page }) => {
+  const reads = await runtimeFixture(page);
+  for (const section of ["config", "logs"]) {
+    await page.goto(`/agents/test-agent/runtime/${section}`);
+    await expect(page.getByRole("combobox", { name: "Runtime section" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: section === "config" ? "Agent config" : "Agent logs", exact: true })).toBeVisible();
+  }
+  expect(reads.runtimeReads()).toBe(0);
+});

@@ -880,7 +880,11 @@ func (a *App) detachObservability() error {
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	if a != nil && a.Engine != nil {
-		if err := CheckTurnCapability(a.cfg, a.Engine.ThreadRuntimeSnapshot().Thread.ID, TurnAdmissionRequest{Prompt: prompt}); err != nil {
+		identity, ok := a.ThreadIdentity()
+		if !ok {
+			return "", ErrThreadUnavailable
+		}
+		if err := CheckTurnCapability(a.cfg, identity.ID, TurnAdmissionRequest{Prompt: prompt}); err != nil {
 			return "", err
 		}
 	}
