@@ -12,11 +12,10 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/mcp"
-
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-
+	"github.com/juex-ai/juex/internal/framework/agent"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
@@ -386,8 +385,8 @@ func TestAppCanceledAdmittedTurnReleasesEngineReservation(t *testing.T) {
 		Message:    llm.TextMessage(llm.RoleAssistant, "handled after cancellation"),
 		StopReason: llm.StopEndTurn,
 	})
-	first := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "accepted before cancellation"})
-	if first.Kind != TurnAdmissionStarted || first.Start == nil {
+	first := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "accepted before cancellation"})
+	if first.Kind != agent.TurnAdmissionStarted || first.Start == nil {
 		t.Fatalf("first admission = %+v, want started", first)
 	}
 	wantCause := errors.New("admitted turn stopped by owner")
@@ -407,8 +406,8 @@ func TestAppCanceledAdmittedTurnReleasesEngineReservation(t *testing.T) {
 		t.Fatalf("turn error = %+v, want preserved cancellation cause", terminal)
 	}
 
-	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "run after canceled admission"})
-	if second.Kind != TurnAdmissionStarted || second.Start == nil {
+	second := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "run after canceled admission"})
+	if second.Kind != agent.TurnAdmissionStarted || second.Start == nil {
 		t.Fatalf("second admission = %+v, want started instead of queued behind a phantom turn", second)
 	}
 	out, err := a.RunAdmittedTurn(context.Background(), second.Start.TurnID, second.Start.Message)

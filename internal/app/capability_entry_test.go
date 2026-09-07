@@ -11,7 +11,7 @@ import (
 	extensionsmodule "github.com/juex-ai/juex/internal/features/extensions"
 	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-
+	"github.com/juex-ai/juex/internal/framework/agent"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -49,7 +49,7 @@ func TestDisabledGoalRejectsDirectAndAdmittedSlash(t *testing.T) {
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
 	provider := &capabilityProvider{}
 	a := capabilityApp(t, cfg, thread.MainID, provider)
-	if result := a.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: "/goal finish this"}); result.Kind != TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
+	if result := a.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: "/goal finish this"}); result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
 		t.Errorf("disabled goal admission = %+v", result)
 	}
 	if _, err := a.Run(t.Context(), "/goal finish this"); err == nil || !strings.Contains(err.Error(), "goal module is disabled") {
@@ -107,13 +107,13 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	if pausedProvider.calls.Load() != 0 {
 		t.Fatal("opening disabled Worker executed retained input")
 	}
-	if result := paused.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: "run hidden API"}); result.Kind != TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
+	if result := paused.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: "run hidden API"}); result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
 		t.Errorf("disabled Worker admission = %+v", result)
 	}
 	if _, err := paused.Run(t.Context(), "run directly"); err == nil || !strings.Contains(err.Error(), "worker-threads module is disabled") {
 		t.Errorf("disabled Worker direct execution = %v", err)
 	}
-	if result := paused.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: "retry notice", Kind: llm.MessageKindSystemNotice}); result.Kind != TurnAdmissionRejected {
+	if result := paused.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: "retry notice", Kind: llm.MessageKindSystemNotice}); result.Kind != agent.TurnAdmissionRejected {
 		t.Errorf("disabled Worker system notice = %+v", result)
 	}
 	message := llm.TextMessage(llm.RoleUser, "external input")
@@ -127,8 +127,8 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 		t.Error("disabled Worker external input was accepted")
 	}
 	for range 2 {
-		result := paused.AdmitTurn(t.Context(), TurnAdmissionRequest{Prompt: SlashCompact})
-		if result.Kind != TurnAdmissionCommandCompleted || result.Start != nil {
+		result := paused.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: SlashCompact})
+		if result.Kind != agent.TurnAdmissionCommandCompleted || result.Start != nil {
 			t.Fatalf("paused Worker maintenance = %+v", result)
 		}
 	}

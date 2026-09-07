@@ -4,6 +4,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -14,7 +15,7 @@ func (e *moduleUnavailableError) Error() string { return e.ModuleID + " module i
 
 // CheckTurnCapability lets transports reject disabled execution before opening
 // a Thread. Storage and host maintenance remain available independently.
-func CheckTurnCapability(cfg config.Config, threadID string, req TurnAdmissionRequest) error {
+func CheckTurnCapability(cfg config.Config, threadID string, req agent.TurnAdmissionRequest) error {
 	if req.Kind == "" && len(req.Attachments) == 0 {
 		if cmd, handled, err := ParseSlashCommand(req.Prompt); handled && err == nil {
 			switch cmd.Name {
@@ -45,9 +46,12 @@ func (a *App) executionError() error {
 	if snapshot.Thread == nil {
 		return nil
 	}
-	return workerExecutionError(a.cfg, snapshot.Thread.ID)
+	if a.executionPolicy.CheckExecution == nil {
+		return nil
+	}
+	return a.executionPolicy.CheckExecution(snapshot.Thread.ID)
 }
 
-func moduleUnavailableResult(err error) TurnAdmissionResult {
+func moduleUnavailableResult(err error) agent.TurnAdmissionResult {
 	return rejectedResult("module_disabled", err.Error(), "", false, err, runtime.PendingInputStatus{})
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	usermedia "github.com/juex-ai/juex/internal/framework/inputmedia"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	statusapi "github.com/juex-ai/juex/internal/framework/status"
@@ -323,17 +324,17 @@ type turnRequest struct {
 }
 
 type startTurnResponse struct {
-	ThreadID         string                  `json:"thread_id,omitempty"`
-	InputID          string                  `json:"input_id,omitempty"`
-	AcceptedAt       *thread.Timestamp       `json:"accepted_at,omitempty"`
-	State            string                  `json:"state,omitempty"`
-	Cursor           string                  `json:"cursor,omitempty"`
-	TurnID           string                  `json:"turn_id,omitempty"`
-	Queued           bool                    `json:"queued,omitempty"`
-	PendingCount     int                     `json:"pending_count,omitempty"`
-	MaxPendingInputs int                     `json:"max_pending_inputs,omitempty"`
-	Command          *app.SlashCommandResult `json:"command,omitempty"`
-	Warnings         []app.TurnWarning       `json:"warnings,omitempty"`
+	ThreadID         string               `json:"thread_id,omitempty"`
+	InputID          string               `json:"input_id,omitempty"`
+	AcceptedAt       *thread.Timestamp    `json:"accepted_at,omitempty"`
+	State            string               `json:"state,omitempty"`
+	Cursor           string               `json:"cursor,omitempty"`
+	TurnID           string               `json:"turn_id,omitempty"`
+	Queued           bool                 `json:"queued,omitempty"`
+	PendingCount     int                  `json:"pending_count,omitempty"`
+	MaxPendingInputs int                  `json:"max_pending_inputs,omitempty"`
+	Command          *agent.CommandResult `json:"command,omitempty"`
+	Warnings         []agent.TurnWarning  `json:"warnings,omitempty"`
 }
 
 func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id string) {
@@ -342,7 +343,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body")
 		return
 	}
-	req := app.TurnAdmissionRequest{Prompt: request.Prompt, Kind: request.Kind, Attachments: request.Attachments, RetryTurnID: request.RetryTurnID}
+	req := agent.TurnAdmissionRequest{Prompt: request.Prompt, Kind: request.Kind, Attachments: request.Attachments, RetryTurnID: request.RetryTurnID}
 	if err := app.CheckTurnCapability(s.opts.Cfg, id, req); err != nil {
 		writeErr(w, http.StatusForbidden, "module_disabled", err.Error())
 		return
@@ -373,7 +374,7 @@ func latestDurableEventCursor(active *activeThread) string {
 	return active.app.Thread.LatestEventCursor()
 }
 
-func writeTurnAdmissionResult(w http.ResponseWriter, threadID string, result app.TurnAdmissionResult, admissionCursor string) {
+func writeTurnAdmissionResult(w http.ResponseWriter, threadID string, result agent.TurnAdmissionResult, admissionCursor string) {
 	receipt := startTurnResponse{
 		ThreadID: threadID,
 		InputID:  result.InputID,
@@ -384,23 +385,23 @@ func writeTurnAdmissionResult(w http.ResponseWriter, threadID string, result app
 		acceptedAt := thread.NewTimestamp(time.Now())
 		receipt.AcceptedAt = &acceptedAt
 		receipt.State = "queued"
-		if result.Kind == app.TurnAdmissionStarted {
+		if result.Kind == agent.TurnAdmissionStarted {
 			receipt.State = "assigned"
 		}
 	}
 	switch result.Kind {
-	case app.TurnAdmissionStarted:
+	case agent.TurnAdmissionStarted:
 		receipt.Warnings = result.Warnings
 		writeJSON(w, http.StatusAccepted, receipt)
-	case app.TurnAdmissionQueued:
+	case agent.TurnAdmissionQueued:
 		receipt.Queued = true
 		receipt.PendingCount = result.PendingCount
 		receipt.MaxPendingInputs = result.MaxPendingInputs
 		receipt.Warnings = result.Warnings
 		writeJSON(w, http.StatusAccepted, receipt)
-	case app.TurnAdmissionCommandCompleted:
+	case agent.TurnAdmissionCommandCompleted:
 		writeJSON(w, http.StatusOK, startTurnResponse{ThreadID: threadID, Command: result.Command, Warnings: result.Warnings})
-	case app.TurnAdmissionRejected:
+	case agent.TurnAdmissionRejected:
 		status := http.StatusBadRequest
 		if result.Error.Kind == "module_disabled" {
 			status = http.StatusForbidden
@@ -410,7 +411,7 @@ func writeTurnAdmissionResult(w http.ResponseWriter, threadID string, result app
 		}
 		writeJSON(w, status, errorJSON{Error: result.Error.Kind, Message: result.Error.Message,
 			Suggestion: result.Error.Suggestion, Retryable: result.Error.Retryable})
-	case app.TurnAdmissionConflict:
+	case agent.TurnAdmissionConflict:
 		writeJSON(w, http.StatusConflict, errorJSON{Error: result.Error.Kind, Message: result.Error.Message,
 			Suggestion: result.Error.Suggestion, Retryable: result.Error.Retryable})
 	default:

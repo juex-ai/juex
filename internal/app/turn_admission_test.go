@@ -10,15 +10,16 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 func TestAdmitTurnStartsWhenIdleWithFrameworkIdentity(t *testing.T) {
 	a, _ := newStubApp(t)
 
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "hello"})
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "hello"})
 
-	if result.Kind != TurnAdmissionStarted || result.Start == nil {
+	if result.Kind != agent.TurnAdmissionStarted || result.Start == nil {
 		t.Fatalf("result = %+v", result)
 	}
 	if result.Start.TurnID == "" || result.Start.Message.ID == "" || result.Start.Message.FirstText() != "hello" {
@@ -46,28 +47,28 @@ func TestAdmitTurnStartsNextInputAfterRuntimeCompletes(t *testing.T) {
 		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "first answer"), StopReason: llm.StopEndTurn},
 		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "second answer"), StopReason: llm.StopEndTurn},
 	)
-	first := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "first"})
-	if first.Kind != TurnAdmissionStarted || first.Start == nil {
+	first := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "first"})
+	if first.Kind != agent.TurnAdmissionStarted || first.Start == nil {
 		t.Fatalf("first = %+v", first)
 	}
 	if _, err := a.RunAdmittedTurn(context.Background(), first.Start.TurnID, first.Start.Message); err != nil {
 		t.Fatal(err)
 	}
 
-	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "second"})
-	if second.Kind != TurnAdmissionStarted || second.Start == nil || second.Start.TurnID == first.Start.TurnID {
+	second := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "second"})
+	if second.Kind != agent.TurnAdmissionStarted || second.Start == nil || second.Start.TurnID == first.Start.TurnID {
 		t.Fatalf("second = %+v", second)
 	}
 }
 
 func TestAdmitTurnSystemNoticeUsesOrdinaryLifecycleWithoutSlashParsing(t *testing.T) {
 	a, _ := newStubApp(t)
-	started := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/status", Kind: llm.MessageKindSystemNotice})
-	if started.Kind != TurnAdmissionStarted || started.Start == nil || started.Start.Message.Kind != llm.MessageKindSystemNotice || started.Start.Message.FirstText() != "/status" {
+	started := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "/status", Kind: llm.MessageKindSystemNotice})
+	if started.Kind != agent.TurnAdmissionStarted || started.Start == nil || started.Start.Message.Kind != llm.MessageKindSystemNotice || started.Start.Message.FirstText() != "/status" {
 		t.Fatalf("started = %+v", started)
 	}
-	queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "continue", Kind: llm.MessageKindSystemNotice})
-	if queued.Kind != TurnAdmissionQueued || queued.PendingCount != 1 {
+	queued := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "continue", Kind: llm.MessageKindSystemNotice})
+	if queued.Kind != agent.TurnAdmissionQueued || queued.PendingCount != 1 {
 		t.Fatalf("queued = %+v", queued)
 	}
 }
@@ -95,12 +96,12 @@ func TestAdmitTurnSystemNoticeRetriesInterruptedTurnInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	started := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+	started := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{
 		Prompt:      "continue after restart",
 		Kind:        llm.MessageKindSystemNotice,
 		RetryTurnID: "turn-interrupted",
 	})
-	if started.Kind != TurnAdmissionStarted || started.Start == nil {
+	if started.Kind != agent.TurnAdmissionStarted || started.Start == nil {
 		t.Fatalf("started = %+v", started)
 	}
 	records, err := a.Engine.PendingInputQueue.Records()
@@ -150,7 +151,7 @@ func TestAdmitTurnSystemNoticeRollsBackInterruptedInputsWhenAdmissionFails(t *te
 		delegate: a.eventSink, eventType: runtime.TurnAdmittedType, err: wantErr,
 	})
 
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{
 		Prompt:      "continue after restart",
 		Kind:        llm.MessageKindSystemNotice,
 		RetryTurnID: "turn-interrupted",
@@ -180,21 +181,21 @@ func TestAdmitTurnRejectsUnsupportedKindsAndSystemNoticeAttachments(t *testing.T
 	} {
 		t.Run(kind, func(t *testing.T) {
 			a, _ := newStubApp(t)
-			result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/status", Kind: kind})
-			if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
+			result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "/status", Kind: kind})
+			if result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "bad_request" {
 				t.Fatalf("result = %+v", result)
 			}
 		})
 	}
 	a, _ := newStubApp(t)
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{
 		Prompt: "notice", Kind: llm.MessageKindSystemNotice, Attachments: []llm.MediaRef{turnAdmissionMediaRef()},
 	})
-	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
+	if result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "bad_request" {
 		t.Fatalf("result = %+v", result)
 	}
-	result = a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "notice", RetryTurnID: "turn-old"})
-	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
+	result = a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "notice", RetryTurnID: "turn-old"})
+	if result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "bad_request" {
 		t.Fatalf("retry without system notice = %+v", result)
 	}
 }
@@ -202,8 +203,8 @@ func TestAdmitTurnRejectsUnsupportedKindsAndSystemNoticeAttachments(t *testing.T
 func TestAdmitTurnPreservesAttachmentsAndWarnings(t *testing.T) {
 	a, _ := newStubApp(t)
 	media := turnAdmissionMediaRef()
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "describe this", Attachments: []llm.MediaRef{media}})
-	if result.Kind != TurnAdmissionStarted || result.Start == nil {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "describe this", Attachments: []llm.MediaRef{media}})
+	if result.Kind != agent.TurnAdmissionStarted || result.Start == nil {
 		t.Fatalf("result = %+v", result)
 	}
 	if len(result.Warnings) != 1 || result.Warnings[0].Code != "attachment_vision_unavailable" {
@@ -219,16 +220,16 @@ func TestAdmitTurnVisionCapabilitySuppressesAttachmentWarning(t *testing.T) {
 	a, _ := newStubApp(t)
 	vision := true
 	a.cfg.ProviderCapabilities.Vision = &vision
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Attachments: []llm.MediaRef{turnAdmissionMediaRef()}})
-	if result.Kind != TurnAdmissionStarted || len(result.Warnings) != 0 || len(result.Start.Message.Blocks) != 1 {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Attachments: []llm.MediaRef{turnAdmissionMediaRef()}})
+	if result.Kind != agent.TurnAdmissionStarted || len(result.Warnings) != 0 || len(result.Start.Message.Blocks) != 1 {
 		t.Fatalf("result = %+v", result)
 	}
 }
 
 func TestAdmitTurnRejectsSlashCommandWithAttachments(t *testing.T) {
 	a, _ := newStubApp(t)
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/status", Attachments: []llm.MediaRef{turnAdmissionMediaRef()}})
-	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "/status", Attachments: []llm.MediaRef{turnAdmissionMediaRef()}})
+	if result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "bad_request" {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -238,8 +239,8 @@ func TestAdmitTurnQueuesBehindRuntimeOwnedTurn(t *testing.T) {
 	if err := a.Engine.ReserveTurnID("external-turn"); err != nil {
 		t.Fatal(err)
 	}
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "steer"})
-	if result.Kind != TurnAdmissionQueued || result.InputID == "" || result.TurnID != "" || result.PendingCount != 1 {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "steer"})
+	if result.Kind != agent.TurnAdmissionQueued || result.InputID == "" || result.TurnID != "" || result.PendingCount != 1 {
 		t.Fatalf("result = %+v", result)
 	}
 	if phase, turnID := a.admissionQueue().snapshot(); phase != turnAdmissionIdle || turnID != "" {
@@ -249,13 +250,13 @@ func TestAdmitTurnQueuesBehindRuntimeOwnedTurn(t *testing.T) {
 
 func TestAdmitTurnQueuesAttachmentBlocksBehindActiveTurn(t *testing.T) {
 	a, _ := newStubApp(t)
-	started := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "first"})
-	if started.Kind != TurnAdmissionStarted {
+	started := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "first"})
+	if started.Kind != agent.TurnAdmissionStarted {
 		t.Fatalf("started = %+v", started)
 	}
 	media := turnAdmissionMediaRef()
-	queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "second", Attachments: []llm.MediaRef{media}})
-	if queued.Kind != TurnAdmissionQueued || len(queued.Warnings) != 1 {
+	queued := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "second", Attachments: []llm.MediaRef{media}})
+	if queued.Kind != agent.TurnAdmissionQueued || len(queued.Warnings) != 1 {
 		t.Fatalf("queued = %+v", queued)
 	}
 	records, err := a.Engine.PendingInputQueue.Records()
@@ -284,8 +285,8 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesWithFrameworkIdentity(t *testing
 	if compactID == "" || admitted.Operation != runtime.TurnAdmissionOperationCompact {
 		t.Fatalf("compact = %q admission = %+v", compactID, admitted)
 	}
-	queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "after compact"})
-	if queued.Kind != TurnAdmissionQueued || queued.InputID == "" || queued.TurnID != "" {
+	queued := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "after compact"})
+	if queued.Kind != agent.TurnAdmissionQueued || queued.InputID == "" || queued.TurnID != "" {
 		t.Fatalf("queued during compact = %+v", queued)
 	}
 	promoted, err := a.finishCompactAdmission(compactID)
@@ -315,9 +316,9 @@ func TestFinishCompactWaitsForConcurrentQueuedAdmissionPublication(t *testing.T)
 	release := func() { releaseOnce.Do(func() { close(releaseQueued) }) }
 	defer release()
 
-	queuedDone := make(chan TurnAdmissionResult, 1)
+	queuedDone := make(chan agent.TurnAdmissionResult, 1)
 	go func() {
-		queuedDone <- a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "after compact"})
+		queuedDone <- a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "after compact"})
 	}()
 	select {
 	case <-queuedPublishing:
@@ -325,7 +326,7 @@ func TestFinishCompactWaitsForConcurrentQueuedAdmissionPublication(t *testing.T)
 		t.Fatal("queued admission did not reach publication")
 	}
 	type compactFinishResult struct {
-		start *AdmittedTurn
+		start *agent.AdmittedTurn
 		err   error
 	}
 	finishDone := make(chan compactFinishResult, 1)
@@ -342,7 +343,7 @@ func TestFinishCompactWaitsForConcurrentQueuedAdmissionPublication(t *testing.T)
 
 	release()
 	queued := <-queuedDone
-	if queued.Kind != TurnAdmissionQueued || queued.InputID == "" || queued.TurnID != "" {
+	if queued.Kind != agent.TurnAdmissionQueued || queued.InputID == "" || queued.TurnID != "" {
 		t.Fatalf("queued admission = %+v", queued)
 	}
 	finished := <-finishDone
@@ -359,12 +360,12 @@ func TestFinishCompactWaitsForConcurrentQueuedAdmissionPublication(t *testing.T)
 
 func TestAdmitTurnStatusSlashAllowedWhileRuntimeBusy(t *testing.T) {
 	a, provider := newStubApp(t)
-	started := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "first"})
-	if started.Kind != TurnAdmissionStarted {
+	started := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "first"})
+	if started.Kind != agent.TurnAdmissionStarted {
 		t.Fatalf("started = %+v", started)
 	}
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/status"})
-	if result.Kind != TurnAdmissionCommandCompleted || result.Command == nil || result.Command.Name != SlashStatus {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "/status"})
+	if result.Kind != agent.TurnAdmissionCommandCompleted || result.Command == nil || result.Command.Name != SlashStatus {
 		t.Fatalf("result = %+v", result)
 	}
 	if provider.calls != 0 {
@@ -374,12 +375,12 @@ func TestAdmitTurnStatusSlashAllowedWhileRuntimeBusy(t *testing.T) {
 
 func TestAdmitTurnNewSlashRejectsWhileBusy(t *testing.T) {
 	a, _ := newStubApp(t)
-	started := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "first"})
-	if started.Kind != TurnAdmissionStarted {
+	started := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "first"})
+	if started.Kind != agent.TurnAdmissionStarted {
 		t.Fatalf("started = %+v", started)
 	}
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/new"})
-	if result.Kind != TurnAdmissionConflict || result.Error.Message != "Thread busy" {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "/new"})
+	if result.Kind != agent.TurnAdmissionConflict || result.Error.Message != "Thread busy" {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -391,7 +392,7 @@ func TestPendingInputTerminalPublicationMapsToRetryableConflict(t *testing.T) {
 		Status: status,
 	}, runtime.ErrActiveTurnExists)
 
-	if result.Kind != TurnAdmissionConflict || !result.Error.Retryable || !errors.Is(result.Err, runtime.ErrActiveTurnExists) {
+	if result.Kind != agent.TurnAdmissionConflict || !result.Error.Retryable || !errors.Is(result.Err, runtime.ErrActiveTurnExists) {
 		t.Fatalf("result = %+v, want retryable conflict", result)
 	}
 	if result.TurnID != status.TurnID || result.PendingCount != status.PendingCount || result.MaxPendingInputs != status.MaxPendingInputs {
@@ -401,8 +402,8 @@ func TestPendingInputTerminalPublicationMapsToRetryableConflict(t *testing.T) {
 
 func TestAdmitTurnNewSlashRenewsContextWithoutStartingTurn(t *testing.T) {
 	a, _ := newStubApp(t)
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/new"})
-	if result.Kind != TurnAdmissionCommandCompleted || result.Start != nil || result.TurnID != "" {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "/new"})
+	if result.Kind != agent.TurnAdmissionCommandCompleted || result.Start != nil || result.TurnID != "" {
 		t.Fatalf("result = %+v", result)
 	}
 	if got := a.Thread.Info().GenerationID; got != "g000002" {
@@ -413,22 +414,22 @@ func TestAdmitTurnNewSlashRenewsContextWithoutStartingTurn(t *testing.T) {
 func TestAdmitTurnMapsQueueFull(t *testing.T) {
 	a, _ := newStubApp(t)
 	a.Engine.MaxPendingInputs = 1
-	if started := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "first"}); started.Kind != TurnAdmissionStarted {
+	if started := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "first"}); started.Kind != agent.TurnAdmissionStarted {
 		t.Fatalf("started = %+v", started)
 	}
-	if queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "second"}); queued.Kind != TurnAdmissionQueued {
+	if queued := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "second"}); queued.Kind != agent.TurnAdmissionQueued {
 		t.Fatalf("queued = %+v", queued)
 	}
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "third"})
-	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "pending_input_full" || !result.Error.Retryable {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "third"})
+	if result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "pending_input_full" || !result.Error.Retryable {
 		t.Fatalf("result = %+v", result)
 	}
 }
 
 func TestAdmitTurnMalformedSlashReturnsBadRequest(t *testing.T) {
 	a, _ := newStubApp(t)
-	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/status verbose"})
-	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" || !strings.Contains(result.Error.Suggestion, AvailableSlashCommandsText()) {
+	result := a.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "/status verbose"})
+	if result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "bad_request" || !strings.Contains(result.Error.Suggestion, AvailableSlashCommandsText()) {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -443,8 +444,8 @@ func TestAdmitTurnRequiresInitializedApp(t *testing.T) {
 		{name: "nil thread", app: func(t *testing.T) *App { a, _ := newStubApp(t); a.Thread = nil; return a }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			result := test.app(t).AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "hello"})
-			if result.Kind != TurnAdmissionError || result.Error.Message != "turn admission: app, engine, or Thread is not initialized" {
+			result := test.app(t).AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: "hello"})
+			if result.Kind != agent.TurnAdmissionError || result.Error.Message != "turn admission: app, engine, or Thread is not initialized" {
 				t.Fatalf("result = %+v", result)
 			}
 		})

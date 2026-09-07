@@ -258,7 +258,7 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 		return agent.WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	result := child.admitUserTurn(createCtx, userTurnMessage(query, nil))
-	if result.Kind != TurnAdmissionStarted || result.Start == nil {
+	if result.Kind != agent.TurnAdmissionStarted || result.Start == nil {
 		m.removeIfCurrent(managed)
 		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
 		finishReservation()
@@ -479,14 +479,14 @@ func (m *workerThreadManager) Send(id, message string) (agent.WorkerThreadStatus
 	defer unlock()
 	result := managed.app.admitUserTurn(managed.ctx, userTurnMessage(message, nil))
 	switch result.Kind {
-	case TurnAdmissionStarted:
+	case agent.TurnAdmissionStarted:
 		if err := m.startRun(managed.ctx, managed, result.Start); err != nil {
 			return agent.WorkerThreadStatus{}, false, err
 		}
 		return m.snapshot(managed), false, nil
-	case TurnAdmissionQueued:
+	case agent.TurnAdmissionQueued:
 		return m.snapshot(managed), true, nil
-	case TurnAdmissionRejected, TurnAdmissionConflict, TurnAdmissionError:
+	case agent.TurnAdmissionRejected, agent.TurnAdmissionConflict, agent.TurnAdmissionError:
 		if result.Err != nil {
 			return agent.WorkerThreadStatus{}, false, result.Err
 		}
@@ -727,7 +727,7 @@ func (m *workerThreadManager) WaitClose() error {
 	return m.cleanupErr
 }
 
-func (m *workerThreadManager) startRun(ctx context.Context, managed *managedWorkerThread, start *AdmittedTurn) error {
+func (m *workerThreadManager) startRun(ctx context.Context, managed *managedWorkerThread, start *agent.AdmittedTurn) error {
 	if start == nil {
 		return errors.New("worker thread run: missing admitted turn")
 	}

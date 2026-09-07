@@ -38,6 +38,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	usermedia "github.com/juex-ai/juex/internal/framework/inputmedia"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -99,6 +100,8 @@ type Options struct {
 }
 
 type App struct {
+	executionPolicy       agent.InputPolicy
+	mediaDir              string
 	Engine                *runtime.Engine
 	Status                *runtime.StatusStore
 	Bus                   *events.Bus
@@ -518,6 +521,8 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		hookRunner:            hookRunner,
 		hookBaseRequest:       hookBaseRequest,
 	}
+	a.executionPolicy = a.applicationInputPolicy(cfg)
+	a.mediaDir = cfg.MediaDir()
 	statusUnsubscribe = eventSink.AddProjection(status)
 	a.statusUnsubscribe = statusUnsubscribe
 	if err := a.attachObservability(threadState); err != nil {
@@ -891,26 +896,26 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 		if !ok {
 			return "", ErrThreadUnavailable
 		}
-		if err := CheckTurnCapability(a.cfg, identity.ID, TurnAdmissionRequest{Prompt: prompt}); err != nil {
+		if err := a.checkInput(identity.ID, agent.TurnAdmissionRequest{Prompt: prompt}); err != nil {
 			return "", err
 		}
 	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
 		return "", err
 	}
-	if cmd, handled, err := ParseSlashCommand(prompt); handled || err != nil {
+	if cmd, handled, err := a.parseCommand(prompt); handled || err != nil {
 		if err != nil {
 			return "", err
 		}
-		if cmd.Name == SlashGoal {
-			return a.runEngineTurn(ctx, GoalInstructionPrompt(cmd.Args))
+		if cmd.Kind == agent.CommandKindPrompt {
+			return a.runEngineTurn(ctx, cmd.Prompt)
 		}
-		result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
+		result, err := a.ExecuteCommand(ctx, cmd)
 		if err != nil {
 			return "", err
 		}
-		if cmd.Name == SlashNew && a.executionError() == nil {
-			return a.runEngineTurnMessage(ctx, NewThreadGreetingMessage())
+		if cmd.Kind == agent.CommandKindNew && a.executionError() == nil {
+			return a.runEngineTurnMessage(ctx, a.executionPolicy.NewContextInput)
 		}
 		return result.Text, nil
 	}
@@ -929,7 +934,7 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
 		return "", err
 	}
-	if _, handled, err := ParseSlashCommand(prompt); handled || err != nil {
+	if _, handled, err := a.parseCommand(prompt); handled || err != nil {
 		if err != nil {
 			return "", err
 		}
@@ -943,7 +948,7 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 	if err := a.executionError(); err != nil {
 		return "", err
 	}
-	if err := usermedia.ValidateThreadMediaRefs(a.cfg.MediaDir(), a.Thread.ID, attachments, usermedia.Limits{}); err != nil {
+	if err := usermedia.ValidateThreadMediaRefs(a.mediaDir, a.Thread.ID, attachments, usermedia.Limits{}); err != nil {
 		return "", err
 	}
 	return a.Engine.TurnMessage(ctx, userTurnMessage(prompt, attachments))

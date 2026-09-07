@@ -10,6 +10,7 @@ import (
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -24,18 +25,6 @@ const (
 const newThreadGreetingPrompt = "Please greet me briefly, introduce what you can help with in one concise sentence, and ask what I want to do next. You may suggest a concrete place to start."
 
 var slashCommandNames = []string{SlashCompact, SlashGoal, SlashNew, SlashStatus}
-
-type SlashCommand struct {
-	Name string `json:"name"`
-	Args string `json:"args,omitempty"`
-}
-
-type SlashCommandResult struct {
-	Name    string                    `json:"name"`
-	Text    string                    `json:"text"`
-	Compact *runtime.CompactionResult `json:"compact,omitempty"`
-	Status  *StatusSnapshot           `json:"status,omitempty"`
-}
 
 type UnknownSlashCommandError struct {
 	Input string
@@ -72,33 +61,25 @@ func NewThreadGreetingMessage() llm.Message {
 	return msg
 }
 
-func GoalInstructionPrompt(args string) string {
-	args = strings.TrimSpace(args)
-	if args == "" {
-		return "The user wants to inspect or update the Thread goal. Use get_goal first, then create_goal or update_goal if a goal should be created, changed, marked success, or marked failure. Do not treat this slash command text itself as the goal description."
-	}
-	return "The user wants to create or update the Thread goal. Use get_goal first, then call create_goal or update_goal as appropriate. Do not write goal state directly; use the goal tools only.\n\nUser goal request:\n" + args
-}
-
-func ParseSlashCommand(input string) (SlashCommand, bool, error) {
+func ParseSlashCommand(input string) (agent.Command, bool, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
-		return SlashCommand{}, false, nil
+		return agent.Command{}, false, nil
 	}
 	fields := strings.Fields(trimmed)
 	commandName := fields[0]
 	if !isSlashCommandName(commandName) {
-		return SlashCommand{}, false, nil
+		return agent.Command{}, false, nil
 	}
 	if commandName == SlashCompact || commandName == SlashGoal {
 		args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
-		return SlashCommand{Name: commandName, Args: args}, true, nil
+		return parsedSlashCommand(commandName, args), true, nil
 	}
 	if len(fields) == 1 {
-		return SlashCommand{Name: commandName}, true, nil
+		return parsedSlashCommand(commandName, ""), true, nil
 	}
 	args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
-	return SlashCommand{}, true, &SlashCommandArgumentsError{Name: commandName, Args: args}
+	return agent.Command{}, true, &SlashCommandArgumentsError{Name: commandName, Args: args}
 }
 
 func isSlashCommandName(commandName string) bool {
@@ -110,35 +91,41 @@ func isSlashCommandName(commandName string) bool {
 	return false
 }
 
-func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (SlashCommandResult, bool, error) {
+func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (agent.CommandResult, bool, error) {
 	cmd, handled, err := ParseSlashCommand(input)
 	if err != nil || !handled {
-		return SlashCommandResult{}, handled, err
+		return agent.CommandResult{}, handled, err
 	}
-	result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
+	result, err := a.ExecuteCommand(ctx, cmd)
 	return result, true, err
 }
 
-func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (SlashCommandResult, error) {
-	switch cmd.Name {
-	case SlashCompact:
-		return a.executeCompactSlashCommand(ctx, cmd, "")
-	case SlashStatus:
-		status := a.StatusSnapshot()
-		return SlashCommandResult{Name: cmd.Name, Text: status.Text(), Status: &status}, nil
-	case SlashNew:
-		if err := a.NewContext(ctx); err != nil {
-			return SlashCommandResult{}, err
+func (a *App) ExecuteCommand(ctx context.Context, cmd agent.Command) (agent.CommandResult, error) {
+	switch cmd.Kind {
+	case agent.CommandKindCompact:
+		return a.executeCompactCommand(ctx, cmd, "")
+	case agent.CommandKindStatus:
+		status, err := a.executionPolicy.Status()
+		if err != nil {
+			return agent.CommandResult{}, err
 		}
-		status := a.StatusSnapshot()
+		return agent.CommandResult{Name: cmd.Name, Text: status.Text, Status: status.JSON}, nil
+	case agent.CommandKindNew:
+		if err := a.NewContext(ctx); err != nil {
+			return agent.CommandResult{}, err
+		}
+		status, err := a.executionPolicy.Status()
+		if err != nil {
+			return agent.CommandResult{}, err
+		}
 		text := fmt.Sprintf("New context generation: %s", status.GenerationID)
-		return SlashCommandResult{Name: cmd.Name, Text: text, Status: &status}, nil
+		return agent.CommandResult{Name: cmd.Name, Text: text, Status: status.JSON}, nil
 	default:
-		return SlashCommandResult{}, &UnknownSlashCommandError{Input: cmd.Name}
+		return agent.CommandResult{}, fmt.Errorf("unknown command %q", cmd.Name)
 	}
 }
 
-func (a *App) executeCompactSlashCommand(ctx context.Context, cmd SlashCommand, admittedTurnID string) (SlashCommandResult, error) {
+func (a *App) executeCompactCommand(ctx context.Context, cmd agent.Command, admittedTurnID string) (agent.CommandResult, error) {
 	var (
 		compact runtime.CompactionResult
 		err     error
@@ -149,14 +136,14 @@ func (a *App) executeCompactSlashCommand(ctx context.Context, cmd SlashCommand, 
 		compact, err = a.CompactAdmittedWithInstructions(ctx, admittedTurnID, "manual", false, cmd.Args)
 	}
 	if err != nil {
-		return SlashCommandResult{}, err
+		return agent.CommandResult{}, err
 	}
 	text := "No eligible context to compact."
 	if compact.MessageID != "" {
 		text = fmt.Sprintf("Context compacted: %d -> %d tokens (%d summary chars).",
 			compact.TokensBefore, compact.TokensAfter, compact.SummaryChars)
 	}
-	return SlashCommandResult{Name: cmd.Name, Text: text, Compact: &compact}, nil
+	return agent.CommandResult{Name: cmd.Name, Text: text, Compact: &compact}, nil
 }
 
 type StatusSnapshot struct {
@@ -481,4 +468,20 @@ func trimCompactFloat(value float64) string {
 		return fmt.Sprintf("%.0f", rounded)
 	}
 	return fmt.Sprintf("%.1f", rounded)
+}
+
+func parsedSlashCommand(name, args string) agent.Command {
+	cmd := agent.Command{Name: name, Args: args}
+	switch name {
+	case SlashStatus:
+		cmd.Kind = agent.CommandKindStatus
+	case SlashNew:
+		cmd.Kind = agent.CommandKindNew
+	case SlashCompact:
+		cmd.Kind = agent.CommandKindCompact
+	case SlashGoal:
+		cmd.Kind = agent.CommandKindPrompt
+		cmd.Prompt = goalmodule.InstructionPrompt(args)
+	}
+	return cmd
 }
