@@ -21,7 +21,11 @@ func TestModuleWatcherCoversChildCreatedWhileSubscribingParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer watcher.Close()
+	t.Cleanup(func() {
+		if err := watcher.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := watcher.Add(root); err != nil {
 		t.Fatal(err)
 	}
