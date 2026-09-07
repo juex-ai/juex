@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/features/hooks"
-	"gopkg.in/yaml.v3"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
+	yaml "gopkg.in/yaml.v3"
 )
 
 // Keep declarations immutable until all layers establish the effective switches.
@@ -22,8 +22,8 @@ func resolveModuleDeclarations(cfg *Config) error {
 	for _, declaration := range cfg.moduleDeclarations {
 		if declaration.hooks && cfg.ModuleEnabled("hooks") {
 			var fields struct {
-				Hooks hooks.FileConfig     `yaml:"hooks"`
-				Other map[string]yaml.Node `yaml:",inline"`
+				Hooks hookconfig.FileConfig `yaml:"hooks"`
+				Other map[string]yaml.Node  `yaml:",inline"`
 			}
 			if err := decodeModuleDeclaration(declaration, &fields); err != nil {
 				return err

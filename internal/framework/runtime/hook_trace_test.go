@@ -7,16 +7,17 @@ import (
 
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 func TestPolicyTraceMessageIsUIOnly(t *testing.T) {
-	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+	runner, err := hooks.NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "fake",
 		Source:  "ext:demo",
-		Events:  []hooks.EventName{hooks.EventUserPromptSubmit},
+		Events:  []hookconfig.EventName{hookconfig.EventUserPromptSubmit},
 		Command: runtimeHookCommand("ok"),
 	}}})
 	if err != nil {

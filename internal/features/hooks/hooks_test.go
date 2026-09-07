@@ -9,36 +9,20 @@ import (
 	"testing"
 	"time"
 
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 )
 
-func TestCommandHookMatchesEventAndTool(t *testing.T) {
-	h := CommandHook{Name: "guard", Events: []EventName{EventPreToolUse}, Tools: []string{"exec_command"}}
-	if !h.Matches(EventPreToolUse, "exec_command") {
-		t.Fatal("hook should match configured event and tool")
-	}
-	if h.Matches(EventPostToolUse, "exec_command") {
-		t.Fatal("hook should not match a different event")
-	}
-	if h.Matches(EventPreToolUse, "read") {
-		t.Fatal("hook should not match a different tool")
-	}
-	withoutToolFilter := CommandHook{Name: "any", Events: []EventName{EventUserPromptSubmit}}
-	if !withoutToolFilter.Matches(EventUserPromptSubmit, "") {
-		t.Fatal("hook without tool filter should match event")
-	}
-}
-
 func TestRunnerRunStableOrderAndStdout(t *testing.T) {
-	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "first", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:first")},
-		{Name: "second", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:second")},
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "first", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: helperCommand("stdout:first")},
+		{Name: "second", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: helperCommand("stdout:second")},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventUserPromptSubmit})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventUserPromptSubmit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +32,7 @@ func TestRunnerRunStableOrderAndStdout(t *testing.T) {
 	if results[0].Hook.Name != "first" || results[0].ExitCode != 0 || results[0].Stdout != "first" {
 		t.Fatalf("first result = %+v", results[0])
 	}
-	if results[0].EventName != EventUserPromptSubmit {
+	if results[0].EventName != hookconfig.EventUserPromptSubmit {
 		t.Fatalf("first event = %q", results[0].EventName)
 	}
 	if results[1].Hook.Name != "second" || results[1].ExitCode != 0 || results[1].Stdout != "second" {
@@ -66,15 +50,15 @@ func TestRunnerPropagatesResolvedEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
+	r, err := NewRunnerWithOptions(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "environment",
-		Events:  []EventName{EventThreadStart},
+		Events:  []hookconfig.EventName{hookconfig.EventThreadStart},
 		Command: helperCommand("environment"),
 	}}}, RunnerOptions{Environment: snapshot})
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := r.Run(context.Background(), Request{EventName: EventThreadStart})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventThreadStart})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,16 +70,16 @@ func TestRunnerPropagatesResolvedEnvironment(t *testing.T) {
 func TestRunnerResolvesRelativeCommandFromRequestCWD(t *testing.T) {
 	workDir := t.TempDir()
 	command := copyHookHelperExecutable(t, workDir)
-	r, err := NewRunner(Config{Commands: []CommandHook{{
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "relative",
-		Events:  []EventName{EventThreadStart},
+		Events:  []hookconfig.EventName{hookconfig.EventThreadStart},
 		Command: []string{command, "-test.run=TestHookHelperProcess", "--", "stdout:relative"},
 	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	results, err := r.Run(context.Background(), Request{
-		EventName: EventThreadStart,
+		EventName: hookconfig.EventThreadStart,
 		CWD:       workDir,
 	})
 	if err != nil {
@@ -107,14 +91,14 @@ func TestRunnerResolvesRelativeCommandFromRequestCWD(t *testing.T) {
 }
 
 func TestRunnerRunExitTwoReturnsTextResult(t *testing.T) {
-	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "guard", Events: []EventName{EventPreToolUse}, Command: helperCommand("block")},
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "guard", Events: []hookconfig.EventName{hookconfig.EventPreToolUse}, Command: helperCommand("block")},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventPreToolUse, ToolName: "exec_command"})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventPreToolUse, ToolName: "exec_command"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,16 +112,16 @@ func TestRunnerRunExitTwoReturnsTextResult(t *testing.T) {
 
 func TestRunnerRunOtherExitErrorsAndContinues(t *testing.T) {
 	observer := &recordingObserver{}
-	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "first", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:first")},
-		{Name: "broken", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("exit-seven")},
-		{Name: "last", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:last")},
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "first", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: helperCommand("stdout:first")},
+		{Name: "broken", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: helperCommand("exit-seven")},
+		{Name: "last", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: helperCommand("stdout:last")},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventUserPromptSubmit, Observer: observer})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventUserPromptSubmit, Observer: observer})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,35 +134,35 @@ func TestRunnerRunOtherExitErrorsAndContinues(t *testing.T) {
 }
 
 func TestRunnerRunResultCarriesTriggeredTool(t *testing.T) {
-	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "multi", Events: []EventName{EventPreToolUse, EventPostToolUse}, Tools: []string{"exec_command"}, Command: helperCommand("allow")},
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "multi", Events: []hookconfig.EventName{hookconfig.EventPreToolUse, hookconfig.EventPostToolUse}, Tools: []string{"exec_command"}, Command: helperCommand("allow")},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventPostToolUse, ToolName: "exec_command"})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventPostToolUse, ToolName: "exec_command"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 1 {
 		t.Fatalf("results len = %d", len(results))
 	}
-	if results[0].EventName != EventPostToolUse || results[0].ToolName != "exec_command" {
+	if results[0].EventName != hookconfig.EventPostToolUse || results[0].ToolName != "exec_command" {
 		t.Fatalf("result trigger = %q/%q", results[0].EventName, results[0].ToolName)
 	}
 }
 
 func TestRunnerRunTimeout(t *testing.T) {
 	observer := &recordingObserver{}
-	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 1},
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "slow", Events: []hookconfig.EventName{hookconfig.EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 1},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventPreToolUse, ToolName: "exec_command", Observer: observer})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventPreToolUse, ToolName: "exec_command", Observer: observer})
 	if err != nil {
 		t.Fatalf("optional timeout error = %v", err)
 	}
@@ -188,29 +172,29 @@ func TestRunnerRunTimeout(t *testing.T) {
 }
 
 func TestRunnerRunRequiredTimeoutFails(t *testing.T) {
-	r, err := NewRunner(Config{Commands: []CommandHook{{
-		Name: "slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 1, Required: true,
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{{
+		Name: "slow", Events: []hookconfig.EventName{hookconfig.EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 1, Required: true,
 	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = r.Run(context.Background(), Request{EventName: EventPreToolUse, ToolName: "exec_command"})
+	_, err = r.Run(context.Background(), Request{EventName: hookconfig.EventPreToolUse, ToolName: "exec_command"})
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("err = %v, want required timeout", err)
 	}
 }
 
 func TestRunnerRunRequiredExitErrorFails(t *testing.T) {
-	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "broken", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("exit-seven"), Required: true},
-		{Name: "unreached", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:unreached")},
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "broken", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: helperCommand("exit-seven"), Required: true},
+		{Name: "unreached", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: helperCommand("stdout:unreached")},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventUserPromptSubmit})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventUserPromptSubmit})
 	if err == nil || !strings.Contains(err.Error(), "exited with code 7") {
 		t.Fatalf("err = %v, want required exit error", err)
 	}
@@ -228,25 +212,23 @@ func TestRunnerRunExtensionRuntimeExpandsPathsAndPreparesData(t *testing.T) {
 		"JUEX_EXT_DIR=/spoofed-extension",
 		"JUEX_EXT_DATA_DIR=/spoofed-data",
 	))
-	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
+	bindings := map[string]RuntimeContext{"extension": {ExtensionDir: extensionDir, ExtensionDataDir: dataDir, PrepareExtensionDataDir: func() error { prepared = true; return os.MkdirAll(dataDir, 0o700) }}}
+	r, err := NewRunnerWithOptions(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:     "extension",
-		Events:   []EventName{EventThreadStart},
+		Events:   []hookconfig.EventName{hookconfig.EventThreadStart},
 		Command:  []string{"${JUEX_EXT_DIR}/" + filepath.Base(helper), "-test.run=TestHookHelperProcess", "--", "extension-environment"},
 		Required: true,
-		Runtime: RuntimeContext{
-			ExtensionDir:     extensionDir,
-			ExtensionDataDir: dataDir,
-			PrepareExtensionDataDir: func() error {
-				prepared = true
-				return os.MkdirAll(dataDir, 0o700)
-			},
-		},
-	}}}, RunnerOptions{Environment: snapshot})
+	}}}, RunnerOptions{Environment: snapshot, RuntimeContexts: bindings})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventThreadStart, CWD: t.TempDir()})
+	delete(bindings, "extension")
+	if results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventStop}); err != nil || len(results) != 0 || prepared {
+		t.Fatalf("unmatched hook prepared resources: results=%+v, error=%v, prepared=%v", results, err, prepared)
+	}
+
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventThreadStart, CWD: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,16 +245,16 @@ func TestRunnerRunNonExtensionStripsExtensionEnvironment(t *testing.T) {
 		"JUEX_EXT_DIR=/spoofed-extension",
 		"JUEX_EXT_DATA_DIR=/spoofed-data",
 	))
-	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
+	r, err := NewRunnerWithOptions(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "workspace",
-		Events:  []EventName{EventThreadStart},
+		Events:  []hookconfig.EventName{hookconfig.EventThreadStart},
 		Command: helperCommand("extension-environment"),
 	}}}, RunnerOptions{Environment: snapshot})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventThreadStart})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventThreadStart})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,22 +265,17 @@ func TestRunnerRunNonExtensionStripsExtensionEnvironment(t *testing.T) {
 
 func TestRunnerRunOptionalExtensionPrepareFailureContinues(t *testing.T) {
 	observer := &recordingObserver{}
-	r, err := NewRunner(Config{Commands: []CommandHook{
+	r, err := NewRunnerWithOptions(hookconfig.Config{Commands: []hookconfig.CommandHook{
 		{
-			Name: "broken-extension", Events: []EventName{EventThreadStart}, Command: helperCommand("stdout:unused"),
-			Runtime: RuntimeContext{
-				ExtensionDir:            t.TempDir(),
-				ExtensionDataDir:        filepath.Join(t.TempDir(), "data"),
-				PrepareExtensionDataDir: func() error { return errors.New("prepare failed") },
-			},
+			Name: "broken-extension", Events: []hookconfig.EventName{hookconfig.EventThreadStart}, Command: helperCommand("stdout:unused"),
 		},
-		{Name: "last", Events: []EventName{EventThreadStart}, Command: helperCommand("stdout:last")},
-	}})
+		{Name: "last", Events: []hookconfig.EventName{hookconfig.EventThreadStart}, Command: helperCommand("stdout:last")},
+	}}, RunnerOptions{RuntimeContexts: map[string]RuntimeContext{"broken-extension": {ExtensionDir: t.TempDir(), ExtensionDataDir: filepath.Join(t.TempDir(), "data"), PrepareExtensionDataDir: func() error { return errors.New("prepare failed") }}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventThreadStart, Observer: observer})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventThreadStart, Observer: observer})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,8 +288,8 @@ func TestRunnerRunOptionalExtensionPrepareFailureContinues(t *testing.T) {
 }
 
 func TestRunnerRunPropagatesParentCancellation(t *testing.T) {
-	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 5},
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "slow", Events: []hookconfig.EventName{hookconfig.EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 5},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -321,15 +298,15 @@ func TestRunnerRunPropagatesParentCancellation(t *testing.T) {
 	time.AfterFunc(50*time.Millisecond, cancel)
 	defer cancel()
 
-	_, err = r.Run(ctx, Request{EventName: EventPreToolUse, ToolName: "exec_command"})
+	_, err = r.Run(ctx, Request{EventName: hookconfig.EventPreToolUse, ToolName: "exec_command"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context canceled", err)
 	}
 }
 
 func TestNewRunnerRejectsTimeoutAboveMax(t *testing.T) {
-	_, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "too-slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("allow"), TimeoutSeconds: MaxTimeoutSeconds + 1},
+	_, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "too-slow", Events: []hookconfig.EventName{hookconfig.EventPreToolUse}, Command: helperCommand("allow"), TimeoutSeconds: hookconfig.MaxTimeoutSeconds + 1},
 	}})
 	if err == nil || !strings.Contains(err.Error(), "timeout_seconds cannot exceed 300 seconds") {
 		t.Fatalf("err = %v, want max timeout error", err)
@@ -338,34 +315,19 @@ func TestNewRunnerRejectsTimeoutAboveMax(t *testing.T) {
 
 func TestRunnerRunOutputLimit(t *testing.T) {
 	observer := &recordingObserver{}
-	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "large", Events: []EventName{EventPostToolUse}, Command: helperCommand("large"), MaxOutputBytes: 8},
+	r, err := NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{
+		{Name: "large", Events: []hookconfig.EventName{hookconfig.EventPostToolUse}, Command: helperCommand("large"), MaxOutputBytes: 8},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := r.Run(context.Background(), Request{EventName: EventPostToolUse, ToolName: "read", Observer: observer})
+	results, err := r.Run(context.Background(), Request{EventName: hookconfig.EventPostToolUse, ToolName: "read", Observer: observer})
 	if err != nil {
 		t.Fatalf("optional output limit error = %v", err)
 	}
 	if len(results) != 0 || len(observer.errors) != 1 || !strings.Contains(observer.errors[0].err.Error(), "stdout exceeded") {
 		t.Fatalf("results = %+v, observer errors = %+v", results, observer.errors)
-	}
-}
-
-func TestLoadFileConfigEmptyFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "hooks.yaml")
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := LoadFileConfig(path, "ext:empty", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Commands) != 0 {
-		t.Fatalf("commands = %+v, want empty config", cfg.Commands)
 	}
 }
 
@@ -429,7 +391,7 @@ type recordingObserver struct {
 	errors []observedHookError
 }
 
-func (*recordingObserver) HookStarted(CommandHook, Request) {}
+func (*recordingObserver) HookStarted(hookconfig.CommandHook, Request) {}
 
 func (*recordingObserver) HookCompleted(Result) {}
 

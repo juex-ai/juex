@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/skills"
@@ -486,7 +487,7 @@ func runtimeToolInfoFromDefinition(definition toolcore.ToolDefinition, defaultTi
 	}
 }
 
-func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
+func hooksStatus(cfg hookconfig.Config) RuntimeHooksStatus {
 	commands := make([]RuntimeHookInfo, 0, len(cfg.Commands))
 	for _, command := range cfg.Commands {
 		events := make([]string, 0, len(command.Events))
@@ -495,11 +496,11 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 		}
 		timeoutSeconds := command.TimeoutSeconds
 		if timeoutSeconds <= 0 {
-			timeoutSeconds = hooks.DefaultTimeoutSeconds
+			timeoutSeconds = hookconfig.DefaultTimeoutSeconds
 		}
 		maxOutputBytes := command.MaxOutputBytes
 		if maxOutputBytes <= 0 {
-			maxOutputBytes = hooks.DefaultMaxOutputBytes
+			maxOutputBytes = hookconfig.DefaultMaxOutputBytes
 		}
 		commands = append(commands, RuntimeHookInfo{
 			Name:           command.Name,

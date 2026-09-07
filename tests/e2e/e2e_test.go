@@ -38,7 +38,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/features/filetools"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
-	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
@@ -1978,11 +1978,11 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 		Config: config.Config{
 			ProviderProtocol: "openai/chat",
 			WorkDir:          work,
-			Hooks: hooks.Config{Commands: []hooks.CommandHook{
-				{Name: "inject", Events: []hooks.EventName{hooks.EventUserPromptSubmit}, Command: e2eHookCommand("inject")},
-				{Name: "deny-write", Events: []hooks.EventName{hooks.EventPreToolUse}, Tools: []string{"write"}, Command: e2eHookCommand("deny")},
-				{Name: "correct-read", Events: []hooks.EventName{hooks.EventPostToolUse}, Tools: []string{"read"}, Command: e2eHookCommand("correct")},
-				{Name: "continue-once", Events: []hooks.EventName{hooks.EventStop}, Command: e2eHookCommand("stop")},
+			Hooks: hookconfig.Config{Commands: []hookconfig.CommandHook{
+				{Name: "inject", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: e2eHookCommand("inject")},
+				{Name: "deny-write", Events: []hookconfig.EventName{hookconfig.EventPreToolUse}, Tools: []string{"write"}, Command: e2eHookCommand("deny")},
+				{Name: "correct-read", Events: []hookconfig.EventName{hookconfig.EventPostToolUse}, Tools: []string{"read"}, Command: e2eHookCommand("correct")},
+				{Name: "continue-once", Events: []hookconfig.EventName{hookconfig.EventStop}, Command: e2eHookCommand("stop")},
 			}},
 		},
 		Provider: prov,

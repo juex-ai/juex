@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/features/contextcontrol"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -99,7 +100,7 @@ func TestRunToolCalls_ContextTransitionsFollowProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	installModuleTools(t, eng.Tools, contextcontrol.New(eng))
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, request hooks.Request) ([]hooks.Result, error) {
-		if request.EventName == hooks.EventPreToolUse && request.ToolName == contextcontrol.ToolCompact {
+		if request.EventName == hookconfig.EventPreToolUse && request.ToolName == contextcontrol.ToolCompact {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():

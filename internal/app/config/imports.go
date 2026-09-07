@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
-	"gopkg.in/yaml.v3"
+	yaml "gopkg.in/yaml.v3"
 )
 
 const (
@@ -1239,10 +1239,10 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return out
 }
 
-func cloneHooksConfig(value hooks.Config) hooks.Config {
-	out := hooks.Config{Commands: append([]hooks.CommandHook(nil), value.Commands...)}
+func cloneHooksConfig(value hookconfig.Config) hookconfig.Config {
+	out := hookconfig.Config{Commands: append([]hookconfig.CommandHook(nil), value.Commands...)}
 	for i := range out.Commands {
-		out.Commands[i].Events = append([]hooks.EventName(nil), value.Commands[i].Events...)
+		out.Commands[i].Events = append([]hookconfig.EventName(nil), value.Commands[i].Events...)
 		out.Commands[i].Tools = append([]string(nil), value.Commands[i].Tools...)
 		out.Commands[i].Command = append([]string(nil), value.Commands[i].Command...)
 	}

@@ -13,7 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
-	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
@@ -727,9 +727,9 @@ func TestRuntimeCatalogServiceTreatsZeroToolDescriptorMembershipAsConnected(t *t
 func TestRuntimeCatalogServiceIncludesHookStatus(t *testing.T) {
 	cfg := config.Config{
 		WorkDir: t.TempDir(),
-		Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+		Hooks: hookconfig.Config{Commands: []hookconfig.CommandHook{{
 			Name:    "protect-write",
-			Events:  []hooks.EventName{hooks.EventPreToolUse, hooks.EventStop},
+			Events:  []hookconfig.EventName{hookconfig.EventPreToolUse, hookconfig.EventStop},
 			Tools:   []string{"write"},
 			Command: []string{"python3", "hooks/protect.py"},
 			Source:  "project",
@@ -753,7 +753,7 @@ func TestRuntimeCatalogServiceIncludesHookStatus(t *testing.T) {
 	if strings.Join(hook.Tools, ",") != "write" || strings.Join(hook.Command, " ") != "python3 hooks/protect.py" {
 		t.Fatalf("hook command = %+v tools=%+v", hook.Command, hook.Tools)
 	}
-	if hook.TimeoutSeconds != hooks.DefaultTimeoutSeconds || hook.MaxOutputBytes != hooks.DefaultMaxOutputBytes {
+	if hook.TimeoutSeconds != hookconfig.DefaultTimeoutSeconds || hook.MaxOutputBytes != hookconfig.DefaultMaxOutputBytes {
 		t.Fatalf("effective limits = timeout %d output %d", hook.TimeoutSeconds, hook.MaxOutputBytes)
 	}
 }
@@ -952,9 +952,9 @@ commands:
 		cfg := config.Config{
 			WorkDir:    work,
 			Extensions: allowExtensions("demo"),
-			Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+			Hooks: hookconfig.Config{Commands: []hookconfig.CommandHook{{
 				Name:    "shared",
-				Events:  []hooks.EventName{hooks.EventStop},
+				Events:  []hookconfig.EventName{hookconfig.EventStop},
 				Command: []string{"python3", "base.py"},
 				Source:  "project",
 			}}},

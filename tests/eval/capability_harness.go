@@ -13,6 +13,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/features/agentsmd"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	shelltools "github.com/juex-ai/juex/internal/features/shell"
@@ -31,7 +32,7 @@ type CapabilityCase struct {
 	Name       string
 	Prompt     string
 	Files      map[string]string
-	Hooks      func(workDir string) hooks.Config
+	Hooks      func(workDir string) hookconfig.Config
 	ExtraTools []toolcore.Tool
 	Script     []CapabilityStep
 	Contract   ContractExpectations

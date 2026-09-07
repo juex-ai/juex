@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
@@ -148,8 +149,8 @@ func TestTurn_BuiltinShellCompletedEventUsesFinalizedHookContent(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "hook handled"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
 	}})
 
 	var completed toolevents.CompletedPayload
@@ -187,8 +188,8 @@ func TestTurn_BuiltinShellErroredEventUsesFinalizedHookErrorContent(t *testing.T
 		{Message: llm.TextMessage(llm.RoleAssistant, "hook failure handled"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
-	installHookRunner(t, eng, &fakeHookRunner{errors: map[hooks.EventName]error{
-		hooks.EventPostToolUse: errors.New("post hook failed"),
+	installHookRunner(t, eng, &fakeHookRunner{errors: map[hookconfig.EventName]error{
+		hookconfig.EventPostToolUse: errors.New("post hook failed"),
 	}})
 
 	var errored toolevents.ErroredPayload
@@ -229,14 +230,14 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 	eng.ContextWindow = 1 << 30
 	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 4 << 20}
 	installHookRunner(t, eng, hookRunnerFunc(func(_ context.Context, request hooks.Request) ([]hooks.Result, error) {
-		if request.EventName != hooks.EventPostToolUse {
+		if request.EventName != hookconfig.EventPostToolUse {
 			return nil, nil
 		}
 		results := make([]hooks.Result, 4)
 		for index := range results {
 			results[index] = hooks.Result{
-				Hook:      hooks.CommandHook{Name: "large", Events: []hooks.EventName{hooks.EventPostToolUse}},
-				EventName: hooks.EventPostToolUse,
+				Hook:      hookconfig.CommandHook{Name: "large", Events: []hookconfig.EventName{hookconfig.EventPostToolUse}},
+				EventName: hookconfig.EventPostToolUse,
 				ToolName:  "exec_command",
 				ExitCode:  2,
 				Stdout:    strings.Repeat("<", 384<<10),
@@ -295,8 +296,8 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 	eng, bus := newEngine(t, prov, true)
 	eng.ContextWindow = 1 << 30
 	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 4 << 20}
-	installHookRunner(t, eng, &fakeHookRunner{errors: map[hooks.EventName]error{
-		hooks.EventPostToolUse: errors.New("post hook failed: " + strings.Repeat("<", 2<<20)),
+	installHookRunner(t, eng, &fakeHookRunner{errors: map[hookconfig.EventName]error{
+		hookconfig.EventPostToolUse: errors.New("post hook failed: " + strings.Repeat("<", 2<<20)),
 	}})
 
 	var errored toolevents.ErroredPayload

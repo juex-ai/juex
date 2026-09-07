@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
@@ -92,10 +92,10 @@ func TestDisabledResourceHostsSkipDiscovery(t *testing.T) {
 			if err := os.Symlink(tc.filename, path); err != nil {
 				t.Skipf("symlink unavailable: %v", err)
 			}
-			cfg := config.Config{WorkDir: work, HomeAgentsDir: home, EnableUserAgentsResources: true, Extensions: allowExtensions("demo"), Modules: config.ModulePolicy{tc.module: {Enabled: false}}, Hooks: hooks.Config{Commands: []hooks.CommandHook{{Name: "bad"}}}}
+			cfg := config.Config{WorkDir: work, HomeAgentsDir: home, EnableUserAgentsResources: true, Extensions: allowExtensions("demo"), Modules: config.ModulePolicy{tc.module: {Enabled: false}}, Hooks: hookconfig.Config{Commands: []hookconfig.CommandHook{{Name: "bad"}}}}
 			// The unrelated test hook must not invalidate the other enabled hosts.
 			if tc.module != "hooks" {
-				cfg.Hooks = hooks.Config{}
+				cfg.Hooks = hookconfig.Config{}
 			}
 			graph, err := ResolveRuntimeResourceGraph(cfg)
 			if err != nil {

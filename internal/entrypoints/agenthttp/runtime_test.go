@@ -16,7 +16,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
@@ -27,9 +27,9 @@ import (
 func TestGetRuntimeStatus_ReturnsConfiguredMCPAndSkills(t *testing.T) {
 	srv := newTestServer(t)
 	work := srv.opts.Cfg.WorkDir
-	srv.opts.Cfg.Hooks = hooks.Config{Commands: []hooks.CommandHook{{
+	srv.opts.Cfg.Hooks = hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "guard",
-		Events:  []hooks.EventName{hooks.EventPreToolUse},
+		Events:  []hookconfig.EventName{hookconfig.EventPreToolUse},
 		Command: []string{"python3", "guard.py"},
 		Source:  "project",
 	}}}

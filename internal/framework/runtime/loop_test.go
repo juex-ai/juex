@@ -18,6 +18,7 @@ import (
 
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
@@ -222,8 +223,8 @@ func (m *mockProviderWithErrors) Complete(ctx context.Context, sys string, histo
 }
 
 type fakeHookRunner struct {
-	responses map[hooks.EventName][]fakeHookResponse
-	errors    map[hooks.EventName]error
+	responses map[hookconfig.EventName][]fakeHookResponse
+	errors    map[hookconfig.EventName]error
 	requests  []hooks.Request
 }
 
@@ -279,7 +280,7 @@ func (r *fakeHookRunner) Run(ctx context.Context, req hooks.Request) ([]hooks.Re
 	response := responses[0]
 	r.responses[req.EventName] = responses[1:]
 	return []hooks.Result{{
-		Hook:      hooks.CommandHook{Name: "fake", Events: []hooks.EventName{req.EventName}},
+		Hook:      hookconfig.CommandHook{Name: "fake", Events: []hookconfig.EventName{req.EventName}},
 		EventName: req.EventName,
 		ToolName:  req.ToolName,
 		ExitCode:  response.ExitCode,
@@ -317,7 +318,7 @@ func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
 	msg := llm.Message{Role: llm.RoleUser, Blocks: blocks}
 
 	out := appendPolicyAdditionalContext(msg, []hooks.Result{{
-		Hook:   hooks.CommandHook{Name: "context"},
+		Hook:   hookconfig.CommandHook{Name: "context"},
 		Stdout: "extra",
 	}})
 
@@ -339,8 +340,8 @@ func TestRunThreadStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventThreadStart: {{Stdout: "load project policy"}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventThreadStart: {{Stdout: "load project policy"}},
 	}})
 
 	if err := eng.RunThreadStartHooks(context.Background()); err != nil {
@@ -370,8 +371,8 @@ func TestRunThreadStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 
 func TestRunThreadStartHooksUsesStderrFallbackForExitTwo(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventThreadStart: {{ExitCode: 2, Stderr: "workspace is not trusted"}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventThreadStart: {{ExitCode: 2, Stderr: "workspace is not trusted"}},
 	}})
 
 	err := eng.RunThreadStartHooks(context.Background())
@@ -655,7 +656,7 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 	}}}
 	eng, bus := newEngine(t, prov, false)
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
-		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
+		Hook: hookconfig.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -694,7 +695,7 @@ func TestTurn_RequestEpochCheckpointConsumesPolicyContextAndLinksResponse(t *tes
 	}
 	installThreadStateModulesWithStores(t, eng, nil, notesStore)
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
-		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
+		Hook: hookconfig.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -752,7 +753,7 @@ func TestTurn_RequestEpochCheckpointConsumesPolicyContextAndLinksResponse(t *tes
 func TestTurn_FailedProviderDoesNotReplayCheckpointedPolicyContext(t *testing.T) {
 	eng, _ := newEngine(t, errorProvider{}, false)
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
-		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
+		Hook: hookconfig.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -767,7 +768,7 @@ func TestTurn_FailedProviderDoesNotReplayCheckpointedPolicyContext(t *testing.T)
 func TestTurn_DispatchCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}}}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hookconfig.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("dispatch sync failed")
@@ -784,7 +785,7 @@ func TestTurn_DispatchCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "returned"), StopReason: llm.StopEndTurn}}}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hookconfig.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("response sync failed")
@@ -850,8 +851,8 @@ func TestTurn_DurableToolStartedFailurePreventsToolCall(t *testing.T) {
 		StopReason: llm.StopToolUse,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	hookRunner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPreToolUse: {{Stdout: "pre-hook ran"}},
+	hookRunner := &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPreToolUse: {{Stdout: "pre-hook ran"}},
 	}}
 	installHookRunner(t, eng, hookRunner)
 	toolCalls := 0
@@ -871,7 +872,7 @@ func TestTurn_DurableToolStartedFailurePreventsToolCall(t *testing.T) {
 		t.Fatalf("tool calls = %d, want 0", toolCalls)
 	}
 	for _, request := range hookRunner.requests {
-		if request.EventName == hooks.EventPreToolUse {
+		if request.EventName == hookconfig.EventPreToolUse {
 			t.Fatalf("pre-tool hook ran before durable started checkpoint: %+v", hookRunner.requests)
 		}
 	}
@@ -2104,7 +2105,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 	releaseHook := func() { releaseOnce.Do(func() { close(releasePost) }) }
 	defer releaseHook()
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
-		if req.EventName != hooks.EventPostCompact {
+		if req.EventName != hookconfig.EventPostCompact {
 			return nil, nil
 		}
 		signal(postStarted)
@@ -2457,7 +2458,7 @@ func TestTurn_CompactRetryFailureConsumesPolicyContext(t *testing.T) {
 	eng.ContextWindow = 10000
 	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
-		Hook:   hooks.CommandHook{Name: "one-shot"},
+		Hook:   hookconfig.CommandHook{Name: "one-shot"},
 		Stdout: "one-shot compact context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -2925,9 +2926,9 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	runner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPreCompact:  {{}},
-		hooks.EventPostCompact: {{}},
+	runner := &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPreCompact:  {{}},
+		hookconfig.EventPostCompact: {{}},
 	}}
 	installHookRunner(t, eng, runner)
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
@@ -2944,8 +2945,8 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	if result.MessageID == "" {
 		t.Fatalf("result = %+v", result)
 	}
-	got := []hooks.EventName{runner.requests[0].EventName, runner.requests[1].EventName}
-	want := []hooks.EventName{hooks.EventPreCompact, hooks.EventPostCompact}
+	got := []hookconfig.EventName{runner.requests[0].EventName, runner.requests[1].EventName}
+	want := []hookconfig.EventName{hookconfig.EventPreCompact, hookconfig.EventPostCompact}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("hook order = %+v, want %+v", got, want)
@@ -2963,8 +2964,8 @@ func TestCompactPreHookStdoutExtendsSummaryInstructions(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPreCompact: {{Stdout: "Preserve deployment command exactly."}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPreCompact: {{Stdout: "Preserve deployment command exactly."}},
 	}})
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -3004,8 +3005,8 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 		t.Fatal(err)
 	}
 	installThreadStateModulesWithStores(t, eng, goalState, notesStore)
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
 	}})
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -3072,9 +3073,9 @@ func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+	runner, err := hooks.NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "compact-guard",
-		Events:  []hooks.EventName{hooks.EventPreCompact},
+		Events:  []hookconfig.EventName{hookconfig.EventPreCompact},
 		Command: runtimeHookCommand("block"),
 	}}})
 	if err != nil {
@@ -3116,8 +3117,8 @@ func TestCompactPostHookStdoutQueuesRuntimeContextForNextProviderRequest(t *test
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPostCompact: {{Stdout: "Recheck the release branch on the next turn."}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPostCompact: {{Stdout: "Recheck the release branch on the next turn."}},
 	}})
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -4305,27 +4306,27 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 		{
 			name: "error",
 			runner: &fakeHookRunner{
-				responses: map[hooks.EventName][]fakeHookResponse{hooks.EventPreCompact: {{}}},
-				errors:    map[hooks.EventName]error{hooks.EventPostCompact: errors.New("audit sink unavailable")},
+				responses: map[hookconfig.EventName][]fakeHookResponse{hookconfig.EventPreCompact: {{}}},
+				errors:    map[hookconfig.EventName]error{hookconfig.EventPostCompact: errors.New("audit sink unavailable")},
 			},
 		},
 		{
 			name: "deny",
 			runner: &fakeHookRunner{
-				responses: map[hooks.EventName][]fakeHookResponse{
-					hooks.EventPreCompact:  {{}},
-					hooks.EventPostCompact: {{ExitCode: 2, Stdout: "audit failed"}},
+				responses: map[hookconfig.EventName][]fakeHookResponse{
+					hookconfig.EventPreCompact:  {{}},
+					hookconfig.EventPostCompact: {{ExitCode: 2, Stdout: "audit failed"}},
 				},
 			},
 		},
 		{
 			name: "partial success before error",
 			runner: hookRunnerFunc(func(_ context.Context, req hooks.Request) ([]hooks.Result, error) {
-				if req.EventName != hooks.EventPostCompact {
+				if req.EventName != hookconfig.EventPostCompact {
 					return nil, nil
 				}
 				return []hooks.Result{{
-					Hook:      hooks.CommandHook{Name: "audit", Events: []hooks.EventName{req.EventName}},
+					Hook:      hookconfig.CommandHook{Name: "audit", Events: []hookconfig.EventName{req.EventName}},
 					EventName: req.EventName,
 					ExitCode:  0,
 					Stdout:    "retain this context",
@@ -4401,9 +4402,9 @@ func TestCompactPreservesCommittedResultWhenPostPolicyContextCannotBeQueued(t *t
 	defer unsub()
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPreCompact:  {{}},
-		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxPolicyContextBatchBytes)}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPreCompact:  {{}},
+		hookconfig.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxPolicyContextBatchBytes)}},
 	}})
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -4771,8 +4772,8 @@ func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventUserPromptSubmit: {{Stdout: "ticket: ABC-123"}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventUserPromptSubmit: {{Stdout: "ticket: ABC-123"}},
 	}})
 
 	out, err := eng.Turn(context.Background(), "summarize")
@@ -4796,8 +4797,8 @@ func TestTurn_UserPromptSubmitHookDenyStopsBeforeProvider(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventUserPromptSubmit: {{ExitCode: 2, Stdout: "missing approval"}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventUserPromptSubmit: {{ExitCode: 2, Stdout: "missing approval"}},
 	}})
 
 	_, err := eng.Turn(context.Background(), "summarize")
@@ -4834,8 +4835,8 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 			return "inspection complete", nil
 		},
 	})
-	runner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPreToolUse: {{Stdout: "compare against approved baseline"}},
+	runner := &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPreToolUse: {{Stdout: "compare against approved baseline"}},
 	}}
 	installHookRunner(t, eng, runner)
 
@@ -4848,7 +4849,7 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 	}
 	var postRequest hooks.Request
 	for _, request := range runner.requests {
-		if request.EventName == hooks.EventPostToolUse {
+		if request.EventName == hookconfig.EventPostToolUse {
 			postRequest = request
 		}
 	}
@@ -4872,8 +4873,8 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 			return "", nil
 		},
 	})
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPreToolUse: {{ExitCode: 2, Stdout: "policy denied"}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPreToolUse: {{ExitCode: 2, Stdout: "policy denied"}},
 	}})
 
 	out, err := eng.Turn(context.Background(), "run danger")
@@ -4906,9 +4907,9 @@ func TestTurn_PostToolUseExitTwoAddsCorrectiveContext(t *testing.T) {
 			return "sensitive output", nil
 		},
 	})
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPreToolUse:  {{}},
-		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPreToolUse:  {{}},
+		hookconfig.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
 	}})
 
 	out, err := eng.Turn(context.Background(), "run audit")
@@ -4942,12 +4943,12 @@ func TestTurn_PostToolUseRetainsSuccessfulContextBeforeRequiredFailure(t *testin
 		},
 	})
 	installHookRunner(t, eng, hookRunnerFunc(func(_ context.Context, request hooks.Request) ([]hooks.Result, error) {
-		if request.EventName != hooks.EventPostToolUse {
+		if request.EventName != hookconfig.EventPostToolUse {
 			return nil, nil
 		}
 		return []hooks.Result{{
-			Hook:      hooks.CommandHook{Name: "context-hook", Events: []hooks.EventName{hooks.EventPostToolUse}},
-			EventName: hooks.EventPostToolUse,
+			Hook:      hookconfig.CommandHook{Name: "context-hook", Events: []hookconfig.EventName{hookconfig.EventPostToolUse}},
+			EventName: hookconfig.EventPostToolUse,
 			ToolName:  request.ToolName,
 			ExitCode:  0,
 			Stdout:    "earlier successful context",
@@ -5115,8 +5116,8 @@ func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventStop: {
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventStop: {
 			{ExitCode: 2, Stdout: "continue until done"},
 			{},
 		},
@@ -5144,8 +5145,8 @@ func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testin
 		{Message: llm.TextMessage(llm.RoleAssistant, "third"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventStop: {
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventStop: {
 			{Stdout: "verify the release branch before the next response"},
 			{},
 			{},
@@ -5344,8 +5345,8 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventStop: {
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventStop: {
 			{ExitCode: 2, Stdout: "run the explicit stop check"},
 			{},
 		},
@@ -5435,9 +5436,9 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
 	installThreadStateModulesWithStores(t, eng, goalState, nil)
-	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+	runner, err := hooks.NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "ignored-goal-output",
-		Events:  []hooks.EventName{hooks.EventStop},
+		Events:  []hookconfig.EventName{hookconfig.EventStop},
 		Command: runtimeHookCommand("goal-output"),
 	}}})
 	if err != nil {
@@ -5567,7 +5568,7 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 	}
 	eng, bus := newEngine(t, prov, false)
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
-		Hook:   hooks.CommandHook{Name: "provider-retry"},
+		Hook:   hookconfig.CommandHook{Name: "provider-retry"},
 		Stdout: "preserve retry context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -5640,7 +5641,7 @@ func TestTurn_TerminalProviderFailureConsumesPolicyContext(t *testing.T) {
 	}
 	eng, _ := newEngine(t, prov, false)
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
-		Hook:   hooks.CommandHook{Name: "one-shot"},
+		Hook:   hookconfig.CommandHook{Name: "one-shot"},
 		Stdout: "one-shot provider context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -7513,7 +7514,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 	}}, false)
 	_, notesStore := installThreadStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
-		if req.EventName == hooks.EventPreToolUse && req.ToolName == notesmodule.ToolUpdate && req.ToolInput["content"] == "first" {
+		if req.EventName == hookconfig.EventPreToolUse && req.ToolName == notesmodule.ToolUpdate && req.ToolInput["content"] == "first" {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():
@@ -7539,7 +7540,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	goalState, _ := installThreadStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
-		if req.EventName == hooks.EventPreToolUse && req.ToolName == goalmodule.ToolCreate {
+		if req.EventName == hookconfig.EventPreToolUse && req.ToolName == goalmodule.ToolCreate {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():
@@ -8523,9 +8524,9 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, false)
 	installThreadStateModules(t, eng)
-	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+	runner, err := hooks.NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "stop-ok",
-		Events:  []hooks.EventName{hooks.EventStop},
+		Events:  []hookconfig.EventName{hookconfig.EventStop},
 		Command: runtimeHookCommand("ok"),
 	}}})
 	if err != nil {
@@ -8762,9 +8763,9 @@ func TestTurn_StopHookOtherExitDoesNotBlockAndEmitsHookErrored(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+	runner, err := hooks.NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{{
 		Name:    "stop-fails",
-		Events:  []hooks.EventName{hooks.EventStop},
+		Events:  []hookconfig.EventName{hookconfig.EventStop},
 		Command: runtimeHookCommand("fail"),
 	}}})
 	if err != nil {

@@ -198,8 +198,8 @@ commands:
 	}
 	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
 	dataDir := filepath.Join(address.StateDir(), "extensions", "demo")
-	if hook.Runtime.ExtensionDir != extensionDir || hook.Runtime.ExtensionDataDir != dataDir || hook.Runtime.PrepareExtensionDataDir == nil {
-		t.Fatalf("hook runtime = %+v, want %s / %s", hook.Runtime, extensionDir, dataDir)
+	if graph.HookRuntimeContexts()[hook.Name].ExtensionDir != extensionDir || graph.HookRuntimeContexts()[hook.Name].ExtensionDataDir != dataDir || graph.HookRuntimeContexts()[hook.Name].PrepareExtensionDataDir == nil {
+		t.Fatalf("hook runtime = %+v, want %s / %s", graph.HookRuntimeContexts()[hook.Name], extensionDir, dataDir)
 	}
 
 	var hookNode RuntimeResourceNode

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
@@ -48,7 +49,7 @@ func (*Module) ID() runtimemodule.ID { return ModuleID }
 func (*Module) AllowsLiveToolOutput() bool { return true }
 
 func (m *Module) ApplyThreadStart(ctx context.Context, request runtimemodule.ThreadStartRequest) (runtimemodule.ThreadStartDecision, error) {
-	results, err := m.run(ctx, EventThreadStart, request.Observer, func(*Request) {})
+	results, err := m.run(ctx, hookconfig.EventThreadStart, request.Observer, func(*Request) {})
 	if err != nil {
 		return runtimemodule.ThreadStartDecision{}, err
 	}
@@ -59,7 +60,7 @@ func (m *Module) ApplyThreadStart(ctx context.Context, request runtimemodule.Thr
 }
 
 func (m *Module) ApplyTurnInput(ctx context.Context, request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
-	results, err := m.run(ctx, EventUserPromptSubmit, request.Observer, func(hookRequest *Request) {
+	results, err := m.run(ctx, hookconfig.EventUserPromptSubmit, request.Observer, func(hookRequest *Request) {
 		hookRequest.TurnID = request.TurnID
 		hookRequest.UserInput = request.Message.FirstText()
 	})
@@ -88,10 +89,10 @@ func (m *Module) ApplyTurnInput(ctx context.Context, request runtimemodule.TurnI
 }
 
 func (m *Module) ApplyTool(ctx context.Context, request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
-	event := EventPreToolUse
+	event := hookconfig.EventPreToolUse
 	point := runtimemodule.PolicyPointToolBefore
 	if request.Stage == runtimemodule.ToolPolicyAfterExecution {
-		event = EventPostToolUse
+		event = hookconfig.EventPostToolUse
 		point = runtimemodule.PolicyPointToolAfter
 	}
 	results, err := m.runAt(ctx, event, point, request.Observer, func(hookRequest *Request) {
@@ -116,7 +117,7 @@ func (m *Module) ApplyTool(ctx context.Context, request runtimemodule.ToolPolicy
 }
 
 func (m *Module) EvaluateFinish(ctx context.Context, request runtimemodule.FinishRequest) (runtimemodule.FinishDecision, error) {
-	results, err := m.run(ctx, EventStop, request.Observer, func(hookRequest *Request) {
+	results, err := m.run(ctx, hookconfig.EventStop, request.Observer, func(hookRequest *Request) {
 		hookRequest.TurnID = request.TurnID
 		hookRequest.UserInput = request.UserInput
 	})
@@ -138,10 +139,10 @@ func (m *Module) EvaluateFinish(ctx context.Context, request runtimemodule.Finis
 }
 
 func (m *Module) ApplyCompaction(ctx context.Context, request runtimemodule.CompactionPolicyRequest) (runtimemodule.CompactionPolicyDecision, error) {
-	event := EventPreCompact
+	event := hookconfig.EventPreCompact
 	point := runtimemodule.PolicyPointCompactionBefore
 	if request.Stage == runtimemodule.CompactionPolicyAfter {
-		event = EventPostCompact
+		event = hookconfig.EventPostCompact
 		point = runtimemodule.PolicyPointCompactionAfter
 	}
 	results, err := m.runAt(ctx, event, point, request.Observer, func(hookRequest *Request) {
@@ -162,18 +163,18 @@ func (m *Module) ApplyCompaction(ctx context.Context, request runtimemodule.Comp
 	return decision, err
 }
 
-func (m *Module) run(ctx context.Context, event EventName, observer runtimemodule.PolicyObserver, fill func(*Request)) ([]Result, error) {
+func (m *Module) run(ctx context.Context, event hookconfig.EventName, observer runtimemodule.PolicyObserver, fill func(*Request)) ([]Result, error) {
 	return m.runAt(ctx, event, policyPoint(event), observer, fill)
 }
 
-func (m *Module) runAt(ctx context.Context, event EventName, point runtimemodule.PolicyPoint, observer runtimemodule.PolicyObserver, fill func(*Request)) ([]Result, error) {
+func (m *Module) runAt(ctx context.Context, event hookconfig.EventName, point runtimemodule.PolicyPoint, observer runtimemodule.PolicyObserver, fill func(*Request)) ([]Result, error) {
 	if m == nil || m.runner == nil {
 		return nil, nil
 	}
 	req := m.request(event)
 	fill(&req)
 	if matcher, ok := m.runner.(interface {
-		Matching(EventName, string) []CommandHook
+		Matching(hookconfig.EventName, string) []hookconfig.CommandHook
 	}); ok && len(matcher.Matching(event, req.ToolName)) == 0 {
 		return nil, nil
 	}
@@ -190,7 +191,7 @@ func (m *Module) runAt(ctx context.Context, event EventName, point runtimemodule
 	return m.runner.Run(ctx, req)
 }
 
-func (m *Module) request(event EventName) Request {
+func (m *Module) request(event hookconfig.EventName) Request {
 	req := m.base
 	req.EventName = event
 	req.WorkspaceRoots = append([]string(nil), m.base.WorkspaceRoots...)
@@ -207,11 +208,11 @@ func (m *Module) request(event EventName) Request {
 
 type policyObserver struct {
 	next  runtimemodule.PolicyObserver
-	event EventName
+	event hookconfig.EventName
 	point runtimemodule.PolicyPoint
 }
 
-func (o policyObserver) execution(hook CommandHook, toolName string) runtimemodule.PolicyExecution {
+func (o policyObserver) execution(hook hookconfig.CommandHook, toolName string) runtimemodule.PolicyExecution {
 	return runtimemodule.PolicyExecution{
 		Point:    o.point,
 		Name:     policyDisplayName(o.event, hook.Name),
@@ -220,7 +221,7 @@ func (o policyObserver) execution(hook CommandHook, toolName string) runtimemodu
 	}
 }
 
-func policyDisplayName(event EventName, hookName string) string {
+func policyDisplayName(event hookconfig.EventName, hookName string) string {
 	eventName := strings.TrimSpace(string(event))
 	hookName = strings.TrimSpace(hookName)
 	if hookName == "" {
@@ -232,7 +233,7 @@ func policyDisplayName(event EventName, hookName string) string {
 	return eventName + "/" + hookName
 }
 
-func (o policyObserver) HookStarted(hook CommandHook, request Request) {
+func (o policyObserver) HookStarted(hook hookconfig.CommandHook, request Request) {
 	if o.next != nil {
 		o.next.Started(o.execution(hook, request.ToolName))
 	}
@@ -244,7 +245,7 @@ func (o policyObserver) HookCompleted(result Result) {
 	}
 	execution := o.execution(result.Hook, result.ToolName)
 	policyResult := result.policyResult()
-	if result.ExitCode == 2 && (result.EventName == EventPreCompact || result.EventName == EventPostCompact) {
+	if result.ExitCode == 2 && (result.EventName == hookconfig.EventPreCompact || result.EventName == hookconfig.EventPostCompact) {
 		o.next.Errored(execution, policyResult, fmt.Errorf("hooks: %s hook %q cannot block compaction", result.EventName, result.Hook.Name))
 		return
 	}
@@ -266,21 +267,21 @@ func (r Result) policyResult() runtimemodule.PolicyResult {
 	}
 }
 
-func policyPoint(event EventName) runtimemodule.PolicyPoint {
+func policyPoint(event hookconfig.EventName) runtimemodule.PolicyPoint {
 	switch event {
-	case EventThreadStart:
+	case hookconfig.EventThreadStart:
 		return runtimemodule.PolicyPointThreadStart
-	case EventUserPromptSubmit:
+	case hookconfig.EventUserPromptSubmit:
 		return runtimemodule.PolicyPointTurnInput
-	case EventPreToolUse:
+	case hookconfig.EventPreToolUse:
 		return runtimemodule.PolicyPointToolBefore
-	case EventPostToolUse:
+	case hookconfig.EventPostToolUse:
 		return runtimemodule.PolicyPointToolAfter
-	case EventStop:
+	case hookconfig.EventStop:
 		return runtimemodule.PolicyPointFinish
-	case EventPreCompact:
+	case hookconfig.EventPreCompact:
 		return runtimemodule.PolicyPointCompactionBefore
-	case EventPostCompact:
+	case hookconfig.EventPostCompact:
 		return runtimemodule.PolicyPointCompactionAfter
 	default:
 		return runtimemodule.PolicyPoint(event)

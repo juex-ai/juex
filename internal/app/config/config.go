@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
@@ -50,7 +50,7 @@ type Config struct {
 	ToolTimeout               time.Duration
 	ShowBuiltinPolicyTraces   bool
 	NotifyModelChanges        bool
-	Hooks                     hooks.Config
+	Hooks                     hookconfig.Config
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
 	Skills                    SkillsConfig
@@ -1038,8 +1038,8 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	return nil
 }
 
-func applyHooksConfig(cfg *Config, fileHooks hooks.FileConfig, source string, requireTrust bool) error {
-	resolved, err := hooks.ResolveFileConfig(fileHooks, source, requireTrust)
+func applyHooksConfig(cfg *Config, fileHooks hookconfig.FileConfig, source string, requireTrust bool) error {
+	resolved, err := hookconfig.ResolveFileConfig(fileHooks, source, requireTrust)
 	if err != nil {
 		return err
 	}

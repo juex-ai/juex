@@ -443,7 +443,8 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	var hookRunner hooks.PolicyRunner
 	if cfg.ModuleEnabled(string(hooks.ModuleID)) {
 		hookRunner, err = hooks.NewRunnerWithOptions(resourceGraph.HooksConfig(), hooks.RunnerOptions{
-			Environment: runtimeEnvironment,
+			Environment:     runtimeEnvironment,
+			RuntimeContexts: resourceGraph.HookRuntimeContexts(),
 		})
 		if err != nil {
 			closeThreadResources()

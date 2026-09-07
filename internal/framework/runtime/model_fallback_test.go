@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
@@ -513,8 +514,8 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 		{Ref: "backup:model", Provider: backup, ContextWindow: 2_000},
 	}
 	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
-	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
-		hooks.EventPostCompact: {{Stdout: "Use the refreshed fallback context now."}},
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
+		hookconfig.EventPostCompact: {{Stdout: "Use the refreshed fallback context now."}},
 	}})
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 200))); err != nil {
 		t.Fatal(err)
@@ -633,7 +634,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		{Ref: "backup:model", Provider: backup, ContextWindow: 64000, MaxOutputTokens: 2048},
 	}
 	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
-	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "fallback"}, Stdout: "one-shot fallback context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hookconfig.CommandHook{Name: "fallback"}, Stdout: "one-shot fallback context"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, "earlier")); err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/extensions"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/skills"
@@ -62,12 +63,13 @@ type RuntimeExtensionDescriptor struct {
 }
 
 type RuntimeResourceGraph struct {
-	extensions        []RuntimeExtensionDescriptor
-	skillDirs         []skills.Dir
-	mcpConfigs        []mcpConfigRef
-	observableConfigs []observableConfigRef
-	hooks             hooks.Config
-	nodes             []RuntimeResourceNode
+	extensions          []RuntimeExtensionDescriptor
+	skillDirs           []skills.Dir
+	mcpConfigs          []mcpConfigRef
+	observableConfigs   []observableConfigRef
+	hooks               hookconfig.Config
+	hookRuntimeContexts map[string]hooks.RuntimeContext
+	nodes               []RuntimeResourceNode
 }
 
 func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error) {
@@ -96,10 +98,11 @@ func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error
 	}
 
 	runtimeContexts := extensionRuntimeContexts(cfg, extResources.Extensions)
-	var hookConfig hooks.Config
+	var hookConfig hookconfig.Config
+	var hookBindings map[string]hooks.RuntimeContext
 	if selection.Hooks {
 		var err error
-		hookConfig, err = appendExtensionHooks(cfg.Hooks, extResources.HookFiles, runtimeContexts)
+		hookConfig, hookBindings, err = appendExtensionHooks(cfg.Hooks, extResources.HookFiles, runtimeContexts)
 		if err != nil {
 			return RuntimeResourceGraph{}, err
 		}
@@ -115,12 +118,13 @@ func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error
 	}
 	observableConfigs := observableConfigRefs(extResources.ObservableConfigs, runtimeContexts)
 	return RuntimeResourceGraph{
-		extensions:        runtimeExtensionDescriptors(extResources.Extensions, runtimeContexts),
-		skillDirs:         skillDirs,
-		mcpConfigs:        mcpConfigs,
-		observableConfigs: observableConfigs,
-		hooks:             hookConfig,
-		nodes:             runtimeResourceNodes(paths, extResources, runtimeContexts, selection),
+		extensions:          runtimeExtensionDescriptors(extResources.Extensions, runtimeContexts),
+		skillDirs:           skillDirs,
+		mcpConfigs:          mcpConfigs,
+		observableConfigs:   observableConfigs,
+		hooks:               hookConfig,
+		hookRuntimeContexts: hookBindings,
+		nodes:               runtimeResourceNodes(paths, extResources, runtimeContexts, selection),
 	}, nil
 }
 
@@ -161,7 +165,7 @@ func (g RuntimeResourceGraph) ObservableConfigs() []observableConfigRef {
 	return append([]observableConfigRef(nil), g.observableConfigs...)
 }
 
-func (g RuntimeResourceGraph) HooksConfig() hooks.Config {
+func (g RuntimeResourceGraph) HooksConfig() hookconfig.Config {
 	return cloneHooksConfig(g.hooks)
 }
 
@@ -263,15 +267,15 @@ func runtimeExtensionResourceNode(kind RuntimeResourceKind, ref extensions.Resou
 	return node
 }
 
-func cloneHooksConfig(cfg hooks.Config) hooks.Config {
-	commands := make([]hooks.CommandHook, 0, len(cfg.Commands))
+func cloneHooksConfig(cfg hookconfig.Config) hookconfig.Config {
+	commands := make([]hookconfig.CommandHook, 0, len(cfg.Commands))
 	for _, command := range cfg.Commands {
-		command.Events = append([]hooks.EventName(nil), command.Events...)
+		command.Events = append([]hookconfig.EventName(nil), command.Events...)
 		command.Tools = append([]string(nil), command.Tools...)
 		command.Command = append([]string(nil), command.Command...)
 		commands = append(commands, command)
 	}
-	return hooks.Config{Commands: commands}
+	return hookconfig.Config{Commands: commands}
 }
 
 func runtimeSourceLess(leftSource, leftName, rightSource, rightName string) bool {
@@ -386,8 +390,9 @@ func extensionRuntimeContexts(cfg config.Config, selected []extensions.Extension
 	return contexts
 }
 
-func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef, runtimeContexts map[string]ExtensionRuntimeContext) (hooks.Config, error) {
-	out := hooks.Config{Commands: append([]hooks.CommandHook(nil), base.Commands...)}
+func appendExtensionHooks(base hookconfig.Config, refs []extensions.ResourceRef, runtimeContexts map[string]ExtensionRuntimeContext) (hookconfig.Config, map[string]hooks.RuntimeContext, error) {
+	out := hookconfig.Config{Commands: append([]hookconfig.CommandHook(nil), base.Commands...)}
+	bindings := map[string]hooks.RuntimeContext{}
 	names := map[string]string{}
 	for _, command := range out.Commands {
 		if command.Name != "" {
@@ -395,25 +400,25 @@ func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef, runt
 		}
 	}
 	for _, ref := range refs {
-		cfg, err := hooks.LoadFileConfig(ref.Path, ref.Source, ref.RequireTrust)
+		cfg, err := hookconfig.LoadFileConfig(ref.Path, ref.Source, ref.RequireTrust)
 		if err != nil {
-			return hooks.Config{}, err
+			return hookconfig.Config{}, nil, err
 		}
 		runtimeContext := runtimeContexts[ref.ExtensionName]
 		for _, command := range cfg.Commands {
-			command.Runtime = hooks.RuntimeContext{
+			bindings[command.Name] = hooks.RuntimeContext{
 				ExtensionDir:            runtimeContext.ExtensionDir,
 				ExtensionDataDir:        runtimeContext.DataDir,
 				PrepareExtensionDataDir: runtimeContext.PrepareDataDir,
 			}
 			if prev, ok := names[command.Name]; ok {
-				return hooks.Config{}, fmt.Errorf("extensions: duplicate hook %q from %s and %s", command.Name, prev, command.Source)
+				return hookconfig.Config{}, nil, fmt.Errorf("extensions: duplicate hook %q from %s and %s", command.Name, prev, command.Source)
 			}
 			names[command.Name] = command.Source
 			out.Commands = append(out.Commands, command)
 		}
 	}
-	return out, nil
+	return out, bindings, nil
 }
 
 func loadMCPConfigRefs(refs []mcpConfigRef, workDir string, runtimeEnvironment environment.Snapshot) ([]mcp.Config, mcp.Config, map[string]string, error) {
@@ -502,4 +507,12 @@ func LoadMCPConfigs(runtime AgentRuntimeResolution, workDir string) ([]mcp.Confi
 		runtime.Environment(),
 	)
 	return configs, err
+}
+
+func (g RuntimeResourceGraph) HookRuntimeContexts() map[string]hooks.RuntimeContext {
+	bindings := make(map[string]hooks.RuntimeContext, len(g.hookRuntimeContexts))
+	for name, binding := range g.hookRuntimeContexts {
+		bindings[name] = binding
+	}
+	return bindings
 }
