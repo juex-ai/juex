@@ -1451,6 +1451,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 		Observables []observable.ObservableStatus `json:"observables"`
 	}
 	var records []observable.ObservationRecord
+	var eventsData []byte
 	waitForCondition(t, 5*time.Second, func() bool {
 		resp, err := http.Get(ts.URL + "/api/observables")
 		if err != nil {
@@ -1479,13 +1480,18 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 			return false
 		}
 		records = fetched
-		return len(records) == 1 && records[0].State == observable.ObservationStateDelivered
+		if len(records) != 1 || records[0].State != observable.ObservationStateDelivered {
+			return false
+		}
+		// The record is stored before the delivery event is published.
+		eventsData = []byte(threadJournalText(t, filepath.Join(stateDir, "threads", c.ID)))
+		return strings.Contains(string(eventsData), `"type":"observable.started"`) &&
+			strings.Contains(string(eventsData), `"type":"observation.delivered"`)
 	})
 	got := snapshot.Observables[0]
 	if got.ID != "observable-e2e" {
 		t.Fatalf("observable id = %q", got.ID)
 	}
-	eventsData := []byte(threadJournalText(t, filepath.Join(stateDir, "threads", c.ID)))
 	for _, want := range []string{`"type":"observable.started"`, `"type":"observation.delivered"`} {
 		if !strings.Contains(string(eventsData), want) {
 			t.Fatalf("events missing %s:\n%s", want, eventsData)
