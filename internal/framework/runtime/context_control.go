@@ -20,6 +20,11 @@ func (e *Engine) RequestContextTransition(request runtimemodule.ContextTransitio
 	if request.Kind != runtimemodule.ContextTransitionNew && request.Kind != runtimemodule.ContextTransitionCompact {
 		return fmt.Errorf("runtime: unsupported context transition %q", request.Kind)
 	}
+	if request.Kind == runtimemodule.ContextTransitionNew {
+		if err := e.checkInputScopeRenewal(); err != nil {
+			return err
+		}
+	}
 	e.contextControlMu.Lock()
 	defer e.contextControlMu.Unlock()
 	if e.pendingContextTransition != nil {

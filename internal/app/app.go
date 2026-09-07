@@ -25,6 +25,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
+	"github.com/juex-ai/juex/internal/features/inputtracking"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
@@ -408,7 +409,8 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		Prompt:                  pb,
 		WorkDir:                 runtimePaths.WorkDir,
 		MediaDir:                runtimePaths.MediaDir,
-		PendingInputQueue:       runtime.NewPendingInputQueue(threadState.Dir, runtime.PendingInputQueueOptions{Thread: threadState}),
+		PendingInputQueue:       runtime.NewPendingInputQueue(threadState.Dir, runtime.PendingInputQueueOptions{Thread: threadState, TrackUserInputs: cfg.ModuleEnabled(inputtracking.ModuleID)}),
+		TrackUserInputs:         cfg.ModuleEnabled(inputtracking.ModuleID),
 		PendingInputTTL:         pendingInputTTL,
 		ExternalEventTTL:        externalEventTTL,
 		ShowBuiltinPolicyTraces: runtimeLimits.ShowBuiltinPolicyTraces,

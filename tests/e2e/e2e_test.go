@@ -1310,7 +1310,7 @@ func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {
 			t.Fatalf("startup notification tools missing %q: %v", want, provider.toolNames)
 		}
 	}
-	conversation := withoutWindowRecitation(provider.history)
+	conversation := withoutRuntimeRecitation(provider.history)
 	if len(conversation) != 1 || conversation[0].Kind != llm.MessageKindObservation {
 		t.Fatalf("startup notification history = %+v", provider.history)
 	}
@@ -1632,7 +1632,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if len(prov1.history) == 0 {
 		t.Fatalf("first turn provider was never called")
 	}
-	firstHistory := withoutWindowRecitation(prov1.history[0])
+	firstHistory := withoutRuntimeRecitation(prov1.history[0])
 	if got := len(firstHistory); got != 1 {
 		t.Errorf("first turn saw history of len %d, want 1 (just the new user prompt)", got)
 	} else if firstHistory[0].FirstText() != "remember: alice" {
@@ -1672,7 +1672,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if len(prov2.history) == 0 {
 		t.Fatalf("second turn provider was never called")
 	}
-	secondHistory := withoutWindowRecitation(prov2.history[0])
+	secondHistory := withoutRuntimeRecitation(prov2.history[0])
 	if got := len(secondHistory); got != 3 {
 		t.Errorf("second turn history len = %d, want 3 (prior user+assistant + new user)", got)
 	} else {
@@ -2415,10 +2415,10 @@ func messagesText(messages []llm.Message) string {
 	return b.String()
 }
 
-func withoutWindowRecitation(messages []llm.Message) []llm.Message {
+func withoutRuntimeRecitation(messages []llm.Message) []llm.Message {
 	filtered := make([]llm.Message, 0, len(messages))
 	for _, message := range messages {
-		if message.ID != "runtime-context-window" {
+		if message.ID != "runtime-context-window" && !strings.HasPrefix(message.ID, "runtime-input-") {
 			filtered = append(filtered, message)
 		}
 	}

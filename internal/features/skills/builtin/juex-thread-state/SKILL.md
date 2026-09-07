@@ -45,3 +45,12 @@ append. Keep the content under 2048 characters and use concise Markdown for
 the current plan, verified progress, and unresolved issues. Checkbox items
 (`- [ ]` and `- [x]`) are useful for work that changes state. Put long-lived or
 large material in scratchpad files instead of notes.
+
+## Input checklist
+
+When enabled, `input-tracking` supplies delivered unchecked inputs on every
+request. Call `check_inputs` with `input_ids` after handling them; answer a
+question before checking it. Partial work, failures, waiting requests and
+active constraints stay unchecked. A new question does not replace earlier
+work. Checking is idempotent and does not cancel the Turn. Compaction retains
+the checklist; use `context_compact` while it contains unfinished work.

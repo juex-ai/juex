@@ -271,6 +271,13 @@ func (t *Thread) BeginNewGeneration() (Commit, error) {
 	return t.beginGeneration(false, llm.Message{}, false, nil)
 }
 
+// ContextScopeID survives compaction and changes only at an empty-context boundary.
+func (t *Thread) ContextScopeID() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.state.ContextScopeID
+}
+
 func (t *Thread) BeginCompactedGeneration(summary llm.Message, automatic bool, contextUsage *llm.ContextUsage) (Commit, error) {
 	summary = prepareMessage(summary)
 	return t.beginGeneration(true, summary, automatic, contextUsage)
@@ -306,6 +313,9 @@ func (t *Thread) beginGeneration(compacted bool, summary llm.Message, automatic 
 		summaryPointer = &summary
 	}
 	seed := generationSeedFromState(t.state, providerMessages, contextUsage)
+	if !compacted {
+		seed.ContextScopeID = nextID
+	}
 	fact := Fact{
 		Type: factType, FromGenerationID: current.ID, ToGenerationID: nextID,
 		Summary: summaryPointer, Automatic: automatic, Seed: &seed,
@@ -378,7 +388,7 @@ func (t *Thread) ApplyAlias(alias string) error {
 	return nil
 }
 
-// SetPendingInputCount materializes the bounded pending_inputs.json state in
+// SetPendingInputCount materializes the bounded inputs.json state in
 // Thread metadata and the Agent index. The pending document remains the
 // authority; loading it repairs this value after an interrupted refresh.
 func (t *Thread) SetPendingInputCount(count int) error {
@@ -635,6 +645,7 @@ func (t *Thread) refreshPublicLocked() {
 
 func cloneReplayState(source ReplayState) ReplayState {
 	clone := ReplayState{
+		ContextScopeID:   source.ContextScopeID,
 		Projection:       cloneProjection(source.Projection),
 		Messages:         append([]llm.Message(nil), source.Messages...),
 		ProviderMessages: append([]llm.Message(nil), source.ProviderMessages...),

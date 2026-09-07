@@ -37,6 +37,19 @@ func (e *Engine) newContextLocked(ctx context.Context, allowActive bool) error {
 	if !allowActive && (e.activeTurnID != "" || len(e.pendingInput) > 0) {
 		return ErrThreadRuntimeBusy
 	}
+	e.pendingLifecycleMu.Lock()
+	renewed := false
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		if renewed {
+			e.finishContextRenewal(ctx, current.Modules)
+		}
+	}()
+	if allowActive {
+		if err := e.checkInputScopeRenewal(); err != nil {
+			return err
+		}
+	}
 	generationID := current.Thread.Projection().CurrentGeneration.ID
 	clear, err := runtimemodule.ClearContextForRenewal(ctx, current.Modules, generationID)
 	if err != nil {
@@ -50,11 +63,11 @@ func (e *Engine) newContextLocked(ctx context.Context, allowActive bool) error {
 		// The Journal boundary is durable even though its derived projection did
 		// not persist. Keep the module clear on the committed side of the boundary.
 		finalizeErr := clear.Finalize()
-		e.finishContextRenewal(ctx, current.Modules)
+		renewed = true
 		return errors.Join(err, finalizeErr)
 	}
 	finalizeErr := clear.Finalize()
-	e.finishContextRenewal(ctx, current.Modules)
+	renewed = true
 	if finalizeErr != nil {
 		return fmt.Errorf("runtime: finalize committed Context renewal: %w", finalizeErr)
 	}

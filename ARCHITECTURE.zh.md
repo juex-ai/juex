@@ -81,7 +81,7 @@ juex.yaml
 threads.index.json
 threads/<thread-id>/
   thread.json
-  pending_inputs.json
+  inputs.json
   generations/
     g000001.jsonl
     g000002.jsonl
@@ -122,7 +122,7 @@ registry 的权威。它还物化有界 counter、context status、Pending Input
 与诊断 reader 通过 EventStore snapshot 分页或捕获已注册 Generation，不自行拼接
 存储路径。Torn final write 可以修复，完整但非法的 commit 属于 corruption。
 
-`pending_inputs.json` 是 runtime 拥有的原子、有界当前状态文档。Goal 与 Notes
+`inputs.json` 是 Runtime 拥有的原子当前状态文档，保留执行恢复所需输入和有界的未勾选输入清单。Framework 先提交 Generation 勾选事实，再更新当前集并发布；加载时根据事实修复“勾选已提交而文件写入中断”的窗口。已结束但未勾选的记录不计入 pending，也不进入恢复执行。Context Generation seed 保存工作范围 ID：compaction 继承，`/new` 替换。`features/inputtracking` 只通过窄 Framework 接口贡献工具、recitation 和 compaction 指引。Goal 与 Notes
 Module 在 Thread 内 Framework 分配的 `modules/<owner>/` 目录中拥有当前状态
 文件，core Thread storage 不解释其 schema。首次写状态前，资源 owner 持久登记
 身份、scope、相对目录和保留策略；没有持久状态时，文件与登记都可以不存在。Scratchpad ThreadResource
@@ -141,7 +141,7 @@ run、delivery、idempotency 与 schedule 状态。Extension bundle 可以提供
 ```text
 CLI / Web / Observation
   -> App input policy / Framework admission
-  -> pending_inputs.json acceptance
+  -> inputs.json acceptance
   -> attempt 与 Turn
   -> prompt / Provider / Tool
   -> terminal Generation commit

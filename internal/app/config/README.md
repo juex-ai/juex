@@ -12,6 +12,10 @@ capability declared in `internal/app/modulecatalog`; minimal enables only
 `basic-file-tools`, `shell`, and `operating-context` by default. Explicit
 `modules.<id>.enabled` switches override those defaults.
 
+`input-tracking` follows these defaults: standard on, minimal off. Its
+[input checklist](../../features/inputtracking/README.md) retains unchecked
+inputs across disable/re-enable without changing pending delivery counts.
+
 Preset and explicit switches merge independently through the existing config
 layers and imports. Setting only a higher-layer preset preserves lower-layer
 explicit switches. A higher explicit value replaces the same lower field;

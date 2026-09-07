@@ -12,7 +12,8 @@ func TestProductPresetMembership(t *testing.T) {
 		"apply-patch": false, "chunked-write": false, "file-search": false,
 		"agents-md": false, "skills": false, "scratchpad": false, "goal": false,
 		"notes": false, "memory": false, "context-control": false, "worker-threads": false,
-		"observables": false, "mcp": false, "hooks": false, "extensions": false,
+		"input-tracking": false,
+		"observables":    false, "mcp": false, "hooks": false, "extensions": false,
 	}
 	definitions := Inventory().Definitions()
 	if len(definitions) != len(expected) {

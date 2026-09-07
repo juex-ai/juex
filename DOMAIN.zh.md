@@ -61,6 +61,8 @@ Assistant 消息与 Input 配对。
 Generation，也使用一条连续的 Thread Event sequence。它不天然绑定 Input、Turn
 或 client 类型。更高层 waiter 可以从 `input_id` 跟随到消费它的 Turn。
 
+可选的输入跟踪将投递与模型“已处理”的判断分开。启用期间接收的直接用户输入保持未勾选，直到模型主动勾选。Turn 结束不代表输入已勾选，已结束但未勾选的输入也不属于待投递队列。失败和 compaction 保留未勾选输入。关闭开关保留已有记录，但停止新登记和提醒；这些核心输入记录不是 Goal/Notes 的可退休资源。用户 `/new` 开始新的工作范围，compaction 保持原范围。勾选不能取消执行，也不证明结果正确。
+
 ## Context Generation 与 Thread 工作状态
 
 Context Generation 是 Thread 内的一代 Provider 可见上下文。

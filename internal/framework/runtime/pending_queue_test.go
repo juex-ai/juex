@@ -25,7 +25,7 @@ func TestPendingInputQueuePersistsBoundedCurrentStateDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(target.Dir, "pending_inputs.json")
+	path := filepath.Join(target.Dir, "inputs.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

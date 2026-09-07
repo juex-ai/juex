@@ -8,6 +8,7 @@ import (
 func generationSeedFromState(state ReplayState, providerMessages []llm.Message, contextUsage *llm.ContextUsage) GenerationSeed {
 	seed := GenerationSeed{
 		Version:          ProjectionVersion,
+		ContextScopeID:   state.ContextScopeID,
 		ProviderMessages: append([]llm.Message(nil), providerMessages...),
 		RecoveryEvents:   generationRecoveryEvents(state.Events),
 		CompactionCount:  state.CompactionCount,

@@ -155,8 +155,8 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		}
 		count += len(group.Tools)
 	}
-	if status.Tools.Count != count || count != 37 {
-		t.Fatalf("tool count = %d, grouped=%d, want 37", status.Tools.Count, count)
+	if status.Tools.Count != count || count != 38 {
+		t.Fatalf("tool count = %d, grouped=%d, want 38", status.Tools.Count, count)
 	}
 }
 
@@ -193,11 +193,11 @@ func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 			specs = append(specs, llm.ToolSpec{Name: tool.Name, Description: tool.Description, Schema: tool.Schema})
 		}
 	}
-	if len(specs) != 17 {
-		t.Fatalf("Tier 2 tool count = %d, want 17", len(specs))
+	if len(specs) != 18 {
+		t.Fatalf("Tier 2 tool count = %d, want 18", len(specs))
 	}
-	if got := contextbudget.EstimateToolTokens(specs); got > 1900 {
-		t.Fatalf("Tier 2 tool estimate = %d tokens, want <= 1900", got)
+	if got := contextbudget.EstimateToolTokens(specs); got > 2100 {
+		t.Fatalf("Tier 2 tool estimate = %d tokens, want <= 2100 for eighteen tools", got)
 	}
 }
 

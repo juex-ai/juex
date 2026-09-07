@@ -21,7 +21,7 @@ import (
 const (
 	pendingInputSummaryLength   = 200
 	pendingInputDocumentVersion = 1
-	pendingInputFile            = "pending_inputs.json"
+	pendingInputFile            = "inputs.json"
 )
 
 var ErrCorruptPendingInputs = errors.New("runtime: corrupt pending input state")
@@ -35,6 +35,8 @@ const (
 	PendingInputStateProcessed    PendingInputState = "processed"
 	PendingInputStateRetryable    PendingInputState = "retryable"
 	PendingInputStateDeadLettered PendingInputState = "dead_lettered"
+	// Settled inputs are retained only for reminders, never execution recovery.
+	PendingInputStateSettled PendingInputState = "settled"
 	// Expired and dropped are transient dispositions. They are never retained
 	// in the bounded pending document.
 	PendingInputStateExpired PendingInputState = "expired"
@@ -54,9 +56,10 @@ type PendingInputOptions struct {
 }
 
 type PendingInputQueueOptions struct {
-	Now       func() time.Time
-	Thread    *thread.Thread
-	WriteFile func(string, []byte, os.FileMode, os.FileMode) error
+	TrackUserInputs bool
+	Now             func() time.Time
+	Thread          *thread.Thread
+	WriteFile       func(string, []byte, os.FileMode, os.FileMode) error
 }
 
 // PendingInputRecoveryFacts close admission and transcript crash windows that
@@ -67,6 +70,10 @@ type PendingInputRecoveryFacts struct {
 }
 
 type PendingInputRecord struct {
+	// Empty ScopeID means this input was accepted without tracking.
+	ScopeID       string             `json:"scope_id,omitempty"`
+	CheckedAt     *time.Time         `json:"checked_at,omitempty"`
+	ModelMessage  *llm.Message       `json:"model_message,omitempty"`
 	ID            string             `json:"id"`
 	TurnID        string             `json:"turn_id,omitempty"`
 	MessageID     string             `json:"message_id"`
@@ -83,7 +90,7 @@ type PendingInputRecord struct {
 }
 
 func (r PendingInputRecord) Expired(now time.Time) bool {
-	return r.Origin != PendingInputOriginTurn && isReplayablePendingState(r.State) &&
+	return r.ScopeID == "" && r.Origin != PendingInputOriginTurn && isReplayablePendingState(r.State) &&
 		!r.ExpiresAt.IsZero() && !r.ExpiresAt.After(now)
 }
 
@@ -103,19 +110,22 @@ const (
 )
 
 type PendingInputQueue struct {
-	thread       *thread.Thread
-	dir          string
-	now          func() time.Time
-	writeFile    func(string, []byte, os.FileMode, os.FileMode) error
-	mu           sync.Mutex
-	loaded       bool
-	records      map[string]PendingInputRecord
-	order        []string
-	messageIndex map[string]string
-	turnIndex    map[string]string
-	completed    map[string]struct{}
-	handled      map[string]struct{}
-	handledMsgs  map[string]struct{}
+	trackUserInputs bool
+	scopeID         string
+	checked         map[string]InputCheckedPayload
+	thread          *thread.Thread
+	dir             string
+	now             func() time.Time
+	writeFile       func(string, []byte, os.FileMode, os.FileMode) error
+	mu              sync.Mutex
+	loaded          bool
+	records         map[string]PendingInputRecord
+	order           []string
+	messageIndex    map[string]string
+	turnIndex       map[string]string
+	completed       map[string]struct{}
+	handled         map[string]struct{}
+	handledMsgs     map[string]struct{}
 }
 
 func NewPendingInputQueue(dir string, opts PendingInputQueueOptions) *PendingInputQueue {
@@ -130,7 +140,7 @@ func NewPendingInputQueue(dir string, opts PendingInputQueueOptions) *PendingInp
 	if opts.Thread != nil {
 		dir = opts.Thread.Dir
 	}
-	return &PendingInputQueue{thread: opts.Thread, dir: filepath.Clean(dir), now: now, writeFile: writeFile}
+	return &PendingInputQueue{thread: opts.Thread, dir: filepath.Clean(dir), now: now, writeFile: writeFile, trackUserInputs: opts.TrackUserInputs}
 }
 
 func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, turnID string) (PendingInputRecord, error) {
@@ -171,6 +181,7 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 		Origin:  PendingInputOriginQueued, State: PendingInputStatePending,
 		CreatedAt: now, ExpiresAt: now.Add(ttl),
 	}
+	q.trackInputLocked(&record)
 	if err := q.upsertLocked(record); err != nil {
 		return PendingInputRecord{}, err
 	}
@@ -230,6 +241,7 @@ func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuse
 		Summary: truncate(msg.FirstText(), pendingInputSummaryLength),
 		Origin:  PendingInputOriginTurn, State: state, CreatedAt: now, Attempts: attempts,
 	}
+	q.trackInputLocked(&record)
 	if err := q.upsertLocked(record); err != nil {
 		return PendingInputRecord{}, err
 	}
@@ -377,11 +389,13 @@ func (q *PendingInputQueue) MarkProcessed(ids []string) error {
 		}
 		record.State = PendingInputStateProcessed
 		record.ProcessedAt = &now
+		record.ModelMessage = q.processedMessageLocked(record)
 		return record, true, false
 	})
 }
 
-func (q *PendingInputQueue) MarkMessageProcessed(messageID string) error {
+func (q *PendingInputQueue) MarkMessageProcessed(message llm.Message) error {
+	messageID := message.ID
 	if q == nil || messageID == "" {
 		return nil
 	}
@@ -401,6 +415,9 @@ func (q *PendingInputQueue) MarkMessageProcessed(messageID string) error {
 	now := q.nowMillis()
 	record.State = PendingInputStateProcessed
 	record.ProcessedAt = &now
+	if record.ScopeID != "" {
+		record.ModelMessage = &message
+	}
 	return q.upsertLocked(record)
 }
 
@@ -560,7 +577,7 @@ func (q *PendingInputQueue) ReconcileRecoveryFacts(facts PendingInputRecoveryFac
 	changed := false
 	for _, id := range order {
 		record := records[id]
-		if record.State == PendingInputStateDeadLettered {
+		if record.State == PendingInputStateDeadLettered || record.State == PendingInputStateSettled {
 			continue
 		}
 		_, transcribed := facts.TranscriptMessageIDs[record.MessageID]
@@ -585,6 +602,7 @@ func (q *PendingInputQueue) ReconcileRecoveryFacts(facts PendingInputRecoveryFac
 		if transcribed && record.ProcessedAt == nil {
 			now := q.nowMillis()
 			record.ProcessedAt = &now
+			record.ModelMessage = q.processedMessageLocked(record)
 			changed = true
 		}
 		records[id] = record
@@ -663,7 +681,7 @@ func (q *PendingInputQueue) remove(ids []string) error {
 
 func (q *PendingInputQueue) ensureLoadedLocked() error {
 	if q.loaded {
-		return nil
+		return q.refreshInputScopeLocked()
 	}
 	records, order, err := q.loadDocumentLocked()
 	if err != nil {
@@ -674,6 +692,8 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 	q.completed = map[string]struct{}{}
 	q.handled = map[string]struct{}{}
 	q.handledMsgs = map[string]struct{}{}
+	q.checked = map[string]InputCheckedPayload{}
+	q.scopeID = q.currentInputScopeID()
 	q.rebuildIndexesLocked()
 	changed := false
 	if q.thread != nil {
@@ -682,6 +702,11 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 			return fmt.Errorf("pending input queue: read Generation events: %w", readErr)
 		}
 		for _, event := range eventsList {
+			if event.Type == InputCheckedType {
+				if q.applyInputCheckLocked(payloadAs[InputCheckedPayload](event.Payload)) {
+					changed = true
+				}
+			}
 			disposition, ids, message, errorKind := pendingDispositionFromEvent(event)
 			if disposition != pendingTerminalNone {
 				for _, id := range ids {
@@ -699,6 +724,22 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 		}
 	}
 	q.loaded = true
+	for id, record := range q.records {
+		if record.ScopeID != "" && record.ModelMessage == nil {
+			if message := q.processedMessageLocked(record); message != nil {
+				record.ModelMessage = message
+				if record.ProcessedAt == nil {
+					now := q.nowMillis()
+					record.ProcessedAt = &now
+				}
+				q.records[id] = record
+				changed = true
+			}
+		}
+	}
+	if q.pruneInputScopesLocked() {
+		changed = true
+	}
 	if changed {
 		if err := q.persistCurrentLocked(); err != nil {
 			return err
@@ -774,7 +815,7 @@ func validatePendingInputRecord(record PendingInputRecord) error {
 			return errors.New("accepting input must identify its Turn")
 		}
 	case PendingInputStatePending:
-	case PendingInputStateAdmitted, PendingInputStateProcessed, PendingInputStateRetryable, PendingInputStateDeadLettered:
+	case PendingInputStateAdmitted, PendingInputStateProcessed, PendingInputStateRetryable, PendingInputStateDeadLettered, PendingInputStateSettled:
 		if record.TurnID == "" {
 			return fmt.Errorf("%s input must identify its Turn", record.State)
 		}
@@ -796,6 +837,17 @@ func validatePendingInputRecord(record PendingInputRecord) error {
 func (q *PendingInputQueue) upsertLocked(record PendingInputRecord) error {
 	records, order := q.cloneStateLocked()
 	if _, exists := records[record.ID]; !exists {
+		if record.ScopeID != "" {
+			count := 0
+			for _, existing := range records {
+				if existing.ScopeID != "" && existing.ScopeID == q.scopeID && existing.CheckedAt == nil {
+					count++
+				}
+			}
+			if count >= maxTrackedInputs {
+				return fmt.Errorf("input tracking: current checklist is full (%d); check handled inputs or start a new scope", maxTrackedInputs)
+			}
+		}
 		order = append(order, record.ID)
 	}
 	records[record.ID] = record
@@ -883,9 +935,18 @@ func (q *PendingInputQueue) applyTerminalStateLocked(disposition pendingTerminal
 		}
 		switch disposition {
 		case pendingTerminalCompleted, pendingTerminalCancelled:
-			delete(q.records, id)
-			q.order = removePendingInputID(q.order, id)
-			changed = true
+			if record.ScopeID != "" && record.ScopeID == q.scopeID && record.CheckedAt == nil {
+				if record.State != PendingInputStateSettled {
+					record.State = PendingInputStateSettled
+					record.LastError, record.LastErrorKind = "", ""
+					q.records[id] = record
+					changed = true
+				}
+			} else {
+				delete(q.records, id)
+				q.order = removePendingInputID(q.order, id)
+				changed = true
+			}
 		case pendingTerminalRetryable:
 			if record.State != PendingInputStateRetryable || record.LastError != message || record.LastErrorKind != errorKind {
 				record.State = PendingInputStateRetryable
