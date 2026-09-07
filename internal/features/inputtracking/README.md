@@ -33,7 +33,8 @@ model `context_new` is rejected while unchecked inputs remain.
 The current checklist accepts at most 256 unchecked inputs, rejecting new
 tracked inputs before acknowledgement when full. Delivery TTL does not expire
 tracked requests. Large content uses the ordinary input projection and artifact
-read paths. Every input remains discoverable; context capacity failures are
+read paths. Checklist previews share the compaction retention budget so reminders
+cannot restore full long inputs after compression. Every input remains discoverable; context capacity failures are
 reported rather than silently omitting checklist entries.
 
 A check is the model's judgement, not proof that the work is correct. The

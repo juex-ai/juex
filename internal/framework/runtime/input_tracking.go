@@ -196,12 +196,21 @@ func (e *Engine) UncheckedInputs(ctx context.Context) ([]runtimemodule.InputRemi
 	if err != nil {
 		return nil, err
 	}
+	policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
+	textBlocks := 0
+	for _, record := range records {
+		textBlocks += compactionProjectedTextBlockCount(*record.ModelMessage)
+	}
+	// Reminders must not restore large raw inputs after context compaction.
+	// Share the existing retention preview budget and keep short requests inline.
+	reminderPolicy := compactionRetentionProjectionPolicyForBlockCount(policy, textBlocks)
+	reminderPolicy.UserInputInlineMaxBytes = min(policy.UserInputInlineMaxBytes, max(1024, reminderPolicy.UserInputPreviewHeadBytes+reminderPolicy.UserInputPreviewTailBytes))
 	result := make([]runtimemodule.InputReminder, 0, len(records))
 	for _, record := range records {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		message, _, err := e.projectMessageLocked(*record.ModelMessage, effectiveCompactionPolicy(e.Compaction, e.ContextWindow))
+		message, _, err := e.projectCompactionRetentionMessageLocked(*record.ModelMessage, reminderPolicy)
 		if err != nil {
 			return nil, err
 		}

@@ -259,10 +259,20 @@ func TestInputTrackingLargeChecklistKeepsEveryIDAndContentReference(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
+		wanted := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			wanted[id] = true
+		}
 		for _, reminder := range reminders {
-			if reminder.ID != "" && strings.Contains(reminder.Content, "Requirement ") && !strings.Contains(reminder.Content, `"artifact"`) {
-				t.Fatalf("large input has no content reference: %s", reminder.ID)
+			if wanted[reminder.ID] {
+				if !strings.Contains(reminder.Content, `"artifact"`) {
+					t.Fatalf("large input has no content reference: %s", reminder.ID)
+				}
+				delete(wanted, reminder.ID)
 			}
+		}
+		if len(wanted) != 0 {
+			t.Fatalf("large inputs missing from checklist: %v", wanted)
 		}
 		return inputTrackingAnswer("Waiting on the user."), nil
 	}
@@ -271,5 +281,39 @@ func TestInputTrackingLargeChecklistKeepsEveryIDAndContentReference(t *testing.T
 	}
 	if call != 2 {
 		t.Fatalf("calls = %d, want 2", call)
+	}
+}
+
+func TestInputTrackingCompactionDoesNotReinflateUncheckedInputs(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+			isolateModuleConfig(t)
+			cfg := inputTrackingConfig(t, enabled)
+			cfg.Compaction.UserInputInlineMaxBytes = 1 << 20
+			cfg.Compaction.KeepRecentTokens = 2500
+			provider := &inputTrackingProvider{complete: func(context.Context, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
+				return inputTrackingAnswer("Stored."), nil
+			}}
+			a := inputTrackingApp(t, cfg, provider)
+			for i := 0; i < 2; i++ {
+				if _, err := a.Engine.Turn(t.Context(), fmt.Sprintf("Remember requirement %d. ", i)+strings.Repeat("noise ", 12000)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if a.Thread.Projection().Counts.GenerationCount < 2 {
+				t.Fatal("compaction was not exercised")
+			}
+			if enabled {
+				remaining, err := a.Engine.UncheckedInputs(t.Context())
+				if err != nil || len(remaining) != 2 {
+					t.Fatalf("unchecked inputs: %+v, %v", remaining, err)
+				}
+				for _, input := range remaining {
+					if !strings.Contains(input.Content, `"artifact"`) {
+						t.Fatalf("unchecked input lost its bounded content reference: %s", input.ID)
+					}
+				}
+			}
+		})
 	}
 }
