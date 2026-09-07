@@ -17,7 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
-	skillsmodule "github.com/juex-ai/juex/internal/features/skills/module"
+	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -100,7 +100,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 	}
 	for name, wantOwner := range map[string]runtimemodule.ID{
 		"read":                         modulecatalog.BasicFileTools,
-		"skill_search":                 skillsmodule.ModuleID,
+		"skill_search":                 skills.ModuleID,
 		goalmodule.ToolGet:             goalmodule.ModuleID,
 		notesmodule.ToolUpdate:         notesmodule.ModuleID,
 		"observable_list":              observable.ModuleID,

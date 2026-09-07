@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -19,7 +18,7 @@ const (
 	ToolUpdate = "update_goal"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.Goal
+const ModuleID runtimemodule.ID = "goal"
 
 const goalCompletionGateName = "goal-completion-gate"
 

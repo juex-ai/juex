@@ -8,11 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.Scratchpad
+const ModuleID runtimemodule.ID = "scratchpad"
 
 type Module struct {
 	WorkDir string

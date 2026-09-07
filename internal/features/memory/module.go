@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.Memory
+const ModuleID runtimemodule.ID = "memory"
 
 const (
 	ToolSearch = "memory_search"

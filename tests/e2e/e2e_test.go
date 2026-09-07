@@ -30,14 +30,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/features/applypatch"
-	"github.com/juex-ai/juex/internal/features/filesearch"
-	"github.com/juex-ai/juex/internal/features/filetools"
-
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/features/agentsmd"
+	"github.com/juex-ai/juex/internal/features/applypatch"
 	chunkmodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
+	"github.com/juex-ai/juex/internal/features/filesearch"
+	"github.com/juex-ai/juex/internal/features/filetools"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/mcp"
@@ -47,7 +46,6 @@ import (
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	shelltools "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/features/skills"
-	skillsmodule "github.com/juex-ai/juex/internal/features/skills/module"
 	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -292,7 +290,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		e2ePromptShellProfile(),
 		func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 		threadState,
-		skillsmodule.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
+		skills.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
 	)
 
 	// -- Script the model --
@@ -1019,7 +1017,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		e2ePromptShellProfile(),
 		func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 		threadState,
-		skillsmodule.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
+		skills.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
 	)
 
 	prov := &scriptProvider{

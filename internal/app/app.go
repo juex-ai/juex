@@ -598,11 +598,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 						AgentStateDir:         runtimePaths.StateDir,
 						MediaDir:              runtimePaths.MediaDir,
 						Environment:           runtimeEnvironment,
-						Shell:                 cfg.Shell,
-						Sandbox:               cfg.SandboxPolicy(),
-						SandboxRunner:         sandboxRunner,
-						Bus:                   bus,
-						Deliver:               a.DeliverObservation,
+
+						Sandbox:       cfg.SandboxPolicy(),
+						SandboxRunner: sandboxRunner,
+						Bus:           bus,
+						Deliver:       a.DeliverObservation,
 					})
 				}
 				return observableRuntimeModule, nil

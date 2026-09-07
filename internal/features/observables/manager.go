@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
@@ -58,12 +57,12 @@ type ManagerOptions struct {
 	AgentStateDir         string
 	MediaDir              string
 	Environment           environment.Snapshot
-	Shell                 config.ShellProfile
-	Sandbox               sandbox.Policy
-	SandboxRunner         sandbox.Runner
-	Bus                   *events.Bus
-	Deliver               DeliveryFunc
-	Now                   func() time.Time
+
+	Sandbox       sandbox.Policy
+	SandboxRunner sandbox.Runner
+	Bus           *events.Bus
+	Deliver       DeliveryFunc
+	Now           func() time.Time
 }
 
 type Manager struct {

@@ -1,10 +1,6 @@
 package app
 
 import (
-	"github.com/juex-ai/juex/internal/features/applypatch"
-	"github.com/juex-ai/juex/internal/features/filesearch"
-	"github.com/juex-ai/juex/internal/features/filetools"
-
 	"context"
 	"fmt"
 	"path/filepath"
@@ -12,8 +8,11 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/agentsmd"
+	"github.com/juex-ai/juex/internal/features/applypatch"
 	chunkmodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
 	"github.com/juex-ai/juex/internal/features/contextcontrol"
+	"github.com/juex-ai/juex/internal/features/filesearch"
+	"github.com/juex-ai/juex/internal/features/filetools"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/memory"
@@ -22,7 +21,6 @@ import (
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	shelltools "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/features/skills"
-	skillsmodule "github.com/juex-ai/juex/internal/features/skills/module"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
@@ -34,7 +32,7 @@ import (
 type runtimeModuleComposition struct {
 	set            *runtimemodule.Set
 	shell          *shelltools.Module
-	skills         *skillsmodule.Module
+	skills         *skills.Module
 	constructed    *constructedRuntimeModules
 	runtimeContext runtimemodule.RuntimeContext
 	specs          []runtimemodule.RuntimeFactorySpec
@@ -42,7 +40,7 @@ type runtimeModuleComposition struct {
 
 type constructedRuntimeModules struct {
 	shell  *shelltools.Module
-	skills *skillsmodule.Module
+	skills *skills.Module
 }
 
 type threadModuleOptions struct {
@@ -126,10 +124,10 @@ func prepareRuntimeModules(
 			},
 		},
 		{
-			ID:      skillsmodule.ModuleID,
-			Enabled: cfg.ModuleEnabled(string(skillsmodule.ModuleID)),
+			ID:      skills.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(skills.ModuleID)),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				mod, err := skillsmodule.New(skillsmodule.Options{
+				mod, err := skills.New(skills.Options{
 					Dirs:          resourceGraph.SkillDirs(),
 					LoaderOptions: skillLoaderOptions(cfg),
 					WorkDir:       runtimePaths.WorkDir,

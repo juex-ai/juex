@@ -8,11 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.AgentsMD
+const ModuleID runtimemodule.ID = "agents-md"
 
 type Module struct {
 	GlobalAgentsMDPath string

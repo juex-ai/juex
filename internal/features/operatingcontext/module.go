@@ -10,11 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.OperatingContext
+const ModuleID runtimemodule.ID = "operating-context"
 
 type Module struct {
 	WorkDir string

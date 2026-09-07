@@ -1,4 +1,4 @@
-package skillsmodule
+package skills
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -24,7 +23,7 @@ func TestModuleContributesSkillToolsAndContext(t *testing.T) {
 	}
 
 	mod, err := New(Options{
-		Dirs:    []skills.Dir{{Path: filepath.Dir(skillDir), Source: "project"}},
+		Dirs:    []Dir{{Path: filepath.Dir(skillDir), Source: "project"}},
 		WorkDir: workDir,
 		Sandbox: sandbox.Policy{},
 	})
@@ -68,7 +67,7 @@ func TestModuleContributesSkillToolsAndContext(t *testing.T) {
 }
 
 func TestModuleContributesContextOnlyForProviderIteration(t *testing.T) {
-	loader := skills.NewLoader(t.TempDir(), t.TempDir())
+	loader := NewLoader(t.TempDir(), t.TempDir())
 	if err := loader.Load(); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +96,7 @@ func TestModulePreservesExtensionProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	mod, err := New(Options{
-		Dirs:    []skills.Dir{{Path: root, Source: "ext:catalog", StrictConflicts: true}},
+		Dirs:    []Dir{{Path: root, Source: "ext:catalog", StrictConflicts: true}},
 		WorkDir: root,
 	})
 	if err != nil {

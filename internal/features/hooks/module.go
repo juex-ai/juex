@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.Hooks
+const ModuleID runtimemodule.ID = "hooks"
 
 type PolicyRunner interface {
 	Run(context.Context, Request) ([]Result, error)

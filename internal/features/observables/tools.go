@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
@@ -20,7 +19,7 @@ const (
 	maxObservationToolLimit     = 100
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.Observables
+const ModuleID runtimemodule.ID = "observables"
 
 type Module struct {
 	mu      sync.RWMutex

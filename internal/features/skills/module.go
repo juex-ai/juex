@@ -1,6 +1,6 @@
 // Package skillsmodule adapts the Skill catalog, Tools, and provider context
 // to the runtime Module framework.
-package skillsmodule
+package skills
 
 import (
 	"context"
@@ -10,39 +10,37 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
-const ModuleID runtimemodule.ID = modulecatalog.Skills
+const ModuleID runtimemodule.ID = "skills"
 
 const defaultSkillSearchLimit = 20
 
 type Options struct {
-	Dirs          []skills.Dir
-	LoaderOptions skills.LoaderOptions
+	Dirs          []Dir
+	LoaderOptions LoaderOptions
 	WorkDir       string
 	Sandbox       sandbox.Policy
 }
 
 type Module struct {
-	loader  *skills.Loader
+	loader  *Loader
 	workDir string
 	policy  sandbox.Policy
 }
 
 func New(options Options) (*Module, error) {
-	loader := skills.NewLoaderFromDirsWithOptions(options.Dirs, options.LoaderOptions)
+	loader := NewLoaderFromDirsWithOptions(options.Dirs, options.LoaderOptions)
 	if err := loader.Load(); err != nil {
 		return nil, err
 	}
 	return NewWithLoader(loader, options.WorkDir, options.Sandbox), nil
 }
 
-func NewWithLoader(loader *skills.Loader, workDir string, policy sandbox.Policy) *Module {
+func NewWithLoader(loader *Loader, workDir string, policy sandbox.Policy) *Module {
 	return &Module{loader: loader, workDir: workDir, policy: policy}
 }
 
@@ -134,21 +132,21 @@ func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest
 	}}, nil
 }
 
-func (m *Module) All() []skills.Skill {
+func (m *Module) All() []Skill {
 	if m == nil || m.loader == nil {
 		return nil
 	}
 	return m.loader.All()
 }
 
-func (m *Module) PromptReport() skills.PromptBudgetReport {
+func (m *Module) PromptReport() PromptBudgetReport {
 	if m == nil || m.loader == nil {
-		return skills.PromptBudgetReport{}
+		return PromptBudgetReport{}
 	}
 	return m.loader.PromptReport()
 }
 
-func (m *Module) Filtered() []skills.FilteredSkill {
+func (m *Module) Filtered() []FilteredSkill {
 	if m == nil || m.loader == nil {
 		return nil
 	}
@@ -193,11 +191,11 @@ func ToolDefinitions() []toolcore.ToolDefinition {
 	}
 }
 
-func formatSkillLoadResult(skill skills.Skill, body string) string {
+func formatSkillLoadResult(skill Skill, body string) string {
 	return fmt.Sprintf("Skill: %s\nSource: %s\nPath: %s\nDirectory: %s\n\n--- SKILL.md ---\n%s", skill.Name, skill.Source, skill.Path, skillDirectory(skill), body)
 }
 
-func skillDirectory(skill skills.Skill) string {
+func skillDirectory(skill Skill) string {
 	if skill.IsBuiltin() {
 		return strings.TrimSuffix(skill.Path, "/SKILL.md")
 	}
