@@ -429,8 +429,8 @@ func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing
 	if tools := a.Engine.Tools.List(); len(tools) != 0 {
 		t.Fatalf("serving Tools = %#v, want none", tools)
 	}
-	if a.shellSessions != nil || a.Workers() != nil || a.obsv != nil || a.mcpManager != nil {
-		t.Fatalf("disabled resources were constructed: shell=%p worker=%p observable=%p mcp=%p", a.shellSessions, a.Workers(), a.obsv, a.mcpManager)
+	if a.Workers() != nil || a.obsv != nil || a.mcpManager != nil {
+		t.Fatalf("disabled resources were constructed: worker=%p observable=%p mcp=%p", a.Workers(), a.obsv, a.mcpManager)
 	}
 	if err := ReadRuntimeModuleSnapshot(a, func(active RuntimeModuleSnapshot) error {
 		status, statusErr := NewRuntimeCatalogService(a.cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})

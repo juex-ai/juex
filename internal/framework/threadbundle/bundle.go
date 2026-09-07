@@ -1,5 +1,5 @@
-// Package bundle creates portable debug archives for persisted JueX Threads.
-package bundle
+// Package threadbundle creates portable debug archives for persisted JueX Threads.
+package threadbundle
 
 import (
 	"archive/tar"

@@ -18,17 +18,21 @@ CONSERVATIVE_CANDIDATE_FLAGS = CANDIDATE_FLAGS
 CONSERVATIVE_FINAL_FLAGS = FINAL_FLAGS
 COMPACTION_PREFIXES = (
     "internal/app/",
-    "internal/app/config/",
-    "internal/app/eventcatalog/",
     "internal/features/hooks/",
+    "internal/features/goal/",
+    "internal/features/notes/",
+    "internal/features/contextcontrol/",
+    "internal/features/chunkedwrite/",
+    "internal/framework/agent/",
+    "internal/framework/module/",
     "internal/framework/runtime/",
     "internal/framework/thread/",
 )
 COMPACTION_EXACT_PATHS = {
-    "internal/llm/history.go",
-    "internal/llm/provider_projection.go",
-    "internal/llm/provider_projection_chunked_write.go",
-    "internal/llm/types.go",
+    "internal/foundation/llm/history.go",
+    "internal/foundation/llm/provider_projection.go",
+    "internal/features/chunkedwrite/projection.go",
+    "internal/foundation/llm/types.go",
 }
 
 
@@ -124,62 +128,51 @@ RULE_DESCRIPTIONS = {
 
 CROSS_BOUNDARY_PREFIXES = (
     "cmd/juex/",
-    "internal/framework/agentstate/",
     "internal/app/",
-    "internal/entrypoints/cli/",
-    "internal/app/config/",
-    "internal/framework/endpoint/",
-    "internal/app/eventcatalog/",
-    "internal/foundation/events/",
+    "internal/entrypoints/",
+    "internal/features/",
     "internal/fleet/",
-    "internal/entrypoints/fleethttp/",
-    "internal/features/hooks/",
-    "internal/llm/",
-    "internal/features/mcp/",
-    "internal/features/observables/",
-    "internal/framework/provenance/",
-    "internal/app/providerreadiness/",
-    "internal/framework/runtime/",
+    "internal/framework/",
+    "internal/providers/",
+    "internal/foundation/command/",
+    "internal/foundation/events/",
+    "internal/foundation/llm/",
     "internal/foundation/sandbox/",
-    "internal/framework/thread/",
-    "internal/tools/",
+    "internal/foundation/toolevents/",
+    "internal/foundation/tools/",
     "tests/e2e/",
+    "tests/toolcontracts/",
 )
 
 RACE_PREFIXES = (
-    "internal/framework/agentstate/",
     "internal/app/",
-    "internal/chunkedwrite/",
-    "internal/framework/endpoint/",
-    "internal/foundation/events/",
-    "internal/fleet/",
-    "internal/entrypoints/fleethttp/",
-    "internal/foundation/homestore/",
-    "internal/llm/",
-    "internal/features/mcp/",
-    "internal/features/observables/",
-    "internal/framework/runtime/",
-    "internal/framework/thread/",
-    "internal/foundation/statusstream/",
-    "internal/tools/",
     "internal/entrypoints/agenthttp/",
+    "internal/entrypoints/fleethttp/",
+    "internal/features/",
+    "internal/fleet/",
+    "internal/framework/",
+    "internal/providers/",
+    "internal/foundation/command/",
+    "internal/foundation/events/",
+    "internal/foundation/homestore/",
+    "internal/foundation/llm/",
+    "internal/foundation/statusstream/",
+    "internal/foundation/tools/",
 )
 
 LIVE_PREFIXES = (
     "cmd/juex/",
     "frontend/",
     "internal/app/",
-    "internal/entrypoints/cli/",
-    "internal/app/config/",
-    "internal/entrypoints/fleethttp/",
-    "internal/llm/",
-    "internal/features/mcp/",
-    "internal/app/providerreadiness/",
-    "internal/framework/runtime/",
-    "internal/framework/thread/",
-    "internal/tools/",
-    "internal/entrypoints/agenthttp/",
+    "internal/entrypoints/",
+    "internal/features/",
+    "internal/framework/",
+    "internal/providers/",
+    "internal/foundation/command/",
+    "internal/foundation/llm/",
+    "internal/foundation/tools/",
     "tests/e2e/",
+    "tests/toolcontracts/",
 )
 
 CONSERVATIVE_EXACT_PATHS = {
@@ -245,11 +238,11 @@ def plan_for_changes(
             add("frontend", changed, candidate=("web",), final=("integration", "provider-smoke"))
             matched = True
 
-        if any(path.startswith("internal/entrypoints/agenthttp/") for path in paths):
+        if any(path.startswith(("internal/entrypoints/agenthttp/", "internal/entrypoints/webassets/")) for path in paths):
             add(
                 "embedded-web",
                 changed,
-                packages=("./internal/entrypoints/agenthttp", "./tests/e2e"),
+                packages=("./internal/entrypoints/agenthttp", "./internal/entrypoints/fleethttp", "./tests/e2e"),
                 candidate=("race", "web"),
                 final=("integration", "provider-smoke"),
             )

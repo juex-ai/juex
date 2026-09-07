@@ -1,6 +1,6 @@
-// Package fleetservice registers the resident fleet supervisor with the
+// Package service registers the resident fleet supervisor with the
 // current user's native service manager.
-package fleetservice
+package service
 
 import (
 	"context"

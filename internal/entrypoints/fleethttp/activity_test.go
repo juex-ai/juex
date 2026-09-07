@@ -1,4 +1,4 @@
-package fleetweb
+package fleethttp
 
 import (
 	"context"

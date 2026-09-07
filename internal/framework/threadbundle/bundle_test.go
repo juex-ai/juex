@@ -1,4 +1,4 @@
-package bundle
+package threadbundle
 
 import (
 	"archive/tar"

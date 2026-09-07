@@ -13,7 +13,7 @@ metadata:
 
 ## 前置条件——ripgrep
 
-`grep` builtin 会调用 ripgrep，因此任何使用它的测试（`internal/tools` grep case、`tests/e2e`、`tests/eval` 文件搜索）在找不到 `rg` 时都会失败。运行时 resolver（`internal/tools/ripgrep_resolver.go`）按顺序检查三个来源：`JUEX_RG` override、运行二进制旁的 release-package 布局，以及系统 PATH。Package source 在 `go test` 下绝不会匹配（测试二进制位于 Go build cache，而不是 release package），所以本地运行需要 `PATH` 中有 `rg`（或提供 `JUEX_RG` override）。
+`grep` builtin 会调用 ripgrep，因此任何使用它的测试（`internal/features/filesearch` grep case、`tests/e2e`、`tests/eval` 文件搜索）在找不到 `rg` 时都会失败。运行时 resolver（`internal/features/filesearch/ripgrep_resolver.go`）按顺序检查三个来源：`JUEX_RG` override、运行二进制旁的 release-package 布局，以及系统 PATH。Package source 在 `go test` 下绝不会匹配（测试二进制位于 Go build cache，而不是 release package），所以本地运行需要 `PATH` 中有 `rg`（或提供 `JUEX_RG` override）。
 
 `make verify-*` tier 以及较低层的 `make test`、`make race`、`make integration` 和 `make ripgrep` target 会自动准备它。验证 orchestrator 或 Make target 运行 `scripts/ensure-ripgrep.sh`，该脚本输出可用 `rg` 的目录（优先系统安装，否则把固定版本 ripgrep 下载到已缓存且被 Git 忽略的 `.tmp/dev-ripgrep`），并为本次运行把该目录放到 `PATH` 前面。这与 CI 一致：CI 也是把 ripgrep 加入 `PATH`，而不是设置 `JUEX_RG`。应通过 `PATH` 准备，不要使用 `JUEX_RG`：`JUEX_RG` 是会短路其他所有 resolver 来源的 override；对整个 `go test` 进程导出它，也会覆盖读取环境的 resolver 单元测试。`make verify-focused` 会准备不覆盖现有内容的 web embed stub 和 ripgrep，因此 fresh checkout 中的 web 测试可以编译。验证 orchestrator 直接运行 Go 测试；需要创建 Agent 状态的测试必须自行选择临时状态路径。
 
@@ -31,10 +31,10 @@ metadata:
 
 ## 关注范围
 
-- **Shell/Tool/Runtime 变更**——使用 `make verify-focused PKGS="./internal/tools ./internal/framework/runtime ./tests/e2e"`。对于跨平台 shell 行为，还要对修改的 package 运行 Windows target compile check，例如：
+- **Shell/Tool/Runtime 变更**——使用 `make verify-focused PKGS="./internal/features/shell ./internal/features/filesearch ./internal/foundation/tools ./internal/framework/runtime ./tests/e2e"`。对于跨平台 shell 行为，还要对修改的 package 运行 Windows target compile check，例如：
 
   ```bash
-  GOOS=windows GOARCH=amd64 go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
+  GOOS=windows GOARCH=amd64 go test -c ./internal/features/shell -o /tmp/juex-shell-windows.test.exe
   ```
 - **Eval harness 变更**——运行 `make verify-focused PKGS="./tests/eval"`；其 contract suite 包含 module 与 wrapper help check。
 - **仅文档或 Skill 变更**——运行 `git diff --check`、stale-reference 搜索，以及针对受影响命令示例的最小 focused test。

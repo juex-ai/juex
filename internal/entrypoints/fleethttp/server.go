@@ -1,5 +1,5 @@
-// Package fleetweb exposes the fleet manager through a loopback browser API.
-package fleetweb
+// Package fleethttp exposes the fleet manager through a loopback browser API.
+package fleethttp
 
 import (
 	"context"

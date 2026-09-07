@@ -1,4 +1,4 @@
-package fleetservice
+package service
 
 import (
 	"bytes"

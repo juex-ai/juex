@@ -28,7 +28,6 @@ import (
 	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
-	shellfeature "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/features/skills"
 	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/command"
@@ -106,7 +105,6 @@ type App struct {
 	skillFilteredItems []skills.FilteredSkill
 	mcp                MCPStatus
 	obsv               *observable.Manager
-	shellSessions      *shellfeature.ShellSessionManager
 	workerFactory      workerThreadFactory
 	mcpManager         *mcp.Manager
 	agentRuntime       AgentRuntimeResolution
@@ -511,9 +509,6 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		a.skillPrompt = runtimeModules.skills.PromptReport()
 		a.skillFilteredItems = runtimeModules.skills.Filtered()
 		a.skillFiltered = len(a.skillFilteredItems)
-	}
-	if runtimeModules.shell != nil {
-		a.shellSessions = runtimeModules.shell.ShellSessions()
 	}
 	if observableRuntimeModule != nil {
 		a.obsv = observableRuntimeModule.Manager()
