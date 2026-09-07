@@ -31,6 +31,7 @@ import (
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	shellfeature "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/features/skills"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
@@ -610,11 +611,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			},
 		},
 		{
-			ID:      workerThreadModuleID,
-			Enabled: cfg.ModuleEnabled(string(workerThreadModuleID)),
+			ID:      workerthreadsmodule.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(workerthreadsmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
 				a.workers = newWorkerThreadManager(a)
-				return &workerThreadModule{manager: a.workers}, nil
+				return workerthreadsmodule.New(a.workers), nil
 			},
 		},
 	}

@@ -10,6 +10,8 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+	"github.com/juex-ai/juex/internal/framework/agent"
 )
 
 func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
@@ -37,7 +39,7 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	create, ok := main.Engine.Tools.Get(app.WorkerThreadToolCreate)
+	create, ok := main.Engine.Tools.Get(workerthreadsmodule.ToolCreate)
 	if !ok {
 		t.Fatal("Worker tool unavailable")
 	}
@@ -45,7 +47,7 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var status app.WorkerThreadStatus
+	var status agent.WorkerThreadStatus
 	if err := json.Unmarshal([]byte(result), &status); err != nil {
 		t.Fatal(err)
 	}

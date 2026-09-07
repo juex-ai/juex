@@ -13,16 +13,14 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
-
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
-
+	"github.com/juex-ai/juex/internal/framework/agent"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -169,9 +167,9 @@ func (p *executionWorkerProvider) Complete(ctx context.Context, _ string, histor
 	if query == "launch two workers" {
 		if !historyHasToolResult(history, "worker-list") {
 			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-				{Type: llm.BlockToolUse, ToolUseID: "create-one", ToolName: app.WorkerThreadToolCreate, Input: map[string]any{"query": "worker-one", "alias": "one"}},
-				{Type: llm.BlockToolUse, ToolUseID: "create-two", ToolName: app.WorkerThreadToolCreate, Input: map[string]any{"query": "worker-two", "alias": "two"}},
-				{Type: llm.BlockToolUse, ToolUseID: "worker-list", ToolName: app.WorkerThreadToolList, Input: map[string]any{}},
+				{Type: llm.BlockToolUse, ToolUseID: "create-one", ToolName: workerthreadsmodule.ToolCreate, Input: map[string]any{"query": "worker-one", "alias": "one"}},
+				{Type: llm.BlockToolUse, ToolUseID: "create-two", ToolName: workerthreadsmodule.ToolCreate, Input: map[string]any{"query": "worker-two", "alias": "two"}},
+				{Type: llm.BlockToolUse, ToolUseID: "worker-list", ToolName: workerthreadsmodule.ToolList, Input: map[string]any{}},
 			}}, StopReason: llm.StopToolUse}, nil
 		}
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "workers started"), StopReason: llm.StopEndTurn}, nil
@@ -230,7 +228,7 @@ func TestEndToEnd_WorkerBatchesKeepIndependentStateAndProgress(t *testing.T) {
 		}
 	}
 	var listed struct {
-		Threads []app.WorkerThreadStatus `json:"threads"`
+		Threads []agent.WorkerThreadStatus `json:"threads"`
 	}
 	if err := json.Unmarshal([]byte(list), &listed); err != nil || len(listed.Threads) != 2 {
 		t.Fatalf("ordered create/create/list=%s, %v", list, err)

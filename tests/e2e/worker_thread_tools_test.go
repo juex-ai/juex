@@ -12,11 +12,11 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
-
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 )
 
 type workerThreadToolProvider struct {
@@ -72,13 +72,13 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 		}}}, StopReason: llm.StopToolUse}, nil
 	}
 	if !historyHasToolResult(history, "create-worker") {
-		if !toolSpecExists(specs, app.WorkerThreadToolCreate) {
-			return llm.Response{}, fmt.Errorf("Main tool catalog missing %s", app.WorkerThreadToolCreate)
+		if !toolSpecExists(specs, workerthreadsmodule.ToolCreate) {
+			return llm.Response{}, fmt.Errorf("Main tool catalog missing %s", workerthreadsmodule.ToolCreate)
 		}
 		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 			Type:      llm.BlockToolUse,
 			ToolUseID: "create-worker",
-			ToolName:  app.WorkerThreadToolCreate,
+			ToolName:  workerthreadsmodule.ToolCreate,
 			Input: map[string]any{
 				"query":     "Reply with exactly WORKER_OK",
 				"subscribe": true,

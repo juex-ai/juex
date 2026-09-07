@@ -201,7 +201,7 @@ func installThreadStateModulesWithStoresAndGoalOptions(
 
 type fixedGoalContinuationDeferrer bool
 
-func (d fixedGoalContinuationDeferrer) ShouldDeferGoalContinuation() bool {
+func (d fixedGoalContinuationDeferrer) ShouldDeferContinuation() bool {
 	return bool(d)
 }
 
@@ -209,7 +209,7 @@ type panicGoalContinuationDeferrer struct {
 	t *testing.T
 }
 
-func (d panicGoalContinuationDeferrer) ShouldDeferGoalContinuation() bool {
+func (d panicGoalContinuationDeferrer) ShouldDeferContinuation() bool {
 	d.t.Helper()
 	d.t.Fatal("wait-for-user Goal consulted the continuation deferrer")
 	return true

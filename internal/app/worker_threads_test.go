@@ -11,11 +11,12 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/tests/testsupport/modulestate"
-
+	"github.com/juex-ai/juex/internal/framework/agent"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 )
 
 type workerProvider struct {
@@ -81,7 +82,7 @@ func newWorkerTestApp(t *testing.T, parentProvider llm.Provider, children ...llm
 	return app
 }
 
-func waitWorkerState(t *testing.T, app *App, id string, want WorkerThreadState) WorkerThreadStatus {
+func waitWorkerState(t *testing.T, app *App, id string, want agent.WorkerThreadState) agent.WorkerThreadStatus {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -93,13 +94,13 @@ func waitWorkerState(t *testing.T, app *App, id string, want WorkerThreadState) 
 	}
 	status, err := app.workers.Status(id)
 	t.Fatalf("Worker %s = %+v, %v; want %s", id, status, err, want)
-	return WorkerThreadStatus{}
+	return agent.WorkerThreadStatus{}
 }
 
 func TestWorkerToolsRegisterOnEveryActiveThread(t *testing.T) {
 	child := &workerProvider{response: "done"}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, child)
-	for _, name := range []string{WorkerThreadToolCreate, WorkerThreadToolList, WorkerThreadToolStatus, WorkerThreadToolSubscribe} {
+	for _, name := range []string{workerthreadsmodule.ToolCreate, workerthreadsmodule.ToolList, workerthreadsmodule.ToolStatus, workerthreadsmodule.ToolSubscribe} {
 		if _, ok := main.Engine.Tools.Get(name); !ok {
 			t.Fatalf("Main missing %s", name)
 		}
@@ -112,7 +113,7 @@ func TestWorkerToolsRegisterOnEveryActiveThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer worker.Close()
-	if _, ok := worker.Engine.Tools.Get(WorkerThreadToolCreate); !ok {
+	if _, ok := worker.Engine.Tools.Get(workerthreadsmodule.ToolCreate); !ok {
 		t.Fatal("Worker missing Worker creation tools")
 	}
 }
@@ -124,7 +125,7 @@ func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitWorkerState(t, main, childStatus.ThreadID, WorkerThreadStateIdle)
+	waitWorkerState(t, main, childStatus.ThreadID, agent.WorkerThreadStateIdle)
 
 	main.workers.mu.Lock()
 	childApp := main.workers.threads[childStatus.ThreadID].app
@@ -133,7 +134,7 @@ func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitWorkerState(t, childApp, grandchildStatus.ThreadID, WorkerThreadStateIdle)
+	waitWorkerState(t, childApp, grandchildStatus.ThreadID, agent.WorkerThreadStateIdle)
 	childApp.workers.mu.Lock()
 	grandchildApp := childApp.workers.threads[grandchildStatus.ThreadID].app
 	childApp.workers.mu.Unlock()
@@ -163,7 +164,7 @@ func TestManagedWorkerParentArchiveKeepsRuntimeWhenChildIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitWorkerState(t, main, parentStatus.ThreadID, WorkerThreadStateIdle)
+	waitWorkerState(t, main, parentStatus.ThreadID, agent.WorkerThreadStateIdle)
 	parentApp, ok := main.ManagedWorkerApp(parentStatus.ThreadID)
 	if !ok {
 		t.Fatal("parent Worker is not managed")
@@ -172,7 +173,7 @@ func TestManagedWorkerParentArchiveKeepsRuntimeWhenChildIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitWorkerState(t, parentApp, childStatus.ThreadID, WorkerThreadStateIdle)
+	waitWorkerState(t, parentApp, childStatus.ThreadID, agent.WorkerThreadStateIdle)
 	if err := main.workers.Archive(context.Background(), parentStatus.ThreadID); err == nil || !strings.Contains(err.Error(), childStatus.ThreadID) {
 		t.Fatalf("archive parent error = %v, want active child %s", err, childStatus.ThreadID)
 	}
@@ -197,7 +198,7 @@ func TestWorkerCreationPersistsParentAndIsolatesThreadState(t *testing.T) {
 	if status.Alias != "reviewer" {
 		t.Fatalf("Worker alias = %q, want reviewer", status.Alias)
 	}
-	status = waitWorkerState(t, main, status.ThreadID, WorkerThreadStateIdle)
+	status = waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateIdle)
 	managed := main.workers.threads[status.ThreadID]
 	if managed == nil || managed.app.Thread.ParentThreadID != thread.MainID {
 		t.Fatalf("managed Worker = %+v", managed)
@@ -342,7 +343,7 @@ func TestSubscribedWorkerPublishesTerminalResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitWorkerState(t, main, status.ThreadID, WorkerThreadStateIdle)
+	waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateIdle)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, message := range main.Thread.ReplaySnapshot().Messages {
@@ -376,7 +377,7 @@ func TestNewContextClearsWorkerResultSubscription(t *testing.T) {
 	}
 
 	close(child.release)
-	waitWorkerState(t, main, status.ThreadID, WorkerThreadStateIdle)
+	waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateIdle)
 	for _, message := range main.Thread.ReplaySnapshot().Messages {
 		if strings.Contains(message.FirstText(), "Worker Thread result") {
 			t.Fatal("Worker result reached Main after New cleared the subscription")
@@ -407,7 +408,7 @@ func TestFailedWorkerReportsFailedAndCanBeArchived(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status = waitWorkerState(t, main, status.ThreadID, WorkerThreadStateFailed)
+	status = waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateFailed)
 	if !strings.Contains(status.LastError, wantErr.Error()) {
 		t.Fatalf("Worker error = %q, want %q", status.LastError, wantErr)
 	}
@@ -431,7 +432,7 @@ func TestWorkerArchiveRequiresSettledSubscriptionAndMovesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitWorkerState(t, main, status.ThreadID, WorkerThreadStateIdle)
+	waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateIdle)
 	if err := main.workers.Archive(context.Background(), status.ThreadID); err == nil {
 		t.Fatal("subscribed Worker was archived")
 	}

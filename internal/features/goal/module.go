@@ -23,7 +23,7 @@ const ModuleID = "goal"
 const goalCompletionGateName = "goal-completion-gate"
 
 type ContinuationDeferrer interface {
-	ShouldDeferGoalContinuation() bool
+	ShouldDeferContinuation() bool
 }
 
 type Options struct {
@@ -178,7 +178,7 @@ func (m *Module) FinishContinuationCommitted(_ context.Context, request runtimem
 }
 
 func (m *Module) shouldDeferContinuation() bool {
-	return m.continuationDeferrer != nil && m.continuationDeferrer.ShouldDeferGoalContinuation()
+	return m.continuationDeferrer != nil && m.continuationDeferrer.ShouldDeferContinuation()
 }
 
 func ToolDefinitions() []toolcore.ToolDefinition {

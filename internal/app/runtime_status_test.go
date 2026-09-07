@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
@@ -353,7 +355,7 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 		"skill_search":    skills.ModuleID,
 		"get_goal":        goalmodule.ModuleID,
 		"update_notes":    notesmodule.ModuleID,
-		"thread_create":   workerThreadModuleID,
+		"thread_create":   workerthreadsmodule.ModuleID,
 		"observable_list": observable.ModuleID,
 	} {
 		if got := owners[tool]; got != wantOwner {
@@ -366,8 +368,8 @@ func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 	work := t.TempDir()
 	a, err := New(Options{
 		Config: config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, Modules: config.ModulePolicy{
-			string(workerThreadModuleID): {Enabled: false},
-			string(observable.ModuleID):  {Enabled: false},
+			string(workerthreadsmodule.ModuleID): {Enabled: false},
+			string(observable.ModuleID):          {Enabled: false},
 		}},
 		Provider:   &stubProvider{},
 		WorkDir:    work,
@@ -382,7 +384,7 @@ func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.ThreadRuntimeSnapshot().Modules} {
 		for _, entry := range set.ToolCatalog().Entries() {
 			owners[entry.Tool.Name] = entry.ModuleID
-			if entry.ModuleID == workerThreadModuleID || entry.ModuleID == observable.ModuleID {
+			if entry.ModuleID == workerthreadsmodule.ModuleID || entry.ModuleID == observable.ModuleID {
 				t.Errorf("disabled module %q contributed tool %q", entry.ModuleID, entry.Tool.Name)
 			}
 		}

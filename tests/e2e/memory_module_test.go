@@ -22,6 +22,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
@@ -407,14 +408,14 @@ func TestEndToEnd_MemoryMainAndConcurrentWorkersShareAgentStore(t *testing.T) {
 	defer close(provider.release)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	create, _ := a.Engine.Tools.Get(app.WorkerThreadToolCreate)
+	create, _ := a.Engine.Tools.Get(workerthreadsmodule.ToolCreate)
 	var workers []*app.App
 	for _, name := range []string{"worker-one", "worker-two"} {
 		result, err := create.Handler(ctx, map[string]any{"query": name})
 		if err != nil {
 			t.Fatal(err)
 		}
-		var status app.WorkerThreadStatus
+		var status agent.WorkerThreadStatus
 		if err := json.Unmarshal([]byte(result), &status); err != nil {
 			t.Fatal(err)
 		}
