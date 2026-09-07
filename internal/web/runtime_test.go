@@ -59,6 +59,7 @@ body`)
 		t.Fatalf("mcp = %+v", got.MCP)
 	}
 	wantModules := []runtimeModuleInfo{
+		{ID: "memory", Scope: "runtime"},
 		{ID: "basic-file-tools", Scope: "runtime"},
 		{ID: "apply-patch", Scope: "runtime"},
 		{ID: "file-search", Scope: "runtime"},
@@ -82,7 +83,7 @@ body`)
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Type != "stdio" || got.MCP.Servers[0].URL != "" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
-	if got.Tools.Count != 34 || len(got.Tools.Groups) != 8 {
+	if got.Tools.Count != 37 || len(got.Tools.Groups) != 9 {
 		t.Fatalf("tools = %+v", got.Tools)
 	}
 	var observableToolNames []string
@@ -687,7 +688,7 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SystemPrompt.Count != 7 {
+	if got.SystemPrompt.Count != 8 {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
 	want := []struct {
@@ -696,13 +697,14 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 		path   string
 		text   string
 	}{
+		{label: "Memory", source: "memory", path: "", text: "memory_search"},
 		{label: "Shell", source: "runtime", path: "", text: "exec_command"},
 		{label: "Global AGENTS.md", source: "user", path: filepath.Join(homeAgents, "AGENTS.md"), text: "global runtime rule"},
 		{label: "Workspace AGENTS.md", source: "project", path: filepath.Join(work, "AGENTS.md"), text: "workspace root rule"},
 		{label: ".agents/AGENTS.md", source: "project", path: filepath.Join(work, ".agents", "AGENTS.md"), text: "workspace agents rule"},
 		{label: "Context Window", source: "runtime", path: "", text: "Context window"},
 		{label: "Operating Context", source: "runtime", path: "", text: "Operating Context"},
-		{label: "Thread Scratchpad", source: "runtime", path: got.SystemPrompt.Items[6].Path, text: "Thread Scratchpad"},
+		{label: "Thread Scratchpad", source: "runtime", path: got.SystemPrompt.Items[7].Path, text: "Thread Scratchpad"},
 	}
 	for i, w := range want {
 		gotEntry := got.SystemPrompt.Items[i]
@@ -875,10 +877,10 @@ body`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.SystemPrompt.Items) != 6 {
+	if len(got.SystemPrompt.Items) != 7 {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
-	if got.SystemPrompt.Items[1].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[1].Text, "global runtime rule") {
+	if got.SystemPrompt.Items[2].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[2].Text, "global runtime rule") {
 		t.Fatalf("system prompt should skip global AGENTS.md and keep project entry: %+v", got.SystemPrompt.Items)
 	}
 	for _, item := range got.SystemPrompt.Items {

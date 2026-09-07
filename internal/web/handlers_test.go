@@ -400,6 +400,10 @@ func TestThreadAPIMainIdentityAndLifecycleAreImmutable(t *testing.T) {
 
 func TestThreadAPIInputReceiptAndDurableCompletion(t *testing.T) {
 	server := newTestServer(t)
+	// Capture the admission baseline after runtime startup policies commit.
+	if _, err := server.getThread(context.Background(), thread.MainID); err != nil {
+		t.Fatal(err)
+	}
 	httpServer := httptest.NewServer(server.APIHandler())
 	defer httpServer.Close()
 
