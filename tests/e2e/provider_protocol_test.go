@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/cli"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/thread"
 )
@@ -36,6 +38,28 @@ func sendAndWait(t *testing.T, bin, home, work string, args ...string) liveSendR
 	return sendAndWaitCommand(t, bin, home, work, commandArgs)
 }
 
+func TestSendAndWaitRetriesBusyAdmissionBeforeReceipt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX executable fixture")
+	}
+	home, work := t.TempDir(), t.TempDir()
+	bin := filepath.Join(t.TempDir(), "send-fixture")
+	writeExecutableFixture(t, bin, `#!/bin/sh
+if [ "$1" = agent ] && [ "$2" = add ]; then exit 0; fi
+if [ ! -f "$JUEX_HOME/busy-seen" ]; then
+  : > "$JUEX_HOME/busy-seen"
+  printf 'Error: agent API POST /api/threads/0/inputs: Thread busy\n' >&2
+  exit 5
+fi
+printf '{"agent_id":"fixture-agent","thread_id":"0","input_id":"fixture-input"}\n'
+printf '{"type":"input.terminal","state":"succeeded"}\n'
+`)
+	result := sendAndWait(t, bin, home, work, "next input")
+	if result.AgentID != "fixture-agent" || result.ThreadID != thread.MainID {
+		t.Fatalf("retry lost accepted input identity: %+v", result)
+	}
+}
+
 func sendThreadAndWait(t *testing.T, bin, home, work, threadSelector string, args ...string) liveSendResult {
 	t.Helper()
 	commandArgs := append([]string{"thread", "send", threadSelector, "--wait", "--json"}, args...)
@@ -49,7 +73,8 @@ func sendAndWaitCommand(t *testing.T, bin, home, work string, commandArgs []stri
 	var err error
 	for {
 		stdout, stderr, err = runAgentStateCommand(bin, home, work, commandArgs...)
-		if err == nil || !strings.Contains(stderr, "HTTP 409") || !strings.Contains(stderr, "Thread busy") || time.Now().After(deadline) {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != cli.ExitConflict || strings.TrimSpace(stdout) != "" || !strings.Contains(stderr, "Thread busy") || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

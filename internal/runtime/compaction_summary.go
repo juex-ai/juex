@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -10,19 +11,8 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
-type CompactionSummaryState = contextbudget.SummaryState
-type CompactionSummaryGoal = contextbudget.SummaryGoal
+type compactionSummaryState = contextbudget.SummaryState
 type compactionSummaryToolBudget = contextbudget.SummaryToolBudget
-
-type compactionSummaryState = CompactionSummaryState
-
-type GoalCompactionStateProvider interface {
-	GoalCompactionState() (*CompactionSummaryGoal, error)
-}
-
-type NotesCompactionStateProvider interface {
-	NotesCompactionState() (string, error)
-}
 
 func buildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, state compactionSummaryState, policy compactionPolicy, instructions string) (string, []llm.Message) {
 	system, history := contextbudget.BuildCompactionSummaryRequest(base, previous, input, state, policy, instructions)
@@ -72,36 +62,11 @@ func compactionSummaryFits(sys string, previous llm.Message, input []llm.Message
 	return contextbudget.CompactionSummaryFits(sys, previous, input, state, toolBudget, omitted, limit)
 }
 
-func (e *Engine) compactionSummaryStateLocked() (compactionSummaryState, error) {
-	var summaryState compactionSummaryState
-	var goalProvider, notesProvider runtimemodule.ID
-	modules := e.ThreadRuntimeSnapshot().Modules
-	if modules == nil {
-		return summaryState, nil
-	}
-	for _, module := range modules.Modules() {
-		if provider, ok := module.(GoalCompactionStateProvider); ok {
-			if goalProvider != "" {
-				return compactionSummaryState{}, fmt.Errorf("compaction state: goal provided by modules %q and %q", goalProvider, module.ID())
-			}
-			goalProvider = module.ID()
-			goal, err := provider.GoalCompactionState()
-			if err != nil {
-				return compactionSummaryState{}, fmt.Errorf("compaction goal state from module %q: %w", module.ID(), err)
-			}
-			summaryState.Goal = goal
-		}
-		if provider, ok := module.(NotesCompactionStateProvider); ok {
-			if notesProvider != "" {
-				return compactionSummaryState{}, fmt.Errorf("compaction state: notes provided by modules %q and %q", notesProvider, module.ID())
-			}
-			notesProvider = module.ID()
-			notes, err := provider.NotesCompactionState()
-			if err != nil {
-				return compactionSummaryState{}, fmt.Errorf("compaction notes state from module %q: %w", module.ID(), err)
-			}
-			summaryState.Notes = notes
-		}
-	}
-	return summaryState, nil
+func (e *Engine) compactionSummaryStateLocked(ctx context.Context, policy compactionPolicy) (compactionSummaryState, error) {
+	contributions, err := runtimemodule.CollectCompactionContributions(ctx, runtimemodule.CompactionBudget{
+		MaxBytes:       provenance.MaxInlineSnapshotBytes,
+		MaxTokens:      policy.SummaryRequestTokens,
+		EstimateTokens: contextbudget.EstimateTextTokens,
+	}, e.policySets()...)
+	return compactionSummaryState{Contributions: contributions}, err
 }

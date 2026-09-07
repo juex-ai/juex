@@ -16,9 +16,10 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/modulecatalog"
+	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
+	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
@@ -46,8 +47,8 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 				{Type: llm.BlockToolUse, ToolUseID: "builtin-read", ToolName: "read", Input: map[string]any{"path": probePath}},
 				{Type: llm.BlockToolUse, ToolUseID: "skill-search", ToolName: "skill_search", Input: map[string]any{"query": "memory"}},
-				{Type: llm.BlockToolUse, ToolUseID: "goal-get", ToolName: juexruntime.GoalToolGet, Input: map[string]any{}},
-				{Type: llm.BlockToolUse, ToolUseID: "notes-update", ToolName: juexruntime.NotesToolUpdate, Input: map[string]any{"content": "- [x] exercise the Module catalog"}},
+				{Type: llm.BlockToolUse, ToolUseID: "goal-get", ToolName: goalmodule.ToolGet, Input: map[string]any{}},
+				{Type: llm.BlockToolUse, ToolUseID: "notes-update", ToolName: notesmodule.ToolUpdate, Input: map[string]any{"content": "- [x] exercise the Module catalog"}},
 				{Type: llm.BlockToolUse, ToolUseID: "observable-list", ToolName: "observable_list", Input: map[string]any{}},
 				{Type: llm.BlockToolUse, ToolUseID: "memory-write", ToolName: "mcp__memory__memory_write", Input: map[string]any{
 					"name": "isolated-home", "description": "test isolation", "type": "feedback", "body": "use a temporary JUEX_HOME",
@@ -100,8 +101,8 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	for name, wantOwner := range map[string]runtimemodule.ID{
 		"read":                       modulecatalog.BasicFileTools,
 		"skill_search":               skillsmodule.ModuleID,
-		juexruntime.GoalToolGet:      juexruntime.GoalModuleID,
-		juexruntime.NotesToolUpdate:  juexruntime.NotesModuleID,
+		goalmodule.ToolGet:           goalmodule.ModuleID,
+		notesmodule.ToolUpdate:       notesmodule.ModuleID,
 		"observable_list":            observable.ModuleID,
 		"mcp__memory__memory_write":  mcp.ModuleID,
 		"mcp__memory__memory_search": mcp.ModuleID,
@@ -115,8 +116,8 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	wantOffered := []string{
 		"read",
 		"skill_search",
-		juexruntime.GoalToolGet,
-		juexruntime.NotesToolUpdate,
+		goalmodule.ToolGet,
+		notesmodule.ToolUpdate,
 		"observable_list",
 		"mcp__memory__memory_write",
 		"mcp__memory__memory_search",

@@ -1,4 +1,4 @@
-package runtime
+package goal
 
 import (
 	"context"
@@ -15,40 +15,40 @@ import (
 )
 
 const (
-	GoalToolGet    = "get_goal"
-	GoalToolCreate = "create_goal"
-	GoalToolUpdate = "update_goal"
+	ToolGet    = "get_goal"
+	ToolCreate = "create_goal"
+	ToolUpdate = "update_goal"
 )
 
-const GoalModuleID runtimemodule.ID = modulecatalog.Goal
+const ModuleID runtimemodule.ID = modulecatalog.Goal
 
 const goalCompletionGateName = "goal-completion-gate"
 
-type GoalContinuationDeferrer interface {
+type ContinuationDeferrer interface {
 	ShouldDeferGoalContinuation() bool
 }
 
-type GoalModuleOptions struct {
+type Options struct {
 	EnableContinuation   bool
-	ContinuationDeferrer GoalContinuationDeferrer
+	ContinuationDeferrer ContinuationDeferrer
 	EventSink            func(events.Event) error
 	CurrentTurnID        func() string
 }
 
-type GoalModule struct {
+type Module struct {
 	store                *workmem.GoalStateStore
 	enableContinuation   bool
-	continuationDeferrer GoalContinuationDeferrer
+	continuationDeferrer ContinuationDeferrer
 	eventSink            func(events.Event) error
 	currentTurnID        func() string
 }
 
-func NewGoalModule(store *workmem.GoalStateStore) *GoalModule {
-	return NewGoalModuleWithOptions(store, GoalModuleOptions{EnableContinuation: true})
+func New(store *workmem.GoalStateStore) *Module {
+	return NewWithOptions(store, Options{EnableContinuation: true})
 }
 
-func NewGoalModuleWithOptions(store *workmem.GoalStateStore, opts GoalModuleOptions) *GoalModule {
-	return &GoalModule{
+func NewWithOptions(store *workmem.GoalStateStore, opts Options) *Module {
+	return &Module{
 		store:                store,
 		enableContinuation:   opts.EnableContinuation,
 		continuationDeferrer: opts.ContinuationDeferrer,
@@ -57,13 +57,13 @@ func NewGoalModuleWithOptions(store *workmem.GoalStateStore, opts GoalModuleOpti
 	}
 }
 
-func (*GoalModule) ID() runtimemodule.ID { return GoalModuleID }
+func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *GoalModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	return GoalTools(m), nil
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	return BoundTools(m), nil
 }
 
-func (m *GoalModule) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
+func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
 	if m == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
 		return nil, nil
 	}
@@ -81,7 +81,7 @@ func (m *GoalModule) Context(_ context.Context, request runtimemodule.ContextReq
 	}}, nil
 }
 
-func (m *GoalModule) EvaluateFinish(_ context.Context, request runtimemodule.FinishRequest) (runtimemodule.FinishDecision, error) {
+func (m *Module) EvaluateFinish(_ context.Context, request runtimemodule.FinishRequest) (runtimemodule.FinishDecision, error) {
 	if m == nil || !m.enableContinuation {
 		return runtimemodule.FinishDecision{Action: runtimemodule.FinishComplete}, nil
 	}
@@ -132,7 +132,7 @@ func (m *GoalModule) EvaluateFinish(_ context.Context, request runtimemodule.Fin
 	return runtimemodule.FinishDecision{Action: runtimemodule.FinishComplete}, nil
 }
 
-func (m *GoalModule) CommitFinishDecision(_ context.Context, request runtimemodule.FinishRequest, selected runtimemodule.FinishDecision) (bool, error) {
+func (m *Module) CommitFinishDecision(_ context.Context, request runtimemodule.FinishRequest, selected runtimemodule.FinishDecision) (bool, error) {
 	if m == nil || !m.enableContinuation || m.shouldDeferContinuation() {
 		return false, nil
 	}
@@ -159,7 +159,7 @@ func (m *GoalModule) CommitFinishDecision(_ context.Context, request runtimemodu
 	return recorded, nil
 }
 
-func (m *GoalModule) FinishContinuationCommitted(_ context.Context, request runtimemodule.FinishRequest, selected runtimemodule.FinishDecision) {
+func (m *Module) FinishContinuationCommitted(_ context.Context, request runtimemodule.FinishRequest, selected runtimemodule.FinishDecision) {
 	if m == nil {
 		return
 	}
@@ -179,14 +179,14 @@ func (m *GoalModule) FinishContinuationCommitted(_ context.Context, request runt
 	})
 }
 
-func (m *GoalModule) shouldDeferContinuation() bool {
+func (m *Module) shouldDeferContinuation() bool {
 	return m.continuationDeferrer != nil && m.continuationDeferrer.ShouldDeferGoalContinuation()
 }
 
-func GoalToolDefinitions() []tools.ToolDefinition {
+func ToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{
 		{
-			Name:        GoalToolGet,
+			Name:        ToolGet,
 			Group:       tools.ToolGroupThreadState,
 			Description: "Read the current thread goal before changing it. ",
 			Schema: map[string]any{
@@ -195,7 +195,7 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 			},
 		},
 		{
-			Name:        GoalToolCreate,
+			Name:        ToolCreate,
 			Group:       tools.ToolGroupThreadState,
 			Description: "Create or replace this thread's in-progress goal contract. ",
 			Schema: map[string]any{
@@ -209,7 +209,7 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 			},
 		},
 		{
-			Name:        GoalToolUpdate,
+			Name:        ToolUpdate,
 			Group:       tools.ToolGroupThreadState,
 			Description: "Update goal fields or status (in_progress, wait_for_user, success, or failure). Use wait_for_user only when progress requires new external input; success requires acceptance. ",
 			Schema: map[string]any{
@@ -225,8 +225,8 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 	}
 }
 
-func GoalTools(module *GoalModule) []tools.Tool {
-	definitions := GoalToolDefinitions()
+func BoundTools(module *Module) []tools.Tool {
+	definitions := ToolDefinitions()
 	unavailable := func(context.Context, map[string]any) (string, error) {
 		return "", fmt.Errorf("goal state is not configured")
 	}
@@ -240,7 +240,7 @@ func GoalTools(module *GoalModule) []tools.Tool {
 	}
 }
 
-func (m *GoalModule) handleGetGoal() (string, error) {
+func (m *Module) handleGetGoal() (string, error) {
 	store := m.store
 	if store == nil {
 		return "", fmt.Errorf("goal state is not configured")
@@ -255,7 +255,7 @@ func (m *GoalModule) handleGetGoal() (string, error) {
 	return marshalGoalToolResponse(map[string]any{"present": true, "goal": snapshot})
 }
 
-func (m *GoalModule) handleCreateGoal(in map[string]any) (string, error) {
+func (m *Module) handleCreateGoal(in map[string]any) (string, error) {
 	store := m.store
 	if store == nil {
 		return "", fmt.Errorf("goal state is not configured")
@@ -273,7 +273,7 @@ func (m *GoalModule) handleCreateGoal(in map[string]any) (string, error) {
 	return marshalGoalToolResponse(map[string]any{"present": true, "goal": state.StatusSnapshot()})
 }
 
-func (m *GoalModule) handleUpdateGoal(in map[string]any) (string, error) {
+func (m *Module) handleUpdateGoal(in map[string]any) (string, error) {
 	store := m.store
 	if store == nil {
 		return "", fmt.Errorf("goal state is not configured")

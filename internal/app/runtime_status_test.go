@@ -16,6 +16,8 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/modulecatalog"
+	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
+	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
@@ -340,8 +342,8 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 	for tool, wantOwner := range map[string]runtimemodule.ID{
 		"read":            modulecatalog.BasicFileTools,
 		"skill_search":    skillsmodule.ModuleID,
-		"get_goal":        juexruntime.GoalModuleID,
-		"update_notes":    juexruntime.NotesModuleID,
+		"get_goal":        goalmodule.ModuleID,
+		"update_notes":    notesmodule.ModuleID,
 		"thread_create":   workerThreadModuleID,
 		"observable_list": observable.ModuleID,
 	} {

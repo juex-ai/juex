@@ -95,7 +95,7 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 		return err
 	}
 
-	_, err = e.compactLocked(ctx, turnID, systemPrompt, tools, "auto", true, "", 0)
+	_, err = e.compactLocked(ctx, turnID, systemPrompt, tools, "auto", true, "", 0, incoming)
 	if err != nil {
 		e.autoCompactFailures++
 		return err
@@ -116,15 +116,15 @@ func (e *Engine) CompactWithInstructions(ctx context.Context, turnID, systemProm
 	return e.compactLocked(ctx, turnID, systemPrompt, e.compactionToolsLocked(), reason, auto, instructions, operationGeneration)
 }
 
-func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, operationGeneration uint64) (CompactionResult, error) {
-	return e.compactLockedForContextWindow(ctx, turnID, systemPrompt, tools, reason, auto, instructions, e.ContextWindow, operationGeneration)
+func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, operationGeneration uint64, incoming ...llm.Message) (CompactionResult, error) {
+	return e.compactLockedForContextWindow(ctx, turnID, systemPrompt, tools, reason, auto, instructions, e.ContextWindow, operationGeneration, incoming...)
 }
 
-func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64) (CompactionResult, error) {
-	return e.compactLockedForContextWindowWithHealthReservation(ctx, turnID, systemPrompt, tools, reason, auto, instructions, contextWindow, operationGeneration, "")
+func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64, incoming ...llm.Message) (CompactionResult, error) {
+	return e.compactLockedForContextWindowWithHealthReservation(ctx, turnID, systemPrompt, tools, reason, auto, instructions, contextWindow, operationGeneration, "", incoming...)
 }
 
-func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64, reservedModelRef string) (CompactionResult, error) {
+func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64, reservedModelRef string, incoming ...llm.Message) (CompactionResult, error) {
 	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
 	if !policy.Enabled {
 		return CompactionResult{}, nil
@@ -138,7 +138,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
 	}
-	summaryState, err := e.compactionSummaryStateLocked()
+	summaryState, err := e.compactionSummaryStateLocked(ctx, policy)
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
@@ -176,7 +176,7 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
-	active, err := e.activeContextLockedWithPolicyContextError(ctx, e.pendingPolicyRuntimeContextSnapshot())
+	active, err := e.activeContextLockedWithPolicyContextError(ctx, e.pendingPolicyRuntimeContextSnapshot(), incoming...)
 	if err != nil {
 		compactErr := newCompactionError(ctx, fmt.Errorf("runtime: build compaction context: %w", err))
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
@@ -199,6 +199,10 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
+	}
+	generation.Summary, err = reconcileCompactionSummary(ctx, generation.Summary, summaryState, generation.MaxTokens)
+	if err != nil {
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
 	}
 	resp := generation.Response
 	summaryProvider := generation.Provider
@@ -232,7 +236,25 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	simulated := make([]llm.Message, 0, len(threadHistory)+1)
 	simulated = append(simulated, threadHistory...)
 	simulated = append(simulated, msg)
-	tokensAfter := e.estimateContextTokens(systemPrompt, tools, assembleActiveContext(simulated, nil).Messages)
+	compacted := assembleActiveContext(simulated, incoming)
+	// Reuse the context already collected for this operation; callbacks must
+	// not cause a second state read between protection and Generation commit.
+	for _, message := range active.Messages {
+		if message.Kind == llm.MessageKindRuntimeContext {
+			compacted.Messages = append(compacted.Messages, message)
+		}
+	}
+	// Provider projection expands retained artifact paths and applies owned tool
+	// projections. Include that representation in the precommit budget check.
+	projectedAfter, _, err := e.projectMessagesForProviderLocked(ctx, compacted.Messages, policy)
+	if err != nil {
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, fmt.Errorf("project compacted context: %w", err)))
+	}
+	tokensAfter := e.estimateContextTokens(systemPrompt, tools, projectedAfter)
+	if tokensAfter > policy.TriggerTokens {
+		err := fmt.Errorf("compacted context exceeds budget: %d tokens, limit %d", tokensAfter, policy.TriggerTokens)
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
+	}
 	msg.Compaction.TokensAfter = tokensAfter
 	contextUsage := llm.ContextUsage{
 		Model:         model,

@@ -1,4 +1,4 @@
-package runtime
+package goal
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -13,8 +14,8 @@ import (
 func TestGoalToolDefinitionsBindThreadStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
 	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
-	installModuleTools(t, reg, NewGoalModule(store))
-	definitions := GoalToolDefinitions()
+	installModuleTools(t, reg, New(store))
+	definitions := ToolDefinitions()
 	if len(definitions) != 3 {
 		t.Fatalf("definition count = %d, want 3", len(definitions))
 	}
@@ -36,8 +37,8 @@ func TestGoalToolDefinitionsBindThreadStateGroup(t *testing.T) {
 func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 	reg := tools.NewRegistry()
 	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
-	installModuleTools(t, reg, NewGoalModule(store))
-	createTool, ok := reg.Get(GoalToolCreate)
+	installModuleTools(t, reg, New(store))
+	createTool, ok := reg.Get(ToolCreate)
 	if !ok {
 		t.Fatal("create_goal is not registered")
 	}
@@ -50,7 +51,7 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 	if len(createProperties) != 3 {
 		t.Fatalf("create_goal properties = %#v", createProperties)
 	}
-	updateTool, ok := reg.Get(GoalToolUpdate)
+	updateTool, ok := reg.Get(ToolUpdate)
 	if !ok {
 		t.Fatal("update_goal is not registered")
 	}
@@ -68,7 +69,7 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 		t.Fatalf("update_goal description should explain completion and waiting: %q", updateTool.Description)
 	}
 
-	out, err := reg.Call(context.Background(), GoalToolGet, nil)
+	out, err := reg.Call(context.Background(), ToolGet, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,20 +77,20 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 		t.Fatalf("get before create = %s", out)
 	}
 
-	if _, err := reg.Call(context.Background(), GoalToolCreate, map[string]any{
+	if _, err := reg.Call(context.Background(), ToolCreate, map[string]any{
 		"description":   "finish the feature",
 		"acceptance":    "command succeeds, docs/contract.md is updated, and go test ./... passes",
 		"status_reason": "created from taskline spec",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reg.Call(context.Background(), GoalToolUpdate, map[string]any{
+	if _, err := reg.Call(context.Background(), ToolUpdate, map[string]any{
 		"status":        string(workmem.GoalStatusSuccess),
 		"status_reason": "validated by tests",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	out, err = reg.Call(context.Background(), GoalToolGet, nil)
+	out, err = reg.Call(context.Background(), ToolGet, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 		}
 	}
 
-	if _, err := reg.Call(context.Background(), GoalToolUpdate, map[string]any{
+	if _, err := reg.Call(context.Background(), ToolUpdate, map[string]any{
 		"status": string(workmem.GoalStatusFailure),
 	}); err != nil {
 		t.Fatalf("failure without status_reason should remain valid: %v", err)
@@ -118,5 +119,18 @@ func TestGoalToolsCreateUpdateGetAndStayThreadScoped(t *testing.T) {
 	}
 	if snapshot != nil {
 		t.Fatalf("goal leaked across threads: %+v", snapshot)
+	}
+}
+
+func installModuleTools(t *testing.T, registry *tools.Registry, provider runtimemodule.ToolProvider) {
+	t.Helper()
+	provided, err := provider.Tools(t.Context(), runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range provided {
+		if err := registry.Register(tool); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

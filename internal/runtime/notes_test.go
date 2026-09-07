@@ -11,14 +11,15 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestNotesToolDefinitionsBindThreadStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
-	installModuleTools(t, reg, NewNotesModule(workmem.NewNotesStore(t.TempDir())))
-	definitions := NotesToolDefinitions()
+	installModuleTools(t, reg, notesmodule.New(workmem.NewNotesStore(t.TempDir())))
+	definitions := notesmodule.ToolDefinitions()
 	if len(definitions) != 1 {
 		t.Fatalf("definition count = %d, want 1", len(definitions))
 	}
@@ -38,7 +39,7 @@ func TestNotesToolDefinitionsBindThreadStateGroup(t *testing.T) {
 func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	_, notesStore := installThreadStateModules(t, eng)
-	tool, ok := eng.Tools.Get(NotesToolUpdate)
+	tool, ok := eng.Tools.Get(notesmodule.ToolUpdate)
 	if !ok {
 		t.Fatal("update_notes is not registered")
 	}
@@ -55,11 +56,11 @@ func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
 		}
 	}
 
-	var updated NotesUpdatedPayload
+	var updated workmem.NotesUpdatedPayload
 	bus.Subscribe("notes.updated", func(event events.Event) {
-		updated, _ = event.Payload.(NotesUpdatedPayload)
+		updated, _ = event.Payload.(workmem.NotesUpdatedPayload)
 	})
-	out, err := eng.Tools.Call(context.Background(), NotesToolUpdate, map[string]any{
+	out, err := eng.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
 		"content": "- [x] inspect\n- [ ] verify",
 	})
 	if err != nil {
@@ -76,7 +77,7 @@ func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
 		t.Fatalf("notes snapshot = %+v, err = %v", snapshot, err)
 	}
 
-	_, err = eng.Tools.Call(context.Background(), NotesToolUpdate, map[string]any{
+	_, err = eng.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
 		"content": strings.Repeat("x", workmem.MaxNotesCharacters+1),
 	})
 	if err == nil || !strings.Contains(err.Error(), "maximum is 2048") {
@@ -110,7 +111,7 @@ func TestNotesSnapshotEntrypointsUseModuleStore(t *testing.T) {
 
 func TestNotesModuleReturnsOneOwnedStoreInstance(t *testing.T) {
 	store := workmem.NewNotesStore(t.TempDir())
-	module := NewNotesModule(store)
+	module := notesmodule.New(store)
 	const callers = 32
 	stores := make([]*workmem.NotesStore, callers)
 	start := make(chan struct{})
@@ -143,7 +144,7 @@ func TestNotesToolRecitesRewriteOnNextProviderRequest(t *testing.T) {
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 			Type:      llm.BlockToolUse,
 			ToolUseID: "notes-1",
-			ToolName:  NotesToolUpdate,
+			ToolName:  notesmodule.ToolUpdate,
 			Input:     map[string]any{"content": "- [x] inspected\n- [ ] finish tests"},
 		}}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
@@ -226,9 +227,9 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			var errored []NotesErroredPayload
+			var errored []workmem.NotesErroredPayload
 			bus.Subscribe("notes.errored", func(event events.Event) {
-				payload, _ := event.Payload.(NotesErroredPayload)
+				payload, _ := event.Payload.(workmem.NotesErroredPayload)
 				errored = append(errored, payload)
 			})
 
@@ -253,7 +254,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 				t.Fatalf("notes.errored payload = %+v", errored[0])
 			}
 
-			if _, err := eng.Tools.Call(context.Background(), NotesToolUpdate, map[string]any{
+			if _, err := eng.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
 				"content": "- [ ] recovered through update_notes",
 			}); err != nil {
 				t.Fatal(err)
@@ -274,18 +275,6 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 	}
 }
 
-func TestNotesContextFromStoreHandlesNil(t *testing.T) {
-	var nilModule *NotesModule
-	if text, ok := nilModule.notesContextFromStore(workmem.NewNotesStore(t.TempDir())); ok || text != "" {
-		t.Fatalf("nil module notes context = %q, %v", text, ok)
-	}
-
-	module := NewNotesModule(nil)
-	if text, ok := module.notesContextFromStore(nil); ok || text != "" {
-		t.Fatalf("nil store notes context = %q, %v", text, ok)
-	}
-}
-
 func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn},
@@ -294,9 +283,14 @@ func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T)
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.ReserveTokens = 1930
+	eng.Compaction.ReserveTokens = 1400
 	installThreadStateModules(t, eng)
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	// Leave enough room for the compact marker and the error recitation;
+	// the old assistant context still exceeds the trigger budget.
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("earlier result ", 250))); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(prepareTestNotesPath(t, eng.Thread.Dir), []byte{0xff}, 0o600); err != nil {
@@ -373,8 +367,8 @@ func runtimeContextMessage(messages []llm.Message, id string) *llm.Message {
 
 func TestNotesModuleRejectsMissingStore(t *testing.T) {
 	reg := tools.NewRegistry()
-	installModuleTools(t, reg, NewNotesModule(nil))
-	if _, err := reg.Call(context.Background(), NotesToolUpdate, map[string]any{"content": "hi"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+	installModuleTools(t, reg, notesmodule.New(nil))
+	if _, err := reg.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{"content": "hi"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("missing store error = %v", err)
 	}
 }

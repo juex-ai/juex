@@ -39,6 +39,8 @@ import (
 	"github.com/juex-ai/juex/internal/modules/agentsmd"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	chunkmodule "github.com/juex-ai/juex/internal/modules/chunkedwrite"
+	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
+	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
 	"github.com/juex-ai/juex/internal/modules/operatingcontext"
 	"github.com/juex-ai/juex/internal/modules/scratchpad"
 	"github.com/juex-ai/juex/internal/modules/shelltools"
@@ -901,7 +903,7 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 	if notes == nil {
 		t.Fatal("app did not initialize the Notes Module store")
 	}
-	if _, err := a.Engine.Tools.Call(context.Background(), runtime.NotesToolUpdate, map[string]any{
+	if _, err := a.Engine.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
 		"content": "- [x] bind local services to 0.0.0.0\n- [ ] confirm CI status",
 	}); err != nil {
 		t.Fatal(err)
@@ -2087,12 +2089,13 @@ func TestEndToEnd_SandboxBlockedPathsStopBuiltinTools(t *testing.T) {
 }
 
 func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
+	isolateModuleConfig(t)
 	work := t.TempDir()
 	prov := &recordingProvider{
 		steps: []llm.Response{
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-create", ToolName: runtime.GoalToolCreate, Input: map[string]any{
+					{Type: llm.BlockToolUse, ToolUseID: "goal-create", ToolName: goalmodule.ToolCreate, Input: map[string]any{
 						"description": "ship goal state",
 						"acceptance":  "completion checks pass, goal_state.json exists, and events include goal.continued",
 					}},
@@ -2105,7 +2108,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			},
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-success", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
+					{Type: llm.BlockToolUse, ToolUseID: "goal-success", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
 						"status":        string(workmem.GoalStatusSuccess),
 						"status_reason": "continuation gate fired and final answer was verified",
 					}},
@@ -2121,6 +2124,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	a, err := app.New(app.Options{
 		Config: config.Config{
 			ProviderProtocol: "openai/chat",
+			Modules:          config.ModulePolicy{"hooks": {Enabled: false}},
 			WorkDir:          work,
 		},
 		Provider: prov,
@@ -2179,7 +2183,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 		steps: []llm.Response{
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-create-wait", ToolName: runtime.GoalToolCreate, Input: map[string]any{
+					{Type: llm.BlockToolUse, ToolUseID: "goal-create-wait", ToolName: goalmodule.ToolCreate, Input: map[string]any{
 						"description": "deploy after user approval",
 						"acceptance":  "the approved deployment is healthy",
 					}},
@@ -2188,7 +2192,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			},
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-wait", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
+					{Type: llm.BlockToolUse, ToolUseID: "goal-wait", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
 						"status":        string(workmem.GoalStatusWaitForUser),
 						"status_reason": "waiting for deployment approval",
 					}},
@@ -2201,7 +2205,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			},
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-success-after-input", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
+					{Type: llm.BlockToolUse, ToolUseID: "goal-success-after-input", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
 						"status":        string(workmem.GoalStatusSuccess),
 						"status_reason": "user approved the healthy deployment",
 					}},

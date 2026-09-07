@@ -23,6 +23,8 @@ import (
 	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
+	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -2864,11 +2866,11 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.ReserveTokens = 1900
+	eng.Compaction.ReserveTokens = 1750
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 300))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3032,24 +3034,26 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 			t.Fatalf("summary request missing authoritative state %q:\n%s", want, body)
 		}
 	}
-	const goalOpen = "<goal-contract>\n"
-	const goalClose = "\n</goal-contract>"
-	start := strings.Index(body, goalOpen)
-	if start < 0 {
-		t.Fatalf("summary request missing goal contract:\n%s", body)
+	const stateOpen = "<authoritative-thread-state>\n"
+	const stateClose = "\n</authoritative-thread-state>"
+	start, end := strings.Index(body, stateOpen), strings.Index(body, stateClose)
+	if start < 0 || end < start {
+		t.Fatalf("missing authoritative state: %s", body)
 	}
-	start += len(goalOpen)
-	end := strings.Index(body[start:], goalClose)
-	if end < 0 {
-		t.Fatalf("summary request has unterminated goal contract:\n%s", body)
+	var parts []struct {
+		Owner string
+		State json.RawMessage
 	}
-	var goal struct {
-		Description string `json:"description"`
-		Acceptance  string `json:"acceptance"`
-		Status      string `json:"status"`
+	if err := json.Unmarshal([]byte(body[start+len(stateOpen):end]), &parts); err != nil {
+		t.Fatal(err)
 	}
-	if err := json.Unmarshal([]byte(body[start:start+end]), &goal); err != nil {
-		t.Fatalf("decode summary goal contract: %v\n%s", err, body)
+	var goal struct{ Description, Acceptance, Status string }
+	for _, part := range parts {
+		if part.Owner == "goal" {
+			if err := json.Unmarshal(part.State, &goal); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	if goal.Description != "Ship authoritative compaction state" ||
 		goal.Acceptance != "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two" ||
@@ -5172,14 +5176,14 @@ func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testin
 func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "goal_create_1", ToolName: GoalToolCreate, Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_create_1", ToolName: goalmodule.ToolCreate, Input: map[string]any{
 				"description": "ship this",
 				"acceptance":  "artifact.txt exists and go test ./... passes",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "goal_update_1", ToolName: GoalToolUpdate, Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_update_1", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
 				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "tests passed",
 			}},
@@ -5260,7 +5264,7 @@ func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "goal_update_max", ToolName: GoalToolUpdate, Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_update_max", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
 				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "maximum contract preserved",
 			}},
@@ -5296,7 +5300,7 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	if _, err := goalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
+	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, goalmodule.Options{
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
@@ -5332,7 +5336,7 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 	if _, err := goalState.Create("finish delegated work", "all checks pass"); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
+	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, goalmodule.Options{
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
@@ -5358,7 +5362,7 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "goal_wait_1", ToolName: GoalToolUpdate, Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_wait_1", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
 				"status":        string(workmem.GoalStatusWaitForUser),
 				"status_reason": "waiting for the deployment choice",
 			}},
@@ -5370,7 +5374,7 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	if _, err := goalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
+	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, goalmodule.Options{
 		EnableContinuation:   true,
 		ContinuationDeferrer: panicGoalContinuationDeferrer{t: t},
 	})
@@ -7496,14 +7500,14 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "notes-1", ToolName: NotesToolUpdate, Input: map[string]any{"content": "first"}},
-			{Type: llm.BlockToolUse, ToolUseID: "notes-2", ToolName: NotesToolUpdate, Input: map[string]any{"content": "second"}},
+			{Type: llm.BlockToolUse, ToolUseID: "notes-1", ToolName: notesmodule.ToolUpdate, Input: map[string]any{"content": "first"}},
+			{Type: llm.BlockToolUse, ToolUseID: "notes-2", ToolName: notesmodule.ToolUpdate, Input: map[string]any{"content": "second"}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}, false)
 	_, notesStore := installThreadStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
-		if req.EventName == hooks.EventPreToolUse && req.ToolName == NotesToolUpdate && req.ToolInput["content"] == "first" {
+		if req.EventName == hooks.EventPreToolUse && req.ToolName == notesmodule.ToolUpdate && req.ToolInput["content"] == "first" {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():
@@ -7529,7 +7533,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	goalState, _ := installThreadStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
-		if req.EventName == hooks.EventPreToolUse && req.ToolName == GoalToolCreate {
+		if req.EventName == hooks.EventPreToolUse && req.ToolName == goalmodule.ToolCreate {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():
@@ -7543,7 +7547,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 		{
 			Type:      llm.BlockToolUse,
 			ToolUseID: "goal-create",
-			ToolName:  GoalToolCreate,
+			ToolName:  goalmodule.ToolCreate,
 			Input: map[string]any{
 				"description": "ship ordered goal state",
 				"acceptance":  "goal updates observe provider order",
@@ -7552,7 +7556,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 		{
 			Type:      llm.BlockToolUse,
 			ToolUseID: "goal-update",
-			ToolName:  GoalToolUpdate,
+			ToolName:  goalmodule.ToolUpdate,
 			Input: map[string]any{
 				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "ordered update applied",
@@ -9113,5 +9117,61 @@ func TestTurn_EmitsLifecycleEvents(t *testing.T) {
 		if seen[want] == 0 {
 			t.Errorf("missing event %q. seen=%v", want, seen)
 		}
+	}
+}
+
+func TestAutoCompactionCountsPreparedInputBeforeGenerationCommit(t *testing.T) {
+	for _, repeats := range []int{1, 160} {
+		t.Run(fmt.Sprintf("incoming=%d", repeats), func(t *testing.T) {
+			provider := &scriptedCompactionProvider{name: "mock", attempts: []scriptedCompactionAttempt{
+				{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn}},
+				{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "answered latest"), StopReason: llm.StopEndTurn}},
+			}}
+			eng, _ := newEngine(t, provider, false)
+			eng.ContextWindow = 2000
+			eng.Compaction = DefaultCompactionPolicy()
+			eng.Compaction.ReserveTokens = 1750
+			eng.Compaction.KeepRecentTokens = 1
+			if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+				t.Fatal(err)
+			}
+			if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 300))); err != nil {
+				t.Fatal(err)
+			}
+			before := eng.Thread.CurrentGenerationJournalPath()
+			incoming := strings.Repeat("incoming ", repeats)
+			_, err := eng.Turn(t.Context(), incoming)
+			if repeats > 1 {
+				if err == nil || !strings.Contains(err.Error(), "compacted context exceeds budget") {
+					t.Fatalf("oversized prepared input accepted: %v", err)
+				}
+				if eng.Thread.CurrentGenerationJournalPath() != before {
+					t.Fatal("oversized prepared input committed a Generation")
+				}
+				if provider.calls != 1 {
+					t.Fatalf("provider calls = %d, want summary only", provider.calls)
+				}
+				if got := eng.Thread.History[len(eng.Thread.History)-1].FirstText(); got != incoming {
+					t.Fatalf("accepted user input was not retained exactly: %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if eng.Thread.CurrentGenerationJournalPath() == before || provider.calls != 2 {
+				t.Fatal("fitting input did not compact and complete")
+			}
+			want := eng.estimateContextTokens(provider.systems[1], eng.Tools.Specs(), provider.histories[1])
+			var compact llm.Message
+			for _, message := range eng.Thread.History {
+				if message.Kind == llm.MessageKindCompact {
+					compact = message
+				}
+			}
+			if compact.Compaction == nil || compact.Compaction.TokensAfter != want {
+				t.Fatalf("compaction metadata omitted incoming context: %+v, want %d", compact.Compaction, want)
+			}
+		})
 	}
 }

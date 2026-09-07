@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/provenance"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
 func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) {
@@ -43,7 +44,7 @@ func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T
 		StopReason: llm.StopEndTurn,
 	}
 
-	got, ok := completeCompactionSummaryText(response, "")
+	got, ok := completeCompactionSummaryText(response)
 	if !ok {
 		t.Fatal("complete summary was rejected")
 	}
@@ -57,45 +58,49 @@ func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T
 	}
 }
 
-func TestCompleteCompactionSummaryTextRestoresUnfinishedAuthoritativeNotes(t *testing.T) {
-	response := llm.Response{
-		Message: llm.TextMessage(llm.RoleAssistant, strings.Join([]string{
-			"Goal",
-			"description: keep exact state",
-			"Critical Context",
-			"GF1: value",
-			"Next Steps",
-			"ship the latest build",
-			"Relevant Files",
-		}, "\n")),
-		StopReason: llm.StopEndTurn,
+func TestCompactionSummaryKeepsLiteralHeadingsInsideProtectedSections(t *testing.T) {
+	const literal = "````text\ndescription: Preserve literal fields\n## Next Steps\n```\n~~~\n```` not a closing fence\n    Critical Context\n````"
+	response := llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "## Goal\n"+literal+"\n## Critical Context\nKeep real facts\n## Next Steps\nKeep real actions"), StopReason: llm.StopEndTurn}
+	summary, ok := completeCompactionSummaryText(response)
+	if !ok || !strings.Contains(summary, literal) {
+		t.Fatalf("normalization rewrote literal data: %s", summary)
 	}
+	state := compactionSummaryState{Contributions: []runtimemodule.OwnedCompactionContribution{{ModuleID: "literal-fixture", CompactionContribution: runtimemodule.CompactionContribution{
+		State: `"frozen"`, Section: "Goal", Reconcile: func(_ context.Context, candidate string) (string, error) {
+			if candidate != literal {
+				t.Errorf("literal section split at embedded heading: %q", candidate)
+			}
+			return literal, nil
+		},
+	}}}}
+	got, err := reconcileCompactionSummary(t.Context(), summary, state, 1000)
+	if err != nil || !strings.Contains(got, literal) || !strings.Contains(got, "Critical Context\nKeep real facts") || !strings.Contains(got, "Next Steps\nKeep real actions") {
+		t.Fatalf("literal candidate rejected or lost context: %s, %v", got, err)
+	}
+	if _, err := reconcileCompactionSummary(t.Context(), summary+"\nNext Steps\nDuplicate action", state, 1000); err == nil || !strings.Contains(err.Error(), "duplicate section") {
+		t.Fatalf("duplicate structural heading accepted: %v", err)
+	}
+}
 
-	got, ok := completeCompactionSummaryText(response, strings.Join([]string{
-		"- [x] completed item",
-		"- [ ] Run the live compaction evaluation and inspect its scorecard.",
-	}, "\n"))
-	if !ok {
-		t.Fatal("complete summary was rejected")
+func TestCompactionSummaryLiteralSyntax(t *testing.T) {
+	for _, literal := range []string{
+		"   ~~~text\nNext Steps\n```\n~~~ trailing text\n    ~~~\n~~~",
+		"    Next Steps\n\tCritical Context\n  \tGoal",
+	} {
+		summary := "## Goal\nLiteral examples:\n" + literal + "\n## Next Steps\nReal action"
+		got := normalizeCompactionSummaryHeadings(summary)
+		if !strings.Contains(got, literal) || !strings.HasSuffix(got, "Next Steps\nReal action") {
+			t.Fatalf("literal or structural headings changed: %s", got)
+		}
+		if _, err := reconcileCompactionSummary(t.Context(), got, compactionSummaryState{}, 1000); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if !strings.Contains(got, "- [ ] Run the live compaction evaluation and inspect its scorecard.") || !strings.Contains(got, "Relevant Files") {
-		t.Fatalf("summary did not restore the unfinished Notes item:\n%s", got)
-	}
-	if got, ok := completeCompactionSummaryText(response, "- [ ] test"); !ok || !strings.Contains(got, "- [ ] test") {
-		t.Fatalf("summary treated a Notes substring as a complete item:\n%s", got)
-	}
-	checkedResponse := llm.Response{
-		Message: llm.TextMessage(llm.RoleAssistant, strings.Join([]string{
-			"Goal", "description: keep exact state", "Critical Context", "GF1: value",
-			"Next Steps", "- [x] deploy", "Relevant Files",
-		}, "\n")),
-		StopReason: llm.StopEndTurn,
-	}
-	if got, ok := completeCompactionSummaryText(checkedResponse, "- [ ] deploy"); !ok || !strings.Contains(got, "- [ ] deploy") {
-		t.Fatalf("summary treated a checked item as authoritative unfinished work:\n%s", got)
-	}
-	if strings.Contains(got, "completed item") {
-		t.Fatalf("summary promoted completed Notes into Next Steps:\n%s", got)
+	for _, opening := range []string{"```text", "~~~text"} {
+		summary := "Goal\n" + opening + "\nNext Steps"
+		if got, err := reconcileCompactionSummary(t.Context(), summary, compactionSummaryState{}, 1000); err != nil || got != summary {
+			t.Fatalf("summary without module reconciliation changed: %q, %v", got, err)
+		}
 	}
 }
 

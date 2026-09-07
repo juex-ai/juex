@@ -81,8 +81,9 @@ threads/<thread-id>/
   generations/
     g000001.jsonl
     g000002.jsonl
-  goal_state.json
-  notes.md
+  modules/
+    goal/goal_state.json
+    notes/notes.md
   scratchpad/
   spool/
 archive/threads/<thread-id>/
@@ -204,6 +205,18 @@ provider-history plans. Framework validates ownership, pairing, cancellation and
 summary budgets before final context projection; journals remain unchanged.
 The Thread [chunked-write Module](internal/modules/chunkedwrite/README.md) owns
 its buffered sessions, current-Generation recovery and folding algorithm.
+
+Goal and Notes policies live in `internal/modules/goal` and
+`internal/modules/notes`. Enabled Modules contribute one frozen JSON state,
+guidance, and an owned summary section per compaction operation. A Module may
+reconcile only its declared section using that snapshot. Framework checks the
+corrected summary against the successful request's output budget and the full
+Provider-visible context, including prepared incoming input, against the
+compaction trigger budget before committing a Generation. Protected state is
+never truncated or written back by compaction;
+an unfit contract fails the operation. Model retries reuse the frozen state.
+Modules fence literal contract text when it can resemble section headings;
+Framework preserves literal blocks during heading normalization and parsing.
 
 Prompt assembly consumes registered context contributors. Stable guidance,
 Hook context, Thread state, and per-request recitation meet at this interface.

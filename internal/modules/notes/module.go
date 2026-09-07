@@ -1,4 +1,4 @@
-package runtime
+package notes
 
 import (
 	"context"
@@ -13,16 +13,16 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-const NotesToolUpdate = "update_notes"
+const ToolUpdate = "update_notes"
 
-const NotesModuleID runtimemodule.ID = modulecatalog.Notes
+const ModuleID runtimemodule.ID = modulecatalog.Notes
 
-type NotesModuleOptions struct {
+type Options struct {
 	EventSink     func(events.Event) error
 	CurrentTurnID func() string
 }
 
-type NotesModule struct {
+type Module struct {
 	store                *workmem.NotesStore
 	eventSink            func(events.Event) error
 	currentTurnID        func() string
@@ -30,21 +30,21 @@ type NotesModule struct {
 	notesContextErrorKey string
 }
 
-func NewNotesModule(store *workmem.NotesStore) *NotesModule {
-	return NewNotesModuleWithOptions(store, NotesModuleOptions{})
+func New(store *workmem.NotesStore) *Module {
+	return NewWithOptions(store, Options{})
 }
 
-func NewNotesModuleWithOptions(store *workmem.NotesStore, opts NotesModuleOptions) *NotesModule {
-	return &NotesModule{store: store, eventSink: opts.EventSink, currentTurnID: opts.CurrentTurnID}
+func NewWithOptions(store *workmem.NotesStore, opts Options) *Module {
+	return &Module{store: store, eventSink: opts.EventSink, currentTurnID: opts.CurrentTurnID}
 }
 
-func (*NotesModule) ID() runtimemodule.ID { return NotesModuleID }
+func (*Module) ID() runtimemodule.ID { return ModuleID }
 
-func (m *NotesModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	return NotesTools(m), nil
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	return BoundTools(m), nil
 }
 
-func (m *NotesModule) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
+func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
 	if m == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
 		return nil, nil
 	}
@@ -62,7 +62,7 @@ func (m *NotesModule) Context(_ context.Context, request runtimemodule.ContextRe
 	}}, nil
 }
 
-func (m *NotesModule) ClearContextForRenewal(_ context.Context, generationID string) (runtimemodule.ContextRenewalClear, error) {
+func (m *Module) ClearContextForRenewal(_ context.Context, generationID string) (runtimemodule.ContextRenewalClear, error) {
 	if m == nil || m.store == nil {
 		return runtimemodule.ContextRenewalClear{
 			Finalize: func() error { return nil },
@@ -77,9 +77,9 @@ func (m *NotesModule) ClearContextForRenewal(_ context.Context, generationID str
 	return runtimemodule.ContextRenewalClear{Finalize: finalize, Rollback: rollback}, nil
 }
 
-func NotesToolDefinitions() []tools.ToolDefinition {
+func ToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{
-		Name:        NotesToolUpdate,
+		Name:        ToolUpdate,
 		Group:       tools.ToolGroupThreadState,
 		Description: "Replace concise thread working notes; use working files for long material. ",
 		Schema: map[string]any{
@@ -92,8 +92,8 @@ func NotesToolDefinitions() []tools.ToolDefinition {
 	}}
 }
 
-func NotesTools(module *NotesModule) []tools.Tool {
-	definition := NotesToolDefinitions()[0]
+func BoundTools(module *Module) []tools.Tool {
+	definition := ToolDefinitions()[0]
 	if module == nil || module.store == nil {
 		return []tools.Tool{definition.Bind(func(context.Context, map[string]any) (string, error) {
 			return "", fmt.Errorf("notes store is unavailable")
@@ -104,7 +104,7 @@ func NotesTools(module *NotesModule) []tools.Tool {
 	})}
 }
 
-func (m *NotesModule) handleUpdateNotes(input map[string]any) (string, error) {
+func (m *Module) handleUpdateNotes(input map[string]any) (string, error) {
 	store := m.store
 	if store == nil {
 		return "", fmt.Errorf("notes store is unavailable")

@@ -711,7 +711,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "goal.updated",
 			Timestamp: ts.Add(7200 * time.Millisecond),
 			TurnID:    "turn-1",
-			Payload: juexruntime.GoalUpdatedPayload{
+			Payload: workmem.GoalUpdatedPayload{
 				Description:       "ship the fix",
 				Acceptance:        "tests pass",
 				ContinuationCount: 2,
@@ -724,7 +724,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "notes.updated",
 			Timestamp: ts.Add(7300 * time.Millisecond),
 			TurnID:    "turn-1",
-			Payload: juexruntime.NotesUpdatedPayload{
+			Payload: workmem.NotesUpdatedPayload{
 				Content:   "- [x] inspect\n- [ ] verify",
 				UpdatedAt: ts.Add(7300 * time.Millisecond),
 			},
@@ -734,7 +734,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "notes.errored",
 			Timestamp: ts.Add(7400 * time.Millisecond),
 			TurnID:    "turn-1",
-			Payload: juexruntime.NotesErroredPayload{
+			Payload: workmem.NotesErroredPayload{
 				Error: "notes read: notes content must be valid UTF-8",
 				Path:  "/state/threads/123456/notes.md",
 			},
