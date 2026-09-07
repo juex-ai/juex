@@ -1,0 +1,124 @@
+package runtime
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+
+	"github.com/juex-ai/juex/internal/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
+)
+
+func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload any
+		want    map[string]any
+	}{
+		{
+			name:    "turn started omits empty kind",
+			payload: TurnStartedPayload{Input: "hello"},
+			want:    map[string]any{"input": "hello"},
+		},
+		{
+			name:    "pending queued keeps empty kind",
+			payload: PendingInputQueuedPayload{Input: "queued", Kind: "", PendingCount: 1, MaxPendingInputs: 4},
+			want: map[string]any{
+				"input":              "queued",
+				"kind":               "",
+				"pending_count":      float64(1),
+				"max_pending_inputs": float64(4),
+			},
+		},
+		{
+			name: "policy completed keeps zero exit code",
+			payload: PolicyCompletedPayload{
+				ModuleID:    "quota",
+				PolicyPoint: runtimemodule.PolicyPointTurnInput,
+				Name:        "policy",
+				DurationMS:  4,
+				ExitCode:    0,
+				StdoutLen:   7,
+			},
+			want: map[string]any{
+				"module_id":    "quota",
+				"policy_point": "turn_input",
+				"name":         "policy",
+				"duration_ms":  float64(4),
+				"exit_code":    float64(0),
+				"stdout_len":   float64(7),
+			},
+		},
+		{
+			name: "llm responded omits nil context usage",
+			payload: LLMRespondedPayload{
+				Iter:       2,
+				StopReason: llm.StopToolUse,
+				Usage:      llm.Usage{InputTokens: 3, OutputTokens: 1},
+				TokenUsage: llm.Usage{InputTokens: 8, OutputTokens: 2},
+				Blocks: []llm.Block{{
+					Type:      llm.BlockToolUse,
+					ToolUseID: "tu3",
+					ToolName:  "read",
+					Input:     map[string]any{"path": "README.md"},
+				}},
+				Text:     "",
+				Thinking: "inspect",
+				ToolCalls: []toolevents.ToolCallPayload{{
+					ToolUseID: "tu3", Name: "read", Input: map[string]any{"path": "README.md"},
+					Iter: 2, CallIndex: 0, MessageID: "assistant-3",
+				}},
+				Model:     "mock:model",
+				MessageID: "assistant-3",
+			},
+			want: map[string]any{
+				"iter":        float64(2),
+				"stop_reason": "tool_use",
+				"usage": map[string]any{
+					"input_tokens":  float64(3),
+					"output_tokens": float64(1),
+				},
+				"token_usage": map[string]any{
+					"input_tokens":  float64(8),
+					"output_tokens": float64(2),
+				},
+				"blocks": []any{map[string]any{
+					"type":        "tool_use",
+					"tool_use_id": "tu3",
+					"tool_name":   "read",
+					"input":       map[string]any{"path": "README.md"},
+				}},
+				"text":     "",
+				"thinking": "inspect",
+				"tool_calls": []any{map[string]any{
+					"tool_use_id":     "tu3",
+					"name":            "read",
+					"input":           map[string]any{"path": "README.md"},
+					"timeout_seconds": float64(0),
+					"iter":            float64(2),
+					"call_index":      float64(0),
+					"message_id":      "assistant-3",
+				}},
+				"model":      "mock:model",
+				"message_id": "assistant-3",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got map[string]any
+			data, err := json.Marshal(tt.payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("payload JSON = %#v, want %#v\njson: %s", got, tt.want, data)
+			}
+		})
+	}
+}

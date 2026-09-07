@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/llm"
-	runtimeevents "github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/toolevents"
+	runtimeevents "github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
 )
 
 // verbosePrinter formats lifecycle events into a human-readable transcript

@@ -14,13 +14,13 @@ web:
 	$(MAKE) web-sync
 
 web-stub:
-	mkdir -p internal/web/dist
-	@test -f internal/web/dist/index.html || printf '%s\n' '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
+	mkdir -p internal/entrypoints/webassets/dist
+	@test -f internal/entrypoints/webassets/dist/index.html || printf '%s\n' '<!doctype html><html><body></body></html>' > internal/entrypoints/webassets/dist/index.html
 
 web-sync:
-	rm -rf internal/web/dist
-	mkdir -p internal/web/dist
-	cp -R frontend/dist/. internal/web/dist/
+	rm -rf internal/entrypoints/webassets/dist
+	mkdir -p internal/entrypoints/webassets/dist
+	cp -R frontend/dist/. internal/entrypoints/webassets/dist/
 
 web-check:
 	cd frontend && pnpm install --frozen-lockfile
@@ -44,9 +44,9 @@ BUILDTIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 DIST_BIN := dist/juex
 
-LDFLAGS := -X github.com/juex-ai/juex/internal/version.Version=$(VERSION) \
-           -X github.com/juex-ai/juex/internal/version.Commit=$(COMMIT) \
-           -X github.com/juex-ai/juex/internal/version.BuildTime=$(BUILDTIME)
+LDFLAGS := -X github.com/juex-ai/juex/internal/foundation/version.Version=$(VERSION) \
+           -X github.com/juex-ai/juex/internal/foundation/version.Commit=$(COMMIT) \
+           -X github.com/juex-ai/juex/internal/foundation/version.BuildTime=$(BUILDTIME)
 
 help:
 	@echo "Targets:"

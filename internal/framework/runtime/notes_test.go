@@ -1,0 +1,383 @@
+package runtime
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/llm"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
+	"github.com/juex-ai/juex/internal/tools"
+)
+
+func TestNotesToolDefinitionsBindThreadStateGroup(t *testing.T) {
+	reg := tools.NewRegistry()
+	installModuleTools(t, reg, notesmodule.New(workmem.NewNotesStore(t.TempDir())))
+	definitions := notesmodule.ToolDefinitions()
+	if len(definitions) != 1 {
+		t.Fatalf("definition count = %d, want 1", len(definitions))
+	}
+	definition := definitions[0]
+	if definition.Group != tools.ToolGroupThreadState {
+		t.Fatalf("definition group = %q, want %q", definition.Group, tools.ToolGroupThreadState)
+	}
+	registered, ok := reg.Get(definition.Name)
+	if !ok {
+		t.Fatalf("%s is not registered", definition.Name)
+	}
+	if got := registered.Definition(); !reflect.DeepEqual(got, definition) {
+		t.Fatalf("registered definition = %#v, want %#v", got, definition)
+	}
+}
+
+func TestNotesToolRewritesThreadNotesAndEmitsEvent(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	_, notesStore := installThreadStateModules(t, eng)
+	tool, ok := eng.Tools.Get(notesmodule.ToolUpdate)
+	if !ok {
+		t.Fatal("update_notes is not registered")
+	}
+	properties := tool.Schema["properties"].(map[string]any)
+	if len(properties) != 1 || properties["content"] == nil {
+		t.Fatalf("update_notes properties = %#v", properties)
+	}
+	if _, ok := eng.Tools.Get("get_notes"); ok {
+		t.Fatal("get_notes must not be registered")
+	}
+	for _, want := range []string{"working files", "replace"} {
+		if !strings.Contains(strings.ToLower(tool.Description), want) {
+			t.Fatalf("tool description missing %q: %q", want, tool.Description)
+		}
+	}
+
+	var updated workmem.NotesUpdatedPayload
+	bus.Subscribe("notes.updated", func(event events.Event) {
+		updated, _ = event.Payload.(workmem.NotesUpdatedPayload)
+	})
+	out, err := eng.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
+		"content": "- [x] inspect\n- [ ] verify",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"content":"- [x] inspect\n- [ ] verify"`) {
+		t.Fatalf("tool output = %s", out)
+	}
+	if updated.Content != "- [x] inspect\n- [ ] verify" || updated.UpdatedAt.IsZero() {
+		t.Fatalf("notes.updated payload = %+v", updated)
+	}
+	snapshot, err := notesStore.Snapshot()
+	if err != nil || snapshot.Content != updated.Content {
+		t.Fatalf("notes snapshot = %+v, err = %v", snapshot, err)
+	}
+
+	_, err = eng.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
+		"content": strings.Repeat("x", workmem.MaxNotesCharacters+1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum is 2048") {
+		t.Fatalf("oversize tool error = %v", err)
+	}
+}
+
+func TestNotesSnapshotEntrypointsUseModuleStore(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	if _, err := workmem.NewNotesStore(eng.Thread.Dir).Update("thread directory store"); err != nil {
+		t.Fatal(err)
+	}
+	injected := workmem.NewNotesStore(t.TempDir())
+	if _, err := injected.Update("module-owned store"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = installThreadStateModulesWithStores(t, eng, nil, injected)
+
+	status, err := eng.NotesStatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status == nil || status.Content != "module-owned store" {
+		t.Fatalf("NotesStatusSnapshot() = %+v, want module-owned store", status)
+	}
+	contextMessage := runtimeContextMessage(eng.ActiveContext().Messages, "runtime-notes")
+	if contextMessage == nil || !strings.Contains(contextMessage.FirstText(), "module-owned store") || strings.Contains(contextMessage.FirstText(), "thread directory store") {
+		t.Fatalf("module notes context = %+v", contextMessage)
+	}
+}
+
+func TestNotesModuleReturnsOneOwnedStoreInstance(t *testing.T) {
+	store := workmem.NewNotesStore(t.TempDir())
+	module := notesmodule.New(store)
+	const callers = 32
+	stores := make([]*workmem.NotesStore, callers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for i := range stores {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			stores[index] = module.NotesStore()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	first := stores[0]
+	if first != store {
+		t.Fatalf("module store = %p, want %p", first, store)
+	}
+	for i, store := range stores[1:] {
+		if store != first {
+			t.Fatalf("store %d = %p, want singleton %p", i+1, store, first)
+		}
+	}
+}
+
+func TestNotesToolRecitesRewriteOnNextProviderRequest(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type:      llm.BlockToolUse,
+			ToolUseID: "notes-1",
+			ToolName:  notesmodule.ToolUpdate,
+			Input:     map[string]any{"content": "- [x] inspected\n- [ ] finish tests"},
+		}}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	installThreadStateModules(t, eng)
+
+	if out, err := eng.Turn(context.Background(), "work"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d", len(prov.histories))
+	}
+	second := messagesText(prov.histories[1])
+	if !strings.Contains(second, "Current working notes") || !strings.Contains(second, "finish tests") {
+		t.Fatalf("second provider context missing notes:\n%s", second)
+	}
+}
+
+func TestActiveContextAppendsGoalThenNotes(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	goalState := workmem.NewGoalStateStore(eng.Thread.Dir, workmem.GoalStateOptions{})
+	notesStore := workmem.NewNotesStore(eng.Thread.Dir)
+	if _, err := goalState.Create("ship notes", "tests pass"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := notesStore.Update("- [ ] run tests"); err != nil {
+		t.Fatal(err)
+	}
+	installThreadStateModulesWithStores(t, eng, goalState, notesStore)
+
+	snapshot := eng.ActiveContext(llm.TextMessage(llm.RoleUser, "continue"))
+	if len(snapshot.Messages) < 3 {
+		t.Fatalf("active context = %+v", snapshot.Messages)
+	}
+	goal := snapshot.Messages[len(snapshot.Messages)-2]
+	notes := snapshot.Messages[len(snapshot.Messages)-1]
+	if goal.ID != "runtime-goal-contract" || goal.Kind != llm.MessageKindRuntimeContext {
+		t.Fatalf("goal context = %+v", goal)
+	}
+	if notes.ID != "runtime-notes" || notes.Kind != llm.MessageKindRuntimeContext || !strings.Contains(notes.FirstText(), "run tests") {
+		t.Fatalf("notes context = %+v", notes)
+	}
+
+	if _, err := notesStore.Update(""); err != nil {
+		t.Fatal(err)
+	}
+	snapshot = eng.ActiveContext(llm.TextMessage(llm.RoleUser, "continue"))
+	for _, message := range snapshot.Messages {
+		if message.ID == "runtime-notes" {
+			t.Fatalf("empty notes leaked into context: %+v", snapshot.Messages)
+		}
+	}
+}
+
+func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
+	tests := []struct {
+		name      string
+		corrupt   []byte
+		wantError string
+	}{
+		{
+			name:      "oversized",
+			corrupt:   []byte(strings.Repeat("x", workmem.MaxNotesCharacters+1)),
+			wantError: "maximum is 2048",
+		},
+		{
+			name:      "invalid UTF-8",
+			corrupt:   []byte{0xff, 0xfe, 0xfd},
+			wantError: "valid UTF-8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, bus := newEngine(t, &mockProvider{}, false)
+			installThreadStateModules(t, eng)
+			notesPath := prepareTestNotesPath(t, eng.Thread.Dir)
+			if err := os.WriteFile(notesPath, tt.corrupt, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var errored []workmem.NotesErroredPayload
+			bus.Subscribe("notes.errored", func(event events.Event) {
+				payload, _ := event.Payload.(workmem.NotesErroredPayload)
+				errored = append(errored, payload)
+			})
+
+			for range 2 {
+				snapshot := eng.ActiveContext(llm.TextMessage(llm.RoleUser, "continue"))
+				message := runtimeContextMessage(snapshot.Messages, "runtime-notes")
+				if message == nil {
+					t.Fatalf("active context missing Notes error placeholder: %+v", snapshot.Messages)
+				}
+				text := message.FirstText()
+				relativePath := filepath.ToSlash(filepath.Join(".juex", "threads", filepath.Base(eng.Thread.Dir), "modules", "notes", workmem.NotesFileName))
+				for _, want := range []string{"Working notes unavailable", tt.wantError, relativePath, "update_notes"} {
+					if !strings.Contains(text, want) {
+						t.Fatalf("Notes placeholder missing %q: %q", want, text)
+					}
+				}
+			}
+			if len(errored) != 1 {
+				t.Fatalf("notes.errored events = %+v, want exactly one", errored)
+			}
+			if errored[0].Path != notesPath || !strings.Contains(errored[0].Error, tt.wantError) {
+				t.Fatalf("notes.errored payload = %+v", errored[0])
+			}
+
+			if _, err := eng.Tools.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{
+				"content": "- [ ] recovered through update_notes",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			recovered := runtimeContextMessage(eng.ActiveContext().Messages, "runtime-notes")
+			if recovered == nil || !strings.Contains(recovered.FirstText(), "Current working notes") || !strings.Contains(recovered.FirstText(), "recovered through update_notes") || strings.Contains(recovered.FirstText(), "unavailable") {
+				t.Fatalf("recovered Notes context = %+v", recovered)
+			}
+
+			if err := os.WriteFile(notesPath, tt.corrupt, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_ = eng.ActiveContext()
+			if len(errored) != 2 {
+				t.Fatalf("notes.errored events after recovery and recurrence = %+v, want two", errored)
+			}
+		})
+	}
+}
+
+func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "acknowledged"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 2000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1400
+	installThreadStateModules(t, eng)
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	// Leave enough room for the compact marker and the error recitation;
+	// the old assistant context still exceeds the trigger budget.
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("earlier result ", 250))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prepareTestNotesPath(t, eng.Thread.Dir), []byte{0xff}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var notesErrors, compactErrors int
+	bus.Subscribe("notes.errored", func(events.Event) { notesErrors++ })
+	bus.Subscribe("context.compact.errored", func(events.Event) { compactErrors++ })
+
+	out, err := eng.Turn(context.Background(), "continue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "acknowledged" {
+		t.Fatalf("Turn() = %q, want acknowledged", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want compaction plus turn", len(prov.histories))
+	}
+	providerText := messagesText(prov.histories[1])
+	for _, want := range []string{"Working notes unavailable", "valid UTF-8", "update_notes"} {
+		if !strings.Contains(providerText, want) {
+			t.Fatalf("post-compaction provider context missing %q:\n%s", want, providerText)
+		}
+	}
+	if notesErrors != 1 || compactErrors != 0 {
+		t.Fatalf("notes errors = %d, compact errors = %d", notesErrors, compactErrors)
+	}
+}
+
+func TestTurnRecitesNotesReadFailurePlaceholder(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "acknowledged"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	installThreadStateModules(t, eng)
+	notesPath := prepareTestNotesPath(t, eng.Thread.Dir)
+	if err := os.WriteFile(notesPath, []byte{0xff}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errored int
+	bus.Subscribe("notes.errored", func(events.Event) {
+		errored++
+	})
+
+	out, err := eng.Turn(context.Background(), "continue")
+	if err != nil || out != "acknowledged" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if len(prov.histories) != 1 {
+		t.Fatalf("provider calls = %d, want one", len(prov.histories))
+	}
+	providerText := messagesText(prov.histories[0])
+	for _, want := range []string{"Working notes unavailable", "valid UTF-8", "update_notes"} {
+		if !strings.Contains(providerText, want) {
+			t.Fatalf("provider context missing %q:\n%s", want, providerText)
+		}
+	}
+	if errored != 1 {
+		t.Fatalf("notes.errored events = %d, want one", errored)
+	}
+}
+
+func runtimeContextMessage(messages []llm.Message, id string) *llm.Message {
+	for i := range messages {
+		if messages[i].ID == id {
+			return &messages[i]
+		}
+	}
+	return nil
+}
+
+func TestNotesModuleRejectsMissingStore(t *testing.T) {
+	reg := tools.NewRegistry()
+	installModuleTools(t, reg, notesmodule.New(nil))
+	if _, err := reg.Call(context.Background(), notesmodule.ToolUpdate, map[string]any{"content": "hi"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("missing store error = %v", err)
+	}
+}
+
+func prepareTestNotesPath(t *testing.T, dir string) string {
+	t.Helper()
+	store := workmem.NewNotesStore(dir)
+	if _, err := store.Update(""); err != nil {
+		t.Fatal(err)
+	}
+	return store.Path
+}

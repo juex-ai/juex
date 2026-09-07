@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/juex-ai/juex/internal/artifact"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/foundation/artifact"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 // PartialThreadDeleteError means durable Thread state was removed but its

@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/homestore"
-	"github.com/juex-ai/juex/internal/processidentity"
-	"github.com/juex-ai/juex/internal/processmetrics"
-	"github.com/juex-ai/juex/internal/statusapi"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	"github.com/juex-ai/juex/internal/foundation/homestore"
+	"github.com/juex-ai/juex/internal/foundation/processidentity"
+	"github.com/juex-ai/juex/internal/foundation/processmetrics"
+	"github.com/juex-ai/juex/internal/framework/status"
 )
 
 type BindingState string

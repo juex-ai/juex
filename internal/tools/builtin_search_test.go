@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/environment"
-	"github.com/juex-ai/juex/internal/sandbox"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
 )
 
 type fakeSearchRunner struct {

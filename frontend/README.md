@@ -17,7 +17,7 @@ pnpm --dir frontend dev
 ```
 
 Vite proxies Fleet and selected-Agent API requests to the local Fleet server.
-Production output is copied from `frontend/dist/` into `internal/web/dist/`;
+Production output is copied from `frontend/dist/` into `internal/entrypoints/webassets/dist/`;
 do not edit embedded output directly.
 
 The frontend verification gate runs browser interactions against the production

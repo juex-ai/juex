@@ -18,7 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/juex-ai/juex/internal/sandbox"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
 )
 
 const (

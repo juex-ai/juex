@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 type TurnAdmissionKind string

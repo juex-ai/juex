@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/extensions"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/features/extensions"
 )
 
 func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {

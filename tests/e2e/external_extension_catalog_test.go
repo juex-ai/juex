@@ -10,17 +10,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
-	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
-	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
-	"github.com/juex-ai/juex/internal/observable"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	skillsmodule "github.com/juex-ai/juex/internal/features/skills/module"
+	"github.com/juex-ai/juex/internal/features/observables"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {

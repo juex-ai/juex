@@ -49,23 +49,23 @@ locator. See [ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.md).
 
 | Package | Owns |
 | --- | --- |
-| `internal/agentstate` | Agent registry identity, canonical Workspace binding, Agent state addressing, and lifecycle metadata. |
-| `internal/config` | Layered YAML loading, scope validation, imports, environment projection, and atomic managed-config publication. |
-| `internal/jsonl` | Domain-neutral durable append, repair, forward iteration, and bounded reverse reads for JSONL files. |
-| `internal/thread` | Thread metadata, Agent index, Generation EventStore, timeline paging, archive, and delete. |
-| `internal/runtime` | Pending Input state, Input/Turn lifecycle, Provider loop, context projection, compaction, status, and Tool execution. |
-| `internal/runtime/module` | Typed Module capabilities and scoped lifecycle contracts. |
+| `internal/framework/agentstate` | Agent registry identity, canonical Workspace binding, Agent state addressing, and lifecycle metadata. |
+| `internal/app/config` | Layered YAML loading, scope validation, imports, environment projection, and atomic managed-config publication. |
+| `internal/foundation/jsonl` | Domain-neutral durable append, repair, forward iteration, and bounded reverse reads for JSONL files. |
+| `internal/framework/thread` | Thread metadata, Agent index, Generation EventStore, timeline paging, archive, and delete. |
+| `internal/framework/runtime` | Pending Input state, Input/Turn lifecycle, Provider loop, context projection, compaction, status, and Tool execution. |
+| `internal/framework/module` | Typed Module capabilities and scoped lifecycle contracts. |
 | `internal/app` | Agent composition, Main/Worker management, Observation admission, slash commands, and subscriptions. |
-| `internal/observable` | Observable definitions, producers, Observation values, and generated state. |
-| `internal/mcp` | Agent-scoped MCP connections, Tool catalog, calls, and Notification transport. |
-| `internal/web` | Single-Agent JSON/SSE transport and resource handlers. |
-| `internal/fleet` / `internal/fleetweb` | Resident Agent lifecycle, registry, proxy, and Fleet UI service. |
-| `internal/cli` | CLI adapters for Agent, Thread, Fleet, config, and diagnostics. |
+| `internal/features/observables` | Observable definitions, producers, Observation values, and generated state. |
+| `internal/features/mcp` | Agent-scoped MCP connections, Tool catalog, calls, and Notification transport. |
+| `internal/entrypoints/agenthttp` | Single-Agent JSON/SSE transport and resource handlers. |
+| `internal/fleet` / `internal/entrypoints/fleethttp` | Resident Agent lifecycle, registry, proxy, and Fleet UI service. |
+| `internal/entrypoints/cli` | CLI adapters for Agent, Thread, Fleet, config, and diagnostics. |
 | `frontend` | Fleet shell, Thread Explorer, transcript, composer, and runtime views. |
 
 Provider-neutral messages live in `internal/llm`. Durable Event transport and
-schemas live in `internal/events`, `internal/eventcatalog`, and
-`internal/toolevents`.
+schemas live in `internal/foundation/events`, `internal/app/eventcatalog`, and
+`internal/foundation/toolevents`.
 
 ## Persistence Authority
 
@@ -115,8 +115,8 @@ with the cursor through which derived values were aggregated.
 lists read this Agent cache; startup repairs a missing or stale entry by
 scanning `thread.json` files, never Generation history.
 
-`internal/thread.EventStore` is the sole production resolver and reader/writer
-for `generations/*.jsonl`; `internal/jsonl` owns the raw file durability and
+`internal/framework/thread.EventStore` is the sole production resolver and reader/writer
+for `generations/*.jsonl`; `internal/foundation/jsonl` owns the raw file durability and
 bounded-read mechanics. Generation commits are chronological, append-only,
 atomic fact batches with one continuous Thread-local sequence. Current Provider
 context is reconstructed from the current Generation file alone. Timeline and
@@ -224,7 +224,7 @@ and is never recreated.
 Configuration preflight and inspection do not retire resources. Once resource
 application commits, cleanup or later startup failure is an incomplete application;
 it does not roll back by resurrecting old state. The new endpoint is published
-only after retirement succeeds. See the [resource lifecycle contract](internal/runtime/module/state/README.md)
+only after retirement succeeds. See the [resource lifecycle contract](internal/framework/module/state/README.md)
 for the pre-ownership deployment boundary.
 
 Runtime and Thread tool contributions are merged before resolving their final
@@ -238,7 +238,7 @@ Thread tool-use batch and may overlap parallel tools. Cancellation uses normal
 tool dispatch and results remain ordered, including errors. Modules retain
 responsibility for synchronizing Agent resources across Threads.
 
-The Agent-scoped [Memory Module](internal/modules/memory/README.md) owns durable
+The Agent-scoped [Memory Module](internal/features/memory/README.md) owns durable
 knowledge and a rebuildable index. App supplies the Agent directory; Main and
 Worker Module instances coordinate file transactions through the same lock.
 Thread-start and post-compaction policies maintain the index without injecting
@@ -249,11 +249,11 @@ the sealed tool catalog and persists them independently of result presentation.
 Enabled Modules may summarize their completed tool pairs through declarative
 provider-history plans. Framework validates ownership, pairing, cancellation and
 summary budgets before final context projection; journals remain unchanged.
-The Thread [chunked-write Module](internal/modules/chunkedwrite/README.md) owns
+The Thread [chunked-write Module](internal/features/chunkedwrite/README.md) owns
 its buffered sessions, current-Generation recovery and folding algorithm.
 
-Goal and Notes policies live in `internal/modules/goal` and
-`internal/modules/notes`. Enabled Modules contribute one frozen JSON state,
+Goal and Notes policies live in `internal/features/goal` and
+`internal/features/notes`. Enabled Modules contribute one frozen JSON state,
 guidance, and an owned summary section per compaction operation. A Module may
 reconcile only its declared section using that snapshot. Framework checks the
 corrected summary against the successful request's output budget and the full

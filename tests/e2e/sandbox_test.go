@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/sandbox"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
 )
 
 func TestEndToEnd_OmittedSandboxConfigRestrictsExecCommandWrites(t *testing.T) {

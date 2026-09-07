@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
 )
 
 type AgentConfig struct {

@@ -12,8 +12,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/environment"
-	"github.com/juex-ai/juex/internal/version"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/version"
 )
 
 type RipgrepSource string

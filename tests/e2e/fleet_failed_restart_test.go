@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/statusapi"
+	"github.com/juex-ai/juex/internal/framework/status"
 )
 
 func TestFleetRestartContinuesFailedTurnOnce(t *testing.T) {

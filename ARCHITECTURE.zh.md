@@ -46,22 +46,22 @@ locator 发现依赖。原因见
 
 | 模块 | 所有权 |
 | --- | --- |
-| `internal/agentstate` | Agent registry 身份、规范 Workspace binding、Agent state 寻址与 lifecycle metadata。 |
-| `internal/config` | 分层 YAML 加载、scope 校验、import、environment 投影与受管配置的原子发布。 |
-| `internal/jsonl` | 与领域无关的 JSONL 持久追加、修复、正向遍历和有界反向读取。 |
-| `internal/thread` | Thread metadata、Agent index、Generation EventStore、timeline paging、archive 和 delete。 |
-| `internal/runtime` | Pending Input 状态、Input/Turn lifecycle、Provider loop、context projection、compaction、status 和 Tool execution。 |
-| `internal/runtime/module` | 类型化 Module capability 与 scoped lifecycle contract。 |
+| `internal/framework/agentstate` | Agent registry 身份、规范 Workspace binding、Agent state 寻址与 lifecycle metadata。 |
+| `internal/app/config` | 分层 YAML 加载、scope 校验、import、environment 投影与受管配置的原子发布。 |
+| `internal/foundation/jsonl` | 与领域无关的 JSONL 持久追加、修复、正向遍历和有界反向读取。 |
+| `internal/framework/thread` | Thread metadata、Agent index、Generation EventStore、timeline paging、archive 和 delete。 |
+| `internal/framework/runtime` | Pending Input 状态、Input/Turn lifecycle、Provider loop、context projection、compaction、status 和 Tool execution。 |
+| `internal/framework/module` | 类型化 Module capability 与 scoped lifecycle contract。 |
 | `internal/app` | Agent 组合、Main/Worker 管理、Observation admission、slash command 和订阅。 |
-| `internal/observable` | Observable 定义、producer、Observation value 和生成状态。 |
-| `internal/mcp` | Agent 级 MCP connection、Tool catalog、调用和 Notification transport。 |
-| `internal/web` | 单 Agent JSON/SSE transport 与资源 handler。 |
-| `internal/fleet` / `internal/fleetweb` | 常驻 Agent lifecycle、registry、proxy 和 Fleet UI 服务。 |
-| `internal/cli` | Agent、Thread、Fleet、配置和诊断的 CLI adapter。 |
+| `internal/features/observables` | Observable 定义、producer、Observation value 和生成状态。 |
+| `internal/features/mcp` | Agent 级 MCP connection、Tool catalog、调用和 Notification transport。 |
+| `internal/entrypoints/agenthttp` | 单 Agent JSON/SSE transport 与资源 handler。 |
+| `internal/fleet` / `internal/entrypoints/fleethttp` | 常驻 Agent lifecycle、registry、proxy 和 Fleet UI 服务。 |
+| `internal/entrypoints/cli` | Agent、Thread、Fleet、配置和诊断的 CLI adapter。 |
 | `frontend` | Fleet shell、Thread Explorer、transcript、composer 和 runtime view。 |
 
 Provider-neutral 消息位于 `internal/llm`。持久 Event transport 与 schema 位于
-`internal/events`、`internal/eventcatalog` 和 `internal/toolevents`。
+`internal/foundation/events`、`internal/app/eventcatalog` 和 `internal/foundation/toolevents`。
 
 ## 持久化权威
 
@@ -107,8 +107,8 @@ registry 的权威。它还物化有界 counter、context status、Pending Input
 排序、过滤和 tooltip 数据。Thread 列表读取这份 Agent cache；启动时通过扫描
 `thread.json` 修复缺失或落后的条目，不读取 Generation 历史。
 
-`internal/thread.EventStore` 是 `generations/*.jsonl` 唯一的生产路径解析和读写
-入口；`internal/jsonl` 负责原始文件的持久性和有界读取机制。Generation commit
+`internal/framework/thread.EventStore` 是 `generations/*.jsonl` 唯一的生产路径解析和读写
+入口；`internal/foundation/jsonl` 负责原始文件的持久性和有界读取机制。Generation commit
 按时间顺序 append，每个 commit 是原子的 fact batch，并共享一条连续的 Thread
 本地 sequence。当前 Provider context 只从当前 Generation 文件重建。Timeline
 与诊断 reader 通过 EventStore snapshot 分页或捕获已注册 Generation，不自行拼接
@@ -193,7 +193,7 @@ Thread 自己拥有通用文件事务记录，在 rename 前登记相对路径�
 
 配置预检与检查不触发退休。资源应用提交后，清理或后续启动失败代表应用尚未完成，
 不会通过复活旧状态回滚；退休成功后才发布新 endpoint。部署前的无所有权状态边界
-见[资源生命周期约定](internal/runtime/module/state/README.zh.md)。
+见[资源生命周期约定](internal/framework/module/state/README.zh.md)。
 
 Runtime 与 Thread 工具贡献合并后，才基于完整工具名称集合生成最终描述和
 schema。解析不能改变工具身份或执行策略。Provider 请求与活动状态读取同一份
@@ -204,7 +204,7 @@ schema。解析不能改变工具身份或执行策略。Provider 请求与活�
 取消沿用正常工具分发，包含错误在内的结果保持有序。跨 Thread 的 Agent
 共享资源同步仍由所属 Module 负责。
 
-Agent scope 的 [Memory Module](internal/modules/memory/README.zh.md) 拥有持久知识
+Agent scope 的 [Memory Module](internal/features/memory/README.zh.md) 拥有持久知识
 及可重建索引。App 注入 Agent 目录，Main 与 Worker 的 Module 实例通过同一把锁
 协调文件事务。Thread 启动与压缩完成后的策略负责维护索引，不注入知识正文，普通
 维护失败不会阻断流程。
@@ -212,11 +212,11 @@ Agent scope 的 [Memory Module](internal/modules/memory/README.zh.md) 拥有持�
 工具执行可以输出显式 JSON fact。Framework 根据封存的工具 catalog 赋予所有者，
 并独立于结果展示文本持久化。启用的 Module 可以通过声明式 Provider 历史计划
 汇总自己已完成的工具对。Framework 在最终上下文投影之前验证所有权、配对、取消
-和摘要预算，Journal 保持不变。Thread 级的[分块写 Module](internal/modules/chunkedwrite/README.zh.md)
+和摘要预算，Journal 保持不变。Thread 级的[分块写 Module](internal/features/chunkedwrite/README.zh.md)
 拥有缓冲会话、当前 Generation 恢复和折叠算法。
 
-Goal 与 Notes 策略分别位于 `internal/modules/goal` 和
-`internal/modules/notes`。每次压缩中，启用的 Module 贡献一份冻结的 JSON 状态、
+Goal 与 Notes 策略分别位于 `internal/features/goal` 和
+`internal/features/notes`。每次压缩中，启用的 Module 贡献一份冻结的 JSON 状态、
 指导和自有摘要段落，只能依据该快照修正自己声明的段落。Framework 在提交
 Generation 前，检查修正后的摘要是否满足成功请求的输出预算，以及包含已准备
 待提交输入的完整 Provider 可见上下文是否满足压缩触发预算。

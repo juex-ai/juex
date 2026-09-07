@@ -10,14 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/errorclass"
-	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/errorclass"
+	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/thread"
 	"github.com/juex-ai/juex/internal/tools"
 )
 

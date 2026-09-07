@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/environment"
 )
 
 // AgentRuntimeResolution is the immutable process-lifetime view of selected

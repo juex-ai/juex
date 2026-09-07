@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/llm"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 type checkpointModule struct {

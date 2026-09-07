@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/cancellation"
-	"github.com/juex-ai/juex/internal/errorclass"
+	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 )
 

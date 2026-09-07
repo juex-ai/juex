@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/artifact"
+	"github.com/juex-ai/juex/internal/foundation/artifact"
 )
 
 const maxProviderImageArtifactBytes = 10 * 1024 * 1024

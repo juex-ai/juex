@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	"github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type activationHistoryProvider struct{ histories chan []llm.Message }

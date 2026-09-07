@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/toolevents"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
 )
 
 type verboseToolState string

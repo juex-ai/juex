@@ -1,0 +1,242 @@
+package runtime
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/llm"
+)
+
+type modelAttemptFailure struct {
+	ref string
+	err error
+}
+
+type modelFallbackTransition struct {
+	from     string
+	reason   string
+	cooldown time.Duration
+	probe    bool
+}
+
+type modelRequestError struct {
+	err           error
+	contextWindow int
+}
+
+func (e *modelRequestError) Error() string { return e.err.Error() }
+func (e *modelRequestError) Unwrap() error { return e.err }
+
+func (e *Engine) effectiveModelCandidatesLocked() []ModelCandidate {
+	if len(e.ModelCandidates) > 0 {
+		out := make([]ModelCandidate, 0, len(e.ModelCandidates))
+		seen := map[string]struct{}{}
+		for _, candidate := range e.ModelCandidates {
+			if candidate.Provider == nil {
+				continue
+			}
+			if candidate.Ref == "" {
+				candidate.Ref = candidate.Provider.Name()
+			}
+			if _, duplicate := seen[candidate.Ref]; duplicate {
+				continue
+			}
+			seen[candidate.Ref] = struct{}{}
+			out = append(out, candidate)
+		}
+		return out
+	}
+	if e.Provider == nil {
+		return nil
+	}
+	return []ModelCandidate{{
+		Ref:             e.Provider.Name(),
+		Provider:        e.Provider,
+		ContextWindow:   e.ContextWindow,
+		MaxOutputTokens: e.MaxOutputTokens,
+	}}
+}
+
+func candidateContextWindow(candidate ModelCandidate, fallback int) int {
+	if candidate.ContextWindow > 0 {
+		return candidate.ContextWindow
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return DefaultContextWindowTokens
+}
+
+func candidateMaxOutputTokens(candidate ModelCandidate, fallback int) int {
+	if candidate.MaxOutputTokens > 0 {
+		return candidate.MaxOutputTokens
+	}
+	return fallback
+}
+
+func usageModelRef(candidate ModelCandidate) string {
+	ref := strings.TrimSpace(candidate.Ref)
+	if providerID, modelID, ok := strings.Cut(ref, ":"); ok && providerID != "" && modelID != "" {
+		return ref
+	}
+	// Provider-only Engine construction is a test and embedding seam. Production
+	// candidates carry their configured canonical ref explicitly.
+	name := "provider"
+	if candidate.Provider != nil && strings.TrimSpace(candidate.Provider.Name()) != "" {
+		name = strings.TrimSpace(candidate.Provider.Name())
+	}
+	return name + ":" + name
+}
+
+func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID string, prepared preparedTurnContext, base providerTurnRequest, candidate ModelCandidate, notice *llm.Message, allowPreflightCompaction bool) (providerTurnRequest, error) {
+	if err := cancellation.ContextError(ctx); err != nil {
+		return base, err
+	}
+	contextWindow := candidateContextWindow(candidate, e.ContextWindow)
+	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
+	request, err := e.projectCandidateHistoryLocked(ctx, turnID, prepared, base, policy, notice)
+	if err != nil {
+		return base, err
+	}
+	if allowPreflightCompaction && policy.Enabled && request.estimatedInputTokens >= policy.TriggerTokens {
+		if _, err := e.compactLockedForContextWindowWithHealthReservation(ctx, turnID, prepared.systemPrompt, prepared.tools, "model_fallback_preflight", true, "", contextWindow, 0, candidate.Ref); err != nil {
+			return base, err
+		}
+		base.policyContext = e.pendingPolicyRuntimeContextSnapshot()
+		active, contextErr := e.activeContextLockedWithPolicyContextError(ctx, base.policyContext)
+		if contextErr != nil {
+			return base, fmt.Errorf("runtime: build provider context: %w", contextErr)
+		}
+		base.history = active.Messages
+		if err := cancellation.ContextError(ctx); err != nil {
+			return base, err
+		}
+		request, err := e.projectCandidateHistoryLocked(ctx, turnID, prepared, base, policy, notice)
+		if err != nil {
+			return base, err
+		}
+		return request, nil
+	}
+	return request, nil
+}
+
+func (e *Engine) projectCandidateHistoryLocked(ctx context.Context, turnID string, prepared preparedTurnContext, base providerTurnRequest, policy compactionPolicy, notice *llm.Message) (providerTurnRequest, error) {
+	projected, projection, err := e.projectMessagesForProviderLocked(ctx, base.history, policy)
+	if err != nil {
+		return providerTurnRequest{}, err
+	}
+	if err := e.emitProjectionApplied(turnID, projection); err != nil {
+		return providerTurnRequest{}, fmt.Errorf("commit candidate history projection: %w", err)
+	}
+	projected, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projected, policy)
+	if err := e.emitProjectionApplied(turnID, projection); err != nil {
+		return providerTurnRequest{}, fmt.Errorf("commit candidate reasoning projection: %w", err)
+	}
+	if notice != nil {
+		projected = append(projected, *notice)
+	}
+	base.history = projected
+	base.estimatedInputTokens = estimateContextTokens(prepared.systemPrompt, prepared.tools, projected)
+	return base, nil
+}
+
+func previousAssistantModel(history []llm.Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == llm.RoleAssistant && history[i].Model != "" {
+			return history[i].Model
+		}
+	}
+	return ""
+}
+
+func modelSwitchNotice(previous, selected string, chain []string, selection llm.ModelSelection, pending *modelFallbackTransition, failures []modelAttemptFailure, skipped []llm.ModelHealthSkip) *llm.Message {
+	previousIndex := modelRefIndex(chain, previous)
+	selectedIndex := modelRefIndex(chain, selected)
+	if previousIndex < 0 || selectedIndex < 0 || previousIndex == selectedIndex {
+		return nil
+	}
+	var text string
+	switch {
+	case selectedIndex < previousIndex && selection.Ticket.Probe:
+		text = fmt.Sprintf("<system-reminder>A higher-priority model is healthy again. You are now serving this conversation as %s instead of %s. Briefly tell the user that the model recovered and was switched back.</system-reminder>", selected, previous)
+	case selectedIndex > previousIndex:
+		reason := failureReasonFor(previous, failures, skipped, pending)
+		if reason == "" {
+			return nil
+		}
+		text = fmt.Sprintf("<system-reminder>The previous serving model %s became unavailable (%s). You are now serving this conversation as %s. Briefly tell the user that the model was switched so work could continue.</system-reminder>", previous, reason, selected)
+	default:
+		return nil
+	}
+	notice := llm.TextMessage(llm.RoleUser, text)
+	notice.Kind = llm.MessageKindModelChange
+	return &notice
+}
+
+func failureReasonFor(ref string, failures []modelAttemptFailure, skips []llm.ModelHealthSkip, pending *modelFallbackTransition) string {
+	for _, failure := range failures {
+		if failure.ref == ref {
+			if reason, ok := llm.ClassifyFallbackError(failure.err); ok {
+				return string(reason)
+			}
+		}
+	}
+	for _, skip := range skips {
+		if skip.Ref == ref {
+			return skip.Reason
+		}
+	}
+	if pending != nil && pending.from == ref {
+		return pending.reason
+	}
+	return ""
+}
+
+func modelRefIndex(chain []string, ref string) int {
+	for i := range chain {
+		if chain[i] == ref {
+			return i
+		}
+	}
+	return -1
+}
+
+func (e *Engine) emitModelFallback(turnID string, transition modelFallbackTransition, to string) {
+	_ = e.emit(events.Event{Type: "llm.fallback", TurnID: turnID, Payload: LLMFallbackPayload{
+		From:       transition.from,
+		To:         to,
+		Reason:     transition.reason,
+		CooldownMS: transition.cooldown.Milliseconds(),
+		Probe:      transition.probe,
+	}})
+}
+
+func modelChainError(failures []modelAttemptFailure, skipped []llm.ModelHealthSkip) error {
+	parts := make([]string, 0, len(failures)+len(skipped))
+	for _, failure := range failures {
+		parts = append(parts, fmt.Sprintf("%s: %s", failure.ref, boundedModelError(failure.err)))
+	}
+	for _, skip := range skipped {
+		parts = append(parts, fmt.Sprintf("%s: unavailable (%s, cooldown %s)", skip.Ref, skip.Reason, skip.CooldownRemaining.Round(time.Millisecond)))
+	}
+	if len(parts) == 0 {
+		return fmt.Errorf("llm: no model candidate available")
+	}
+	return fmt.Errorf("llm: model fallback chain exhausted: %s", strings.Join(parts, "; "))
+}
+
+func boundedModelError(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	text := err.Error()
+	const max = 300
+	if len(text) <= max {
+		return text
+	}
+	return text[:max] + "..."
+}

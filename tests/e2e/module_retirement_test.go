@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t *testing.T) {

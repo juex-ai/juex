@@ -11,15 +11,15 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/modules/scratchpad"
-	"github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/web"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/features/scratchpad"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 )
 
 func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {

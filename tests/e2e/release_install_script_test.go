@@ -362,7 +362,7 @@ func TestCIWorkflowExercisesPOSIXReleaseInstaller(t *testing.T) {
 		"juex version",
 		`--juex-version "$version"`,
 		`cp -R .tmp/ci-ripgrep/. "$package_root/"`,
-		`internal/version.Version=${version}`,
+		`internal/foundation/version.Version=${version}`,
 		`${package_root}/bin/juex`,
 		`juex diagnose --format json --offline`,
 		`"$doctor_status" -eq 7`,

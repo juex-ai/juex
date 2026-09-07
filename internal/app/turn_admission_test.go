@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 func TestAdmitTurnStartsWhenIdleWithFrameworkIdentity(t *testing.T) {

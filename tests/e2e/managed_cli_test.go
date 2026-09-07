@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/fleetweb"
-	"github.com/juex-ai/juex/internal/processmetrics"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/entrypoints/fleethttp"
+	"github.com/juex-ai/juex/internal/foundation/processmetrics"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type unavailableFleetMetrics struct{}

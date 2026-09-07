@@ -20,8 +20,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/coder/websocket"
-	"github.com/juex-ai/juex/internal/artifact"
-	"github.com/juex-ai/juex/internal/eventmedia"
+	"github.com/juex-ai/juex/internal/foundation/artifact"
+	"github.com/juex-ai/juex/internal/framework/observationmedia"
 	openaisdk "github.com/openai/openai-go"
 )
 

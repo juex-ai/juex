@@ -1,18 +1,18 @@
-// Juex CLI entry point. All real work lives in github.com/juex-ai/juex/internal/cli.
+// Juex CLI entry point. All real work lives in github.com/juex-ai/juex/internal/entrypoints/cli.
 package main
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/juex-ai/juex/internal/cli"
-	"github.com/juex-ai/juex/internal/sandbox"
+	"github.com/juex-ai/juex/internal/entrypoints/cli"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
 
 	// Blank import installs DNS + TLS root fallbacks at startup so the
 	// binary works on environments that lack /etc/resolv.conf or a
 	// system CA bundle (notably Termux on Android). No-op on standard
 	// Linux/macOS/Windows.
-	_ "github.com/juex-ai/juex/internal/netbootstrap"
+	_ "github.com/juex-ai/juex/internal/foundation/netbootstrap"
 )
 
 func main() {

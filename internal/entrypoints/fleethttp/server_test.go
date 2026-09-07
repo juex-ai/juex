@@ -1,0 +1,1269 @@
+package fleetweb
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/juex-ai/juex/internal/app/config"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/juex-ai/juex/internal/foundation/artifact"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/processmetrics"
+	"github.com/juex-ai/juex/internal/framework/thread"
+)
+
+type fakeBackend struct {
+	statuses      []fleet.AgentStatus
+	statusErr     error
+	added         fleet.AddResult
+	addErr        error
+	actionStatus  fleet.AgentStatus
+	actionErr     error
+	removed       fleet.RemovedAgent
+	removeErr     error
+	logs          []byte
+	logsErr       error
+	config        fleet.AgentConfig
+	configErr     error
+	updated       fleet.AgentConfig
+	updateStatus  fleet.RestartResult
+	updateErr     error
+	runtime       endpoint.Runtime
+	endpointErr   error
+	readOnly      fleet.ReadOnlyAgentState
+	readOnlyErr   error
+	statusFn      func(context.Context) ([]fleet.AgentStatus, error)
+	registered    map[string]struct{}
+	registeredErr error
+
+	mu            sync.Mutex
+	action        string
+	selector      string
+	addOptions    fleet.AddOptions
+	enabled       bool
+	removeOptions fleet.RemoveOptions
+	lines         int
+	updateContent []byte
+}
+
+func (f *fakeBackend) Status(ctx context.Context) ([]fleet.AgentStatus, error) {
+	if f.statusFn != nil {
+		return f.statusFn(ctx)
+	}
+	return f.statuses, f.statusErr
+}
+
+func (f *fakeBackend) RegisteredWorkspaces() (map[string]struct{}, error) {
+	return f.registered, f.registeredErr
+}
+
+func (f *fakeBackend) Add(_ context.Context, opts fleet.AddOptions) (fleet.AddResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.addOptions = opts
+	return f.added, f.addErr
+}
+
+type fakeProcessMetrics struct {
+	usage processmetrics.Usage
+	err   error
+	key   string
+	pid   int
+}
+
+func (f *fakeProcessMetrics) Sample(
+	_ context.Context,
+	key string,
+	pid int,
+) (processmetrics.Usage, error) {
+	f.key = key
+	f.pid = pid
+	return f.usage, f.err
+}
+
+func (f *fakeBackend) Start(context.Context, string) (fleet.AgentStatus, error) {
+	f.recordAction("start")
+	return f.actionStatus, f.actionErr
+}
+
+func (f *fakeBackend) Stop(context.Context, string) (fleet.AgentStatus, error) {
+	f.recordAction("stop")
+	return f.actionStatus, f.actionErr
+}
+
+func (f *fakeBackend) Restart(context.Context, string) (fleet.RestartResult, error) {
+	f.recordAction("restart")
+	return fleet.RestartResult{
+		AgentStatus: f.actionStatus,
+		Resume: fleet.RestartResume{
+			Required: true,
+			Sent:     true,
+			ThreadID: "234567",
+			TurnID:   "turn-resume",
+		},
+	}, f.actionErr
+}
+
+func (f *fakeBackend) SetEnabled(
+	_ context.Context,
+	selector string,
+	enabled bool,
+) (fleet.AgentStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.action = "set-enabled"
+	f.selector = selector
+	f.enabled = enabled
+	return f.actionStatus, f.actionErr
+}
+
+func (f *fakeBackend) Remove(
+	_ context.Context,
+	selector string,
+	opts fleet.RemoveOptions,
+) (fleet.RemovedAgent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selector = selector
+	f.removeOptions = opts
+	return f.removed, f.removeErr
+}
+
+func (f *fakeBackend) Logs(selector string, lines int) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selector = selector
+	f.lines = lines
+	return f.logs, f.logsErr
+}
+
+func (f *fakeBackend) Config(selector string) (fleet.AgentConfig, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selector = selector
+	return f.config, f.configErr
+}
+
+func (f *fakeBackend) UpdateConfig(
+	_ context.Context,
+	selector string,
+	content []byte,
+) (fleet.AgentConfig, fleet.RestartResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selector = selector
+	f.updateContent = append([]byte(nil), content...)
+	return f.updated, f.updateStatus, f.updateErr
+}
+
+func (f *fakeBackend) Endpoint(context.Context, string) (endpoint.Runtime, error) {
+	return f.runtime, f.endpointErr
+}
+
+func (f *fakeBackend) ReadOnlyState(string) (fleet.ReadOnlyAgentState, error) {
+	return f.readOnly, f.readOnlyErr
+}
+
+func (f *fakeBackend) recordAction(action string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.action = action
+}
+
+func TestStoppedAgentServesPersistedThreadHistory(t *testing.T) {
+	stateDir := t.TempDir()
+	workspace := t.TempDir()
+	previewPNG := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x00}
+	if err := os.WriteFile(filepath.Join(workspace, "preview.png"), previewPNG, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := thread.NewStore(stateDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persisted.Append(llm.TextMessage(llm.RoleUser, "persisted while offline")); err != nil {
+		t.Fatal(err)
+	}
+	threadID := persisted.ID
+	if err := persisted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewStore(filepath.Join(stateDir, "media"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactRef, err := store.PutContentAddressed("threads/"+threadID+"/media", ".png", previewPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventFileRef, err := store.PutContentAddressed("event-media", ".txt", []byte("persisted attachment\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backend := &fakeBackend{
+		endpointErr: errors.New("agent is stopped"),
+		readOnly: fleet.ReadOnlyAgentState{
+			ID:        "aaaaaa",
+			Name:      "alpha",
+			Workspace: workspace,
+			StateDir:  stateDir,
+		},
+	}
+	handler := newServer(backend, Options{Addr: "127.0.0.1:0"}).Handler()
+
+	for _, path := range []string{
+		"/agents/aaaaaa/api/threads",
+		"/agents/aaaaaa/api/threads/" + threadID,
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body=%s", path, response.Code, response.Body.String())
+		}
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/agents/aaaaaa/api/threads/"+threadID,
+		nil,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if !strings.Contains(response.Body.String(), "persisted while offline") {
+		t.Fatalf("offline transcript = %s", response.Body.String())
+	}
+
+	request = httptest.NewRequest(
+		http.MethodHead,
+		"/agents/aaaaaa/api/media?root=workspace&path=preview.png",
+		nil,
+	)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("offline media HEAD status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("offline media content type = %q", got)
+	}
+	if got := response.Header().Get("Content-Length"); got != fmt.Sprint(len(previewPNG)) {
+		t.Fatalf("offline media content length = %q", got)
+	}
+	if response.Body.Len() != 0 {
+		t.Fatalf("offline media HEAD body length = %d", response.Body.Len())
+	}
+
+	request = httptest.NewRequest(
+		http.MethodHead,
+		"/agents/aaaaaa/api/media?root=artifact&path="+url.QueryEscape(artifactRef.Path),
+		nil,
+	)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("offline Artifact media HEAD status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("offline Artifact cache-control = %q", got)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/agents/aaaaaa/api/files/content?root=artifact&path="+url.QueryEscape(eventFileRef.Path),
+		nil,
+	)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("offline Artifact content status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "persisted attachment") {
+		t.Fatalf("offline Artifact content = %s", response.Body.String())
+	}
+}
+
+func TestStoppedAgentReusesPreparedReadOnlyHandler(t *testing.T) {
+	stateDir := t.TempDir()
+	main, err := thread.NewStore(stateDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(stateDir, "threads", thread.MainID, "thread.json")
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &fakeBackend{
+		endpointErr: errors.New("agent is stopped"),
+		readOnly: fleet.ReadOnlyAgentState{
+			ID:        "aaaaaa",
+			Name:      "alpha",
+			Workspace: t.TempDir(),
+			StateDir:  stateDir,
+		},
+	}
+	server := newServer(backend, Options{Addr: "127.0.0.1:0"})
+	handler := server.Handler()
+	requestList := func() *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(
+			response,
+			httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/api/threads", http.NoBody),
+		)
+		return response
+	}
+	if response := requestList(); response.Code != http.StatusOK {
+		t.Fatalf("first stopped list status = %d body=%s", response.Code, response.Body.String())
+	}
+	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if response := requestList(); response.Code != http.StatusOK {
+		t.Fatalf("cached stopped list status = %d body=%s", response.Code, response.Body.String())
+	}
+	stateGeneration := time.Now().Add(time.Hour)
+	if err := os.Chtimes(stateDir, stateGeneration, stateGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if response := requestList(); response.Code != http.StatusInternalServerError {
+		t.Fatalf("new state generation list status = %d body=%s, want fresh recovery failure", response.Code, response.Body.String())
+	}
+	if err := os.WriteFile(metadataPath, metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateGeneration = stateGeneration.Add(time.Hour)
+	if err := os.Chtimes(stateDir, stateGeneration, stateGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if response := requestList(); response.Code != http.StatusOK {
+		t.Fatalf("restored state generation list status = %d body=%s", response.Code, response.Body.String())
+	}
+	if err := os.WriteFile(metadataPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	backend.endpointErr = nil
+	backend.runtime = tcpRuntime(t, upstream.URL)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(
+		response,
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/api/runtime", http.NoBody),
+	)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("live proxy status = %d body=%s", response.Code, response.Body.String())
+	}
+	backend.endpointErr = errors.New("agent stopped again")
+	if response := requestList(); response.Code != http.StatusInternalServerError {
+		t.Fatalf("post-runtime stopped list status = %d body=%s, want fresh recovery failure", response.Code, response.Body.String())
+	}
+}
+
+func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
+	const threadID = "8f0582"
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "/api/threads", want: true},
+		{path: "/api/threads/" + threadID, want: true},
+		{path: "/api/threads/" + threadID + "/context", want: true},
+		{path: "/api/threads/" + threadID + "/modules", want: true},
+		{path: "/api/threads/" + threadID + "/modules/events", want: true},
+		{path: "/api/threads/" + threadID + "/modules/example/resources/files/tree", want: true},
+		{path: "/api/threads/" + threadID + "/modules/example/operations/run", want: false},
+		{path: "/api/media", want: true},
+		{path: "/api/files/content", want: true},
+		{path: "/api/runtime", want: false},
+		{path: "/api/threads/" + threadID + "/events", want: false},
+		{path: "/api/threads/" + threadID + "/inputs", want: false},
+		{path: "/api/threads/" + threadID + "/context/extra", want: false},
+		{path: "/api/threads/", want: false},
+		{path: "/api/threads/..", want: false},
+		{path: `/api/threads/8f0582\..\other`, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			if got := isReadOnlyAgentPath(test.path); got != test.want {
+				t.Fatalf("isReadOnlyAgentPath(%q) = %v, want %v", test.path, got, test.want)
+			}
+		})
+	}
+}
+
+func TestFleetAPIResponseShapes(t *testing.T) {
+	cpuPercent := 125.5
+	status := fleet.AgentStatus{
+		ID:            "aaaaaa",
+		Name:          "alpha",
+		Binding:       fleet.BindingBound,
+		RuntimeHealth: fleet.RuntimeHealthy,
+		Process: &processmetrics.Usage{
+			RSSBytes:   96_000_000,
+			CPUPercent: &cpuPercent,
+		},
+	}
+	configState := fleet.AgentConfig{
+		Path:    "/workspace/.juex/juex.yaml",
+		Content: "models: [local:test]\n",
+		Exists:  true,
+	}
+	backend := &fakeBackend{
+		statuses:     []fleet.AgentStatus{status},
+		added:        fleet.AddResult{Agent: status, Created: true},
+		actionStatus: status,
+		removed: fleet.RemovedAgent{
+			ID:        status.ID,
+			Name:      status.Name,
+			Workspace: "/workspace",
+		},
+		logs:    []byte("one\ntwo\n"),
+		config:  configState,
+		updated: configState,
+		updateStatus: fleet.RestartResult{
+			AgentStatus: status,
+			Resume: fleet.RestartResume{
+				Required: true,
+				Sent:     true,
+				ThreadID: "234567",
+				TurnID:   "turn-resume",
+			},
+		},
+	}
+	metrics := &fakeProcessMetrics{
+		usage: processmetrics.Usage{RSSBytes: 64_000_000},
+	}
+	server := newServer(backend, Options{
+		Addr:           "127.0.0.1:0",
+		ProcessMetrics: metrics,
+	})
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		wantStatus int
+		assert     func(*testing.T, []byte)
+	}{
+		{
+			name:       "fleet status",
+			method:     http.MethodGet,
+			path:       "/api/fleet/status",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got struct {
+					Process *processmetrics.Usage `json:"process"`
+				}
+				decodeJSON(t, body, &got)
+				if got.Process == nil ||
+					got.Process.RSSBytes != 64_000_000 {
+					t.Fatalf("fleet status = %+v", got)
+				}
+				if metrics.key != "fleet" || metrics.pid != os.Getpid() {
+					t.Fatalf("metrics target = %q/%d", metrics.key, metrics.pid)
+				}
+			},
+		},
+		{
+			name:       "fleet status requires get",
+			method:     http.MethodPost,
+			path:       "/api/fleet/status",
+			wantStatus: http.StatusMethodNotAllowed,
+			assert:     func(*testing.T, []byte) {},
+		},
+		{
+			name:       "roster",
+			method:     http.MethodGet,
+			path:       "/api/agents",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got []fleet.AgentStatus
+				decodeJSON(t, body, &got)
+				if len(got) != 1 ||
+					got[0].ID != status.ID ||
+					got[0].Process == nil ||
+					got[0].Process.RSSBytes != 96_000_000 ||
+					got[0].Process.CPUPercent == nil ||
+					*got[0].Process.CPUPercent != cpuPercent {
+					t.Fatalf("roster = %+v", got)
+				}
+			},
+		},
+		{
+			name:       "create",
+			method:     http.MethodPost,
+			path:       "/api/agents",
+			body:       `{"workspace":"/workspace","name":"alpha","autostart":true,"start":true}`,
+			wantStatus: http.StatusCreated,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.AddResult
+				decodeJSON(t, body, &got)
+				if got.Agent.ID != status.ID || !got.Created {
+					t.Fatalf("create response = %+v", got)
+				}
+				if backend.addOptions.Workspace != "/workspace" ||
+					backend.addOptions.Name == nil ||
+					*backend.addOptions.Name != "alpha" ||
+					backend.addOptions.Autostart == nil ||
+					!*backend.addOptions.Autostart ||
+					!backend.addOptions.Start {
+					t.Fatalf("add options = %+v", backend.addOptions)
+				}
+			},
+		},
+		{
+			name:       "lifecycle",
+			method:     http.MethodPost,
+			path:       "/api/agents/aaaaaa/restart",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.RestartResult
+				decodeJSON(t, body, &got)
+				if got.ID != status.ID ||
+					!got.Resume.Required ||
+					!got.Resume.Sent ||
+					got.Resume.TurnID != "turn-resume" ||
+					backend.action != "restart" {
+					t.Fatalf("status/action = %+v/%q", got, backend.action)
+				}
+				var statusProjection fleet.AgentStatus
+				decodeJSON(t, body, &statusProjection)
+				if statusProjection.ID != status.ID || statusProjection.RuntimeHealth != status.RuntimeHealth {
+					t.Fatalf("status projection decode = %+v", statusProjection)
+				}
+			},
+		},
+		{
+			name:       "disable",
+			method:     http.MethodPost,
+			path:       "/api/agents/aaaaaa/disable",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.AgentStatus
+				decodeJSON(t, body, &got)
+				if got.ID != status.ID ||
+					backend.action != "set-enabled" ||
+					backend.enabled {
+					t.Fatalf("disable response/action = %+v/%q/%t", got, backend.action, backend.enabled)
+				}
+			},
+		},
+		{
+			name:       "remove",
+			method:     http.MethodDelete,
+			path:       "/api/agents/aaaaaa",
+			body:       `{"confirm":"alpha"}`,
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.RemovedAgent
+				decodeJSON(t, body, &got)
+				if got.ID != status.ID ||
+					backend.selector != status.ID ||
+					backend.removeOptions.ConfirmName != status.Name ||
+					backend.removeOptions.SkipConfirmation {
+					t.Fatalf(
+						"remove response/args = %+v/%q/%+v",
+						got,
+						backend.selector,
+						backend.removeOptions,
+					)
+				}
+			},
+		},
+		{
+			name:       "logs",
+			method:     http.MethodGet,
+			path:       "/api/agents/aaaaaa/logs?lines=12",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got struct {
+					Content string `json:"content"`
+				}
+				decodeJSON(t, body, &got)
+				if got.Content != "one\ntwo\n" || backend.lines != 12 {
+					t.Fatalf("logs = %q, lines = %d", got.Content, backend.lines)
+				}
+			},
+		},
+		{
+			name:       "config get",
+			method:     http.MethodGet,
+			path:       "/api/agents/aaaaaa/config",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.AgentConfig
+				decodeJSON(t, body, &got)
+				if got != configState {
+					t.Fatalf("config = %+v", got)
+				}
+			},
+		},
+		{
+			name:       "config put",
+			method:     http.MethodPut,
+			path:       "/api/agents/aaaaaa/config",
+			body:       `{"content":"models: [local:test]\n"}`,
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got struct {
+					Config fleet.AgentConfig   `json:"config"`
+					Agent  fleet.RestartResult `json:"agent"`
+				}
+				decodeJSON(t, body, &got)
+				if got.Config != configState || got.Agent.ID != status.ID ||
+					!got.Agent.Resume.Required || !got.Agent.Resume.Sent ||
+					got.Agent.Resume.TurnID != "turn-resume" {
+					t.Fatalf("update response = %+v", got)
+				}
+				if string(backend.updateContent) != configState.Content {
+					t.Fatalf("updated content = %q", backend.updateContent)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, req)
+			response := recorder.Result()
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != test.wantStatus {
+				t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+			}
+			test.assert(t, body)
+		})
+	}
+}
+
+func TestFleetStatusReportsMetricCollectionFailure(t *testing.T) {
+	server := newServer(&fakeBackend{}, Options{
+		Addr: "127.0.0.1:0",
+		ProcessMetrics: &fakeProcessMetrics{
+			err: errors.New("access denied"),
+		},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/fleet/status", nil)
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"metrics_unavailable"`) {
+		t.Fatalf("body = %s", response.Body.String())
+	}
+}
+
+func TestFleetRosterIncludesLiveActivityForHealthyAgents(t *testing.T) {
+	backend := &fakeBackend{statuses: []fleet.AgentStatus{
+		{
+			ID:            "healthy",
+			RuntimeHealth: fleet.RuntimeHealthy,
+			Endpoint:      "unix:///tmp/healthy.sock",
+		},
+		{
+			ID:            "stopped",
+			RuntimeHealth: fleet.RuntimeStopped,
+		},
+	}}
+	server := newServer(backend, Options{Addr: "127.0.0.1:0"})
+	var activityReads int
+	server.readActivity = func(
+		_ context.Context,
+		status fleet.AgentStatus,
+	) (*agentActivity, error) {
+		activityReads++
+		if status.ID != "healthy" {
+			t.Fatalf("activity requested for %q", status.ID)
+		}
+		return &agentActivity{
+			State:             "working",
+			PendingInputCount: 2,
+		}, nil
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var got []agentRosterItem
+	decodeJSON(t, response.Body.Bytes(), &got)
+	if activityReads != 1 {
+		t.Fatalf("activity reads = %d, want 1", activityReads)
+	}
+	if len(got) != 2 || got[0].Activity == nil {
+		t.Fatalf("roster = %+v", got)
+	}
+	if got[0].Activity.State != "working" ||
+		got[0].Activity.PendingInputCount != 2 ||
+		got[1].Activity != nil {
+		t.Fatalf("roster activities = %+v", got)
+	}
+}
+
+func TestFleetRosterPollingKeepsAgentConnectionsBounded(t *testing.T) {
+	var expected endpoint.Runtime
+	var connections fleetConnectionCounter
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/identity":
+			if err := json.NewEncoder(w).Encode(expected); err != nil {
+				t.Errorf("encode identity: %v", err)
+			}
+		case "/api/status":
+			if err := json.NewEncoder(w).Encode(agentActivity{State: "idle"}); err != nil {
+				t.Errorf("encode activity: %v", err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	upstream.Config.ConnState = connections.track
+	upstream.Start()
+	t.Cleanup(upstream.Close)
+	expected = tcpRuntime(t, upstream.URL)
+
+	backend := &fakeBackend{
+		statusFn: func(ctx context.Context) ([]fleet.AgentStatus, error) {
+			if err := endpoint.Probe(ctx, expected); err != nil {
+				return nil, err
+			}
+			return []fleet.AgentStatus{{
+				ID:            expected.AgentID,
+				RuntimeHealth: fleet.RuntimeHealthy,
+				Endpoint:      expected.Endpoint,
+			}}, nil
+		},
+	}
+	server := newServer(backend, Options{})
+	t.Cleanup(server.activityClients.close)
+	fleetAPI := httptest.NewServer(server.Handler())
+	t.Cleanup(fleetAPI.Close)
+
+	for range 64 {
+		response, err := fleetAPI.Client().Get(fleetAPI.URL + "/api/agents")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+		}
+		var roster []agentRosterItem
+		decodeJSON(t, body, &roster)
+		if len(roster) != 1 || roster[0].Activity == nil || roster[0].Activity.State != "idle" {
+			t.Fatalf("roster = %+v", roster)
+		}
+		// Probe uses a one-shot connection whose close notification is
+		// asynchronous. Let it leave before the next zero-delay synthetic
+		// poll so the peak measures retained activity connections rather than
+		// scheduler lag between sequential probes.
+		waitForFleetConnectionCount(t, &connections.open, 1)
+	}
+
+	if got := connections.maxOpen.Load(); got > 2 {
+		t.Fatalf("peak open agent connections = %d, want at most 2", got)
+	}
+	server.activityClients.close()
+	waitForFleetConnectionCount(t, &connections.open, 0)
+}
+
+func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
+	tests := []struct {
+		name       string
+		backend    *fakeBackend
+		method     string
+		path       string
+		body       io.Reader
+		wantStatus int
+	}{
+		{
+			name: "invalid registration",
+			backend: &fakeBackend{
+				addErr: &fleet.ValidationError{Reason: "workspace must be absolute"},
+			},
+			method:     http.MethodPost,
+			path:       "/api/agents",
+			body:       strings.NewReader(`{"workspace":"relative"}`),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "missing agent",
+			backend: &fakeBackend{
+				actionErr: &fleet.NotFoundError{Selector: "missing"},
+			},
+			method:     http.MethodPost,
+			path:       "/api/agents/missing/start",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name: "conflict",
+			backend: &fakeBackend{
+				actionErr: &fleet.ConflictError{AgentID: "aaaaaa", Reason: "stopped"},
+			},
+			method:     http.MethodPost,
+			path:       "/api/agents/aaaaaa/restart",
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "invalid config",
+			backend: &fakeBackend{
+				updateErr: &fleet.ConfigValidationError{Err: errors.New("missing model")},
+			},
+			method:     http.MethodPut,
+			path:       "/api/agents/aaaaaa/config",
+			body:       strings.NewReader(`{"content":"bad"}`),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "missing remove confirmation",
+			backend:    &fakeBackend{},
+			method:     http.MethodDelete,
+			path:       "/api/agents/aaaaaa",
+			body:       strings.NewReader(`{}`),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "bad log lines",
+			backend:    &fakeBackend{},
+			method:     http.MethodGet,
+			path:       "/api/agents/aaaaaa/logs?lines=0",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "malformed json",
+			backend:    &fakeBackend{},
+			method:     http.MethodPut,
+			path:       "/api/agents/aaaaaa/config",
+			body:       strings.NewReader(`{"content":`),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "oversize json",
+			backend:    &fakeBackend{},
+			method:     http.MethodPut,
+			path:       "/api/agents/aaaaaa/config",
+			body:       io.MultiReader(strings.NewReader(`{"content":"`), bytes.NewReader(bytes.Repeat([]byte("x"), maxConfigRequestBytes)), strings.NewReader(`"}`)),
+			wantStatus: http.StatusRequestEntityTooLarge,
+		},
+		{
+			name:       "wrong method",
+			backend:    &fakeBackend{},
+			method:     http.MethodDelete,
+			path:       "/api/agents/aaaaaa/config",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.body == nil {
+				test.body = http.NoBody
+			}
+			server := newServer(test.backend, Options{Addr: "127.0.0.1:0"})
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(
+				recorder,
+				httptest.NewRequest(test.method, test.path, test.body),
+			)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Header().Get("Content-Type"), "application/json") {
+				t.Fatalf("content type = %q", recorder.Header().Get("Content-Type"))
+			}
+		})
+	}
+}
+
+func TestFleetAPIMissingFleetLogIsNotFound(t *testing.T) {
+	const logPath = "/private/fleet.log"
+	backend := &fakeBackend{
+		logsErr: &fleet.LogUnavailableError{
+			AgentID: "aaaaaa",
+			Path:    logPath,
+		},
+	}
+	server := newServer(backend, Options{Addr: "127.0.0.1:0"})
+	recorder := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/api/agents/aaaaaa/logs", http.NoBody),
+	)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	decodeJSON(t, recorder.Body.Bytes(), &body)
+	if body.Error.Code != "not_found" ||
+		!strings.Contains(body.Error.Message, "no fleet-owned log is available") {
+		t.Fatalf("error body = %+v", body.Error)
+	}
+	if strings.Contains(body.Error.Message, logPath) {
+		t.Fatalf("error message exposed absolute path: %q", body.Error.Message)
+	}
+}
+
+func TestAgentReverseProxyPreservesResponsePathAndQuery(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/runtime" || r.URL.RawQuery != "detail=full" {
+			http.Error(w, fmt.Sprintf("target = %s?%s", r.URL.Path, r.URL.RawQuery), http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("X-Test") != "forwarded" {
+			http.Error(w, "missing header", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("X-Upstream", "agent")
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, "proxied")
+	}))
+	defer upstream.Close()
+
+	server := newServer(
+		&fakeBackend{runtime: tcpRuntime(t, upstream.URL)},
+		Options{Addr: "127.0.0.1:0"},
+	)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/agents/aaaaaa/api/runtime?detail=full",
+		http.NoBody,
+	)
+	req.Header.Set("X-Test", "forwarded")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusAccepted ||
+		recorder.Header().Get("X-Upstream") != "agent" ||
+		recorder.Body.String() != "proxied" {
+		t.Fatalf("proxy response = %d %v %q", recorder.Code, recorder.Header(), recorder.Body.String())
+	}
+}
+
+func TestAgentReverseProxyUsesUnixEndpoint(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix sockets are unavailable on Windows")
+	}
+	socketDir, err := os.MkdirTemp("", "jfx-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "agent.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/runtime" || r.URL.RawQuery != "via=unix" {
+			http.Error(w, "unexpected target", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, "unix")
+	})}
+	go func() { _ = upstream.Serve(listener) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = upstream.Shutdown(ctx)
+	}()
+
+	server := newServer(
+		&fakeBackend{runtime: endpoint.Runtime{
+			AgentID:    "aaaaaa",
+			InstanceID: "instance-one",
+			PID:        42,
+			Endpoint:   (&url.URL{Scheme: "unix", Path: socketPath}).String(),
+			StartedAt:  time.Now().UTC(),
+		}},
+		Options{Addr: "127.0.0.1:0"},
+	)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(
+		recorder,
+		httptest.NewRequest(
+			http.MethodGet,
+			"/agents/aaaaaa/api/runtime?via=unix",
+			http.NoBody,
+		),
+	)
+	if recorder.Code != http.StatusCreated || recorder.Body.String() != "unix" {
+		t.Fatalf("Unix proxy response = %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAgentReverseProxyFlushesSSEBeforeUpstreamCompletes(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: ready\ndata: first\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	defer upstream.Close()
+	defer close(release)
+
+	server := httptest.NewServer(newServer(
+		&fakeBackend{runtime: tcpRuntime(t, upstream.URL)},
+		Options{Addr: "127.0.0.1:0"},
+	).Handler())
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		server.URL+"/agents/aaaaaa/api/events",
+		http.NoBody,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if got := response.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("content type = %q", got)
+	}
+	reader := bufio.NewReader(response.Body)
+	frame, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame != "event: ready\n" {
+		t.Fatalf("first SSE line = %q", frame)
+	}
+}
+
+func TestAgentReverseProxyFailureAndSPAFallback(t *testing.T) {
+	server := newServer(
+		&fakeBackend{
+			endpointErr: &fleet.ConflictError{
+				AgentID: "aaaaaa",
+				Reason:  "not healthy",
+			},
+		},
+		Options{Addr: "127.0.0.1:0"},
+	)
+
+	proxyRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(
+		proxyRecorder,
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/api/runtime", http.NoBody),
+	)
+	if proxyRecorder.Code != http.StatusConflict {
+		t.Fatalf("proxy status = %d, body = %s", proxyRecorder.Code, proxyRecorder.Body.String())
+	}
+
+	spaRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(
+		spaRecorder,
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/threads/0", http.NoBody),
+	)
+	if spaRecorder.Code != http.StatusOK ||
+		!strings.Contains(spaRecorder.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(strings.ToLower(spaRecorder.Body.String()), "<!doctype html>") {
+		t.Fatalf("SPA response = %d %q", spaRecorder.Code, spaRecorder.Body.String())
+	}
+
+}
+
+func TestServerRunValidatesLoopbackAndShutsDown(t *testing.T) {
+	if _, err := New(Options{}); err == nil {
+		t.Fatal("New accepted a nil manager")
+	}
+
+	backend := &fakeBackend{}
+	server := newServer(backend, Options{Addr: "0.0.0.0:0"})
+	if err := server.Run(context.Background()); err == nil {
+		t.Fatal("Run accepted a non-loopback address")
+	}
+
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := occupied.Close(); err != nil {
+			t.Errorf("close occupied listener: %v", err)
+		}
+	}()
+	server = newServer(backend, Options{Addr: occupied.Addr().String()})
+	err = server.Run(context.Background())
+	if err == nil ||
+		!strings.Contains(err.Error(), "change fleet.addr in $JUEX_HOME/juex.yaml") ||
+		!strings.Contains(err.Error(), "free the port") {
+		t.Fatalf("occupied address error = %v", err)
+	}
+
+	ready := make(chan string, 1)
+	server = newServer(backend, Options{
+		Addr:    "127.0.0.1:0",
+		OnReady: func(addr string) { ready <- addr },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx) }()
+	select {
+	case addr := <-ready:
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+	case <-time.After(time.Second):
+		t.Fatal("server did not report ready")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not shut down")
+	}
+}
+
+func decodeJSON(t *testing.T, body []byte, target any) {
+	t.Helper()
+	if err := json.Unmarshal(body, target); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+}
+
+func tcpRuntime(t *testing.T, rawURL string) endpoint.Runtime {
+	t.Helper()
+	address := strings.TrimPrefix(rawURL, "http://")
+	if _, _, err := net.SplitHostPort(address); err != nil {
+		t.Fatal(err)
+	}
+	return endpoint.Runtime{
+		AgentID:    "aaaaaa",
+		InstanceID: "instance-one",
+		PID:        42,
+		Endpoint:   "tcp://" + address,
+		StartedAt:  time.Now().UTC(),
+	}
+}
+
+type fleetConnectionCounter struct {
+	open    atomic.Int32
+	maxOpen atomic.Int32
+}
+
+func (c *fleetConnectionCounter) track(_ net.Conn, state http.ConnState) {
+	switch state {
+	case http.StateNew:
+		current := c.open.Add(1)
+		for maximum := c.maxOpen.Load(); current > maximum; maximum = c.maxOpen.Load() {
+			if c.maxOpen.CompareAndSwap(maximum, current) {
+				break
+			}
+		}
+	case http.StateHijacked, http.StateClosed:
+		c.open.Add(-1)
+	}
+}
+
+func waitForFleetConnectionCount(t *testing.T, count *atomic.Int32, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for count.Load() != want && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := count.Load(); got != want {
+		t.Fatalf("open agent connections = %d, want %d", got, want)
+	}
+}
+
+func TestStoppedAgentModuleInspectionUsesEffectiveComposition(t *testing.T) {
+	stateDir := t.TempDir()
+	main, err := thread.NewStore(stateDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := main.Dir
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "modules", "goal"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "modules", "goal", "goal_state.json"), []byte("unreadable module body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backend := &fakeBackend{endpointErr: errors.New("stopped"), readOnly: fleet.ReadOnlyAgentState{ID: "aaaaaa", Workspace: t.TempDir(), StateDir: stateDir, Preset: "minimal"}}
+	handler := newServer(backend, Options{}).Handler()
+	request := func() *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/api/threads/0/modules", nil))
+		return response
+	}
+	response := request()
+	if response.Code != 200 || strings.Contains(response.Body.String(), `"goal"`) {
+		t.Fatalf("disabled response=%d %s", response.Code, response.Body.String())
+	}
+	backend.readOnly.Modules = config.ModulePolicy{"goal": {Enabled: true}}
+	response = request()
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"status": "error"`) {
+		t.Fatalf("enabled response=%d %s", response.Code, response.Body.String())
+	}
+	backend.readOnly.ModuleError = "configuration unavailable"
+	response = request()
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable=%d %s", response.Code, response.Body.String())
+	}
+}

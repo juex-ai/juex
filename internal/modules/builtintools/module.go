@@ -4,8 +4,8 @@ package builtintools
 import (
 	"context"
 
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 

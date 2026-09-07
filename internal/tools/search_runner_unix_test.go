@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/sandbox"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
 )
 
 func TestRipgrepRunnerKeepsReadableMatchesWhenDescendantIsUnreadable(t *testing.T) {

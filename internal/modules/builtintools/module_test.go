@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 

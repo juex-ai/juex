@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 )
 
 type moduleCapabilityProvider struct {

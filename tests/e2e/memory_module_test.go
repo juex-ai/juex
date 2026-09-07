@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/homestore"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/homestore"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/modules/memory"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/features/memory"
+	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 func memoryConfig(t *testing.T) config.Config {

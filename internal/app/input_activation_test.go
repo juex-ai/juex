@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/app/config"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 type failingInputSource struct{ log *[]string }

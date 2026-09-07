@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	"github.com/juex-ai/juex/internal/toolevents"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
 )
 
 type OutputDelta = toolevents.OutputDelta

@@ -31,7 +31,7 @@ metadata:
 
 ## 关注范围
 
-- **Shell/Tool/Runtime 变更**——使用 `make verify-focused PKGS="./internal/tools ./internal/runtime ./tests/e2e"`。对于跨平台 shell 行为，还要对修改的 package 运行 Windows target compile check，例如：
+- **Shell/Tool/Runtime 变更**——使用 `make verify-focused PKGS="./internal/tools ./internal/framework/runtime ./tests/e2e"`。对于跨平台 shell 行为，还要对修改的 package 运行 Windows target compile check，例如：
 
   ```bash
   GOOS=windows GOARCH=amd64 go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe

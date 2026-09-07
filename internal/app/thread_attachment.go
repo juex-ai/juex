@@ -3,8 +3,8 @@ package app
 import (
 	"fmt"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 // ThreadAttachmentRequest selects an existing active Thread or creates a

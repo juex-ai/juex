@@ -1,6 +1,6 @@
 package tools
 
-import "github.com/juex-ai/juex/internal/errorclass"
+import "github.com/juex-ai/juex/internal/foundation/errorclass"
 
 type Observation struct {
 	ToolName         string

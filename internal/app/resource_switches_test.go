@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/hooks"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/features/hooks"
 )
 
 func TestDisabledExtensionsLeaveWorkspaceResourcesAvailable(t *testing.T) {

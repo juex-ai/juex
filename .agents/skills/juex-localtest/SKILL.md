@@ -70,7 +70,7 @@ There is no local service startup step for the current suite. Web tests use
 ## Focus Areas
 
 - **Shell/tool/runtime changes** - use `make verify-focused
-  PKGS="./internal/tools ./internal/runtime ./tests/e2e"`. For cross-platform shell
+  PKGS="./internal/tools ./internal/framework/runtime ./tests/e2e"`. For cross-platform shell
   behavior, also run Windows target compile checks for touched packages, for
   example:
 

@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/environment"
-	"github.com/juex-ai/juex/internal/extensions"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/skills"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/features/extensions"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	"github.com/juex-ai/juex/internal/features/skills"
 )
 
 func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {

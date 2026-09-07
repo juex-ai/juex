@@ -1,6 +1,6 @@
 import type { GoalStatusSnapshot, NotesSnapshot } from "./module-schema";
 export type { GoalStatusSnapshot, NotesSnapshot } from "./module-schema";
-// Mirror of Go API/thread DTOs and the internal/web browser event contract.
+// Mirror of Go API/thread DTOs and the internal/entrypoints/agenthttp browser event contract.
 // When the Go side changes, update this file in the same PR.
 
 export type Role = "user" | "assistant" | "system";

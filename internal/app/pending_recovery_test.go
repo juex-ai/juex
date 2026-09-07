@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	"github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 const pendingRecoveryTestTimeout = 10 * time.Second

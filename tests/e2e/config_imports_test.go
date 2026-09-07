@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/environment"
 )
 
 func TestConfigImportsAcrossHomeWorkspaceAndExplicitLayers(t *testing.T) {

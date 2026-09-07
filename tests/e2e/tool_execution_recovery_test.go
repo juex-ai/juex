@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/eventcatalog"
-	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/app/eventcatalog"
+	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/provenance"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/toolevents"
+	"github.com/juex-ai/juex/internal/framework/provenance"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
 

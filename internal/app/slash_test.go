@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func TestParseSlashCommand(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
 )
 
 func (m *Manager) Status(ctx context.Context) ([]AgentStatus, error) {

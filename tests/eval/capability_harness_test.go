@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/hooks"
+	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/tools"
 )

@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/web"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 )
 
 func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {

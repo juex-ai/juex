@@ -1,0 +1,358 @@
+package runtime
+
+import (
+	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/errorclass"
+	"github.com/juex-ai/juex/internal/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
+)
+
+const (
+	TurnAdmittedType              = "turn.admitted"
+	TurnAdmissionOperationCompact = "compact"
+	TurnPhaseType                 = "turn.phase"
+	PendingInputDrainingType      = "pending_input.draining"
+	PendingInputPromotedType      = "pending_input.promoted"
+)
+
+type TurnAdmittedPayload struct {
+	NonInterruptible bool   `json:"non_interruptible,omitempty"`
+	Operation        string `json:"operation,omitempty"`
+	MessageID        string `json:"message_id,omitempty"`
+}
+
+type TurnPhasePayload struct {
+	Phase TurnPhase `json:"phase"`
+	Iter  *int      `json:"iter,omitempty"`
+}
+
+type TurnStartedPayload struct {
+	Input     string `json:"input"`
+	Kind      string `json:"kind,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
+}
+
+type TurnCompletedPayload struct {
+	DurationMS int64     `json:"duration_ms"`
+	OutputLen  int       `json:"output_len"`
+	TokenUsage llm.Usage `json:"token_usage"`
+	InputIDs   []string  `json:"input_ids,omitempty"`
+}
+
+type TurnErroredPayload struct {
+	Error        string   `json:"error"`
+	ErrorKind    string   `json:"error_kind,omitempty"`
+	TimedOut     bool     `json:"timed_out,omitempty"`
+	RawCause     string   `json:"raw_cause,omitempty"`
+	Signal       string   `json:"signal,omitempty"`
+	SignalNumber int      `json:"signal_number,omitempty"`
+	Interrupted  bool     `json:"interrupted,omitempty"`
+	InputIDs     []string `json:"input_ids,omitempty"`
+}
+
+func NewTurnErroredPayload(err error) TurnErroredPayload {
+	classification := errorclass.Classify(err)
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	if isCompactionCancellation(err) {
+		publicErr = compactionCanceledMessage
+	}
+	payload := TurnErroredPayload{
+		Error:     publicErr,
+		ErrorKind: string(classification.Kind),
+		TimedOut:  classification.TimedOut,
+		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
+	}
+	if signalErr, ok := cancellation.AsSignalError(err); ok {
+		payload.Signal = signalErr.Signal
+		payload.SignalNumber = signalErr.SignalNumber
+		payload.Interrupted = true
+	}
+	return payload
+}
+
+type PolicyStartedPayload struct {
+	ModuleID    runtimemodule.ID          `json:"module_id"`
+	PolicyPoint runtimemodule.PolicyPoint `json:"policy_point"`
+	Name        string                    `json:"name,omitempty"`
+	Source      string                    `json:"source,omitempty"`
+	ToolName    string                    `json:"tool_name,omitempty"`
+}
+
+type PolicyCompletedPayload struct {
+	ModuleID      runtimemodule.ID          `json:"module_id"`
+	PolicyPoint   runtimemodule.PolicyPoint `json:"policy_point"`
+	Name          string                    `json:"name,omitempty"`
+	Source        string                    `json:"source,omitempty"`
+	ToolName      string                    `json:"tool_name,omitempty"`
+	DurationMS    int64                     `json:"duration_ms"`
+	ExitCode      int                       `json:"exit_code"`
+	StdoutLen     int                       `json:"stdout_len,omitempty"`
+	StderrLen     int                       `json:"stderr_len,omitempty"`
+	StdoutPreview string                    `json:"stdout_preview,omitempty"`
+	StderrPreview string                    `json:"stderr_preview,omitempty"`
+}
+
+type PolicyErroredPayload struct {
+	ModuleID      runtimemodule.ID          `json:"module_id"`
+	PolicyPoint   runtimemodule.PolicyPoint `json:"policy_point"`
+	Name          string                    `json:"name,omitempty"`
+	Source        string                    `json:"source,omitempty"`
+	ToolName      string                    `json:"tool_name,omitempty"`
+	DurationMS    int64                     `json:"duration_ms"`
+	ExitCode      int                       `json:"exit_code,omitempty"`
+	Error         string                    `json:"error"`
+	StdoutLen     int                       `json:"stdout_len,omitempty"`
+	StderrLen     int                       `json:"stderr_len,omitempty"`
+	StdoutPreview string                    `json:"stdout_preview,omitempty"`
+	StderrPreview string                    `json:"stderr_preview,omitempty"`
+}
+
+type PolicyTracePayload struct {
+	Text      string `json:"text"`
+	MessageID string `json:"message_id,omitempty"`
+}
+
+type LLMRequestedPayload struct {
+	Iter          int    `json:"iter"`
+	Purpose       string `json:"purpose"`
+	HistoryLen    int    `json:"history_len"`
+	ToolCount     int    `json:"tool_count"`
+	Model         string `json:"model,omitempty"`
+	EpochID       string `json:"epoch_id,omitempty"`
+	RequestDigest string `json:"request_digest,omitempty"`
+}
+
+type LLMRespondedPayload struct {
+	Iter          int                          `json:"iter"`
+	StopReason    llm.StopReason               `json:"stop_reason"`
+	Usage         llm.Usage                    `json:"usage"`
+	TokenUsage    llm.Usage                    `json:"token_usage"`
+	Blocks        []llm.Block                  `json:"blocks"`
+	Text          string                       `json:"text"`
+	Thinking      string                       `json:"thinking"`
+	ToolCalls     []toolevents.ToolCallPayload `json:"tool_calls"`
+	Model         string                       `json:"model"`
+	ContextUsage  *llm.ContextUsage            `json:"context_usage,omitempty"`
+	Notice        *llm.Message                 `json:"notice,omitempty"`
+	MessageID     string                       `json:"message_id"`
+	EpochID       string                       `json:"epoch_id,omitempty"`
+	RequestDigest string                       `json:"request_digest,omitempty"`
+}
+
+type LLMErroredPayload struct {
+	Iter          int               `json:"iter"`
+	Purpose       string            `json:"purpose"`
+	Model         string            `json:"model,omitempty"`
+	Error         string            `json:"error"`
+	Usage         llm.Usage         `json:"usage"`
+	TokenUsage    llm.Usage         `json:"token_usage"`
+	ContextUsage  *llm.ContextUsage `json:"context_usage,omitempty"`
+	EpochID       string            `json:"epoch_id"`
+	RequestDigest string            `json:"request_digest"`
+}
+
+type LLMOutputDeltaPayload struct {
+	Iter  int    `json:"iter"`
+	Model string `json:"model,omitempty"`
+	Kind  string `json:"kind"`
+	Index int    `json:"index"`
+	Text  string `json:"text"`
+}
+
+type LLMRetryPayload struct {
+	llm.ProviderRetryDiagnostic
+	Purpose       string `json:"purpose"`
+	Iter          *int   `json:"iter,omitempty"`
+	EpochID       string `json:"epoch_id"`
+	RequestDigest string `json:"request_digest"`
+}
+
+type LLMFallbackPayload struct {
+	From       string `json:"from"`
+	To         string `json:"to"`
+	Reason     string `json:"reason"`
+	CooldownMS int64  `json:"cooldown_ms,omitempty"`
+	Probe      bool   `json:"probe,omitempty"`
+}
+
+type FinishAttemptedPayload struct {
+	StopReason llm.StopReason `json:"stop_reason"`
+	OutputLen  int            `json:"output_len"`
+}
+
+type ToolFailureClassification string
+
+const (
+	ToolFailureRecoverable            ToolFailureClassification = "recoverable"
+	ToolFailureExternalBlocked        ToolFailureClassification = "external_blocked"
+	ToolFailureRuntimeFatal           ToolFailureClassification = "runtime_fatal"
+	ToolFailureRepeatedStuck          ToolFailureClassification = "repeated_stuck"
+	ToolFailureNonblockingExploratory ToolFailureClassification = "nonblocking_exploratory"
+)
+
+type ToolFailureStatus string
+
+const (
+	ToolFailureStatusUnresolved ToolFailureStatus = "unresolved"
+	ToolFailureStatusResolved   ToolFailureStatus = "resolved"
+	ToolFailureStatusStale      ToolFailureStatus = "stale"
+	ToolFailureStatusSuperseded ToolFailureStatus = "superseded"
+)
+
+type ToolFailureRecordedPayload struct {
+	Fingerprint     string                    `json:"fingerprint"`
+	Name            string                    `json:"name"`
+	ToolUseID       string                    `json:"tool_use_id"`
+	Classification  ToolFailureClassification `json:"classification"`
+	Status          ToolFailureStatus         `json:"status"`
+	Blocking        bool                      `json:"blocking"`
+	Occurrences     int                       `json:"occurrences"`
+	Error           string                    `json:"error,omitempty"`
+	ExitCode        *int                      `json:"exit_code,omitempty"`
+	OutputLen       int                       `json:"output_len,omitempty"`
+	OutputPreview   string                    `json:"output_preview,omitempty"`
+	RelatedPaths    []string                  `json:"related_paths,omitempty"`
+	LatestModUnixMS int64                     `json:"latest_mod_unix_ms,omitempty"`
+}
+
+type ToolFailureResolvedPayload struct {
+	Fingerprint   string            `json:"fingerprint"`
+	Name          string            `json:"name"`
+	ToolUseID     string            `json:"tool_use_id"`
+	Status        ToolFailureStatus `json:"status"`
+	Reason        string            `json:"reason"`
+	ResolverName  string            `json:"resolver_name"`
+	ResolverUseID string            `json:"resolver_tool_use_id"`
+}
+
+type ToolFailureStalePayload struct {
+	Fingerprint     string            `json:"fingerprint"`
+	Name            string            `json:"name"`
+	ToolUseID       string            `json:"tool_use_id"`
+	Status          ToolFailureStatus `json:"status"`
+	Reason          string            `json:"reason"`
+	ResolverName    string            `json:"resolver_name"`
+	ResolverUseID   string            `json:"resolver_tool_use_id"`
+	RelatedPaths    []string          `json:"related_paths,omitempty"`
+	LatestModUnixMS int64             `json:"latest_mod_unix_ms,omitempty"`
+}
+
+type PendingInputQueuedPayload struct {
+	InputID          string `json:"input_id,omitempty"`
+	Input            string `json:"input"`
+	Kind             string `json:"kind"`
+	MessageID        string `json:"message_id,omitempty"`
+	PendingCount     int    `json:"pending_count"`
+	MaxPendingInputs int    `json:"max_pending_inputs"`
+}
+
+type PendingInputDrainingPayload struct {
+	InputIDs         []string `json:"input_ids,omitempty"`
+	Count            int      `json:"count"`
+	PendingCount     int      `json:"pending_count"`
+	MaxPendingInputs int      `json:"max_pending_inputs"`
+}
+
+type PendingInputPromotedPayload struct {
+	InputIDs         []string `json:"input_ids,omitempty"`
+	PendingCount     int      `json:"pending_count"`
+	MaxPendingInputs int      `json:"max_pending_inputs"`
+}
+
+type PendingInputDrainedPayload struct {
+	InputIDs         []string `json:"input_ids,omitempty"`
+	Count            int      `json:"count"`
+	PendingCount     int      `json:"pending_count"`
+	MaxPendingInputs int      `json:"max_pending_inputs"`
+}
+
+type PendingInputDroppedPayload struct {
+	Count            int `json:"count"`
+	PendingCount     int `json:"pending_count"`
+	MaxPendingInputs int `json:"max_pending_inputs"`
+}
+
+type PendingInputRejectedPayload struct {
+	Input            string `json:"input"`
+	Kind             string `json:"kind"`
+	PendingCount     int    `json:"pending_count"`
+	MaxPendingInputs int    `json:"max_pending_inputs"`
+	Reason           string `json:"reason"`
+}
+
+type ContextCompactSkippedPayload struct {
+	Reason              string `json:"reason"`
+	Auto                bool   `json:"auto"`
+	ConsecutiveFailures int    `json:"consecutive_failures"`
+	MaxAutoFailures     int    `json:"max_auto_failures"`
+	Error               string `json:"error"`
+}
+
+type ContextCompactStartedPayload struct {
+	Reason           string `json:"reason"`
+	Auto             bool   `json:"auto"`
+	EstimatedTokens  int    `json:"estimated_tokens"`
+	TokensBefore     int    `json:"tokens_before"`
+	ContextWindow    int    `json:"context_window"`
+	ReserveTokens    int    `json:"reserve_tokens"`
+	KeepRecentTokens int    `json:"keep_recent_tokens"`
+}
+
+type ContextCompactErroredPayload struct {
+	Reason string `json:"reason"`
+	Auto   bool   `json:"auto"`
+	Error  string `json:"error"`
+}
+
+type ContextCompactSummaryFallbackPayload struct {
+	ConfiguredModel string `json:"configured_model,omitempty"`
+	FallbackModel   string `json:"fallback_model,omitempty"`
+	Error           string `json:"error"`
+	EpochID         string `json:"epoch_id"`
+	RequestDigest   string `json:"request_digest"`
+}
+
+type ContextCompactSummaryRetryPayload struct {
+	Attempt                 int            `json:"attempt"`
+	Reason                  string         `json:"reason"`
+	StopReason              llm.StopReason `json:"stop_reason,omitempty"`
+	ReasoningOnly           bool           `json:"reasoning_only,omitempty"`
+	PreviousMaxOutputTokens int            `json:"previous_max_output_tokens"`
+	MaxOutputTokens         int            `json:"max_output_tokens"`
+	EpochID                 string         `json:"epoch_id"`
+	RequestDigest           string         `json:"request_digest"`
+}
+
+type ContextCompactSummaryRespondedPayload struct {
+	Attempt       int            `json:"attempt"`
+	Model         string         `json:"model,omitempty"`
+	StopReason    llm.StopReason `json:"stop_reason,omitempty"`
+	Usage         llm.Usage      `json:"usage"`
+	EpochID       string         `json:"epoch_id"`
+	RequestDigest string         `json:"request_digest"`
+}
+
+type ContextCompactSummaryErroredPayload struct {
+	Attempt       int    `json:"attempt"`
+	Model         string `json:"model,omitempty"`
+	Error         string `json:"error"`
+	EpochID       string `json:"epoch_id"`
+	RequestDigest string `json:"request_digest"`
+}
+
+type ContextCompactCompletedPayload struct {
+	MessageID          string            `json:"message_id"`
+	Reason             string            `json:"reason"`
+	Auto               bool              `json:"auto"`
+	EstimatedTokens    int               `json:"estimated_tokens"`
+	TokensBefore       int               `json:"tokens_before"`
+	TokensAfter        int               `json:"tokens_after"`
+	SummaryChars       int               `json:"summary_chars"`
+	SummaryModel       string            `json:"summary_model"`
+	TailStartMessageID string            `json:"tail_start_message_id"`
+	ContextWindow      int               `json:"context_window"`
+	ReserveTokens      int               `json:"reserve_tokens"`
+	KeepRecentTokens   int               `json:"keep_recent_tokens"`
+	ContextUsage       *llm.ContextUsage `json:"context_usage,omitempty"`
+}
