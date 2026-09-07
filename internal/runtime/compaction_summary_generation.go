@@ -438,7 +438,11 @@ var compactionSummaryHeadings = []string{
 
 func normalizeCompactionSummaryHeadings(summary string) string {
 	lines := strings.Split(summary, "\n")
+	var syntax compactionSummarySyntax
 	for index, line := range lines {
+		if syntax.literal(line) {
+			continue
+		}
 		if heading, ok := canonicalCompactionSummaryHeading(line); ok {
 			lines[index] = heading
 		}

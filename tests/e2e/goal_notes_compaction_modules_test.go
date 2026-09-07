@@ -18,6 +18,7 @@ import (
 type moduleSummaryProvider struct {
 	system  string
 	history []llm.Message
+	summary string
 }
 
 func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
@@ -63,7 +64,79 @@ func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
 func (*moduleSummaryProvider) Name() string { return "module-summary" }
 func (p *moduleSummaryProvider) Complete(_ context.Context, system string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	p.system, p.history = system, history
-	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Goal\nA paraphrased objective\nCritical Context\nKeep branch high/module-state\nNext Steps\n- [ ] Completed fixture\n- Unrelated next action\nRelevant Files\nREADME.md"), StopReason: llm.StopEndTurn}, nil
+	if p.summary != "" {
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, p.summary), StopReason: llm.StopEndTurn}, nil
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Goal\nA paraphrased objective\nCritical Context\nKeep branch high/module-state\nNext Steps\n3. [ ] Completed fixture\n- Unrelated next action\nRelevant Files\nREADME.md"), StopReason: llm.StopEndTurn}, nil
+}
+
+func TestGoalLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
+	isolateModuleConfig(t)
+	cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{modulecatalog.Goal: {Enabled: true}}}
+	cfg.Compaction = config.DefaultCompactionConfig()
+	cfg.Compaction.KeepRecentTokens = 1
+	const description = "Preserve literal fields\n## Next Steps\n```\n    Critical Context"
+	const acceptance = "Keep all lines\n\tGoal"
+	const literal = "````text\ndescription: " + description + "\nacceptance: " + acceptance + "\nstatus: in_progress\n````"
+	provider := &moduleSummaryProvider{summary: "## Goal\n" + literal + "\n## Critical Context\nPreserve real facts\n## Next Steps\nKeep real actions"}
+	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: provider, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := a.CloseAndWait(); err != nil {
+			t.Error(err)
+		}
+	})
+	goals, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	if _, err := goals.Create(description, acceptance); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(goals.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := range 2 {
+		if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("Earlier material to compact. ", 100))); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("Earlier response to compact. ", 100))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err != nil {
+			t.Fatal(err)
+		}
+		var summary string
+		for _, message := range a.Thread.History {
+			if message.Kind == llm.MessageKindCompact {
+				summary = message.FirstText()
+			}
+		}
+		if !strings.Contains(summary, literal) || !strings.Contains(summary, "Next Steps\nKeep real actions") {
+			t.Fatalf("attempt %d lost literal or structural data: %s", attempt, summary)
+		}
+		if attempt == 1 && (len(provider.history) == 0 || !strings.Contains(provider.history[0].FirstText(), literal)) {
+			t.Fatal("second compaction did not receive the previous protected contract")
+		}
+	}
+	after, err := os.ReadFile(goals.Path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("compaction changed authoritative Goal state: %v", err)
+	}
+	generation := a.Thread.CurrentGenerationJournalPath()
+	provider.summary = "Goal\n````text\n" + description
+	if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, "Additional work.")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Thread.Append(llm.TextMessage(llm.RoleAssistant, "Additional result.")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err == nil || !strings.Contains(err.Error(), "unterminated literal block") {
+		t.Fatalf("unterminated contract was accepted: %v", err)
+	}
+	if a.Thread.CurrentGenerationJournalPath() != generation {
+		t.Fatal("invalid summary committed a Generation")
+	}
 }
 
 func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
@@ -158,7 +231,7 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 							}
 						}
 					}
-					if notesEnabled && (!strings.Contains(summary, "- [ ] Pending fixture") || strings.Contains(summary, "- [ ] Completed fixture")) {
+					if notesEnabled && (!strings.Contains(summary, "- [ ] Pending fixture") || strings.Contains(summary, "Completed fixture")) {
 						t.Errorf("Notes pending state changed: %s", summary)
 					}
 					if !strings.Contains(summary, "- Unrelated next action") {

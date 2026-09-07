@@ -14,6 +14,13 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 	if err := cancellation.ContextError(ctx); err != nil {
 		return "", err
 	}
+	var syntax compactionSummarySyntax
+	for _, line := range strings.Split(summary, "\n") {
+		syntax.literal(line)
+	}
+	if syntax.fence != 0 {
+		return "", fmt.Errorf("compaction summary contains an unterminated literal block")
+	}
 	if len(state.Contributions) > 0 {
 		headings := append([]string(nil), compactionSummaryHeadings...)
 		for _, part := range state.Contributions {
@@ -24,10 +31,13 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 		sections := map[string]string{}
 		var preamble []string
 		var current string
+		var syntax compactionSummarySyntax
 		// Parse once, before inserting any protected multiline data. A value may
 		// itself contain a heading; it must not become a new structural section.
 		for _, line := range strings.Split(summary, "\n") {
-			if heading, ok := canonicalSummaryHeading(line, headings); ok {
+			literal := syntax.literal(line)
+			heading, isHeading := canonicalSummaryHeading(line, headings)
+			if !literal && isHeading {
 				if _, duplicate := sections[heading]; duplicate {
 					return "", fmt.Errorf("compaction summary contains duplicate section %q", heading)
 				}

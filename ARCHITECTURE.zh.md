@@ -188,6 +188,8 @@ Goal 与 Notes 策略分别位于 `internal/modules/goal` 和
 Generation 前，检查修正后的摘要是否满足成功请求的输出预算，以及完整活动
 上下文是否满足压缩触发预算。压缩不会截断受保护状态或将其写回权威文件；
 契约无法容纳时操作失败。模型重试复用同一份冻结状态。
+契约原文可能与段落标题相似时，由 Module 添加文字围栏；Framework 在标题
+规范化和段落解析时保留文字块。
 
 Prompt assembly 使用已注册的 context contributor。稳定 guidance、Hook
 context、Thread state 和每次请求的 recitation 在该接口汇合。Generation 边界

@@ -44,9 +44,22 @@ func (m *Module) CompactionContribution(ctx context.Context) (runtimemodule.Comp
 		}
 	}
 	canonical := strings.Join(entries, "\n")
+	// The contract may itself contain Markdown headings or fences. A delimiter
+	// longer than every embedded run keeps those bytes literal in model output.
+	longest, run := 0, 0
+	for _, r := range canonical {
+		if r == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", max(3, longest+1))
+	canonical = fence + "text\n" + canonical + "\n" + fence
 	return runtimemodule.CompactionContribution{
 		State: string(data), Section: "Goal",
-		Guidance:  `Copy the Goal section from the provided contract instead of re-deriving it from history. Preserve its description, acceptance, status, and status_reason exactly when present, including multiline text. Use separate description:, acceptance:, status:, and status_reason: entries; omit only absent fields.`,
+		Guidance:  `Copy the Goal section from the provided contract instead of re-deriving it from history. Preserve its description, acceptance, status, and status_reason exactly when present, including multiline text. Use separate description:, acceptance:, status:, and status_reason: entries; omit only absent fields.` + "\nEnclose the entire Goal section body in this exact text fence so heading-like field values remain literal:\n" + fence + "text\n<copy all contract entries here>\n" + fence,
 		Reconcile: func(ctx context.Context, _ string) (string, error) { return canonical, ctx.Err() },
 	}, nil
 }

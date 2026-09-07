@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/provenance"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
 func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) {
@@ -54,6 +55,51 @@ func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T
 	}
 	if !strings.Contains(got, "**Goal** is mentioned in prose and must not change.") {
 		t.Fatalf("normalization changed prose:\n%s", got)
+	}
+}
+
+func TestCompactionSummaryKeepsLiteralHeadingsInsideProtectedSections(t *testing.T) {
+	const literal = "````text\ndescription: Preserve literal fields\n## Next Steps\n```\n~~~\n```` not a closing fence\n    Critical Context\n````"
+	response := llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "## Goal\n"+literal+"\n## Critical Context\nKeep real facts\n## Next Steps\nKeep real actions"), StopReason: llm.StopEndTurn}
+	summary, ok := completeCompactionSummaryText(response)
+	if !ok || !strings.Contains(summary, literal) {
+		t.Fatalf("normalization rewrote literal data: %s", summary)
+	}
+	state := compactionSummaryState{Contributions: []runtimemodule.OwnedCompactionContribution{{ModuleID: "literal-fixture", CompactionContribution: runtimemodule.CompactionContribution{
+		State: `"frozen"`, Section: "Goal", Reconcile: func(_ context.Context, candidate string) (string, error) {
+			if candidate != literal {
+				t.Errorf("literal section split at embedded heading: %q", candidate)
+			}
+			return literal, nil
+		},
+	}}}}
+	got, err := reconcileCompactionSummary(t.Context(), summary, state, 1000)
+	if err != nil || !strings.Contains(got, literal) || !strings.Contains(got, "Critical Context\nKeep real facts") || !strings.Contains(got, "Next Steps\nKeep real actions") {
+		t.Fatalf("literal candidate rejected or lost context: %s, %v", got, err)
+	}
+	if _, err := reconcileCompactionSummary(t.Context(), summary+"\nNext Steps\nDuplicate action", state, 1000); err == nil || !strings.Contains(err.Error(), "duplicate section") {
+		t.Fatalf("duplicate structural heading accepted: %v", err)
+	}
+}
+
+func TestCompactionSummaryLiteralSyntax(t *testing.T) {
+	for _, literal := range []string{
+		"   ~~~text\nNext Steps\n```\n~~~ trailing text\n    ~~~\n~~~",
+		"    Next Steps\n\tCritical Context\n  \tGoal",
+	} {
+		summary := "## Goal\nLiteral examples:\n" + literal + "\n## Next Steps\nReal action"
+		got := normalizeCompactionSummaryHeadings(summary)
+		if !strings.Contains(got, literal) || !strings.HasSuffix(got, "Next Steps\nReal action") {
+			t.Fatalf("literal or structural headings changed: %s", got)
+		}
+		if _, err := reconcileCompactionSummary(t.Context(), got, compactionSummaryState{}, 1000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, opening := range []string{"```text", "~~~text"} {
+		if _, err := reconcileCompactionSummary(t.Context(), "Goal\n"+opening+"\nNext Steps", compactionSummaryState{}, 1000); err == nil || !strings.Contains(err.Error(), "unterminated literal block") {
+			t.Fatalf("unterminated fence accepted: %v", err)
+		}
 	}
 }
 

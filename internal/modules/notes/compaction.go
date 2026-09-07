@@ -84,7 +84,18 @@ func reconcileNextSteps(candidate, notes string) string {
 
 func nextStepKey(line string) string {
 	line = strings.ToLower(strings.TrimSpace(line))
-	for _, prefix := range []string{"- [ ]", "- [x]", "* [ ]", "* [x]", "- ", "* "} {
+	if len(line) > 1 && strings.ContainsRune("-*+", rune(line[0])) && (line[1] == ' ' || line[1] == '\t') {
+		line = strings.TrimSpace(line[1:])
+	} else {
+		end := 0
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		if end > 0 && len(line) > end+1 && (line[end] == '.' || line[end] == ')') && (line[end+1] == ' ' || line[end+1] == '\t') {
+			line = strings.TrimSpace(line[end+1:])
+		}
+	}
+	for _, prefix := range []string{"[ ]", "[x]"} {
 		if strings.HasPrefix(line, prefix) {
 			line = strings.TrimSpace(strings.TrimPrefix(line, prefix))
 			break
