@@ -10,7 +10,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
-	"github.com/juex-ai/juex/internal/framework/status"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 func TestRestartAutoResumeLifecycle(t *testing.T) {

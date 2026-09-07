@@ -1,66 +1,22 @@
-package llm
+package profile
 
 import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
-type Protocol string
-
-const (
-	ProtocolAnthropicMessages    Protocol = "anthropic/messages"
-	ProtocolOpenAIResponses      Protocol = "openai/responses"
-	ProtocolOpenAICodexResponses Protocol = "openai-codex/responses"
-	ProtocolOpenAIChat           Protocol = "openai/chat"
-)
-
-type ProviderCapabilities struct {
-	Tools           bool `json:"tools"`
-	Vision          bool `json:"vision"`
-	Streaming       bool `json:"streaming"`
-	ReasoningEffort bool `json:"reasoning_effort"`
-	ReasoningReplay bool `json:"reasoning_replay"`
-	MaxOutputTokens bool `json:"max_output_tokens"`
-}
-
-type CapabilityOverrides struct {
-	Tools           *bool
-	Vision          *bool
-	Streaming       *bool
-	ReasoningEffort *bool
-	ReasoningReplay *bool
-	MaxOutputTokens *bool
-}
-
-type CompatOptions struct {
-	ReasoningReplayFields []string
-	CodexTransport        string
-}
-
-type ProviderProfile struct {
-	ID             string
-	Protocol       Protocol
-	BaseURL        string
-	APIKey         string
-	Model          string
-	ThinkingEffort string
-	Headers        map[string]string
-	Query          map[string]string
-	Capabilities   ProviderCapabilities
-	Compat         CompatOptions
-	MediaDir       string
-}
-
-func ResolveProfile(cfg Config) (ProviderProfile, error) {
+func ResolveProfile(cfg Config) (llm.ProviderProfile, error) {
 	profile, err := baseProfile(cfg)
 	if err != nil {
-		return ProviderProfile{}, err
+		return llm.ProviderProfile{}, err
 	}
-	profile.BaseURL = firstNonEmpty(cfg.BaseURL, profile.BaseURL)
-	profile.APIKey = firstNonEmpty(cfg.APIKey, profile.APIKey)
-	profile.Model = firstNonEmpty(cfg.Model, profile.Model)
-	profile.ThinkingEffort = firstNonEmpty(cfg.ThinkingEffort, profile.ThinkingEffort)
+	profile.BaseURL = firstProfileValue(cfg.BaseURL, profile.BaseURL)
+	profile.APIKey = firstProfileValue(cfg.APIKey, profile.APIKey)
+	profile.Model = firstProfileValue(cfg.Model, profile.Model)
+	profile.ThinkingEffort = firstProfileValue(cfg.ThinkingEffort, profile.ThinkingEffort)
 	profile.Headers = mergeStringMap(profile.Headers, cfg.Headers)
 	profile.Query = mergeStringMap(profile.Query, cfg.Query)
 	profile.MediaDir = cfg.MediaDir
@@ -71,7 +27,7 @@ func ResolveProfile(cfg Config) (ProviderProfile, error) {
 	if cfg.Compat.CodexTransport != "" {
 		transport, err := NormalizeCodexTransport(cfg.Compat.CodexTransport)
 		if err != nil {
-			return ProviderProfile{}, err
+			return llm.ProviderProfile{}, err
 		}
 		profile.Compat.CodexTransport = transport
 	}
@@ -81,7 +37,7 @@ func ResolveProfile(cfg Config) (ProviderProfile, error) {
 	return profile, nil
 }
 
-func cloneProviderProfile(p ProviderProfile) ProviderProfile {
+func CloneProviderProfile(p llm.ProviderProfile) llm.ProviderProfile {
 	p.Headers = cloneStringMap(p.Headers)
 	p.Query = cloneStringMap(p.Query)
 	p.Compat.ReasoningReplayFields = append([]string(nil), p.Compat.ReasoningReplayFields...)
@@ -112,7 +68,7 @@ func NormalizeCodexTransport(raw string) (string, error) {
 	}
 }
 
-func baseProfile(cfg Config) (ProviderProfile, error) {
+func baseProfile(cfg Config) (llm.ProviderProfile, error) {
 	id := strings.TrimSpace(cfg.ID)
 	rawProtocol := strings.TrimSpace(cfg.Protocol)
 
@@ -122,16 +78,16 @@ func baseProfile(cfg Config) (ProviderProfile, error) {
 			if rawProtocol != "" {
 				proto, err := parseProtocol(rawProtocol)
 				if err != nil {
-					return ProviderProfile{}, err
+					return llm.ProviderProfile{}, err
 				}
 				if proto != profile.Protocol {
-					return ProviderProfile{}, fmt.Errorf("llm: provider id %q uses fixed protocol %q; omit providers[].protocol or use a custom providers[].id", id, profile.Protocol)
+					return llm.ProviderProfile{}, fmt.Errorf("llm: provider id %q uses fixed protocol %q; omit providers[].protocol or use a custom providers[].id", id, profile.Protocol)
 				}
 			}
 			return profile, nil
 		}
 		if rawProtocol == "" {
-			return ProviderProfile{}, fmt.Errorf("llm: unknown provider id %q requires providers[].protocol", id)
+			return llm.ProviderProfile{}, fmt.Errorf("llm: unknown provider id %q requires providers[].protocol", id)
 		}
 		return customProfileForProtocol(id, rawProtocol)
 	}
@@ -140,7 +96,7 @@ func baseProfile(cfg Config) (ProviderProfile, error) {
 		return customProfileForProtocol("custom", rawProtocol)
 	}
 
-	return ProviderProfile{}, fmt.Errorf("llm: provider id or protocol is empty")
+	return llm.ProviderProfile{}, fmt.Errorf("llm: provider id or protocol is empty")
 }
 
 func KnownProviderIDs() []string {
@@ -152,133 +108,133 @@ func KnownProviderIDs() []string {
 	return ids
 }
 
-var providerPresets = map[string]ProviderProfile{
+var providerPresets = map[string]llm.ProviderProfile{
 	"anthropic": {
 		ID:       "anthropic",
-		Protocol: ProtocolAnthropicMessages,
-		Capabilities: ProviderCapabilities{
+		Protocol: llm.ProtocolAnthropicMessages,
+		Capabilities: llm.ProviderCapabilities{
 			Tools:           true,
 			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,
 		},
-		Compat: CompatOptions{ReasoningReplayFields: []string{"thinking", "redacted_thinking"}},
+		Compat: llm.CompatOptions{ReasoningReplayFields: []string{"thinking", "redacted_thinking"}},
 	},
 	"openai": {
 		ID:       "openai",
-		Protocol: ProtocolOpenAIResponses,
-		Capabilities: ProviderCapabilities{
+		Protocol: llm.ProtocolOpenAIResponses,
+		Capabilities: llm.ProviderCapabilities{
 			Tools:           true,
 			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,
 		},
-		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
+		Compat: llm.CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 	},
 	"openai-codex": {
 		ID:       "openai-codex",
-		Protocol: ProtocolOpenAICodexResponses,
-		Capabilities: ProviderCapabilities{
+		Protocol: llm.ProtocolOpenAICodexResponses,
+		Capabilities: llm.ProviderCapabilities{
 			Tools:           true,
 			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 		},
-		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
+		Compat: llm.CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 	},
 	"deepseek": {
 		ID:       "deepseek",
-		Protocol: ProtocolOpenAIChat,
+		Protocol: llm.ProtocolOpenAIChat,
 		BaseURL:  "https://api.deepseek.com",
-		Capabilities: ProviderCapabilities{
+		Capabilities: llm.ProviderCapabilities{
 			Tools:           true,
 			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,
 		},
-		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content"}},
+		Compat: llm.CompatOptions{ReasoningReplayFields: []string{"reasoning_content"}},
 	},
 }
 
-func customProfileForProtocol(id, rawProtocol string) (ProviderProfile, error) {
+func customProfileForProtocol(id, rawProtocol string) (llm.ProviderProfile, error) {
 	proto, err := parseProtocol(rawProtocol)
 	if err != nil {
-		return ProviderProfile{}, err
+		return llm.ProviderProfile{}, err
 	}
 	switch proto {
-	case ProtocolAnthropicMessages:
-		return ProviderProfile{
+	case llm.ProtocolAnthropicMessages:
+		return llm.ProviderProfile{
 			ID:       id,
 			Protocol: proto,
-			Capabilities: ProviderCapabilities{
+			Capabilities: llm.ProviderCapabilities{
 				Tools:           true,
 				Streaming:       true,
 				ReasoningEffort: true,
 				ReasoningReplay: true,
 				MaxOutputTokens: true,
 			},
-			Compat: CompatOptions{ReasoningReplayFields: []string{"thinking", "redacted_thinking"}},
+			Compat: llm.CompatOptions{ReasoningReplayFields: []string{"thinking", "redacted_thinking"}},
 		}, nil
-	case ProtocolOpenAIResponses:
-		return ProviderProfile{
+	case llm.ProtocolOpenAIResponses:
+		return llm.ProviderProfile{
 			ID:       id,
 			Protocol: proto,
-			Capabilities: ProviderCapabilities{
+			Capabilities: llm.ProviderCapabilities{
 				Tools:           true,
 				Streaming:       true,
 				ReasoningEffort: true,
 				ReasoningReplay: true,
 				MaxOutputTokens: true,
 			},
-			Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
+			Compat: llm.CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 		}, nil
-	case ProtocolOpenAIChat:
+	case llm.ProtocolOpenAIChat:
 		return customOpenAIChatProfile(id, proto), nil
-	case ProtocolOpenAICodexResponses:
-		return ProviderProfile{}, fmt.Errorf("llm: protocol %q is reserved for provider id %q", proto, "openai-codex")
+	case llm.ProtocolOpenAICodexResponses:
+		return llm.ProviderProfile{}, fmt.Errorf("llm: protocol %q is reserved for provider id %q", proto, "openai-codex")
 	default:
-		return ProviderProfile{}, fmt.Errorf("llm: unsupported provider protocol %q", proto)
+		return llm.ProviderProfile{}, fmt.Errorf("llm: unsupported provider protocol %q", proto)
 	}
 }
 
-func customOpenAIChatProfile(id string, proto Protocol) ProviderProfile {
-	return ProviderProfile{
+func customOpenAIChatProfile(id string, proto llm.Protocol) llm.ProviderProfile {
+	return llm.ProviderProfile{
 		ID:       id,
 		Protocol: proto,
-		Capabilities: ProviderCapabilities{
+		Capabilities: llm.ProviderCapabilities{
 			Tools:           true,
 			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,
 		},
-		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
+		Compat: llm.CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 	}
 }
 
-func presetProfile(id string) ProviderProfile {
+func presetProfile(id string) llm.ProviderProfile {
 	if p, ok := providerPresets[id]; ok {
 		p.Headers = cloneStringMap(p.Headers)
 		p.Query = cloneStringMap(p.Query)
 		p.Compat.ReasoningReplayFields = append([]string(nil), p.Compat.ReasoningReplayFields...)
 		return p
 	}
-	return ProviderProfile{}
+	return llm.ProviderProfile{}
 }
 
-func parseProtocol(in string) (Protocol, error) {
-	switch Protocol(in) {
-	case ProtocolAnthropicMessages, ProtocolOpenAIResponses, ProtocolOpenAICodexResponses, ProtocolOpenAIChat:
-		return Protocol(in), nil
+func parseProtocol(in string) (llm.Protocol, error) {
+	switch llm.Protocol(in) {
+	case llm.ProtocolAnthropicMessages, llm.ProtocolOpenAIResponses, llm.ProtocolOpenAICodexResponses, llm.ProtocolOpenAIChat:
+		return llm.Protocol(in), nil
 	default:
 		return "", fmt.Errorf("llm: unknown provider protocol %q", in)
 	}
 }
 
-func applyCapabilityOverrides(c ProviderCapabilities, o CapabilityOverrides) ProviderCapabilities {
+func applyCapabilityOverrides(c llm.ProviderCapabilities, o llm.CapabilityOverrides) llm.ProviderCapabilities {
 	if o.Tools != nil {
 		c.Tools = *o.Tools
 	}
@@ -300,7 +256,7 @@ func applyCapabilityOverrides(c ProviderCapabilities, o CapabilityOverrides) Pro
 	return c
 }
 
-func firstNonEmpty(values ...string) string {
+func firstProfileValue(values ...string) string {
 	for _, v := range values {
 		if v != "" {
 			return v
@@ -333,8 +289,4 @@ func cloneStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }

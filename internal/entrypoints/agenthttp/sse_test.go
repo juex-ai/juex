@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/status"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {

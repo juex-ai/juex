@@ -12,7 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/agentsmd"
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
-	"github.com/juex-ai/juex/internal/features/shell"
+	shelltools "github.com/juex-ai/juex/internal/features/shell"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )

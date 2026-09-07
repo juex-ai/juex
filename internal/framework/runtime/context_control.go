@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -210,4 +210,5 @@ func (e *Engine) contextWindowRecitation() string {
 }
 
 var _ runtimemodule.ToolProvider = (*ContextControlModule)(nil)
+
 var _ runtimemodule.ContextProvider = (*ContextControlModule)(nil)

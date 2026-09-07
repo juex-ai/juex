@@ -8,7 +8,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
 )
 
 type modelAttemptFailure struct {
@@ -29,6 +30,7 @@ type modelRequestError struct {
 }
 
 func (e *modelRequestError) Error() string { return e.err.Error() }
+
 func (e *modelRequestError) Unwrap() error { return e.err }
 
 func (e *Engine) effectiveModelCandidatesLocked() []ModelCandidate {
@@ -153,7 +155,7 @@ func previousAssistantModel(history []llm.Message) string {
 	return ""
 }
 
-func modelSwitchNotice(previous, selected string, chain []string, selection llm.ModelSelection, pending *modelFallbackTransition, failures []modelAttemptFailure, skipped []llm.ModelHealthSkip) *llm.Message {
+func modelSwitchNotice(previous, selected string, chain []string, selection modelhealth.ModelSelection, pending *modelFallbackTransition, failures []modelAttemptFailure, skipped []modelhealth.ModelHealthSkip) *llm.Message {
 	previousIndex := modelRefIndex(chain, previous)
 	selectedIndex := modelRefIndex(chain, selected)
 	if previousIndex < 0 || selectedIndex < 0 || previousIndex == selectedIndex {
@@ -177,7 +179,7 @@ func modelSwitchNotice(previous, selected string, chain []string, selection llm.
 	return &notice
 }
 
-func failureReasonFor(ref string, failures []modelAttemptFailure, skips []llm.ModelHealthSkip, pending *modelFallbackTransition) string {
+func failureReasonFor(ref string, failures []modelAttemptFailure, skips []modelhealth.ModelHealthSkip, pending *modelFallbackTransition) string {
 	for _, failure := range failures {
 		if failure.ref == ref {
 			if reason, ok := llm.ClassifyFallbackError(failure.err); ok {
@@ -215,7 +217,7 @@ func (e *Engine) emitModelFallback(turnID string, transition modelFallbackTransi
 	}})
 }
 
-func modelChainError(failures []modelAttemptFailure, skipped []llm.ModelHealthSkip) error {
+func modelChainError(failures []modelAttemptFailure, skipped []modelhealth.ModelHealthSkip) error {
 	parts := make([]string, 0, len(failures)+len(skipped))
 	for _, failure := range failures {
 		parts = append(parts, fmt.Sprintf("%s: %s", failure.ref, boundedModelError(failure.err)))

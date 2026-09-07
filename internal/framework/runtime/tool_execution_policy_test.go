@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/features/hooks"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/tools"
 )
 

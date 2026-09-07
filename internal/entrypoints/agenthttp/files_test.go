@@ -15,14 +15,14 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
+	"github.com/juex-ai/juex/internal/foundation/artifact"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	usermedia "github.com/juex-ai/juex/internal/framework/inputmedia"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/framework/inputmedia"
 )
 
 func TestFilesTreeReturnsSortedWorkDir(t *testing.T) {
@@ -964,6 +964,7 @@ func TestFilesContentTruncatesLargeFiles(t *testing.T) {
 }
 
 var tinyPNG = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x00}
+
 var tinyBMP = []byte{'B', 'M', 0x00, 0x00, 0x00, 0x00}
 
 func mustWriteFile(t *testing.T, path, body string) {

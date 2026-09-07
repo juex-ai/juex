@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/artifact"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 const (

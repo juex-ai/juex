@@ -6,13 +6,17 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
 
 type SandboxPolicy = sandbox.Policy
+
 type FileSystemSandboxPolicy = sandbox.FileSystemPolicy
+
 type OutsideWorkspaceAccess = sandbox.OutsideWorkspaceAccess
+
 type NetworkSandboxPolicy = sandbox.NetworkPolicy
 
 const (
@@ -163,11 +167,11 @@ func (s ProviderSelection) ProviderProfile() (llm.ProviderProfile, error) {
 	if s.ID == "" && s.Protocol == "" {
 		return llm.ProviderProfile{}, fmt.Errorf("config: provider id/protocol is empty")
 	}
-	return llm.ResolveProfile(s.llmConfig())
+	return providerprofile.ResolveProfile(s.llmConfig())
 }
 
-func (s ProviderSelection) llmConfig() llm.Config {
-	return llm.Config{
+func (s ProviderSelection) llmConfig() providerprofile.Config {
+	return providerprofile.Config{
 		ID:             s.ID,
 		Protocol:       s.Protocol,
 		BaseURL:        s.BaseURL,

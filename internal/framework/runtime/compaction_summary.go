@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 type compactionSummaryState = contextbudget.SummaryState
+
 type compactionSummaryToolBudget = contextbudget.SummaryToolBudget
 
 func buildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, state compactionSummaryState, policy compactionPolicy, instructions string) (string, []llm.Message) {

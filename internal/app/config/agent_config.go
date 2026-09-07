@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 // AgentConfigValidationError identifies a rejected Agent config candidate.

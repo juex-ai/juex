@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/juex-ai/juex/internal/app/config"
 	"io"
 	"net"
 	"net/http"
@@ -22,11 +21,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/foundation/artifact"
-	"github.com/juex-ai/juex/internal/framework/endpoint"
+	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/artifact"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/processmetrics"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 

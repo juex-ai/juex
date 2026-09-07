@@ -12,13 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
-	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/features/hooks"
-	"github.com/juex-ai/juex/internal/llm"
-	runtimepolicy "github.com/juex-ai/juex/internal/framework/runtime/policy"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
-	"gopkg.in/yaml.v3"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	runtimepolicy "github.com/juex-ai/juex/internal/framework/runtime/policy"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
+	yaml "gopkg.in/yaml.v3"
 )
 
 // Config holds runtime-wide settings.
@@ -173,6 +174,7 @@ type providerCompatConfig struct {
 }
 
 type CompactionConfig = runtimepolicy.CompactionPolicy
+
 type ToolOutputConfig = runtimepolicy.ToolOutputPolicy
 
 // ModelRef is one provider:model selector used by the top-level models chain.
@@ -364,9 +366,13 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 }
 
 const DefaultContextWindow = runtimepolicy.DefaultContextWindowTokens
+
 const DefaultPendingInputTTL = 15 * time.Minute
+
 const DefaultExternalEventTTL = 24 * time.Hour
+
 const DefaultToolTimeout = 60 * time.Second
+
 const DefaultSkillPromptBudgetChars = 8000
 
 var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
@@ -1219,13 +1225,13 @@ func applyProvidersConfig(cfg *Config, providers []providerConfig) error {
 				return fmt.Errorf("provider %q model %q: %w", id, modelID, err)
 			}
 			model.ThinkingEffort = thinkingEffort
-			codexTransport, err := llm.NormalizeCodexTransport(model.Compat.CodexTransport)
+			codexTransport, err := providerprofile.NormalizeCodexTransport(model.Compat.CodexTransport)
 			if err != nil {
 				return fmt.Errorf("provider %q model %q: %w", id, modelID, err)
 			}
 			model.Compat.CodexTransport = codexTransport
 		}
-		codexTransport, err := llm.NormalizeCodexTransport(p.Compat.CodexTransport)
+		codexTransport, err := providerprofile.NormalizeCodexTransport(p.Compat.CodexTransport)
 		if err != nil {
 			return fmt.Errorf("provider %q: %w", id, err)
 		}

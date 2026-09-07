@@ -19,9 +19,10 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/internal/providers"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -219,7 +220,7 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	if err != nil {
 		t.Fatalf("provider profile: %v", err)
 	}
-	provider, err := llm.NewProvider(profile)
+	provider, err := providers.NewProvider(profile)
 	if err != nil {
 		t.Fatalf("provider: %v", err)
 	}
@@ -333,7 +334,7 @@ func TestLiveConfigs_ExternalizedToolResultRetrieval(t *testing.T) {
 			if err != nil {
 				t.Fatalf("provider profile: %v", err)
 			}
-			provider, err := llm.NewProvider(profile)
+			provider, err := providers.NewProvider(profile)
 			if err != nil {
 				t.Fatalf("provider: %v", err)
 			}

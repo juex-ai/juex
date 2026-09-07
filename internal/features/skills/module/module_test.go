@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 

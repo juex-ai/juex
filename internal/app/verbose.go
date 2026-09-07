@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
-	runtimeevents "github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	runtimeevents "github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 // verbosePrinter formats lifecycle events into a human-readable transcript
@@ -399,8 +399,6 @@ func truncOneLine(s string, max int) string {
 	}
 	return s
 }
-
-// ---- spinner ----
 
 // spinner renders an animated braille frame plus a status message on a
 // single line, using \r to overwrite. start/stop is reentrant — calling

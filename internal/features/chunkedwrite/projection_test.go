@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	writefacts "github.com/juex-ai/juex/internal/chunkedwrite"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -18,6 +18,7 @@ func testResultFact(event writefacts.Event) *llm.ResultFact {
 	data, _ := json.Marshal(event)
 	return &llm.ResultFact{Owner: string(ModuleID), Data: data}
 }
+
 func projectTestHistory(t *testing.T, history []llm.Message) []llm.Message {
 	t.Helper()
 	for i := range history {

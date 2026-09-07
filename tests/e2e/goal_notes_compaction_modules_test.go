@@ -9,8 +9,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 )
@@ -62,6 +62,7 @@ func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
 }
 
 func (*moduleSummaryProvider) Name() string { return "module-summary" }
+
 func (p *moduleSummaryProvider) Complete(_ context.Context, system string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	p.system, p.history = system, history
 	if p.summary != "" {

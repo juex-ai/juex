@@ -10,16 +10,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 	skillsmodule "github.com/juex-ai/juex/internal/features/skills/module"
-	"github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 

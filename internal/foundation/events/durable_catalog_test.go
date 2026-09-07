@@ -3,8 +3,9 @@ package events_test
 import (
 	"testing"
 
-	"github.com/juex-ai/juex/internal/app/eventcatalog"
 	"github.com/juex-ai/juex/internal/foundation/events"
+
+	"github.com/juex-ai/juex/internal/app/eventcatalog"
 )
 
 func TestDurableSinkRejectsMalformedCatalogEventBeforeJournal(t *testing.T) {

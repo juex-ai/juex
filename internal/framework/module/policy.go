@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 )
 
@@ -67,6 +67,7 @@ type policyCheckpointError struct {
 }
 
 func (e *policyCheckpointError) Error() string { return e.operation + ": " + e.err.Error() }
+
 func (e *policyCheckpointError) Unwrap() error { return e.err }
 
 func CheckpointPolicy(observer PolicyObserver, execution PolicyExecution) error {
@@ -89,6 +90,7 @@ type policyContextValidationError struct {
 }
 
 func (e *policyContextValidationError) Error() string { return e.err.Error() }
+
 func (e *policyContextValidationError) Unwrap() error { return e.err }
 
 func IsPolicyContextValidationError(err error) bool {

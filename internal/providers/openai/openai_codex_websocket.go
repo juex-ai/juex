@@ -1,4 +1,4 @@
-package llm
+package openai
 
 import (
 	"context"
@@ -12,13 +12,16 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	protocolsupport "github.com/juex-ai/juex/internal/providers/internal/protocol"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 	"github.com/openai/openai-go/responses"
 )
 
 const codexResponsesWebsocketBeta = "responses_websockets=2026-02-06"
 
 type codexResponsesWebsocketTransport struct {
-	profile    ProviderProfile
+	profile    llm.ProviderProfile
 	httpClient *http.Client
 
 	mu             sync.Mutex
@@ -28,11 +31,11 @@ type codexResponsesWebsocketTransport struct {
 	lastResponseID string
 }
 
-func newCodexResponsesWebsocketTransport(profile ProviderProfile, httpClient *http.Client) *codexResponsesWebsocketTransport {
+func newCodexResponsesWebsocketTransport(profile llm.ProviderProfile, httpClient *http.Client) *codexResponsesWebsocketTransport {
 	return &codexResponsesWebsocketTransport{profile: profile, httpClient: httpClient}
 }
 
-func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (*responses.Response, error) {
+func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions) (*responses.Response, error) {
 	payload, err := codexResponsesWebsocketPayload(params)
 	if err != nil {
 		return nil, err
@@ -56,8 +59,8 @@ func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params 
 		return nil, fmt.Errorf("codex websocket send request: %w", err)
 	}
 
-	idleTimeout := streamIdleTimeout(opts)
-	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
+	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 	resp, err := readCodexResponsesWebsocket(streamCtx, conn, codexResponsesStreamOptions{
 		OnDelta:   opts.OnDelta,
 		ResetIdle: resetIdle,
@@ -66,11 +69,11 @@ func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params 
 	if err != nil {
 		t.closeLocked()
 		if idleExpired() {
-			return nil, newStreamIdleTimeoutError("codex websocket", idleTimeout, err)
+			return nil, protocolsupport.NewStreamIdleTimeoutError("codex websocket", idleTimeout, err)
 		}
 		return nil, err
 	}
-	if t.profile.Compat.CodexTransport == CodexTransportWebSocket {
+	if t.profile.Compat.CodexTransport == providerprofile.CodexTransportWebSocket {
 		t.closeLocked()
 		return resp, nil
 	}
@@ -161,41 +164,41 @@ func codexResponsesWebsocketDelta(current, previous map[string]any, baseline []a
 	return append([]any(nil), input[len(baseline):]...), true
 }
 
-func codexResponsesWebsocketBaseline(payload map[string]any, resp *responses.Response, profile ProviderProfile) []any {
+func codexResponsesWebsocketBaseline(payload map[string]any, resp *responses.Response, profile llm.ProviderProfile) []any {
 	input, _ := payload["input"].([]any)
 	baseline := append([]any(nil), input...)
 	return append(baseline, codexResponsesOutputAsInput(resp, profile)...)
 }
 
-func codexResponsesOutputAsInput(resp *responses.Response, profile ProviderProfile) []any {
+func codexResponsesOutputAsInput(resp *responses.Response, profile llm.ProviderProfile) []any {
 	if resp == nil || len(resp.Output) == 0 {
 		return nil
 	}
-	assistant := Message{Role: RoleAssistant}
+	assistant := llm.Message{Role: llm.RoleAssistant}
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":
 			for _, c := range item.Content {
 				switch c.Type {
 				case "output_text":
-					assistant.Blocks = append(assistant.Blocks, Block{Type: BlockText, Text: c.Text})
+					assistant.Blocks = append(assistant.Blocks, llm.Block{Type: llm.BlockText, Text: c.Text})
 				case "refusal":
-					assistant.Blocks = append(assistant.Blocks, Block{Type: BlockText, Text: c.Refusal})
+					assistant.Blocks = append(assistant.Blocks, llm.Block{Type: llm.BlockText, Text: c.Refusal})
 				}
 			}
 		case "function_call":
-			assistant.Blocks = append(assistant.Blocks, Block{
-				Type:      BlockToolUse,
+			assistant.Blocks = append(assistant.Blocks, llm.Block{
+				Type:      llm.BlockToolUse,
 				ToolUseID: item.CallID,
 				ToolName:  item.Name,
-				Input:     parseToolArguments(item.Arguments),
+				Input:     llm.ParseToolArguments(item.Arguments),
 			})
 		}
 	}
 	if len(assistant.Blocks) == 0 {
 		return nil
 	}
-	encoded := encodeOpenAIResponseInput([]Message{assistant}, profile)
+	encoded := encodeOpenAIResponseInput([]llm.Message{assistant}, profile)
 	raw, err := json.Marshal(encoded)
 	if err != nil {
 		return nil
@@ -207,7 +210,7 @@ func codexResponsesOutputAsInput(resp *responses.Response, profile ProviderProfi
 	return items
 }
 
-func codexResponsesWebsocketURL(profile ProviderProfile) (string, error) {
+func codexResponsesWebsocketURL(profile llm.ProviderProfile) (string, error) {
 	u, err := url.Parse(openAICodexResponsesBaseURL(profile.BaseURL))
 	if err != nil {
 		return "", fmt.Errorf("codex websocket URL: %w", err)
@@ -230,7 +233,7 @@ func codexResponsesWebsocketURL(profile ProviderProfile) (string, error) {
 	return u.String(), nil
 }
 
-func codexResponsesWebsocketHeaders(profile ProviderProfile) http.Header {
+func codexResponsesWebsocketHeaders(profile llm.ProviderProfile) http.Header {
 	headers := http.Header{}
 	for k, v := range profile.Headers {
 		headers.Set(k, v)

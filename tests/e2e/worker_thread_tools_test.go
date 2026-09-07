@@ -11,8 +11,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"

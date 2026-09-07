@@ -9,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/framework/threadbundle"
 	"github.com/juex-ai/juex/internal/framework/thread"
+	bundle "github.com/juex-ai/juex/internal/framework/threadbundle"
 )
 
 func newThreadBundleCmd(selectors *agentSelectorFlags) *cobra.Command {

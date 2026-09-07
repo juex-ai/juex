@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 type configScope uint8

@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/fleet/service"
+	fleetservice "github.com/juex-ai/juex/internal/fleet/service"
 	"github.com/juex-ai/juex/internal/foundation/version"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 type fakeFleetServiceInstaller struct {

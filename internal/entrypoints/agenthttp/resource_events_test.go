@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/features/observables"
-	"github.com/juex-ai/juex/internal/framework/thread"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {

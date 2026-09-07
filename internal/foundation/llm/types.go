@@ -6,7 +6,9 @@
 // Thread) only ever see the types defined here.
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 type Role string
 
@@ -248,7 +250,7 @@ func (u *Usage) Add(v Usage) {
 	u.CachedInputTokens += v.CachedInputTokens
 }
 
-func canonicalUsage(inputTokens, outputTokens, cachedInputTokens int) Usage {
+func CanonicalUsage(inputTokens, outputTokens, cachedInputTokens int) Usage {
 	if inputTokens < cachedInputTokens {
 		inputTokens = cachedInputTokens
 	}

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 

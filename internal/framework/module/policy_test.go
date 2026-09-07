@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 type recoveryPolicy struct {
@@ -18,6 +18,7 @@ type recoveryPolicy struct {
 }
 
 func (m *recoveryPolicy) ID() ID { return m.id }
+
 func (m *recoveryPolicy) ApplyThreadStart(_ context.Context, request ThreadStartRequest) (ThreadStartDecision, error) {
 	m.apply(request)
 	return ThreadStartDecision{}, nil

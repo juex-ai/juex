@@ -1,4 +1,4 @@
-package llm
+package openai
 
 import (
 	"context"
@@ -11,7 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openai/openai-go"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	protocolsupport "github.com/juex-ai/juex/internal/providers/internal/protocol"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
+	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/responses"
@@ -25,25 +28,25 @@ var codexSSERetryBaseDelay = 100 * time.Millisecond
 const codexSSEIdleMaxAttempts = 2
 
 type openAICodexResponsesProvider struct {
-	profile   ProviderProfile
+	profile   llm.ProviderProfile
 	client    openai.Client
 	transport string
 	ws        *codexResponsesWebsocketTransport
 }
 
-func NewOpenAICodexResponses(profile ProviderProfile, client any) Provider {
-	profile = cloneProviderProfile(profile)
+func NewOpenAICodexResponses(profile llm.ProviderProfile, client any) llm.Provider {
+	profile = providerprofile.CloneProviderProfile(profile)
 	if profile.BaseURL == "" {
 		profile.BaseURL = defaultOpenAICodexBaseURL
 	}
 	transport := profile.Compat.CodexTransport
 	if transport == "" {
-		transport = CodexTransportSSE
+		transport = providerprofile.CodexTransportSSE
 		profile.Compat.CodexTransport = transport
 	}
 	opts := []option.RequestOption{
 		option.WithBaseURL(openAICodexResponsesBaseURL(profile.BaseURL)),
-		option.WithMaxRetries(providerMaxRetries),
+		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
 	}
 	for k, v := range profile.Headers {
 		opts = append(opts, option.WithHeader(k, v))
@@ -78,43 +81,44 @@ func NewOpenAICodexResponses(profile ProviderProfile, client any) Provider {
 
 func (p *openAICodexResponsesProvider) Name() string { return p.profile.ID + ":" + p.profile.Model }
 
-func (p *openAICodexResponsesProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
-	return p.CompleteWithOptions(ctx, sys, history, tools, CompleteOptions{})
+func (p *openAICodexResponsesProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
 }
 
-func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
-	providerContext, err := BuildProviderContext(history, p.profile, ProviderContextOptions{OmitReasoning: true})
+func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
+	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{OmitReasoning: true})
 	if err != nil {
-		return Response{}, err
+		return llm.Response{}, err
 	}
 	params := p.codexRequestParams(sys, providerContext.Messages, tools, opts)
 	var resp *responses.Response
 
 	switch p.transport {
-	case CodexTransportAuto:
+	case providerprofile.CodexTransportAuto:
 		resp, err = p.ws.Complete(ctx, params, opts)
 		if err != nil {
 			resp, err = p.completeSSE(ctx, params, opts)
 		}
-	case CodexTransportWebSocket, CodexTransportWebSocketCached:
+	case providerprofile.CodexTransportWebSocket, providerprofile.CodexTransportWebSocketCached:
 		resp, err = p.ws.Complete(ctx, params, opts)
-	case CodexTransportSSE:
+	case providerprofile.CodexTransportSSE:
 		resp, err = p.completeSSE(ctx, params, opts)
 	default:
-		return Response{}, fmt.Errorf("openai codex responses: unsupported codex transport %q", p.transport)
+		return llm.Response{}, fmt.Errorf("openai codex responses: unsupported codex transport %q", p.transport)
 	}
 	if err != nil {
-		return Response{}, fmt.Errorf("openai codex responses: %w", err)
+		return llm.Response{}, fmt.Errorf("openai codex responses: %w", err)
 	}
 	return p.responseFromCodexResponses(resp), nil
 }
 
-func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (*responses.Response, error) {
-	maxAttempts := providerMaxRetries + 1
-	idleTimeout := streamIdleTimeout(opts)
+func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions) (*responses.Response, error) {
+	maxAttempts := protocolsupport.ProviderMaxRetries + 1
+	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
 	idleAttempts := 0
 	for attempt := 0; ; attempt++ {
-		streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+		streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 		stream := p.client.Responses.NewStreaming(streamCtx, params)
 		resp, err := readCodexResponsesStream(stream, codexResponsesStreamOptions{
 			OnDelta:   opts.OnDelta,
@@ -130,7 +134,7 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 				return nil, ctx.Err()
 			}
 			idleAttempts++
-			idleErr := newStreamIdleTimeoutError("codex SSE", idleTimeout, err)
+			idleErr := protocolsupport.NewStreamIdleTimeoutError("codex SSE", idleTimeout, err)
 			if idleAttempts >= codexSSEIdleMaxAttempts {
 				p.emitCodexSSERetryDiagnostic(opts, idleErr, idleAttempts, codexSSEIdleMaxAttempts, 0, false, true, "codex_sse_idle_timeout")
 				return nil, idleErr
@@ -158,7 +162,7 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 	}
 }
 
-func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []Message, tools []ToolSpec, opts CompleteOptions) responses.ResponseNewParams {
+func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(p.profile.Model),
 		Store: param.NewOpt(false),
@@ -187,7 +191,7 @@ func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []
 	if opts.CachePolicy.Retention != "" {
 		params.SetExtraFields(map[string]any{"prompt_cache_retention": opts.CachePolicy.Retention})
 	}
-	if effort := requestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
+	if effort := protocolsupport.RequestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
 		params.Reasoning = shared.ReasoningParam{
 			Effort:  shared.ReasoningEffort(effort),
 			Summary: shared.ReasoningSummaryAuto,
@@ -203,7 +207,7 @@ type codexResponsesStream interface {
 }
 
 type codexResponsesStreamOptions struct {
-	OnDelta   func(StreamDelta)
+	OnDelta   func(llm.StreamDelta)
 	ResetIdle func()
 }
 
@@ -296,15 +300,15 @@ func waitCodexSSERetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (p *openAICodexResponsesProvider) emitCodexSSERetryDiagnostic(opts CompleteOptions, err error, attempt, maxAttempts int, delay time.Duration, willRetry, exhausted bool, retryReason string) {
+func (p *openAICodexResponsesProvider) emitCodexSSERetryDiagnostic(opts llm.CompleteOptions, err error, attempt, maxAttempts int, delay time.Duration, willRetry, exhausted bool, retryReason string) {
 	if opts.RetryObserver == nil {
 		return
 	}
-	opts.RetryObserver(ProviderRetryDiagnostic{
+	opts.RetryObserver(llm.ProviderRetryDiagnostic{
 		Provider:    p.profile.ID,
 		Model:       p.profile.Model,
 		Protocol:    p.profile.Protocol,
-		Transport:   CodexTransportSSE,
+		Transport:   providerprofile.CodexTransportSSE,
 		Operation:   "responses.sse",
 		Attempt:     attempt,
 		MaxAttempts: maxAttempts,
@@ -326,9 +330,9 @@ func responseErrorMessage(resp responses.Response) string {
 	return ""
 }
 
-func (p *openAICodexResponsesProvider) responseFromCodexResponses(resp *responses.Response) Response {
-	out := Message{Role: RoleAssistant, Model: p.Name()}
-	stop := StopEndTurn
+func (p *openAICodexResponsesProvider) responseFromCodexResponses(resp *responses.Response) llm.Response {
+	out := llm.Message{Role: llm.RoleAssistant, Model: p.Name()}
+	stop := llm.StopEndTurn
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "reasoning":
@@ -338,8 +342,8 @@ func (p *openAICodexResponsesProvider) responseFromCodexResponses(resp *response
 					summaries = append(summaries, summary.Text)
 				}
 			}
-			out.Blocks = append(out.Blocks, Block{
-				Type:      BlockReasoning,
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockReasoning,
 				Text:      strings.Join(summaries, "\n"),
 				Signature: item.ID,
 				Content:   item.EncryptedContent,
@@ -349,28 +353,28 @@ func (p *openAICodexResponsesProvider) responseFromCodexResponses(resp *response
 			for _, c := range item.Content {
 				switch c.Type {
 				case "output_text":
-					out.Blocks = append(out.Blocks, Block{Type: BlockText, Text: c.Text})
+					out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: c.Text})
 				case "refusal":
-					out.Blocks = append(out.Blocks, Block{Type: BlockText, Text: c.Refusal})
+					out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: c.Refusal})
 				}
 			}
 		case "function_call":
-			stop = StopToolUse
-			out.Blocks = append(out.Blocks, Block{
-				Type:      BlockToolUse,
+			stop = llm.StopToolUse
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockToolUse,
 				ToolUseID: item.CallID,
 				ToolName:  item.Name,
-				Input:     parseToolArguments(item.Arguments),
+				Input:     llm.ParseToolArguments(item.Arguments),
 			})
 		}
 	}
 	if resp.Status == responses.ResponseStatusIncomplete && resp.IncompleteDetails.Reason == "max_output_tokens" {
-		stop = StopMaxTokens
+		stop = llm.StopMaxTokens
 	}
-	return Response{
+	return llm.Response{
 		Message:    out,
 		StopReason: stop,
-		Usage: canonicalUsage(
+		Usage: llm.CanonicalUsage(
 			int(resp.Usage.InputTokens),
 			int(resp.Usage.OutputTokens),
 			int(resp.Usage.InputTokensDetails.CachedTokens),
@@ -393,7 +397,7 @@ func openAICodexResponsesBaseURL(baseURL string) string {
 	return normalized
 }
 
-func codexAccountID(profile ProviderProfile) string {
+func codexAccountID(profile llm.ProviderProfile) string {
 	for _, key := range []string{"chatgpt-account-id", "ChatGPT-Account-ID"} {
 		if v := strings.TrimSpace(profile.Headers[key]); v != "" {
 			return v

@@ -12,11 +12,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
-	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
 	"github.com/juex-ai/juex/internal/foundation/version"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 // Exit code conventions (principle 6 from the agent-CLI guide). Stable

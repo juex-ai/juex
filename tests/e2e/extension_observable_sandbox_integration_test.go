@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/features/observables"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 func TestIntegration_ExtensionObservableSandboxGrantsCurrentAgentStateDir(t *testing.T) {

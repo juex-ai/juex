@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 )
 
 type BatcherOptions struct {

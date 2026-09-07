@@ -9,9 +9,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )

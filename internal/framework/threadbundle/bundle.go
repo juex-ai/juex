@@ -20,11 +20,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/environment"
-	"github.com/juex-ai/juex/internal/framework/thread"
 	"github.com/juex-ai/juex/internal/foundation/version"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 const archiveRoot = "juex-debug-bundle"

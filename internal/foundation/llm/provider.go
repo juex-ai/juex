@@ -3,16 +3,11 @@ package llm
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
-	openaisdk "github.com/openai/openai-go"
 )
 
 type Provider interface {
@@ -28,13 +23,6 @@ type CompleteOptions struct {
 	RetryObserver     func(ProviderRetryDiagnostic)
 	OnDelta           func(StreamDelta)
 	StreamIdleTimeout time.Duration
-}
-
-func requestThinkingEffort(profile ProviderProfile, opts CompleteOptions) string {
-	if opts.ThinkingEffort != "" {
-		return opts.ThinkingEffort
-	}
-	return profile.ThinkingEffort
 }
 
 type StreamDelta struct {
@@ -67,166 +55,13 @@ type ProviderWithOptions interface {
 	CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error)
 }
 
-const (
-	providerMaxRetries       = 10
-	DefaultStreamIdleTimeout = 3 * time.Minute
-)
-
-type Config struct {
-	ID             string
-	Protocol       string
-	BaseURL        string
-	APIKey         string
-	Model          string
-	ThinkingEffort string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
-	Headers        map[string]string
-	Query          map[string]string
-	Capabilities   CapabilityOverrides
-	Compat         CompatOptions
-	MediaDir       string
-}
-
-// New constructs the appropriate Provider for the resolved provider profile.
-// Public custom protocol families are "anthropic/messages", "openai/chat",
-// and "openai/responses"; "openai-codex/responses" is reserved for the
-// openai-codex preset.
-func New(cfg Config) (Provider, error) {
-	profile, err := ResolveProfile(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return NewProvider(profile)
-}
-
-// NewProvider constructs the concrete provider for a resolved profile.
-func NewProvider(profile ProviderProfile) (Provider, error) {
-	if profile.APIKey == "" {
-		return nil, fmt.Errorf("llm: missing API key")
-	}
-	if profile.Model == "" {
-		return nil, fmt.Errorf("llm: missing model")
-	}
-	profile = cloneProviderProfile(profile)
-	switch profile.Protocol {
-	case ProtocolAnthropicMessages:
-		return NewAnthropic(profile, &http.Client{Timeout: 120 * time.Second}), nil
-	case ProtocolOpenAIChat:
-		return NewOpenAI(profile, &http.Client{Timeout: 120 * time.Second}), nil
-	case ProtocolOpenAIResponses:
-		return NewOpenAIResponses(profile, &http.Client{Timeout: 120 * time.Second}), nil
-	case ProtocolOpenAICodexResponses:
-		transport, err := NormalizeCodexTransport(profile.Compat.CodexTransport)
-		if err != nil {
-			return nil, err
-		}
-		if transport == "" {
-			transport = CodexTransportSSE
-		}
-		profile.Compat.CodexTransport = transport
-		return NewOpenAICodexResponses(profile, nil), nil
-	default:
-		return nil, fmt.Errorf("llm: unsupported provider protocol %q", profile.Protocol)
-	}
-}
+const DefaultStreamIdleTimeout = 3 * time.Minute
 
 func CompleteWithOptions(ctx context.Context, p Provider, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
 	if withOpts, ok := p.(ProviderWithOptions); ok {
 		return withOpts.CompleteWithOptions(ctx, sys, history, tools, opts)
 	}
 	return p.Complete(ctx, sys, history, tools)
-}
-
-func streamIdleTimeout(opts CompleteOptions) time.Duration {
-	if opts.StreamIdleTimeout != 0 {
-		return opts.StreamIdleTimeout
-	}
-	return DefaultStreamIdleTimeout
-}
-
-type streamIdleTimeoutError struct {
-	operation string
-	timeout   time.Duration
-	cause     error
-}
-
-func (e *streamIdleTimeoutError) Error() string {
-	if e.cause == nil {
-		return fmt.Sprintf("%s idle timeout after %s", e.operation, e.timeout)
-	}
-	return fmt.Sprintf("%s idle timeout after %s: %v", e.operation, e.timeout, e.cause)
-}
-
-func (e *streamIdleTimeoutError) Unwrap() error {
-	return context.DeadlineExceeded
-}
-
-func newStreamIdleTimeoutError(operation string, timeout time.Duration, cause error) error {
-	return &streamIdleTimeoutError{operation: operation, timeout: timeout, cause: cause}
-}
-
-func newStreamIdleContext(ctx context.Context, timeout time.Duration) (context.Context, func(), func(), func() bool) {
-	if timeout <= 0 {
-		return ctx, func() {}, func() {}, func() bool { return false }
-	}
-	streamCtx, cancel := context.WithCancel(ctx)
-	var (
-		mu       sync.Mutex
-		once     sync.Once
-		expired  bool
-		stopped  bool
-		deadline = time.Now().Add(timeout)
-	)
-	timer := time.NewTimer(timeout)
-	stopCh := make(chan struct{})
-	go func() {
-		defer timer.Stop()
-		for {
-			select {
-			case <-timer.C:
-				mu.Lock()
-				if stopped || expired {
-					mu.Unlock()
-					return
-				}
-				if remaining := time.Until(deadline); remaining > 0 {
-					timer.Reset(remaining)
-					mu.Unlock()
-					continue
-				}
-				expired = true
-				mu.Unlock()
-				cancel()
-				return
-			case <-ctx.Done():
-				return
-			case <-stopCh:
-				return
-			}
-		}
-	}()
-	reset := func() {
-		mu.Lock()
-		defer mu.Unlock()
-		if stopped || expired {
-			return
-		}
-		deadline = time.Now().Add(timeout)
-	}
-	stop := func() {
-		once.Do(func() {
-			mu.Lock()
-			stopped = true
-			mu.Unlock()
-			close(stopCh)
-			cancel()
-		})
-	}
-	isExpired := func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return expired
-	}
-	return streamCtx, reset, stop, isExpired
 }
 
 func IsContextOverflowError(err error) bool {
@@ -360,13 +195,9 @@ func modelNotFoundError(lower string) bool {
 }
 
 func providerHTTPStatusCode(err error) (int, bool) {
-	var anthropicErr *anthropicsdk.Error
-	if errors.As(err, &anthropicErr) && validHTTPStatusCode(anthropicErr.StatusCode) {
-		return anthropicErr.StatusCode, true
-	}
-	var openAIErr *openaisdk.Error
-	if errors.As(err, &openAIErr) && validHTTPStatusCode(openAIErr.StatusCode) {
-		return openAIErr.StatusCode, true
+	var statusError interface{ HTTPStatusCode() int }
+	if errors.As(err, &statusError) && validHTTPStatusCode(statusError.HTTPStatusCode()) {
+		return statusError.HTTPStatusCode(), true
 	}
 
 	fields := strings.FieldsFunc(strings.ToLower(err.Error()), func(r rune) bool {

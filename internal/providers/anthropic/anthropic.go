@@ -1,13 +1,17 @@
-package llm
+package anthropic
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	providermedia "github.com/juex-ai/juex/internal/providers/internal/media"
+	protocolsupport "github.com/juex-ai/juex/internal/providers/internal/protocol"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
 
 // anthropicProvider wraps the official anthropic-sdk-go client and translates
@@ -17,15 +21,15 @@ import (
 // works against the canonical types in types.go, so swapping SDK versions or
 // dropping back to raw HTTP only touches this file.
 type anthropicProvider struct {
-	profile ProviderProfile
+	profile llm.ProviderProfile
 	client  anthropic.Client
 }
 
-func NewAnthropic(profile ProviderProfile, _ any) Provider {
-	profile = cloneProviderProfile(profile)
+func NewAnthropic(profile llm.ProviderProfile, _ any) llm.Provider {
+	profile = providerprofile.CloneProviderProfile(profile)
 	opts := []option.RequestOption{
 		option.WithAPIKey(profile.APIKey),
-		option.WithMaxRetries(providerMaxRetries),
+		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
 	}
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
@@ -44,14 +48,15 @@ func NewAnthropic(profile ProviderProfile, _ any) Provider {
 
 func (p *anthropicProvider) Name() string { return p.profile.ID + ":" + p.profile.Model }
 
-func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
-	return p.CompleteWithOptions(ctx, sys, history, tools, CompleteOptions{})
+func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
 }
 
-func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
-	providerContext, err := BuildProviderContext(history, p.profile, ProviderContextOptions{})
+func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
+	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{})
 	if err != nil {
-		return Response{}, err
+		return llm.Response{}, err
 	}
 	maxTokens := int64(4096)
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
@@ -68,7 +73,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		params.Tools = toAnthropicTools(tools, cachePrompt, opts.CachePolicy.Retention)
 	}
 	if p.profile.Capabilities.ReasoningEffort {
-		if effort := requestThinkingEffort(p.profile, opts); effort != "" {
+		if effort := protocolsupport.RequestThinkingEffort(p.profile, opts); effort != "" {
 			params.OutputConfig = anthropic.OutputConfigParam{
 				Effort: anthropic.OutputConfigEffort(effort),
 			}
@@ -90,7 +95,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	if !p.profile.Capabilities.Streaming {
 		msg, err := p.client.Messages.New(ctx, params)
 		if err != nil {
-			return Response{}, fmt.Errorf("anthropic: %w", err)
+			return llm.Response{}, fmt.Errorf("anthropic: %w", err)
 		}
 		return p.responseFromMessage(msg), nil
 	}
@@ -98,8 +103,8 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	msg := anthropic.Message{}
 	deltaUsage := anthropicStreamUsageObservation{}
 	streamDiagnostics := &anthropicStreamDiagnostics{}
-	idleTimeout := streamIdleTimeout(opts)
-	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
+	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 	defer stopIdle()
 	stream := p.client.Messages.NewStreaming(streamCtx, params, option.WithMiddleware(streamDiagnostics.middleware))
 	for stream.Next() {
@@ -108,17 +113,17 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		emitAnthropicStreamDelta(opts.OnDelta, event)
 		deltaUsage.observe(event)
 		if err := msg.Accumulate(event); err != nil {
-			return Response{}, anthropicStreamParseErrorFromEvent(p.Name(), event, err)
+			return llm.Response{}, anthropicStreamParseErrorFromEvent(p.Name(), event, err)
 		}
 	}
 	if err := stream.Err(); err != nil {
 		if idleExpired() {
-			return Response{}, newStreamIdleTimeoutError("anthropic stream", idleTimeout, err)
+			return llm.Response{}, protocolsupport.NewStreamIdleTimeoutError("anthropic stream", idleTimeout, err)
 		}
 		if streamErr := anthropicStreamParseErrorFromDiagnostics(p.Name(), streamDiagnostics, err); streamErr != nil {
-			return Response{}, streamErr
+			return llm.Response{}, streamErr
 		}
-		return Response{}, fmt.Errorf("anthropic: %w", err)
+		return llm.Response{}, fmt.Errorf("anthropic: %w", err)
 	}
 	deltaUsage.applyFallback(&msg)
 	return p.responseFromMessage(&msg), nil
@@ -160,23 +165,23 @@ func (o *anthropicStreamUsageObservation) applyFallback(msg *anthropic.Message) 
 	}
 }
 
-func emitAnthropicStreamDelta(onDelta func(StreamDelta), event anthropic.MessageStreamEventUnion) {
+func emitAnthropicStreamDelta(onDelta func(llm.StreamDelta), event anthropic.MessageStreamEventUnion) {
 	if onDelta == nil || event.Type != "content_block_delta" {
 		return
 	}
 	switch event.Delta.Type {
 	case "thinking_delta":
 		if event.Delta.Thinking != "" {
-			onDelta(StreamDelta{Kind: "reasoning", Index: int(event.Index), Text: event.Delta.Thinking})
+			onDelta(llm.StreamDelta{Kind: "reasoning", Index: int(event.Index), Text: event.Delta.Thinking})
 		}
 	case "text_delta":
 		if event.Delta.Text != "" {
-			onDelta(StreamDelta{Kind: "text", Index: int(event.Index), Text: event.Delta.Text})
+			onDelta(llm.StreamDelta{Kind: "text", Index: int(event.Index), Text: event.Delta.Text})
 		}
 	}
 }
 
-func anthropicStreamParseErrorFromEvent(provider string, event anthropic.MessageStreamEventUnion, cause error) *StreamParseError {
+func anthropicStreamParseErrorFromEvent(provider string, event anthropic.MessageStreamEventUnion, cause error) *llm.StreamParseError {
 	raw := trimStreamPreview(event.RawJSON())
 	eventType := event.Type
 	if eventType == "" {
@@ -195,7 +200,7 @@ func anthropicStreamParseErrorFromEvent(provider string, event anthropic.Message
 	}, cause)
 }
 
-func anthropicStreamParseErrorFromDiagnostics(provider string, diagnostics *anthropicStreamDiagnostics, cause error) *StreamParseError {
+func anthropicStreamParseErrorFromDiagnostics(provider string, diagnostics *anthropicStreamDiagnostics, cause error) *llm.StreamParseError {
 	diag := diagnostics.last()
 	if !isAnthropicParsedStreamEvent(diag.EventType) {
 		return nil
@@ -203,13 +208,13 @@ func anthropicStreamParseErrorFromDiagnostics(provider string, diagnostics *anth
 	return newAnthropicStreamParseError(provider, diag, cause)
 }
 
-func newAnthropicStreamParseError(provider string, diag anthropicStreamDiagnostic, cause error) *StreamParseError {
+func newAnthropicStreamParseError(provider string, diag anthropicStreamDiagnostic, cause error) *llm.StreamParseError {
 	eventType := diag.EventType
 	if eventType == "" {
 		eventType = "stream"
 	}
-	return &StreamParseError{
-		Kind:       StreamParseErrorKindAnthropic,
+	return &llm.StreamParseError{
+		Kind:       llm.StreamParseErrorKindAnthropic,
 		Provider:   provider,
 		EventType:  eventType,
 		Index:      diag.Index,
@@ -237,21 +242,21 @@ func isAnthropicParsedStreamEvent(eventType string) bool {
 	}
 }
 
-func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response {
-	out := Message{Role: RoleAssistant, Model: p.Name()}
+func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) llm.Response {
+	out := llm.Message{Role: llm.RoleAssistant, Model: p.Name()}
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "text":
-			out.Blocks = append(out.Blocks, Block{Type: BlockText, Text: block.Text})
+			out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: block.Text})
 		case "thinking":
-			out.Blocks = append(out.Blocks, Block{
-				Type:      BlockReasoning,
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockReasoning,
 				Text:      block.Thinking,
 				Signature: block.Signature,
 			})
 		case "redacted_thinking":
-			out.Blocks = append(out.Blocks, Block{
-				Type:     BlockReasoning,
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:     llm.BlockReasoning,
 				Content:  block.Data,
 				Redacted: true,
 			})
@@ -262,8 +267,8 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 					input = map[string]any{"_raw_input": string(block.Input)}
 				}
 			}
-			out.Blocks = append(out.Blocks, Block{
-				Type:      BlockToolUse,
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockToolUse,
 				ToolUseID: block.ID,
 				ToolName:  block.Name,
 				Input:     input,
@@ -271,10 +276,10 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 		}
 	}
 
-	return Response{
+	return llm.Response{
 		Message:    out,
 		StopReason: mapAnthropicStop(string(msg.StopReason)),
-		Usage: canonicalUsage(
+		Usage: llm.CanonicalUsage(
 			int(msg.Usage.InputTokens+msg.Usage.CacheReadInputTokens+msg.Usage.CacheCreationInputTokens),
 			int(msg.Usage.OutputTokens),
 			int(msg.Usage.CacheReadInputTokens),
@@ -282,7 +287,7 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 	}
 }
 
-func toAnthropicMessages(history []Message, profile ProviderProfile, cachePrompt bool, cacheRetention string) []anthropic.MessageParam {
+func toAnthropicMessages(history []llm.Message, profile llm.ProviderProfile, cachePrompt bool, cacheRetention string) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(history))
 	cacheMsg, cacheBlock := anthropicHistoryCacheBreakpoint(history, cachePrompt)
 	for msgIndex, m := range history {
@@ -290,23 +295,23 @@ func toAnthropicMessages(history []Message, profile ProviderProfile, cachePrompt
 		for blockIndex, b := range m.Blocks {
 			var block anthropic.ContentBlockParamUnion
 			switch b.Type {
-			case BlockText:
+			case llm.BlockText:
 				block = anthropic.NewTextBlock(b.Text)
-			case BlockImage:
+			case llm.BlockImage:
 				if imageBlock, ok := anthropicImageBlock(profile.MediaDir, b.Media); ok {
 					block = imageBlock
 				} else {
-					block = anthropic.NewTextBlock(unavailableMediaReferenceText("image", b.Media))
+					block = anthropic.NewTextBlock(llm.UnavailableMediaReferenceText("image", b.Media))
 				}
-			case BlockReasoning:
+			case llm.BlockReasoning:
 				if b.Redacted {
 					block = anthropic.NewRedactedThinkingBlock(b.Content)
 				} else {
 					block = anthropic.NewThinkingBlock(b.Signature, b.Text)
 				}
-			case BlockToolUse:
+			case llm.BlockToolUse:
 				block = anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName)
-			case BlockToolResult:
+			case llm.BlockToolResult:
 				block = anthropicToolResultBlock(profile.MediaDir, b)
 			default:
 				continue
@@ -317,24 +322,24 @@ func toAnthropicMessages(history []Message, profile ProviderProfile, cachePrompt
 			blocks = append(blocks, block)
 		}
 		switch m.Role {
-		case RoleUser:
+		case llm.RoleUser:
 			out = append(out, anthropic.NewUserMessage(blocks...))
-		case RoleAssistant:
+		case llm.RoleAssistant:
 			out = append(out, anthropic.NewAssistantMessage(blocks...))
 		}
 	}
 	return out
 }
 
-func anthropicImageBlock(workDir string, media *MediaRef) (anthropic.ContentBlockParamUnion, bool) {
-	encoded, mediaType, ok := readImageBase64(workDir, media)
+func anthropicImageBlock(workDir string, media *llm.MediaRef) (anthropic.ContentBlockParamUnion, bool) {
+	encoded, mediaType, ok := providermedia.ReadImageBase64(workDir, media)
 	if !ok {
 		return anthropic.ContentBlockParamUnion{}, false
 	}
 	return anthropic.NewImageBlockBase64(mediaType, encoded), true
 }
 
-func anthropicToolResultBlock(workDir string, b Block) anthropic.ContentBlockParamUnion {
+func anthropicToolResultBlock(workDir string, b llm.Block) anthropic.ContentBlockParamUnion {
 	if b.Media == nil {
 		return anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError)
 	}
@@ -344,7 +349,7 @@ func anthropicToolResultBlock(workDir string, b Block) anthropic.ContentBlockPar
 			OfText: &anthropic.TextBlockParam{Text: b.Content},
 		})
 	}
-	if encoded, mediaType, ok := readImageBase64(workDir, b.Media); ok {
+	if encoded, mediaType, ok := providermedia.ReadImageBase64(workDir, b.Media); ok {
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{
 			OfImage: &anthropic.ImageBlockParam{
 				Source: anthropic.ImageBlockParamSourceUnion{
@@ -357,7 +362,7 @@ func anthropicToolResultBlock(workDir string, b Block) anthropic.ContentBlockPar
 		})
 	} else {
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{
-			OfText: &anthropic.TextBlockParam{Text: unavailableMediaReferenceText("tool_result_image", b.Media)},
+			OfText: &anthropic.TextBlockParam{Text: llm.UnavailableMediaReferenceText("tool_result_image", b.Media)},
 		})
 	}
 	return anthropic.ContentBlockParamUnion{
@@ -369,12 +374,12 @@ func anthropicToolResultBlock(workDir string, b Block) anthropic.ContentBlockPar
 	}
 }
 
-func anthropicHistoryCacheBreakpoint(history []Message, enabled bool) (int, int) {
+func anthropicHistoryCacheBreakpoint(history []llm.Message, enabled bool) (int, int) {
 	if !enabled {
 		return -1, -1
 	}
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Kind == MessageKindRuntimeContext {
+		if history[i].Kind == llm.MessageKindRuntimeContext {
 			continue
 		}
 		for j := len(history[i].Blocks) - 1; j >= 0; j-- {
@@ -386,9 +391,9 @@ func anthropicHistoryCacheBreakpoint(history []Message, enabled bool) (int, int)
 	return -1, -1
 }
 
-func anthropicCacheableHistoryBlock(block Block) bool {
+func anthropicCacheableHistoryBlock(block llm.Block) bool {
 	switch block.Type {
-	case BlockText, BlockImage, BlockToolUse, BlockToolResult:
+	case llm.BlockText, llm.BlockImage, llm.BlockToolUse, llm.BlockToolResult:
 		return true
 	default:
 		return false
@@ -409,13 +414,13 @@ func setAnthropicBlockCacheControl(block *anthropic.ContentBlockParamUnion, rete
 	}
 }
 
-func toAnthropicTools(tools []ToolSpec, cachePrompt bool, cacheRetention string) []anthropic.ToolUnionParam {
+func toAnthropicTools(tools []llm.ToolSpec, cachePrompt bool, cacheRetention string) []anthropic.ToolUnionParam {
 	out := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for i, t := range tools {
-		normalized := normalizedFunctionParameters(t.Schema)
+		normalized := llm.NormalizedFunctionParameters(t.Schema)
 		schema := anthropic.ToolInputSchemaParam{
 			Properties: normalized["properties"],
-			Required:   normalizedFunctionRequired(t.Schema),
+			Required:   llm.NormalizedFunctionRequired(t.Schema),
 		}
 		if additionalProperties, ok := normalized["additionalProperties"]; ok && additionalProperties != nil {
 			schema.ExtraFields = map[string]any{"additionalProperties": additionalProperties}
@@ -444,15 +449,15 @@ func anthropicCacheControl(retention string) anthropic.CacheControlEphemeralPara
 	return cc
 }
 
-func mapAnthropicStop(s string) StopReason {
+func mapAnthropicStop(s string) llm.StopReason {
 	switch s {
 	case "end_turn", "stop_sequence":
-		return StopEndTurn
+		return llm.StopEndTurn
 	case "tool_use":
-		return StopToolUse
+		return llm.StopToolUse
 	case "max_tokens":
-		return StopMaxTokens
+		return llm.StopMaxTokens
 	default:
-		return StopOther
+		return llm.StopOther
 	}
 }

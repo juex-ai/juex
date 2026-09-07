@@ -13,12 +13,13 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
-	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/features/mcp"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
-	"github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -230,7 +231,7 @@ func TestAppModelCandidateInjectionPrecedence(t *testing.T) {
 	primary := &stubProvider{}
 	backup := &stubProvider{}
 	injectedSingle := &stubProvider{}
-	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	a, err := New(Options{
 		Config: config.Config{
 			ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir,

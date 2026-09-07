@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/foundation/environment"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 func TestLoadWithOptionsResolvesRuntimeEnvironmentPrecedenceAndMetadata(t *testing.T) {

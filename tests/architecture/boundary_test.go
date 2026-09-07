@@ -51,7 +51,7 @@ var foundationDirs = []string{
 	"internal/features/skills/internal/frontmatter",
 	"internal/foundation/homestore",
 	"internal/foundation/jsonl",
-	"internal/llm",
+	"internal/foundation/llm",
 	"internal/foundation/netbootstrap",
 	"internal/framework/provenance",
 	"internal/foundation/processmetrics",
@@ -181,4 +181,15 @@ func repositoryRoot(t *testing.T) string {
 		t.Fatal("resolve boundary test source path")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+}
+
+func TestFoundationContractsDoNotImportProviderSDKs(t *testing.T) {
+	checkImports(t, repositoryRoot(t), "internal/foundation", "Foundation", func(path string) bool {
+		return strings.HasPrefix(path, "github.com/openai/") || strings.HasPrefix(path, "github.com/anthropics/")
+	})
+}
+func TestFrameworkDoesNotImportProviderImplementations(t *testing.T) {
+	checkImports(t, repositoryRoot(t), "internal/framework", "Framework", func(path string) bool {
+		return path == modulePath+"/internal/providers" || strings.HasPrefix(path, modulePath+"/internal/providers/")
+	})
 }

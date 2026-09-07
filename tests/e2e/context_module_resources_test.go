@@ -10,8 +10,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -24,6 +24,7 @@ type contextResourceProvider struct {
 }
 
 func (*contextResourceProvider) Name() string { return "context-resources" }
+
 func (p *contextResourceProvider) Complete(_ context.Context, system string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	p.t.Helper()
 	for module, marker := range map[string]string{

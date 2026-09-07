@@ -14,9 +14,11 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
+	"github.com/juex-ai/juex/internal/providers"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
 
 func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithinHardLimit(t *testing.T) {
@@ -92,7 +94,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 		send("message_stop", map[string]any{})
 	}))
 	defer server.Close()
-	provider, err := llm.New(llm.Config{ID: "summary-test", Protocol: "anthropic/messages", BaseURL: server.URL, APIKey: "test-key", Model: "thinking-model"})
+	provider, err := providers.New(providerprofile.Config{ID: "summary-test", Protocol: "anthropic/messages", BaseURL: server.URL, APIKey: "test-key", Model: "thinking-model"})
 	if err != nil {
 		t.Fatal(err)
 	}

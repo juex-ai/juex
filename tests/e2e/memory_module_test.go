@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/foundation/homestore"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/memory"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/homestore"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
@@ -378,6 +378,7 @@ type memoryWorkerProvider struct {
 }
 
 func (*memoryWorkerProvider) Name() string { return "memory-workers" }
+
 func (p *memoryWorkerProvider) Complete(ctx context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	query := lastDirectUserText(history)
 	if !historyHasToolResult(history, "shared-write") {

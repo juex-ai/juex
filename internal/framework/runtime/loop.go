@@ -36,12 +36,13 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/foundation/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -62,7 +63,7 @@ type Engine struct {
 	// window. Zero keeps the serving candidate window as the fallback.
 	SummaryContextWindow int
 	ModelCandidates      []ModelCandidate
-	ModelHealth          *llm.ModelHealth
+	ModelHealth          *modelhealth.ModelHealth
 	Tools                *tools.Registry
 	RuntimeModules       *runtimemodule.Set
 	RuntimeContext       runtimemodule.RuntimeContext
@@ -1005,7 +1006,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 	}
 	health := e.ModelHealth
 	if health == nil {
-		health = llm.NewModelHealth(llm.ModelHealthOptions{})
+		health = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 		e.ModelHealth = health
 	}
 	refs := make([]string, len(candidates))
@@ -1016,7 +1017,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 	_, currentHistory := e.currentThread().Snapshot()
 	previousModel := previousAssistantModel(currentHistory)
 	var failures []modelAttemptFailure
-	var skipped []llm.ModelHealthSkip
+	var skipped []modelhealth.ModelHealthSkip
 	var pending *modelFallbackTransition
 	attempt := 0
 
@@ -1051,13 +1052,13 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		}
 		request, err := e.prepareCandidateRequestLocked(ctx, turnID, prepared, base, candidate, notice, selection.Index > 0)
 		if err != nil {
-			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, err
 		}
 		base.policyContext = request.policyContext
 		active, contextErr := e.activeContextLockedWithPolicyContextError(ctx, base.policyContext)
 		if contextErr != nil {
-			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			return providerTurnResult{request: base}, fmt.Errorf("runtime: build provider context: %w", contextErr)
 		}
 		base.history = active.Messages
@@ -1074,7 +1075,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		cachePolicy := e.cachePolicyLocked()
 		epoch, err := e.checkpointProviderRequestLocked(turnID, prepared, request, candidate, cachePolicy, attempt)
 		if err != nil {
-			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, err
 		}
 		request.epochID = epoch.EpochID
@@ -1088,7 +1089,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			EpochID:       request.epochID,
 			RequestDigest: request.requestDigest,
 		}}); err != nil {
-			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, fmt.Errorf("commit provider request: %w", err)
 		}
 
@@ -1124,7 +1125,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			contextUsage: contextUsage,
 		}
 		if usageErr != nil {
-			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			if err != nil {
 				usageErr = fmt.Errorf("record Usage after provider error %q: %w", err, usageErr)
 			}
@@ -1132,7 +1133,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		}
 		if err == nil {
 			if contextErr := cancellation.ContextError(ctx); contextErr != nil {
-				health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
+				health.Complete(selection.Ticket, modelhealth.ModelHealthSuccess, "")
 				discardErr := fmt.Errorf("provider response discarded: %w", contextErr)
 				if emitErr := e.emitProviderTurnErrored(
 					turnID,
@@ -1147,7 +1148,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 				}
 				return result, context.Canceled
 			}
-			health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthSuccess, "")
 			return result, nil
 		}
 		if emitErr := e.emitProviderTurnErrored(
@@ -1159,7 +1160,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			totalUsage,
 			contextUsage,
 		); emitErr != nil {
-			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			return result, &modelRequestError{
 				err:           errors.Join(err, fmt.Errorf("commit provider error: %w", emitErr)),
 				contextWindow: candidateContextWindow(candidate, e.ContextWindow),
@@ -1167,14 +1168,14 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		}
 		reason, eligible := llm.ClassifyFallbackError(err)
 		if !eligible {
-			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			return result, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
 		}
 		if len(candidates) == 1 {
-			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			return result, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
 		}
-		transition := health.Complete(selection.Ticket, llm.ModelHealthEligibleFailure, string(reason))
+		transition := health.Complete(selection.Ticket, modelhealth.ModelHealthEligibleFailure, string(reason))
 		failures = append(failures, modelAttemptFailure{ref: candidate.Ref, err: err})
 		pending = &modelFallbackTransition{
 			from:     candidate.Ref,

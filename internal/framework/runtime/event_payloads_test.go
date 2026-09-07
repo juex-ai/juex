@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/llm"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {

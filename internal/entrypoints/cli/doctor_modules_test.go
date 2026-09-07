@@ -10,8 +10,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/features/mcp"
 )
 
 func TestDoctorDisabledResourcesSkipInspection(t *testing.T) {

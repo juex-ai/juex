@@ -7,9 +7,9 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
 	"github.com/juex-ai/juex/internal/foundation/events"
-	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/status"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 // BrowserEvent is the stable event DTO sent over the Thread SSE stream.

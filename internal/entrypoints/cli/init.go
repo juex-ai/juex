@@ -10,12 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
-
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/providerreadiness"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/spf13/cobra"
+	yaml "gopkg.in/yaml.v3"
 )
 
 type initOptions struct {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/juex-ai/juex/internal/framework/status"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 const (

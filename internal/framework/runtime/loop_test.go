@@ -16,21 +16,23 @@ import (
 	"testing"
 	"time"
 
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/features/hooks"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
-	"github.com/juex-ai/juex/internal/features/hooks"
-	"github.com/juex-ai/juex/internal/llm"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
-	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -38,6 +40,7 @@ import (
 type errorProvider struct{}
 
 func (errorProvider) Name() string { return "errprov" }
+
 func (errorProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
 	return llm.Response{}, fmt.Errorf("boom")
 }
@@ -159,7 +162,7 @@ func (p retryDiagnosticProvider) CompleteWithOptions(ctx context.Context, sys st
 			Provider:    "openai-codex",
 			Model:       "gpt-5.5",
 			Protocol:    llm.ProtocolOpenAICodexResponses,
-			Transport:   llm.CodexTransportSSE,
+			Transport:   providerprofile.CodexTransportSSE,
 			Operation:   "responses.sse",
 			Attempt:     1,
 			MaxAttempts: 11,
@@ -3352,13 +3355,13 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 
 func TestCompactFallbackEventFailureReleasesSelectedHalfOpenProbe(t *testing.T) {
 	now := time.Unix(40_000, 0)
-	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{Now: func() time.Time { return now }})
 	backupOnly := []string{"backup:model"}
 	backupFailure, ok := health.Acquire(backupOnly, nil)
 	if !ok {
 		t.Fatal("acquire backup health ticket")
 	}
-	health.Complete(backupFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(backupFailure.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 	now = now.Add(30 * time.Second)
 
 	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
@@ -3387,7 +3390,7 @@ func TestCompactFallbackEventFailureReleasesSelectedHalfOpenProbe(t *testing.T) 
 	if !ok || retry.Ticket.Ref != "backup:model" || !retry.Ticket.Probe {
 		t.Fatalf("backup probe after journal failure = %+v, %v", retry, ok)
 	}
-	health.Complete(retry.Ticket, llm.ModelHealthNeutral, "")
+	health.Complete(retry.Ticket, modelhealth.ModelHealthNeutral, "")
 }
 
 func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *testing.T) {
@@ -3401,7 +3404,7 @@ func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *
 		{Ref: "primary:model", Provider: primary},
 		{Ref: "backup:model", Provider: backup},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	eng.NotifyModelChanges = true
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.SummaryModel = "summary:model"
@@ -3615,12 +3618,12 @@ func TestCompactClampsSummaryOutputForFallbackContextWindow(t *testing.T) {
 }
 
 func TestCompactSkipsModelAlreadyInSharedHealthCooldown(t *testing.T) {
-	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	primaryFailure, ok := health.Acquire([]string{"primary:model"}, nil)
 	if !ok {
 		t.Fatal("acquire primary health ticket")
 	}
-	health.Complete(primaryFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(primaryFailure.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 
 	primary := &namedCompactionProvider{name: "primary:model", text: "unexpected primary summary"}
 	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
@@ -3653,13 +3656,13 @@ func TestCompactSkipsModelAlreadyInSharedHealthCooldown(t *testing.T) {
 }
 
 func TestCompactReportsHealthSkipsWhenNoCandidateCanBeAcquired(t *testing.T) {
-	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	for _, ref := range []string{"primary:model", "backup:model"} {
 		selection, ok := health.Acquire([]string{ref}, nil)
 		if !ok {
 			t.Fatalf("acquire %s health ticket", ref)
 		}
-		health.Complete(selection.Ticket, llm.ModelHealthEligibleFailure, "transient")
+		health.Complete(selection.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 	}
 
 	primary := &namedCompactionProvider{name: "primary:model", text: "unexpected primary summary"}
@@ -3702,12 +3705,12 @@ func TestCompactReportsHealthSkipsWhenNoCandidateCanBeAcquired(t *testing.T) {
 }
 
 func TestCompactReportsRemainingHealthSkipsAfterAttemptFailure(t *testing.T) {
-	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	backupSelection, ok := health.Acquire([]string{"backup:model"}, nil)
 	if !ok {
 		t.Fatal("acquire backup health ticket")
 	}
-	health.Complete(backupSelection.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(backupSelection.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 
 	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
 	backup := &namedCompactionProvider{name: "backup:model", text: "unexpected backup summary"}
@@ -7700,7 +7703,7 @@ func TestTurn_EmitsLLMRetryDiagnostics(t *testing.T) {
 		t.Fatalf("retry events = %+v, want one", got)
 	}
 	event := got[0]
-	if event.Provider != "openai-codex" || event.Model != "gpt-5.5" || event.Transport != llm.CodexTransportSSE {
+	if event.Provider != "openai-codex" || event.Model != "gpt-5.5" || event.Transport != providerprofile.CodexTransportSSE {
 		t.Fatalf("retry identity = %+v", event)
 	}
 	if !event.WillRetry || event.Attempt != 1 || event.MaxAttempts != 11 || event.DelayMS != 100 || event.RetryReason != "codex_sse_read" {

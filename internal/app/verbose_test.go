@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
-	runtimeevents "github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	runtimeevents "github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 // emitAll feeds a sequence of events through a verbosePrinter and returns

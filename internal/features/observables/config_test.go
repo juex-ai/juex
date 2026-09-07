@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/features/observables"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 )
 
 func TestLoadConfigMissingFileReturnsEmpty(t *testing.T) {

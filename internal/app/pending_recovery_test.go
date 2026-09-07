@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/features/mcp"
-	"github.com/juex-ai/juex/internal/features/observables"
-	"github.com/juex-ai/juex/internal/framework/runtime"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 const pendingRecoveryTestTimeout = 10 * time.Second
@@ -1444,11 +1444,15 @@ func providerHistoryContains(history []llm.Message, id, text string) bool {
 type recoveryInputSource struct{ activate func(context.Context) error }
 
 func (*recoveryInputSource) ID() runtimemodule.ID { return "recovery-test-source" }
+
 func (*recoveryInputSource) StartRuntime(context.Context, runtimemodule.RuntimeContext) error {
 	return nil
 }
-func (*recoveryInputSource) QuiesceRuntime(context.Context) error        { return nil }
-func (*recoveryInputSource) CloseRuntime(context.Context) error          { return nil }
+
+func (*recoveryInputSource) QuiesceRuntime(context.Context) error { return nil }
+
+func (*recoveryInputSource) CloseRuntime(context.Context) error { return nil }
+
 func (s *recoveryInputSource) ActivateRuntime(ctx context.Context) error { return s.activate(ctx) }
 
 func installRecoveryInputSource(t *testing.T, a *App, activate func(context.Context) error) {

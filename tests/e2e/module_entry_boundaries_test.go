@@ -11,18 +11,19 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 )
 
 type moduleEntryProvider struct{ calls atomic.Int32 }
 
 func (*moduleEntryProvider) Name() string { return "module-entry" }
+
 func (p *moduleEntryProvider) Complete(context.Context, string, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
 	p.calls.Add(1)
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "retained history"), StopReason: llm.StopEndTurn}, nil

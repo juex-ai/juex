@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 // ToolResultPair contains one completed call and its execution fact. Framework

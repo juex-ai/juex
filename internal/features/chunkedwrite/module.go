@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"strings"
 
-	writefacts "github.com/juex-ai/juex/internal/chunkedwrite"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	writefacts "github.com/juex-ai/juex/internal/chunkedwrite"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -25,7 +25,8 @@ type Module struct {
 }
 
 func New(options tools.BuiltinOptions) *Module { return &Module{options: options} }
-func (*Module) ID() runtimemodule.ID           { return ModuleID }
+
+func (*Module) ID() runtimemodule.ID { return ModuleID }
 
 func (m *Module) StartThread(context.Context, runtimemodule.ThreadContext) error {
 	if m.manager != nil {

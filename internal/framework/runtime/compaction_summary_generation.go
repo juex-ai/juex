@@ -7,7 +7,8 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 )
 
@@ -18,6 +19,7 @@ const compactionSummaryThinkingEffort = "low"
 type compactionSummaryJournalError struct{ err error }
 
 func (e *compactionSummaryJournalError) Error() string { return e.err.Error() }
+
 func (e *compactionSummaryJournalError) Unwrap() error { return e.err }
 
 func isCompactionSummaryJournalError(err error) bool {
@@ -51,7 +53,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 	}
 	health := e.ModelHealth
 	if health == nil {
-		health = llm.NewModelHealth(llm.ModelHealthOptions{})
+		health = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 		e.ModelHealth = health
 	}
 	refs := make([]string, len(candidates))
@@ -60,7 +62,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 	}
 	attempted := map[string]struct{}{}
 	selection, ok := acquireCompactionSummaryCandidate(health, refs, attempted, reservedModelRef)
-	var skipped []llm.ModelHealthSkip
+	var skipped []modelhealth.ModelHealthSkip
 	recordCompactionSummaryHealthSkips(attempted, &skipped, selection.Skipped)
 	if !ok {
 		e.emitCompactionSummaryHealthSkips(turnID, "", selection.Skipped)
@@ -87,12 +89,12 @@ func (e *Engine) generateCompactionSummaryLocked(
 		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 	}
 	if isCompactionSummaryJournalError(err) {
-		health.Complete(ticket, llm.ModelHealthNeutral, "")
+		health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 	}
 	if err == nil {
 		if summary, ok := completeCompactionSummaryText(resp); ok {
-			health.Complete(ticket, llm.ModelHealthSuccess, "")
+			health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch, MaxTokens: maxOutputTokens}, nil
 		}
 
@@ -108,7 +110,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			EpochID:                 epoch.EpochID,
 			RequestDigest:           epoch.RequestDigest,
 		}}); emitErr != nil {
-			health.Complete(ticket, llm.ModelHealthNeutral, "")
+			health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
 		}
 		retryPolicy := candidatePolicy
@@ -124,19 +126,19 @@ func (e *Engine) generateCompactionSummaryLocked(
 			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 		}
 		if isCompactionSummaryJournalError(err) {
-			health.Complete(ticket, llm.ModelHealthNeutral, "")
+			health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 		}
 		if err == nil {
 			if summary, ok := completeCompactionSummaryText(resp); ok {
-				health.Complete(ticket, llm.ModelHealthSuccess, "")
+				health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch, MaxTokens: maxOutputTokens}, nil
 			}
 		}
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		health.Complete(ticket, llm.ModelHealthNeutral, "")
+		health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, ctxErr
 	}
 	for {
@@ -161,7 +163,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			RequestDigest:   epoch.RequestDigest,
 		}}); emitErr != nil {
 			if ok {
-				health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+				health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 			}
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, fmt.Errorf("commit compaction summary model fallback: %w", emitErr)
 		}
@@ -194,12 +196,12 @@ func (e *Engine) generateCompactionSummaryLocked(
 			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 		}
 		if isCompactionSummaryJournalError(err) {
-			health.Complete(ticket, llm.ModelHealthNeutral, "")
+			health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 		}
 		if err == nil {
 			if summary, ok := completeCompactionSummaryText(resp); ok {
-				health.Complete(ticket, llm.ModelHealthSuccess, "")
+				health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch, MaxTokens: maxOutputTokens}, nil
 			}
 			if !useRetryBudget {
@@ -215,7 +217,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 					EpochID:                 epoch.EpochID,
 					RequestDigest:           epoch.RequestDigest,
 				}}); emitErr != nil {
-					health.Complete(ticket, llm.ModelHealthNeutral, "")
+					health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 					return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
 				}
 				retryPolicy := candidatePolicy
@@ -231,19 +233,19 @@ func (e *Engine) generateCompactionSummaryLocked(
 					resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 				}
 				if isCompactionSummaryJournalError(err) {
-					health.Complete(ticket, llm.ModelHealthNeutral, "")
+					health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 					return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 				}
 				if err == nil {
 					if summary, ok := completeCompactionSummaryText(resp); ok {
-						health.Complete(ticket, llm.ModelHealthSuccess, "")
+						health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
 						return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch, MaxTokens: maxOutputTokens}, nil
 					}
 				}
 			}
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			health.Complete(ticket, llm.ModelHealthNeutral, "")
+			health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, ctxErr
 		}
 	}
@@ -270,7 +272,7 @@ func compactionSummaryRequestFitError(system string, history []llm.Message, poli
 	)
 }
 
-func acquireCompactionSummaryCandidate(health *llm.ModelHealth, refs []string, attempted map[string]struct{}, reservedRef string) (llm.ModelSelection, bool) {
+func acquireCompactionSummaryCandidate(health *modelhealth.ModelHealth, refs []string, attempted map[string]struct{}, reservedRef string) (modelhealth.ModelSelection, bool) {
 	selection, ok := health.Acquire(refs, attempted)
 	if reservedRef == "" {
 		return selection, ok
@@ -289,26 +291,26 @@ func acquireCompactionSummaryCandidate(health *llm.ModelHealth, refs []string, a
 		return selection, ok
 	}
 	if ok {
-		health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+		health.Complete(selection.Ticket, modelhealth.ModelHealthNeutral, "")
 	}
-	earlierSkips := make([]llm.ModelHealthSkip, 0, len(selection.Skipped))
+	earlierSkips := make([]modelhealth.ModelHealthSkip, 0, len(selection.Skipped))
 	for _, skip := range selection.Skipped {
 		index := modelRefIndex(refs, skip.Ref)
 		if index >= 0 && index < reservedIndex {
 			earlierSkips = append(earlierSkips, skip)
 		}
 	}
-	return llm.ModelSelection{Index: reservedIndex, Skipped: earlierSkips}, true
+	return modelhealth.ModelSelection{Index: reservedIndex, Skipped: earlierSkips}, true
 }
 
-func recordCompactionSummaryHealthSkips(attempted map[string]struct{}, all *[]llm.ModelHealthSkip, skips []llm.ModelHealthSkip) {
+func recordCompactionSummaryHealthSkips(attempted map[string]struct{}, all *[]modelhealth.ModelHealthSkip, skips []modelhealth.ModelHealthSkip) {
 	for _, skip := range skips {
 		attempted[skip.Ref] = struct{}{}
 		*all = append(*all, skip)
 	}
 }
 
-func (e *Engine) emitCompactionSummaryHealthSkips(turnID, selected string, skips []llm.ModelHealthSkip) {
+func (e *Engine) emitCompactionSummaryHealthSkips(turnID, selected string, skips []modelhealth.ModelHealthSkip) {
 	for _, skip := range skips {
 		e.emitModelFallback(turnID, modelFallbackTransition{
 			from:     skip.Ref,
@@ -318,12 +320,12 @@ func (e *Engine) emitCompactionSummaryHealthSkips(turnID, selected string, skips
 	}
 }
 
-func completeCompactionSummaryModelHealth(health *llm.ModelHealth, ticket llm.ModelAttemptTicket) {
+func completeCompactionSummaryModelHealth(health *modelhealth.ModelHealth, ticket modelhealth.ModelAttemptTicket) {
 	// Summary generation shares the serving health selector so it avoids models
 	// that a normal turn has already put in cooldown. A summary-only failure must
 	// not poison that serving health, though: callers may deliberately continue
 	// the accepted turn after automatic compaction fails.
-	health.Complete(ticket, llm.ModelHealthNeutral, "")
+	health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
 }
 
 func (e *Engine) compactionSummaryPolicyForCandidateLocked(candidate ModelCandidate, defaultContextWindow int) (compactionPolicy, int) {

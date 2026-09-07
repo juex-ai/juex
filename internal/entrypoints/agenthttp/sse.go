@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/framework/status"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 func sseResumeCursor(r *http.Request) string {

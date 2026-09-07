@@ -32,29 +32,29 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/features/hooks"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/agentsmd"
-	"github.com/juex-ai/juex/internal/modules/builtintools"
 	chunkmodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/features/hooks"
+	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
-	"github.com/juex-ai/juex/internal/features/shell"
+	shelltools "github.com/juex-ai/juex/internal/features/shell"
+	"github.com/juex-ai/juex/internal/features/skills"
 	skillsmodule "github.com/juex-ai/juex/internal/features/skills/module"
-	"github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
-	"github.com/juex-ai/juex/internal/foundation/sandbox"
-	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	"github.com/juex-ai/juex/internal/modules/builtintools"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -1192,8 +1192,6 @@ func e2ePromptBuilder(
 		}, runtimeSet, threadSet)
 	}}
 }
-
-// ---- Fake MCP server (re-exec) ----
 
 func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cfg mcp.Config, state *thread.Thread) (*runtimemodule.Set, *runtimemodule.Set, *tools.Registry) {
 	t.Helper()

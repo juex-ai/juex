@@ -2,11 +2,12 @@ package agentsmd
 
 import (
 	"context"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 func TestModuleContextLoadsOrderedSections(t *testing.T) {

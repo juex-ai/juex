@@ -14,16 +14,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/cobra"
-
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/providerreadiness"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
-	toolruntime "github.com/juex-ai/juex/internal/tools"
 	"github.com/juex-ai/juex/internal/foundation/version"
-	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	toolruntime "github.com/juex-ai/juex/internal/tools"
+	"github.com/spf13/cobra"
 )
 
 func TestVersionCmd_ShortForm(t *testing.T) {

@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/features/hooks"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -35,7 +36,7 @@ func TestTurnMultiLevelFallbackUsesRealTransitionsAndFinalServingNotice(t *testi
 		{Ref: "b:model", Provider: middle, ContextWindow: 128000},
 		{Ref: "c:model", Provider: last, ContextWindow: 128000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	previous := llm.TextMessage(llm.RoleAssistant, "from a")
 	previous.Model = "a:model"
 	if err := eng.Thread.Append(previous); err != nil {
@@ -89,7 +90,7 @@ func TestTurnFallbackExcludesContextOverflow(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	eng.Compaction.Enabled = false
 
 	if _, err := eng.Turn(context.Background(), "hello"); err == nil || !strings.Contains(err.Error(), "context_length_exceeded") {
@@ -102,13 +103,13 @@ func TestTurnFallbackExcludesContextOverflow(t *testing.T) {
 
 func TestTurnRecoversHigherPriorityModelWithPersistedNotice(t *testing.T) {
 	now := time.Unix(10_000, 0)
-	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{Now: func() time.Time { return now }})
 	refs := []string{"primary:model", "backup:model"}
 	failed, ok := health.Acquire(refs, nil)
 	if !ok {
 		t.Fatal("missing initial primary ticket")
 	}
-	health.Complete(failed.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(failed.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 	now = now.Add(30 * time.Second)
 
 	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{response: llm.Response{
@@ -144,13 +145,13 @@ func TestTurnRecoversHigherPriorityModelWithPersistedNotice(t *testing.T) {
 
 func TestTurnRecoveryDoesNotNotifyModelChangesByDefault(t *testing.T) {
 	now := time.Unix(15_000, 0)
-	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{Now: func() time.Time { return now }})
 	refs := []string{"primary:model", "backup:model"}
 	failed, ok := health.Acquire(refs, nil)
 	if !ok {
 		t.Fatal("missing initial primary ticket")
 	}
-	health.Complete(failed.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(failed.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 	now = now.Add(30 * time.Second)
 
 	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{response: llm.Response{
@@ -190,10 +191,10 @@ func TestTurnRecoveryDoesNotNotifyModelChangesByDefault(t *testing.T) {
 
 func TestTurnFailedRecoveryProbeDoesNotPersistFalseNotice(t *testing.T) {
 	now := time.Unix(20_000, 0)
-	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{Now: func() time.Time { return now }})
 	refs := []string{"primary:model", "backup:model"}
 	failed, _ := health.Acquire(refs, nil)
-	health.Complete(failed.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(failed.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 	now = now.Add(30 * time.Second)
 
 	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{err: errors.New("status 503")}}}
@@ -244,7 +245,7 @@ func TestTurnFallbackBatchFailureRecordsUsageBeforeResponsePersistence(t *testin
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	previous := llm.TextMessage(llm.RoleAssistant, "primary response")
 	previous.Model = "primary:model"
 	if err := eng.Thread.Append(previous); err != nil {
@@ -308,7 +309,7 @@ func TestTurnFallbackChainExhaustionEmitsEmptyDestination(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	var got []LLMFallbackPayload
 	bus.Subscribe("llm.fallback", func(event events.Event) { got = append(got, event.Payload.(LLMFallbackPayload)) })
 
@@ -322,7 +323,7 @@ func TestTurnFallbackChainExhaustionEmitsEmptyDestination(t *testing.T) {
 }
 
 func TestSharedModelHealthSkipsOpenPrimaryAcrossEngines(t *testing.T) {
-	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	primary1 := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{err: errors.New("status 503")}}}
 	backup1 := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{response: llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "first fallback"),
@@ -364,12 +365,12 @@ func TestSharedModelHealthSkipsOpenPrimaryAcrossEngines(t *testing.T) {
 }
 
 func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
-	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	opened, ok := health.Acquire([]string{"a:model"}, nil)
 	if !ok {
 		t.Fatal("missing circuit ticket")
 	}
-	health.Complete(opened.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(opened.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 
 	a := &fallbackProvider{name: "a:model"}
 	b := &fallbackProvider{name: "b:model", results: []fallbackProviderResult{{err: errors.New("status 503")}}}
@@ -417,12 +418,12 @@ func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
 }
 
 func TestTurnExhaustionErrorIncludesEarlierBreakerSkip(t *testing.T) {
-	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	opened, ok := health.Acquire([]string{"primary:model"}, nil)
 	if !ok {
 		t.Fatal("missing circuit ticket")
 	}
-	health.Complete(opened.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(opened.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 
 	primary := &fallbackProvider{name: "primary:model"}
 	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{err: errors.New("status 403")}}}
@@ -462,7 +463,7 @@ func TestTurnFallbackAfterToolResultDoesNotRerunTool(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	toolCalls := 0
 	if err := eng.Tools.Register(tools.Tool{
 		Name: "once",
@@ -511,7 +512,7 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 10_000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 2_000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Use the refreshed fallback context now."}},
 	}})
@@ -555,16 +556,16 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 
 func TestTurnPreflightFailureNeutrallyReleasesHalfOpenCandidate(t *testing.T) {
 	now := time.Unix(30_000, 0)
-	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	health := modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{Now: func() time.Time { return now }})
 	primaryOnly := []string{"primary:model"}
 	backupOnly := []string{"backup:model"}
 	primaryFailure, _ := health.Acquire(primaryOnly, nil)
-	health.Complete(primaryFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(primaryFailure.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 	now = now.Add(30 * time.Second)
 	primaryProbe, _ := health.Acquire(primaryOnly, nil)
-	health.Complete(primaryProbe.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(primaryProbe.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 	backupFailure, _ := health.Acquire(backupOnly, nil)
-	health.Complete(backupFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	health.Complete(backupFailure.Ticket, modelhealth.ModelHealthEligibleFailure, "transient")
 	now = now.Add(30 * time.Second)
 
 	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{err: errors.New("summary unavailable")}}}
@@ -631,7 +632,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000, MaxOutputTokens: 4096},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 64000, MaxOutputTokens: 2048},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "fallback"}, Stdout: "one-shot fallback context"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -715,7 +716,7 @@ func TestTurnFallbackDoesNotNotifyModelChangesByDefault(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 64000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	previous := llm.TextMessage(llm.RoleAssistant, "primary response")
 	previous.Model = "primary:model"
 	if err := eng.Thread.Append(previous); err != nil {
@@ -762,7 +763,7 @@ func TestTurnFallsBackAfterStreamedDelta(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	var modelEvents []string
 	for _, eventType := range []string{"llm.requested", "llm.output_delta", "llm.errored", "llm.fallback", "llm.responded"} {
 		bus.Subscribe(eventType, func(event events.Event) {
@@ -798,7 +799,7 @@ func TestTurnDoesNotFallbackWhenErrorOutcomeCannotCommit(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	want := errors.New("outcome sync failed")
 	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: "llm.errored", err: want})
 
@@ -833,7 +834,7 @@ func TestTurnFallbackAfterStreamedDeltaExecutesRecoveredToolOnce(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
 	}
-	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.ModelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	toolCalls := 0
 	if err := eng.Tools.Register(tools.Tool{
 		Name: "once",

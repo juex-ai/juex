@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/foundation/toolevents"
 )
 
 func TestDefaultCatalogPreparesAndDecodesStableEvent(t *testing.T) {

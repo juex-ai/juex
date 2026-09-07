@@ -7,13 +7,15 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/errorclass"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 var ErrThreadUnavailable = errors.New("app: Thread is unavailable")
+
 var ErrThreadChanged = errors.New("app: Thread changed")
+
 var ErrThreadStopped = errorclass.WithKind(errorclass.KindTerminated, errors.New("app: Thread stopped"))
 
 type ThreadIdentitySnapshot struct {

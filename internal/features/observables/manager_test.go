@@ -11,14 +11,16 @@ import (
 	"testing"
 	"time"
 
+	observable "github.com/juex-ai/juex/internal/features/observables"
+
 	"github.com/juex-ai/juex/internal/foundation/environment"
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 )
 
 const asyncWaitTimeout = 5 * time.Second
+
 const quietBatchWaitTimeout = 8 * time.Second
 
 func TestManager_RecordObservationSnapshotsAttachments(t *testing.T) {

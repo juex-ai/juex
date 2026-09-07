@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 )
 
 func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {

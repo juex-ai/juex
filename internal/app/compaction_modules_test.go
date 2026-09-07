@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
@@ -18,10 +18,12 @@ type checkpointModule struct {
 }
 
 func (*checkpointModule) ID() runtimemodule.ID { return "checkpoint-fixture" }
+
 func (m *checkpointModule) CompactionContribution(context.Context) (runtimemodule.CompactionContribution, error) {
 	m.reads++
 	return m.part, nil
 }
+
 func (m *checkpointModule) Context(context.Context, runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
 	if m.runtimeText == "" {
 		return nil, nil

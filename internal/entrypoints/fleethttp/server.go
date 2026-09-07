@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/juex-ai/juex/internal/entrypoints/webassets"
 	"io"
 	"net"
 	"net/http"
@@ -19,8 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/entrypoints/webassets"
+
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/foundation/processmetrics"
 	"github.com/juex-ai/juex/internal/framework/endpoint"

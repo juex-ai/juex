@@ -23,25 +23,27 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
-	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/features/hooks"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/features/mcp"
-	"github.com/juex-ai/juex/internal/framework/threadlog"
-	"github.com/juex-ai/juex/internal/features/observables"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	usermedia "github.com/juex-ai/juex/internal/framework/inputmedia"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/framework/prompt"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 	"github.com/juex-ai/juex/internal/framework/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
-	"github.com/juex-ai/juex/internal/foundation/sandbox"
-	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/framework/thread"
+	observability "github.com/juex-ai/juex/internal/framework/threadlog"
+	modelproviders "github.com/juex-ai/juex/internal/providers"
 	"github.com/juex-ai/juex/internal/tools"
-	"github.com/juex-ai/juex/internal/framework/inputmedia"
 )
 
 // Options bundles the inputs to New.
@@ -51,7 +53,7 @@ type Options struct {
 	// ModelCandidates takes precedence over Provider and config-derived models.
 	// ModelHealth may be shared by multiple Apps, as juex listen does.
 	ModelCandidates []runtime.ModelCandidate
-	ModelHealth     *llm.ModelHealth
+	ModelHealth     *modelhealth.ModelHealth
 	// SummaryProvider, when set, overrides compaction.summary_model provider
 	// construction. It is primarily useful for tests and embedded callers.
 	SummaryProvider      llm.Provider
@@ -267,7 +269,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			if err != nil {
 				return nil, err
 			}
-			candidateProvider, err := llm.NewProvider(profile)
+			candidateProvider, err := modelproviders.NewProvider(profile)
 			if err != nil {
 				return nil, err
 			}
@@ -283,7 +285,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	}
 	modelHealth := opts.ModelHealth
 	if modelHealth == nil {
-		modelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+		modelHealth = modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{})
 	}
 	summaryProvider := opts.SummaryProvider
 	summaryProvenance := opts.SummaryProvenance
@@ -299,7 +301,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}
-		p, err := llm.NewProvider(profile)
+		p, err := modelproviders.NewProvider(profile)
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}

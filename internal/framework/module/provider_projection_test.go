@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 type historyProjector struct {
@@ -16,6 +16,7 @@ type historyProjector struct {
 }
 
 func (m *historyProjector) ID() ID { return m.id }
+
 func (m *historyProjector) ProjectProviderHistory(ctx context.Context, pairs []ToolResultPair, _ ProviderHistoryBudget) (ProviderHistoryPlan, error) {
 	return m.project(ctx, pairs)
 }

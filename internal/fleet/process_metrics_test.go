@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/processmetrics"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
-	"github.com/juex-ai/juex/internal/foundation/processmetrics"
 )
 
 type stubProcessUsageSampler struct {

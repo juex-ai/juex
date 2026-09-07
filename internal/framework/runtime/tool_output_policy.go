@@ -1,8 +1,9 @@
 package runtime
 
-import runtimepolicy "github.com/juex-ai/juex/internal/framework/runtime/policy"
-
-import "github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
+import (
+	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
+	runtimepolicy "github.com/juex-ai/juex/internal/framework/runtime/policy"
+)
 
 type ToolOutputPolicy = runtimepolicy.ToolOutputPolicy
 

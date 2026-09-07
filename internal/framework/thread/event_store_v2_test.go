@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 func TestUsageProjectionRecoversCommittedTailExactlyOnce(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 func TestStoreCreatesAndReplaysMainAndWorker(t *testing.T) {

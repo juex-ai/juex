@@ -15,15 +15,16 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/framework/endpoint"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	"github.com/juex-ai/juex/internal/framework/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/status"
-	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/version"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	"github.com/juex-ai/juex/internal/framework/modelhealth"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 // Options configures a Server. Provider is optional; if unset, each Thread
@@ -52,7 +53,7 @@ type Server struct {
 	readOnly            bool
 	inspectionFactories []runtimemodule.ThreadFactorySpec
 	opts                Options
-	modelHealth         *llm.ModelHealth
+	modelHealth         *modelhealth.ModelHealth
 	threads             sync.Map // Thread id (string) → *activeThread
 	startedAt           time.Time
 	statusStream        *statusapi.ActivityStore
@@ -116,7 +117,7 @@ func NewServer(opts Options) *Server {
 	return &Server{
 		inspectionDone: make(chan struct{}),
 		opts:           opts,
-		modelHealth:    llm.NewModelHealth(llm.ModelHealthOptions{}),
+		modelHealth:    modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{}),
 		startedAt:      time.Now().UTC(),
 		statusStream:   statusapi.NewActivityStore(),
 		resources:      resources,

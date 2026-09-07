@@ -7,13 +7,13 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/extensions"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/mcp"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	"github.com/juex-ai/juex/internal/features/observables"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/environment"
 )
 
 type mcpConfigRef struct {

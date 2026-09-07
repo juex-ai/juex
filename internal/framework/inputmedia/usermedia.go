@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	_ "image/gif"
-	_ "image/jpeg"
 	_ "image/png"
 	"io"
 	"io/fs"
@@ -18,7 +16,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/artifact"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 const (

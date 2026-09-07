@@ -12,9 +12,9 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/features/mcp"
-	"github.com/juex-ai/juex/internal/features/observables"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -22,6 +22,7 @@ import (
 type activationHistoryProvider struct{ histories chan []llm.Message }
 
 func (*activationHistoryProvider) Name() string { return "activation-history" }
+
 func (p *activationHistoryProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	p.histories <- append([]llm.Message(nil), history...)
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "handled"), StopReason: llm.StopEndTurn}, nil

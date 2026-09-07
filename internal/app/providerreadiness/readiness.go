@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	modelproviders "github.com/juex-ai/juex/internal/providers"
 )
 
 const InitSuggestion = "run `juex config init` to get started"
@@ -72,7 +73,7 @@ func (e *ProviderConstructionError) Unwrap() error {
 }
 
 func (LLMProbe) Probe(ctx context.Context, profile llm.ProviderProfile) error {
-	provider, err := llm.NewProvider(profile)
+	provider, err := modelproviders.NewProvider(profile)
 	if err != nil {
 		return &ProviderConstructionError{Err: err}
 	}

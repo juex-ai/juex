@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 )
 
 func newListenCmd(flags *persistentFlags) *cobra.Command {

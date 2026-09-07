@@ -2,7 +2,7 @@ package thread
 
 import (
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 func generationSeedFromState(state ReplayState, providerMessages []llm.Message, contextUsage *llm.ContextUsage) GenerationSeed {

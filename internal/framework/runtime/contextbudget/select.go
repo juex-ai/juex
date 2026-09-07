@@ -1,6 +1,8 @@
 package contextbudget
 
-import "github.com/juex-ai/juex/internal/llm"
+import (
+	"github.com/juex-ai/juex/internal/foundation/llm"
+)
 
 type Selection struct {
 	PreviousSummary    llm.Message

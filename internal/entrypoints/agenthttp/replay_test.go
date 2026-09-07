@@ -9,9 +9,9 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/foundation/toolevents"
 )
 
 func TestReplaySince_ReturnsEventsAfterID(t *testing.T) {

@@ -1,6 +1,8 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 type providerProjectionOptions struct {
 	// Codex Responses uses store=false. Replaying reasoning item IDs in that
@@ -69,14 +71,14 @@ func projectProviderBlock(b Block, profile ProviderProfile) Block {
 		}
 	case BlockToolResult:
 		if b.Media != nil && !profile.Capabilities.Vision {
-			b.Content = toolResultContentWithUnavailableMediaReference(b)
+			b.Content = ToolResultContentWithUnavailableMediaReference(b)
 			b.Media = nil
 		}
 	}
 	return b
 }
 
-func normalizedFunctionParameters(schema map[string]any) map[string]any {
+func NormalizedFunctionParameters(schema map[string]any) map[string]any {
 	out := normalizeFunctionSchemaObject(schema)
 	if out["type"] == nil || out["type"] == "" {
 		out["type"] = "object"
@@ -287,8 +289,8 @@ func isNoArgumentSchemaMetadata(key string) bool {
 	}
 }
 
-func normalizedFunctionProperties(schema map[string]any) map[string]any {
-	normalized := normalizedFunctionParameters(schema)
+func NormalizedFunctionProperties(schema map[string]any) map[string]any {
+	normalized := NormalizedFunctionParameters(schema)
 	props, ok := normalized["properties"].(map[string]any)
 	if !ok || props == nil {
 		return map[string]any{}
@@ -296,8 +298,8 @@ func normalizedFunctionProperties(schema map[string]any) map[string]any {
 	return props
 }
 
-func normalizedFunctionRequired(schema map[string]any) []string {
-	normalized := normalizedFunctionParameters(schema)
+func NormalizedFunctionRequired(schema map[string]any) []string {
+	normalized := NormalizedFunctionParameters(schema)
 	return functionRequired(normalized)
 }
 
@@ -318,7 +320,7 @@ func functionRequired(schema map[string]any) []string {
 	}
 }
 
-func toolCallArguments(toolName string, input map[string]any) string {
+func ToolCallArguments(toolName string, input map[string]any) string {
 	input = ProviderToolInput(toolName, input)
 	if input == nil {
 		return "{}"
@@ -330,7 +332,7 @@ func toolCallArguments(toolName string, input map[string]any) string {
 	return string(argBytes)
 }
 
-func parseToolArguments(raw string) map[string]any {
+func ParseToolArguments(raw string) map[string]any {
 	if raw == "" {
 		return nil
 	}

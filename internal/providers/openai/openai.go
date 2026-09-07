@@ -1,4 +1,4 @@
-package llm
+package openai
 
 import (
 	"context"
@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openai/openai-go"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	providermedia "github.com/juex-ai/juex/internal/providers/internal/media"
+	protocolsupport "github.com/juex-ai/juex/internal/providers/internal/protocol"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
+	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
@@ -16,15 +20,15 @@ import (
 // every OpenAI-compatible endpoint (DeepSeek, OpenRouter, Ollama, ...) by
 // swapping option.WithBaseURL.
 type openAIProvider struct {
-	profile ProviderProfile
+	profile llm.ProviderProfile
 	client  openai.Client
 }
 
-func NewOpenAI(profile ProviderProfile, _ any) Provider {
-	profile = cloneProviderProfile(profile)
+func NewOpenAI(profile llm.ProviderProfile, _ any) llm.Provider {
+	profile = providerprofile.CloneProviderProfile(profile)
 	opts := []option.RequestOption{
 		option.WithAPIKey(profile.APIKey),
-		option.WithMaxRetries(providerMaxRetries),
+		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
 	}
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
@@ -43,14 +47,15 @@ func NewOpenAI(profile ProviderProfile, _ any) Provider {
 
 func (p *openAIProvider) Name() string { return p.profile.ID + ":" + p.profile.Model }
 
-func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
-	return p.CompleteWithOptions(ctx, sys, history, tools, CompleteOptions{})
+func (p *openAIProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
 }
 
-func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
-	providerContext, err := BuildProviderContext(history, p.profile, ProviderContextOptions{})
+func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
+	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{})
 	if err != nil {
-		return Response{}, err
+		return llm.Response{}, err
 	}
 	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(providerContext.Messages)+1)
 	if sys != "" {
@@ -65,7 +70,7 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 	if p.profile.Capabilities.Tools {
 		params.Tools = toOpenAITools(tools)
 	}
-	if effort := requestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
+	if effort := protocolsupport.RequestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
 		params.ReasoningEffort = shared.ReasoningEffort(effort)
 	}
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
@@ -80,15 +85,15 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return Response{}, fmt.Errorf("openai: %w", err)
+		return llm.Response{}, fmt.Errorf("openai: %w", err)
 	}
 	return p.responseFromChatCompletion(completion, "")
 }
 
-func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.ChatCompletionNewParams, opts CompleteOptions) (Response, error) {
+func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.ChatCompletionNewParams, opts llm.CompleteOptions) (llm.Response, error) {
 	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{IncludeUsage: openai.Bool(true)}
-	idleTimeout := streamIdleTimeout(opts)
-	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
+	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 	defer stopIdle()
 	stream := p.client.Chat.Completions.NewStreaming(streamCtx, params)
 	defer func() { _ = stream.Close() }()
@@ -106,15 +111,15 @@ func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.Ch
 			if delta := extractReasoningContent(choice.Delta.RawJSON()); delta != "" {
 				reasoning.WriteString(delta)
 				if opts.OnDelta != nil {
-					opts.OnDelta(StreamDelta{Kind: "reasoning", Index: index, Text: delta})
+					opts.OnDelta(llm.StreamDelta{Kind: "reasoning", Index: index, Text: delta})
 				}
 			}
 			if choice.Delta.Content != "" && opts.OnDelta != nil {
-				opts.OnDelta(StreamDelta{Kind: "text", Index: index, Text: choice.Delta.Content})
+				opts.OnDelta(llm.StreamDelta{Kind: "text", Index: index, Text: choice.Delta.Content})
 			}
 		}
 		if !acc.AddChunk(chunk) {
-			return Response{}, fmt.Errorf("openai chat stream accumulation failed")
+			return llm.Response{}, fmt.Errorf("openai chat stream accumulation failed")
 		}
 		if chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 || chunk.Usage.PromptTokensDetails.CachedTokens != 0 {
 			streamUsage = chunk.Usage
@@ -122,9 +127,9 @@ func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.Ch
 	}
 	if err := stream.Err(); err != nil {
 		if idleExpired() {
-			return Response{}, newStreamIdleTimeoutError("openai chat stream", idleTimeout, err)
+			return llm.Response{}, protocolsupport.NewStreamIdleTimeoutError("openai chat stream", idleTimeout, err)
 		}
-		return Response{}, fmt.Errorf("openai chat stream: %w", err)
+		return llm.Response{}, fmt.Errorf("openai chat stream: %w", err)
 	}
 	if streamUsage.PromptTokens != 0 || streamUsage.CompletionTokens != 0 || streamUsage.PromptTokensDetails.CachedTokens != 0 {
 		acc.Usage = streamUsage
@@ -132,36 +137,36 @@ func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.Ch
 	return p.responseFromChatCompletion(&acc.ChatCompletion, reasoning.String())
 }
 
-func (p *openAIProvider) responseFromChatCompletion(completion *openai.ChatCompletion, streamedReasoning string) (Response, error) {
+func (p *openAIProvider) responseFromChatCompletion(completion *openai.ChatCompletion, streamedReasoning string) (llm.Response, error) {
 	if len(completion.Choices) == 0 {
-		return Response{}, fmt.Errorf("openai: empty choices")
+		return llm.Response{}, fmt.Errorf("openai: empty choices")
 	}
 	choice := completion.Choices[0]
 
-	out := Message{Role: RoleAssistant, Model: p.Name()}
+	out := llm.Message{Role: llm.RoleAssistant, Model: p.Name()}
 	// DeepSeek and similar providers attach `reasoning_content` to the
 	// assistant message. We surface it as a Block so it round-trips on the
 	// next call (DeepSeek rejects requests that omit it after a thinking
 	// turn).
 	if rc := firstNonEmpty(streamedReasoning, extractReasoningContent(choice.Message.RawJSON())); rc != "" {
-		out.Blocks = append(out.Blocks, Block{Type: BlockReasoning, Text: rc})
+		out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockReasoning, Text: rc})
 	}
 	if choice.Message.Content != "" {
-		out.Blocks = append(out.Blocks, Block{Type: BlockText, Text: choice.Message.Content})
+		out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: choice.Message.Content})
 	}
 	for _, tc := range choice.Message.ToolCalls {
-		out.Blocks = append(out.Blocks, Block{
-			Type:      BlockToolUse,
+		out.Blocks = append(out.Blocks, llm.Block{
+			Type:      llm.BlockToolUse,
 			ToolUseID: tc.ID,
 			ToolName:  tc.Function.Name,
-			Input:     parseToolArguments(tc.Function.Arguments),
+			Input:     llm.ParseToolArguments(tc.Function.Arguments),
 		})
 	}
 
-	return Response{
+	return llm.Response{
 		Message:    out,
 		StopReason: mapOpenAIStop(string(choice.FinishReason)),
-		Usage: canonicalUsage(
+		Usage: llm.CanonicalUsage(
 			int(completion.Usage.PromptTokens),
 			int(completion.Usage.CompletionTokens),
 			int(completion.Usage.PromptTokensDetails.CachedTokens),
@@ -172,11 +177,11 @@ func (p *openAIProvider) responseFromChatCompletion(completion *openai.ChatCompl
 // toOpenAIMessages converts Juex history into OpenAI-shaped messages,
 // splitting user-role tool_result blocks into role=tool messages so the
 // tool_call_id <-> tool message linkage is preserved.
-func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatCompletionMessageParamUnion {
+func toOpenAIMessages(history []llm.Message, profile llm.ProviderProfile) []openai.ChatCompletionMessageParamUnion {
 	var out []openai.ChatCompletionMessageParamUnion
 	for _, m := range history {
 		switch m.Role {
-		case RoleUser:
+		case llm.RoleUser:
 			var userText strings.Builder
 			var userParts []openai.ChatCompletionContentPartUnionParam
 			var deferredUserMessages []openai.ChatCompletionMessageParamUnion
@@ -205,15 +210,15 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 			}
 			for _, b := range m.Blocks {
 				switch b.Type {
-				case BlockText:
+				case llm.BlockText:
 					flushDeferredUserMessages()
 					if userText.Len() > 0 {
 						userText.WriteString("\n")
 					}
 					userText.WriteString(b.Text)
-				case BlockImage:
+				case llm.BlockImage:
 					flushDeferredUserMessages()
-					if dataURL, ok := imageDataURL(profile.MediaDir, b.Media); ok {
+					if dataURL, ok := providermedia.ImageDataURL(profile.MediaDir, b.Media); ok {
 						if userText.Len() > 0 {
 							userParts = append(userParts, openai.TextContentPart(userText.String()))
 							userText.Reset()
@@ -226,18 +231,18 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					if userText.Len() > 0 {
 						userText.WriteString("\n")
 					}
-					userText.WriteString(unavailableMediaReferenceText("image", b.Media))
-				case BlockToolResult:
+					userText.WriteString(llm.UnavailableMediaReferenceText("image", b.Media))
+				case llm.BlockToolResult:
 					flushUser()
 					content := b.Content
 					var dataURL string
 					var mediaAvailable bool
 					if b.Media != nil {
-						dataURL, mediaAvailable = imageDataURL(profile.MediaDir, b.Media)
+						dataURL, mediaAvailable = providermedia.ImageDataURL(profile.MediaDir, b.Media)
 						if mediaAvailable {
-							content = toolResultContentWithMediaReference(b)
+							content = llm.ToolResultContentWithMediaReference(b)
 						} else {
-							content = toolResultContentWithUnavailableMediaReference(b)
+							content = llm.ToolResultContentWithUnavailableMediaReference(b)
 						}
 					}
 					out = append(out, openai.ToolMessage(content, b.ToolUseID))
@@ -251,25 +256,25 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 			}
 			flushDeferredUserMessages()
 			flushUser()
-		case RoleAssistant:
+		case llm.RoleAssistant:
 			am := openai.ChatCompletionAssistantMessageParam{}
 			var textParts []string
 			var reasoningParts []string
 			var toolCalls []openai.ChatCompletionMessageToolCallParam
 			for _, b := range m.Blocks {
 				switch b.Type {
-				case BlockText:
+				case llm.BlockText:
 					textParts = append(textParts, b.Text)
-				case BlockReasoning:
+				case llm.BlockReasoning:
 					if profile.Capabilities.ReasoningReplay {
 						reasoningParts = append(reasoningParts, b.Text)
 					}
-				case BlockToolUse:
+				case llm.BlockToolUse:
 					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
 						ID: b.ToolUseID,
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      b.ToolName,
-							Arguments: toolCallArguments(b.ToolName, b.Input),
+							Arguments: llm.ToolCallArguments(b.ToolName, b.Input),
 						},
 					})
 				}
@@ -295,7 +300,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 				}
 			}
 			out = append(out, openai.ChatCompletionMessageParamUnion{OfAssistant: &am})
-		case RoleSystem:
+		case llm.RoleSystem:
 			if text := m.FirstText(); text != "" {
 				out = append(out, openai.SystemMessage(text))
 			}
@@ -312,21 +317,21 @@ func openAIUserContentPartsMessage(parts []openai.ChatCompletionContentPartUnion
 	return openai.ChatCompletionMessageParamUnion{OfUser: &msg}
 }
 
-func openAIToolResultImageAttribution(b Block) string {
+func openAIToolResultImageAttribution(b llm.Block) string {
 	if b.ToolName != "" {
 		return "Tool result image from " + b.ToolName + " (" + b.ToolUseID + ")."
 	}
 	return "Tool result image from tool call " + b.ToolUseID + "."
 }
 
-func toOpenAITools(tools []ToolSpec) []openai.ChatCompletionToolParam {
+func toOpenAITools(tools []llm.ToolSpec) []openai.ChatCompletionToolParam {
 	out := make([]openai.ChatCompletionToolParam, 0, len(tools))
 	for _, t := range tools {
 		out = append(out, openai.ChatCompletionToolParam{
 			Function: shared.FunctionDefinitionParam{
 				Name:        t.Name,
 				Description: param.NewOpt(t.Description),
-				Parameters:  shared.FunctionParameters(normalizedFunctionParameters(t.Schema)),
+				Parameters:  shared.FunctionParameters(llm.NormalizedFunctionParameters(t.Schema)),
 			},
 		})
 	}
@@ -360,15 +365,15 @@ func extractReasoningContent(raw string) string {
 	}
 }
 
-func mapOpenAIStop(s string) StopReason {
+func mapOpenAIStop(s string) llm.StopReason {
 	switch s {
 	case "stop":
-		return StopEndTurn
+		return llm.StopEndTurn
 	case "tool_calls", "function_call":
-		return StopToolUse
+		return llm.StopToolUse
 	case "length":
-		return StopMaxTokens
+		return llm.StopMaxTokens
 	default:
-		return StopOther
+		return llm.StopOther
 	}
 }

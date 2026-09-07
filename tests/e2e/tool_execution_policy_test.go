@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
-	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
-	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -26,6 +26,7 @@ import (
 type executionPolicyModule struct{ tools []tools.Tool }
 
 func (*executionPolicyModule) ID() runtimemodule.ID { return "execution-policy-fixture" }
+
 func (m *executionPolicyModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
 	return m.tools, nil
 }
@@ -156,6 +157,7 @@ type executionWorkerProvider struct {
 }
 
 func (*executionWorkerProvider) Name() string { return "execution-workers" }
+
 func (p *executionWorkerProvider) Complete(ctx context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	query := lastDirectUserText(history)
 	if query == "launch two workers" {

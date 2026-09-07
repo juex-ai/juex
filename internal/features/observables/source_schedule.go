@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 )
 
 const scheduleRecoveryLimit = 100

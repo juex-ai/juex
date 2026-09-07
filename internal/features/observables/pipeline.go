@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/tools"
 )
 

@@ -13,15 +13,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/foundation/environment"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/app/providerreadiness"
-	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	toolruntime "github.com/juex-ai/juex/internal/tools"
 )
 

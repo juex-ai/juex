@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/events"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"

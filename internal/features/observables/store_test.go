@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/features/observables"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 )
 
 var fixedTime = time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC)

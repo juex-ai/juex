@@ -10,14 +10,15 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/runtime/workmem"
-	"github.com/juex-ai/juex/internal/framework/status"
-	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
 
 func TestBrowserEventTypesMatchGolden(t *testing.T) {
@@ -566,7 +567,7 @@ func browserEventFixtureEvents() []events.Event {
 					Provider:    "openai-codex",
 					Model:       "gpt-5.5",
 					Protocol:    llm.ProtocolOpenAICodexResponses,
-					Transport:   llm.CodexTransportSSE,
+					Transport:   providerprofile.CodexTransportSSE,
 					Operation:   "responses.sse",
 					Attempt:     1,
 					MaxAttempts: 11,

@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 

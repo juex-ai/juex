@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 func newRecordID(prefix string) string {

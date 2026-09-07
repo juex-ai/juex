@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 func TestLoadAgentConfigAfterWorkspaceWithInheritedImportScope(t *testing.T) {

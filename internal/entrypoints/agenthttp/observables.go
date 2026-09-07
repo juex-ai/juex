@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	"github.com/juex-ai/juex/internal/features/observables"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 

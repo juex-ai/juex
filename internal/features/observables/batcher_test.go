@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
-	"github.com/juex-ai/juex/internal/features/observables"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 )
 
 func TestBatcher_FlushesAfterInterval(t *testing.T) {

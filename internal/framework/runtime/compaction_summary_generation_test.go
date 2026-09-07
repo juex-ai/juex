@@ -3,7 +3,7 @@ package runtime
 import (
 	"testing"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 func TestCompactionSummaryRetryBudgetNeverExceedsSteppedOrExplicitCeilings(t *testing.T) {

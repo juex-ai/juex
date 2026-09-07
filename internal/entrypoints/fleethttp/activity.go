@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/framework/status"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 const (

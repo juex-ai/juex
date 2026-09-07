@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
 
 func TestParseLevel(t *testing.T) {
@@ -97,7 +98,7 @@ func TestRecorderRecordsLLMRetryDiagnostics(t *testing.T) {
 		"provider":     "openai-codex",
 		"model":        "gpt-5.5",
 		"protocol":     llm.ProtocolOpenAICodexResponses,
-		"transport":    llm.CodexTransportSSE,
+		"transport":    providerprofile.CodexTransportSSE,
 		"operation":    "responses.sse",
 		"attempt":      1,
 		"max_attempts": 11,

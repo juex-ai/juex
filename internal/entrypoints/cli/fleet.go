@@ -21,9 +21,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	fleetweb "github.com/juex-ai/juex/internal/entrypoints/fleethttp"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/fleet/service"
-	"github.com/juex-ai/juex/internal/entrypoints/fleethttp"
+	fleetservice "github.com/juex-ai/juex/internal/fleet/service"
 	"github.com/juex-ai/juex/internal/foundation/processmetrics"
 	"github.com/juex-ai/juex/internal/foundation/version"
 )

@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -19,12 +19,14 @@ type capabilityProvider struct{ calls atomic.Int32 }
 type capabilityStartPolicy struct{ calls atomic.Int32 }
 
 func (*capabilityStartPolicy) ID() runtimemodule.ID { return "startup-probe" }
+
 func (p *capabilityStartPolicy) ApplyThreadStart(context.Context, runtimemodule.ThreadStartRequest) (runtimemodule.ThreadStartDecision, error) {
 	p.calls.Add(1)
 	return runtimemodule.ThreadStartDecision{}, nil
 }
 
 func (*capabilityProvider) Name() string { return "capability-test" }
+
 func (p *capabilityProvider) Complete(context.Context, string, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
 	p.calls.Add(1)
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "completed"), StopReason: llm.StopEndTurn}, nil

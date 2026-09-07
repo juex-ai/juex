@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
-	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 

@@ -1,6 +1,10 @@
-package llm
+package profile
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/juex-ai/juex/internal/foundation/llm"
+)
 
 func TestResolveProfile_KnownPresetUsesFixedProtocol(t *testing.T) {
 	profile, err := ResolveProfile(Config{
@@ -12,7 +16,7 @@ func TestResolveProfile_KnownPresetUsesFixedProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != "openai" || profile.Protocol != ProtocolOpenAIResponses {
+	if profile.ID != "openai" || profile.Protocol != llm.ProtocolOpenAIResponses {
 		t.Fatalf("profile = %+v", profile)
 	}
 	if !profile.Capabilities.Tools || !profile.Capabilities.Streaming || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
@@ -32,7 +36,7 @@ func TestResolveProfile_DeepSeekPresetUsesOpenAIChatWithReasoningEffort(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != "deepseek" || profile.Protocol != ProtocolOpenAIChat {
+	if profile.ID != "deepseek" || profile.Protocol != llm.ProtocolOpenAIChat {
 		t.Fatalf("profile = %+v", profile)
 	}
 	if profile.BaseURL != "https://api.deepseek.com" {
@@ -49,7 +53,7 @@ func TestResolveProfile_DeepSeekPresetUsesOpenAIChatWithReasoningEffort(t *testi
 func TestResolveProfile_RejectsKnownPresetProtocolOverride(t *testing.T) {
 	_, err := ResolveProfile(Config{
 		ID:       "openai",
-		Protocol: string(ProtocolOpenAIChat),
+		Protocol: string(llm.ProtocolOpenAIChat),
 		APIKey:   "k",
 		Model:    "gpt-test",
 	})
@@ -64,7 +68,7 @@ func TestResolveProfile_CapabilityOverride(t *testing.T) {
 		ID:     "openai",
 		APIKey: "k",
 		Model:  "gpt-test",
-		Capabilities: CapabilityOverrides{
+		Capabilities: llm.CapabilityOverrides{
 			Tools:           &no,
 			Streaming:       &no,
 			ReasoningEffort: &no,
@@ -83,14 +87,14 @@ func TestResolveProfile_CapabilityOverride(t *testing.T) {
 
 func TestResolveProfile_CustomProtocolUsesCompatibleOpenAIChatDefaults(t *testing.T) {
 	profile, err := ResolveProfile(Config{
-		Protocol: string(ProtocolOpenAIChat),
+		Protocol: string(llm.ProtocolOpenAIChat),
 		APIKey:   "k",
 		Model:    "model",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != "custom" || profile.Protocol != ProtocolOpenAIChat {
+	if profile.ID != "custom" || profile.Protocol != llm.ProtocolOpenAIChat {
 		t.Fatalf("profile = %+v", profile)
 	}
 	if !profile.Capabilities.Tools || !profile.Capabilities.Streaming || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {

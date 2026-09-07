@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -15,6 +15,7 @@ import (
 type factToolModule struct{ testTool tools.Tool }
 
 func (*factToolModule) ID() runtimemodule.ID { return "fact-owner" }
+
 func (m *factToolModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
 	return []tools.Tool{m.testTool}, nil
 }
@@ -25,6 +26,7 @@ type runtimeHistoryModule struct {
 }
 
 func (*runtimeHistoryModule) ID() runtimemodule.ID { return "history-owner" }
+
 func (m *runtimeHistoryModule) ProjectProviderHistory(_ context.Context, pairs []runtimemodule.ToolResultPair, _ runtimemodule.ProviderHistoryBudget) (runtimemodule.ProviderHistoryPlan, error) {
 	if m.cancel != nil {
 		m.cancel()

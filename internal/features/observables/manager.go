@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/environment"
-	"github.com/juex-ai/juex/internal/framework/observationmedia"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 )
 
 var (

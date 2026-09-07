@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/framework/endpoint"
-	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/features/mcp"
+	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -28,6 +28,7 @@ import (
 type stubProvider struct{}
 
 func (stubProvider) Name() string { return "stub" }
+
 func (stubProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
 	return llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "ack"),
@@ -575,6 +576,7 @@ type cancelAwareProvider struct {
 }
 
 func (p *cancelAwareProvider) Name() string { return "cancel-aware" }
+
 func (p *cancelAwareProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
 	p.once.Do(func() { close(p.started) })
 	select {

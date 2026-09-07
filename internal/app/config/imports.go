@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
-	"github.com/juex-ai/juex/internal/features/hooks"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"gopkg.in/yaml.v3"
 )
 

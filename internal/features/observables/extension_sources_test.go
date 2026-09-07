@@ -9,8 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	observable "github.com/juex-ai/juex/internal/features/observables"
+
 	"github.com/juex-ai/juex/internal/foundation/environment"
-	"github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 )
 

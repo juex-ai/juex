@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/features/agentsmd"
-	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/features/skills"
+	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 type ResourceSummary struct {

@@ -1,4 +1,4 @@
-package llm
+package openai
 
 import (
 	"context"
@@ -7,7 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openai/openai-go"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	providermedia "github.com/juex-ai/juex/internal/providers/internal/media"
+	protocolsupport "github.com/juex-ai/juex/internal/providers/internal/protocol"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
+	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/responses"
@@ -22,15 +26,15 @@ const (
 )
 
 type openAIResponsesProvider struct {
-	profile ProviderProfile
+	profile llm.ProviderProfile
 	client  openai.Client
 }
 
-func NewOpenAIResponses(profile ProviderProfile, _ any) Provider {
-	profile = cloneProviderProfile(profile)
+func NewOpenAIResponses(profile llm.ProviderProfile, _ any) llm.Provider {
+	profile = providerprofile.CloneProviderProfile(profile)
 	opts := []option.RequestOption{
 		option.WithAPIKey(profile.APIKey),
-		option.WithMaxRetries(providerMaxRetries),
+		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
 	}
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
@@ -49,14 +53,15 @@ func NewOpenAIResponses(profile ProviderProfile, _ any) Provider {
 
 func (p *openAIResponsesProvider) Name() string { return p.profile.ID + ":" + p.profile.Model }
 
-func (p *openAIResponsesProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
-	return p.CompleteWithOptions(ctx, sys, history, tools, CompleteOptions{})
+func (p *openAIResponsesProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
 }
 
-func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
-	providerContext, err := BuildProviderContext(history, p.profile, ProviderContextOptions{})
+func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
+	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{})
 	if err != nil {
-		return Response{}, err
+		return llm.Response{}, err
 	}
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(p.profile.Model),
@@ -77,7 +82,7 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		params.MaxOutputTokens = param.NewOpt(int64(opts.MaxOutputTokens))
 	}
-	if effort := requestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
+	if effort := protocolsupport.RequestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
 		params.Reasoning = shared.ReasoningParam{
 			Effort:  shared.ReasoningEffort(effort),
 			Summary: shared.ReasoningSummaryAuto,
@@ -95,28 +100,28 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 
 	resp, err := p.client.Responses.New(ctx, params)
 	if err != nil {
-		return Response{}, fmt.Errorf("openai responses: %w", err)
+		return llm.Response{}, fmt.Errorf("openai responses: %w", err)
 	}
 	return p.responseFromResponses(resp), nil
 }
 
-func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (Response, error) {
-	idleTimeout := streamIdleTimeout(opts)
+func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions) (llm.Response, error) {
+	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
 	for attempt := 1; ; attempt++ {
 		resp, err, idleExpired := p.completeStreamingAttempt(ctx, params, opts, idleTimeout)
 		if err == nil {
 			return resp, nil
 		}
 		if !idleExpired {
-			return Response{}, err
+			return llm.Response{}, err
 		}
 		if ctx.Err() != nil {
-			return Response{}, ctx.Err()
+			return llm.Response{}, ctx.Err()
 		}
-		idleErr := newStreamIdleTimeoutError("openai responses stream", idleTimeout, err)
+		idleErr := protocolsupport.NewStreamIdleTimeoutError("openai responses stream", idleTimeout, err)
 		if attempt >= openAIResponsesIdleMaxAttempts {
 			p.emitOpenAIResponsesRetryDiagnostic(opts, idleErr, attempt, 0, false, true)
-			return Response{}, fmt.Errorf("openai responses stream retry exhausted after %d attempts (max_attempts=%d): %w", attempt, openAIResponsesIdleMaxAttempts, idleErr)
+			return llm.Response{}, fmt.Errorf("openai responses stream retry exhausted after %d attempts (max_attempts=%d): %w", attempt, openAIResponsesIdleMaxAttempts, idleErr)
 		}
 		delay := time.Duration(attempt) * openAIResponsesRetryBaseDelay
 		p.emitOpenAIResponsesRetryDiagnostic(opts, idleErr, attempt, delay, true, false)
@@ -124,14 +129,14 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return Response{}, ctx.Err()
+			return llm.Response{}, ctx.Err()
 		case <-timer.C:
 		}
 	}
 }
 
-func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions, idleTimeout time.Duration) (Response, error, bool) {
-	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions, idleTimeout time.Duration) (llm.Response, error, bool) {
+	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 	defer stopIdle()
 	stream := p.client.Responses.NewStreaming(streamCtx, params)
 	defer func() { _ = stream.Close() }()
@@ -143,12 +148,12 @@ func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, 
 		emitResponsesStreamDelta(opts.OnDelta, event)
 		switch event.Type {
 		case "error":
-			return Response{}, fmt.Errorf("openai responses stream error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON())), false
+			return llm.Response{}, fmt.Errorf("openai responses stream error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON())), false
 		case "response.failed":
 			if msg := responseErrorMessage(event.Response); msg != "" {
-				return Response{}, fmt.Errorf("openai responses: %s", msg), false
+				return llm.Response{}, fmt.Errorf("openai responses: %s", msg), false
 			}
-			return Response{}, fmt.Errorf("openai responses failed"), false
+			return llm.Response{}, fmt.Errorf("openai responses failed"), false
 		case "response.output_item.done":
 			items = append(items, event.Item)
 		case "response.done", "response.completed", "response.incomplete":
@@ -161,22 +166,22 @@ func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, 
 	}
 	if err := stream.Err(); err != nil {
 		if idleExpired() {
-			return Response{}, err, true
+			return llm.Response{}, err, true
 		}
-		return Response{}, fmt.Errorf("openai responses stream: %w", err), false
+		return llm.Response{}, fmt.Errorf("openai responses stream: %w", err), false
 	}
 	if len(items) == 0 {
-		return Response{}, fmt.Errorf("openai responses stream closed before response.completed"), false
+		return llm.Response{}, fmt.Errorf("openai responses stream closed before response.completed"), false
 	}
 	finalResp := responses.Response{Status: responses.ResponseStatusCompleted, Output: items}
 	return p.responseFromResponses(&finalResp), nil, false
 }
 
-func (p *openAIResponsesProvider) emitOpenAIResponsesRetryDiagnostic(opts CompleteOptions, err error, attempt int, delay time.Duration, willRetry, exhausted bool) {
+func (p *openAIResponsesProvider) emitOpenAIResponsesRetryDiagnostic(opts llm.CompleteOptions, err error, attempt int, delay time.Duration, willRetry, exhausted bool) {
 	if opts.RetryObserver == nil {
 		return
 	}
-	opts.RetryObserver(ProviderRetryDiagnostic{
+	opts.RetryObserver(llm.ProviderRetryDiagnostic{
 		Provider:    p.profile.ID,
 		Model:       p.profile.Model,
 		Protocol:    p.profile.Protocol,
@@ -192,7 +197,7 @@ func (p *openAIResponsesProvider) emitOpenAIResponsesRetryDiagnostic(opts Comple
 	})
 }
 
-func emitResponsesStreamDelta(onDelta func(StreamDelta), event responses.ResponseStreamEventUnion) {
+func emitResponsesStreamDelta(onDelta func(llm.StreamDelta), event responses.ResponseStreamEventUnion) {
 	if onDelta == nil {
 		return
 	}
@@ -200,19 +205,19 @@ func emitResponsesStreamDelta(onDelta func(StreamDelta), event responses.Respons
 	case "response.output_text.delta":
 		delta := event.AsResponseOutputTextDelta()
 		if delta.Delta != "" {
-			onDelta(StreamDelta{Kind: "text", Index: int(delta.OutputIndex), Text: delta.Delta})
+			onDelta(llm.StreamDelta{Kind: "text", Index: int(delta.OutputIndex), Text: delta.Delta})
 		}
 	case "response.reasoning_summary_text.delta":
 		delta := event.AsResponseReasoningSummaryTextDelta()
 		if delta.Delta != "" {
-			onDelta(StreamDelta{Kind: "reasoning", Index: int(delta.OutputIndex), Text: delta.Delta})
+			onDelta(llm.StreamDelta{Kind: "reasoning", Index: int(delta.OutputIndex), Text: delta.Delta})
 		}
 	}
 }
 
-func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response) Response {
-	out := Message{Role: RoleAssistant, Model: p.Name()}
-	stop := StopEndTurn
+func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response) llm.Response {
+	out := llm.Message{Role: llm.RoleAssistant, Model: p.Name()}
+	stop := llm.StopEndTurn
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "reasoning":
@@ -222,8 +227,8 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 					summaries = append(summaries, summary.Text)
 				}
 			}
-			out.Blocks = append(out.Blocks, Block{
-				Type:      BlockReasoning,
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockReasoning,
 				Text:      strings.Join(summaries, "\n"),
 				Signature: item.ID,
 				Content:   item.EncryptedContent,
@@ -233,28 +238,28 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 			for _, c := range item.Content {
 				switch c.Type {
 				case "output_text":
-					out.Blocks = append(out.Blocks, Block{Type: BlockText, Text: c.Text})
+					out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: c.Text})
 				case "refusal":
-					out.Blocks = append(out.Blocks, Block{Type: BlockText, Text: c.Refusal})
+					out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: c.Refusal})
 				}
 			}
 		case "function_call":
-			stop = StopToolUse
-			out.Blocks = append(out.Blocks, Block{
-				Type:      BlockToolUse,
+			stop = llm.StopToolUse
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockToolUse,
 				ToolUseID: item.CallID,
 				ToolName:  item.Name,
-				Input:     parseToolArguments(item.Arguments),
+				Input:     llm.ParseToolArguments(item.Arguments),
 			})
 		}
 	}
 	if string(resp.Status) == "incomplete" && resp.IncompleteDetails.Reason == "max_output_tokens" {
-		stop = StopMaxTokens
+		stop = llm.StopMaxTokens
 	}
-	return Response{
+	return llm.Response{
 		Message:    out,
 		StopReason: stop,
-		Usage: canonicalUsage(
+		Usage: llm.CanonicalUsage(
 			int(resp.Usage.InputTokens),
 			int(resp.Usage.OutputTokens),
 			int(resp.Usage.InputTokensDetails.CachedTokens),
@@ -262,7 +267,7 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 	}
 }
 
-func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) responses.ResponseInputParam {
+func encodeOpenAIResponseInput(history []llm.Message, profile llm.ProviderProfile) responses.ResponseInputParam {
 	var out responses.ResponseInputParam
 	for _, m := range history {
 		var textParts []string
@@ -281,43 +286,43 @@ func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) respo
 		}
 		for _, b := range m.Blocks {
 			switch b.Type {
-			case BlockText:
+			case llm.BlockText:
 				textParts = append(textParts, b.Text)
-			case BlockImage:
-				if dataURL, ok := imageDataURL(profile.MediaDir, b.Media); ok {
+			case llm.BlockImage:
+				if dataURL, ok := providermedia.ImageDataURL(profile.MediaDir, b.Media); ok {
 					flushTextToContent()
 					imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
 					imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
 					contentParts = append(contentParts, imagePart)
 				} else {
-					textParts = append(textParts, unavailableMediaReferenceText("image", b.Media))
+					textParts = append(textParts, llm.UnavailableMediaReferenceText("image", b.Media))
 				}
-			case BlockToolUse:
+			case llm.BlockToolUse:
 				flushMessage()
-				out = append(out, responses.ResponseInputItemParamOfFunctionCall(toolCallArguments(b.ToolName, b.Input), boundedOpenAIResponsesToolCallID(b.ToolUseID), b.ToolName))
-			case BlockToolResult:
+				out = append(out, responses.ResponseInputItemParamOfFunctionCall(llm.ToolCallArguments(b.ToolName, b.Input), boundedOpenAIResponsesToolCallID(b.ToolUseID), b.ToolName))
+			case llm.BlockToolResult:
 				flushMessage()
 				content := b.Content
 				var dataURL string
 				var mediaAvailable bool
 				if b.Media != nil {
-					dataURL, mediaAvailable = imageDataURL(profile.MediaDir, b.Media)
+					dataURL, mediaAvailable = providermedia.ImageDataURL(profile.MediaDir, b.Media)
 					if mediaAvailable {
-						content = toolResultContentWithMediaReference(b)
+						content = llm.ToolResultContentWithMediaReference(b)
 					} else {
-						content = toolResultContentWithUnavailableMediaReference(b)
+						content = llm.ToolResultContentWithUnavailableMediaReference(b)
 					}
 				}
 				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(boundedOpenAIResponsesToolCallID(b.ToolUseID), content))
 				if mediaAvailable {
 					imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
 					imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
-					out = appendResponseMessage(out, RoleUser, nil, responses.ResponseInputMessageContentListParam{
+					out = appendResponseMessage(out, llm.RoleUser, nil, responses.ResponseInputMessageContentListParam{
 						responses.ResponseInputContentParamOfInputText(openAIToolResultImageAttribution(b)),
 						imagePart,
 					})
 				}
-			case BlockReasoning:
+			case llm.BlockReasoning:
 				if b.Signature == "" {
 					continue
 				}
@@ -351,7 +356,7 @@ func boundedOpenAIResponsesToolCallID(id string) string {
 	return openAIResponsesToolCallIDHashPrefix + digest[:openAIResponsesToolCallIDMaxLength-len(openAIResponsesToolCallIDHashPrefix)]
 }
 
-func appendResponseMessage(out responses.ResponseInputParam, role Role, textParts []string, contentParts responses.ResponseInputMessageContentListParam) responses.ResponseInputParam {
+func appendResponseMessage(out responses.ResponseInputParam, role llm.Role, textParts []string, contentParts responses.ResponseInputMessageContentListParam) responses.ResponseInputParam {
 	if len(textParts) == 0 && len(contentParts) == 0 {
 		return out
 	}
@@ -364,25 +369,25 @@ func appendResponseMessage(out responses.ResponseInputParam, role Role, textPart
 	return append(out, responses.ResponseInputItemParamOfMessage(contentParts, toResponseRole(role)))
 }
 
-func toResponseRole(role Role) responses.EasyInputMessageRole {
+func toResponseRole(role llm.Role) responses.EasyInputMessageRole {
 	switch role {
-	case RoleAssistant:
+	case llm.RoleAssistant:
 		return responses.EasyInputMessageRoleAssistant
-	case RoleSystem:
+	case llm.RoleSystem:
 		return responses.EasyInputMessageRoleSystem
 	default:
 		return responses.EasyInputMessageRoleUser
 	}
 }
 
-func toOpenAIResponseTools(tools []ToolSpec) []responses.ToolUnionParam {
+func toOpenAIResponseTools(tools []llm.ToolSpec) []responses.ToolUnionParam {
 	out := make([]responses.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
 		out = append(out, responses.ToolUnionParam{
 			OfFunction: &responses.FunctionToolParam{
 				Name:        t.Name,
 				Description: param.NewOpt(t.Description),
-				Parameters:  normalizedFunctionParameters(t.Schema),
+				Parameters:  llm.NormalizedFunctionParameters(t.Schema),
 				Strict:      param.NewOpt(false),
 			},
 		})

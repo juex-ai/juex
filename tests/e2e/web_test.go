@@ -26,15 +26,15 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
+	"github.com/juex-ai/juex/internal/features/mcp"
+	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
-	"github.com/juex-ai/juex/internal/features/observables"
-	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
-	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -47,6 +47,7 @@ type webProvider struct {
 }
 
 func (p *webProvider) Name() string { return "web-test" }
+
 func (p *webProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
