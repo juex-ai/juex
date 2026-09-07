@@ -10,10 +10,19 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/modulecatalog"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
 type capabilityProvider struct{ calls atomic.Int32 }
+
+type capabilityStartPolicy struct{ calls atomic.Int32 }
+
+func (*capabilityStartPolicy) ID() runtimemodule.ID { return "startup-probe" }
+func (p *capabilityStartPolicy) ApplyThreadStart(context.Context, runtimemodule.ThreadStartRequest) (runtimemodule.ThreadStartDecision, error) {
+	p.calls.Add(1)
+	return runtimemodule.ThreadStartDecision{}, nil
+}
 
 func (*capabilityProvider) Name() string { return "capability-test" }
 func (p *capabilityProvider) Complete(context.Context, string, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
@@ -162,5 +171,39 @@ func TestDisabledWorkerNewContextDoesNotGreet(t *testing.T) {
 	}
 	if provider.calls.Load() != 0 {
 		t.Fatal("disabled Worker /new executed a greeting")
+	}
+}
+
+func TestDisabledWorkerSkipsThreadStartPolicies(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		cfg := config.Config{WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal,
+			Modules: config.ModulePolicy{modulecatalog.WorkerThreads: {Enabled: enabled}},
+		}
+		if err := EnsureMainThread(cfg); err != nil {
+			t.Fatal(err)
+		}
+		worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "startup")
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := worker.ID
+		if err := worker.Close(); err != nil {
+			t.Fatal(err)
+		}
+		probe := &capabilityStartPolicy{}
+		a, err := New(Options{Config: cfg, ThreadID: id, Provider: &capabilityProvider{},
+			runtimeModuleFactories: []runtimemodule.RuntimeFactorySpec{{ID: probe.ID(), Enabled: true,
+				New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) { return probe, nil },
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.CloseAndWait(); err != nil {
+			t.Fatal(err)
+		}
+		if (probe.calls.Load() == 1) != enabled {
+			t.Errorf("Worker enabled=%t ran ThreadStart policies %d times", enabled, probe.calls.Load())
+		}
 	}
 }

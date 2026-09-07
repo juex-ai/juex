@@ -686,9 +686,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	status.RecoverAfterRestart()
-	if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
-		_ = a.Close()
-		return nil, err
+	if a.executionError() == nil {
+		if err := eng.RunThreadStartPolicies(startupCtx); err != nil {
+			_ = a.Close()
+			return nil, err
+		}
 	}
 	if err := startupCtx.Err(); err != nil {
 		_ = a.Close()
