@@ -279,3 +279,64 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 		}
 	}
 }
+
+func TestGoalNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
+	isolateModuleConfig(t)
+	cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{modulecatalog.Goal: {Enabled: true}, modulecatalog.Notes: {Enabled: true}}}
+	cfg.Compaction = config.DefaultCompactionConfig()
+	cfg.Compaction.KeepRecentTokens = 1
+	cfg.Compaction.ReserveTokens = 22000
+	provider := &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn}}}
+	summary := &moduleSummaryProvider{}
+	a, err := app.New(app.Options{Config: cfg, Provider: provider, SummaryProvider: summary, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := a.CloseAndWait(); err != nil {
+			t.Error(err)
+		}
+	})
+	goals, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	if _, err := goals.Create("Protect this contract", "Keep exact state"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := goals.Update(workmem.GoalStateUpdate{Status: workmem.GoalStatusSuccess}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := notes.Update("- [ ] Pending fixture"); err != nil {
+		t.Fatal(err)
+	}
+	beforeGoal, err := os.ReadFile(goals.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeNotes, err := os.ReadFile(notes.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, "Earlier request.")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("earlier ", 600))); err != nil {
+		t.Fatal(err)
+	}
+	generation := a.Thread.CurrentGenerationJournalPath()
+	incoming := strings.Repeat("incoming ", 6000)
+	if len(incoming) >= cfg.Compaction.UserInputInlineMaxBytes {
+		t.Fatal("fixture would externalize before compaction")
+	}
+	_, err = a.Run(t.Context(), incoming)
+	if err == nil || !strings.Contains(err.Error(), "compacted context exceeds budget") {
+		t.Fatalf("oversized input did not fail precommit check: %v", err)
+	}
+	if a.Thread.CurrentGenerationJournalPath() != generation || len(provider.history) != 0 || len(summary.history) == 0 {
+		t.Fatal("oversized input committed or reached the ordinary provider")
+	}
+	for path, before := range map[string][]byte{goals.Path: beforeGoal, notes.Path: beforeNotes} {
+		after, err := os.ReadFile(path)
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("failed compaction changed %s: %v", path, err)
+		}
+	}
+}

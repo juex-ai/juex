@@ -9119,3 +9119,59 @@ func TestTurn_EmitsLifecycleEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestAutoCompactionCountsPreparedInputBeforeGenerationCommit(t *testing.T) {
+	for _, repeats := range []int{1, 160} {
+		t.Run(fmt.Sprintf("incoming=%d", repeats), func(t *testing.T) {
+			provider := &scriptedCompactionProvider{name: "mock", attempts: []scriptedCompactionAttempt{
+				{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn}},
+				{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "answered latest"), StopReason: llm.StopEndTurn}},
+			}}
+			eng, _ := newEngine(t, provider, false)
+			eng.ContextWindow = 2000
+			eng.Compaction = DefaultCompactionPolicy()
+			eng.Compaction.ReserveTokens = 1750
+			eng.Compaction.KeepRecentTokens = 1
+			if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+				t.Fatal(err)
+			}
+			if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 300))); err != nil {
+				t.Fatal(err)
+			}
+			before := eng.Thread.CurrentGenerationJournalPath()
+			incoming := strings.Repeat("incoming ", repeats)
+			_, err := eng.Turn(t.Context(), incoming)
+			if repeats > 1 {
+				if err == nil || !strings.Contains(err.Error(), "compacted context exceeds budget") {
+					t.Fatalf("oversized prepared input accepted: %v", err)
+				}
+				if eng.Thread.CurrentGenerationJournalPath() != before {
+					t.Fatal("oversized prepared input committed a Generation")
+				}
+				if provider.calls != 1 {
+					t.Fatalf("provider calls = %d, want summary only", provider.calls)
+				}
+				if got := eng.Thread.History[len(eng.Thread.History)-1].FirstText(); got != incoming {
+					t.Fatalf("accepted user input was not retained exactly: %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if eng.Thread.CurrentGenerationJournalPath() == before || provider.calls != 2 {
+				t.Fatal("fitting input did not compact and complete")
+			}
+			want := eng.estimateContextTokens(provider.systems[1], eng.Tools.Specs(), provider.histories[1])
+			var compact llm.Message
+			for _, message := range eng.Thread.History {
+				if message.Kind == llm.MessageKindCompact {
+					compact = message
+				}
+			}
+			if compact.Compaction == nil || compact.Compaction.TokensAfter != want {
+				t.Fatalf("compaction metadata omitted incoming context: %+v, want %d", compact.Compaction, want)
+			}
+		})
+	}
+}

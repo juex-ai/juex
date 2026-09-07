@@ -211,8 +211,9 @@ Goal and Notes policies live in `internal/modules/goal` and
 guidance, and an owned summary section per compaction operation. A Module may
 reconcile only its declared section using that snapshot. Framework checks the
 corrected summary against the successful request's output budget and the full
-active context against the compaction trigger budget before committing a
-Generation. Protected state is never truncated or written back by compaction;
+Provider-visible context, including prepared incoming input, against the
+compaction trigger budget before committing a Generation. Protected state is
+never truncated or written back by compaction;
 an unfit contract fails the operation. Model retries reuse the frozen state.
 Modules fence literal contract text when it can resemble section headings;
 Framework preserves literal blocks during heading normalization and parsing.
