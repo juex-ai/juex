@@ -14,6 +14,37 @@ async function openModuleThread(page, mode = "ready") {
       scratchpad: { ...state("scratchpad", null), resources: ["files"] } } : {},
     ui: enabled ? ["goal.status", "notes.status", "scratchpad.files"].map((id) => ({ id, module_id: id.split(".")[0], version: 1 })) : [],
   };
+  await page.addInitScript((baseline) => {
+    const NativeEventSource = window.EventSource;
+    window.moduleSources = [];
+    class ModuleSource extends EventTarget {
+      readyState = NativeEventSource.OPEN;
+      onmessage = null;
+      onerror = null;
+      constructor(url) {
+        super();
+        this.url = String(url);
+        window.moduleSources.push(this);
+        queueMicrotask(() => this.sendBaseline());
+      }
+      sendBaseline() {
+        if (this.readyState === NativeEventSource.CLOSED) return;
+        this.readyState = NativeEventSource.OPEN;
+        this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(baseline) }));
+      }
+      fail() {
+        this.readyState = NativeEventSource.CONNECTING;
+        this.onerror?.(new Event("error"));
+      }
+      close() { this.readyState = NativeEventSource.CLOSED; }
+    }
+    window.EventSource = class extends NativeEventSource {
+      constructor(url, options) {
+        if (String(url).endsWith("/modules/events")) return new ModuleSource(url);
+        super(url, options);
+      }
+    };
+  }, snapshot);
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/events") || path.endsWith("/resource-events")) return route.abort();
@@ -100,19 +131,37 @@ test("a directory refresh preserves an in-flight module file preview", async ({ 
 });
 
 test("module controls share one Thread subscription", async ({ page }) => {
-  await page.addInitScript(() => {
-    const NativeEventSource = window.EventSource;
-    window.moduleSources = [];
-    window.EventSource = class extends NativeEventSource {
-      constructor(url, options) {
-        super(url, options);
-        if (String(url).endsWith("/modules/events")) window.moduleSources.push(this);
-      }
-    };
-  });
   await openModuleThread(page);
   await expect(page.getByRole("button", { name: /^Open goal and notes:/ })).toBeVisible();
   await page.getByRole("button", { name: "Show scratchpad", exact: true }).click();
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.moduleSources.filter((source) => source.readyState !== EventSource.CLOSED).length)).toBe(1);
+});
+
+test("stream failure marks retained module state unavailable and the same baseline recovers", async ({ page }) => {
+  await openModuleThread(page);
+  const badge = page.getByRole("button", { name: /^Open goal and notes:/ });
+  await expect(badge).toBeVisible();
+  await page.evaluate(() => window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).fail());
+  await expect(page.getByText("Module state unavailable", { exact: true })).toBeVisible();
+  await expect(badge).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Show scratchpad", exact: true })).toBeVisible();
+  await page.evaluate(() => window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).sendBaseline());
+  await expect(badge).toBeVisible();
+  await expect(page.getByText("Module state unavailable", { exact: true })).toHaveCount(0);
+});
+
+test("a deliberate baseline close stays available but a failed reconnect surfaces the error", async ({ page }) => {
+  await openModuleThread(page);
+  const badge = page.getByRole("button", { name: /^Open goal and notes:/ });
+  await expect(badge).toBeVisible();
+  await page.evaluate(() => {
+    const source = window.moduleSources.find((item) => item.readyState !== EventSource.CLOSED);
+    source.dispatchEvent(new MessageEvent("revalidate", { data: "{}" }));
+    source.fail();
+  });
+  await expect(badge).toBeVisible();
+  await expect(page.getByText("Module state unavailable", { exact: true })).toHaveCount(0);
+  await page.evaluate(() => window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).fail());
+  await expect(page.getByText("Module state unavailable", { exact: true })).toBeVisible();
 });

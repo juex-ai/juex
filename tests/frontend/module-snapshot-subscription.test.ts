@@ -50,3 +50,45 @@ test("a reconnect replaces the complete composition and clears removed modules",
   receive(enabled); const disabled = snapshot("disabled"); disabled.composition_revision = "restart"; receive(disabled);
   assert.deepEqual(accepted.at(-1)?.ui, []); assert.deepEqual(accepted.at(-1)?.modules, {}); close();
 });
+
+test("stream failures mark the snapshot stale until a matching baseline recovers, even at the same revision", async () => {
+  let receive!: (value: ThreadModulesSnapshot) => void;
+  let fail!: (error: unknown) => void;
+  let finish!: (value: ThreadModulesSnapshot) => void;
+  const accepted: string[] = [];
+  const failures: unknown[] = [];
+  const close = startModuleSnapshotSubscription({ threadID: "0", agentID: "a",
+    load: () => new Promise((resolve) => { finish = resolve; }),
+    subscribe: (callback, onError) => { receive = callback; fail = onError; return () => {}; },
+    onSnapshot: (value) => accepted.push(value.revision), onError: (error) => failures.push(error),
+  });
+  receive(snapshot("baseline"));
+  assert.equal(typeof fail, "function");
+  fail("disconnected");
+  finish(snapshot("old-get")); await Promise.resolve();
+  assert.deepEqual(failures, ["disconnected"]);
+  assert.deepEqual(accepted, ["baseline"]);
+  receive(snapshot("baseline", "other-agent"));
+  receive(snapshot("baseline")); receive(snapshot("baseline"));
+  assert.deepEqual(accepted, ["baseline", "baseline"]);
+  close(); fail("late-error");
+  assert.deepEqual(failures, ["disconnected"]);
+});
+
+test("a pending GET cannot clear a stream failure before the first stream baseline", async () => {
+  let receive!: (value: ThreadModulesSnapshot) => void;
+  let fail!: (error: unknown) => void;
+  let finish!: (value: ThreadModulesSnapshot) => void;
+  const accepted: string[] = [];
+  const failures: unknown[] = [];
+  const close = startModuleSnapshotSubscription({ threadID: "0",
+    load: () => new Promise((resolve) => { finish = resolve; }),
+    subscribe: (callback, onError) => { receive = callback; fail = onError; return () => {}; },
+    onSnapshot: (value) => accepted.push(value.revision), onError: (error) => failures.push(error),
+  });
+  assert.equal(typeof fail, "function");
+  fail("unavailable"); finish(snapshot("old-get")); await Promise.resolve();
+  assert.deepEqual(failures, ["unavailable"]); assert.deepEqual(accepted, []);
+  receive(snapshot("reconnected")); assert.deepEqual(accepted, ["reconnected"]);
+  close();
+});

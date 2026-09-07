@@ -198,10 +198,13 @@ opaque content revision; reconnect always replaces the baseline. Its transport
 cursor is independent of durable-event replay. The observed durable cursor is a
 lower bound, not an as-of position for module files. Clients discard prior-scope
 responses and do not let a pending GET overwrite a received stream baseline.
+Stream failures mark retained snapshots unavailable until a new baseline arrives,
+including a reconnect whose content revision is unchanged.
 The browser host shares one module snapshot subscription among the current
 Thread's UI consumers, closing it on route changes.
-Stopped-Agent streams finish after their baseline so reconnect rechecks Fleet
-endpoint selection and effective configuration. File trees and recursive resource
+Stopped-Agent streams explicitly signal revalidation before finishing their baseline
+so reconnect rechecks Fleet endpoint selection and effective configuration without
+marking the expected close as a failure. File trees and recursive resource
 subscriptions start only when selected; idle heartbeats send SSE comments without
 reloading the tree. UI
 snapshots are neither model context nor a new storage authority.

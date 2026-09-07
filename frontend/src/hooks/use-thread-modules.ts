@@ -28,9 +28,13 @@ export function useThreadModuleSubscription(threadID: string): ThreadModulesStat
       threadID,
       agentID,
       load: (signal) => getThreadModules(threadID, signal),
-      subscribe: (receive) => subscribeThreadModules(threadID, receive),
+      subscribe: (receive, onError) => subscribeThreadModules(threadID, receive, onError),
       onSnapshot: (snapshot) => setState({ scope, snapshot }),
-      onError: (error) => setState({ scope, error: error instanceof Error ? error.message : "Module state unavailable" }),
+      onError: (error) => setState((previous) => ({
+        scope,
+        snapshot: previous.scope === scope ? previous.snapshot : undefined,
+        error: error instanceof Error ? error.message : "Module state unavailable",
+      })),
     });
   }, [threadID, agentID, scope]);
   return state.scope === scope ? state : { scope };

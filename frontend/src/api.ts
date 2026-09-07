@@ -355,9 +355,16 @@ export async function getThreadModules(id: string, signal?: AbortSignal): Promis
   return jsonOrThrow(await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/modules`), { signal }));
 }
 
-export function subscribeThreadModules(id: string, receive: (snapshot: ThreadModulesSnapshot) => void): () => void {
+export function subscribeThreadModules(id: string, receive: (snapshot: ThreadModulesSnapshot) => void, onError: (error: Error) => void): () => void {
   const source = new EventSource(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/modules/events`));
-  source.onmessage = (event) => { try { receive(JSON.parse(event.data) as ThreadModulesSnapshot); } catch { /* malformed frame */ } };
+  let revalidate = false;
+  source.onmessage = (event) => { try { receive(JSON.parse(event.data) as ThreadModulesSnapshot); revalidate = false; } catch { /* malformed frame */ } };
+  // Read-only servers deliberately finish a baseline to revalidate through Fleet.
+  source.addEventListener("revalidate", () => { revalidate = true; });
+  source.onerror = () => {
+    if (revalidate) { revalidate = false; return; }
+    onError(new Error("Module state unavailable"));
+  };
   return () => source.close();
 }
 

@@ -230,10 +230,14 @@ func (s *Server) handleModuleEvents(w http.ResponseWriter, r *http.Request, id s
 			if _, err := fmt.Fprintf(w, "id: %s:%d\ndata: %s\n\n", epoch, sequence, body); err != nil {
 				return
 			}
-			flusher.Flush()
 			if s.readOnly {
+				if _, err := fmt.Fprint(w, "event: revalidate\ndata: {}\n\n"); err != nil {
+					return
+				}
+				flusher.Flush()
 				return
 			} // Reconnect through Fleet to revalidate config and endpoint selection.
+			flusher.Flush()
 			revision = snapshot.Revision
 		}
 		select {

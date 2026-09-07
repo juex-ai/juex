@@ -108,6 +108,10 @@ func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
 					break
 				}
 			}
+			completion, err := io.ReadAll(reader)
+			if err != nil || !strings.Contains(string(completion), "event: revalidate\n") {
+				t.Fatalf("read-only baseline must signal revalidation before closing: %q, %v", completion, err)
+			}
 			_ = response.Body.Close()
 			cancel()
 			server.Close()
