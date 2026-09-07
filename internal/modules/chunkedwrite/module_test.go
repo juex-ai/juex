@@ -105,3 +105,21 @@ func TestNewGenerationDiscardsBufferedSession(t *testing.T) {
 		t.Fatalf("new Generation cannot start a write: %v", err)
 	}
 }
+
+func TestRecoveryPairsRepeatedToolIDsInResultOrder(t *testing.T) {
+	history := activeTestHistory("first")
+	history[2].Blocks = append(history[2].Blocks, llm.Block{Type: llm.BlockToolUse, ToolUseID: "chunk", ToolName: "write_chunk", Input: map[string]any{"write_id": "same-id", "index": 1, "content": "second"}})
+	history[3].Blocks = append(history[3].Blocks, llm.Block{Type: llm.BlockToolResult, ToolUseID: "chunk", ResultFact: testResultFact(writefacts.Event{Kind: writefacts.EventChunk, WriteID: "same-id", Index: 1})})
+	if err := llm.ValidateToolTranscript(history); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	_, catalog := startTestModule(t, work, history)
+	if _, err := catalog["write_commit"].ResultHandler(t.Context(), map[string]any{"write_id": "same-id", "expected_chunks": 2}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(work, "out.txt"))
+	if err != nil || string(data) != "firstsecond" {
+		t.Fatalf("paired content=%q err=%v", data, err)
+	}
+}

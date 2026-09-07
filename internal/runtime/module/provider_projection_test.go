@@ -56,7 +56,7 @@ func TestProviderHistoryProjectionPreservesSourceAndOtherToolPairs(t *testing.T)
 		}
 		pairs[0].Use.Input["content"] = "attempted mutation"
 		pairs[0].Result.ResultFact.Data[0] = 'x'
-		return ProviderHistoryPlan{Omit: []string{"owned"}, Summaries: []ToolSummary{{ToolUseID: "owned", Text: "bounded summary"}}}, nil
+		return ProviderHistoryPlan{Omit: []string{pairs[0].ID}, Summaries: []ToolSummary{{PairID: pairs[0].ID, Text: "bounded summary"}}}, nil
 	})
 	got, err := ProjectProviderHistory(t.Context(), history, ProviderHistoryBudget{MaxBytes: 1000, MaxTokens: 1000, EstimateTokens: func(text string) int { return len(text) }}, set)
 	if err != nil {
@@ -78,18 +78,23 @@ func TestProviderHistoryProjectionPreservesSourceAndOtherToolPairs(t *testing.T)
 }
 
 func TestProviderHistoryProjectionRejectsInvalidContribution(t *testing.T) {
-	for name, plan := range map[string]ProviderHistoryPlan{
-		"foreign owner":      {Omit: []string{"other"}},
-		"unknown pair":       {Omit: []string{"missing"}},
-		"duplicate omission": {Omit: []string{"owned", "owned"}},
-		"unselected anchor":  {Summaries: []ToolSummary{{ToolUseID: "owned", Text: "summary"}}},
-		"duplicate anchor":   {Omit: []string{"owned"}, Summaries: []ToolSummary{{ToolUseID: "owned", Text: "a"}, {ToolUseID: "owned", Text: "b"}}},
-		"oversized summary":  {Omit: []string{"owned"}, Summaries: []ToolSummary{{ToolUseID: "owned", Text: strings.Repeat("large", 100)}}},
-	} {
+	for _, name := range []string{"foreign owner", "unknown pair", "duplicate omission", "unselected anchor", "duplicate anchor", "oversized summary"} {
 		t.Run(name, func(t *testing.T) {
 			history := projectionHistory()
 			before, _ := json.Marshal(history)
-			set := projectorSet(t, func(context.Context, []ToolResultPair) (ProviderHistoryPlan, error) { return plan, nil })
+			set := projectorSet(t, func(_ context.Context, pairs []ToolResultPair) (ProviderHistoryPlan, error) {
+				id := pairs[0].ID
+				foreign := ownedToolResultPairs(history, "other")[0].ID
+				plans := map[string]ProviderHistoryPlan{
+					"foreign owner":      {Omit: []string{foreign}},
+					"unknown pair":       {Omit: []string{"missing"}},
+					"duplicate omission": {Omit: []string{id, id}},
+					"unselected anchor":  {Summaries: []ToolSummary{{PairID: id, Text: "summary"}}},
+					"duplicate anchor":   {Omit: []string{id}, Summaries: []ToolSummary{{PairID: id, Text: "a"}, {PairID: id, Text: "b"}}},
+					"oversized summary":  {Omit: []string{id}, Summaries: []ToolSummary{{PairID: id, Text: strings.Repeat("large", 100)}}},
+				}
+				return plans[name], nil
+			})
 			if _, err := ProjectProviderHistory(t.Context(), history, ProviderHistoryBudget{MaxBytes: 100, MaxTokens: 100, EstimateTokens: func(text string) int { return len(text) }}, set); err == nil {
 				t.Fatal("invalid contribution accepted")
 			}
@@ -103,9 +108,9 @@ func TestProviderHistoryProjectionRejectsInvalidContribution(t *testing.T) {
 
 func TestProviderHistoryProjectionHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	set := projectorSet(t, func(context.Context, []ToolResultPair) (ProviderHistoryPlan, error) {
+	set := projectorSet(t, func(_ context.Context, pairs []ToolResultPair) (ProviderHistoryPlan, error) {
 		cancel()
-		return ProviderHistoryPlan{Omit: []string{"owned"}}, nil
+		return ProviderHistoryPlan{Omit: []string{pairs[0].ID}}, nil
 	})
 	if _, err := ProjectProviderHistory(ctx, projectionHistory(), ProviderHistoryBudget{MaxBytes: 100, MaxTokens: 100, EstimateTokens: func(text string) int { return len(text) }}, set); err == nil {
 		t.Fatal("projection ignored cancellation")
@@ -115,10 +120,10 @@ func TestProviderHistoryProjectionHonorsCancellation(t *testing.T) {
 func TestProviderHistoryBudgetAppliesPerSummaryAnchor(t *testing.T) {
 	history := projectionHistory()
 	history[1].Blocks[1].ResultFact.Owner = "custom"
-	set := projectorSet(t, func(context.Context, []ToolResultPair) (ProviderHistoryPlan, error) {
-		return ProviderHistoryPlan{Omit: []string{"owned", "other"}, Summaries: []ToolSummary{
-			{ToolUseID: "owned", Text: strings.Repeat("a", 60)},
-			{ToolUseID: "other", Text: strings.Repeat("b", 60)},
+	set := projectorSet(t, func(_ context.Context, pairs []ToolResultPair) (ProviderHistoryPlan, error) {
+		return ProviderHistoryPlan{Omit: []string{pairs[0].ID, pairs[1].ID}, Summaries: []ToolSummary{
+			{PairID: pairs[0].ID, Text: strings.Repeat("a", 60)},
+			{PairID: pairs[1].ID, Text: strings.Repeat("b", 60)},
 		}}, nil
 	})
 	projected, err := ProjectProviderHistory(t.Context(), history, ProviderHistoryBudget{MaxBytes: 100}, set)
@@ -127,5 +132,31 @@ func TestProviderHistoryBudgetAppliesPerSummaryAnchor(t *testing.T) {
 	}
 	if len(projected[1].Blocks) != 2 {
 		t.Fatalf("summary blocks=%+v", projected[1].Blocks)
+	}
+}
+
+func TestProviderHistoryAllowsReusedCompletedToolIDs(t *testing.T) {
+	for _, owner := range []string{"custom", "other"} {
+		t.Run(owner, func(t *testing.T) {
+			history := []llm.Message{
+				{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "reused", ToolName: "first"}}},
+				{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "reused", Content: "first result", ResultFact: &llm.ResultFact{Owner: "custom"}}}},
+				{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "reused", ToolName: "second"}}},
+				{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "reused", Content: "second result", ResultFact: &llm.ResultFact{Owner: owner}}}},
+			}
+			if err := llm.ValidateToolTranscript(history); err != nil {
+				t.Fatal(err)
+			}
+			set := projectorSet(t, func(_ context.Context, pairs []ToolResultPair) (ProviderHistoryPlan, error) {
+				return ProviderHistoryPlan{Omit: []string{pairs[0].ID}, Summaries: []ToolSummary{{PairID: pairs[0].ID, Text: "first completed"}}}, nil
+			})
+			projected, err := ProjectProviderHistory(t.Context(), history, ProviderHistoryBudget{MaxBytes: 100}, set)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if projected[2].Blocks[0].ToolName != "second" || projected[3].Blocks[0].Content != "second result" {
+				t.Fatal("fold removed another occurrence of the reused ID")
+			}
+		})
 	}
 }

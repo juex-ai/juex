@@ -13,16 +13,19 @@ import (
 // ToolResultPair contains one completed call and its execution fact. Framework
 // supplies only the contributing Module's pairs, isolated from durable history.
 type ToolResultPair struct {
+	// ID identifies this completed exchange, independently of Provider ID reuse.
+	ID     string
 	Use    llm.Block
 	Result llm.Block
 }
 
 type ToolSummary struct {
-	ToolUseID string
-	Text      string
+	PairID string
+	Text   string
 }
 
 type ProviderHistoryPlan struct {
+	// Omit contains Framework pair IDs, never Provider tool-use IDs.
 	Omit      []string
 	Summaries []ToolSummary
 }
@@ -77,15 +80,12 @@ func (s *Set) projectProviderHistory(ctx context.Context, history []llm.Message,
 		if err := cancellation.ContextError(ctx); err != nil {
 			return nil, err
 		}
-		pairs, err := ownedToolResultPairs(out, registered.id)
-		if err != nil {
-			return nil, err
-		}
+		pairs := ownedToolResultPairs(out, registered.id)
 		// Each callback sees its own copy, including nested arguments and facts.
 		input := make([]ToolResultPair, len(pairs))
 		for i, pair := range pairs {
 			blocks := cloneMessage(llm.Message{Blocks: []llm.Block{pair.Use, pair.Result}}).Blocks
-			input[i] = ToolResultPair{Use: blocks[0], Result: blocks[1]}
+			input[i] = ToolResultPair{ID: pair.ID, Use: blocks[0], Result: blocks[1]}
 		}
 		plan, err := registered.module.(ProviderHistoryProjector).ProjectProviderHistory(ctx, input, budget)
 		if err != nil {
@@ -100,7 +100,7 @@ func (s *Set) projectProviderHistory(ctx context.Context, history []llm.Message,
 		if len(plan.Omit) == 0 {
 			continue
 		}
-		out = applyProviderHistoryPlan(out, plan)
+		out = applyProviderHistoryPlan(out, plan, pairs)
 		if err := llm.ValidateToolTranscript(out); err != nil {
 			return nil, fmt.Errorf("runtime module %q provider transcript: %w", registered.id, err)
 		}
@@ -108,37 +108,52 @@ func (s *Set) projectProviderHistory(ctx context.Context, history []llm.Message,
 	return out, nil
 }
 
-func ownedToolResultPairs(history []llm.Message, owner ID) ([]ToolResultPair, error) {
-	uses := map[string]llm.Block{}
-	results := map[string]bool{}
-	var pairs []ToolResultPair
-	for _, message := range history {
-		for _, block := range message.Blocks {
+type toolBlockLocation struct{ message, block int }
+
+type indexedToolResultPair struct {
+	ToolResultPair
+	useAt, resultAt toolBlockLocation
+}
+
+func ownedToolResultPairs(history []llm.Message, owner ID) []indexedToolResultPair {
+	type pendingUse struct {
+		block llm.Block
+		at    toolBlockLocation
+	}
+	uses := map[string][]pendingUse{}
+	var pairs []indexedToolResultPair
+	for messageIndex, message := range history {
+		for blockIndex, block := range message.Blocks {
+			if block.ToolUseID == "" {
+				continue
+			}
+			at := toolBlockLocation{messageIndex, blockIndex}
 			switch block.Type {
 			case llm.BlockToolUse:
-				if _, exists := uses[block.ToolUseID]; exists {
-					return nil, fmt.Errorf("duplicate tool use %q", block.ToolUseID)
-				}
-				uses[block.ToolUseID] = block
+				uses[block.ToolUseID] = append(uses[block.ToolUseID], pendingUse{block: block, at: at})
 			case llm.BlockToolResult:
-				if results[block.ToolUseID] {
-					return nil, fmt.Errorf("duplicate tool result %q", block.ToolUseID)
+				pending := uses[block.ToolUseID]
+				if len(pending) == 0 {
+					continue
 				}
-				results[block.ToolUseID] = true
-				use, exists := uses[block.ToolUseID]
-				if exists && block.ToolUseID != "" && block.ResultFact != nil && block.ResultFact.Owner == string(owner) {
-					pairs = append(pairs, ToolResultPair{Use: use, Result: block})
+				use := pending[0]
+				uses[block.ToolUseID] = pending[1:]
+				if block.ResultFact != nil && block.ResultFact.Owner == string(owner) {
+					pairs = append(pairs, indexedToolResultPair{
+						ToolResultPair: ToolResultPair{ID: fmt.Sprintf("pair-%d-%d", messageIndex, blockIndex), Use: use.block, Result: block},
+						useAt:          use.at, resultAt: at,
+					})
 				}
 			}
 		}
 	}
-	return pairs, nil
+	return pairs
 }
 
-func validateProviderHistoryPlan(plan ProviderHistoryPlan, pairs []ToolResultPair, budget ProviderHistoryBudget) error {
+func validateProviderHistoryPlan(plan ProviderHistoryPlan, pairs []indexedToolResultPair, budget ProviderHistoryBudget) error {
 	owned := map[string]bool{}
 	for _, pair := range pairs {
-		owned[pair.Use.ToolUseID] = true
+		owned[pair.ID] = true
 	}
 	omitted := map[string]bool{}
 	for _, id := range plan.Omit {
@@ -149,8 +164,8 @@ func validateProviderHistoryPlan(plan ProviderHistoryPlan, pairs []ToolResultPai
 	}
 	summaries := map[string]bool{}
 	for _, summary := range plan.Summaries {
-		if !omitted[summary.ToolUseID] || summaries[summary.ToolUseID] {
-			return fmt.Errorf("summary anchor %q is not a unique omitted pair", summary.ToolUseID)
+		if !omitted[summary.PairID] || summaries[summary.PairID] {
+			return fmt.Errorf("summary anchor %q is not a unique omitted pair", summary.PairID)
 		}
 		if strings.TrimSpace(summary.Text) == "" || !utf8.ValidString(summary.Text) {
 			return fmt.Errorf("invalid provider history summary")
@@ -158,27 +173,33 @@ func validateProviderHistoryPlan(plan ProviderHistoryPlan, pairs []ToolResultPai
 		if !budget.FitsSummary(summary.Text) {
 			return fmt.Errorf("provider history summary exceeds tool output budget")
 		}
-		summaries[summary.ToolUseID] = true
+		summaries[summary.PairID] = true
 	}
 	return nil
 }
 
-func applyProviderHistoryPlan(history []llm.Message, plan ProviderHistoryPlan) []llm.Message {
-	omitted := map[string]bool{}
-	for _, id := range plan.Omit {
-		omitted[id] = true
+func applyProviderHistoryPlan(history []llm.Message, plan ProviderHistoryPlan, pairs []indexedToolResultPair) []llm.Message {
+	indexed := map[string]indexedToolResultPair{}
+	for _, pair := range pairs {
+		indexed[pair.ID] = pair
 	}
-	summaries := map[string]string{}
+	omitted := map[toolBlockLocation]bool{}
+	for _, id := range plan.Omit {
+		pair := indexed[id]
+		omitted[pair.useAt], omitted[pair.resultAt] = true, true
+	}
+	summaries := map[toolBlockLocation]string{}
 	for _, summary := range plan.Summaries {
-		summaries[summary.ToolUseID] = summary.Text
+		summaries[indexed[summary.PairID].resultAt] = summary.Text
 	}
 	out := cloneMessages(history)
 	for i := range out {
 		var blocks, deferred []llm.Block
-		for _, block := range out[i].Blocks {
-			if (block.Type == llm.BlockToolUse || block.Type == llm.BlockToolResult) && omitted[block.ToolUseID] {
-				if block.Type == llm.BlockToolResult && summaries[block.ToolUseID] != "" {
-					deferred = append(deferred, llm.Block{Type: llm.BlockText, Text: summaries[block.ToolUseID]})
+		for j, block := range out[i].Blocks {
+			at := toolBlockLocation{i, j}
+			if omitted[at] {
+				if summaries[at] != "" {
+					deferred = append(deferred, llm.Block{Type: llm.BlockText, Text: summaries[at]})
 				}
 				continue
 			}

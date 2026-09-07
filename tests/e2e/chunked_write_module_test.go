@@ -175,3 +175,43 @@ func TestChunkedWriteModuleDisabledKeepsHistoricalToolPairsWithoutFolding(t *tes
 		})
 	}
 }
+
+func TestChunkedWriteModuleAllowsOtherToolsToReuseCompletedIDs(t *testing.T) {
+	isolateModuleConfig(t)
+	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "data.txt"), []byte("read twice"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	modules := config.ModulePolicy{}
+	for _, definition := range modulecatalog.Definitions() {
+		modules[definition.ID] = config.ModuleSettings{Enabled: definition.ID == modulecatalog.ChunkedWrite || definition.ID == modulecatalog.BasicFileTools}
+	}
+	provider := &bareScriptProvider{steps: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "reused", ToolName: "read", Input: map[string]any{"path": "data.txt"}}}}, StopReason: llm.StopToolUse},
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "reused", ToolName: "read", Input: map[string]any{"path": "data.txt"}}}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "Read twice."), StopReason: llm.StopEndTurn},
+	}}
+	application, err := app.New(app.Options{Config: config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state"), Modules: modules}, Provider: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = application.CloseAndWait() }()
+	if _, err := application.Run(t.Context(), "Read the file in two separate batches."); err != nil {
+		t.Fatal(err)
+	}
+	last := provider.history[len(provider.history)-1]
+	if err := llm.ValidateToolTranscript(last); err != nil {
+		t.Fatal(err)
+	}
+	results := 0
+	for _, message := range last {
+		for _, block := range message.Blocks {
+			if block.Type == llm.BlockToolResult && block.ToolUseID == "reused" && !block.IsError {
+				results++
+			}
+		}
+	}
+	if results != 2 {
+		t.Fatalf("completed reused results=%d", results)
+	}
+}

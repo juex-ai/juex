@@ -58,7 +58,7 @@ func (*Module) ProjectProviderHistory(_ context.Context, pairs []runtimemodule.T
 	sort.Strings(result.Omit)
 	for _, id := range result.Omit {
 		if text := plan.summaries[id]; text != "" {
-			result.Summaries = append(result.Summaries, runtimemodule.ToolSummary{ToolUseID: id, Text: text})
+			result.Summaries = append(result.Summaries, runtimemodule.ToolSummary{PairID: id, Text: text})
 		}
 	}
 	return result, nil
@@ -76,7 +76,7 @@ func buildChunkedWriteProjectionPlan(pairs []runtimemodule.ToolResultPair) provi
 	}
 
 	for _, pair := range pairs {
-		toolUseID, use, result := pair.Use.ToolUseID, pair.Use, pair.Result
+		toolUseID, use, result := pair.ID, pair.Use, pair.Result
 		event := eventFromResult(result)
 		if event == nil || event.WriteID == "" {
 			if result.IsError && use.ToolName == "write_chunk" {

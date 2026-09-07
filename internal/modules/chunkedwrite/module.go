@@ -90,21 +90,26 @@ func eventFromResult(block llm.Block) *writefacts.Event {
 }
 
 func recoverActiveSessions(history []llm.Message) []tools.ChunkedWriteRecoverySession {
-	uses := map[string]llm.Block{}
+	uses := map[string][]llm.Block{}
 	sessions := map[string]tools.ChunkedWriteRecoverySession{}
 	invalid := map[string]bool{}
 	for _, message := range history {
 		for _, result := range message.Blocks {
 			if result.Type == llm.BlockToolUse {
-				uses[result.ToolUseID] = result
+				uses[result.ToolUseID] = append(uses[result.ToolUseID], result)
 				continue
 			}
 			if result.Type != llm.BlockToolResult {
 				continue
 			}
+			pending := uses[result.ToolUseID]
+			if len(pending) == 0 {
+				continue
+			}
+			use := pending[0]
+			uses[result.ToolUseID] = pending[1:]
 			event := eventFromResult(result)
-			use, paired := uses[result.ToolUseID]
-			if event == nil || !paired {
+			if event == nil {
 				continue
 			}
 			switch event.Kind {

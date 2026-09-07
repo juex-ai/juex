@@ -32,7 +32,7 @@ func (m *runtimeHistoryModule) ProjectProviderHistory(_ context.Context, pairs [
 	if len(pairs) == 0 {
 		return runtimemodule.ProviderHistoryPlan{}, nil
 	}
-	return runtimemodule.ProviderHistoryPlan{Omit: []string{pairs[0].Use.ToolUseID}, Summaries: []runtimemodule.ToolSummary{{ToolUseID: pairs[0].Use.ToolUseID, Text: m.summary}}}, nil
+	return runtimemodule.ProviderHistoryPlan{Omit: []string{pairs[0].ID}, Summaries: []runtimemodule.ToolSummary{{PairID: pairs[0].ID, Text: m.summary}}}, nil
 }
 
 func TestProviderHistoryContributionUsesRuntimeBudgetAndCancellation(t *testing.T) {
