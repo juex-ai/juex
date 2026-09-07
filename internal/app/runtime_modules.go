@@ -23,6 +23,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -55,7 +56,7 @@ func prepareRuntimeModules(
 	_ context.Context,
 	cfg config.Config,
 	resourceGraph RuntimeResourceGraph,
-	runtimePaths config.RuntimePaths,
+	runtimePaths agentstate.RuntimePaths,
 	runtimeEnvironment environment.Snapshot,
 	sandboxRunner sandbox.Runner,
 ) (runtimeModuleComposition, error) {

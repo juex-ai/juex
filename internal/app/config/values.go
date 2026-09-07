@@ -8,6 +8,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
 
@@ -186,23 +187,8 @@ func (s ProviderSelection) llmConfig() providerprofile.Config {
 	}
 }
 
-// RuntimePaths separates workspace-local configuration from identity-owned
-// runtime state.
-type RuntimePaths struct {
-	WorkDir               string
-	JuexDir               string
-	StateDir              string
-	MediaDir              string
-	ThreadsDir            string
-	ThreadIndexPath       string
-	WorkspaceConfigPath   string
-	DefaultHomeConfigPath string
-	HomeConfigPath        string
-	AgentConfigPath       string
-}
-
-func (c Config) RuntimePaths() RuntimePaths {
-	paths := RuntimePaths{WorkDir: c.WorkDir}
+func (c Config) RuntimePaths() agentstate.RuntimePaths {
+	paths := agentstate.RuntimePaths{WorkDir: c.WorkDir}
 	if c.WorkDir != "" {
 		paths.JuexDir = filepath.Join(c.WorkDir, ".juex")
 		paths.StateDir = c.AgentStateDir

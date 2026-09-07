@@ -1,4 +1,4 @@
-package app
+package extensions
 
 import (
 	"os"
@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/features/extensions"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
@@ -22,14 +21,14 @@ func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extension := extensions.Extension{
+	extension := Extension{
 		Name:   "demo",
 		Dir:    filepath.Join(t.TempDir(), "installed demo"),
-		Source: extensions.Source("demo"),
+		Source: Source("demo"),
 	}
 
-	first := newExtensionRuntimeContext(firstAddress, extension)
-	second := newExtensionRuntimeContext(secondAddress, extension)
+	first := NewRuntimeContext(firstAddress.StateDir(), extension)
+	second := NewRuntimeContext(secondAddress.StateDir(), extension)
 	if got, want := first.DataDir, filepath.Join(firstAddress.StateDir(), "extensions", "demo"); got != want {
 		t.Fatalf("first data dir = %q, want %q", got, want)
 	}
@@ -39,14 +38,14 @@ func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {
 	if first.DataDir == second.DataDir {
 		t.Fatalf("agent data directories are not isolated: %q", first.DataDir)
 	}
-	otherExtension := newExtensionRuntimeContext(firstAddress, extensions.Extension{Name: "other"})
+	otherExtension := NewRuntimeContext(firstAddress.StateDir(), Extension{Name: "other"})
 	if otherExtension.DataDir == first.DataDir {
 		t.Fatalf("extension data directories are not isolated: %q", first.DataDir)
 	}
-	movedWorkspace := newExtensionRuntimeContext(firstAddress, extensions.Extension{
+	movedWorkspace := NewRuntimeContext(firstAddress.StateDir(), Extension{
 		Name:   "demo",
 		Dir:    filepath.Join(t.TempDir(), "moved workspace", "demo"),
-		Source: extensions.Source("demo"),
+		Source: Source("demo"),
 	})
 	if movedWorkspace.DataDir != first.DataDir {
 		t.Fatalf("workspace move changed Agent-owned data dir: %q != %q", movedWorkspace.DataDir, first.DataDir)
@@ -54,7 +53,7 @@ func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {
 	if first.ExtensionDir != extension.Dir || first.Source != extension.Source || first.ExtensionName != extension.Name {
 		t.Fatalf("runtime metadata = %+v", first)
 	}
-	stateFree := newExtensionRuntimeContext(agentstate.AgentAddress{}, extension)
+	stateFree := NewRuntimeContext("", extension)
 	if stateFree.DataDir != "" {
 		t.Fatalf("state-free runtime context = %+v", stateFree)
 	}
@@ -69,7 +68,7 @@ func TestAgentExtensionsRuntimePreparesPrivatePersistentRoot(t *testing.T) {
 	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runtimeContext := newAgentExtensionsRuntime(address)
+	runtimeContext := NewRuntimeRoot(address.StateDir())
 	if _, err := os.Stat(runtimeContext.RootDir); !os.IsNotExist(err) {
 		t.Fatalf("runtime construction created extensions root: %v", err)
 	}
@@ -112,7 +111,7 @@ func TestAgentExtensionsRuntimeRejectsSymlinkEscape(t *testing.T) {
 	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runtimeContext := newAgentExtensionsRuntime(address)
+	runtimeContext := NewRuntimeRoot(address.StateDir())
 	if err := os.Symlink(t.TempDir(), runtimeContext.RootDir); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
@@ -120,7 +119,7 @@ func TestAgentExtensionsRuntimeRejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("Prepare() error = %v, want symlink rejection", err)
 	}
 
-	stateFree := newAgentExtensionsRuntime(agentstate.AgentAddress{})
+	stateFree := NewRuntimeRoot("")
 	if stateFree.RootDir != "" {
 		t.Fatalf("state-free runtime = %+v", stateFree)
 	}
@@ -138,10 +137,10 @@ func TestExtensionRuntimeContextPrepareDataDirIsPrivateAndPersistent(t *testing.
 	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	context := newExtensionRuntimeContext(address, extensions.Extension{
+	context := NewRuntimeContext(address.StateDir(), Extension{
 		Name:   "demo",
 		Dir:    filepath.Join(t.TempDir(), "demo"),
-		Source: extensions.Source("demo"),
+		Source: Source("demo"),
 	})
 
 	if err := context.PrepareDataDir(); err != nil {
@@ -182,7 +181,7 @@ func TestExtensionRuntimeContextPrepareDataDirIsConcurrent(t *testing.T) {
 	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	context := newExtensionRuntimeContext(address, extensions.Extension{Name: "demo"})
+	context := NewRuntimeContext(address.StateDir(), Extension{Name: "demo"})
 
 	const workers = 64
 	start := make(chan struct{})
@@ -237,7 +236,7 @@ func TestExtensionRuntimeContextRejectsSymlinkEscape(t *testing.T) {
 				}
 			}
 
-			context := newExtensionRuntimeContext(address, extensions.Extension{Name: "demo"})
+			context := NewRuntimeContext(address.StateDir(), Extension{Name: "demo"})
 			err = context.PrepareDataDir()
 			if err == nil || !strings.Contains(err.Error(), "symlink") {
 				t.Fatalf("PrepareDataDir() error = %v, want symlink rejection", err)

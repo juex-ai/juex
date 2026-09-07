@@ -129,7 +129,7 @@ func TestOpenThreadWaitsForInFlightMCPStartup(t *testing.T) {
 	})
 
 	startErrCh := make(chan error, 1)
-	go func() { startErrCh <- srv.ensureMCPStarted(context.Background()) }()
+	go func() { startErrCh <- srv.processServices().EnsureMCPStarted(context.Background()) }()
 	waitForFile(t, marker)
 
 	as, err := srv.openThread(context.Background(), thread.MainID)
@@ -217,10 +217,14 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 			}
 			mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "mcp.json"), string(body))
 
-			if err := srv.ensureMCPStarted(t.Context()); err != nil {
+			if err := srv.processServices().EnsureMCPStarted(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			startupError := srv.mcpErrors()["remote"]
+			startupStatus, err := srv.runtimeStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			startupError := startupStatus.MCP.Servers[0].Error
 			if startupError == "" {
 				t.Fatal("missing remote MCP startup error")
 			}
@@ -266,7 +270,7 @@ func TestRuntimeUsesMCPStartupSpecAfterConfigEdit(t *testing.T) {
 		mustWriteRuntimeFile(t, configPath, string(body))
 	}
 	writeConfig(remote.URL + "/mcp?token=startup-secret")
-	if err := srv.ensureMCPStarted(t.Context()); err != nil {
+	if err := srv.processServices().EnsureMCPStarted(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -324,7 +328,7 @@ func TestRuntimeUsesMCPStartupRowSetAfterConfigEdit(t *testing.T) {
 		mustWriteRuntimeFile(t, configPath, string(body))
 	}
 	writeConfig("startup", remote.URL+"/mcp")
-	if err := srv.ensureMCPStarted(t.Context()); err != nil {
+	if err := srv.processServices().EnsureMCPStarted(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -364,7 +368,7 @@ func TestRuntimeUsesMCPStartupRowSetAfterConfigEdit(t *testing.T) {
 
 func TestRuntimeKeepsEmptyMCPStartupRowSetAfterConfigBecomesInvalid(t *testing.T) {
 	srv := newTestServer(t)
-	if err := srv.ensureMCPStarted(t.Context()); err != nil {
+	if err := srv.processServices().EnsureMCPStarted(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), "{")

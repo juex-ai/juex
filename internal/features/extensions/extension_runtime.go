@@ -1,4 +1,4 @@
-package app
+package extensions
 
 import (
 	"fmt"
@@ -6,14 +6,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/juex-ai/juex/internal/features/extensions"
-	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 // ExtensionRuntimeContext carries Agent-owned runtime paths for one selected
 // extension without coupling extension discovery to mutable Agent state.
-type ExtensionRuntimeContext struct {
+type RuntimeContext struct {
 	ExtensionName string
 	Source        string
 	ExtensionDir  string
@@ -24,15 +21,14 @@ type ExtensionRuntimeContext struct {
 
 // AgentExtensionsRuntime manages the Agent-owned parent directory used by
 // selected extensions for private persistent data.
-type AgentExtensionsRuntime struct {
+type RuntimeRoot struct {
 	RootDir string
 
 	agentStateDir string
 }
 
-func newAgentExtensionsRuntime(address agentstate.AgentAddress) AgentExtensionsRuntime {
-	stateDir := address.StateDir()
-	runtime := AgentExtensionsRuntime{agentStateDir: stateDir}
+func NewRuntimeRoot(stateDir string) RuntimeRoot {
+	runtime := RuntimeRoot{agentStateDir: stateDir}
 	if stateDir != "" {
 		runtime.RootDir = filepath.Join(stateDir, "extensions")
 	}
@@ -41,7 +37,7 @@ func newAgentExtensionsRuntime(address agentstate.AgentAddress) AgentExtensionsR
 
 // Prepare creates only the Agent-wide root immediately before a sandboxed
 // extension child starts. State-free previews remain side-effect free.
-func (r AgentExtensionsRuntime) Prepare() error {
+func (r RuntimeRoot) Prepare() error {
 	if r.RootDir == "" {
 		return nil
 	}
@@ -68,12 +64,12 @@ func (r AgentExtensionsRuntime) Prepare() error {
 	return nil
 }
 
-func newExtensionRuntimeContext(address agentstate.AgentAddress, extension extensions.Extension) ExtensionRuntimeContext {
-	context := ExtensionRuntimeContext{
+func NewRuntimeContext(stateDir string, extension Extension) RuntimeContext {
+	context := RuntimeContext{
 		ExtensionName: extension.Name,
 		Source:        extension.Source,
 		ExtensionDir:  extension.Dir,
-		agentStateDir: address.StateDir(),
+		agentStateDir: stateDir,
 	}
 	if context.agentStateDir != "" && extension.Name != "" {
 		context.DataDir = filepath.Join(context.agentStateDir, "extensions", extension.Name)
@@ -84,7 +80,7 @@ func newExtensionRuntimeContext(address agentstate.AgentAddress, extension exten
 // PrepareDataDir creates the persistent data directory immediately before a
 // selected local extension process starts. State-free resource previews are a
 // deliberate no-op.
-func (c ExtensionRuntimeContext) PrepareDataDir() error {
+func (c RuntimeContext) PrepareDataDir() error {
 	if c.DataDir == "" {
 		return nil
 	}
@@ -103,7 +99,7 @@ func (c ExtensionRuntimeContext) PrepareDataDir() error {
 	if filepath.Clean(c.DataDir) != filepath.Join(extensionsRoot, c.ExtensionName) {
 		return fmt.Errorf("extension runtime: data directory %q is outside the Agent extension root", c.DataDir)
 	}
-	rootRuntime := newAgentExtensionsRuntimeFromStateDir(c.agentStateDir)
+	rootRuntime := NewRuntimeRoot(c.agentStateDir)
 	if err := rootRuntime.Prepare(); err != nil {
 		return err
 	}
@@ -123,14 +119,6 @@ func (c ExtensionRuntimeContext) PrepareDataDir() error {
 		return fmt.Errorf("extension runtime: data directory %q escapes Agent extension root", c.DataDir)
 	}
 	return nil
-}
-
-func newAgentExtensionsRuntimeFromStateDir(stateDir string) AgentExtensionsRuntime {
-	runtime := AgentExtensionsRuntime{agentStateDir: stateDir}
-	if stateDir != "" {
-		runtime.RootDir = filepath.Join(stateDir, "extensions")
-	}
-	return runtime
 }
 
 func ensurePrivateDirectoryWithoutSymlink(path string) error {

@@ -10,17 +10,17 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
-func bundleThreadFixture(t *testing.T) (config.Config, *thread.Thread) {
+func bundleThreadFixture(t *testing.T) (agentstate.RuntimePaths, *thread.Thread) {
 	t.Helper()
 	work := t.TempDir()
 	state := filepath.Join(work, ".juex")
-	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: state}
+	cfg := agentstate.RuntimePaths{WorkDir: work, StateDir: state, MediaDir: filepath.Join(state, "media")}
 	target, err := thread.NewStore(state).EnsureMain()
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +35,7 @@ func TestCreateIncludesGenerationJournalsAndRedacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "thread.tar.gz")
-	result, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: target.ID, OutPath: out, Redact: true, Config: cfg})
+	result, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: target.ID, OutPath: out, Redact: true, Paths: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestCreateIncludesGenerationJournalsAndRedacts(t *testing.T) {
 
 func TestCreateReadsArchivedThread(t *testing.T) {
 	cfg, main := bundleThreadFixture(t)
-	store := thread.NewStore(cfg.AgentStateDir)
+	store := thread.NewStore(cfg.StateDir)
 	worker, err := store.CreateWorker(main.ID, "archived")
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestCreateReadsArchivedThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "archived.tar.gz")
-	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: id, OutPath: out, Config: cfg}); err != nil {
+	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: id, OutPath: out, Paths: cfg}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -72,7 +72,7 @@ func TestCreateReadsArchivedThread(t *testing.T) {
 func TestCreateDoesNotRepairUnregisteredGeneration(t *testing.T) {
 	cfg, target := bundleThreadFixture(t)
 	stagedPath := filepath.Join(
-		cfg.AgentStateDir,
+		cfg.StateDir,
 		"threads",
 		target.ID,
 		"generations",
@@ -83,7 +83,7 @@ func TestCreateDoesNotRepairUnregisteredGeneration(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
-	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: target.ID, OutPath: out, Config: cfg}); err != nil {
+	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: target.ID, OutPath: out, Paths: cfg}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(stagedPath)
@@ -98,13 +98,13 @@ func TestCreateDoesNotRepairUnregisteredGeneration(t *testing.T) {
 func TestCreateRejectsMissingThreadAndExistingOutput(t *testing.T) {
 	cfg, target := bundleThreadFixture(t)
 	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
-	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: "abcdef", OutPath: out, Config: cfg}); !errors.Is(err, ErrThreadNotFound) {
+	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: "abcdef", OutPath: out, Paths: cfg}); !errors.Is(err, ErrThreadNotFound) {
 		t.Fatalf("missing error = %v", err)
 	}
 	if err := os.WriteFile(out, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: target.ID, OutPath: out, Config: cfg}); !errors.Is(err, ErrOutputExists) {
+	if _, err := Create(Options{WorkDir: cfg.WorkDir, ThreadID: target.ID, OutPath: out, Paths: cfg}); !errors.Is(err, ErrOutputExists) {
 		t.Fatalf("existing output error = %v", err)
 	}
 }

@@ -54,7 +54,8 @@ func newThreadBundleCmd(selectors *agentSelectorFlags) *cobra.Command {
 				Force:                  force,
 				IncludeMedia:           includeMedia,
 				IncludeWorktreeSummary: includeWorktreeSummary,
-				Config:                 cfg,
+				Paths:                  cfg.RuntimePaths(),
+				Provider:               bundle.RuntimeProvider{ID: cfg.ProviderID, Protocol: cfg.ProviderProtocol, Model: cfg.Model, BaseURL: cfg.BaseURL},
 				Environment:            agentRuntime.Environment(),
 			})
 			if err != nil {

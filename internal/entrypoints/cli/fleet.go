@@ -18,6 +18,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app"
+
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 
 	"github.com/spf13/cobra"
@@ -57,7 +59,7 @@ func newFleetManager() (*fleet.Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("juex fleet: resolve executable: %w", err)
 	}
-	return fleet.New(fleet.Options{HomeDir: homeDir, Executable: executable})
+	return app.NewFleet(fleet.Options{HomeDir: homeDir, Executable: executable})
 }
 
 func newFleetServeCmd(_ *persistentFlags) *cobra.Command {

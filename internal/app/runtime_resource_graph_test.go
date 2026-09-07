@@ -397,7 +397,7 @@ func TestLoadMCPConfigRefsDoesNotPrepareOverriddenLocalExtension(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "project-mcp.json")
 	mustWriteRuntimeStatusFile(t, extensionPath, `{"mcpServers":{"shared":{"command":"extension-server"}}}`)
 	mustWriteRuntimeStatusFile(t, projectPath, `{"mcpServers":{"shared":{"command":"project-server"}}}`)
-	context := newExtensionRuntimeContext(address, extensions.Extension{
+	context := extensions.NewRuntimeContext(address.StateDir(), extensions.Extension{
 		Name:   "demo",
 		Dir:    filepath.Dir(extensionPath),
 		Source: extensions.Source("demo"),

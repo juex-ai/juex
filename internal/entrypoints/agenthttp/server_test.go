@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app"
+
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/features/mcp"
@@ -215,8 +217,8 @@ func TestServerThreadsShareProcessModelHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.agent.Engine.ModelHealth == nil || first.agent.Engine.ModelHealth != second.agent.Engine.ModelHealth || first.agent.Engine.ModelHealth != srv.modelHealth {
-		t.Fatalf("model health is not process-shared: first=%p second=%p server=%p", first.agent.Engine.ModelHealth, second.agent.Engine.ModelHealth, srv.modelHealth)
+	if first.agent.Engine.ModelHealth == nil || first.agent.Engine.ModelHealth != second.agent.Engine.ModelHealth {
+		t.Fatalf("model health is not process-shared: first=%p second=%p", first.agent.Engine.ModelHealth, second.agent.Engine.ModelHealth)
 	}
 }
 
@@ -620,11 +622,14 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.handleMCPNotification(context.Background(), mcp.Notification{
-			ServerName: "test",
-			Method:     "notifications/message",
-			EventType:  "demo",
-			Content:    "trigger a turn",
+		errCh <- srv.withMain(context.Background(), func(ctx context.Context, main *app.App) error {
+			_, err := main.DeliverObservation(ctx, main.ObservationFromMCPNotification(mcp.Notification{
+				ServerName: "test",
+				Method:     "notifications/message",
+				EventType:  "demo",
+				Content:    "trigger a turn",
+			}))
+			return err
 		})
 	}()
 	select {

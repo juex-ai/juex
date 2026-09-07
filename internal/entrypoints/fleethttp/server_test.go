@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -1230,6 +1229,8 @@ func waitForFleetConnectionCount(t *testing.T, count *atomic.Int32, want int32) 
 }
 
 func TestStoppedAgentModuleInspectionUsesEffectiveComposition(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("JUEX_HOME", t.TempDir())
 	stateDir := t.TempDir()
 	main, err := thread.NewStore(stateDir).EnsureMain()
 	if err != nil {
@@ -1245,7 +1246,14 @@ func TestStoppedAgentModuleInspectionUsesEffectiveComposition(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "modules", "goal", "goal_state.json"), []byte("unreadable module body"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	backend := &fakeBackend{endpointErr: errors.New("stopped"), readOnly: fleet.ReadOnlyAgentState{ID: "aaaaaa", Workspace: t.TempDir(), StateDir: stateDir, Preset: "minimal"}}
+	backend := &fakeBackend{endpointErr: errors.New("stopped"), readOnly: fleet.ReadOnlyAgentState{ID: "aaaaaa", Workspace: t.TempDir(), StateDir: stateDir, HomeDir: t.TempDir(), ConfigPath: filepath.Join(stateDir, "juex.yaml")}}
+	writeComposition := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(backend.readOnly.ConfigPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeComposition("preset: minimal\n")
 	handler := newServer(backend, Options{}).Handler()
 	request := func() *httptest.ResponseRecorder {
 		response := httptest.NewRecorder()
@@ -1256,12 +1264,12 @@ func TestStoppedAgentModuleInspectionUsesEffectiveComposition(t *testing.T) {
 	if response.Code != 200 || strings.Contains(response.Body.String(), `"goal"`) {
 		t.Fatalf("disabled response=%d %s", response.Code, response.Body.String())
 	}
-	backend.readOnly.Modules = config.ModulePolicy{"goal": {Enabled: true}}
+	writeComposition("preset: minimal\nmodules:\n  goal:\n    enabled: true\n")
 	response = request()
 	if response.Code != 200 || !strings.Contains(response.Body.String(), `"status": "error"`) {
 		t.Fatalf("enabled response=%d %s", response.Code, response.Body.String())
 	}
-	backend.readOnly.ModuleError = "configuration unavailable"
+	writeComposition("modules: [invalid]\n")
 	response = request()
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unavailable=%d %s", response.Code, response.Body.String())

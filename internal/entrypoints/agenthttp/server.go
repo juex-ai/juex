@@ -10,19 +10,16 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	agentsmdmodule "github.com/juex-ai/juex/internal/features/agentsmd"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	observablesmodule "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/version"
 	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
-	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	statusapi "github.com/juex-ai/juex/internal/framework/status"
@@ -55,7 +52,6 @@ type Server struct {
 	readOnly            bool
 	inspectionFactories []runtimemodule.ThreadFactorySpec
 	opts                Options
-	modelHealth         *modelhealth.ModelHealth
 	threads             sync.Map // Thread id (string) → *activeThread
 	startedAt           time.Time
 	statusStream        *statusapi.ActivityStore
@@ -67,21 +63,11 @@ type Server struct {
 	closed          bool
 	deferredCloseWG sync.WaitGroup
 
-	runtimeMu     sync.Mutex
-	runtimeMCPErr map[string]string
-
-	mcpMu       sync.Mutex
-	mcpStarted  bool
-	mcpStarting chan struct{}
-	mcpStartErr error
-	mcpManager  *mcp.Manager
-
-	agentRuntimeOnce sync.Once
-	agentRuntime     app.AgentRuntimeResolution
-	agentRuntimeErr  error
-	threadIndexOnce  sync.Once
-	threadIndexMu    sync.Mutex
-	threadIndexErr   error
+	servicesOnce    sync.Once
+	services        *app.ProcessServices
+	threadIndexOnce sync.Once
+	threadIndexMu   sync.Mutex
+	threadIndexErr  error
 
 	endpointMu       sync.RWMutex
 	endpointRuntime  endpoint.Runtime
@@ -120,11 +106,9 @@ func NewServer(opts Options) *Server {
 	return &Server{
 		inspectionDone: make(chan struct{}),
 		opts:           opts,
-		modelHealth:    modelhealth.NewModelHealth(modelhealth.ModelHealthOptions{}),
 		startedAt:      time.Now().UTC(),
 		statusStream:   statusapi.NewActivityStore(),
 		resources:      resources,
-		runtimeMCPErr:  map[string]string{},
 	}
 }
 
@@ -330,7 +314,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = binding.Close() }()
-	if _, err := s.resolveAgentRuntime(); err != nil {
+	if _, err := s.processServices().RuntimeResolution(); err != nil {
 		return err
 	}
 	resourceLease, err := app.AcquireModuleResources(s.opts.Cfg)
@@ -393,7 +377,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go func() {
 		defer close(startupDone)
 		// Keep warmup behind both listeners so startup notifications cannot hide readiness.
-		if err := s.ensureMCPStarted(startupCtx); err != nil {
+		if err := s.processServices().EnsureMCPStarted(startupCtx); err != nil {
 			startupErrCh <- err
 			return
 		}
@@ -533,7 +517,7 @@ func (s *Server) Close() {
 		v.(*activeThread).beginClose()
 		return true
 	})
-	s.closeMCPManager()
+	s.processServices().Close()
 	s.resources.close()
 	s.threads.Range(func(_, v any) bool {
 		v.(*activeThread).close()
@@ -583,7 +567,7 @@ func validLoopback(addr string) bool {
 // openThread restores one active Thread runtime. Concurrent first touches of
 // the same Thread collapse to a single App instance.
 func (s *Server) openThread(ctx context.Context, id string) (*activeThread, error) {
-	if err := s.ensureMCPStarted(ctx); err != nil {
+	if err := s.processServices().EnsureMCPStarted(ctx); err != nil {
 		return nil, err
 	}
 	s.createMu.Lock()
@@ -627,26 +611,8 @@ func (s *Server) openThreadLocked(ctx context.Context, id string) (*activeThread
 	if managed := s.managedWorkerAgent(id); managed != nil {
 		return s.bindThreadAgent(managed, nil, false)
 	}
-	agentRuntime, err := s.resolveAgentRuntime()
+	a, err := s.processServices().NewThread(id)
 	if err != nil {
-		return nil, err
-	}
-	a, err := app.New(app.Options{
-		Config:       s.opts.Cfg,
-		Provider:     s.opts.Provider,
-		ModelHealth:  s.modelHealth,
-		Verbose:      s.opts.Verbose,
-		Debug:        s.opts.Debug,
-		LogLevel:     s.opts.LogLevel,
-		Stderr:       s.stderr(),
-		WorkDir:      s.opts.Cfg.WorkDir,
-		MCPManager:   s.mcpManagerSnapshot(),
-		DisableMCP:   true,
-		ThreadID:     id,
-		AgentRuntime: &agentRuntime,
-	})
-	if err != nil {
-		s.recordMCPError(err)
 		s.logVerbose("juex listen: open Thread failed: %v", err)
 		return nil, err
 	}
@@ -721,13 +687,6 @@ func (s *Server) bindThreadAgent(a *agent.Agent, main *app.App, ownsAgent bool) 
 	return as, nil
 }
 
-func (s *Server) resolveAgentRuntime() (app.AgentRuntimeResolution, error) {
-	s.agentRuntimeOnce.Do(func() {
-		s.agentRuntime, s.agentRuntimeErr = app.ResolveAgentRuntime(s.opts.Cfg)
-	})
-	return s.agentRuntime, s.agentRuntimeErr
-}
-
 func (s *Server) ensureMainThread(ctx context.Context) error {
 	if !s.hasThreadProvider() {
 		return nil
@@ -743,153 +702,13 @@ func (s *Server) hasThreadProvider() bool {
 	return s.opts.Provider != nil || s.opts.Cfg.ProviderID != "" || s.opts.Cfg.ProviderProtocol != ""
 }
 
-func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
-	if err := app.ValidateModuleConfig(s.opts.Cfg); err != nil {
-		return err
-	}
-	if !s.opts.Cfg.ModuleEnabled(string(mcp.ModuleID)) {
-		return nil
-	}
-	s.mcpMu.Lock()
-	if s.mcpStarted {
-		starting := s.mcpStarting
-		s.mcpMu.Unlock()
-		if starting == nil {
-			return nil
-		}
-		select {
-		case <-starting:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		s.mcpMu.Lock()
-		defer s.mcpMu.Unlock()
-		return s.mcpStartErr
-	}
-	s.mcpStarted = true
-	s.mcpStartErr = nil
-	starting := make(chan struct{})
-	s.mcpStarting = starting
-	s.mcpMu.Unlock()
-	startupFinished := false
-	finishStartup := func(startErr error) {
-		s.mcpMu.Lock()
-		if startErr != nil {
-			s.mcpStarted = false
-		}
-		s.mcpStartErr = startErr
-		s.mcpStarting = nil
-		s.mcpMu.Unlock()
-		close(starting)
-	}
-	defer func() {
-		if !startupFinished {
-			finishStartup(err)
-		}
-	}()
-
-	agentRuntime, err := s.resolveAgentRuntime()
-	if err != nil {
-		return err
-	}
-	mcpConfigs, err := s.loadMCPConfigs(agentRuntime)
-	if err != nil {
-		return err
-	}
-	var ready atomic.Bool
-	var queuedMu sync.Mutex
-	var queued []mcp.Notification
-	handleNotification := func(n mcp.Notification) {
-		if !ready.Load() {
-			queuedMu.Lock()
-			queued = append(queued, n)
-			queuedMu.Unlock()
-			return
-		}
-		if err := s.handleMCPNotification(context.Background(), n); err != nil {
-			s.logVerbose("juex listen: MCP notification dropped: %v", err)
-		}
-	}
-	mgr, err := mcp.NewManagerLayeredSoft(ctx, mcpConfigs, mcp.ConnectOptions{
-		OnNotification:      handleNotification,
-		EnableClaudeChannel: true,
-		Environment:         agentRuntime.Environment(),
-	})
-	if err != nil {
-		s.recordMCPError(err)
-		s.logVerbose("juex listen: MCP startup failed: %v", err)
-		return nil
-	}
-	s.setMCPErrors(mgr.StartupErrors())
-
-	s.mcpMu.Lock()
-	if s.isClosed() {
-		s.mcpMu.Unlock()
-		if err := mgr.Close(); err != nil {
-			s.logVerbose("juex listen: MCP shutdown failed: %v", err)
-		}
-		return nil
-	}
-	s.mcpManager = mgr
-	s.mcpMu.Unlock()
-	ready.Store(true)
-	finishStartup(nil)
-	startupFinished = true
-	queuedMu.Lock()
-	pending := append([]mcp.Notification(nil), queued...)
-	queued = nil
-	queuedMu.Unlock()
-	for _, n := range pending {
-		handleNotification(n)
-	}
-	return nil
-}
-
-func (s *Server) mcpManagerSnapshot() *mcp.Manager {
-	s.mcpMu.Lock()
-	defer s.mcpMu.Unlock()
-	return s.mcpManager
-}
-
-func (s *Server) mcpToolDescriptors() map[string][]mcp.ToolDescriptor {
-	mgr := s.mcpManagerSnapshot()
-	if mgr == nil {
-		return map[string][]mcp.ToolDescriptor{}
-	}
-	return mgr.ToolDescriptors()
-}
-
-func (s *Server) mcpConnectionSpecs() map[string]mcp.RuntimeConnectionSpec {
-	s.mcpMu.Lock()
-	started := s.mcpStarted
-	mgr := s.mcpManager
-	s.mcpMu.Unlock()
-	if !started {
-		return nil
-	}
-	if mgr == nil {
-		return map[string]mcp.RuntimeConnectionSpec{}
-	}
-	return mgr.RuntimeConnectionSpecs()
-}
-
-func (s *Server) closeMCPManager() {
-	s.mcpMu.Lock()
-	mgr := s.mcpManager
-	s.mcpManager = nil
-	s.mcpMu.Unlock()
-	if mgr != nil {
-		_ = mgr.Close()
-	}
-}
-
 func (s *Server) isClosed() bool {
 	s.closeMu.Lock()
 	defer s.closeMu.Unlock()
 	return s.closed
 }
 
-func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
+func (s *Server) withMain(ctx context.Context, use func(context.Context, *app.App) error) error {
 	as, err := s.getThread(ctx, thread.MainID)
 	if errors.Is(err, os.ErrNotExist) {
 		s.logVerbose("juex listen: MCP notification dropped: Main Thread unavailable")
@@ -908,8 +727,7 @@ func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) 
 	s.createMu.Unlock()
 	defer as.workWG.Done()
 	defer cancel()
-	_, err = as.main.DeliverObservation(workCtx, as.main.ObservationFromMCPNotification(n))
-	return err
+	return use(workCtx, as.main)
 }
 
 func (s *Server) stderr() io.Writer {
@@ -924,54 +742,11 @@ func (s *Server) logVerbose(format string, args ...any) {
 		return
 	}
 	message := fmt.Sprintf(format, args...)
-	fmt.Fprintln(s.stderr(), s.redactRuntimeText(message))
-}
-
-func (s *Server) recordMCPError(err error) {
-	name, ok := mcp.ErrorServerName(err)
-	if !ok {
-		return
-	}
-	s.runtimeMu.Lock()
-	defer s.runtimeMu.Unlock()
-	if s.runtimeMCPErr == nil {
-		s.runtimeMCPErr = map[string]string{}
-	}
-	s.runtimeMCPErr[name] = s.redactRuntimeText(err.Error())
-}
-
-func (s *Server) setMCPErrors(errors map[string]string) {
-	s.runtimeMu.Lock()
-	defer s.runtimeMu.Unlock()
-	s.runtimeMCPErr = map[string]string{}
-	for name, msg := range errors {
-		if msg != "" {
-			s.runtimeMCPErr[name] = s.redactRuntimeText(msg)
-		}
-	}
-}
-
-func (s *Server) redactRuntimeText(message string) string {
-	runtime, err := s.resolveAgentRuntime()
-	if err != nil {
-		return message
-	}
-	redacted, _ := runtime.Environment().RedactConfiguredValues([]byte(message))
-	return string(redacted)
-}
-
-func (s *Server) mcpErrors() map[string]string {
-	s.runtimeMu.Lock()
-	defer s.runtimeMu.Unlock()
-	out := make(map[string]string, len(s.runtimeMCPErr))
-	for name, msg := range s.runtimeMCPErr {
-		out[name] = msg
-	}
-	return out
+	fmt.Fprintln(s.stderr(), s.processServices().RedactRuntimeText(message))
 }
 
 func (s *Server) getThread(ctx context.Context, id string) (*activeThread, error) {
-	if err := s.ensureMCPStarted(ctx); err != nil {
+	if err := s.processServices().EnsureMCPStarted(ctx); err != nil {
 		return nil, err
 	}
 	s.createMu.Lock()
@@ -989,4 +764,13 @@ func threadPathID(path string) (id, rest string) {
 		return tail[:i], strings.Trim(tail[i+1:], "/")
 	}
 	return tail, ""
+}
+
+func (s *Server) processServices() *app.ProcessServices {
+	s.servicesOnce.Do(func() {
+		s.services = app.NewProcessServices(app.ProcessServicesOptions{
+			Config: s.opts.Cfg, Provider: s.opts.Provider, Verbose: s.opts.Verbose, Debug: s.opts.Debug, LogLevel: s.opts.LogLevel, Stderr: s.opts.Stderr, WithMain: s.withMain,
+		})
+	})
+	return s.services
 }

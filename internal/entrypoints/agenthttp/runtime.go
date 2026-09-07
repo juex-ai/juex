@@ -4,13 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
@@ -208,7 +205,7 @@ func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runtimeEnvironment := s.opts.Cfg.EnvironmentSnapshot()
-	if agentRuntime, resolveErr := s.resolveAgentRuntime(); resolveErr == nil {
+	if agentRuntime, resolveErr := s.processServices().RuntimeResolution(); resolveErr == nil {
 		runtimeEnvironment = agentRuntime.Environment()
 	}
 	if err := writeRuntimeStatusJSON(w, http.StatusOK, status, runtimeEnvironment); err != nil {
@@ -256,29 +253,14 @@ func restorePublicExtensionStructure(redacted *extensionsStatus, public extensio
 }
 
 func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
-	if err := s.ensureMCPStarted(context.Background()); err != nil {
+	if err := s.processServices().EnsureMCPStarted(context.Background()); err != nil {
 		return runtimeStatusResponse{}, err
 	}
 	active, err := s.getThread(context.Background(), thread.MainID)
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	agentRuntime, err := s.resolveAgentRuntime()
-	if err != nil {
-		return runtimeStatusResponse{}, err
-	}
-	var status app.RuntimeStatus
-	err = app.ReadRuntimeModuleSnapshot(active.agent, func(snapshot app.RuntimeModuleSnapshot) error {
-		var snapshotErr error
-		status, snapshotErr = app.NewRuntimeCatalogService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
-			ActiveModules:      &snapshot,
-			MCPToolDescriptors: s.mcpToolDescriptors(),
-			MCPErrors:          s.mcpErrors(),
-			MCPConnectionSpecs: s.mcpConnectionSpecs(),
-			AgentRuntime:       &agentRuntime,
-		})
-		return snapshotErr
-	})
+	status, err := s.processServices().RuntimeStatus(active.agent)
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
@@ -477,24 +459,4 @@ func skillsStatusFromApp(status app.RuntimeSkillsStatus) skillsStatus {
 			Omitted:     omitted,
 		},
 	}
-}
-
-func (s *Server) absoluteWorkDir() string {
-	workDir := s.opts.Cfg.WorkDir
-	if workDir == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return ""
-		}
-		workDir = cwd
-	}
-	abs, err := filepath.Abs(workDir)
-	if err != nil {
-		return workDir
-	}
-	return abs
-}
-
-func (s *Server) loadMCPConfigs(runtime app.AgentRuntimeResolution) ([]mcp.Config, error) {
-	return app.LoadMCPConfigs(runtime, s.absoluteWorkDir())
 }

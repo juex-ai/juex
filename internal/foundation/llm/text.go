@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// FormatImagePlaceholder returns the terminal-friendly representation of an
+// ImagePlainText returns the plain-text representation of an
 // image media reference.
-func FormatImagePlaceholder(media *MediaRef) string {
+func ImagePlainText(media *MediaRef) string {
 	if media == nil {
 		return "[图片: unavailable]"
 	}
@@ -29,9 +29,9 @@ func FormatImagePlaceholder(media *MediaRef) string {
 	return "[图片: " + name + " (" + strings.Join(meta, ", ") + ")]"
 }
 
-// FormatBlocksForTerminal flattens displayable blocks into CLI text while
+// BlocksPlainText flattens displayable blocks into shared output text while
 // preserving image references that would otherwise be invisible.
-func FormatBlocksForTerminal(blocks []Block) string {
+func BlocksPlainText(blocks []Block) string {
 	var parts []string
 	for _, block := range blocks {
 		switch block.Type {
@@ -40,13 +40,13 @@ func FormatBlocksForTerminal(blocks []Block) string {
 				parts = append(parts, block.Text)
 			}
 		case BlockImage:
-			parts = append(parts, FormatImagePlaceholder(block.Media))
+			parts = append(parts, ImagePlainText(block.Media))
 		case BlockToolResult:
 			if block.Content != "" {
 				parts = append(parts, block.Content)
 			}
 			if block.Media != nil {
-				parts = append(parts, FormatImagePlaceholder(block.Media))
+				parts = append(parts, ImagePlainText(block.Media))
 			}
 		}
 	}

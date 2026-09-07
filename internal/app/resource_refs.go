@@ -19,14 +19,14 @@ import (
 type mcpConfigRef struct {
 	Path             string
 	Source           string
-	ExtensionRuntime ExtensionRuntimeContext
+	ExtensionRuntime extensions.RuntimeContext
 	StrictConflicts  bool
 }
 
 type observableConfigRef struct {
 	Path             string
 	Source           string
-	ExtensionRuntime ExtensionRuntimeContext
+	ExtensionRuntime extensions.RuntimeContext
 }
 
 type RuntimeResourceKind string
@@ -58,7 +58,7 @@ type RuntimeExtensionDescriptor struct {
 	Scope        extensions.Scope
 	RequireTrust bool
 	Manifest     extensions.Manifest
-	Runtime      ExtensionRuntimeContext
+	Runtime      extensions.RuntimeContext
 }
 
 type RuntimeResourceGraph struct {
@@ -172,7 +172,7 @@ func (g RuntimeResourceGraph) Nodes() []RuntimeResourceNode {
 	return append([]RuntimeResourceNode(nil), g.nodes...)
 }
 
-func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Resources, runtimeContexts map[string]ExtensionRuntimeContext, selection extensions.ResourceSelection) []RuntimeResourceNode {
+func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Resources, runtimeContexts map[string]extensions.RuntimeContext, selection extensions.ResourceSelection) []RuntimeResourceNode {
 	var nodes []RuntimeResourceNode
 	if paths.UserAgentsResources && paths.HomeAgentsDir != "" {
 		nodes = append(nodes, workspaceResourceNodes(paths.HomeAgentsDir, "user", selection)...)
@@ -223,7 +223,7 @@ func workspaceResourceNodes(dir, source string, selection extensions.ResourceSel
 	return nodes
 }
 
-func runtimeExtensionDescriptors(selected []extensions.Extension, runtimeContexts map[string]ExtensionRuntimeContext) []RuntimeExtensionDescriptor {
+func runtimeExtensionDescriptors(selected []extensions.Extension, runtimeContexts map[string]extensions.RuntimeContext) []RuntimeExtensionDescriptor {
 	descriptors := make([]RuntimeExtensionDescriptor, 0, len(selected))
 	for _, ext := range selected {
 		descriptors = append(descriptors, RuntimeExtensionDescriptor{
@@ -258,7 +258,7 @@ func runtimeResourceNode(kind RuntimeResourceKind, source, path string, requireT
 	}
 }
 
-func runtimeExtensionResourceNode(kind RuntimeResourceKind, ref extensions.ResourceRef, runtimeContext ExtensionRuntimeContext, strictConflicts bool) RuntimeResourceNode {
+func runtimeExtensionResourceNode(kind RuntimeResourceKind, ref extensions.ResourceRef, runtimeContext extensions.RuntimeContext, strictConflicts bool) RuntimeResourceNode {
 	node := runtimeResourceNode(kind, ref.Source, ref.Path, ref.RequireTrust, strictConflicts)
 	node.ExtensionName = ref.ExtensionName
 	node.ExtensionDir = ref.ExtensionDir
@@ -327,7 +327,7 @@ func skillDirRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef) 
 	return refs
 }
 
-func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef, runtimeContexts map[string]ExtensionRuntimeContext) []mcpConfigRef {
+func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef, runtimeContexts map[string]extensions.RuntimeContext) []mcpConfigRef {
 	var refs []mcpConfigRef
 	if paths.UserAgentsResources && paths.HomeAgentsDir != "" {
 		refs = append(refs, mcpConfigRef{
@@ -352,7 +352,7 @@ func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef,
 	return refs
 }
 
-func observableConfigRefs(extRefs []extensions.ResourceRef, runtimeContexts map[string]ExtensionRuntimeContext) []observableConfigRef {
+func observableConfigRefs(extRefs []extensions.ResourceRef, runtimeContexts map[string]extensions.RuntimeContext) []observableConfigRef {
 	refs := make([]observableConfigRef, 0, len(extRefs))
 	for _, ref := range extRefs {
 		refs = append(refs, observableConfigRef{
@@ -381,15 +381,15 @@ func observableReadOnlyConfigSources(refs []observableConfigRef) []observable.Re
 	return out
 }
 
-func extensionRuntimeContexts(cfg config.Config, selected []extensions.Extension) map[string]ExtensionRuntimeContext {
-	contexts := make(map[string]ExtensionRuntimeContext, len(selected))
+func extensionRuntimeContexts(cfg config.Config, selected []extensions.Extension) map[string]extensions.RuntimeContext {
+	contexts := make(map[string]extensions.RuntimeContext, len(selected))
 	for _, extension := range selected {
-		contexts[extension.Name] = newExtensionRuntimeContext(cfg.AgentAddress, extension)
+		contexts[extension.Name] = extensions.NewRuntimeContext(cfg.AgentAddress.StateDir(), extension)
 	}
 	return contexts
 }
 
-func appendExtensionHooks(base hookconfig.Config, refs []extensions.ResourceRef, runtimeContexts map[string]ExtensionRuntimeContext) (hookconfig.Config, map[string]hooks.RuntimeContext, error) {
+func appendExtensionHooks(base hookconfig.Config, refs []extensions.ResourceRef, runtimeContexts map[string]extensions.RuntimeContext) (hookconfig.Config, map[string]hooks.RuntimeContext, error) {
 	out := hookconfig.Config{Commands: append([]hookconfig.CommandHook(nil), base.Commands...)}
 	bindings := map[string]hooks.RuntimeContext{}
 	names := map[string]string{}

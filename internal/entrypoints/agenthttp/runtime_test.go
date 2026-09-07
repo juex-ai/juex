@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
-	"github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/agent"
@@ -200,7 +198,8 @@ func TestRuntimeStatusOmitsConfigDisabledModulesAndResources(t *testing.T) {
 		"worker-threads": {Enabled: false},
 		"hooks":          {Enabled: false},
 	}
-	mustWriteWebFakeMCPConfig(t, srv.opts.Cfg.WorkDir, false)
+	marker := filepath.Join(t.TempDir(), "mcp-started")
+	mustWriteWebFakeMCPConfigEnv(t, srv.opts.Cfg.WorkDir, false, map[string]string{"JUEX_WEB_FAKE_MCP_LIST_MARKER": marker})
 	got, err := srv.runtimeStatus()
 	if err != nil {
 		t.Fatal(err)
@@ -218,8 +217,8 @@ func TestRuntimeStatusOmitsConfigDisabledModulesAndResources(t *testing.T) {
 			t.Fatalf("disabled Module tools remain in group %q: %+v", group.Group, group.Tools)
 		}
 	}
-	if srv.mcpManagerSnapshot() != nil {
-		t.Fatal("disabled MCP Module started the process manager")
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("disabled MCP process ran: %v", err)
 	}
 }
 
@@ -930,7 +929,6 @@ func TestRuntimeStatusReportsMCPConnectionError(t *testing.T) {
     "alpha": { "command": "alpha-cmd" }
   }
 }`)
-	srv.recordMCPError(&mcp.ServerError{Server: "alpha", Op: "connect", Err: errors.New("invalid stdout")})
 
 	got, err := srv.runtimeStatus()
 	if err != nil {
@@ -990,7 +988,6 @@ func TestOpenThreadKeepsServeUsableWhenMCPStartupFails(t *testing.T) {
     "alpha": { "command": "__juex_missing_mcp_command__" }
   }
 }`)
-	srv.recordMCPError(&mcp.ServerError{Server: "alpha", Op: "connect", Err: errors.New("old failure")})
 
 	if _, err := srv.openThread(context.Background(), "0"); err != nil {
 		t.Fatalf("openThread returned error: %v", err)
@@ -1002,9 +999,7 @@ func TestOpenThreadKeepsServeUsableWhenMCPStartupFails(t *testing.T) {
 	if len(got.MCP.Servers) != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
-	if strings.Contains(got.MCP.Servers[0].Error, "old failure") {
-		t.Fatalf("stale error was not cleared: %+v", got.MCP.Servers[0])
-	}
+
 	if got.MCP.Servers[0].Status != "error" || !strings.Contains(got.MCP.Servers[0].Error, "resolve command") {
 		t.Fatalf("server = %+v", got.MCP.Servers[0])
 	}

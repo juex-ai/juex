@@ -18,8 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app"
+
 	"github.com/juex-ai/juex/internal/app/config"
-	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/entrypoints/webassets"
 
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
@@ -62,6 +63,7 @@ type readOnlyStateBackend interface {
 }
 
 type cachedReadOnlyAgentHandler struct {
+	composition        config.Config
 	state              fleet.ReadOnlyAgentState
 	stateDirModifiedAt time.Time
 	handler            http.Handler
@@ -500,14 +502,15 @@ func (s *Server) serveReadOnlyAgent(
 	if err != nil {
 		return false
 	}
-	if state.ModuleError != "" && strings.Contains(upstreamPath, "/modules") {
-		writeError(w, http.StatusServiceUnavailable, "unavailable", state.ModuleError)
+	composition, inspectionErr := app.InspectFleetAgent(state)
+	if inspectionErr != nil && strings.Contains(upstreamPath, "/modules") {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", inspectionErr.Error())
 		return true
 	}
 	request := r.Clone(r.Context())
 	request.URL.Path = upstreamPath
 	request.URL.RawPath = ""
-	handler := s.readOnlyAgentHandler(state)
+	handler := s.readOnlyAgentHandler(state, composition)
 	handler.ServeHTTP(w, request)
 	if info, err := os.Stat(state.StateDir); err == nil {
 		s.readOnlyMu.Lock()
@@ -520,23 +523,17 @@ func (s *Server) serveReadOnlyAgent(
 	return true
 }
 
-func (s *Server) readOnlyAgentHandler(state fleet.ReadOnlyAgentState) http.Handler {
+func (s *Server) readOnlyAgentHandler(state fleet.ReadOnlyAgentState, composition config.Config) http.Handler {
 	stateDirInfo, stateDirErr := os.Stat(state.StateDir)
 	s.readOnlyMu.Lock()
 	defer s.readOnlyMu.Unlock()
 	if cached, ok := s.readOnlyAgents[state.ID]; ok &&
 		stateDirErr == nil &&
-		reflect.DeepEqual(cached.state, state) &&
+		reflect.DeepEqual(cached.state, state) && reflect.DeepEqual(cached.composition, composition) &&
 		cached.stateDirModifiedAt.Equal(stateDirInfo.ModTime()) {
 		return cached.handler
 	}
-	handler := web.NewReadOnlyAPIHandler(config.Config{ModuleInventory: modulecatalog.Inventory(),
-		WorkDir: state.Workspace,
-		Preset:  state.Preset, Modules: state.Modules,
-		AgentID:       state.ID,
-		AgentName:     state.Name,
-		AgentStateDir: state.StateDir,
-	})
+	handler := web.NewReadOnlyAPIHandler(composition)
 	stateDirInfo, stateDirErr = os.Stat(state.StateDir)
 	if stateDirErr != nil {
 		delete(s.readOnlyAgents, state.ID)
@@ -544,6 +541,7 @@ func (s *Server) readOnlyAgentHandler(state fleet.ReadOnlyAgentState) http.Handl
 	}
 	s.readOnlyAgents[state.ID] = cachedReadOnlyAgentHandler{
 		state:              state,
+		composition:        composition,
 		stateDirModifiedAt: stateDirInfo.ModTime(),
 		handler:            handler,
 	}

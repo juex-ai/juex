@@ -329,7 +329,7 @@ func (vp *verbosePrinter) printResponseBlocksSkipping(blocks []llm.Block, skipRe
 			}
 			vp.printIndentedBlock("assistant", block.Text, false)
 		case llm.BlockImage:
-			vp.printIndentedBlock("assistant", llm.FormatImagePlaceholder(block.Media), false)
+			vp.printIndentedBlock("assistant", llm.ImagePlainText(block.Media), false)
 		}
 	}
 }

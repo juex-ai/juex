@@ -1347,7 +1347,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, result providerTurn
 
 	toolCalls := msg.ToolCalls()
 	return recordedProviderResponse{
-		finalText:     llm.FormatBlocksForTerminal(msg.Blocks),
+		finalText:     llm.BlocksPlainText(msg.Blocks),
 		stopReason:    resp.StopReason,
 		toolCalls:     toolCalls,
 		iter:          request.iter,

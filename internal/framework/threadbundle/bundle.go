@@ -20,10 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/version"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -44,7 +44,8 @@ type Options struct {
 	IncludeWorktreeSummary bool
 	IncludeMedia           bool
 	Now                    func() time.Time
-	Config                 config.Config
+	Paths                  agentstate.RuntimePaths
+	Provider               RuntimeProvider
 	Environment            environment.Snapshot
 	ExtraFiles             []ExtraFile
 }
@@ -83,15 +84,15 @@ type ManifestEntry struct {
 }
 
 type RuntimeSnapshot struct {
-	WorkDir     string                 `json:"work_dir"`
-	ThreadID    string                 `json:"thread_id"`
-	ThreadDir   string                 `json:"thread_dir"`
-	Provider    RuntimeProvider        `json:"provider"`
-	Version     version.Info           `json:"version"`
-	OS          string                 `json:"os"`
-	Arch        string                 `json:"arch"`
-	Paths       config.RuntimePaths    `json:"paths"`
-	Environment []environment.Metadata `json:"environment,omitempty"`
+	WorkDir     string                  `json:"work_dir"`
+	ThreadID    string                  `json:"thread_id"`
+	ThreadDir   string                  `json:"thread_dir"`
+	Provider    RuntimeProvider         `json:"provider"`
+	Version     version.Info            `json:"version"`
+	OS          string                  `json:"os"`
+	Arch        string                  `json:"arch"`
+	Paths       agentstate.RuntimePaths `json:"paths"`
+	Environment []environment.Metadata  `json:"environment,omitempty"`
 }
 
 type RuntimeProvider struct {
@@ -139,7 +140,7 @@ func Create(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	store := thread.NewStore(opts.Config.RuntimePaths().StateDir)
+	store := thread.NewStore(opts.Paths.StateDir)
 	threadDir := filepath.Join(store.ThreadsDir(), threadID)
 	if st, statErr := os.Stat(threadDir); errors.Is(statErr, os.ErrNotExist) {
 		threadDir = filepath.Join(store.ArchiveDir(), threadID)
@@ -156,7 +157,7 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	snapshot := bundleEnvironment(opts)
+	snapshot := opts.Environment
 	usedArchivePaths := map[string]struct{}{}
 	manifestPath, manifestPathRedacted := uniqueRedactedArchivePath(
 		snapshot,
@@ -283,7 +284,7 @@ func collectEntries(opts Options, workDir, threadDir string, now time.Time) ([]a
 		entries = append(entries, newEntry(pathInBundle("worktree/summary.json"), "", append(data, '\n'), false, false))
 	}
 	if opts.IncludeMedia {
-		mediaEntries, err := collectMedia(opts.Config.MediaDir(), opts.Redact)
+		mediaEntries, err := collectMedia(opts.Paths.MediaDir, opts.Redact)
 		if err != nil {
 			return nil, err
 		}
@@ -301,7 +302,7 @@ func collectEntries(opts Options, workDir, threadDir string, now time.Time) ([]a
 		}
 		entries = append(entries, newEntry(pathInBundle(path), "", data, redacted, false))
 	}
-	snapshot := bundleEnvironment(opts)
+	snapshot := opts.Environment
 	for i := range entries {
 		data, redacted := redactConfiguredArchiveData(snapshot, entries[i].Path, entries[i].Data)
 		if !redacted {
@@ -507,33 +508,21 @@ func entriesContainRedaction(entries []archiveEntry) bool {
 }
 
 func runtimeSnapshot(opts Options, workDir, threadDir string) RuntimeSnapshot {
-	cfg := opts.Config
-	if cfg.WorkDir == "" {
-		cfg.WorkDir = workDir
+	paths := opts.Paths
+	if paths.WorkDir == "" {
+		paths.WorkDir = workDir
 	}
 	return RuntimeSnapshot{
-		WorkDir:   workDir,
-		ThreadID:  opts.ThreadID,
-		ThreadDir: threadDir,
-		Provider: RuntimeProvider{
-			ID:       cfg.ProviderID,
-			Protocol: cfg.ProviderProtocol,
-			Model:    cfg.Model,
-			BaseURL:  cfg.BaseURL,
-		},
+		WorkDir:     workDir,
+		ThreadID:    opts.ThreadID,
+		ThreadDir:   threadDir,
+		Provider:    opts.Provider,
 		Version:     version.Build(),
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
-		Paths:       cfg.RuntimePaths(),
-		Environment: bundleEnvironment(opts).ConfiguredMetadata(),
+		Paths:       paths,
+		Environment: opts.Environment.ConfiguredMetadata(),
 	}
-}
-
-func bundleEnvironment(opts Options) environment.Snapshot {
-	if !opts.Environment.IsZero() {
-		return opts.Environment
-	}
-	return opts.Config.EnvironmentSnapshot()
 }
 
 type threadBundleFile struct {
