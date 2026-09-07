@@ -1,3 +1,4 @@
+import { useModuleFilePanel } from "@/modules/use-module-file-panel";
 import { ThreadModulesProvider, useThreadModuleSubscription } from "@/hooks/use-thread-modules";
 import {
   createContext,
@@ -16,13 +17,9 @@ import {
   useMatch,
   useNavigate,
 } from "react-router-dom";
-import { AlertTriangle, ArrowLeftRight, Plus } from "lucide-react";
+import { AlertTriangle, Plus } from "lucide-react";
 
 import {
-  getModuleFileTree,
-  getModuleFileContent,
-  getModuleFileRawURL,
-  subscribeModuleResource,
   listAgents,
   runAgentAction,
   subscribeAgentResourceEvents,
@@ -37,12 +34,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { FleetAgentProvider } from "@/components/fleet/FleetAgentContext";
 import { FleetSidebar } from "@/components/fleet/FleetSidebar";
 import { FleetStageHeader } from "@/components/fleet/FleetStageHeader";
@@ -65,13 +56,6 @@ const INITIAL_RESOURCE_REVISION: Record<AgentResourceName, number> = {
   workspace: 0,
   observables: 0,
   runtime: 0,
-};
-
-type FilePanelMode = "workspace" | "scratchpad";
-
-type FilePanelState = {
-  mode: FilePanelMode;
-  route: string;
 };
 
 type ShellTitleContextValue = {
@@ -136,14 +120,6 @@ export function AppShell() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
-  const [filePanelState, setFilePanelState] = useState<FilePanelState>(() => ({
-    mode: "workspace",
-    route: location.pathname,
-  }));
-  const filePanelMode =
-    filePanelState.route === location.pathname
-      ? filePanelState.mode
-      : "workspace";
   const currentAgent =
     agents.find((candidate) => candidate.id === agentId) ?? null;
   const invalidAgentRoute =
@@ -269,26 +245,7 @@ export function AppShell() {
     }
   }, [activeTab]);
 
-  useEffect(() => {
-    setFilePanelState((current) =>
-      current.route === location.pathname
-        ? current
-        : { route: location.pathname, mode: "workspace" },
-    );
-  }, [location.pathname]);
-
-  const loadScratchpadTree = useCallback(
-    (signal?: AbortSignal) => getModuleFileTree(threadID, "scratchpad", "files", signal),
-    [threadID],
-  );
-
   const moduleState = useThreadModuleSubscription(threadID);
-  const moduleSnapshot = moduleState.snapshot;
-  const scratchpadAvailable = moduleSnapshot?.ui.some((item) => item.id === "scratchpad.files") ?? false;
-  const loadScratchpadContent = useCallback((path: string, signal?: AbortSignal) => getModuleFileContent(threadID, "scratchpad", "files", path, signal), [threadID]);
-  const scratchpadRawURL = useCallback((path: string) => getModuleFileRawURL(threadID, "scratchpad", "files", path), [threadID]);
-  const subscribeScratchpad = useCallback((receive: () => void) => subscribeModuleResource(threadID, "scratchpad", "files", receive), [threadID]);
-
   const runLifecycle = useCallback(
     async (agent: AgentStatus) => {
       const action = nextAgentLifecycleAction(agent);
@@ -341,42 +298,15 @@ export function AppShell() {
     [],
   );
 
-  const workspaceAvailable =
-    currentAgent?.runtime_health === "healthy" &&
-    activeTab === "chat" &&
-    !settings;
+  const { title: filePanelTitle, rootKey: filePanelKey, ...filePanelProps } = useModuleFilePanel({
+    agentID: agentId, threadID, snapshot: moduleState.snapshot,
+    workspaceHealthy: currentAgent?.runtime_health === "healthy",
+    workspaceRevision: resourceRevision.workspace,
+  });
+  const workspaceAvailable = Boolean(currentAgent) && activeTab === "chat" && !settings;
   const workspaceOpen = workspaceDocked
     ? workspaceDockOpen && workspaceAvailable
     : workspaceSheetOpen && workspaceAvailable;
-  const scratchpadMode = scratchpadAvailable && filePanelMode === "scratchpad";
-  const filePanelTitle = scratchpadMode ? "Scratchpad" : "Workspace";
-  const filePanelKey = `${agentId}:${threadID || "workspace"}:${scratchpadMode ? "scratchpad" : "workspace"}`;
-  const filePanelHeaderAction = threadID && scratchpadAvailable ? (
-    <FilePanelModeToggle
-      mode={filePanelMode}
-      onToggle={() =>
-        setFilePanelState({
-          route: location.pathname,
-          mode: scratchpadMode ? "workspace" : "scratchpad",
-        })
-      }
-    />
-  ) : undefined;
-  const filePanelProps = {
-    emptyLabel: scratchpadMode
-      ? "No scratchpad files yet."
-      : "This directory is empty.",
-    headerAction: filePanelHeaderAction,
-    loadTree: scratchpadMode ? loadScratchpadTree : undefined,
-    loadContent: scratchpadMode ? loadScratchpadContent : undefined,
-    rawURL: scratchpadMode ? scratchpadRawURL : undefined,
-    subscribeChanges: scratchpadMode ? subscribeScratchpad : undefined,
-    refreshLabel: scratchpadMode
-      ? "Refresh scratchpad"
-      : "Refresh workspace",
-    title: filePanelTitle,
-    refreshRevision: resourceRevision.workspace,
-  };
 
   const sidebar = (
     <FleetSidebar
@@ -503,7 +433,9 @@ export function AppShell() {
                 <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] shrink-0 flex-col overflow-hidden border-l bg-card xl:flex">
                   <FileTreePanel
                     active={workspaceDocked}
+                    key={filePanelKey}
                     rootKey={filePanelKey}
+                    title={filePanelTitle}
                     {...filePanelProps}
                   />
                 </div>
@@ -527,7 +459,9 @@ export function AppShell() {
               </SheetHeader>
               <FileTreePanel
                 active={!workspaceDocked && workspaceSheetOpen}
+                key={filePanelKey}
                 rootKey={filePanelKey}
+                title={filePanelTitle}
                 {...filePanelProps}
               />
             </SheetContent>
@@ -535,36 +469,6 @@ export function AppShell() {
         </div>
       </FleetAgentProvider>
     </ShellTitleContext.Provider>
-  );
-}
-
-function FilePanelModeToggle({
-  mode,
-  onToggle,
-}: {
-  mode: FilePanelMode;
-  onToggle: () => void;
-}) {
-  const label = mode === "scratchpad" ? "Show workspace" : "Show scratchpad";
-
-  return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground hover:text-foreground"
-            onClick={onToggle}
-            aria-label={label}
-          >
-            <ArrowLeftRight className="size-3.5" aria-hidden="true" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>{label}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
   );
 }
 

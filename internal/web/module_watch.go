@@ -88,28 +88,8 @@ func (w *moduleWatcher) Refresh() error {
 		if err := rejectModuleTreeSymlinks(w.root, relative); err != nil {
 			return err
 		}
-		for dir := filepath.Dir(target); pathWithin(w.root, dir); dir = filepath.Dir(dir) {
-			if !watched[dir] {
-				info, err := os.Stat(dir)
-				if os.IsNotExist(err) {
-					continue
-				}
-				if err != nil {
-					return err
-				}
-				if info.IsDir() {
-					if err := w.watcher.Add(dir); err != nil {
-						if os.IsNotExist(err) {
-							continue
-						}
-						return err
-					}
-					watched[dir] = true
-				}
-			}
-			if dir == w.root {
-				break
-			}
+		if err := watchModuleParents(w.root, filepath.Dir(target), watched, w.watcher.Add); err != nil {
+			return err
 		}
 	}
 	if w.resourceRoot != "" {
@@ -133,6 +113,40 @@ func (w *moduleWatcher) Refresh() error {
 		})
 		if err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func watchModuleParents(root, directory string, watched map[string]bool, add func(string) error) error {
+	var directories []string
+	for dir := directory; pathWithin(root, dir); dir = filepath.Dir(dir) {
+		directories = append(directories, dir)
+		if dir == root {
+			break
+		}
+	}
+	// Subscribe to parents before checking descendants. A child created while
+	// its parent is being added must either be discovered next or emit an event.
+	for i := len(directories) - 1; i >= 0; i-- {
+		dir := directories[i]
+		if !watched[dir] {
+			info, err := os.Stat(dir)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				if err := add(dir); err != nil {
+					if os.IsNotExist(err) {
+						continue
+					}
+					return err
+				}
+				watched[dir] = true
+			}
 		}
 	}
 	return nil
