@@ -79,9 +79,10 @@ func (m *Module) ClearContextForRenewal(_ context.Context, generationID string) 
 
 func ToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{
-		Name:        ToolUpdate,
-		Group:       tools.ToolGroupThreadState,
-		Description: "Replace concise thread working notes; use working files for long material. ",
+		Name:            ToolUpdate,
+		Group:           tools.ToolGroupThreadState,
+		ExecutionPolicy: tools.ToolExecutionSerial,
+		Description:     "Replace concise thread working notes; use working files for long material. ",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

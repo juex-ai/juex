@@ -71,13 +71,29 @@ const (
 	ToolTimeoutDisabled
 )
 
+// ToolExecutionPolicy constrains dispatch within one assistant tool-use batch.
+// Registry calls alone do not schedule batches; the runtime applies this policy.
+type ToolExecutionPolicy int
+
+const (
+	// ToolExecutionParallel is the default and may overlap any other call.
+	ToolExecutionParallel ToolExecutionPolicy = iota
+	// ToolExecutionSerial shares one provider-ordered queue with all serial tools
+	// in this Thread's batch, regardless of Module or Group. Parallel calls and
+	// other Threads can still run concurrently; shared resources own their locks.
+	// Failure does not skip subsequent calls. Cancellation follows normal tool
+	// dispatch: active handlers receive cancellation and queued handlers do not run.
+	ToolExecutionSerial
+)
+
 type ToolDefinition struct {
-	Name           string
-	Group          ToolGroup
-	Description    string
-	Schema         map[string]any
-	TimeoutPolicy  ToolTimeoutPolicy
-	TimeoutSeconds int
+	Name            string
+	Group           ToolGroup
+	Description     string
+	Schema          map[string]any
+	ExecutionPolicy ToolExecutionPolicy
+	TimeoutPolicy   ToolTimeoutPolicy
+	TimeoutSeconds  int
 }
 
 type ToolTimeoutMode string
@@ -100,14 +116,15 @@ func (d ToolDefinition) Normalized() ToolDefinition {
 }
 
 type Tool struct {
-	Name           string
-	Group          ToolGroup
-	Description    string
-	Schema         map[string]any
-	TimeoutPolicy  ToolTimeoutPolicy
-	TimeoutSeconds int
-	Handler        Handler
-	ResultHandler  ResultHandler
+	Name            string
+	Group           ToolGroup
+	Description     string
+	Schema          map[string]any
+	ExecutionPolicy ToolExecutionPolicy
+	TimeoutPolicy   ToolTimeoutPolicy
+	TimeoutSeconds  int
+	Handler         Handler
+	ResultHandler   ResultHandler
 	// ResolveDefinition must be pure: a shared contribution can serve multiple
 	// Thread registries with different available tools.
 	ResolveDefinition func(ToolAvailability) ToolDefinition
@@ -122,36 +139,39 @@ func (t Tool) Clone() Tool {
 
 func (d ToolDefinition) Bind(handler Handler) Tool {
 	return Tool{
-		Name:           d.Name,
-		Group:          d.Group,
-		Description:    d.Description,
-		Schema:         d.Schema,
-		TimeoutPolicy:  d.TimeoutPolicy,
-		TimeoutSeconds: d.TimeoutSeconds,
-		Handler:        handler,
+		Name:            d.Name,
+		Group:           d.Group,
+		Description:     d.Description,
+		Schema:          d.Schema,
+		ExecutionPolicy: d.ExecutionPolicy,
+		TimeoutPolicy:   d.TimeoutPolicy,
+		TimeoutSeconds:  d.TimeoutSeconds,
+		Handler:         handler,
 	}
 }
 
 func (d ToolDefinition) BindResult(handler ResultHandler) Tool {
 	return Tool{
-		Name:           d.Name,
-		Group:          d.Group,
-		Description:    d.Description,
-		Schema:         d.Schema,
-		TimeoutPolicy:  d.TimeoutPolicy,
-		TimeoutSeconds: d.TimeoutSeconds,
-		ResultHandler:  handler,
+		Name:            d.Name,
+		Group:           d.Group,
+		Description:     d.Description,
+		Schema:          d.Schema,
+		ExecutionPolicy: d.ExecutionPolicy,
+		TimeoutPolicy:   d.TimeoutPolicy,
+		TimeoutSeconds:  d.TimeoutSeconds,
+		ResultHandler:   handler,
 	}
 }
 
 func (t Tool) Definition() ToolDefinition {
 	return ToolDefinition{
-		Name:           t.Name,
-		Group:          t.Group,
-		Description:    t.Description,
-		Schema:         t.Schema,
-		TimeoutPolicy:  t.TimeoutPolicy,
-		TimeoutSeconds: t.TimeoutSeconds,
+		Name:            t.Name,
+		Group:           t.Group,
+		Description:     t.Description,
+		Schema:          t.Schema,
+		ExecutionPolicy: t.ExecutionPolicy,
+		TimeoutPolicy:   t.TimeoutPolicy,
+		TimeoutSeconds:  t.TimeoutSeconds,
 	}
 }
 
@@ -211,6 +231,9 @@ func (r *Registry) Register(t Tool) error {
 	}
 	if t.Handler == nil && t.ResultHandler == nil {
 		return fmt.Errorf("tools: %s: nil handler", t.Name)
+	}
+	if t.ExecutionPolicy != ToolExecutionParallel && t.ExecutionPolicy != ToolExecutionSerial {
+		return fmt.Errorf("tools: %s: unknown execution policy %d", t.Name, t.ExecutionPolicy)
 	}
 	t.Schema = t.Definition().Normalized().Schema
 	r.mu.Lock()

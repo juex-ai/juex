@@ -186,18 +186,20 @@ func (m *Module) shouldDeferContinuation() bool {
 func ToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{
 		{
-			Name:        ToolGet,
-			Group:       tools.ToolGroupThreadState,
-			Description: "Read the current thread goal before changing it. ",
+			Name:            ToolGet,
+			Group:           tools.ToolGroupThreadState,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Read the current thread goal before changing it. ",
 			Schema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
 			},
 		},
 		{
-			Name:        ToolCreate,
-			Group:       tools.ToolGroupThreadState,
-			Description: "Create or replace this thread's in-progress goal contract. ",
+			Name:            ToolCreate,
+			Group:           tools.ToolGroupThreadState,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Create or replace this thread's in-progress goal contract. ",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -209,9 +211,10 @@ func ToolDefinitions() []tools.ToolDefinition {
 			},
 		},
 		{
-			Name:        ToolUpdate,
-			Group:       tools.ToolGroupThreadState,
-			Description: "Update goal fields or status (in_progress, wait_for_user, success, or failure). Use wait_for_user only when progress requires new external input; success requires acceptance. ",
+			Name:            ToolUpdate,
+			Group:           tools.ToolGroupThreadState,
+			ExecutionPolicy: tools.ToolExecutionSerial,
+			Description:     "Update goal fields or status (in_progress, wait_for_user, success, or failure). Use wait_for_user only when progress requires new external input; success requires acceptance. ",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
