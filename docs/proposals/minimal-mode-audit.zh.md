@@ -68,7 +68,7 @@
 | 模型选择/回退、认证、环境、Sandbox | 基础配置/执行服务 | 不必为极简模式全部改成 Module；单模型可通过模型列表表达，保留执行安全和取消约束 |
 | Thread、Input、Turn、Generation、Usage、历史、SSE/Web/CLI | Framework/Foundation 与宿主接口 | 核心运行和用户操作能力，不是额外模型工具；极简模式不应破坏持久化与控制面 |
 
-关键来源：[AGENTS.md / Thread context](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/modules/promptcontext/module.go#L28)、[隐藏 builtin guides](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/skills/builtin.go#L79)、[运行时上下文消息](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/active_context.go#L76)、[资源前置解析](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/resource_refs.go#L72)、[Extension 环境合并](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/agent_runtime.go#L76)。
+关键来源：[AGENTS.md / Thread context](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/modules/promptcontext/module.go#L28)、[隐藏 builtin guides](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/skills/builtin.go#L73)、[运行时上下文消息](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/active_context.go#L76)、[资源前置解析](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/resource_refs.go#L72)、[Extension 环境合并](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/agent_runtime.go#L76)。
 
 **优先改造清单：让极简模式真正可用**
 
