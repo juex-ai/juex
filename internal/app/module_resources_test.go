@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/config"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/runtime/module/state"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/module/state"
 )
 
 type resourceFixtureModule struct{}
@@ -25,7 +27,7 @@ func (*resourceFixtureModule) CloseThread(context.Context) error { return nil }
 
 func TestModuleResourcesRetireMissingFactoryAtColdStart(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
 	first, err := New(Options{Config: cfg, Provider: &stubProvider{}, DisableMCP: true, threadModuleFactories: []runtimemodule.ThreadFactorySpec{{
 		ID: "removed-fixture", Enabled: true, OwnsResources: true,
 		New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {

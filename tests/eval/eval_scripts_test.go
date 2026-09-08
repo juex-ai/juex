@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/homestore"
+	"github.com/juex-ai/juex/internal/foundation/homestore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1746,38 +1746,40 @@ func TestEvalValidationPlanRulesAreDeterministicAndConservative(t *testing.T) {
 		"ChangedFile = validation_plan.ChangedFile",
 		"cases = [",
 		"    ('frontend/src/App.tsx', set(), {'web'}, {'integration', 'provider-smoke'}, 'frontend'),",
-		"    ('internal/web/dist/index.html', {'./internal/web', './tests/e2e'}, {'web', 'race'}, {'integration', 'provider-smoke'}, 'embedded-web'),",
+		"    ('internal/entrypoints/webassets/dist/index.html', {'./internal/entrypoints/agenthttp', './tests/e2e'}, {'web', 'race'}, {'integration', 'provider-smoke'}, 'embedded-web'),",
 		"    ('internal/app/app.go', {'./internal/app', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/agentstate/store.go', {'./internal/agentstate', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/endpoint/endpoint.go', {'./internal/endpoint', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/eventcatalog/catalog.go', {'./internal/eventcatalog', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/thread/thread.go', {'./internal/thread', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/fleet/fleet.go', {'./internal/fleet', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/fleetweb/server.go', {'./internal/fleetweb', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/hooks/hooks.go', {'./internal/hooks', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/mcp/client.go', {'./internal/mcp', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/observable/observable.go', {'./internal/observable', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/sandbox/sandbox.go', {'./internal/sandbox', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/tools/builtin.go', {'./internal/tools', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/config/config.go', {'./internal/config', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/cli/send.go', {'./internal/cli', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/providerreadiness/readiness.go', {'./internal/providerreadiness', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/events/bus.go', {'./internal/events', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/llm/openai_responses.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'live-runtime'),",
-		"    ('internal/llm/openai_codex_websocket.go', {'./internal/llm', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'race-sensitive'),",
-		"    ('internal/provenance/request_epoch.go', {'./internal/provenance', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/runtime/compaction_policy.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/runtime/context_projection.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/runtime/policy/policy.go', {'./internal/runtime/policy', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/runtime/module/policy.go', {'./internal/runtime/module', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/llm/provider_projection.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/llm/provider_projection_chunked_write.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/llm/history.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/thread/timeline.go', {'./internal/thread', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/thread/replay.go', {'./internal/thread', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
-		"    ('internal/thread/protocol_repair.go', {'./internal/thread', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/framework/agentstate/store.go', {'./internal/framework/agentstate', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/framework/endpoint/endpoint.go', {'./internal/framework/endpoint', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/app/eventcatalog/builtin.go', {'./internal/app/eventcatalog', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/framework/thread/thread.go', {'./internal/framework/thread', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/fleet/lifecycle.go', {'./internal/fleet', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/entrypoints/fleethttp/server.go', {'./internal/entrypoints/fleethttp', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/features/hooks/hooks.go', {'./internal/features/hooks', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/features/mcp/client.go', {'./internal/features/mcp', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/features/observables/observable.go', {'./internal/features/observables', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/foundation/sandbox/sandbox.go', {'./internal/foundation/sandbox', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/features/filetools/builtin_file.go', {'./internal/features/filetools', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/app/config/config.go', {'./internal/app/config', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/entrypoints/cli/send.go', {'./internal/entrypoints/cli', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/app/providerreadiness/readiness.go', {'./internal/app/providerreadiness', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/foundation/events/bus.go', {'./internal/foundation/events', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/providers/openai/openai_responses.go', {'./internal/providers/openai', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'live-runtime'),",
+		"    ('internal/providers/openai/openai_codex_websocket.go', {'./internal/providers/openai', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'race-sensitive'),",
+		"    ('internal/framework/provenance/request_epoch.go', {'./internal/framework/provenance', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/framework/runtime/compaction_policy.go', {'./internal/framework/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/framework/runtime/context_projection.go', {'./internal/framework/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/framework/module/policy.go', {'./internal/framework/module', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/foundation/llm/provider_projection.go', {'./internal/foundation/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/features/chunkedwrite/projection.go', {'./internal/features/chunkedwrite', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/foundation/llm/history.go', {'./internal/foundation/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/framework/thread/timeline.go', {'./internal/framework/thread', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/framework/thread/replay.go', {'./internal/framework/thread', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/framework/thread/protocol_repair.go', {'./internal/framework/thread', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
 		"    ('tests/e2e/testdata/fake-mcp/server.py', {'./tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
-		"    ('internal/version/version.go', {'./internal/version'}, set(), set(), 'go-package'),",
+		"    ('internal/framework/agent/pending_recovery.go', {'./internal/framework/agent', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'cross-boundary'),",
+		"    ('internal/foundation/tools/registry.go', {'./internal/foundation/tools', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/entrypoints/webassets/dist/index.html', {'./internal/entrypoints/agenthttp', './internal/entrypoints/fleethttp', './tests/e2e'}, {'race', 'web'}, {'integration', 'provider-smoke'}, 'embedded-web'),",
+		"    ('internal/foundation/version/version.go', {'./internal/foundation/version'}, set(), set(), 'go-package'),",
 		"    ('Makefile', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
 		"    ('scripts/unknown-new-tool.py', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
 		"    ('.agents/skills/example/SKILL.md', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
@@ -1945,16 +1947,16 @@ func TestEvalVerificationTiersConsumeOneValidationPlan(t *testing.T) {
 	program := strings.Join([]string{
 		"from argparse import Namespace",
 		"from tests.eval.juex_eval import cli, validation_plan",
-		"changes = [validation_plan.ChangedFile('M', 'frontend/src/App.tsx'), validation_plan.ChangedFile('M', 'internal/runtime/compact.go')]",
+		"changes = [validation_plan.ChangedFile('M', 'frontend/src/App.tsx'), validation_plan.ChangedFile('M', 'internal/framework/runtime/compact.go')]",
 		"plan = validation_plan.plan_for_changes('focused', changes, base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
 		"focused = Namespace(tier='focused', packages=[], planned=True)",
 		"cli.apply_validation_plan(focused, plan)",
 		"focused_steps = cli.verification_steps(focused)",
 		"assert [step.label for step in focused_steps] == ['web-stub', 'go-test-focused', 'web-check', 'make-build-go']",
-		"assert '-race' in focused_steps[1].command and './internal/runtime' in focused_steps[1].command and './tests/e2e' in focused_steps[1].command",
-		"manual = Namespace(tier='focused', packages=['./internal/version'])",
+		"assert '-race' in focused_steps[1].command and './internal/framework/runtime' in focused_steps[1].command and './tests/e2e' in focused_steps[1].command",
+		"manual = Namespace(tier='focused', packages=['./internal/foundation/version'])",
 		"manual_plan = cli.plan_with_cli_overrides(manual, plan)",
-		"assert manual_plan.focused_packages == ('./internal/version',)",
+		"assert manual_plan.focused_packages == ('./internal/foundation/version',)",
 		"assert any(row.rule_id == 'explicit-cli-override' for row in manual_plan.matched_rules)",
 		"cli.apply_validation_plan(manual, manual_plan)",
 		"manual_steps = cli.verification_steps(manual)",
@@ -2138,7 +2140,7 @@ func TestEvalVerifyFocusedPlansOnlyExplicitPackages(t *testing.T) {
 		"import json",
 		"from argparse import Namespace",
 		"from tests.eval.juex_eval import cli",
-		"steps = cli.verification_steps(Namespace(tier='focused', packages=['./internal/app', './internal/runtime']))",
+		"steps = cli.verification_steps(Namespace(tier='focused', packages=['./internal/app', './internal/framework/runtime']))",
 		"print(json.dumps([{'label': step.label, 'command': step.command, 'test_environment': step.test_environment} for step in steps]))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)
@@ -2157,7 +2159,7 @@ func TestEvalVerifyFocusedPlansOnlyExplicitPackages(t *testing.T) {
 	if !reflect.DeepEqual(steps[0].Command, []string{"make", "web-stub"}) {
 		t.Fatalf("web stub command = %q", steps[0].Command)
 	}
-	want := []string{"go", "test", "./internal/app", "./internal/runtime", "-count=1"}
+	want := []string{"go", "test", "./internal/app", "./internal/framework/runtime", "-count=1"}
 	if !reflect.DeepEqual(steps[1].Command, want) {
 		t.Fatalf("command = %q, want %q", steps[1].Command, want)
 	}
@@ -3024,7 +3026,7 @@ func TestEvalFinalExecutesOnlyLiveStepsWhenCandidateIsReusable(t *testing.T) {
 		"    cli.go_test_environment = lambda: {}",
 		"    cli.selection.resolved_path = lambda path: Path(path)",
 		"    cli.provider_record_summary = lambda args: {'selected_provider_model': 'provider:model', 'redacted_config_hash': 'sha256:redacted'}",
-		"    validation_plan.collect_plan = lambda root, mode, base=None: validation_plan.plan_for_changes(mode, [validation_plan.ChangedFile('M', 'internal/providerreadiness/readiness.go')], base_sha='b' * 40, head_sha=snapshot.head_sha, dirty=False)",
+		"    validation_plan.collect_plan = lambda root, mode, base=None: validation_plan.plan_for_changes(mode, [validation_plan.ChangedFile('M', 'internal/foundation/version/version.go')], base_sha='b' * 40, head_sha=snapshot.head_sha, dirty=False)",
 		"    def fake_run(step, log_dir, test_env):",
 		"        calls.append(step.label)",
 		"        return {'execution_state': 'executed', 'started_at': '2026-08-21T00:00:01Z', 'duration': 2.0, 'exit_status': 0, 'log': str(log_dir / f'{step.label}.log'), 'attempts': [], 'initial_outcome': 'passed', **outcomes.success(attempt_count=1).as_dict()}",
@@ -3063,7 +3065,7 @@ func TestEvalVerifyFocusedRunsThroughPublicCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "focused", "./internal/version")
+	out := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "focused", "./internal/foundation/version")
 	if !strings.Contains(out, "ok  go-test-focused") {
 		t.Fatalf("focused verification did not report success:\n%s", out)
 	}
@@ -3104,7 +3106,7 @@ func TestMakeWebStubPreparesMissingAssetsWithoutOverwriting(t *testing.T) {
 	}
 
 	run()
-	index := filepath.Join(work, "internal", "web", "dist", "index.html")
+	index := filepath.Join(work, "internal", "entrypoints", "webassets", "dist", "index.html")
 	data, err := os.ReadFile(index)
 	if err != nil {
 		t.Fatal(err)
@@ -3140,7 +3142,7 @@ func TestMakeWebCheckBuildsAndSynchronizesFrontendOnce(t *testing.T) {
 	if count := strings.Count(rendered, "pnpm build"); count != 1 {
 		t.Fatalf("web-check pnpm build count = %d, want 1:\n%s", count, rendered)
 	}
-	if !strings.Contains(rendered, "cp -R frontend/dist/. internal/web/dist/") {
+	if !strings.Contains(rendered, "cp -R frontend/dist/. internal/entrypoints/webassets/dist/") {
 		t.Fatalf("web-check did not synchronize the built embed assets:\n%s", rendered)
 	}
 }
@@ -3157,7 +3159,7 @@ func TestMakeVerificationTargetsAreThinPythonAdapters(t *testing.T) {
 	}{
 		{name: "plan", args: []string{"-n", "verify-plan", "TIER=final", "BASE=abc123", "EXPLAIN=1"}, want: "plan --tier final --base abc123 --explain"},
 		{name: "planned-focused", args: []string{"-n", "verify-focused", "PLANNED=1"}, want: "verify focused --planned"},
-		{name: "focused", args: []string{"-n", "verify-focused", "PKGS=./internal/app ./internal/runtime"}, want: "verify focused ./internal/app ./internal/runtime"},
+		{name: "focused", args: []string{"-n", "verify-focused", "PKGS=./internal/app ./internal/framework/runtime"}, want: "verify focused ./internal/app ./internal/framework/runtime"},
 		{name: "candidate", args: []string{"-n", "verify-candidate", "RACE=1", "WEB=1"}, want: "verify candidate --race --web"},
 		{name: "final", args: []string{"-n", "verify-final", "RACE=1", "WEB=1", "COMPACTION=1"}, want: "verify final --race --web --compaction"},
 	}

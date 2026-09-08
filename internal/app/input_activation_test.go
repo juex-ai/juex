@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 type failingInputSource struct{ log *[]string }
@@ -39,7 +41,7 @@ func TestAppInputActivationFailureRollsBackAndDisabledFactoryStaysInert(t *testi
 			var log []string
 			work, state := t.TempDir(), t.TempDir()
 			a, err := New(Options{
-				Config: config.Config{Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}, Provider: &stubProvider{},
+				Config: config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}, Provider: &stubProvider{},
 				runtimeModuleFactories: []runtimemodule.RuntimeFactorySpec{{
 					ID: "test-input", Enabled: enabled,
 					New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
@@ -85,7 +87,7 @@ func TestAppInputActivationCallbackCanCloseWithoutDeadlock(t *testing.T) {
 		}
 		return nil
 	})
-	if err := a.activateExternalInputAfterPendingRecovery(context.Background(), nil); !errors.Is(err, context.Canceled) {
+	if err := a.RestoreAndActivate(context.Background()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("activation = %v, want canceled", err)
 	}
 	_ = deferred.Wait()
@@ -102,7 +104,7 @@ func TestAppStartupCancellationRollsBackActiveInputSource(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		a, err := New(Options{
-			Config: config.Config{Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}, Provider: &stubProvider{},
+			Config: config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}, Provider: &stubProvider{},
 			startupContext: ctx,
 			runtimeModuleFactories: []runtimemodule.RuntimeFactorySpec{{
 				ID: "recovery-test-source", Enabled: true,

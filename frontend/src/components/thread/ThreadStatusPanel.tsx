@@ -1,30 +1,21 @@
-import type { ReactNode } from "react";
-import { CircleGaugeIcon, LoaderCircleIcon } from "lucide-react";
+import { ThreadStatusSlot } from "@/modules/ThreadStatusSlot";
+import { CircleGaugeIcon } from "lucide-react";
 
-import { MessageResponse } from "@/components/ai-elements/message";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
-  formatRuntimeTimestamp,
-  notesCheckboxProgress,
   runtimeContextModelLabel,
   runtimeContextPercentLabel,
   runtimeContextWindowDetailLabel,
-  runtimeGoalContinuationLabel,
-  runtimeThreadStateBadgeLabel,
-  runtimeThreadStateIsActive,
   runtimeTokenUsageDetailLabel,
 } from "@/lib/runtime-display";
-import { cn } from "@/lib/utils";
 import type {
   ActiveContextSnapshot,
   AgentRuntimeStatusSnapshot,
   ContextUsage,
-  GoalStatusSnapshot,
-  NotesSnapshot,
   ThreadShowResponse,
   TokenUsage,
 } from "@/types";
@@ -50,153 +41,10 @@ export function ThreadStatusPanel({
           tokenUsage={runtimeStatus.token_usage}
         />
       ) : (
-        <StatusLoading />
+        <span className="text-xs text-muted-foreground">Context usage unavailable</span>
       )}
-      <ThreadRuntimeStateBadge data={data} />
+      <ThreadStatusSlot threadID={data.id} />
     </>
-  );
-}
-
-function ThreadRuntimeStateBadge({ data }: { data: ThreadShowResponse }) {
-  const label = runtimeThreadStateBadgeLabel(data.goal, data.notes);
-  const active = runtimeThreadStateIsActive(data.goal, data.notes);
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          className={cn(
-            STATUS_CONTROL_CLASS,
-            active ? "border-primary/30 text-primary" : "text-muted-foreground",
-          )}
-          type="button"
-          aria-label={`Open goal and notes: ${label}`}
-        >
-          {label}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="block !w-[min(34rem,calc(100vw-2rem))] !max-w-[calc(100vw-2rem)] max-h-[24rem] overflow-auto text-left text-xs"
-      >
-        <ThreadStateTooltip goal={data.goal} notes={data.notes} />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function ThreadStateTooltip({
-  goal,
-  notes,
-}: {
-  goal?: GoalStatusSnapshot;
-  notes?: NotesSnapshot;
-}) {
-  return (
-    <div className="space-y-3">
-      <GoalStateTooltip goal={goal} />
-      <div className="border-t border-border/60 pt-3">
-        <NotesStateTooltip notes={notes} />
-      </div>
-    </div>
-  );
-}
-
-function GoalStateTooltip({ goal }: { goal?: GoalStatusSnapshot }) {
-  if (!goal) {
-    return (
-      <RuntimeTooltipPanel title="Goal">
-        <div className="text-muted-foreground">No goal state for this thread.</div>
-      </RuntimeTooltipPanel>
-    );
-  }
-  return (
-    <RuntimeTooltipPanel title="Goal">
-      <RuntimeTooltipRow label="status" value={goal.status || "unknown"} />
-      <RuntimeTooltipRow label="description" value={goal.description || "-"} />
-      <RuntimeTooltipRow label="acceptance" value={goal.acceptance || "-"} />
-      <RuntimeTooltipRow label="reason" value={goal.status_reason || "-"} />
-      <RuntimeTooltipRow
-        label="continuations"
-        value={runtimeGoalContinuationLabel(goal)}
-      />
-      <RuntimeTooltipRow
-        label="updated"
-        value={formatRuntimeTimestamp(goal.updated_at)}
-      />
-    </RuntimeTooltipPanel>
-  );
-}
-
-function NotesStateTooltip({ notes }: { notes?: NotesSnapshot }) {
-  if (!notes?.content?.trim()) {
-    return (
-      <RuntimeTooltipPanel title="Notes">
-        <div className="text-muted-foreground">
-          No working notes for this thread.
-        </div>
-      </RuntimeTooltipPanel>
-    );
-  }
-  const progress = notesCheckboxProgress(notes);
-  return (
-    <RuntimeTooltipPanel title="Notes">
-      <RuntimeTooltipRow
-        label="updated"
-        value={formatRuntimeTimestamp(notes.updated_at)}
-      />
-      {progress.total > 0 ? (
-        <div className="space-y-1.5">
-          <RuntimeTooltipRow
-            label="progress"
-            value={`${progress.completed}/${progress.total} complete`}
-          />
-          <div
-            aria-label="Notes task progress"
-            aria-valuemax={progress.total}
-            aria-valuemin={0}
-            aria-valuenow={progress.completed}
-            className="h-1.5 w-full overflow-hidden rounded-sm bg-muted"
-            role="progressbar"
-          >
-            <div
-              className="h-full bg-primary transition-[width]"
-              style={{ width: `${progress.percent}%` }}
-            />
-          </div>
-        </div>
-      ) : null}
-      <div className="border-t border-border/60 pt-2">
-        <MessageResponse className="break-words text-xs leading-relaxed [&_h1]:!my-2 [&_h1]:!text-base [&_h2]:!my-2 [&_h2]:!text-sm [&_h3]:!my-1.5 [&_h3]:!text-xs">
-          {notes.content}
-        </MessageResponse>
-      </div>
-    </RuntimeTooltipPanel>
-  );
-}
-
-function RuntimeTooltipPanel({
-  children,
-  title,
-}: {
-  children: ReactNode;
-  title: string;
-}) {
-  return (
-    <div className="min-w-[18rem] max-w-xl space-y-2">
-      <div className="font-mono text-[11px] font-semibold uppercase tracking-normal text-muted-foreground">
-        {title}
-      </div>
-      <div className="space-y-1.5">{children}</div>
-    </div>
-  );
-}
-
-function RuntimeTooltipRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid gap-2 sm:grid-cols-[6rem_minmax(0,1fr)]">
-      <span className="font-mono text-[11px] text-muted-foreground">{label}</span>
-      <span className="min-w-0 break-words text-popover-foreground">{value}</span>
-    </div>
   );
 }
 
@@ -301,22 +149,6 @@ function ActiveContextDebugLine({
     <div className="text-muted-foreground">
       active provider context {count} messages, ~{formatTokenCount(tokens)}{" "}
       estimated tokens
-    </div>
-  );
-}
-
-function StatusLoading() {
-  return (
-    <div
-      aria-label="Loading thread status"
-      className={STATUS_CONTROL_CLASS}
-      role="status"
-    >
-      <LoaderCircleIcon
-        className="size-3 animate-spin motion-reduce:animate-none"
-        aria-hidden="true"
-      />
-      status
     </div>
   );
 }

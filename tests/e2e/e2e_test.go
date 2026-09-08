@@ -31,31 +31,43 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modules/agentsmd"
-	"github.com/juex-ai/juex/internal/modules/builtintools"
-	chunkmodule "github.com/juex-ai/juex/internal/modules/chunkedwrite"
-	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
-	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
-	"github.com/juex-ai/juex/internal/modules/operatingcontext"
-	"github.com/juex-ai/juex/internal/modules/scratchpad"
-	"github.com/juex-ai/juex/internal/modules/shelltools"
-	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
-	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/prompt"
-	"github.com/juex-ai/juex/internal/provenance"
-	"github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/sandbox"
-	"github.com/juex-ai/juex/internal/skills"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/toolevents"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/features/agentsmd"
+	"github.com/juex-ai/juex/internal/features/applypatch"
+
+	chunkmodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
+	"github.com/juex-ai/juex/internal/features/filesearch"
+	"github.com/juex-ai/juex/internal/features/filetools"
+
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
+	"github.com/juex-ai/juex/internal/features/mcp"
+
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/operatingcontext"
+	"github.com/juex-ai/juex/internal/features/scratchpad"
+
+	shelltools "github.com/juex-ai/juex/internal/features/shell"
+	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/command"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/foundation/toolevents"
+
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/prompt"
+	"github.com/juex-ai/juex/internal/framework/provenance"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
+	"github.com/juex-ai/juex/tests/testsupport/toolset"
 )
 
 // scriptProvider drives the engine through a deterministic script. Each call
@@ -186,10 +198,10 @@ func TestEndToEnd_RuntimeAppliesDefaultStreamIdleTimeout(t *testing.T) {
 	provider := &optionsCaptureProvider{}
 	engine := &runtime.Engine{
 		Provider: provider,
-		Tools:    tools.NewRegistry(),
+		Tools:    toolcore.NewRegistry(),
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt:   e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, time.Now, threadState),
+		Prompt:   e2ePromptBuilder(t, "", []string{root}, root, command.ShellProfile{}, time.Now, threadState),
 	}
 
 	if output, err := engine.Turn(context.Background(), "hello"); err != nil || output != "done" {
@@ -287,7 +299,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		e2ePromptShellProfile(),
 		func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 		threadState,
-		skillsmodule.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
+		skills.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
 	)
 
 	// -- Script the model --
@@ -428,9 +440,9 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 	bus := events.NewBus()
 	threadState.SubscribeBus(bus)
 
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: tools.DefaultShellProfile()})
-	reg.MustRegister(tools.Tool{
+	reg := toolcore.NewRegistry()
+	toolset.Register(reg, toolset.Options{WorkDir: root, Shell: command.DefaultShellProfile()})
+	reg.MustRegister(toolcore.Tool{
 		Name:        "check_ready",
 		Description: "test-only readiness check",
 		Schema: map[string]any{
@@ -483,7 +495,7 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -549,8 +561,8 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 	t.Cleanup(func() { _ = threadState.Close() })
 	bus := events.NewBus()
 	threadState.SubscribeBus(bus)
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: work, Shell: tools.DefaultShellProfile()})
+	reg := toolcore.NewRegistry()
+	toolset.Register(reg, toolset.Options{WorkDir: work, Shell: command.DefaultShellProfile()})
 
 	patchText := strings.Join([]string{
 		"*** Begin Patch",
@@ -583,7 +595,7 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{work}, work, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -644,13 +656,13 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 	threadState.SubscribeBus(bus)
 	tc := runtimemodule.ThreadContext{ID: threadState.ID, Dir: threadState.Dir}
 	set, err := runtimemodule.BuildAndStartThreadSet(t.Context(), []runtimemodule.ThreadFactorySpec{{ID: chunkmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-		return chunkmodule.New(tools.BuiltinOptions{WorkDir: work}), nil
+		return chunkmodule.New(chunkmodule.Options{WorkDir: work}), nil
 	}}}, tc, runtimemodule.ToolContext{Thread: &tc})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = set.CloseThread(context.Background()) })
-	reg, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, set)
+	reg, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{}, set)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +676,7 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{work}, work, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC)
 		}, threadState),
 	}
@@ -826,7 +838,7 @@ func TestEndToEnd_ToolFailureLedgerWithUserAgentsDisabledDoesNotHardBlock(t *tes
 		},
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol:          "openai/chat",
 			WorkDir:                   work,
 			EnableUserAgentsResources: false,
@@ -838,7 +850,7 @@ func TestEndToEnd_ToolFailureLedgerWithUserAgentsDisabledDoesNotHardBlock(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	out, err := a.Run(context.Background(), "record the command failure")
 	if err != nil {
@@ -890,16 +902,16 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
 		Provider: prov,
 		WorkDir:  work,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
-	_, notes := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	_, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if notes == nil {
 		t.Fatal("app did not initialize the Notes Module store")
 	}
@@ -1014,7 +1026,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		e2ePromptShellProfile(),
 		func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 		threadState,
-		skillsmodule.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
+		skills.NewWithLoader(skillLoader, root, sandbox.DisabledPolicy()),
 	)
 
 	prov := &scriptProvider{
@@ -1121,7 +1133,7 @@ func e2ePromptBuilder(
 	globalAgentsMDPath string,
 	agentsMDDirs []string,
 	workDir string,
-	shell tools.ShellProfile,
+	shell command.ShellProfile,
 	now func() time.Time,
 	threadState *thread.Thread,
 	runtimeModules ...runtimemodule.Module,
@@ -1129,7 +1141,7 @@ func e2ePromptBuilder(
 	t.Helper()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
 	if shell.Binary != "" {
-		runtimeModules = append(runtimeModules, shelltools.New(context.Background(), tools.BuiltinOptions{WorkDir: workDir, Shell: shell}))
+		runtimeModules = append(runtimeModules, shelltools.New(context.Background(), shelltools.Options{WorkDir: workDir, Shell: shell}))
 	}
 	runtimeModules = append([]runtimemodule.Module{&agentsmd.Module{
 		GlobalAgentsMDPath: globalAgentsMDPath,
@@ -1193,9 +1205,7 @@ func e2ePromptBuilder(
 	}}
 }
 
-// ---- Fake MCP server (re-exec) ----
-
-func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cfg mcp.Config, state *thread.Thread) (*runtimemodule.Set, *runtimemodule.Set, *tools.Registry) {
+func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cfg mcp.Config, state *thread.Thread) (*runtimemodule.Set, *runtimemodule.Set, *toolcore.Registry) {
 	t.Helper()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
 	runtimeSet, err := runtimemodule.BuildAndStartRuntimeSet(ctx, []runtimemodule.RuntimeFactorySpec{
@@ -1203,17 +1213,17 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 			ID:      "basic-file-tools",
 			Enabled: true,
 			New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.NewBasicFiles(tools.BuiltinOptions{WorkDir: workDir}), nil
+				return filetools.New(filetools.Options{WorkDir: workDir}), nil
 			},
 		},
 		{ID: shelltools.ModuleID, Enabled: true, New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return shelltools.New(factoryCtx, tools.BuiltinOptions{WorkDir: workDir, Shell: e2eToolShellProfile()}), nil
+			return shelltools.New(factoryCtx, shelltools.Options{WorkDir: workDir, Shell: e2eToolShellProfile()}), nil
 		}},
 		{ID: "apply-patch", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return builtintools.NewApplyPatch(tools.BuiltinOptions{WorkDir: workDir}), nil
+			return applypatch.New(applypatch.Options{WorkDir: workDir}), nil
 		}},
 		{ID: "file-search", Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return builtintools.NewFileSearch(tools.BuiltinOptions{WorkDir: workDir}), nil
+			return filesearch.New(filesearch.Options{WorkDir: workDir}), nil
 		}},
 
 		{
@@ -1234,7 +1244,7 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 	})
 	tc := runtimemodule.ThreadContext{ID: state.ID, Dir: state.Dir}
 	threadSet, err := runtimemodule.BuildAndStartThreadSet(ctx, []runtimemodule.ThreadFactorySpec{{ID: chunkmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-		return chunkmodule.New(tools.BuiltinOptions{WorkDir: workDir}), nil
+		return chunkmodule.New(chunkmodule.Options{WorkDir: workDir}), nil
 	}}}, tc, runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &tc})
 	if err != nil {
 		t.Fatal(err)
@@ -1244,7 +1254,7 @@ func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cf
 			t.Error(err)
 		}
 	})
-	registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: tools.DefaultTimeoutSeconds}, runtimeSet, threadSet)
+	registry, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{DefaultTimeoutSeconds: toolcore.DefaultTimeoutSeconds}, runtimeSet, threadSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1276,7 +1286,7 @@ func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {
 
 	provider := &startupNotificationProvider{}
 	a, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: workDir},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: workDir},
 		Provider: provider,
 		WorkDir:  workDir,
 	})
@@ -1300,7 +1310,7 @@ func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {
 			t.Fatalf("startup notification tools missing %q: %v", want, provider.toolNames)
 		}
 	}
-	conversation := withoutWindowRecitation(provider.history)
+	conversation := withoutRuntimeRecitation(provider.history)
 	if len(conversation) != 1 || conversation[0].Kind != llm.MessageKindObservation {
 		t.Fatalf("startup notification history = %+v", provider.history)
 	}
@@ -1312,7 +1322,7 @@ func TestObservableRecoveryRedeliveryStaysIdempotentDuringLiveTurn(t *testing.T)
 	provider := newPendingWebProvider()
 	releaseOnce := sync.Once{}
 	release := func() { releaseOnce.Do(func() { close(provider.release) }) }
-	cfg := config.Config{
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(),
 		ProviderID:       "openai",
 		ProviderProtocol: "openai/chat",
 		APIKey:           "x",
@@ -1455,8 +1465,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func e2eToolShellProfile() tools.ShellProfile {
-	return tools.ShellProfile{
+func e2eToolShellProfile() command.ShellProfile {
+	return command.ShellProfile{
 		Profile:   "fake-posix",
 		Family:    "posix",
 		Binary:    os.Args[0],
@@ -1465,8 +1475,8 @@ func e2eToolShellProfile() tools.ShellProfile {
 	}
 }
 
-func e2ePromptShellProfile() tools.ShellProfile {
-	return tools.ShellProfile{
+func e2ePromptShellProfile() command.ShellProfile {
+	return command.ShellProfile{
 		Profile:   "fake-posix",
 		Family:    "posix",
 		Binary:    os.Args[0],
@@ -1602,7 +1612,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		},
 	}
 	a1, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work},
 		Provider: prov1,
 		WorkDir:  work,
 	})
@@ -1622,7 +1632,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if len(prov1.history) == 0 {
 		t.Fatalf("first turn provider was never called")
 	}
-	firstHistory := withoutWindowRecitation(prov1.history[0])
+	firstHistory := withoutRuntimeRecitation(prov1.history[0])
 	if got := len(firstHistory); got != 1 {
 		t.Errorf("first turn saw history of len %d, want 1 (just the new user prompt)", got)
 	} else if firstHistory[0].FirstText() != "remember: alice" {
@@ -1639,7 +1649,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		},
 	}
 	a2, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work},
 		Provider: prov2,
 		WorkDir:  work,
 		ThreadID: filepath.Base(threadDir),
@@ -1647,7 +1657,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a2.Close()
+	defer func() { _ = a2.Close() }()
 	out, err := a2.Run(context.Background(), "who am I?")
 	if err != nil {
 		t.Fatal(err)
@@ -1662,7 +1672,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if len(prov2.history) == 0 {
 		t.Fatalf("second turn provider was never called")
 	}
-	secondHistory := withoutWindowRecitation(prov2.history[0])
+	secondHistory := withoutRuntimeRecitation(prov2.history[0])
 	if got := len(secondHistory); got != 3 {
 		t.Errorf("second turn history len = %d, want 3 (prior user+assistant + new user)", got)
 	} else {
@@ -1680,7 +1690,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 
 func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{ProviderProtocol: "openai/chat", WorkDir: work}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work}
 	first, err := app.New(app.Options{
 		Config:     cfg,
 		Provider:   &recordingProvider{},
@@ -1759,7 +1769,8 @@ func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testi
 
 func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testing.T) {
 	work := t.TempDir()
-	cfg := config.Config{ProviderProtocol: "openai/chat", WorkDir: work}
+	// Keep startup policies out of this exact-cursor replay fixture.
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work, Preset: config.PresetMinimal}
 	first, err := app.New(app.Options{
 		Config:     cfg,
 		Provider:   &recordingProvider{},
@@ -1886,7 +1897,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resumed.Close()
+	defer func() { _ = resumed.Close() }()
 
 	snapshot := resumed.Status.Snapshot()
 	if snapshot.Cursor != "5" ||
@@ -1973,14 +1984,14 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol: "openai/chat",
 			WorkDir:          work,
-			Hooks: hooks.Config{Commands: []hooks.CommandHook{
-				{Name: "inject", Events: []hooks.EventName{hooks.EventUserPromptSubmit}, Command: e2eHookCommand("inject")},
-				{Name: "deny-write", Events: []hooks.EventName{hooks.EventPreToolUse}, Tools: []string{"write"}, Command: e2eHookCommand("deny")},
-				{Name: "correct-read", Events: []hooks.EventName{hooks.EventPostToolUse}, Tools: []string{"read"}, Command: e2eHookCommand("correct")},
-				{Name: "continue-once", Events: []hooks.EventName{hooks.EventStop}, Command: e2eHookCommand("stop")},
+			Hooks: hookconfig.Config{Commands: []hookconfig.CommandHook{
+				{Name: "inject", Events: []hookconfig.EventName{hookconfig.EventUserPromptSubmit}, Command: e2eHookCommand("inject")},
+				{Name: "deny-write", Events: []hookconfig.EventName{hookconfig.EventPreToolUse}, Tools: []string{"write"}, Command: e2eHookCommand("deny")},
+				{Name: "correct-read", Events: []hookconfig.EventName{hookconfig.EventPostToolUse}, Tools: []string{"read"}, Command: e2eHookCommand("correct")},
+				{Name: "continue-once", Events: []hookconfig.EventName{hookconfig.EventStop}, Command: e2eHookCommand("stop")},
 			}},
 		},
 		Provider: prov,
@@ -1989,7 +2000,7 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	out, err := a.Run(context.Background(), "start")
 	if err != nil {
@@ -2060,14 +2071,14 @@ func TestEndToEnd_SandboxBlockedPathsStopBuiltinTools(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Sandbox: policy},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work, Sandbox: policy},
 		Provider: prov,
 		WorkDir:  work,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	out, err := a.Run(context.Background(), "try blocked write")
 	if err != nil {
@@ -2109,7 +2120,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(workmem.GoalStatusSuccess),
+						"status":        string(goalmodule.GoalStatusSuccess),
 						"status_reason": "continuation gate fired and final answer was verified",
 					}},
 				}},
@@ -2122,7 +2133,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol: "openai/chat",
 			Modules:          config.ModulePolicy{"hooks": {Enabled: false}},
 			WorkDir:          work,
@@ -2133,7 +2144,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	out, err := a.Run(context.Background(), "ship goal state")
 	if err != nil {
@@ -2157,7 +2168,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 		!strings.Contains(goalContext.FirstText(), "ship goal state") {
 		t.Fatalf("goal runtime context = %+v", goalContext)
 	}
-	goalStore, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goalStore, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalStore == nil {
 		t.Fatal("Goal Module store is unavailable")
 	}
@@ -2165,7 +2176,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Description != "ship goal state" || goal.ContinuationCount != 1 || goal.Status != workmem.GoalStatusSuccess ||
+	if goal.Description != "ship goal state" || goal.ContinuationCount != 1 || goal.Status != goalmodule.GoalStatusSuccess ||
 		goal.StatusReason != "continuation gate fired and final answer was verified" || !strings.Contains(goal.Acceptance, "goal.continued") {
 		t.Fatalf("Thread goal = %+v", goal)
 	}
@@ -2193,7 +2204,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-wait", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(workmem.GoalStatusWaitForUser),
+						"status":        string(goalmodule.GoalStatusWaitForUser),
 						"status_reason": "waiting for deployment approval",
 					}},
 				}},
@@ -2206,7 +2217,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success-after-input", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(workmem.GoalStatusSuccess),
+						"status":        string(goalmodule.GoalStatusSuccess),
 						"status_reason": "user approved the healthy deployment",
 					}},
 				}},
@@ -2219,7 +2230,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 		},
 	}
 	a, err := app.New(app.Options{
-		Config: config.Config{
+		Config: config.Config{ModuleInventory: modulecatalog.Inventory(),
 			ProviderProtocol: "openai/chat",
 			WorkDir:          work,
 		},
@@ -2229,7 +2240,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 
 	first, err := a.Run(context.Background(), "deploy the service")
 	if err != nil {
@@ -2250,7 +2261,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 		t.Fatalf("new input should reach the model with unchanged waiting goal:\n%s", got)
 	}
 
-	goalStore, _ := runtime.ThreadStateStoresFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+	goalStore, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	if goalStore == nil {
 		t.Fatal("Goal Module store is unavailable")
 	}
@@ -2258,7 +2269,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != workmem.GoalStatusSuccess || goal.StatusReason != "user approved the healthy deployment" {
+	if goal.Status != goalmodule.GoalStatusSuccess || goal.StatusReason != "user approved the healthy deployment" {
 		t.Fatalf("Thread goal = %+v", goal)
 	}
 	eventsData := []byte(threadJournalText(t, a.Thread.Dir))
@@ -2294,7 +2305,7 @@ func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 	compaction := config.DefaultCompactionConfig()
 	compaction.KeepRecentTokens = 0
 	a, err := app.New(app.Options{
-		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
+		Config:   config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
 		Provider: prov,
 		WorkDir:  work,
 		Debug:    true,
@@ -2404,10 +2415,10 @@ func messagesText(messages []llm.Message) string {
 	return b.String()
 }
 
-func withoutWindowRecitation(messages []llm.Message) []llm.Message {
+func withoutRuntimeRecitation(messages []llm.Message) []llm.Message {
 	filtered := make([]llm.Message, 0, len(messages))
 	for _, message := range messages {
-		if message.ID != "runtime-context-window" {
+		if message.ID != "runtime-context-window" && !strings.HasPrefix(message.ID, "runtime-input-") {
 			filtered = append(filtered, message)
 		}
 	}

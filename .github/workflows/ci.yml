@@ -116,7 +116,7 @@ jobs:
 
           cp -R .tmp/ci-ripgrep/. "$package_root/"
           go build -trimpath \
-            -ldflags "-X github.com/juex-ai/juex/internal/version.Version=${version}" \
+            -ldflags "-X github.com/juex-ai/juex/internal/foundation/version.Version=${version}" \
             -o "${package_root}/bin/juex" ./cmd/juex
           archive="juex_${version}_${os_name}_${arch}.tar.gz"
           tar -C "$payload_dir" -czf "${release_dir}/${archive}" "$(basename "$package_root")"

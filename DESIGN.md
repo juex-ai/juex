@@ -97,6 +97,18 @@ Agent process health, Thread retention state, and Thread execution state are
 separate signals. Disconnection and reconciliation failures are visible, not
 represented by blank or silently frozen panels.
 
+Module UI uses two fixed insertion points: Thread status and optional file
+roots. Server contributions determine presence. Goal and Notes expose independent
+compact controls; an enabled empty module remains distinct from a disabled one.
+Unknown or failed renderers show a local unavailable state without blocking the
+Thread. Readable module views remain available for archived Threads or stopped Agents.
+
+Workspace is the default file root. Selecting a module root loads its resources
+on demand. Removing it returns to Workspace and clears its requests, subscription,
+and preview. Agent, Thread, or composition changes also reset that selection;
+ordinary state updates and reconnects within the same composition preserve it.
+Read-only file roots refresh on demand without a live resource subscription.
+
 ## Layout And Visual Language
 
 - Desktop uses a Fleet/Agent navigation shell and readable centered content.

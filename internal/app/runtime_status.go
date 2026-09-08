@@ -7,17 +7,25 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/environment"
-	"github.com/juex-ai/juex/internal/hooks"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/observable"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/sandbox"
-	"github.com/juex-ai/juex/internal/skills"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/internal/app/config"
+	extensionsmodule "github.com/juex-ai/juex/internal/features/extensions"
+	"github.com/juex-ai/juex/internal/features/hooks"
+
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
+	"github.com/juex-ai/juex/internal/features/mcp"
+
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+
+	"github.com/juex-ai/juex/internal/framework/agent"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+
+	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
 )
 
 // RuntimeCatalogService assembles read-only runtime facts for presentation
@@ -39,14 +47,10 @@ type RuntimeStatusOptions struct {
 }
 
 // RuntimeModuleSnapshot is a leased view of the active, sealed Module sets.
-// Callers obtain it through App.ReadRuntimeModuleSnapshot so Thread
+// Callers obtain it through ReadRuntimeModuleSnapshot so Thread
 // replacement and shutdown cannot invalidate the sets during projection.
 type RuntimeModuleSnapshot struct {
-	Tools          *tools.Registry
-	Runtime        *runtimemodule.Set
-	Thread         *runtimemodule.Set
-	RuntimeContext runtimemodule.RuntimeContext
-	ThreadContext  runtimemodule.ThreadContext
+	agent.ModuleSnapshot
 	Skills         []skills.Skill
 	FilteredSkills []skills.FilteredSkill
 	SkillPrompt    skills.PromptBudgetReport
@@ -72,8 +76,9 @@ type RuntimeModuleStatus struct {
 }
 
 type RuntimeExtensionsStatus struct {
-	Count int
-	Items []RuntimeExtensionStatus
+	Enabled bool
+	Count   int
+	Items   []RuntimeExtensionStatus
 }
 
 type RuntimeExtensionStatus struct {
@@ -222,32 +227,24 @@ type RuntimeSkillOmittedInfo struct {
 	Reason string
 }
 
-// ReadRuntimeModuleSnapshot holds the App and Thread publication leases while
-// fn projects the currently active Runtime and Thread Module sets.
-func (a *App) ReadRuntimeModuleSnapshot(fn func(RuntimeModuleSnapshot) error) error {
-	if a == nil || fn == nil {
-		return fmt.Errorf("runtime status: active App and snapshot reader are required")
+// ReadRuntimeModuleSnapshot projects Feature metadata while the execution object's
+// Module lease is held, including for a borrowed Worker without an App handle.
+func ReadRuntimeModuleSnapshot(reader interface {
+	ReadModuleSnapshot(func(agent.ModuleSnapshot) error) error
+}, fn func(RuntimeModuleSnapshot) error) error {
+	if reader == nil || fn == nil {
+		return fmt.Errorf("runtime status: active Agent and snapshot reader are required")
 	}
-	a.lifecycleMu.RLock()
-	defer a.lifecycleMu.RUnlock()
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	if a.Engine == nil || a.runtimeModules == nil {
-		return fmt.Errorf("runtime status: active Runtime Module set is unavailable")
-	}
-	threadRuntime := a.Engine.ThreadRuntimeSnapshot()
-	if threadRuntime.Modules == nil || threadRuntime.Thread == nil {
-		return fmt.Errorf("runtime status: active Thread Module set is unavailable")
-	}
-	return fn(RuntimeModuleSnapshot{
-		Tools:          threadRuntime.Tools,
-		Runtime:        a.runtimeModules,
-		Thread:         threadRuntime.Modules,
-		RuntimeContext: a.runtimeModuleContext,
-		ThreadContext:  threadModuleContext(threadRuntime.Thread),
-		Skills:         append([]skills.Skill(nil), a.skills...),
-		FilteredSkills: append([]skills.FilteredSkill(nil), a.skillFilteredItems...),
-		SkillPrompt:    cloneSkillPromptReport(a.skillPrompt),
+	return reader.ReadModuleSnapshot(func(snapshot agent.ModuleSnapshot) error {
+		active := RuntimeModuleSnapshot{ModuleSnapshot: snapshot}
+		for _, item := range snapshot.Runtime.Modules() {
+			if feature, ok := item.(*skills.Module); ok {
+				active.Skills = feature.All()
+				active.FilteredSkills = feature.Filtered()
+				active.SkillPrompt = cloneSkillPromptReport(feature.PromptReport())
+			}
+		}
+		return fn(active)
 	})
 }
 
@@ -305,6 +302,7 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
+	extensionsStatus.Enabled = s.cfg.ModuleEnabled(extensionsmodule.ModuleID)
 	return RuntimeStatus{
 		WorkDir:      s.absoluteWorkDir(),
 		Modules:      runtimeModuleStatuses(*active),
@@ -403,7 +401,7 @@ func activeToolEntries(active RuntimeModuleSnapshot) ([]runtimemodule.ToolEntry,
 func runtimeToolsStatusFromActiveCatalogs(defaultTimeoutSeconds int, entries []runtimemodule.ToolEntry) (RuntimeToolsStatus, error) {
 	filtered := make([]runtimemodule.ToolEntry, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Tool.Group == tools.ToolGroupMCP {
+		if entry.Tool.Group == toolcore.ToolGroupMCP {
 			continue
 		}
 		filtered = append(filtered, entry)
@@ -412,7 +410,7 @@ func runtimeToolsStatusFromActiveCatalogs(defaultTimeoutSeconds int, entries []r
 }
 
 func runtimeToolsStatusFromEntries(defaultTimeoutSeconds int, entries []runtimemodule.ToolEntry) (RuntimeToolsStatus, error) {
-	definitions := make([]tools.ToolDefinition, 0, len(entries))
+	definitions := make([]toolcore.ToolDefinition, 0, len(entries))
 	owners := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		definition := entry.Tool.Definition()
@@ -431,19 +429,20 @@ func runtimeToolsStatusFromEntries(defaultTimeoutSeconds int, entries []runtimem
 	return status, nil
 }
 
-func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defaultTimeoutSeconds int) (RuntimeToolsStatus, error) {
-	groupOrder := []tools.ToolGroup{
-		tools.ToolGroupFile,
-		tools.ToolGroupChunkedWrite,
-		tools.ToolGroupShell,
-		tools.ToolGroupSearch,
-		tools.ToolGroupSkill,
-		tools.ToolGroupThreadState,
-		tools.ToolGroupWorkerThread,
-		tools.ToolGroupObservable,
+func runtimeToolsStatusFromDefinitions(definitions []toolcore.ToolDefinition, defaultTimeoutSeconds int) (RuntimeToolsStatus, error) {
+	groupOrder := []toolcore.ToolGroup{
+		toolcore.ToolGroupFile,
+		toolcore.ToolGroupChunkedWrite,
+		toolcore.ToolGroupShell,
+		toolcore.ToolGroupSearch,
+		toolcore.ToolGroupSkill,
+		toolcore.ToolGroupThreadState,
+		toolcore.ToolGroupMemory,
+		toolcore.ToolGroupWorkerThread,
+		toolcore.ToolGroupObservable,
 	}
 	groups := make([]RuntimeToolGroupStatus, len(groupOrder))
-	groupIndexes := make(map[tools.ToolGroup]int, len(groupOrder))
+	groupIndexes := make(map[toolcore.ToolGroup]int, len(groupOrder))
 	for i, group := range groupOrder {
 		groups[i] = RuntimeToolGroupStatus{Group: string(group), Tools: []RuntimeToolInfo{}}
 		groupIndexes[group] = i
@@ -468,9 +467,9 @@ func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defau
 	return RuntimeToolsStatus{Count: len(definitions), Groups: groups}, nil
 }
 
-func runtimeToolInfoFromDefinition(definition tools.ToolDefinition, defaultTimeoutSeconds int) RuntimeToolInfo {
+func runtimeToolInfoFromDefinition(definition toolcore.ToolDefinition, defaultTimeoutSeconds int) RuntimeToolInfo {
 	definition = definition.Normalized()
-	effective := tools.EffectiveToolTimeout(definition, defaultTimeoutSeconds)
+	effective := toolcore.EffectiveToolTimeout(definition, defaultTimeoutSeconds)
 	return RuntimeToolInfo{
 		Name:        definition.Name,
 		Description: definition.Description,
@@ -482,7 +481,7 @@ func runtimeToolInfoFromDefinition(definition tools.ToolDefinition, defaultTimeo
 	}
 }
 
-func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
+func hooksStatus(cfg hookconfig.Config) RuntimeHooksStatus {
 	commands := make([]RuntimeHookInfo, 0, len(cfg.Commands))
 	for _, command := range cfg.Commands {
 		events := make([]string, 0, len(command.Events))
@@ -491,11 +490,11 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 		}
 		timeoutSeconds := command.TimeoutSeconds
 		if timeoutSeconds <= 0 {
-			timeoutSeconds = hooks.DefaultTimeoutSeconds
+			timeoutSeconds = hookconfig.DefaultTimeoutSeconds
 		}
 		maxOutputBytes := command.MaxOutputBytes
 		if maxOutputBytes <= 0 {
-			maxOutputBytes = hooks.DefaultMaxOutputBytes
+			maxOutputBytes = hookconfig.DefaultMaxOutputBytes
 		}
 		commands = append(commands, RuntimeHookInfo{
 			Name:           command.Name,

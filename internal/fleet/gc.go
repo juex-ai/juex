@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 func (m *Manager) GCCandidates(ctx context.Context) ([]GCCandidate, error) {

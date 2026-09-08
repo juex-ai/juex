@@ -1,0 +1,2883 @@
+package config
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+)
+
+func TestLoadWithOptionsResolvesRuntimeEnvironmentPrecedenceAndMetadata(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := t.TempDir()
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "override.yaml")
+
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), `environment:
+  variables:
+    USER_ONLY: user
+    SHARED: user
+`)
+	writeTextFile(t, filepath.Join(workDir, ".env"), "DOTENV_ONLY=dotenv\nSHARED=dotenv\nEMPTY=\n")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), `environment:
+  variables:
+    WORKSPACE_ONLY: workspace
+    SHARED: workspace
+`)
+	writeTextFile(t, explicitPath, `environment:
+  variables:
+    EXPLICIT_ONLY: explicit
+    SHARED: explicit
+`)
+	t.Setenv("SHARED", "inherited")
+
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
+		WorkDir:    workDir,
+		ConfigPath: explicitPath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ExplicitConfigPath(); got != explicitPath {
+		t.Fatalf("explicit config path = %q, want %q", got, explicitPath)
+	}
+	snapshot := cfg.EnvironmentSnapshot()
+	for key, want := range map[string]string{
+		"USER_ONLY":      "user",
+		"DOTENV_ONLY":    "dotenv",
+		"WORKSPACE_ONLY": "workspace",
+		"EXPLICIT_ONLY":  "explicit",
+		"SHARED":         "inherited",
+		"EMPTY":          "",
+	} {
+		got, ok := snapshot.Lookup(key)
+		if !ok || got != want {
+			t.Fatalf("%s = %q, %v, want %q", key, got, ok, want)
+		}
+	}
+	status := cfg.EnvironmentStatus()
+	if !status.DotenvLoaded || status.DotenvPath != filepath.Join(workDir, ".env") {
+		t.Fatalf("environment status = %+v", status)
+	}
+	sources := map[string]environment.Source{}
+	for _, item := range snapshot.ConfiguredMetadata() {
+		sources[item.Key] = item.Source
+	}
+	for key, want := range map[string]environment.Source{
+		"USER_ONLY":      environment.SourceUserConfig,
+		"DOTENV_ONLY":    environment.SourceDotenv,
+		"WORKSPACE_ONLY": environment.SourceWorkspaceConfig,
+		"EXPLICIT_ONLY":  environment.SourceExplicitConfig,
+	} {
+		if got := sources[key]; got != want {
+			t.Fatalf("%s source = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestLoadForNonDefaultHomeMergesDefaultAndInstanceConfig(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultConfigPath := filepath.Join(userHome, ".juex", "juex.yaml")
+	writeTextFile(t, defaultConfigPath, `models: [local:base]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: http://127.0.0.1:12345
+    api_key: shared-key
+    models:
+      - id: base
+      - id: instance
+sandbox:
+  enabled: true
+runtime:
+  tool_timeout: 70s
+environment:
+  variables:
+    BASE_ONLY: base
+    SHARED: base
+fleet:
+  addr: 127.0.0.1:5840
+  unsafe_bind_any: true
+`)
+	instanceHome := t.TempDir()
+	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), `models: [local:instance]
+runtime:
+  tool_timeout: 80s
+environment:
+  variables:
+    INSTANCE_ONLY: instance
+    SHARED: instance
+fleet:
+  addr: 127.0.0.1:5999
+`)
+	t.Setenv("JUEX_HOME", instanceHome)
+
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "local" || cfg.Model != "instance" ||
+		cfg.BaseURL != "http://127.0.0.1:12345" || cfg.APIKey != "shared-key" {
+		t.Fatalf("provider selection = id:%q model:%q base:%q key:%q", cfg.ProviderID, cfg.Model, cfg.BaseURL, cfg.APIKey)
+	}
+	if !cfg.Sandbox.Enabled {
+		t.Fatalf("sandbox policy = %+v, want inherited enabled policy", cfg.Sandbox)
+	}
+	if cfg.ToolTimeout != 80*time.Second {
+		t.Fatalf("tool timeout = %s, want instance override 80s", cfg.ToolTimeout)
+	}
+	if cfg.Fleet.Addr != "127.0.0.1:5999" {
+		t.Fatalf("fleet address = %q, want instance override", cfg.Fleet.Addr)
+	}
+	if !cfg.Fleet.UnsafeBindAny {
+		t.Fatalf("fleet unsafe bind setting was not inherited: %+v", cfg.Fleet)
+	}
+	for key, want := range map[string]string{
+		"BASE_ONLY":     "base",
+		"INSTANCE_ONLY": "instance",
+		"SHARED":        "instance",
+	} {
+		got, ok := cfg.EnvironmentSnapshot().Lookup(key)
+		if !ok || got != want {
+			t.Fatalf("%s = %q, %v, want %q", key, got, ok, want)
+		}
+	}
+	defaultConfigPath, err = filepath.EvalSymlinks(defaultConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instanceConfigPath, err := filepath.EvalSymlinks(filepath.Join(instanceHome, "juex.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := map[string]environment.Metadata{}
+	for _, item := range cfg.EnvironmentSnapshot().ConfiguredMetadata() {
+		metadata[item.Key] = item
+	}
+	if got := metadata["BASE_ONLY"]; got.Source != environment.SourceUserConfig || got.Path != defaultConfigPath {
+		t.Fatalf("BASE_ONLY metadata = %+v, want default-home config", got)
+	}
+	if got := metadata["INSTANCE_ONLY"]; got.Source != environment.SourceUserConfig || got.Path != instanceConfigPath {
+		t.Fatalf("INSTANCE_ONLY metadata = %+v, want instance-home config", got)
+	}
+	if got := metadata["SHARED"]; got.Source != environment.SourceUserConfig || got.Path != instanceConfigPath {
+		t.Fatalf("SHARED metadata = %+v, want instance override", got)
+	}
+}
+
+func TestModulePolicyDefaultsEnabledAndLayersByCanonicalID(t *testing.T) {
+	cfg := Config{ModuleInventory: testModuleInventory()}
+	if !cfg.ModuleEnabled("skills") {
+		t.Fatal("unconfigured Module must default to enabled")
+	}
+	if err := applyYAMLData(&cfg, []byte(`modules:
+  skills:
+    enabled: false
+  mcp:
+    enabled: false
+`), yamlConfigSource{Path: "base.yaml", Scope: configScopeDefaultHome}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ModuleEnabled("skills") || cfg.ModuleEnabled("mcp") {
+		t.Fatalf("base Module policy = %+v, want skills and mcp disabled", cfg.Modules)
+	}
+	if err := applyYAMLData(&cfg, []byte(`modules:
+  skills:
+    enabled: true
+`), yamlConfigSource{Path: "workspace.yaml", Scope: configScopeWorkspace}); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ModuleEnabled("skills") || cfg.ModuleEnabled("mcp") {
+		t.Fatalf("layered Module policy = %+v, want skills re-enabled and mcp unchanged", cfg.Modules)
+	}
+}
+
+func TestModulePolicyRejectsUnknownEnvelopeFieldAndUnsupportedID(t *testing.T) {
+	t.Run("unknown envelope field", func(t *testing.T) {
+		cfg := Config{ModuleInventory: testModuleInventory()}
+		err := applyYAMLData(&cfg, []byte(`modules:
+  skills:
+    enabled: false
+    priority: 10
+`), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace})
+		if err == nil || !strings.Contains(err.Error(), "priority") {
+			t.Fatalf("applyYAMLData() error = %v, want unknown priority", err)
+		}
+	})
+
+	t.Run("non-canonical id", func(t *testing.T) {
+		cfg := Config{ModuleInventory: testModuleInventory()}
+		err := applyYAMLData(&cfg, []byte(`modules:
+  " skills ":
+    enabled: false
+`), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace})
+		if err == nil || !strings.Contains(err.Error(), `unsupported module " skills "`) {
+			t.Fatalf("applyYAMLData() error = %v, want non-canonical id rejection", err)
+		}
+	})
+
+	t.Run("unsupported id", func(t *testing.T) {
+		cfg := Config{ModuleInventory: testModuleInventory()}
+		err := applyYAMLData(&cfg, []byte(`modules:
+  skillz:
+    enabled: false
+`), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace})
+		if err == nil || !strings.Contains(err.Error(), `unsupported module "skillz"`) {
+			t.Fatalf("applyYAMLData() error = %v", err)
+		}
+	})
+}
+
+func TestLoadWithOptionsNonDefaultHomePrecedence(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), `models: [local:base]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: http://127.0.0.1:12345
+    api_key: shared-key
+    models:
+      - id: base
+      - id: instance
+      - id: workspace
+      - id: explicit
+      - id: env
+      - id: cli
+`)
+	instanceHome := t.TempDir()
+	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), "models: [local:instance]\n")
+	t.Setenv("JUEX_HOME", instanceHome)
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\n")
+	explicitPath := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, explicitPath, "models: [local:explicit]\n")
+
+	load := func(modelRef string) Config {
+		t.Helper()
+		var modelRefs []string
+		if modelRef != "" {
+			modelRefs = []string{modelRef}
+		}
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
+			WorkDir:    workDir,
+			ConfigPath: explicitPath,
+			ModelRefs:  modelRefs,
+			AgentState: AgentStateNone,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	if cfg := load(""); cfg.Model != "explicit" {
+		t.Fatalf("model = %q, want explicit config to win over workspace and both homes", cfg.Model)
+	}
+	t.Setenv("PROVIDER_API_MODEL", "env")
+	if cfg := load(""); cfg.Model != "env" {
+		t.Fatalf("model = %q, want environment override", cfg.Model)
+	}
+	if cfg := load("local:cli"); cfg.Model != "cli" {
+		t.Fatalf("model = %q, want explicit models override", cfg.Model)
+	}
+}
+
+func TestLoadForNonDefaultHomeMergesTrustedHooksInOrder(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), `models: [local:test]
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: shared-key
+    models:
+      - id: test
+hooks:
+  commands:
+    - name: default-hook
+      events: [UserPromptSubmit]
+      command: ["echo", "default"]
+`)
+	instanceHome := t.TempDir()
+	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), `hooks:
+  commands:
+    - name: instance-hook
+      events: [UserPromptSubmit]
+      command: ["echo", "instance"]
+`)
+	t.Setenv("JUEX_HOME", instanceHome)
+
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 2 {
+		t.Fatalf("hooks = %+v, want default then instance", cfg.Hooks.Commands)
+	}
+	if got := cfg.Hooks.Commands[0]; got.Name != "default-hook" || got.Source != "home:default" {
+		t.Fatalf("default hook = %+v", got)
+	}
+	if got := cfg.Hooks.Commands[1]; got.Name != "instance-hook" || got.Source != "home:instance" {
+		t.Fatalf("instance hook = %+v", got)
+	}
+}
+
+func TestLoadForCanonicalDefaultHomeReadsSharedConfigOnce(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHome := filepath.Join(userHome, ".juex")
+	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), `models: [local:test]
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: test-key
+    models:
+      - id: test
+hooks:
+  commands:
+    - name: once
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`)
+	alias := filepath.Join(userHome, "default-home-alias")
+	if err := os.Symlink(defaultHome, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JUEX_HOME", alias)
+	canonicalDefaultHome, err := filepath.EvalSymlinks(defaultHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HomeJuexDir != canonicalDefaultHome {
+		t.Fatalf("effective home dir = %q, want %q", cfg.HomeJuexDir, canonicalDefaultHome)
+	}
+	if cfg.HomeConfigPath() != filepath.Join(canonicalDefaultHome, "juex.yaml") ||
+		cfg.DefaultHomeConfigPath() != filepath.Join(canonicalDefaultHome, "juex.yaml") {
+		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
+	}
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "once" {
+		t.Fatalf("default-home config loaded more than once: %+v", cfg.Hooks.Commands)
+	}
+}
+
+func TestLoadForCaseVariantDefaultHomeReadsSharedConfigOnce(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHome := filepath.Join(userHome, ".juex")
+	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), `models: [local:test]
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: test-key
+    models:
+      - id: test
+hooks:
+  commands:
+    - name: once
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`)
+	caseVariant := filepath.Join(userHome, ".JUEX")
+	if _, err := os.Stat(caseVariant); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("filesystem is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+	t.Setenv("JUEX_HOME", caseVariant)
+
+	cfg, err := LoadForWorkDirForValidation(testModuleInventory(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "once" {
+		t.Fatalf("case-variant default-home config loaded more than once: %+v", cfg.Hooks.Commands)
+	}
+}
+
+func TestLoadWithOptionsDotenvPolicyAndProviderOverrides(t *testing.T) {
+	t.Run("loads only workdir dotenv and provider uses snapshot", func(t *testing.T) {
+		prepareConfigTest(t)
+		workDir := t.TempDir()
+		explicitDir := t.TempDir()
+		explicitPath := filepath.Join(explicitDir, "override.yaml")
+		writeTextFile(t, filepath.Join(workDir, ".env"), "PROVIDER_API_KEY=dotenv-key\nWORK_MARKER=work\n")
+		writeTextFile(t, filepath.Join(explicitDir, ".env"), "WORK_MARKER=wrong\n")
+		writeTextFile(t, explicitPath, "environment:\n  variables:\n    EXPLICIT_MARKER: explicit\n")
+		if err := os.Unsetenv("PROVIDER_API_KEY"); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
+			WorkDir:    workDir,
+			ConfigPath: explicitPath,
+			AgentState: AgentStateNone,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.APIKey != "dotenv-key" {
+			t.Fatalf("APIKey = %q, want dotenv-key", cfg.APIKey)
+		}
+		if got, _ := cfg.EnvironmentSnapshot().Lookup("WORK_MARKER"); got != "work" {
+			t.Fatalf("WORK_MARKER = %q, want work", got)
+		}
+	})
+
+	t.Run("load_dotenv false", func(t *testing.T) {
+		home := prepareConfigTest(t)
+		workDir := t.TempDir()
+		writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), "environment:\n  load_dotenv: false\n")
+		writeTextFile(t, filepath.Join(workDir, ".env"), "SHOULD_NOT_LOAD=value\n")
+
+		cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := cfg.EnvironmentSnapshot().Lookup("SHOULD_NOT_LOAD"); ok {
+			t.Fatal("dotenv variable loaded while environment.load_dotenv=false")
+		}
+		if status := cfg.EnvironmentStatus(); status.DotenvLoaded {
+			t.Fatalf("environment status = %+v", status)
+		}
+	})
+}
+
+func TestLoadWithOptionsRedactsConfiguredValuesFromValidationErrors(t *testing.T) {
+	prepareConfigTest(t)
+	workDir := t.TempDir()
+	const configuredValue = "private-thinking-sentinel"
+	writeTextFile(t, filepath.Join(workDir, ".env"), "PROVIDER_THINKING_EFFORT="+configuredValue+"\n")
+	if err := os.Unsetenv("PROVIDER_THINKING_EFFORT"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
+	if err == nil {
+		t.Fatal("expected invalid configured thinking effort")
+	}
+	if strings.Contains(err.Error(), configuredValue) {
+		t.Fatalf("config error leaked configured value: %q", err)
+	}
+	if !strings.Contains(err.Error(), "[REDACTED_ENV]") ||
+		!strings.Contains(err.Error(), "PROVIDER_THINKING_EFFORT") {
+		t.Fatalf("config error = %q, want redacted provider context", err)
+	}
+	if got, ok := cfg.EnvironmentSnapshot().Lookup("PROVIDER_THINKING_EFFORT"); !ok || got != configuredValue {
+		t.Fatalf("partial config snapshot = %q, %v, want configured value retained internally", got, ok)
+	}
+	var redactedErr *configuredEnvironmentError
+	if !errors.As(err, &redactedErr) {
+		t.Fatalf("config error type = %T, want configuredEnvironmentError", err)
+	}
+}
+
+func TestLoadWithOptionsRejectsMalformedOrReservedEnvironment(t *testing.T) {
+	tests := []struct {
+		name       string
+		configBody string
+		dotenvBody string
+		want       string
+	}{
+		{name: "reserved yaml", configBody: "environment:\n  variables:\n    JUEX_HOME: /other\n", want: "reserved"},
+		{name: "invalid yaml name", configBody: "environment:\n  variables:\n    BAD-NAME: value\n", want: "BAD-NAME"},
+		{name: "malformed dotenv", dotenvBody: "NOT_AN_ASSIGNMENT\n", want: "line 1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prepareConfigTest(t)
+			workDir := t.TempDir()
+			if tc.configBody != "" {
+				writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), tc.configBody)
+			}
+			if tc.dotenvBody != "" {
+				writeTextFile(t, filepath.Join(workDir, ".env"), tc.dotenvBody)
+			}
+			_, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentState: AgentStateNone})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFromFile(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://example.com" || cfg.APIKey != "sk-x" || cfg.Model != "gpt-4" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestConfigObservablesPaths(t *testing.T) {
+	workDir := t.TempDir()
+	agentStateDir := filepath.Join(t.TempDir(), "agent")
+	cfg := Config{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentStateDir: agentStateDir}
+	if got, want := cfg.ObservablesConfigPath(), filepath.Join(agentStateDir, "observables.json"); got != want {
+		t.Fatalf("ObservablesConfigPath() = %q, want %q", got, want)
+	}
+	if got, want := cfg.ObservablesStateDir(), filepath.Join(agentStateDir, "observables"); got != want {
+		t.Fatalf("ObservablesStateDir() = %q, want %q", got, want)
+	}
+}
+
+func TestLoadFromFile_ModelIDCanContainSlash(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [local-proxy:meta-llama/Llama-3-8b-chat]
+providers:
+  - id: local-proxy
+    protocol: openai/chat
+    base_url: https://local.example
+    api_key: sk-local
+    models:
+      - id: meta-llama/Llama-3-8b-chat
+        context_window: 32000
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "local-proxy" || cfg.Model != "meta-llama/Llama-3-8b-chat" || cfg.ContextWindow != 32000 {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFileSkillsConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+skills:
+  include: [" taskline-management ", "", taskline-management, juex-localtest]
+  exclude: [ignored-when-include-is-set]
+  prompt_budget_chars: 4096
+providers:
+  - id: openai
+    api_key: sk
+    models:
+      - id: gpt-4
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Skills.Include, ","); got != "taskline-management,juex-localtest" {
+		t.Fatalf("include = %q", got)
+	}
+	if got := strings.Join(cfg.Skills.Exclude, ","); got != "ignored-when-include-is-set" {
+		t.Fatalf("exclude = %q", got)
+	}
+	if cfg.Skills.PromptBudgetChars != 4096 {
+		t.Fatalf("prompt budget = %d", cfg.Skills.PromptBudgetChars)
+	}
+}
+
+func TestConfigSkillPolicyUsesContextBudgetCap(t *testing.T) {
+	cfg := Config{ModuleInventory: testModuleInventory(), ContextWindow: 1000, Skills: DefaultSkillsConfig()}
+	policy := cfg.SkillPolicy()
+	if policy.PromptBudgetChars != 80 {
+		t.Fatalf("prompt budget = %d, want 80", policy.PromptBudgetChars)
+	}
+}
+
+func TestParseModelRef(t *testing.T) {
+	ref, err := ParseModelRef(" local-proxy:meta-llama/Llama-3-8b-chat ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.ProviderID != "local-proxy" || ref.ModelID != "meta-llama/Llama-3-8b-chat" {
+		t.Fatalf("ref = %+v", ref)
+	}
+	if got := ref.String(); got != "local-proxy:meta-llama/Llama-3-8b-chat" {
+		t.Fatalf("String() = %q", got)
+	}
+
+	for _, raw := range []string{"", "provider-only", "/model", "provider/", "provider/model", ":model", "provider:"} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := ParseModelRef(raw); err == nil || !strings.Contains(err.Error(), "provider:model") {
+				t.Fatalf("ParseModelRef(%q) err = %v, want provider:model error", raw, err)
+			}
+		})
+	}
+}
+
+func TestLoadFromFileModelsResolvesOrderedChain(t *testing.T) {
+	prepareConfigTest(t)
+	path := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, path, modelListTestConfig(`
+models:
+  - openai:gpt-primary
+  - anthropic:claude-backup
+  - local:qwen-backup
+`))
+
+	cfg, err := LoadFromFile(testModuleInventory(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 3 {
+		t.Fatalf("chain = %+v", chain)
+	}
+	wantRefs := []string{"openai:gpt-primary", "anthropic:claude-backup", "local:qwen-backup"}
+	wantWindows := []int{128000, 64000, 32000}
+	for i := range chain {
+		if chain[i].Ref != wantRefs[i] || chain[i].ContextWindow != wantWindows[i] {
+			t.Fatalf("chain[%d] = %+v, want ref=%q window=%d", i, chain[i], wantRefs[i], wantWindows[i])
+		}
+	}
+}
+
+func TestLoadFromFileModelsValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		models string
+		want   string
+	}{
+		{name: "duplicate", models: "  - openai:gpt-primary\n  - openai:gpt-primary", want: "duplicate models"},
+		{name: "unknown provider", models: "  - missing:model", want: "models[0]"},
+		{name: "unknown model", models: "  - local:missing", want: "models[0]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prepareConfigTest(t)
+			path := filepath.Join(t.TempDir(), "juex.yaml")
+			writeTextFile(t, path, modelListTestConfig("\nmodels:\n"+tt.models+"\n"))
+			_, err := LoadFromFile(testModuleInventory(), path)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceModelsReplaceInheritedChain(t *testing.T) {
+	home := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), modelListTestConfig(`
+models:
+  - openai:gpt-primary
+  - anthropic:claude-backup
+  - local:qwen-backup
+`))
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [anthropic:claude-backup]\n")
+
+	cfg, err := LoadForWorkDir(testModuleInventory(), workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := modelChainRefs(chain); got != "anthropic:claude-backup" {
+		t.Fatalf("model chain = %q", got)
+	}
+
+	cfg, err = LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
+		WorkDir:    workDir,
+		ModelRefs:  []string{"openai:gpt-env", "local:qwen-backup"},
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err = cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := modelChainRefs(chain); got != "openai:gpt-env,local:qwen-backup" {
+		t.Fatalf("full CLI override model chain = %q", got)
+	}
+}
+
+func TestEnvironmentPrimaryOverrideKeepsConfiguredModelTail(t *testing.T) {
+	prepareConfigTest(t)
+	path := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, path, modelListTestConfig(`
+models:
+  - openai:gpt-primary
+  - anthropic:claude-backup
+  - local:qwen-backup
+`))
+
+	t.Setenv("PROVIDER_API_MODEL", "gpt-env")
+	cfg, err := LoadFromFile(testModuleInventory(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := modelChainRefs(chain); got != "openai:gpt-env,anthropic:claude-backup,local:qwen-backup" {
+		t.Fatalf("env override chain = %q", got)
+	}
+}
+
+func TestModelsEmptyListClearsInheritedChain(t *testing.T) {
+	home := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), modelListTestConfig(`
+models:
+  - openai:gpt-primary
+  - anthropic:claude-backup
+`))
+	override := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, override, "models: []\n")
+
+	cfg, err := LoadFromFile(testModuleInventory(), override)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Models) != 0 || cfg.ProviderID != "" || cfg.Model != "" {
+		t.Fatalf("models/provider selection = %v/%s:%s, want cleared", cfg.Models, cfg.ProviderID, cfg.Model)
+	}
+}
+
+func modelListTestConfig(header string) string {
+	return strings.TrimSpace(header) + `
+providers:
+  - id: openai
+    api_key: sk-openai
+    models:
+      - id: gpt-primary
+        context_window: 128000
+      - id: gpt-env
+        context_window: 96000
+  - id: anthropic
+    api_key: sk-anthropic
+    models:
+      - id: claude-backup
+        context_window: 64000
+  - id: local
+    protocol: openai/chat
+    api_key: sk-local
+    models:
+      - id: qwen-backup
+        context_window: 32000
+` + "\n"
+}
+
+func modelChainRefs(chain []ResolvedModel) string {
+	refs := make([]string, len(chain))
+	for i := range chain {
+		refs[i] = chain[i].Ref
+	}
+	return strings.Join(refs, ",")
+}
+
+func TestLoadFromFileRejectsProviderIDWithModelSeparator(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [bad:provider:gpt]
+providers:
+  - id: bad:provider
+    base_url: https://bad.example
+    api_key: sk-bad
+    models:
+      - id: gpt
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil || !strings.Contains(err.Error(), `provider "bad:provider" id must not contain ':'`) {
+		t.Fatalf("err = %v, want provider id separator error", err)
+	}
+}
+
+func TestConfigApplyModelOverride(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-default]
+providers:
+  - id: openai
+    base_url: https://openai.example
+    api_key: sk-openai
+    models:
+      - id: gpt-default
+  - id: local-proxy
+    protocol: openai/chat
+    base_url: https://local.example
+    api_key: sk-local
+    models:
+      - id: meta-llama/Llama-3-8b-chat
+        context_window: 32000
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.ApplyModelOverride(" local-proxy:meta-llama/Llama-3-8b-chat "); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "local-proxy" || cfg.ProviderProtocol != "openai/chat" || cfg.BaseURL != "https://local.example" || cfg.APIKey != "sk-local" || cfg.Model != "meta-llama/Llama-3-8b-chat" || cfg.ContextWindow != 32000 {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestConfigApplyModelOverrideRejectsUnknownModel(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = cfg.ApplyModelOverride("openai:missing")
+	if err == nil || !strings.Contains(err.Error(), `model "openai:missing" references unknown model "missing" for provider "openai"`) {
+		t.Fatalf("err = %v, want unknown model error", err)
+	}
+}
+
+func TestLoadFromFileWithModelsOverrideKeepsNonSelectorEnv(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-default]
+providers:
+  - id: openai
+    base_url: https://openai.example
+    api_key: sk-openai
+    models:
+      - id: gpt-default
+  - id: anthropic
+    base_url: https://anthropic.example
+    api_key: sk-anthropic
+    models:
+      - id: claude-sonnet
+`
+	writeTextFile(t, configPath, body)
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_MODEL", "gpt-default")
+	t.Setenv("PROVIDER_API_BASE", "https://env.example")
+	t.Setenv("PROVIDER_API_KEY", "sk-env")
+
+	cfg, err := LoadFromFileForWorkDirWithModelsOverride(testModuleInventory(), configPath, dir, []string{"anthropic:claude-sonnet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "anthropic" || cfg.Model != "claude-sonnet" || cfg.BaseURL != "https://env.example" || cfg.APIKey != "sk-env" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_RejectsScalarShellConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeTextFile(t, configPath, "shell: powershell\n")
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil || !strings.Contains(err.Error(), "shell") {
+		t.Fatalf("err = %v, want scalar shell config rejection", err)
+	}
+}
+
+func TestLoadFromFile_OSEnvOverridesExplicitConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://file.example", "sk-file", "gpt-file")
+
+	t.Setenv("PROVIDER_API_ID", "anthropic")
+	t.Setenv("PROVIDER_API_BASE", "https://env.example")
+	t.Setenv("PROVIDER_API_KEY", "sk-env")
+	t.Setenv("PROVIDER_API_MODEL", "claude-env")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "anthropic" || cfg.BaseURL != "https://env.example" || cfg.APIKey != "sk-env" || cfg.Model != "claude-env" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_EnvYAMLExtensionUsesYAMLParser(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".env.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.Model != "gpt-yaml" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_UnknownYAMLFieldErrors(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-test]
+providers:
+  - id: openai
+    unknown_field: true
+    api_key: sk-x
+    models:
+      - id: gpt-test
+`
+	writeTextFile(t, configPath, body)
+
+	if _, err := LoadFromFile(testModuleInventory(), configPath); err == nil {
+		t.Fatal("expected unknown YAML field error")
+	}
+}
+
+func TestLoad_GlobalRuntimeConfigFallback(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	writeJuexConfig(t, filepath.Join(home, ".juex", "juex.yaml"), "openai", "https://global.example", "sk-global", "gpt-global")
+
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkDir != work {
+		t.Fatalf("WorkDir = %q, want %q", cfg.WorkDir, work)
+	}
+	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://global.example" || cfg.APIKey != "sk-global" || cfg.Model != "gpt-global" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoad_WorkConfigFallsBackToGlobalProviderFields(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	writeJuexConfig(t, filepath.Join(home, ".juex", "juex.yaml"), "openai", "https://global.example", "sk-global", "gpt-global")
+	body := `models: [openai:gpt-local]
+providers:
+  - id: openai
+    models:
+      - id: gpt-local
+        thinking_effort: low
+        context_window: 128000
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://global.example" || cfg.APIKey != "sk-global" || cfg.Model != "gpt-local" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if cfg.ThinkingEffort != "low" || cfg.ContextWindow != 128000 {
+		t.Fatalf("model config = thinking:%q context:%d", cfg.ThinkingEffort, cfg.ContextWindow)
+	}
+}
+
+func TestLoad_RejectsUnknownRuntimeKey(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	global := `models: [openai:gpt-global]
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+runtime:
+  max_iters: 5
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
+
+	_, err := Load(testModuleInventory())
+	if err == nil || !strings.Contains(err.Error(), "runtime.max_iters") {
+		t.Fatalf("Load error = %v, want runtime.max_iters", err)
+	}
+}
+
+func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	writeJuexConfig(t, filepath.Join(home, ".juex", "juex.yaml"), "openai", "https://global.example", "sk-global", "gpt-global")
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := cfg.SandboxPolicyForOS("linux")
+	if !effective.Enabled {
+		t.Fatalf("sandbox enabled = false, want platform default true")
+	}
+	if effective.FileSystem.OutsideWorkspace != OutsideWorkspaceReadOnly || !effective.Network.Enabled {
+		t.Fatalf("sandbox defaults = %+v", effective)
+	}
+	if len(cfg.Sandbox.FileSystem.BlockedPaths) != 0 {
+		t.Fatalf("blocked paths default = %#v, want empty", cfg.Sandbox.FileSystem.BlockedPaths)
+	}
+
+	local := `sandbox:
+  enabled: true
+  file_system:
+    outside_workspace: read_only
+    blocked_paths:
+      - ~/.ssh
+  network:
+    enabled: false
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+	cfg, err = Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Sandbox.Enabled || cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadOnly || cfg.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox override = %+v", cfg.Sandbox)
+	}
+	if got, want := strings.Join(cfg.Sandbox.FileSystem.BlockedPaths, ","), "~/.ssh"; got != want {
+		t.Fatalf("blocked paths = %q, want %q", got, want)
+	}
+}
+
+func TestLoad_SandboxExplicitSectionInheritsPlatformDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		body        string
+		blockedPath string
+	}{
+		{name: "empty", body: "sandbox: {}\n"},
+		{name: "implicit-null", body: "sandbox:\n"},
+		{name: "explicit-null", body: "sandbox: null\n"},
+		{name: "merged-null", body: "<<: &defaults {sandbox: null}\n"},
+		{name: "blocked-only", body: "sandbox:\n  file_system:\n    blocked_paths: [.env]\n", blockedPath: ".env"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepareConfigTest(t)
+			work := t.TempDir()
+			writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), tc.body)
+			cfg, err := LoadForWorkDir(testModuleInventory(), work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := cfg.SandboxPolicy()
+			want := sandbox.DefaultPolicy()
+			if tc.blockedPath != "" {
+				want.FileSystem.BlockedPaths = []string{tc.blockedPath}
+			}
+			if policy.Enabled != want.Enabled ||
+				policy.FileSystem.OutsideWorkspace != want.FileSystem.OutsideWorkspace ||
+				policy.Network.Enabled != want.Network.Enabled ||
+				strings.Join(policy.FileSystem.BlockedPaths, "\x00") != strings.Join(want.FileSystem.BlockedPaths, "\x00") {
+				t.Fatalf("explicit sparse policy = %+v, want platform defaults %+v", policy, want)
+			}
+		})
+	}
+}
+
+func TestLoad_SandboxMergesAcrossConfigLayers(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	global := `models: [openai:gpt-global]
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+sandbox:
+  enabled: true
+  file_system:
+    outside_workspace: read_only
+    blocked_paths:
+      - ~/.ssh
+      - .env
+`
+	local := `sandbox:
+  file_system:
+    blocked_paths:
+      - ~/.aws
+      - ~/.ssh
+  network:
+    enabled: false
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Sandbox.Enabled || cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadOnly || cfg.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox merged policy = %+v", cfg.Sandbox)
+	}
+	wantBlocked := []string{"~/.ssh", ".env", "~/.aws"}
+	if strings.Join(cfg.Sandbox.FileSystem.BlockedPaths, "\x00") != strings.Join(wantBlocked, "\x00") {
+		t.Fatalf("blocked paths = %#v, want %#v", cfg.Sandbox.FileSystem.BlockedPaths, wantBlocked)
+	}
+}
+
+func TestLoad_SandboxRejectsInvalidOutsideWorkspace(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	body := `sandbox:
+  file_system:
+    outside_workspace: maybe
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	_, err := LoadForWorkDir(testModuleInventory(), work)
+	if err == nil || !strings.Contains(err.Error(), "sandbox.file_system.outside_workspace") || !strings.Contains(err.Error(), "read_write, read_only") {
+		t.Fatalf("err = %v, want sandbox enum error", err)
+	}
+}
+
+func TestLoad_SandboxRejectsDeniedOutsideWorkspace(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	body := `sandbox:
+  file_system:
+    outside_workspace: denied
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	_, err := LoadForWorkDir(testModuleInventory(), work)
+	if err == nil || !strings.Contains(err.Error(), "outside_workspace") || !strings.Contains(err.Error(), "read_write, read_only") {
+		t.Fatalf("err = %v, want denied to be rejected", err)
+	}
+}
+
+func TestLoad_SandboxRejectsEmptyBlockedPath(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	body := `sandbox:
+  file_system:
+    blocked_paths:
+      - " "
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	_, err := LoadForWorkDir(testModuleInventory(), work)
+	if err == nil || !strings.Contains(err.Error(), "blocked_paths") {
+		t.Fatalf("err = %v, want blocked_paths validation error", err)
+	}
+}
+
+func TestLoad_GlobalHooksDoNotRequireTrust(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	body := `models: [openai:gpt-global]
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+hooks:
+  commands:
+    - name: global-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), body)
+
+	cfg, err := LoadForWorkDir(testModuleInventory(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "home:default" {
+		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
+	}
+}
+
+func TestLoad_ProjectHooksRequireTrust(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	body := `models: [openai:gpt-local]
+providers:
+  - id: openai
+    base_url: https://local.example
+    api_key: sk-local
+    models:
+      - id: gpt-local
+hooks:
+  commands:
+    - name: project-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	_, err := LoadForWorkDir(testModuleInventory(), work)
+	if err == nil || !strings.Contains(err.Error(), "hooks.trusted: true") {
+		t.Fatalf("err = %v, want project trust error", err)
+	}
+}
+
+func TestLoad_HooksMergeInConfigOrder(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	global := `models: [openai:gpt-global]
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+hooks:
+  commands:
+    - name: global-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`
+	local := `models: [openai:gpt-global]
+hooks:
+  trusted: true
+  commands:
+    - name: project-guard
+      events: [PreToolUse]
+      command: ["echo", "{}"]
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+
+	cfg, err := LoadForWorkDir(testModuleInventory(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 2 {
+		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
+	}
+	if cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "home:default" {
+		t.Fatalf("first hook = %+v", cfg.Hooks.Commands[0])
+	}
+	if cfg.Hooks.Commands[1].Name != "project-guard" || cfg.Hooks.Commands[1].Source != "project" {
+		t.Fatalf("second hook = %+v", cfg.Hooks.Commands[1])
+	}
+}
+
+func TestLoad_WorkShellEmptyResetsGlobalShell(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	global := `models: [openai:gpt-global]
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+shell:
+  profile: custom
+  binary: ` + quoteYAMLString(os.Args[0]) + `
+  family: posix
+  args: ["-test.run=TestNoop"]
+  path_style: posix
+`
+	local := `shell: {}
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Shell.Profile == "custom" {
+		t.Fatalf("work-local shell: {} should reset user-global shell config, got %+v", cfg.Shell)
+	}
+	if !strings.HasPrefix(cfg.Shell.Source, "auto:") {
+		t.Fatalf("shell source = %q, want auto source after reset", cfg.Shell.Source)
+	}
+}
+
+func TestLoad_DefaultWorkspaceConfigPath(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://default.example", "sk-default", "gpt-default")
+
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://default.example" || cfg.APIKey != "sk-default" || cfg.Model != "gpt-default" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoad_WorkspaceConfigPathWhenWorkDirIsDotJuex(t *testing.T) {
+	prepareConfigTest(t)
+	project := t.TempDir()
+	work := filepath.Join(project, ".juex")
+	writeJuexConfig(t, filepath.Join(work, "juex.yaml"), "openai", "https://dotjuex.example", "sk-dot", "gpt-dot")
+	t.Chdir(work)
+
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkDir != work {
+		t.Fatalf("WorkDir = %q, want %q", cfg.WorkDir, work)
+	}
+	if got, want := cfg.WorkspaceConfigPath(), filepath.Join(work, "juex.yaml"); got != want {
+		t.Fatalf("WorkspaceConfigPath = %q, want %q", got, want)
+	}
+	if cfg.Model != "gpt-dot" || cfg.BaseURL != "https://dotjuex.example" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoad_DoesNotReadProjectDotEnvByDefault(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeTextFile(t, filepath.Join(dir, ".env"), "PROVIDER_API_ID=anthropic\nPROVIDER_API_MODEL=claude\n")
+	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
+
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.Model != "gpt-yaml" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoad_OSEnvOverridesFile(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
+
+	t.Setenv("PROVIDER_API_ID", "anthropic")
+	t.Setenv("PROVIDER_API_BASE", "https://api.anthropic.com")
+	t.Setenv("PROVIDER_API_KEY", "k")
+	t.Setenv("PROVIDER_API_MODEL", "claude")
+
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "anthropic" || cfg.Model != "claude" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoad_DefaultsWorkDirToCwd(t *testing.T) {
+	prepareConfigTest(t)
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_BASE", "https://x")
+	t.Setenv("PROVIDER_API_KEY", "k")
+	t.Setenv("PROVIDER_API_MODEL", "m")
+	cfg, err := Load(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWD, _ := os.Getwd()
+	if cfg.WorkDir != wantWD {
+		t.Fatalf("WorkDir = %q, want %q", cfg.WorkDir, wantWD)
+	}
+}
+
+func TestResolveShellProfile_AutoWindowsPrefersPowerShell(t *testing.T) {
+	profile, err := ResolveShellProfile(ShellConfig{}, ShellResolveOptions{
+		RuntimeOS:   "windows",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+		LookPath: func(name string) (string, error) {
+			switch name {
+			case "pwsh":
+				return `C:\Tools\pwsh.exe`, nil
+			case "powershell.exe", "cmd.exe":
+				return `C:\Windows\System32\` + name, nil
+			default:
+				return "", os.ErrNotExist
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Profile != "powershell" || profile.Family != "powershell" || profile.Binary != `C:\Tools\pwsh.exe` {
+		t.Fatalf("profile = %+v", profile)
+	}
+	if strings.Join(profile.Args, " ") != "-NoProfile -Command" || profile.PathStyle != "windows" || profile.Source != "auto:windows" {
+		t.Fatalf("profile metadata = %+v", profile)
+	}
+	if profile.RuntimeOS != "windows" || profile.RuntimeArch != "amd64" {
+		t.Fatalf("runtime metadata = %+v", profile)
+	}
+}
+
+func TestResolveShellProfile_LinuxWSLStaysPOSIX(t *testing.T) {
+	profile, err := ResolveShellProfile(ShellConfig{}, ShellResolveOptions{
+		RuntimeOS:   "linux",
+		RuntimeArch: "amd64",
+		LookupEnv: func(key string) (string, bool) {
+			if key == "WSL_DISTRO_NAME" {
+				return "Ubuntu", true
+			}
+			return "", false
+		},
+		LookPath: func(name string) (string, error) {
+			if name == "bash" {
+				return "/usr/bin/bash", nil
+			}
+			return "", os.ErrNotExist
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Profile != "bash" || profile.Family != "posix" || profile.Environment != "wsl" {
+		t.Fatalf("profile = %+v, want WSL environment with POSIX shell", profile)
+	}
+}
+
+func TestResolveShellProfile_BuiltinRejectsNonBinaryOverrides(t *testing.T) {
+	_, err := ResolveShellProfile(ShellConfig{Profile: "powershell", Binary: "bash"}, ShellResolveOptions{
+		RuntimeOS:   "windows",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+		LookPath: func(name string) (string, error) {
+			if name == "bash" {
+				return `/usr/bin/bash`, nil
+			}
+			return "", os.ErrNotExist
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "shell.profile powershell cannot use binary bash") {
+		t.Fatalf("err = %v, want profile/binary mismatch", err)
+	}
+}
+
+func TestResolveShellProfile_CustomRequiresFields(t *testing.T) {
+	_, err := ResolveShellProfile(ShellConfig{Profile: "custom", Binary: os.Args[0], Family: "posix"}, ShellResolveOptions{
+		RuntimeOS:   "linux",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+		LookPath:    func(string) (string, error) { return "", os.ErrNotExist },
+	})
+	if err == nil || !strings.Contains(err.Error(), "custom") || !strings.Contains(err.Error(), "args") {
+		t.Fatalf("err = %v, want custom missing args error", err)
+	}
+}
+
+func TestResolveShellProfile_CustomPathWithSeparatorBecomesAbsolute(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	binary := filepath.Join("bin", "custom-shell")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	profile, err := ResolveShellProfile(ShellConfig{
+		Profile:   "custom",
+		Binary:    binary,
+		Family:    "posix",
+		Args:      []string{"-c"},
+		PathStyle: "posix",
+	}, ShellResolveOptions{
+		RuntimeOS:   "linux",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(profile.Binary) {
+		t.Fatalf("binary = %q, want absolute path", profile.Binary)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(profile.Binary), "/bin/custom-shell") {
+		t.Fatalf("binary = %q, want resolved custom shell path", profile.Binary)
+	}
+}
+
+func TestLoad_EnableUserAgentsResourcesDefaultsAndOverrides(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+
+	cfg, err := LoadForWorkDir(testModuleInventory(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableUserAgentsResources {
+		t.Fatal("EnableUserAgentsResources should default to true")
+	}
+
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), "enable_user_agents_resources: 0\n")
+	cfg, err = LoadForWorkDir(testModuleInventory(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableUserAgentsResources {
+		t.Fatal("home enable_user_agents_resources: 0 should disable personal ~/.agents resources")
+	}
+	if cfg.GlobalAgentsMDPath() != "" {
+		t.Fatalf("GlobalAgentsMDPath = %q, want empty", cfg.GlobalAgentsMDPath())
+	}
+	if cfg.HomeExtensionsDir() != filepath.Join(cfg.HomeJuexDir, "extensions") {
+		t.Fatalf("HomeExtensionsDir = %q, want home extensions", cfg.HomeExtensionsDir())
+	}
+	if got := cfg.SkillDirs(); len(got) != 1 || got[0] != filepath.Join(work, ".agents", "skills") {
+		t.Fatalf("SkillDirs = %v", got)
+	}
+	if got := cfg.MCPConfigPaths(); len(got) != 1 || got[0] != filepath.Join(work, ".agents", "mcp.json") {
+		t.Fatalf("MCPConfigPaths = %v", got)
+	}
+
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), "enable_user_agents_resources: 1\n")
+	cfg, err = LoadForWorkDir(testModuleInventory(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableUserAgentsResources {
+		t.Fatal("work-local enable_user_agents_resources: 1 should override global false")
+	}
+
+	override := filepath.Join(work, "override.yaml")
+	writeTextFile(t, override, "enable_user_agents_resources: false\n")
+	cfg, err = LoadFromFileForWorkDir(testModuleInventory(), override, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableUserAgentsResources {
+		t.Fatal("--config override false should win over work-local true")
+	}
+}
+
+func TestLoadFromFile_EnableUserAgentsResourcesBoolValues(t *testing.T) {
+	cases := map[string]bool{
+		"true":  true,
+		"false": false,
+		"1":     true,
+		"0":     false,
+	}
+	for value, want := range cases {
+		t.Run(value, func(t *testing.T) {
+			prepareConfigTest(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "juex.yaml")
+			writeTextFile(t, path, "enable_user_agents_resources: "+value+"\n")
+			cfg, err := LoadFromFile(testModuleInventory(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.EnableUserAgentsResources != want {
+				t.Fatalf("EnableUserAgentsResources = %v, want %v", cfg.EnableUserAgentsResources, want)
+			}
+		})
+	}
+}
+
+func TestLoadFromFile_EnableUserAgentsResourcesRejectsInvalidBool(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "juex.yaml")
+	writeTextFile(t, path, "enable_user_agents_resources: maybe\n")
+
+	_, err := LoadFromFile(testModuleInventory(), path)
+	if err == nil || !strings.Contains(err.Error(), "expected boolean value") {
+		t.Fatalf("err = %v, want boolean parse error", err)
+	}
+}
+
+func TestLoadForWorkDirNormalizesRelativeWorkDir(t *testing.T) {
+	prepareConfigTest(t)
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_BASE", "https://x")
+	t.Setenv("PROVIDER_API_KEY", "k")
+	t.Setenv("PROVIDER_API_MODEL", "m")
+	base := t.TempDir()
+	t.Chdir(base)
+	if err := os.MkdirAll("workspace", 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForWorkDir(testModuleInventory(), "workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWD := filepath.Join(base, "workspace")
+	if cfg.WorkDir != wantWD {
+		t.Fatalf("WorkDir = %q, want %q", cfg.WorkDir, wantWD)
+	}
+}
+
+func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
+	home := prepareConfigTest(t)
+	juexHome := filepath.Join(home, "alternate-juex")
+	t.Setenv("JUEX_HOME", juexHome)
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_BASE", "https://x")
+	t.Setenv("PROVIDER_API_KEY", "k")
+	t.Setenv("PROVIDER_API_MODEL", "m")
+	workDir := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForWorkDir(testModuleInventory(), workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HomeJuexDir != juexHome {
+		t.Fatalf("HomeJuexDir = %q, want %q", cfg.HomeJuexDir, juexHome)
+	}
+	canonicalHome, err := filepath.EvalSymlinks(juexHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentID == "" || cfg.AgentStateDir != filepath.Join(canonicalHome, "agents", cfg.AgentID) {
+		t.Fatalf("agent identity paths = id %q state %q", cfg.AgentID, cfg.AgentStateDir)
+	}
+	if cfg.AgentAddress.ID() != cfg.AgentID ||
+		cfg.AgentAddress.StateDir() != cfg.AgentStateDir ||
+		cfg.AgentAddress.EndpointLockPath() != filepath.Join(canonicalHome, ".locks", "endpoints", cfg.AgentID+".lock") {
+		t.Fatalf("agent address = id %q state %q endpoint lock %q", cfg.AgentAddress.ID(), cfg.AgentAddress.StateDir(), cfg.AgentAddress.EndpointLockPath())
+	}
+	if cfg.ThreadsDir() != filepath.Join(cfg.AgentStateDir, "threads") ||
+		cfg.ThreadIndexPath() != filepath.Join(cfg.AgentStateDir, "threads.index.json") ||
+		cfg.ObservablesStateDir() != filepath.Join(cfg.AgentStateDir, "observables") {
+		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
+	}
+	if cfg.ObservablesConfigPath() != filepath.Join(cfg.AgentStateDir, "observables.json") {
+		t.Fatalf("observable config path = %q", cfg.ObservablesConfigPath())
+	}
+	if cfg.WorkspaceConfigPath() != filepath.Join(workDir, ".juex", "juex.yaml") {
+		t.Fatalf("workspace config path = %q", cfg.WorkspaceConfigPath())
+	}
+	if cfg.HomeConfigPath() != filepath.Join(juexHome, "juex.yaml") ||
+		cfg.HomeExtensionsDir() != filepath.Join(juexHome, "extensions") {
+		t.Fatalf("home paths = config %q extensions %q", cfg.HomeConfigPath(), cfg.HomeExtensionsDir())
+	}
+	if cfg.HomeAgentsDir != filepath.Join(home, ".agents") {
+		t.Fatalf("HomeAgentsDir = %q, want existing user resource home", cfg.HomeAgentsDir)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("loading an alternate JUEX_HOME wrote to the default home: %v", err)
+	}
+}
+
+func TestLoadForWorkDirDoesNotCreateIdentityBeforeConfigValidation(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "unknown_field: true\n")
+
+	if _, err := LoadForWorkDir(testModuleInventory(), workDir); err == nil {
+		t.Fatal("expected invalid config error")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("agent registry exists before config validation: %v", err)
+	}
+}
+
+func TestLoadForWorkDirDoesNotCreateIdentityBeforeSemanticValidation(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [missing:model]\n")
+
+	if _, err := LoadForWorkDir(testModuleInventory(), workDir); err == nil {
+		t.Fatal("expected invalid model reference error")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("agent registry exists before semantic config validation: %v", err)
+	}
+}
+
+func TestLoadWithOptionsAgentStateNoneDoesNotUseWorkspaceFallback(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
+		WorkDir:    workDir,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentID != "" || cfg.AgentStateDir != "" || cfg.AgentAddress.ID() != "" || cfg.RuntimePaths().StateDir != "" {
+		t.Fatalf("state-free config resolved runtime state: id=%q dir=%q address=%q paths=%+v", cfg.AgentID, cfg.AgentStateDir, cfg.AgentAddress.ID(), cfg.RuntimePaths())
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state-free load wrote workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state-free load wrote registry: %v", err)
+	}
+}
+
+func TestLoadWithOptionsExistingRequiresRegisteredAgent(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(),
+		WorkDir:    workDir,
+		AgentState: AgentStateExisting,
+	})
+	var noAgent *agentstate.NoAgentError
+	if !errors.As(err, &noAgent) {
+		t.Fatalf("err = %v, want NoAgentError", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("existing-only load wrote workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("existing-only load wrote registry: %v", err)
+	}
+}
+
+func TestSkillDirs_AndPaths(t *testing.T) {
+	cfg := Config{ModuleInventory: testModuleInventory(),
+		HomeAgentsDir:             filepath.Join("/u", ".agents"),
+		HomeJuexDir:               filepath.Join("/u", ".juex"),
+		WorkDir:                   filepath.Join("/proj"),
+		EnableUserAgentsResources: true,
+	}
+	wantUserSkills := filepath.Join("/u", ".agents", "skills")
+	wantProjSkills := filepath.Join("/proj", ".agents", "skills")
+	wantUserExtensions := filepath.Join("/u", ".juex", "extensions")
+	wantProjExtensions := filepath.Join("/proj", ".juex", "extensions")
+	skills := cfg.SkillDirs()
+	if len(skills) != 2 || skills[0] != wantUserSkills || skills[1] != wantProjSkills {
+		t.Fatalf("skills = %v", skills)
+	}
+	if want := filepath.Join("/proj", ".juex", "threads"); cfg.ThreadsDir() != want {
+		t.Fatalf("threads dir = %q, want %q", cfg.ThreadsDir(), want)
+	}
+	if want := filepath.Join("/proj", ".juex", "threads.index.json"); cfg.ThreadIndexPath() != want {
+		t.Fatalf("history path = %q, want %q", cfg.ThreadIndexPath(), want)
+	}
+	if want := filepath.Join("/proj", ".juex", "juex.yaml"); cfg.WorkspaceConfigPath() != want {
+		t.Fatalf("workspace config = %q, want %q", cfg.WorkspaceConfigPath(), want)
+	}
+	if want := filepath.Join("/u", ".juex", "juex.yaml"); cfg.HomeConfigPath() != want {
+		t.Fatalf("home config = %q, want %q", cfg.HomeConfigPath(), want)
+	}
+	mcp := cfg.MCPConfigPaths()
+	wantUserMCP := filepath.Join("/u", ".agents", "mcp.json")
+	wantProjMCP := filepath.Join("/proj", ".agents", "mcp.json")
+	if len(mcp) != 2 || mcp[0] != wantUserMCP || mcp[1] != wantProjMCP {
+		t.Fatalf("mcp = %v", mcp)
+	}
+	dirs := cfg.AgentsMDDirs()
+	wantProjAgents := filepath.Join("/proj", ".agents")
+	if len(dirs) != 2 || dirs[0] != filepath.Clean("/proj") || dirs[1] != wantProjAgents {
+		t.Fatalf("agents md dirs = %v", dirs)
+	}
+	if cfg.ProjectAgentsDir() != wantProjAgents {
+		t.Fatalf("project agents dir = %q, want %q", cfg.ProjectAgentsDir(), wantProjAgents)
+	}
+	if cfg.HomeExtensionsDir() != wantUserExtensions || cfg.ProjectExtensionsDir() != wantProjExtensions {
+		t.Fatalf("extension dirs = home %q project %q", cfg.HomeExtensionsDir(), cfg.ProjectExtensionsDir())
+	}
+	runtimePaths := cfg.RuntimePaths()
+	if runtimePaths.WorkDir != filepath.Join("/proj") || runtimePaths.ThreadIndexPath != cfg.ThreadIndexPath() {
+		t.Fatalf("runtime paths = %+v", runtimePaths)
+	}
+	resourcePaths := cfg.ResourcePaths()
+	if resourcePaths.ProjectAgentsDir != wantProjAgents || resourcePaths.HomeExtensionsDir != wantUserExtensions || resourcePaths.ProjectExtensionsDir != wantProjExtensions || len(resourcePaths.SkillDirs) != 2 || len(resourcePaths.MCPConfigPaths) != 2 {
+		t.Fatalf("resource paths = %+v", resourcePaths)
+	}
+}
+
+func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
+	cfg := Config{ModuleInventory: testModuleInventory(), HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserAgentsResources: true}
+	if cfg.ThreadsDir() != "" || cfg.ThreadIndexPath() != "" || cfg.WorkspaceConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
+		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
+	}
+	if cfg.ProjectExtensionsDir() != "" {
+		t.Fatalf("empty WorkDir should yield empty project extension dir: %q", cfg.ProjectExtensionsDir())
+	}
+	if cfg.HomeConfigPath() != filepath.Join("/u", ".juex", "juex.yaml") {
+		t.Fatalf("home config = %q", cfg.HomeConfigPath())
+	}
+	if cfg.HomeExtensionsDir() != filepath.Join("/u", ".juex", "extensions") {
+		t.Fatalf("home extension dir = %q", cfg.HomeExtensionsDir())
+	}
+	if len(cfg.AgentsMDDirs()) != 0 {
+		t.Fatalf("expected empty AgentsMDDirs, got %v", cfg.AgentsMDDirs())
+	}
+	wantSkills := filepath.Join("/u", ".agents", "skills")
+	skills := cfg.SkillDirs()
+	if len(skills) != 1 || skills[0] != wantSkills {
+		t.Fatalf("skills = %v", skills)
+	}
+	wantMCP := filepath.Join("/u", ".agents", "mcp.json")
+	mcp := cfg.MCPConfigPaths()
+	if len(mcp) != 1 || mcp[0] != wantMCP {
+		t.Fatalf("mcp = %v", mcp)
+	}
+}
+
+func TestRuntimePathsMediaDirRequiresExplicitAgentStateDir(t *testing.T) {
+	workDir := filepath.Join("/proj")
+	manual := Config{ModuleInventory: testModuleInventory(), WorkDir: workDir}
+	if got := manual.RuntimePaths().MediaDir; got != "" {
+		t.Fatalf("manual MediaDir = %q, want empty", got)
+	}
+	stateDir := filepath.Join("/state", "agents", "abcdef")
+	resident := Config{ModuleInventory: testModuleInventory(), WorkDir: workDir, AgentStateDir: stateDir}
+	if got, want := resident.RuntimePaths().MediaDir, filepath.Join(stateDir, "media"); got != want {
+		t.Fatalf("resident MediaDir = %q, want %q", got, want)
+	}
+}
+
+func TestPaths_DisabledUserAgentsResourcesOmitsHomeResources(t *testing.T) {
+	cfg := Config{ModuleInventory: testModuleInventory(),
+		HomeAgentsDir:             filepath.Join("/u", ".agents"),
+		HomeJuexDir:               filepath.Join("/u", ".juex"),
+		WorkDir:                   filepath.Join("/proj"),
+		EnableUserAgentsResources: false,
+	}
+	if cfg.GlobalAgentsMDPath() != "" {
+		t.Fatalf("GlobalAgentsMDPath = %q, want empty", cfg.GlobalAgentsMDPath())
+	}
+	if cfg.HomeExtensionsDir() != filepath.Join("/u", ".juex", "extensions") {
+		t.Fatalf("HomeExtensionsDir = %q, want home extensions", cfg.HomeExtensionsDir())
+	}
+	if cfg.ProjectExtensionsDir() != filepath.Join("/proj", ".juex", "extensions") {
+		t.Fatalf("ProjectExtensionsDir = %q", cfg.ProjectExtensionsDir())
+	}
+	if got := cfg.SkillDirs(); len(got) != 1 || got[0] != filepath.Join("/proj", ".agents", "skills") {
+		t.Fatalf("SkillDirs = %v", got)
+	}
+	if got := cfg.MCPConfigPaths(); len(got) != 1 || got[0] != filepath.Join("/proj", ".agents", "mcp.json") {
+		t.Fatalf("MCPConfigPaths = %v", got)
+	}
+}
+
+func TestProviderSelection_RequiresProviderSelector(t *testing.T) {
+	cfg := Config{ModuleInventory: testModuleInventory(), APIKey: "x", Model: "m"}
+	if _, err := cfg.ProviderSelection().ProviderProfile(); err == nil {
+		t.Fatal("expected error for empty provider selector")
+	}
+}
+
+func TestRuntimeLimits_ResolvedValues(t *testing.T) {
+	cfg := Config{ModuleInventory: testModuleInventory(),
+		ContextWindow: 1234,
+		Compaction:    DefaultCompactionConfig(),
+		ToolOutput: ToolOutputConfig{
+			InlineMaxBytes:   456,
+			PreviewHeadBytes: 78,
+			PreviewTailBytes: 90,
+		},
+	}
+	limits := cfg.RuntimeLimits()
+	if limits.ContextWindow != 1234 {
+		t.Fatalf("runtime limits = %+v", limits)
+	}
+	if !limits.Compaction.Enabled {
+		t.Fatalf("compaction = %+v", limits.Compaction)
+	}
+	if limits.ToolOutput != cfg.ToolOutput {
+		t.Fatalf("tool output = %+v, want %+v", limits.ToolOutput, cfg.ToolOutput)
+	}
+	if limits.NotifyModelChanges {
+		t.Fatalf("model change notifications enabled by default: %+v", limits)
+	}
+}
+
+func TestLoadFromFile_ThinkingEffort(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+        thinking_effort: low
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingEffort != "low" {
+		t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, "low")
+	}
+}
+
+func TestLoadFromFile_ThinkingEffortAllowedValues(t *testing.T) {
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
+		t.Run(effort, func(t *testing.T) {
+			prepareConfigTest(t)
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "juex.yaml")
+			body := fmt.Sprintf(`models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+        thinking_effort: %s
+`, effort)
+			writeTextFile(t, configPath, body)
+
+			cfg, err := LoadFromFile(testModuleInventory(), configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ThinkingEffort != effort {
+				t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, effort)
+			}
+		})
+	}
+}
+
+func TestLoadFromFile_TrimsThinkingEffort(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+        thinking_effort: " high "
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingEffort != "high" {
+		t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, "high")
+	}
+}
+
+func TestLoadFromFile_RejectsInvalidThinkingEffort(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+        thinking_effort: turbo
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil {
+		t.Fatal("expected invalid thinking_effort error")
+	}
+	if msg := err.Error(); !strings.Contains(msg, `invalid thinking_effort "turbo"`) || !strings.Contains(msg, allowedThinkingEffortText) {
+		t.Fatalf("error = %q", msg)
+	}
+}
+
+func TestLoadFromFile_TrimsThinkingEffortEnv(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+	t.Setenv("PROVIDER_THINKING_EFFORT", " medium ")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingEffort != "medium" {
+		t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, "medium")
+	}
+}
+
+func TestLoadFromFile_RejectsInvalidThinkingEffortEnv(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+	t.Setenv("PROVIDER_THINKING_EFFORT", "turbo")
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil {
+		t.Fatal("expected invalid PROVIDER_THINKING_EFFORT error")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "PROVIDER_THINKING_EFFORT") || !strings.Contains(msg, allowedThinkingEffortText) {
+		t.Fatalf("error = %q", msg)
+	}
+}
+
+func TestLoadFromFile_ContextWindow(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+        context_window: 128000
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContextWindow != 128000 {
+		t.Fatalf("ContextWindow = %d, want 128000", cfg.ContextWindow)
+	}
+}
+
+func TestLoadFromFile_CompactionConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+compaction:
+  enabled: false
+  instructions: Preserve the current release gate and exact verification command.
+  reserve_tokens: 1000
+  keep_recent_tokens: 2000
+  summary_model: compact:gpt-4-mini
+  summary_max_tokens: 777
+  tool_result_max_chars: 888
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Compaction.Enabled || cfg.Compaction.Instructions != "Preserve the current release gate and exact verification command." || cfg.Compaction.ReserveTokens != 1000 || cfg.Compaction.KeepRecentTokens != 2000 || cfg.Compaction.SummaryModel != "compact:gpt-4-mini" || cfg.Compaction.SummaryMaxTokens != 777 || cfg.Compaction.ToolResultMaxChars != 888 {
+		t.Fatalf("Compaction = %+v", cfg.Compaction)
+	}
+}
+
+func TestLoadFromFile_ToolOutputConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+compaction:
+  enabled: false
+tool_output:
+  inline_max_bytes: 1234
+  preview_head_bytes: 234
+  preview_tail_bytes: 345
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Compaction.Enabled {
+		t.Fatal("compaction enabled = true, want false")
+	}
+	if cfg.ToolOutput.InlineMaxBytes != 1234 || cfg.ToolOutput.PreviewHeadBytes != 234 || cfg.ToolOutput.PreviewTailBytes != 345 {
+		t.Fatalf("ToolOutput = %+v", cfg.ToolOutput)
+	}
+}
+
+func TestLoadFromFile_RejectsToolOutputKeysUnderCompaction(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+compaction:
+  tool_result_inline_max_bytes: 1234
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil || !strings.Contains(err.Error(), "tool_result_inline_max_bytes") {
+		t.Fatalf("LoadFromFile error = %v, want rejected old compaction key", err)
+	}
+}
+
+func TestApplyCompactionConfigExplicitEmptyClearsInstructions(t *testing.T) {
+	cfg := Config{ModuleInventory: testModuleInventory(), Compaction: DefaultCompactionConfig()}
+	global := "Preserve the global release focus."
+	applyCompactionConfig(&cfg, compactionConfig{Instructions: &global})
+	if cfg.Compaction.Instructions != global {
+		t.Fatalf("global instructions = %q", cfg.Compaction.Instructions)
+	}
+
+	empty := ""
+	applyCompactionConfig(&cfg, compactionConfig{Instructions: &empty})
+	if cfg.Compaction.Instructions != "" {
+		t.Fatalf("explicit empty instructions did not clear inherited value: %q", cfg.Compaction.Instructions)
+	}
+}
+
+func TestConfig_ProviderProfileForModelRef(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://main.example.com
+    api_key: sk-main
+    models:
+      - id: gpt-4
+  - id: compact
+    protocol: openai/chat
+    base_url: https://compact.example.com
+    api_key: sk-compact
+    models:
+      - id: gpt-4-mini
+        thinking_effort: low
+compaction:
+  summary_model: compact:gpt-4-mini
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := cfg.ProviderProfileForModelRef(cfg.Compaction.SummaryModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "compact" || profile.Protocol != llm.ProtocolOpenAIChat || profile.BaseURL != "https://compact.example.com" || profile.APIKey != "sk-compact" || profile.Model != "gpt-4-mini" || profile.ThinkingEffort != "low" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
+func TestConfig_ResolvedModelForRefIncludesContextWindow(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [main:gpt-large]
+providers:
+  - id: main
+    protocol: openai/chat
+    base_url: https://main.example.com
+    api_key: sk-main
+    models:
+      - id: gpt-large
+        context_window: 256000
+  - id: compact
+    protocol: openai/chat
+    base_url: https://compact.example.com
+    api_key: sk-compact
+    models:
+      - id: gpt-small
+        context_window: 30000
+compaction:
+  summary_model: compact:gpt-small
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := cfg.ResolvedModelForRef(cfg.Compaction.SummaryModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Ref != "compact:gpt-small" || resolved.ContextWindow != 30000 || resolved.Selection.Model != "gpt-small" {
+		t.Fatalf("resolved summary model = %+v", resolved)
+	}
+}
+
+func TestConfig_ProviderProfileForModelRefKeepsEnvCredentials(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [local:gpt-4]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://main.example.com
+    models:
+      - id: gpt-4
+      - id: gpt-4-mini
+compaction:
+  summary_model: local:gpt-4-mini
+`
+	writeTextFile(t, configPath, body)
+	t.Setenv("PROVIDER_API_BASE", "https://env.example.com")
+	t.Setenv("PROVIDER_API_KEY", "sk-env")
+
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := cfg.ProviderProfileForModelRef(cfg.Compaction.SummaryModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "local" || profile.Protocol != llm.ProtocolOpenAIChat || profile.BaseURL != "https://env.example.com" || profile.APIKey != "sk-env" || profile.Model != "gpt-4-mini" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
+func TestLoadFromFile_CompactionDefaults(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 0 || cfg.Compaction.KeepRecentTokens != 0 || cfg.Compaction.SummaryMaxTokens != 0 || cfg.Compaction.ToolResultMaxChars != 0 {
+		t.Fatalf("Compaction defaults = %+v", cfg.Compaction)
+	}
+	if cfg.ToolOutput.InlineMaxBytes != 0 || cfg.ToolOutput.PreviewHeadBytes != 0 || cfg.ToolOutput.PreviewTailBytes != 0 {
+		t.Fatalf("ToolOutput defaults = %+v", cfg.ToolOutput)
+	}
+}
+
+func TestLoadFromFile_RejectsUnknownRuntimeKey(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  max_duration: 15m
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil || !strings.Contains(err.Error(), "runtime.max_duration") {
+		t.Fatalf("LoadFromFile error = %v, want runtime.max_duration", err)
+	}
+}
+
+func TestLoadFromFile_PendingInputRuntimeTTL(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  pending_input_ttl: 30m
+  external_event_ttl: 48h
+  tool_timeout: 2m
+  max_output_tokens: 8192
+  show_builtin_policy_traces: true
+  notify_model_changes: true
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := cfg.RuntimeLimits()
+	if limits.PendingInputTTL != 30*time.Minute || limits.ExternalEventTTL != 48*time.Hour || limits.ToolTimeout != 2*time.Minute {
+		t.Fatalf("runtime TTLs = %+v", limits)
+	}
+	if limits.MaxOutputTokens != 8192 {
+		t.Fatalf("runtime max output tokens = %d, want 8192", limits.MaxOutputTokens)
+	}
+	if !limits.ShowBuiltinPolicyTraces {
+		t.Fatalf("builtin policy traces should be enabled: %+v", limits)
+	}
+	if !limits.NotifyModelChanges {
+		t.Fatalf("model change notifications should be enabled: %+v", limits)
+	}
+}
+
+func TestLoadFromFile_ModelChangeNotificationsLayeredOverride(t *testing.T) {
+	home := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), `models: [openai:gpt-4]
+providers:
+  - id: openai
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  notify_model_changes: true
+`)
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), `runtime:
+  notify_model_changes: false
+`)
+
+	cfg, err := LoadForWorkDir(testModuleInventory(), workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RuntimeLimits().NotifyModelChanges {
+		t.Fatalf("workspace false did not override Home true: %+v", cfg.RuntimeLimits())
+	}
+}
+
+func TestLoadFromFile_InvalidModelChangeNotification(t *testing.T) {
+	prepareConfigTest(t)
+	configPath := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, configPath, `models: [openai:gpt-4]
+providers:
+  - id: openai
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  notify_model_changes: sometimes
+`)
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil || !strings.Contains(err.Error(), "runtime.notify_model_changes") {
+		t.Fatalf("err = %v, want runtime.notify_model_changes parse error", err)
+	}
+}
+
+func TestLoadFromFile_InvalidPendingInputRuntimeTTL(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  pending_input_ttl: soon
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil || !strings.Contains(err.Error(), "pending_input_ttl") {
+		t.Fatalf("err = %v, want pending_input_ttl parse error", err)
+	}
+}
+
+func TestLoadFromFile_InvalidToolTimeout(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-4]
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  tool_timeout: soon
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil || !strings.Contains(err.Error(), "tool_timeout") {
+		t.Fatalf("err = %v, want tool_timeout parse error", err)
+	}
+}
+
+func TestLoadFromFile_ContextWindowDefaultAndEnvOverride(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+	t.Setenv("PROVIDER_CONTEXT_WINDOW", "64000")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContextWindow != 64000 {
+		t.Fatalf("ContextWindow = %d, want env override 64000", cfg.ContextWindow)
+	}
+
+	t.Setenv("PROVIDER_CONTEXT_WINDOW", "")
+	cfg, err = LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContextWindow != DefaultContextWindow {
+		t.Fatalf("ContextWindow = %d, want default %d", cfg.ContextWindow, DefaultContextWindow)
+	}
+}
+
+func TestLoadFromFile_ThinkingEffortEmpty(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingEffort != "" {
+		t.Fatalf("ThinkingEffort = %q, want empty", cfg.ThinkingEffort)
+	}
+}
+
+func TestLoadFromFile_ProviderProfile(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [deepseek:deepseek-chat]
+providers:
+  - id: deepseek
+    protocol: openai/chat
+    base_url: https://api.deepseek.com
+    api_key: sk-x
+    headers:
+      X-Provider: juex
+    query:
+      beta: "1"
+    capabilities:
+      tools: false
+      vision: false
+      reasoning_replay: true
+    compat:
+      reasoning_replay_fields:
+        - reasoning_content
+      codex_transport: auto
+    models:
+      - id: deepseek-chat
+        context_window: 64000
+        headers:
+          X-Model: deepseek-chat
+        capabilities:
+          vision: true
+          max_output_tokens: false
+        compat:
+          codex_transport: websocket-cached
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "deepseek" || cfg.ProviderProtocol != "openai/chat" {
+		t.Fatalf("provider identity = id:%q protocol:%q", cfg.ProviderID, cfg.ProviderProtocol)
+	}
+	if cfg.ProviderHeaders["X-Provider"] != "juex" || cfg.ProviderHeaders["X-Model"] != "deepseek-chat" || cfg.ProviderQuery["beta"] != "1" {
+		t.Fatalf("headers/query = %+v / %+v", cfg.ProviderHeaders, cfg.ProviderQuery)
+	}
+	if cfg.ContextWindow != 64000 {
+		t.Fatalf("ContextWindow = %d", cfg.ContextWindow)
+	}
+	if cfg.ProviderCapabilities.Tools == nil || *cfg.ProviderCapabilities.Tools {
+		t.Fatalf("tools override = %+v, want false", cfg.ProviderCapabilities.Tools)
+	}
+	if cfg.ProviderCapabilities.MaxOutputTokens == nil || *cfg.ProviderCapabilities.MaxOutputTokens {
+		t.Fatalf("max_output_tokens override = %+v, want false", cfg.ProviderCapabilities.MaxOutputTokens)
+	}
+	if cfg.ProviderCapabilities.Vision == nil || !*cfg.ProviderCapabilities.Vision {
+		t.Fatalf("vision override = %+v, want true", cfg.ProviderCapabilities.Vision)
+	}
+	if got := cfg.ProviderCompat.ReasoningReplayFields; len(got) != 1 || got[0] != "reasoning_content" {
+		t.Fatalf("compat = %+v", cfg.ProviderCompat)
+	}
+	if cfg.ProviderCompat.CodexTransport != "websocket-cached" {
+		t.Fatalf("codex transport = %q", cfg.ProviderCompat.CodexTransport)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "deepseek" || profile.Protocol != "openai/chat" || profile.Capabilities.Tools || !profile.Capabilities.Vision || profile.Capabilities.MaxOutputTokens || profile.Compat.CodexTransport != "websocket-cached" {
+		t.Fatalf("profile = %+v", profile)
+	}
+	selection := cfg.ProviderSelection()
+	if selection.ID != "deepseek" || selection.Model != "deepseek-chat" || selection.Headers["X-Model"] != "deepseek-chat" {
+		t.Fatalf("provider selection = %+v", selection)
+	}
+	selectedProfile, err := selection.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selectedProfile.ID != profile.ID || selectedProfile.Protocol != profile.Protocol || selectedProfile.Model != profile.Model {
+		t.Fatalf("selected profile = %+v, want %+v", selectedProfile, profile)
+	}
+}
+
+func TestLoadFromFile_ProviderCompatRejectsInvalidCodexTransport(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [openai:gpt-test]
+providers:
+  - id: openai
+    api_key: sk-x
+    compat:
+      codex_transport: sideways
+    models:
+      - id: gpt-test
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(testModuleInventory(), configPath)
+	if err == nil || !strings.Contains(err.Error(), "unsupported codex transport") {
+		t.Fatalf("err = %v, want invalid codex transport", err)
+	}
+}
+
+func TestLoadFromFile_ProviderVisionCapabilitySurvivesMerge(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [local:vision-model]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://local.example
+    api_key: sk-local
+    capabilities:
+      vision: true
+    models:
+      - id: vision-model
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderCapabilities.Vision == nil || !*cfg.ProviderCapabilities.Vision {
+		t.Fatalf("provider vision override = %+v, want true", cfg.ProviderCapabilities.Vision)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !profile.Capabilities.Vision {
+		t.Fatalf("profile capabilities = %+v, want provider-level vision enabled", profile.Capabilities)
+	}
+}
+
+func TestLoadFromFile_OpenAICodexIDUsesDefaultCodexAuth(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, "codex-home")
+	writeTextFile(t, filepath.Join(codexHome, "auth.json"), `{"auth_mode":"apiKey","OPENAI_API_KEY":"sk-codex"}`)
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeOpenAICodexConfig(t, configPath, "")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai-codex" || cfg.APIKey != "sk-codex" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Protocol != "openai-codex/responses" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
+func TestLoadFromFile_ProviderProfileEnvOverrides(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://file.example", "sk-file", "gpt-file")
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_PROTOCOL", "openai/responses")
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.ProviderProtocol != "openai/responses" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Protocol != "openai/responses" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
+func TestLoadFromFile_CodexAuthUsesDefaultCachedAPIKey(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, "codex-home")
+	writeTextFile(t, filepath.Join(codexHome, "auth.json"), `{"auth_mode":"apiKey","OPENAI_API_KEY":"sk-codex"}`)
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeOpenAICodexConfig(t, configPath, "")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "sk-codex" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_CodexAuthUsesChatGPTTokenHeaders(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, "codex-home")
+	idToken := fakeCodexIDToken(t, map[string]any{
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id":         "acct-from-jwt",
+			"chatgpt_account_is_fedramp": true,
+		},
+	})
+	authJSON := map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]any{
+			"access_token": "chatgpt-access",
+			"id_token":     idToken,
+		},
+	}
+	authBytes, err := json.Marshal(authJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTextFile(t, filepath.Join(codexHome, "auth.json"), string(authBytes))
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeOpenAICodexConfig(t, configPath, "")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "chatgpt-access" {
+		t.Fatalf("APIKey = %q", cfg.APIKey)
+	}
+	if cfg.ProviderID != "openai-codex" || cfg.ProviderProtocol != "openai-codex/responses" {
+		t.Fatalf("provider route = id:%q protocol:%q", cfg.ProviderID, cfg.ProviderProtocol)
+	}
+	if cfg.ProviderHeaders["ChatGPT-Account-ID"] != "acct-from-jwt" || cfg.ProviderHeaders["X-OpenAI-Fedramp"] != "true" {
+		t.Fatalf("headers = %+v", cfg.ProviderHeaders)
+	}
+}
+
+func TestLoadFromFile_CodexAuthExplicitAPIKeyWins(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeOpenAICodexConfig(t, configPath, "sk-explicit")
+	t.Setenv("CODEX_HOME", filepath.Join(dir, "missing-codex-home"))
+
+	cfg, err := LoadFromFile(testModuleInventory(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "sk-explicit" {
+		t.Fatalf("APIKey = %q", cfg.APIKey)
+	}
+}
+
+func TestLoadFromFile_CodexAuthRuntimeConfigCanBeOverridden(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	writeOpenAICodexConfig(t, filepath.Join(work, ".juex", "juex.yaml"), "")
+	overrideConfig := filepath.Join(work, "override.yaml")
+	writeJuexConfig(t, overrideConfig, "openai", "https://example.com", "sk-override", "gpt-test")
+
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), overrideConfig, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "sk-override" || cfg.Model != "gpt-test" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_CustomProtocolOverridesRuntimePresetIdentity(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	writeOpenAICodexConfig(t, filepath.Join(work, ".juex", "juex.yaml"), "")
+	overrideConfig := filepath.Join(work, "override.yaml")
+	body := `models: [local-proxy:custom-model]
+providers:
+  - id: local-proxy
+    protocol: openai/chat
+    base_url: https://example.com
+    api_key: sk-override
+    models:
+      - id: custom-model
+`
+	writeTextFile(t, overrideConfig, body)
+
+	cfg, err := LoadFromFileForWorkDir(testModuleInventory(), overrideConfig, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "local-proxy" || cfg.ProviderProtocol != "openai/chat" {
+		t.Fatalf("cfg identity = id:%q protocol:%q", cfg.ProviderID, cfg.ProviderProtocol)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "local-proxy" || profile.Protocol != "openai/chat" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
+func TestLoadFromFile_CodexAuthMissingCredentialErrors(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, "codex-home")
+	writeTextFile(t, filepath.Join(codexHome, "auth.json"), `{"auth_mode":"chatgpt","tokens":{}}`)
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeOpenAICodexConfig(t, configPath, "")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	if _, err := LoadFromFile(testModuleInventory(), configPath); err == nil {
+		t.Fatal("expected missing codex credential error")
+	}
+}
+
+func prepareConfigTest(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Chdir(home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+	t.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex-home"))
+	return home
+}
+
+func writeJuexConfig(t *testing.T, path, id, base, key, model string) {
+	t.Helper()
+	body := "models: [" + id + ":" + model + "]\n" +
+		"providers:\n" +
+		"  - id: " + id + "\n" +
+		"    base_url: " + base + "\n" +
+		"    api_key: " + key + "\n" +
+		"    models:\n" +
+		"      - id: " + model + "\n"
+	writeTextFile(t, path, body)
+}
+
+func writeOpenAICodexConfig(t *testing.T, path, apiKey string) {
+	t.Helper()
+	body := "models: [openai-codex:gpt-test]\n" +
+		"providers:\n" +
+		"  - id: openai-codex\n"
+	if apiKey != "" {
+		body += "    api_key: " + apiKey + "\n"
+	}
+	body += "    models:\n" +
+		"      - id: gpt-test\n"
+	writeTextFile(t, path, body)
+}
+
+func writeTextFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func quoteYAMLString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func fakeCodexIDToken(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]any{"alg": "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+}

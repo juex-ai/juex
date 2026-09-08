@@ -17,7 +17,7 @@ pnpm --dir frontend dev
 ```
 
 Vite 把 Fleet 与 selected-Agent API 请求代理到本地 Fleet server。生产输出
-从 `frontend/dist/` 复制到 `internal/web/dist/`，不要直接编辑 embedded output。
+从 `frontend/dist/` 复制到 `internal/entrypoints/webassets/dist/`，不要直接编辑 embedded output。
 
 前端验证门禁会针对生产构建运行浏览器交互测试，因此需要本地 Chrome 可执行文件。
 如果 Chrome 不在平台标准位置，请设置 `CHROME_PATH`。
@@ -26,6 +26,9 @@ Vite 把 Fleet 与 selected-Agent API 请求代理到本地 Fleet server。生�
 
 - `src/pages/` 负责 route 级 Fleet、Thread 和 Runtime view。
 - `src/components/` 负责可复用展示与交互。
+- `src/modules/` 负责内置模块 renderer 和 resource adapter。静态注册表把服务端
+  贡献解析到 Thread 状态区和可选文件根，页面不重新解释模块配置。文件 adapter
+  绑定明确的 Agent/Thread 范围，仅在对应根被选中时挂载。
 - `src/lib/` 负责 client read model 与 stream projection。
 - `src/api.ts` 是类型化 Fleet/Agent transport 边界。
 - `src/index.css` 负责生产 design token。

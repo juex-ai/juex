@@ -7,13 +7,13 @@ HTTP route、CLI 展示或原生 service 安装。
 
 ## 边界
 
-- `internal/agentstate` 负责注册身份与 Workspace binding。
-- `internal/endpoint` 校验进程与 Runtime Instance 身份，并提供 maintenance guard。
-- `internal/processmetrics` 提供 best-effort 进程指标。
-- `internal/config` 校验 effective 与 replacement config。
-- `internal/fleetweb` 负责 HTTP、JSON、reverse proxy 与 embedded Web。
-- `internal/cli` 负责 prompt、输出与 exit category。
-- `internal/fleetservice` 负责 launchd、systemd-user 与 termux-services。
+- `internal/framework/agentstate` 负责注册身份与 Workspace binding。
+- `internal/framework/endpoint` 校验进程与 Runtime Instance 身份，并提供 maintenance guard。
+- `internal/foundation/processmetrics` 提供 best-effort 进程指标。
+- `internal/app/config` 校验 effective 与 replacement config。
+- `internal/entrypoints/fleethttp` 负责 HTTP、JSON、reverse proxy 与 embedded Web。
+- `internal/entrypoints/cli` 负责 prompt、输出与 exit category。
+- `internal/fleet/service` 负责 launchd、systemd-user 与 termux-services。
 
 ## 不变量
 

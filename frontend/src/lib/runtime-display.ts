@@ -1,8 +1,6 @@
 import type {
   ContextUsage,
-  GoalStatusSnapshot,
   MCPServerInfo,
-  NotesSnapshot,
   RuntimeHooksStatus,
   TokenUsage,
 } from "../types";
@@ -98,59 +96,6 @@ export function runtimeHooksSummaryLabel(hooks?: RuntimeHooksStatus): string {
 export function runtimeHookCommandLabel(command?: string[]): string {
   if (!command || command.length === 0) return "-";
   return command.join(" ");
-}
-
-export function runtimeGoalBadgeLabel(goal?: GoalStatusSnapshot): string {
-  return `goal ${goal?.status || "none"}`;
-}
-
-export function runtimeGoalIsActive(goal?: GoalStatusSnapshot): boolean {
-  return Boolean(goal?.status && goal.status !== "none");
-}
-
-export function runtimeGoalContinuationLabel(goal?: GoalStatusSnapshot): string {
-  if (!goal) return "-";
-  return String(goal.continuation_count ?? 0);
-}
-
-export function runtimeThreadStateBadgeLabel(
-  goal?: GoalStatusSnapshot,
-  notes?: NotesSnapshot,
-): string {
-  if (runtimeGoalIsActive(goal)) {
-    return `goal ${goal?.status}`;
-  }
-  const progress = notesCheckboxProgress(notes);
-  if (progress.total > 0) {
-    return `notes ${progress.completed}/${progress.total}`;
-  }
-  if (notes?.content?.trim()) {
-    return "notes active";
-  }
-  return "goal idle";
-}
-
-export function runtimeThreadStateIsActive(
-  goal?: GoalStatusSnapshot,
-  notes?: NotesSnapshot,
-): boolean {
-  return runtimeGoalIsActive(goal) || Boolean(notes?.content?.trim());
-}
-
-export interface NotesCheckboxProgress {
-  completed: number;
-  total: number;
-  percent: number;
-}
-
-export function notesCheckboxProgress(notes?: NotesSnapshot): NotesCheckboxProgress {
-  let completed = 0;
-  let total = 0;
-  for (const match of notes?.content?.matchAll(/^\s*-\s+\[([ xX])\]\s+/gm) ?? []) {
-    total += 1;
-    if (match[1].toLowerCase() === "x") completed += 1;
-  }
-  return { completed, total, percent: total > 0 ? (completed / total) * 100 : 0 };
 }
 
 export function formatRuntimeTimestamp(value?: string): string {

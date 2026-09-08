@@ -6,9 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
 type checkpointModule struct {
@@ -18,10 +20,12 @@ type checkpointModule struct {
 }
 
 func (*checkpointModule) ID() runtimemodule.ID { return "checkpoint-fixture" }
+
 func (m *checkpointModule) CompactionContribution(context.Context) (runtimemodule.CompactionContribution, error) {
 	m.reads++
 	return m.part, nil
 }
+
 func (m *checkpointModule) Context(context.Context, runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
 	if m.runtimeText == "" {
 		return nil, nil
@@ -62,7 +66,7 @@ func TestCompactionModuleProtectsOnlyItsSectionBeforeGenerationCommit(t *testing
 				{Message: llm.TextMessage(llm.RoleAssistant, ""), StopReason: llm.StopMaxTokens},
 				{Message: llm.TextMessage(llm.RoleAssistant, summary), StopReason: llm.StopEndTurn},
 			}}
-			cfg := config.Config{Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000}
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000}
 			cfg.Compaction = config.DefaultCompactionConfig()
 			cfg.Compaction.KeepRecentTokens = 1
 			if name == "over-context-budget" {

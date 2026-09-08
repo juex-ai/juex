@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 func TestContractOracleValidatesAgentSmokeArtifacts(t *testing.T) {

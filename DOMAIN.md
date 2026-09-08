@@ -10,7 +10,7 @@ storage implementation belong in [ARCHITECTURE.md](ARCHITECTURE.md).
 | Owner | Responsibility |
 | --- | --- |
 | Workspace | User-authored project files, workspace configuration, Skills, and Hooks. |
-| Agent | Long-lived identity, Workspace ownership, configuration overlay, rebuildable Thread list index, active and archived Threads, media, logs, Observable definitions and state, and Extension state. |
+| Agent | Long-lived identity, Workspace ownership, configuration overlay, rebuildable Thread list index, active and archived Threads, media, logs, durable Memory, Observable definitions and state, and Extension state. |
 | Thread | Identity, topology, lifecycle, Context Generation registry, pending Inputs, Turns, messages, Events, Usage, and spool. |
 | Thread Module | Optional Thread-scoped state such as Goal, Notes, and Scratchpad, including its resources, context, and Generation lifecycle behavior. |
 | Agent Runtime | Replaceable process resources: Providers, MCP clients, Tools, Observables, schedulers, and live subscriptions. |
@@ -41,6 +41,10 @@ A Worker uses the same Thread model:
 - history, context, work state, pending Inputs, and subscriptions are independent;
 - it may use shared Agent resources, but it does not receive Observations.
 
+The `worker-threads` Module controls Worker execution, not Thread storage.
+When disabled, pending Input recovery pauses while history, retention management,
+and host `/new` and `/compact` remain available.
+
 The creator and result destination are not Worker properties. Any interested
 caller subscribes to the Worker. Parent identity expresses topology, not
 delivery routing.
@@ -63,6 +67,15 @@ A subscription is an observer-owned replay/live cursor over one continuous
 Thread Event sequence, even when that sequence spans Context Generations. It
 is not inherently attached to an Input, Turn, or client type. Higher-level
 waiters may follow an `input_id` to the Turn that consumes it.
+
+Optional input tracking distinguishes delivery from the model's judgement
+that an input has been handled. Direct user inputs accepted while enabled
+remain unchecked until the model checks them. A settled Turn does not imply
+a checked input, and an unchecked settled input is not a queued execution.
+Failures and compaction preserve unchecked inputs. Disablement retains existing
+records while stopping new registration and reminders; these core input records
+are not disposable Goal/Notes resources. Host `/new` starts a new work scope,
+while compaction retains it. Checking cannot cancel execution or prove correctness.
 
 ## Context Generations And Thread Work State
 

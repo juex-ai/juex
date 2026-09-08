@@ -17,7 +17,7 @@ pnpm --dir frontend dev
 ```
 
 Vite proxies Fleet and selected-Agent API requests to the local Fleet server.
-Production output is copied from `frontend/dist/` into `internal/web/dist/`;
+Production output is copied from `frontend/dist/` into `internal/entrypoints/webassets/dist/`;
 do not edit embedded output directly.
 
 The frontend verification gate runs browser interactions against the production
@@ -28,6 +28,10 @@ not installed in its standard platform location.
 
 - `src/pages/` owns route-level Fleet, Thread, and Runtime views.
 - `src/components/` owns reusable presentation and interaction.
+- `src/modules/` owns built-in module renderers and resource adapters. Its static
+  registry resolves server contributions into Thread status and optional file
+  roots; pages do not reinterpret module configuration. File adapters bind an
+  explicit Agent/Thread scope and mount only for the selected root.
 - `src/lib/` owns client-side read models and stream projection.
 - `src/api.ts` is the typed Fleet/Agent transport boundary.
 - `src/index.css` owns production design tokens.

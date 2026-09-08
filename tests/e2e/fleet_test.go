@@ -21,10 +21,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	runtimeengine "github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func processExitCode(err error) int {
@@ -1156,12 +1157,17 @@ func waitFleetInterruptedAndContinuationEvents(
 		}
 		text := string(body)
 		pendingSettled := false
-		pendingData, pendingErr := os.ReadFile(filepath.Join(threadDir, "pending_inputs.json"))
+		pendingData, pendingErr := os.ReadFile(filepath.Join(threadDir, "inputs.json"))
 		if pendingErr == nil {
 			var pending struct {
-				Records []json.RawMessage `json:"records"`
+				Records []runtimeengine.PendingInputRecord `json:"records"`
 			}
-			pendingSettled = json.Unmarshal(pendingData, &pending) == nil && len(pending.Records) == 0
+			pendingSettled = json.Unmarshal(pendingData, &pending) == nil
+			for _, record := range pending.Records {
+				if record.State != runtimeengine.PendingInputStateSettled {
+					pendingSettled = false
+				}
+			}
 		}
 		if strings.Contains(text, `"type":"turn.errored"`) &&
 			strings.Contains(text, `"turn_id":"`+originalTurnID+`"`) &&
@@ -1212,7 +1218,7 @@ func buildJuexVersion(t *testing.T, stampedVersion string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ldflags := "-X github.com/juex-ai/juex/internal/version.Version=" + stampedVersion
+	ldflags := "-X github.com/juex-ai/juex/internal/foundation/version.Version=" + stampedVersion
 	command := exec.Command(
 		"go",
 		"build",

@@ -49,6 +49,10 @@ Observables, and environment into typed Framework capabilities. Juex does not
 load third-party Go plugins or dynamic libraries. Mutable Extension data stays
 under the owning Agent and Extension.
 
+Memory is a first-party Go Feature Module using the same typed capabilities.
+It owns durable Agent knowledge and derived index maintenance without a
+Feature-specific Framework slot.
+
 ## Consequences
 
 - Enablement, construction, publication, and cleanup derive from one validated
@@ -81,4 +85,4 @@ under the owning Agent and Extension.
 - [Architecture: Dependency Direction](../../ARCHITECTURE.md#dependency-direction)
 - [Domain Model](../../DOMAIN.md)
 - [Philosophy](../../PHILOSOPHY.md)
-- [Module contracts](../../internal/runtime/module/)
+- [Module contracts](../../internal/framework/module)

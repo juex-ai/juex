@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 func spawnDetached(executable, homeDir string, entry agentstate.RegistryEntry) (spawnedProcess, error) {

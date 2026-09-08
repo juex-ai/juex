@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/hooks"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/tools"
+	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
@@ -63,7 +63,7 @@ func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
 		{
 			Name:   "permission-denial-recovery",
 			Prompt: "recover from a protected path denial",
-			ExtraTools: []tools.Tool{{
+			ExtraTools: []toolcore.Tool{{
 				Name:        "guarded_read",
 				Description: "eval-only permission denial tool",
 				Schema: map[string]any{
@@ -129,17 +129,17 @@ func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
 		{
 			Name:   "hook-injection-and-stop-gate",
 			Prompt: "exercise policy context and stop continuation",
-			Hooks: func(workDir string) hooks.Config {
+			Hooks: func(workDir string) hookconfig.Config {
 				statePath := filepath.Join(workDir, "hook-state.json")
-				return hooks.Config{Commands: []hooks.CommandHook{
+				return hookconfig.Config{Commands: []hookconfig.CommandHook{
 					{
 						Name:    "inject-context",
-						Events:  []hooks.EventName{hooks.EventUserPromptSubmit},
+						Events:  []hookconfig.EventName{hookconfig.EventUserPromptSubmit},
 						Command: []string{os.Args[0], "capability-hook", "inject"},
 					},
 					{
 						Name:    "stop-once",
-						Events:  []hooks.EventName{hooks.EventStop},
+						Events:  []hookconfig.EventName{hookconfig.EventStop},
 						Command: []string{os.Args[0], "capability-hook", "stop-once", statePath},
 					},
 				}}

@@ -16,9 +16,9 @@ the user before running these commands; they are non-destructive.
 ## Prerequisites - ripgrep
 
 The `grep` builtin shells out to ripgrep, so any test that exercises it
-(`internal/tools` grep cases, `tests/e2e`, `tests/eval` file-search) fails
+(`internal/features/filesearch` grep cases, `tests/e2e`, `tests/eval` file-search) fails
 without a resolvable `rg`. The runtime resolver
-(`internal/tools/ripgrep_resolver.go`) checks three sources in order:
+(`internal/features/filesearch/ripgrep_resolver.go`) checks three sources in order:
 `JUEX_RG` override, a release-package layout beside the running binary, then
 the system PATH. The package source never matches under `go test` (the test
 binary lives in the Go build cache, not a release package), so local runs need
@@ -70,12 +70,12 @@ There is no local service startup step for the current suite. Web tests use
 ## Focus Areas
 
 - **Shell/tool/runtime changes** - use `make verify-focused
-  PKGS="./internal/tools ./internal/runtime ./tests/e2e"`. For cross-platform shell
+  PKGS="./internal/features/shell ./internal/features/filesearch ./internal/foundation/tools ./internal/framework/runtime ./tests/e2e"`. For cross-platform shell
   behavior, also run Windows target compile checks for touched packages, for
   example:
 
   ```bash
-  GOOS=windows GOARCH=amd64 go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
+  GOOS=windows GOARCH=amd64 go test -c ./internal/features/shell -o /tmp/juex-shell-windows.test.exe
   ```
 - **Eval harness changes** - run `make verify-focused PKGS="./tests/eval"`;
   its contract suite includes the module and wrapper help checks.

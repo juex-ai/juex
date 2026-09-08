@@ -1,3 +1,4 @@
+import type { ThreadModulesSnapshot } from "./module-schema";
 import type {
   ActiveContextSnapshot,
   BrowserEvent,
@@ -35,7 +36,7 @@ import type {
   AgentResourceEvent,
   FleetStatus,
 } from "./types";
-import { agentBasePath } from "./lib/fleet-routes.ts";
+import { agentBasePath, agentPagePath } from "./lib/fleet-routes.ts";
 
 function agentAPIPath(path: string): string {
   const pathname = typeof window === "undefined" ? "" : window.location.pathname;
@@ -208,8 +209,6 @@ interface RawThreadShowResponse extends RawThreadInfo {
   event_cursor?: string;
   has_more_before?: boolean;
   previous_cursor?: string;
-  goal?: ThreadShowResponse["goal"];
-  notes?: ThreadShowResponse["notes"];
 }
 
 function normalizeThreadInfo(raw: RawThreadInfo): ThreadInfo {
@@ -238,8 +237,6 @@ function normalizeThreadShow(raw: RawThreadShowResponse): ThreadShowResponse {
     event_cursor: raw.event_cursor ?? "",
     has_more_before: raw.has_more_before,
     oldest_message_id: raw.previous_cursor,
-    goal: raw.goal,
-    notes: raw.notes,
   };
 }
 
@@ -354,13 +351,43 @@ export async function getFileTree(signal?: AbortSignal): Promise<FileNode> {
   return jsonOrThrow(await fetch(agentAPIPath("/api/files/tree"), { signal }));
 }
 
-export async function getThreadScratchpad(
-  id: string,
-  signal?: AbortSignal,
-): Promise<FileNode> {
-  return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/scratchpad`), { signal }),
-  );
+export async function getThreadModules(id: string, signal?: AbortSignal): Promise<ThreadModulesSnapshot> {
+  return jsonOrThrow(await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/modules`), { signal }));
+}
+
+export function subscribeThreadModules(id: string, receive: (snapshot: ThreadModulesSnapshot) => void, onError: (error: Error) => void): () => void {
+  const source = new EventSource(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/modules/events`));
+  let revalidate = false;
+  source.onmessage = (event) => { try { receive(JSON.parse(event.data) as ThreadModulesSnapshot); revalidate = false; } catch { /* malformed frame */ } };
+  // Read-only servers deliberately finish a baseline to revalidate through Fleet.
+  source.addEventListener("revalidate", () => { revalidate = true; });
+  source.onerror = () => {
+    if (revalidate) { revalidate = false; return; }
+    onError(new Error("Module state unavailable"));
+  };
+  return () => source.close();
+}
+
+export function moduleResourcePath(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, operation: string): string {
+  return agentPagePath(scope.agentID, `/api/threads/${encodeURIComponent(scope.threadID)}/modules/${encodeURIComponent(moduleID)}/resources/${encodeURIComponent(resource)}/${operation}`);
+}
+
+export async function getModuleFileTree(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, signal?: AbortSignal): Promise<FileNode> {
+  return jsonOrThrow(await fetch(moduleResourcePath(scope, moduleID, resource, "tree"), { signal }));
+}
+
+export async function getModuleFileContent(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, path: string, signal?: AbortSignal): Promise<FileContentResponse> {
+  return jsonOrThrow(await fetch(`${moduleResourcePath(scope, moduleID, resource, "content")}?path=${encodeURIComponent(path)}`, { signal }));
+}
+
+export function getModuleFileRawURL(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, path: string): string {
+  return `${moduleResourcePath(scope, moduleID, resource, "raw")}?path=${encodeURIComponent(path)}`;
+}
+
+export function subscribeModuleResource(scope: { agentID: string; threadID: string }, moduleID: string, resource: string, receive: () => void): () => void {
+  const source = new EventSource(moduleResourcePath(scope, moduleID, resource, "events"));
+  source.onmessage = receive;
+  return () => source.close();
 }
 
 export async function getFileContent(

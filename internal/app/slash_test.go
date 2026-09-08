@@ -2,13 +2,15 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 func TestParseSlashCommand(t *testing.T) {
@@ -46,8 +48,8 @@ func TestNewSlashCreatesGenerationWithoutProviderTurn(t *testing.T) {
 	app.Status.Publish(events.Event{ID: "usage-before-new", Type: "llm.responded", Payload: runtime.LLMRespondedPayload{
 		TokenUsage: llm.Usage{InputTokens: 10, OutputTokens: 2}, ContextUsage: contextUsage,
 	}})
-	result := app.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: SlashNew})
-	if result.Kind != TurnAdmissionCommandCompleted || result.Command == nil {
+	result := app.AdmitTurn(context.Background(), agent.TurnAdmissionRequest{Prompt: SlashNew})
+	if result.Kind != agent.TurnAdmissionCommandCompleted || result.Command == nil {
 		t.Fatalf("admission = %+v", result)
 	}
 	if provider.calls != 0 {
@@ -75,11 +77,15 @@ func TestNewSlashCreatesGenerationWithoutProviderTurn(t *testing.T) {
 
 func TestStatusSlashReportsThreadAndGeneration(t *testing.T) {
 	app, _ := newStubApp(t)
-	result, err := app.ExecuteParsedSlashCommand(context.Background(), SlashCommand{Name: SlashStatus})
+	result, err := app.ExecuteCommand(context.Background(), parsedSlashCommand(SlashStatus, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status == nil || result.Status.ThreadID != thread.MainID || result.Status.GenerationID != thread.InitialGeneration {
+	var status StatusSnapshot
+	if err := json.Unmarshal(result.Status, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.ThreadID != thread.MainID || status.GenerationID != thread.InitialGeneration {
 		t.Fatalf("status = %+v", result.Status)
 	}
 	if !strings.Contains(result.Text, "thread: 0 (main)") || !strings.Contains(result.Text, "generation: g000001") {
@@ -115,7 +121,7 @@ func TestCompactSlashStartsCompactedGeneration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result, err := app.ExecuteParsedSlashCommand(context.Background(), SlashCommand{Name: SlashCompact})
+	result, err := app.ExecuteCommand(context.Background(), parsedSlashCommand(SlashCompact, ""))
 	if err != nil {
 		t.Fatal(err)
 	}

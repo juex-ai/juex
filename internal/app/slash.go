@@ -7,11 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/thread"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agent"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 const (
@@ -24,18 +25,6 @@ const (
 const newThreadGreetingPrompt = "Please greet me briefly, introduce what you can help with in one concise sentence, and ask what I want to do next. You may suggest a concrete place to start."
 
 var slashCommandNames = []string{SlashCompact, SlashGoal, SlashNew, SlashStatus}
-
-type SlashCommand struct {
-	Name string `json:"name"`
-	Args string `json:"args,omitempty"`
-}
-
-type SlashCommandResult struct {
-	Name    string                    `json:"name"`
-	Text    string                    `json:"text"`
-	Compact *runtime.CompactionResult `json:"compact,omitempty"`
-	Status  *StatusSnapshot           `json:"status,omitempty"`
-}
 
 type UnknownSlashCommandError struct {
 	Input string
@@ -72,33 +61,25 @@ func NewThreadGreetingMessage() llm.Message {
 	return msg
 }
 
-func GoalInstructionPrompt(args string) string {
-	args = strings.TrimSpace(args)
-	if args == "" {
-		return "The user wants to inspect or update the Thread goal. Use get_goal first, then create_goal or update_goal if a goal should be created, changed, marked success, or marked failure. Do not treat this slash command text itself as the goal description."
-	}
-	return "The user wants to create or update the Thread goal. Use get_goal first, then call create_goal or update_goal as appropriate. Do not write goal state directly; use the goal tools only.\n\nUser goal request:\n" + args
-}
-
-func ParseSlashCommand(input string) (SlashCommand, bool, error) {
+func ParseSlashCommand(input string) (agent.Command, bool, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
-		return SlashCommand{}, false, nil
+		return agent.Command{}, false, nil
 	}
 	fields := strings.Fields(trimmed)
 	commandName := fields[0]
 	if !isSlashCommandName(commandName) {
-		return SlashCommand{}, false, nil
+		return agent.Command{}, false, nil
 	}
 	if commandName == SlashCompact || commandName == SlashGoal {
 		args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
-		return SlashCommand{Name: commandName, Args: args}, true, nil
+		return parsedSlashCommand(commandName, args), true, nil
 	}
 	if len(fields) == 1 {
-		return SlashCommand{Name: commandName}, true, nil
+		return parsedSlashCommand(commandName, ""), true, nil
 	}
 	args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
-	return SlashCommand{}, true, &SlashCommandArgumentsError{Name: commandName, Args: args}
+	return agent.Command{}, true, &SlashCommandArgumentsError{Name: commandName, Args: args}
 }
 
 func isSlashCommandName(commandName string) bool {
@@ -110,75 +91,35 @@ func isSlashCommandName(commandName string) bool {
 	return false
 }
 
-func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (SlashCommandResult, bool, error) {
+func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (agent.CommandResult, bool, error) {
 	cmd, handled, err := ParseSlashCommand(input)
 	if err != nil || !handled {
-		return SlashCommandResult{}, handled, err
+		return agent.CommandResult{}, handled, err
 	}
-	result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
+	result, err := a.ExecuteCommand(ctx, cmd)
 	return result, true, err
 }
 
-func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (SlashCommandResult, error) {
-	switch cmd.Name {
-	case SlashCompact:
-		return a.executeCompactSlashCommand(ctx, cmd, "")
-	case SlashStatus:
-		status := a.StatusSnapshot()
-		return SlashCommandResult{Name: cmd.Name, Text: status.Text(), Status: &status}, nil
-	case SlashNew:
-		if err := a.NewContext(ctx); err != nil {
-			return SlashCommandResult{}, err
-		}
-		status := a.StatusSnapshot()
-		text := fmt.Sprintf("New context generation: %s", status.GenerationID)
-		return SlashCommandResult{Name: cmd.Name, Text: text, Status: &status}, nil
-	default:
-		return SlashCommandResult{}, &UnknownSlashCommandError{Input: cmd.Name}
-	}
-}
-
-func (a *App) executeCompactSlashCommand(ctx context.Context, cmd SlashCommand, admittedTurnID string) (SlashCommandResult, error) {
-	var (
-		compact runtime.CompactionResult
-		err     error
-	)
-	if admittedTurnID == "" {
-		compact, err = a.CompactWithInstructions(ctx, "manual", false, cmd.Args)
-	} else {
-		compact, err = a.CompactAdmittedWithInstructions(ctx, admittedTurnID, "manual", false, cmd.Args)
-	}
-	if err != nil {
-		return SlashCommandResult{}, err
-	}
-	text := "No eligible context to compact."
-	if compact.MessageID != "" {
-		text = fmt.Sprintf("Context compacted: %d -> %d tokens (%d summary chars).",
-			compact.TokensBefore, compact.TokensAfter, compact.SummaryChars)
-	}
-	return SlashCommandResult{Name: cmd.Name, Text: text, Compact: &compact}, nil
-}
-
 type StatusSnapshot struct {
-	ThreadID     string                      `json:"thread_id"`
-	ThreadDir    string                      `json:"thread_dir,omitempty"`
-	ThreadAlias  string                      `json:"thread_alias,omitempty"`
-	GenerationID string                      `json:"generation_id"`
-	State        string                      `json:"state"`
-	WorkDir      string                      `json:"work_dir"`
-	Turns        int                         `json:"turns"`
-	StartedAt    time.Time                   `json:"started_at"`
-	LastActiveAt time.Time                   `json:"last_active_at"`
-	Provider     ProviderStatusSnapshot      `json:"provider"`
-	MCP          MCPStatus                   `json:"mcp"`
-	Observables  StatusObservablesSnapshot   `json:"observables"`
-	SkillCount   int                         `json:"skill_count"`
-	TokenUsage   llm.Usage                   `json:"token_usage"`
-	TokenTotal   int                         `json:"token_total"`
-	ContextUsage *llm.ContextUsage           `json:"context_usage,omitempty"`
-	Compaction   StatusCompactionSnapshot    `json:"compaction"`
-	PendingInput runtime.PendingInputStatus  `json:"pending_input"`
-	Goal         *workmem.GoalStatusSnapshot `json:"goal,omitempty"`
+	ThreadID     string                         `json:"thread_id"`
+	ThreadDir    string                         `json:"thread_dir,omitempty"`
+	ThreadAlias  string                         `json:"thread_alias,omitempty"`
+	GenerationID string                         `json:"generation_id"`
+	State        string                         `json:"state"`
+	WorkDir      string                         `json:"work_dir"`
+	Turns        int                            `json:"turns"`
+	StartedAt    time.Time                      `json:"started_at"`
+	LastActiveAt time.Time                      `json:"last_active_at"`
+	Provider     ProviderStatusSnapshot         `json:"provider"`
+	MCP          MCPStatus                      `json:"mcp"`
+	Observables  StatusObservablesSnapshot      `json:"observables"`
+	SkillCount   int                            `json:"skill_count"`
+	TokenUsage   llm.Usage                      `json:"token_usage"`
+	TokenTotal   int                            `json:"token_total"`
+	ContextUsage *llm.ContextUsage              `json:"context_usage,omitempty"`
+	Compaction   StatusCompactionSnapshot       `json:"compaction"`
+	PendingInput runtime.PendingInputStatus     `json:"pending_input"`
+	Goal         *goalmodule.GoalStatusSnapshot `json:"goal,omitempty"`
 }
 
 type ProviderStatusSnapshot struct {
@@ -227,68 +168,71 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 	if a == nil {
 		return StatusSnapshot{}
 	}
-	a.threadMu.RLock()
-	defer a.threadMu.RUnlock()
-	var (
-		threadID     string
-		threadDir    string
-		threadAlias  string
-		generationID string
-		threadState  string
-		turns        int
-		startedAt    time.Time
-		lastActiveAt time.Time
-		tokenUsage   llm.Usage
-		contextUsage *llm.ContextUsage
-		compaction   StatusCompactionSnapshot
-	)
-	if a.Thread != nil {
-		info := a.Thread.Info()
-		replay := a.Thread.ReplaySnapshot()
-		threadID = info.ID
-		threadDir = info.Dir
-		threadAlias = info.Alias
-		generationID = info.GenerationID
-		threadState = string(info.ExecutionState)
-		turns = info.TurnCount
-		startedAt = info.CreatedAt.Time
-		lastActiveAt = replay.Projection.LastActivityAt.Time
-		tokenUsage = info.TokenUsage.Total
-		if info.ContextUsage != nil {
-			copied := *info.ContextUsage
-			copied.Breakdown = append([]llm.ContextUsagePart(nil), info.ContextUsage.Breakdown...)
-			contextUsage = &copied
+	var result StatusSnapshot
+	_ = a.ReadThreadState(func(target *thread.Thread) error {
+		var (
+			threadID     string
+			threadDir    string
+			threadAlias  string
+			generationID string
+			threadState  string
+			turns        int
+			startedAt    time.Time
+			lastActiveAt time.Time
+			tokenUsage   llm.Usage
+			contextUsage *llm.ContextUsage
+			compaction   StatusCompactionSnapshot
+		)
+		if target != nil {
+			info := target.Info()
+			replay := target.ReplaySnapshot()
+			threadID = info.ID
+			threadDir = info.Dir
+			threadAlias = info.Alias
+			generationID = info.GenerationID
+			threadState = string(info.ExecutionState)
+			turns = info.TurnCount
+			startedAt = info.CreatedAt.Time
+			lastActiveAt = replay.Projection.LastActivityAt.Time
+			tokenUsage = info.TokenUsage.Total
+			if info.ContextUsage != nil {
+				copied := *info.ContextUsage
+				copied.Breakdown = append([]llm.ContextUsagePart(nil), info.ContextUsage.Breakdown...)
+				contextUsage = &copied
+			}
+			compaction = compactionStatusFromReplay(replay)
 		}
-		compaction = compactionStatusFromReplay(replay)
-	}
-	observables := observablesStatusFromManager(a.obsv)
-	pending := runtime.PendingInputStatus{}
-	var goal *workmem.GoalStatusSnapshot
-	if a.Engine != nil {
-		pending = a.Engine.PendingInputStatus()
-		goal, _ = a.Engine.ThreadStateStatus()
-	}
-	return StatusSnapshot{
-		ThreadID:     threadID,
-		ThreadDir:    threadDir,
-		ThreadAlias:  threadAlias,
-		GenerationID: generationID,
-		State:        threadState,
-		WorkDir:      a.cfg.WorkDir,
-		Turns:        turns,
-		StartedAt:    startedAt,
-		LastActiveAt: lastActiveAt,
-		Provider:     a.providerStatusSnapshot(),
-		MCP:          a.MCPStatus(),
-		Observables:  observables,
-		SkillCount:   len(a.skills),
-		TokenUsage:   tokenUsage,
-		TokenTotal:   tokenUsage.TotalTokens(),
-		ContextUsage: contextUsage,
-		Compaction:   compaction,
-		PendingInput: pending,
-		Goal:         goal,
-	}
+		observables := observablesStatusFromManager(a.obsv)
+		pending := runtime.PendingInputStatus{}
+		var goal *goalmodule.GoalStatusSnapshot
+		if a.Engine != nil {
+			pending = a.Engine.PendingInputStatus()
+			goal, _ = goalmodule.StatusFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+		}
+		result = StatusSnapshot{
+			ThreadID:     threadID,
+			ThreadDir:    threadDir,
+			ThreadAlias:  threadAlias,
+			GenerationID: generationID,
+			State:        threadState,
+			WorkDir:      a.cfg.WorkDir,
+			Turns:        turns,
+			StartedAt:    startedAt,
+			LastActiveAt: lastActiveAt,
+			Provider:     a.providerStatusSnapshot(),
+			MCP:          a.MCPStatus(),
+			Observables:  observables,
+			SkillCount:   len(a.skills),
+			TokenUsage:   tokenUsage,
+			TokenTotal:   tokenUsage.TotalTokens(),
+			ContextUsage: contextUsage,
+			Compaction:   compaction,
+			PendingInput: pending,
+			Goal:         goal,
+		}
+		return nil
+	})
+	return result
 }
 
 func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {
@@ -342,7 +286,7 @@ func (s StatusSnapshot) Text() string {
 	return strings.Join(lines, "\n")
 }
 
-func formatGoalStatus(goal *workmem.GoalStatusSnapshot) string {
+func formatGoalStatus(goal *goalmodule.GoalStatusSnapshot) string {
 	if goal == nil {
 		return "goal: none"
 	}
@@ -481,4 +425,20 @@ func trimCompactFloat(value float64) string {
 		return fmt.Sprintf("%.0f", rounded)
 	}
 	return fmt.Sprintf("%.1f", rounded)
+}
+
+func parsedSlashCommand(name, args string) agent.Command {
+	cmd := agent.Command{Name: name, Args: args}
+	switch name {
+	case SlashStatus:
+		cmd.Kind = agent.CommandKindStatus
+	case SlashNew:
+		cmd.Kind = agent.CommandKindNew
+	case SlashCompact:
+		cmd.Kind = agent.CommandKindCompact
+	case SlashGoal:
+		cmd.Kind = agent.CommandKindPrompt
+		cmd.Prompt = goalmodule.InstructionPrompt(args)
+	}
+	return cmd
 }

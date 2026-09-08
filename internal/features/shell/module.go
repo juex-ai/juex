@@ -1,0 +1,94 @@
+// Package shell owns shell execution tools, sessions, and prompt guidance.
+package shell
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/juex-ai/juex/internal/foundation/artifact"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+)
+
+const ModuleID = "shell"
+
+type Module struct {
+	mu           sync.RWMutex
+	baseContext  context.Context
+	options      Options
+	ownedSession *ShellSessionManager
+	closeOnce    sync.Once
+	closeErr     error
+}
+
+func New(ctx context.Context, options Options) *Module {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &Module{baseContext: ctx, options: options}
+}
+
+func (*Module) ID() runtimemodule.ID { return ModuleID }
+
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
+	if m == nil {
+		return nil, nil
+	}
+	m.mu.RLock()
+	options := m.options
+	needsOwnedSession := m.ownedSession == nil && options.ShellSessions == nil
+	m.mu.RUnlock()
+	if needsOwnedSession {
+		return nil, fmt.Errorf("shell module has not started")
+	}
+	return Contributions(options), nil
+}
+
+func (m *Module) ShellSessions() *ShellSessionManager {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.options.ShellSessions
+}
+
+func (m *Module) StartRuntime(context.Context, runtimemodule.RuntimeContext) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.TrimSpace(m.options.MediaDir) != "" {
+		store, err := artifact.NewStore(m.options.MediaDir)
+		if err != nil {
+			return fmt.Errorf("shell: initialize Artifact Store: %w", err)
+		}
+		if err := store.EnsureRoot(); err != nil {
+			return fmt.Errorf("shell: initialize Artifact Store: %w", err)
+		}
+	}
+	if m.options.ShellSessions == nil {
+		m.ownedSession = NewShellSessionManager(m.baseContext)
+		m.options.ShellSessions = m.ownedSession
+	}
+	return nil
+}
+
+func (m *Module) CloseRuntime(context.Context) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	ownedSession := m.ownedSession
+	m.mu.RUnlock()
+	if ownedSession == nil {
+		return nil
+	}
+	m.closeOnce.Do(func() {
+		m.closeErr = ownedSession.Close()
+	})
+	return m.closeErr
+}

@@ -21,9 +21,9 @@ builds:
     flags: [-trimpath]
     ldflags:
       - -s -w
-      - -X github.com/juex-ai/juex/internal/version.Version={{.Version}}
-      - -X github.com/juex-ai/juex/internal/version.Commit={{.ShortCommit}}
-      - -X github.com/juex-ai/juex/internal/version.BuildTime={{.Date}}
+      - -X github.com/juex-ai/juex/internal/foundation/version.Version={{.Version}}
+      - -X github.com/juex-ai/juex/internal/foundation/version.Commit={{.ShortCommit}}
+      - -X github.com/juex-ai/juex/internal/foundation/version.BuildTime={{.Date}}
     goos: [darwin, linux, windows]
     goarch: [amd64, arm64, arm]
     goarm: ["7"]

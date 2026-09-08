@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/statusapi"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 const (

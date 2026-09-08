@@ -3,10 +3,10 @@ package app
 import (
 	"fmt"
 
-	"github.com/juex-ai/juex/internal/config"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/runtime/module/state"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/config"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/module/state"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 // AcquireModuleResources commits an accepted configuration's resource lifecycle

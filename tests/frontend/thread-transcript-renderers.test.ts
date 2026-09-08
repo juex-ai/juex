@@ -12,7 +12,7 @@ import {
 const backendMessageKinds = JSON.parse(
   readFileSync(
     new URL(
-      "../../internal/web/testdata/message-kinds.golden.json",
+      "../../internal/entrypoints/agenthttp/testdata/message-kinds.golden.json",
       import.meta.url,
     ),
     "utf8",

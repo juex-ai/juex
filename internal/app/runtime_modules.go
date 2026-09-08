@@ -2,34 +2,38 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/environment"
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	"github.com/juex-ai/juex/internal/modules/agentsmd"
-	"github.com/juex-ai/juex/internal/modules/builtintools"
-	chunkmodule "github.com/juex-ai/juex/internal/modules/chunkedwrite"
-	goalmodule "github.com/juex-ai/juex/internal/modules/goal"
-	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
-	"github.com/juex-ai/juex/internal/modules/operatingcontext"
-	"github.com/juex-ai/juex/internal/modules/scratchpad"
-	"github.com/juex-ai/juex/internal/modules/shelltools"
-	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/runtime/workmem"
-	"github.com/juex-ai/juex/internal/sandbox"
-	"github.com/juex-ai/juex/internal/skills"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/features/agentsmd"
+	"github.com/juex-ai/juex/internal/features/applypatch"
+	chunkmodule "github.com/juex-ai/juex/internal/features/chunkedwrite"
+	"github.com/juex-ai/juex/internal/features/contextcontrol"
+	"github.com/juex-ai/juex/internal/features/filesearch"
+	"github.com/juex-ai/juex/internal/features/filetools"
+	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	"github.com/juex-ai/juex/internal/features/hooks"
+	"github.com/juex-ai/juex/internal/features/inputtracking"
+	"github.com/juex-ai/juex/internal/features/memory"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	"github.com/juex-ai/juex/internal/features/operatingcontext"
+	"github.com/juex-ai/juex/internal/features/scratchpad"
+	shelltools "github.com/juex-ai/juex/internal/features/shell"
+	"github.com/juex-ai/juex/internal/features/skills"
+	"github.com/juex-ai/juex/internal/foundation/environment"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type runtimeModuleComposition struct {
 	set            *runtimemodule.Set
 	shell          *shelltools.Module
-	skills         *skillsmodule.Module
+	skills         *skills.Module
 	constructed    *constructedRuntimeModules
 	runtimeContext runtimemodule.RuntimeContext
 	specs          []runtimemodule.RuntimeFactorySpec
@@ -37,14 +41,14 @@ type runtimeModuleComposition struct {
 
 type constructedRuntimeModules struct {
 	shell  *shelltools.Module
-	skills *skillsmodule.Module
+	skills *skills.Module
 }
 
 type threadModuleOptions struct {
 	hookRunner               hooks.PolicyRunner
 	hookBaseRequest          hooks.Request
-	goalState                *workmem.GoalStateStore
-	notes                    *workmem.NotesStore
+	goalState                *goalmodule.GoalStateStore
+	notes                    *notesmodule.NotesStore
 	goalContinuation         bool
 	goalContinuationDeferrer goalmodule.ContinuationDeferrer
 }
@@ -53,10 +57,9 @@ func prepareRuntimeModules(
 	_ context.Context,
 	cfg config.Config,
 	resourceGraph RuntimeResourceGraph,
-	runtimePaths config.RuntimePaths,
+	runtimePaths agentstate.RuntimePaths,
 	runtimeEnvironment environment.Snapshot,
 	sandboxRunner sandbox.Runner,
-	toolTimeoutSeconds int,
 ) (runtimeModuleComposition, error) {
 	runtimeContext := runtimemodule.RuntimeContext{
 		ID:            cfg.AgentAddress.ID(),
@@ -66,43 +69,48 @@ func prepareRuntimeModules(
 	}
 	constructed := &constructedRuntimeModules{}
 	composition := runtimeModuleComposition{runtimeContext: runtimeContext, constructed: constructed}
-	toolOptions := tools.BuiltinOptions{
-		WorkDir:            runtimePaths.WorkDir,
-		Environment:        runtimeEnvironment,
-		Shell:              toolsShellProfile(cfg.Shell),
-		Sandbox:            cfg.SandboxPolicy(),
-		SandboxRunner:      sandboxRunner,
-		ToolTimeoutSeconds: toolTimeoutSeconds,
-		AgentStateDir:      runtimePaths.StateDir,
-		MediaDir:           runtimePaths.MediaDir,
-	}
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: cfg.SandboxPolicy(), WorkDir: runtimePaths.WorkDir, AgentStateDir: runtimePaths.StateDir, ReadOnlyPaths: []string{runtimePaths.MediaDir}})
 	composition.specs = []runtimemodule.RuntimeFactorySpec{
 		{
-			ID:      modulecatalog.BasicFileTools,
-			Enabled: cfg.ModuleEnabled(modulecatalog.BasicFileTools),
-			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.NewBasicFiles(toolOptions), nil
+			ID:      memory.ModuleID,
+			Enabled: cfg.ModuleEnabled(memory.ModuleID),
+			New: func(_ context.Context, ctx runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				if ctx.AgentStateDir == "" {
+					return nil, fmt.Errorf("memory module requires an Agent state directory")
+				}
+				agentDir, err := filepath.Abs(ctx.AgentStateDir)
+				if err != nil {
+					return nil, fmt.Errorf("resolve memory Agent state directory: %w", err)
+				}
+				return memory.New(agentDir), nil
 			},
 		},
 		{
-			ID:      modulecatalog.ApplyPatch,
-			Enabled: cfg.ModuleEnabled(modulecatalog.ApplyPatch),
+			ID:      filetools.ModuleID,
+			Enabled: cfg.ModuleEnabled(filetools.ModuleID),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.NewApplyPatch(toolOptions), nil
+				return filetools.New(filetools.Options{WorkDir: runtimePaths.WorkDir, MediaDir: runtimePaths.MediaDir, FilePolicy: filePolicy}), nil
 			},
 		},
 		{
-			ID:      modulecatalog.FileSearch,
-			Enabled: cfg.ModuleEnabled(modulecatalog.FileSearch),
+			ID:      applypatch.ModuleID,
+			Enabled: cfg.ModuleEnabled(applypatch.ModuleID),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return builtintools.NewFileSearch(toolOptions), nil
+				return applypatch.New(applypatch.Options{WorkDir: runtimePaths.WorkDir, FilePolicy: filePolicy}), nil
+			},
+		},
+		{
+			ID:      filesearch.ModuleID,
+			Enabled: cfg.ModuleEnabled(filesearch.ModuleID),
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return filesearch.New(filesearch.Options{WorkDir: runtimePaths.WorkDir, Environment: runtimeEnvironment, Sandbox: cfg.SandboxPolicy(), SandboxRunner: sandboxRunner, FilePolicy: filePolicy}), nil
 			},
 		},
 		{
 			ID:      shelltools.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.Shell),
+			Enabled: cfg.ModuleEnabled(shelltools.ModuleID),
 			New: func(ctx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				constructed.shell = shelltools.New(ctx, toolOptions)
+				constructed.shell = shelltools.New(ctx, shelltools.Options{WorkDir: runtimePaths.WorkDir, Environment: runtimeEnvironment, Shell: toolsShellProfile(cfg.Shell), Sandbox: cfg.SandboxPolicy(), SandboxRunner: sandboxRunner, FilePolicy: filePolicy, MediaDir: runtimePaths.MediaDir})
 				return constructed.shell, nil
 			},
 		},
@@ -117,10 +125,10 @@ func prepareRuntimeModules(
 			},
 		},
 		{
-			ID:      skillsmodule.ModuleID,
-			Enabled: cfg.ModuleEnabled(string(skillsmodule.ModuleID)),
+			ID:      skills.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(skills.ModuleID)),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				mod, err := skillsmodule.New(skillsmodule.Options{
+				mod, err := skills.New(skills.Options{
 					Dirs:          resourceGraph.SkillDirs(),
 					LoaderOptions: skillLoaderOptions(cfg),
 					WorkDir:       runtimePaths.WorkDir,
@@ -167,7 +175,7 @@ func buildThreadModules(
 	opts threadModuleOptions,
 ) (*runtimemodule.Set, error) {
 	var set *runtimemodule.Set
-	specs = threadFactorySpecs(cfg, specs, threadState, engine, workDir, opts, func() []byte { return juexruntime.HookGoalStateFromModules(set) })
+	specs = threadFactorySpecs(cfg, specs, threadState, engine, workDir, opts, func() []byte { return goalmodule.HookStateFromModules(set) })
 	threadContext := threadModuleContext(threadState)
 	var err error
 	set, err = runtimemodule.BuildAndStartThreadSet(ctx, specs, threadContext, runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &threadContext})
@@ -189,36 +197,45 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 	}
 	builtinSpecs := []runtimemodule.ThreadFactorySpec{
 		{
-			ID:      chunkmodule.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.ChunkedWrite),
+			ID:      inputtracking.ModuleID,
+			Enabled: cfg.ModuleEnabled(inputtracking.ModuleID),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-				paths := cfg.RuntimePaths()
-				return chunkmodule.New(tools.BuiltinOptions{WorkDir: workDir, Sandbox: cfg.SandboxPolicy(), AgentStateDir: paths.StateDir, MediaDir: paths.MediaDir}), nil
+				return inputtracking.New(engine), nil
 			},
 		},
 		{
-			ID:      juexruntime.ContextControlModuleID,
-			Enabled: cfg.ModuleEnabled(string(juexruntime.ContextControlModuleID)),
+			ID:      chunkmodule.ModuleID,
+			Enabled: cfg.ModuleEnabled(chunkmodule.ModuleID),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-				return juexruntime.NewContextControlModule(engine), nil
+				paths := cfg.RuntimePaths()
+				return chunkmodule.New(chunkmodule.Options{WorkDir: workDir, FilePolicy: sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: cfg.SandboxPolicy(), WorkDir: workDir, AgentStateDir: paths.StateDir, ReadOnlyPaths: []string{paths.MediaDir}})}), nil
+			},
+		},
+		{
+			ID:      contextcontrol.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(contextcontrol.ModuleID)),
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				return contextcontrol.New(engine), nil
 			},
 		},
 		{
 			ID:      operatingcontext.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.OperatingContext),
+			Enabled: cfg.ModuleEnabled(operatingcontext.ModuleID),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				return &operatingcontext.Module{WorkDir: workDir}, nil
 			},
 		},
 		{
-			ID:      scratchpad.ModuleID,
-			Enabled: cfg.ModuleEnabled(modulecatalog.Scratchpad),
+			ID:         scratchpad.ModuleID,
+			Inspection: scratchpad.Inspection(),
+			Enabled:    cfg.ModuleEnabled(scratchpad.ModuleID),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 				return &scratchpad.Module{WorkDir: workDir}, nil
 			},
 		},
 		{
 			ID:            goalmodule.ModuleID,
+			Inspection:    goalmodule.Inspection(),
 			OwnsResources: true,
 			Enabled:       cfg.ModuleEnabled(string(goalmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
@@ -236,6 +253,7 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		},
 		{
 			ID:            notesmodule.ModuleID,
+			Inspection:    notesmodule.Inspection(),
 			OwnsResources: true,
 			Enabled:       cfg.ModuleEnabled(string(notesmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {

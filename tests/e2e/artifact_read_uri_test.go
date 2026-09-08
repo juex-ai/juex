@@ -9,17 +9,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/internal/foundation/command"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/tests/testsupport/toolset"
 )
 
 type spoolReadProvider struct {
-	t       *testing.T
-	calls   int
-	readURI string
+	t             *testing.T
+	calls         int
+	readURI       string
+	firstReadPath string
 }
 
 func (p *spoolReadProvider) Name() string { return "spool-read" }
@@ -28,9 +31,14 @@ func (p *spoolReadProvider) Complete(_ context.Context, _ string, history []llm.
 	switch p.calls {
 	case 0:
 		p.calls++
-		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		call := llm.Block{
 			Type: llm.BlockToolUse, ToolUseID: "large-result", ToolName: "large_result",
-		}}}, StopReason: llm.StopToolUse}, nil
+		}
+		if p.firstReadPath != "" {
+			call.ToolName = "read"
+			call.Input = map[string]any{"path": p.firstReadPath}
+		}
+		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{call}}, StopReason: llm.StopToolUse}, nil
 	case 1:
 		p.calls++
 		p.readURI = providerSpoolPath(messagesText(history))
@@ -69,13 +77,13 @@ func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinSpoolPath(t *testing.T) 
 	t.Cleanup(func() { _ = threadState.Close() })
 	bus := events.NewBus()
 	threadState.SubscribeBus(bus)
-	registry := tools.NewRegistry()
-	tools.RegisterBuiltins(registry, tools.BuiltinOptions{
+	registry := toolcore.NewRegistry()
+	toolset.Register(registry, toolset.Options{
 		WorkDir: workDir, AgentStateDir: agentStateDir, MediaDir: threadState.SpoolDir(),
-		Shell: tools.DefaultShellProfile(),
+		Shell: command.DefaultShellProfile(),
 	})
 	original := "artifact-read-success\n" + strings.Repeat("externalized detail\n", 20)
-	registry.MustRegister(tools.Tool{
+	registry.MustRegister(toolcore.Tool{
 		Name: "large_result",
 		Handler: func(context.Context, map[string]any) (string, error) {
 			return original, nil
@@ -87,7 +95,7 @@ func TestEndToEnd_ProjectedToolResultReadsThroughBuiltinSpoolPath(t *testing.T) 
 		Tools:    registry,
 		Bus:      bus,
 		Thread:   threadState,
-		Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, tools.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{workDir}, workDir, command.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 24, 11, 0, 0, 0, time.UTC)
 		}, threadState),
 		WorkDir:  workDir,

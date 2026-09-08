@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/agentstate"
-	"github.com/juex-ai/juex/internal/cli"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/entrypoints/cli"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type liveSendResult struct {
@@ -677,7 +677,7 @@ providers:
 		t.Fatalf("provider requests=%d, want 2", requests.Load())
 	}
 	conversation := threadJournalText(t, result.ThreadDir)
-	if strings.Contains(conversation, "partial") || !strings.Contains(conversation, "recovered") {
+	if strings.Contains(conversation, `"text":"partial"`) || !strings.Contains(conversation, `"text":"recovered"`) {
 		t.Fatalf("conversation retained provisional output or lost recovery:\n%s", conversation)
 	}
 	eventLog := conversation
@@ -1074,6 +1074,13 @@ func TestLiveBinary_CLIVerboseCompactsToolBatch(t *testing.T) {
 }
 
 func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
+	for _, preset := range []string{"minimal", "standard"} {
+		t.Run(preset, func(t *testing.T) { testLiveBinaryShellYield(t, preset) })
+	}
+}
+
+func testLiveBinaryShellYield(t *testing.T, preset string) {
+	t.Helper()
 	bin := buildJuex(t)
 
 	var requestCount atomic.Int32
@@ -1122,7 +1129,7 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "models: [local-chat:chat-test]\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "preset: " + preset + "\nmodels: [local-chat:chat-test]\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -1306,7 +1313,7 @@ func TestLiveBinary_ProviderErrorPersistsThreadFailure(t *testing.T) {
 	if !strings.Contains(journal, `"type":"turn.errored"`) {
 		t.Fatalf("Thread journal missing terminal failure after provider error:\n%s", journal)
 	}
-	pendingPath := filepath.Join(result.ThreadDir, "pending_inputs.json")
+	pendingPath := filepath.Join(result.ThreadDir, "inputs.json")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		pending, err := os.ReadFile(pendingPath)

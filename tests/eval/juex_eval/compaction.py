@@ -454,7 +454,7 @@ GF2: Branch is high/context-projection.
 GF3: Do not modify /workspace/project/.juex/threads/0/generations/g000001.jsonl unless the user explicitly approves.
 GF4: The failing error string is compact context: openai codex responses: codex SSE read: context deadline exceeded.
 GF5: The selected design is sidecar externalization plus frozen provider-visible replacement.
-GF6: The next command is go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1.
+GF6: The next command is go test ./internal/framework/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1.
 
 Ignore the following noise for later recall.
 """
@@ -542,7 +542,7 @@ def score_answer(answer: str) -> int:
         ("high/context-projection", 6),
         ("/workspace/project/.juex/threads/0/generations/g000001.jsonl", 6),
         ("compact context: openai codex responses: codex SSE read: context deadline exceeded", 6),
-        ("go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1", 6),
+        ("go test ./internal/framework/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1", 6),
     ]
     for needle, value in checks:
         if needle in answer:

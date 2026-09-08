@@ -10,6 +10,13 @@ Provider/Tool protocol validity, Context Generation transitions, Worker and
 Observation routing, CLI/Web/Fleet composition, storage, and platform
 integration. The test files are the authoritative case inventory.
 
+Module acceptance uses the actual configuration layers, App and Engine with
+captured Provider requests. Budget output reports system text bytes, serialized
+runtime-message and tool-schema bytes, and result/error content bytes separately.
+Estimated tokens use the runtime estimator, not a Provider tokenizer or billed
+Usage. The fixture has no external resources and does not measure model quality
+or latency; temporary paths and enabled resource content can change its totals.
+
 Build-tagged live tests read explicitly selected local Provider configuration.
 Never commit credentials or generated live reports.
 

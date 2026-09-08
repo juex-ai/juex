@@ -11,17 +11,20 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/thread"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/features/mcp"
+
+	observable "github.com/juex-ai/juex/internal/features/observables"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 type activationHistoryProvider struct{ histories chan []llm.Message }
 
 func (*activationHistoryProvider) Name() string { return "activation-history" }
+
 func (p *activationHistoryProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	p.histories <- append([]llm.Message(nil), history...)
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "handled"), StopReason: llm.StopEndTurn}, nil
@@ -31,7 +34,7 @@ func TestModuleInputActivationRestoresMainBeforeIndependentSources(t *testing.T)
 	for _, source := range []string{"mcp", "schedule", "command"} {
 		t.Run(source, func(t *testing.T) {
 			work, state := t.TempDir(), t.TempDir()
-			cfg := config.Config{Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}
 			original, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}})
 			if err != nil {
 				t.Fatal(err)

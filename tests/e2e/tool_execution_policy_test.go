@@ -10,23 +10,28 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/cancellation"
-	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/eventcatalog"
-	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/modulecatalog"
-	notesmodule "github.com/juex-ai/juex/internal/modules/notes"
-	"github.com/juex-ai/juex/internal/runtime"
-	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/thread"
-	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/eventcatalog"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
+	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/command"
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
+	"github.com/juex-ai/juex/internal/framework/agent"
+	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
+	"github.com/juex-ai/juex/internal/framework/runtime"
+	"github.com/juex-ai/juex/internal/framework/thread"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 )
 
-type executionPolicyModule struct{ tools []tools.Tool }
+type executionPolicyModule struct{ tools []toolcore.Tool }
 
 func (*executionPolicyModule) ID() runtimemodule.ID { return "execution-policy-fixture" }
-func (m *executionPolicyModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+
+func (m *executionPolicyModule) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	return m.tools, nil
 }
 
@@ -48,25 +53,25 @@ func TestEndToEnd_ModuleExecutionPolicyPersistsOrderedOutcomes(t *testing.T) {
 			firstStarted := make(chan struct{})
 			parallelStarted := make(chan struct{})
 			var firstFinished, secondRan atomic.Bool
-			mod := &executionPolicyModule{tools: []tools.Tool{
-				(tools.ToolDefinition{Name: "state_write", Group: "fixture-state", ExecutionPolicy: tools.ToolExecutionSerial}).BindResult(func(ctx context.Context, _ map[string]any) (tools.Result, error) {
+			mod := &executionPolicyModule{tools: []toolcore.Tool{
+				(toolcore.ToolDefinition{Name: "state_write", Group: "fixture-state", ExecutionPolicy: toolcore.ToolExecutionSerial}).BindResult(func(ctx context.Context, _ map[string]any) (toolcore.Result, error) {
 					close(firstStarted)
 					select {
 					case <-parallelStarted:
 					case <-ctx.Done():
-						return tools.Result{}, ctx.Err()
+						return toolcore.Result{}, ctx.Err()
 					}
 					firstFinished.Store(true)
-					return tools.Result{Text: "partial result", Fact: json.RawMessage(`{"attempted":true}`)}, errors.New("fixture failure")
+					return toolcore.Result{Text: "partial result", Fact: json.RawMessage(`{"attempted":true}`)}, errors.New("fixture failure")
 				}),
-				(tools.ToolDefinition{Name: "state_read", Group: tools.ToolGroupFile, ExecutionPolicy: tools.ToolExecutionSerial}).Bind(func(context.Context, map[string]any) (string, error) {
+				(toolcore.ToolDefinition{Name: "state_read", Group: toolcore.ToolGroupFile, ExecutionPolicy: toolcore.ToolExecutionSerial}).Bind(func(context.Context, map[string]any) (string, error) {
 					secondRan.Store(true)
 					if !firstFinished.Load() {
 						return "", errors.New("read overtook write")
 					}
 					return "observed attempted write", nil
 				}),
-				(tools.ToolDefinition{Name: "parallel_probe", Group: "fixture-state"}).Bind(func(ctx context.Context, _ map[string]any) (string, error) {
+				(toolcore.ToolDefinition{Name: "parallel_probe", Group: "fixture-state"}).Bind(func(ctx context.Context, _ map[string]any) (string, error) {
 					select {
 					case <-firstStarted:
 					case <-ctx.Done():
@@ -87,7 +92,7 @@ func TestEndToEnd_ModuleExecutionPolicyPersistsOrderedOutcomes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, set)
+			registry, err := runtimemodule.BuildToolRegistry(toolcore.RegistryOptions{}, set)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -104,7 +109,7 @@ func TestEndToEnd_ModuleExecutionPolicyPersistsOrderedOutcomes(t *testing.T) {
 			sink.SetCatalog(eventcatalog.Default())
 			bus.SetCommitter(sink)
 			defer func() { _ = sink.Close() }()
-			engine := &runtime.Engine{Provider: provider, Tools: registry, RuntimeModules: set, Thread: state, Bus: bus, WorkDir: root, MediaDir: filepath.Join(root, "media"), Prompt: e2ePromptBuilder(t, "", []string{root}, root, tools.ShellProfile{}, time.Now, state)}
+			engine := &runtime.Engine{Provider: provider, Tools: registry, RuntimeModules: set, Thread: state, Bus: bus, WorkDir: root, MediaDir: filepath.Join(root, "media"), Prompt: e2ePromptBuilder(t, "", []string{root}, root, command.ShellProfile{}, time.Now, state)}
 			_, err = engine.Turn(ctx, "Execute all three calls in one batch.")
 			if cancelBatch && !cancellation.IsUserCancelled(err) {
 				t.Fatalf("canceled Turn=%v", err)
@@ -156,14 +161,15 @@ type executionWorkerProvider struct {
 }
 
 func (*executionWorkerProvider) Name() string { return "execution-workers" }
+
 func (p *executionWorkerProvider) Complete(ctx context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
 	query := lastDirectUserText(history)
 	if query == "launch two workers" {
 		if !historyHasToolResult(history, "worker-list") {
 			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-				{Type: llm.BlockToolUse, ToolUseID: "create-one", ToolName: app.WorkerThreadToolCreate, Input: map[string]any{"query": "worker-one", "alias": "one"}},
-				{Type: llm.BlockToolUse, ToolUseID: "create-two", ToolName: app.WorkerThreadToolCreate, Input: map[string]any{"query": "worker-two", "alias": "two"}},
-				{Type: llm.BlockToolUse, ToolUseID: "worker-list", ToolName: app.WorkerThreadToolList, Input: map[string]any{}},
+				{Type: llm.BlockToolUse, ToolUseID: "create-one", ToolName: workerthreadsmodule.ToolCreate, Input: map[string]any{"query": "worker-one", "alias": "one"}},
+				{Type: llm.BlockToolUse, ToolUseID: "create-two", ToolName: workerthreadsmodule.ToolCreate, Input: map[string]any{"query": "worker-two", "alias": "two"}},
+				{Type: llm.BlockToolUse, ToolUseID: "worker-list", ToolName: workerthreadsmodule.ToolList, Input: map[string]any{}},
 			}}, StopReason: llm.StopToolUse}, nil
 		}
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "workers started"), StopReason: llm.StopEndTurn}, nil
@@ -186,7 +192,7 @@ func (p *executionWorkerProvider) Complete(ctx context.Context, _ string, histor
 func TestEndToEnd_WorkerBatchesKeepIndependentStateAndProgress(t *testing.T) {
 	isolateModuleConfig(t)
 	provider := &executionWorkerProvider{started: make(chan string, 2), release: make(chan struct{})}
-	a, err := app.New(app.Options{Config: config.Config{ProviderID: "openai", Model: "test", Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Modules: config.ModulePolicy{modulecatalog.WorkerThreads: {Enabled: true}, modulecatalog.Notes: {Enabled: true}}}, Provider: provider, DisableMCP: true})
+	a, err := app.New(app.Options{Config: config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", Model: "test", Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Modules: config.ModulePolicy{workerthreadsmodule.ModuleID: {Enabled: true}, notesmodule.ModuleID: {Enabled: true}}}, Provider: provider, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,17 +228,17 @@ func TestEndToEnd_WorkerBatchesKeepIndependentStateAndProgress(t *testing.T) {
 		}
 	}
 	var listed struct {
-		Threads []app.WorkerThreadStatus `json:"threads"`
+		Threads []agent.WorkerThreadStatus `json:"threads"`
 	}
 	if err := json.Unmarshal([]byte(list), &listed); err != nil || len(listed.Threads) != 2 {
 		t.Fatalf("ordered create/create/list=%s, %v", list, err)
 	}
 	for _, status := range listed.Threads {
-		worker, ok := a.ManagedWorkerApp(status.ThreadID)
+		worker, ok := a.ManagedWorkerAgent(status.ThreadID)
 		if !ok {
 			t.Fatalf("missing Worker %s", status.ThreadID)
 		}
-		_, notes := runtime.ThreadStateStoresFromModules(worker.Engine.ThreadRuntimeSnapshot().Modules)
+		_, notes := modulestate.Stores(worker.Engine.ThreadRuntimeSnapshot().Modules)
 		snapshot, err := notes.Snapshot()
 		if err != nil {
 			t.Fatal(err)

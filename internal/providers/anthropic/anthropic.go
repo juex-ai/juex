@@ -1,0 +1,463 @@
+package anthropic
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	providermedia "github.com/juex-ai/juex/internal/providers/internal/media"
+	protocolsupport "github.com/juex-ai/juex/internal/providers/internal/protocol"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
+)
+
+// anthropicProvider wraps the official anthropic-sdk-go client and translates
+// between Juex's canonical Message form and the SDK's request/response types.
+//
+// We deliberately keep the SDK confined to this file — every other layer
+// works against the canonical types in types.go, so swapping SDK versions or
+// dropping back to raw HTTP only touches this file.
+type anthropicProvider struct {
+	profile llm.ProviderProfile
+	client  anthropic.Client
+}
+
+func NewAnthropic(profile llm.ProviderProfile, _ any) llm.Provider {
+	profile = providerprofile.CloneProviderProfile(profile)
+	opts := []option.RequestOption{
+		option.WithAPIKey(profile.APIKey),
+		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
+	}
+	if profile.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(profile.BaseURL))
+	}
+	for k, v := range profile.Headers {
+		opts = append(opts, option.WithHeader(k, v))
+	}
+	for k, v := range profile.Query {
+		opts = append(opts, option.WithQuery(k, v))
+	}
+	return &anthropicProvider{
+		profile: profile,
+		client:  anthropic.NewClient(opts...),
+	}
+}
+
+func (p *anthropicProvider) Name() string { return p.profile.ID + ":" + p.profile.Model }
+
+func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
+	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{})
+	if err != nil {
+		return llm.Response{}, err
+	}
+	maxTokens := int64(4096)
+	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
+		maxTokens = int64(opts.MaxOutputTokens)
+	}
+
+	cachePrompt := opts.CachePolicy.StablePrefixKey != ""
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(p.profile.Model),
+		MaxTokens: maxTokens,
+		Messages:  toAnthropicMessages(providerContext.Messages, p.profile, cachePrompt, opts.CachePolicy.Retention),
+	}
+	if p.profile.Capabilities.Tools {
+		params.Tools = toAnthropicTools(tools, cachePrompt, opts.CachePolicy.Retention)
+	}
+	if p.profile.Capabilities.ReasoningEffort {
+		if effort := protocolsupport.RequestThinkingEffort(p.profile, opts); effort != "" {
+			params.OutputConfig = anthropic.OutputConfigParam{
+				Effort: anthropic.OutputConfigEffort(effort),
+			}
+		}
+		params.Thinking = anthropic.ThinkingConfigParamUnion{
+			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+				Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
+			},
+		}
+	}
+	if sys != "" {
+		systemBlock := anthropic.TextBlockParam{Text: sys}
+		if cachePrompt {
+			systemBlock.CacheControl = anthropicCacheControl(opts.CachePolicy.Retention)
+		}
+		params.System = []anthropic.TextBlockParam{systemBlock}
+	}
+
+	if !p.profile.Capabilities.Streaming {
+		msg, err := p.client.Messages.New(ctx, params)
+		if err != nil {
+			return llm.Response{}, fmt.Errorf("anthropic: %w", err)
+		}
+		return p.responseFromMessage(msg), nil
+	}
+
+	msg := anthropic.Message{}
+	deltaUsage := anthropicStreamUsageObservation{}
+	streamDiagnostics := &anthropicStreamDiagnostics{}
+	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
+	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
+	defer stopIdle()
+	stream := p.client.Messages.NewStreaming(streamCtx, params, option.WithMiddleware(streamDiagnostics.middleware))
+	for stream.Next() {
+		resetIdle()
+		event := stream.Current()
+		emitAnthropicStreamDelta(opts.OnDelta, event)
+		deltaUsage.observe(event)
+		if err := msg.Accumulate(event); err != nil {
+			return llm.Response{}, anthropicStreamParseErrorFromEvent(p.Name(), event, err)
+		}
+	}
+	if err := stream.Err(); err != nil {
+		if idleExpired() {
+			return llm.Response{}, protocolsupport.NewStreamIdleTimeoutError("anthropic stream", idleTimeout, err)
+		}
+		if streamErr := anthropicStreamParseErrorFromDiagnostics(p.Name(), streamDiagnostics, err); streamErr != nil {
+			return llm.Response{}, streamErr
+		}
+		return llm.Response{}, fmt.Errorf("anthropic: %w", err)
+	}
+	deltaUsage.applyFallback(&msg)
+	return p.responseFromMessage(&msg), nil
+}
+
+type anthropicStreamUsageObservation struct {
+	inputTokens         int64
+	cacheReadTokens     int64
+	cacheCreationTokens int64
+}
+
+func (o *anthropicStreamUsageObservation) observe(event anthropic.MessageStreamEventUnion) {
+	if o == nil || event.Type != "message_delta" {
+		return
+	}
+	if event.Usage.InputTokens > 0 {
+		o.inputTokens = event.Usage.InputTokens
+	}
+	if event.Usage.CacheReadInputTokens > 0 {
+		o.cacheReadTokens = event.Usage.CacheReadInputTokens
+	}
+	if event.Usage.CacheCreationInputTokens > 0 {
+		o.cacheCreationTokens = event.Usage.CacheCreationInputTokens
+	}
+}
+
+func (o *anthropicStreamUsageObservation) applyFallback(msg *anthropic.Message) {
+	if o == nil || msg == nil || msg.Usage.InputTokens != 0 {
+		return
+	}
+	if o.inputTokens > 0 {
+		msg.Usage.InputTokens = o.inputTokens
+	}
+	if msg.Usage.CacheReadInputTokens == 0 && o.cacheReadTokens > 0 {
+		msg.Usage.CacheReadInputTokens = o.cacheReadTokens
+	}
+	if msg.Usage.CacheCreationInputTokens == 0 && o.cacheCreationTokens > 0 {
+		msg.Usage.CacheCreationInputTokens = o.cacheCreationTokens
+	}
+}
+
+func emitAnthropicStreamDelta(onDelta func(llm.StreamDelta), event anthropic.MessageStreamEventUnion) {
+	if onDelta == nil || event.Type != "content_block_delta" {
+		return
+	}
+	switch event.Delta.Type {
+	case "thinking_delta":
+		if event.Delta.Thinking != "" {
+			onDelta(llm.StreamDelta{Kind: "reasoning", Index: int(event.Index), Text: event.Delta.Thinking})
+		}
+	case "text_delta":
+		if event.Delta.Text != "" {
+			onDelta(llm.StreamDelta{Kind: "text", Index: int(event.Index), Text: event.Delta.Text})
+		}
+	}
+}
+
+func anthropicStreamParseErrorFromEvent(provider string, event anthropic.MessageStreamEventUnion, cause error) *llm.StreamParseError {
+	raw := trimStreamPreview(event.RawJSON())
+	eventType := event.Type
+	if eventType == "" {
+		eventType = extractAnthropicStreamType(raw)
+	}
+	idx, hasIndex := extractAnthropicStreamIndex(raw)
+	if hasAnthropicContentBlockIndex(eventType) {
+		idx = event.Index
+		hasIndex = true
+	}
+	return newAnthropicStreamParseError(provider, anthropicStreamDiagnostic{
+		EventType:  eventType,
+		Index:      idx,
+		HasIndex:   hasIndex,
+		RawPreview: raw,
+	}, cause)
+}
+
+func anthropicStreamParseErrorFromDiagnostics(provider string, diagnostics *anthropicStreamDiagnostics, cause error) *llm.StreamParseError {
+	diag := diagnostics.last()
+	if !isAnthropicParsedStreamEvent(diag.EventType) {
+		return nil
+	}
+	return newAnthropicStreamParseError(provider, diag, cause)
+}
+
+func newAnthropicStreamParseError(provider string, diag anthropicStreamDiagnostic, cause error) *llm.StreamParseError {
+	eventType := diag.EventType
+	if eventType == "" {
+		eventType = "stream"
+	}
+	return &llm.StreamParseError{
+		Kind:       llm.StreamParseErrorKindAnthropic,
+		Provider:   provider,
+		EventType:  eventType,
+		Index:      diag.Index,
+		HasIndex:   diag.HasIndex,
+		RawPreview: diag.RawPreview,
+		Cause:      cause,
+	}
+}
+
+func hasAnthropicContentBlockIndex(eventType string) bool {
+	switch eventType {
+	case "content_block_start", "content_block_delta", "content_block_stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAnthropicParsedStreamEvent(eventType string) bool {
+	switch eventType {
+	case "message_start", "message_delta", "message_stop", "content_block_start", "content_block_delta", "content_block_stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) llm.Response {
+	out := llm.Message{Role: llm.RoleAssistant, Model: p.Name()}
+	for _, block := range msg.Content {
+		switch block.Type {
+		case "text":
+			out.Blocks = append(out.Blocks, llm.Block{Type: llm.BlockText, Text: block.Text})
+		case "thinking":
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockReasoning,
+				Text:      block.Thinking,
+				Signature: block.Signature,
+			})
+		case "redacted_thinking":
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:     llm.BlockReasoning,
+				Content:  block.Data,
+				Redacted: true,
+			})
+		case "tool_use":
+			var input map[string]any
+			if len(block.Input) > 0 {
+				if err := json.Unmarshal(block.Input, &input); err != nil {
+					input = map[string]any{"_raw_input": string(block.Input)}
+				}
+			}
+			out.Blocks = append(out.Blocks, llm.Block{
+				Type:      llm.BlockToolUse,
+				ToolUseID: block.ID,
+				ToolName:  block.Name,
+				Input:     input,
+			})
+		}
+	}
+
+	return llm.Response{
+		Message:    out,
+		StopReason: mapAnthropicStop(string(msg.StopReason)),
+		Usage: llm.CanonicalUsage(
+			int(msg.Usage.InputTokens+msg.Usage.CacheReadInputTokens+msg.Usage.CacheCreationInputTokens),
+			int(msg.Usage.OutputTokens),
+			int(msg.Usage.CacheReadInputTokens),
+		),
+	}
+}
+
+func toAnthropicMessages(history []llm.Message, profile llm.ProviderProfile, cachePrompt bool, cacheRetention string) []anthropic.MessageParam {
+	out := make([]anthropic.MessageParam, 0, len(history))
+	cacheMsg, cacheBlock := anthropicHistoryCacheBreakpoint(history, cachePrompt)
+	for msgIndex, m := range history {
+		var blocks []anthropic.ContentBlockParamUnion
+		for blockIndex, b := range m.Blocks {
+			var block anthropic.ContentBlockParamUnion
+			switch b.Type {
+			case llm.BlockText:
+				block = anthropic.NewTextBlock(b.Text)
+			case llm.BlockImage:
+				if imageBlock, ok := anthropicImageBlock(profile.MediaDir, b.Media); ok {
+					block = imageBlock
+				} else {
+					block = anthropic.NewTextBlock(llm.UnavailableMediaReferenceText("image", b.Media))
+				}
+			case llm.BlockReasoning:
+				if b.Redacted {
+					block = anthropic.NewRedactedThinkingBlock(b.Content)
+				} else {
+					block = anthropic.NewThinkingBlock(b.Signature, b.Text)
+				}
+			case llm.BlockToolUse:
+				block = anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName)
+			case llm.BlockToolResult:
+				block = anthropicToolResultBlock(profile.MediaDir, b)
+			default:
+				continue
+			}
+			if msgIndex == cacheMsg && blockIndex == cacheBlock {
+				setAnthropicBlockCacheControl(&block, cacheRetention)
+			}
+			blocks = append(blocks, block)
+		}
+		switch m.Role {
+		case llm.RoleUser:
+			out = append(out, anthropic.NewUserMessage(blocks...))
+		case llm.RoleAssistant:
+			out = append(out, anthropic.NewAssistantMessage(blocks...))
+		}
+	}
+	return out
+}
+
+func anthropicImageBlock(workDir string, media *llm.MediaRef) (anthropic.ContentBlockParamUnion, bool) {
+	encoded, mediaType, ok := providermedia.ReadImageBase64(workDir, media)
+	if !ok {
+		return anthropic.ContentBlockParamUnion{}, false
+	}
+	return anthropic.NewImageBlockBase64(mediaType, encoded), true
+}
+
+func anthropicToolResultBlock(workDir string, b llm.Block) anthropic.ContentBlockParamUnion {
+	if b.Media == nil {
+		return anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError)
+	}
+	content := make([]anthropic.ToolResultBlockParamContentUnion, 0, 2)
+	if b.Content != "" {
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{
+			OfText: &anthropic.TextBlockParam{Text: b.Content},
+		})
+	}
+	if encoded, mediaType, ok := providermedia.ReadImageBase64(workDir, b.Media); ok {
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{
+			OfImage: &anthropic.ImageBlockParam{
+				Source: anthropic.ImageBlockParamSourceUnion{
+					OfBase64: &anthropic.Base64ImageSourceParam{
+						Data:      encoded,
+						MediaType: anthropic.Base64ImageSourceMediaType(mediaType),
+					},
+				},
+			},
+		})
+	} else {
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{
+			OfText: &anthropic.TextBlockParam{Text: llm.UnavailableMediaReferenceText("tool_result_image", b.Media)},
+		})
+	}
+	return anthropic.ContentBlockParamUnion{
+		OfToolResult: &anthropic.ToolResultBlockParam{
+			ToolUseID: b.ToolUseID,
+			Content:   content,
+			IsError:   param.NewOpt(b.IsError),
+		},
+	}
+}
+
+func anthropicHistoryCacheBreakpoint(history []llm.Message, enabled bool) (int, int) {
+	if !enabled {
+		return -1, -1
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Kind == llm.MessageKindRuntimeContext {
+			continue
+		}
+		for j := len(history[i].Blocks) - 1; j >= 0; j-- {
+			if anthropicCacheableHistoryBlock(history[i].Blocks[j]) {
+				return i, j
+			}
+		}
+	}
+	return -1, -1
+}
+
+func anthropicCacheableHistoryBlock(block llm.Block) bool {
+	switch block.Type {
+	case llm.BlockText, llm.BlockImage, llm.BlockToolUse, llm.BlockToolResult:
+		return true
+	default:
+		return false
+	}
+}
+
+func setAnthropicBlockCacheControl(block *anthropic.ContentBlockParamUnion, retention string) {
+	cc := anthropicCacheControl(retention)
+	switch {
+	case block.OfText != nil:
+		block.OfText.CacheControl = cc
+	case block.OfImage != nil:
+		block.OfImage.CacheControl = cc
+	case block.OfToolUse != nil:
+		block.OfToolUse.CacheControl = cc
+	case block.OfToolResult != nil:
+		block.OfToolResult.CacheControl = cc
+	}
+}
+
+func toAnthropicTools(tools []llm.ToolSpec, cachePrompt bool, cacheRetention string) []anthropic.ToolUnionParam {
+	out := make([]anthropic.ToolUnionParam, 0, len(tools))
+	for i, t := range tools {
+		normalized := llm.NormalizedFunctionParameters(t.Schema)
+		schema := anthropic.ToolInputSchemaParam{
+			Properties: normalized["properties"],
+			Required:   llm.NormalizedFunctionRequired(t.Schema),
+		}
+		if additionalProperties, ok := normalized["additionalProperties"]; ok && additionalProperties != nil {
+			schema.ExtraFields = map[string]any{"additionalProperties": additionalProperties}
+		}
+		tool := anthropic.ToolParam{
+			Name:        t.Name,
+			InputSchema: schema,
+			Description: param.NewOpt(t.Description),
+		}
+		if cachePrompt && i == len(tools)-1 {
+			tool.CacheControl = anthropicCacheControl(cacheRetention)
+		}
+		out = append(out, anthropic.ToolUnionParam{OfTool: &tool})
+	}
+	return out
+}
+
+func anthropicCacheControl(retention string) anthropic.CacheControlEphemeralParam {
+	cc := anthropic.NewCacheControlEphemeralParam()
+	switch retention {
+	case "1h", "24h":
+		cc.TTL = anthropic.CacheControlEphemeralTTLTTL1h
+	case "5m":
+		cc.TTL = anthropic.CacheControlEphemeralTTLTTL5m
+	}
+	return cc
+}
+
+func mapAnthropicStop(s string) llm.StopReason {
+	switch s {
+	case "end_turn", "stop_sequence":
+		return llm.StopEndTurn
+	case "tool_use":
+		return llm.StopToolUse
+	case "max_tokens":
+		return llm.StopMaxTokens
+	default:
+		return llm.StopOther
+	}
+}

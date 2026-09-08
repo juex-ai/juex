@@ -44,6 +44,9 @@ MCP server、Hook、Observable 与 environment 映射成类型化 Framework
 capability。Juex 不加载第三方 Go plugin 或动态库。可变 Extension 数据属于
 Agent 与对应 Extension。
 
+Memory 是使用同一套类型化 capability 的第一方 Go Feature Module，拥有 Agent
+持久知识和派生索引维护，不需要 Feature-specific Framework slot。
+
 ## 结果
 
 - Enablement、构造、发布和 cleanup 来自一套校验后的组合。
@@ -66,4 +69,4 @@ Agent 与对应 Extension。
 - [架构：依赖方向](../../ARCHITECTURE.zh.md#依赖方向)
 - [领域模型](../../DOMAIN.zh.md)
 - [产品哲学](../../PHILOSOPHY.zh.md)
-- [Module contract](../../internal/runtime/module/)
+- [Module contract](../../internal/framework/module)

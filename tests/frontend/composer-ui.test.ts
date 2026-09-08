@@ -42,7 +42,7 @@ const promptInputSource = readFileSync(
 test("composer groups utility actions before matching status controls", () => {
   const actions = composerSource.indexOf('aria-label="Composer actions"');
   const separator = composerSource.indexOf('orientation="vertical"');
-  const status = composerSource.indexOf('aria-label="Thread status"');
+  const status = composerSource.indexOf('aria-label="Thread status"', separator);
   assert.ok(actions >= 0 && separator > actions && status > separator);
   assert.match(
     composerSource,
@@ -57,13 +57,6 @@ test("composer groups utility actions before matching status controls", () => {
   assert.doesNotMatch(
     statusSource,
     /ContextUsageLabel[\s\S]{0,600}<TooltipTrigger/,
-  );
-});
-
-test("composer goal chip names the disclosed goal and notes content", () => {
-  assert.match(
-    statusSource,
-    /aria-label=\{`Open goal and notes: \$\{label\}`\}/,
   );
 });
 

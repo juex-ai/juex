@@ -10,7 +10,7 @@
 | 所有者 | 职责 |
 | --- | --- |
 | Workspace | 用户维护的项目文件、Workspace 配置、Skill 和 Hook。 |
-| Agent | 长期身份、Workspace 所有权、配置覆盖、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、Observable 定义与状态，以及 Extension 状态。 |
+| Agent | 长期身份、Workspace 所有权、配置覆盖、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、持久 Memory、Observable 定义与状态，以及 Extension 状态。 |
 | Thread | 身份、拓扑、lifecycle、Context Generation registry、pending Input、Turn、消息、Event、Usage 和 spool。 |
 | Thread Module | 可选的 Thread scope 状态，例如 Goal、Notes 与 Scratchpad，以及其资源、context 和 Generation lifecycle 行为。 |
 | Agent Runtime | 可替换的进程资源：Provider、MCP client、Tool、Observable、scheduler 和实时订阅。 |
@@ -39,6 +39,9 @@ Worker 使用相同的 Thread 模型：
 - 历史、上下文、工作状态、pending Input 和订阅相互独立；
 - 可以使用 Agent 共享资源，但不接收 Observation。
 
+`worker-threads` Module 控制 Worker 执行，不控制 Thread 存储。禁用时暂停
+pending Input 恢复，仍可读取历史、管理保留状态，并执行宿主 `/new` 与 `/compact`。
+
 创建者和结果目的地不是 Worker 属性。任何关注结果的调用方都自行订阅。
 Parent 只表达拓扑，不表示投递路由。
 
@@ -57,6 +60,8 @@ Assistant 消息与 Input 配对。
 订阅是订阅者持有 cursor 的单 Thread replay/live 观察；即使跨越 Context
 Generation，也使用一条连续的 Thread Event sequence。它不天然绑定 Input、Turn
 或 client 类型。更高层 waiter 可以从 `input_id` 跟随到消费它的 Turn。
+
+可选的输入跟踪将投递与模型“已处理”的判断分开。启用期间接收的直接用户输入保持未勾选，直到模型主动勾选。Turn 结束不代表输入已勾选，已结束但未勾选的输入也不属于待投递队列。失败和 compaction 保留未勾选输入。关闭开关保留已有记录，但停止新登记和提醒；这些核心输入记录不是 Goal/Notes 的可退休资源。用户 `/new` 开始新的工作范围，compaction 保持原范围。勾选不能取消执行，也不证明结果正确。
 
 ## Context Generation 与 Thread 工作状态
 

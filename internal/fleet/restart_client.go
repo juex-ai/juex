@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/statusapi"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/framework/endpoint"
+	statusapi "github.com/juex-ai/juex/internal/framework/status"
 )
 
 const (

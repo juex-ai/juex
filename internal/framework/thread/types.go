@@ -1,0 +1,238 @@
+package thread
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+
+	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/llm"
+)
+
+const (
+	JournalVersion    = 1
+	ProjectionVersion = 1
+	IndexVersion      = 1
+	InitialGeneration = "g000001"
+)
+
+const (
+	FactThreadCreated    = "thread.created"
+	FactMessageAppended  = "message.appended"
+	FactEventRecorded    = "event.recorded"
+	FactTurnStarted      = "turn.started"
+	FactTurnCompleted    = "turn.completed"
+	FactTurnFailed       = "turn.failed"
+	FactTurnCancelled    = "turn.cancelled"
+	FactThreadSettled    = "thread.settled"
+	FactContextRenewed   = "context.renewed"
+	FactContextCompacted = "context.compacted"
+	FactUsageRecorded    = "usage.recorded"
+)
+
+type RetentionState string
+
+const (
+	RetentionActive   RetentionState = "active"
+	RetentionArchived RetentionState = "archived"
+)
+
+type ExecutionState string
+
+const (
+	ExecutionIdle    ExecutionState = "idle"
+	ExecutionWorking ExecutionState = "working"
+	ExecutionFailed  ExecutionState = "failed"
+)
+
+var (
+	ErrCorruptJournal    = errors.New("thread: corrupt journal")
+	ErrInvalidFact       = errors.New("thread: invalid fact")
+	ErrInvalidTransition = errors.New("thread: invalid transition")
+	ErrProjectionStale   = errors.New("thread: projection persistence failed after journal commit")
+	ErrStaleHandle       = errors.New("thread: stale Thread handle")
+)
+
+type Commit struct {
+	Version int       `json:"v"`
+	Seq     uint64    `json:"seq"`
+	At      Timestamp `json:"at"`
+	Facts   []Fact    `json:"facts"`
+}
+
+type Fact struct {
+	Type             string            `json:"type"`
+	ThreadID         string            `json:"thread_id,omitempty"`
+	Alias            string            `json:"alias,omitempty"`
+	ParentThreadID   string            `json:"parent_thread_id,omitempty"`
+	GenerationID     string            `json:"generation_id,omitempty"`
+	FromGenerationID string            `json:"from_generation_id,omitempty"`
+	ToGenerationID   string            `json:"to_generation_id,omitempty"`
+	TurnID           string            `json:"turn_id,omitempty"`
+	Message          *llm.Message      `json:"message,omitempty"`
+	Event            *events.Event     `json:"event,omitempty"`
+	Summary          *llm.Message      `json:"summary,omitempty"`
+	Automatic        bool              `json:"automatic,omitempty"`
+	Error            string            `json:"error,omitempty"`
+	ModelRef         string            `json:"model_ref,omitempty"`
+	Usage            *llm.Usage        `json:"usage,omitempty"`
+	ContextUsage     *llm.ContextUsage `json:"context_usage,omitempty"`
+	Seed             *GenerationSeed   `json:"seed,omitempty"`
+}
+
+// GenerationSeed is the bounded runtime state needed to continue from a
+// Generation boundary. Authoritative Thread metadata stays in thread.json.
+type GenerationSeed struct {
+	Version          int               `json:"v"`
+	ContextScopeID   string            `json:"context_scope_id"`
+	ProviderMessages []llm.Message     `json:"provider_messages,omitempty"`
+	RecoveryEvents   []events.Event    `json:"recovery_events,omitempty"`
+	CompactionCount  int               `json:"compaction_count,omitempty"`
+	ContextUsage     *llm.ContextUsage `json:"context_usage,omitempty"`
+}
+
+type GenerationProjection struct {
+	ID          string `json:"generation_id"`
+	Ordinal     int    `json:"ordinal"`
+	BoundarySeq uint64 `json:"boundary_seq"`
+}
+
+type Counts struct {
+	GenerationCount   int `json:"generation_count"`
+	TurnCount         int `json:"turn_count"`
+	PendingInputCount int `json:"pending_input_count"`
+}
+
+type ContextProjection struct {
+	ContextWindow int        `json:"context_window"`
+	CurrentTokens int        `json:"current_tokens"`
+	Percentage    float64    `json:"percentage"`
+	CalibratedAt  *Timestamp `json:"calibrated_at,omitempty"`
+}
+
+type EventCursor struct {
+	GenerationID string `json:"generation_id"`
+	Seq          uint64 `json:"seq"`
+	Offset       int64  `json:"offset"`
+}
+
+type UsageAggregate struct {
+	Total   llm.Usage            `json:"total"`
+	ByModel map[string]llm.Usage `json:"by_model"`
+}
+
+type Projection struct {
+	Version                int                    `json:"v"`
+	ThreadID               string                 `json:"thread_id"`
+	Alias                  string                 `json:"alias"`
+	ParentThreadID         string                 `json:"parent_thread_id,omitempty"`
+	CreatedAt              Timestamp              `json:"created_at"`
+	UpdatedAt              Timestamp              `json:"updated_at"`
+	ArchivedAt             *Timestamp             `json:"archived_at,omitempty"`
+	RetentionState         RetentionState         `json:"retention_state"`
+	ExecutionState         ExecutionState         `json:"execution_state,omitempty"`
+	Revision               uint64                 `json:"revision"`
+	CurrentGeneration      GenerationProjection   `json:"current_generation"`
+	Generations            []GenerationProjection `json:"generations"`
+	Counts                 Counts                 `json:"counts"`
+	TokenUsage             UsageAggregate         `json:"token_usage"`
+	ContextUsage           *ContextProjection     `json:"context_usage,omitempty"`
+	LastActivityAt         Timestamp              `json:"last_activity_at"`
+	EventCursor            EventCursor            `json:"event_cursor"`
+	UsageAggregatedThrough EventCursor            `json:"usage_aggregated_through"`
+}
+
+type IndexEntry struct {
+	ThreadID             string         `json:"thread_id"`
+	Alias                string         `json:"alias"`
+	ParentThreadID       string         `json:"parent_thread_id,omitempty"`
+	ArchivedAt           *Timestamp     `json:"archived_at,omitempty"`
+	CreatedAt            Timestamp      `json:"created_at"`
+	LastActivityAt       Timestamp      `json:"last_activity_at"`
+	RetentionState       RetentionState `json:"retention_state"`
+	ExecutionState       ExecutionState `json:"execution_state,omitempty"`
+	PendingInputCount    int            `json:"pending_input_count"`
+	TurnCount            int            `json:"turn_count"`
+	GenerationCount      int            `json:"generation_count"`
+	CurrentGenerationID  string         `json:"current_generation_id"`
+	CurrentContextTokens int            `json:"current_context_tokens"`
+	TokenUsage           UsageAggregate `json:"token_usage"`
+	ThreadRevision       uint64         `json:"thread_revision"`
+}
+
+type Index struct {
+	Version   int          `json:"v"`
+	Revision  uint64       `json:"revision"`
+	UpdatedAt Timestamp    `json:"updated_at"`
+	Threads   []IndexEntry `json:"threads"`
+}
+
+// Info is a lightweight Thread snapshot for adapters that already hold a
+// Thread handle. Agent-wide lists use IndexEntry instead.
+type Info struct {
+	ID                    string            `json:"thread_id"`
+	Alias                 string            `json:"alias"`
+	ParentThreadID        string            `json:"parent_thread_id,omitempty"`
+	Dir                   string            `json:"dir"`
+	CreatedAt             Timestamp         `json:"created_at"`
+	LastActivityAt        Timestamp         `json:"last_activity_at"`
+	ArchivedAt            *Timestamp        `json:"archived_at,omitempty"`
+	RetentionState        RetentionState    `json:"retention_state"`
+	ExecutionState        ExecutionState    `json:"execution_state,omitempty"`
+	Revision              uint64            `json:"revision"`
+	GenerationID          string            `json:"generation_id"`
+	GenerationJournalPath string            `json:"generation_journal_path"`
+	TurnCount             int               `json:"turn_count"`
+	PendingInputs         int               `json:"pending_input_count"`
+	TokenUsage            UsageAggregate    `json:"token_usage"`
+	ContextUsage          *llm.ContextUsage `json:"context_usage,omitempty"`
+}
+
+type Activity struct {
+	Type             string       `json:"type"`
+	At               Timestamp    `json:"at"`
+	FromGenerationID string       `json:"from_generation_id,omitempty"`
+	ToGenerationID   string       `json:"to_generation_id,omitempty"`
+	Summary          *llm.Message `json:"summary,omitempty"`
+	Automatic        bool         `json:"automatic,omitempty"`
+}
+
+type ReplayState struct {
+	ContextScopeID   string
+	Projection       Projection
+	Messages         []llm.Message
+	ProviderMessages []llm.Message
+	Events           []events.Event
+	Activities       []Activity
+	CompactionCount  int
+	ContextUsage     *llm.ContextUsage
+}
+
+type TimelineItem struct {
+	Type     string       `json:"type"`
+	Seq      uint64       `json:"seq"`
+	At       Timestamp    `json:"at"`
+	Message  *llm.Message `json:"message,omitempty"`
+	Activity *Activity    `json:"activity,omitempty"`
+}
+
+type TimelinePage struct {
+	Items          []TimelineItem `json:"items"`
+	HasMoreBefore  bool           `json:"has_more_before"`
+	PreviousCursor string         `json:"previous_cursor,omitempty"`
+}
+
+func generationID(ordinal int) string {
+	return "g" + fmt.Sprintf("%06d", ordinal)
+}
+
+func parseGenerationID(id string) (int, error) {
+	if len(id) != 7 || id[0] != 'g' {
+		return 0, fmt.Errorf("%w: invalid generation id %q", ErrInvalidFact, id)
+	}
+	ordinal, err := strconv.Atoi(id[1:])
+	if err != nil || ordinal <= 0 || generationID(ordinal) != id {
+		return 0, fmt.Errorf("%w: invalid generation id %q", ErrInvalidFact, id)
+	}
+	return ordinal, nil
+}
