@@ -2,7 +2,7 @@
 
 > English | [中文](input-tracking.zh.md)
 
-Status: proposed for review; not implemented. Updated: 2026-09-08.
+Status: implemented in [PR #538](https://github.com/juex-ai/juex/pull/538). Updated: 2026-09-08. The proposal below records the design discussion; the [Input Tracking Module](../../internal/features/inputtracking/README.md) defines the shipped behavior, limits, and upgrade requirements.
 
 Add a simple durable checklist to the existing input mechanism: Framework registers inputs automatically, recitation presents unchecked inputs, and the model checks them off after handling them. This proposal does not replace the current DOMAIN or ARCHITECTURE contracts.
 

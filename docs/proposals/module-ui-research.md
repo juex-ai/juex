@@ -2,7 +2,7 @@
 
 > English | [中文](module-ui-research.zh.md)
 
-Research date: 2026-09-06. This document is a proposal for review, not an implemented product contract. Related documents: [Module switches](module-switches.md) and [minimal-mode audit](minimal-mode-audit.md).
+Research date: 2026-09-06. Status updated 2026-09-08: the fixed-slot composition was implemented in [PR #534](https://github.com/juex-ai/juex/pull/534). This document retains the research and original recommendation; current contracts live in [DESIGN.md](../../DESIGN.md) and the [frontend README](../../frontend/README.md). The gap inventory below is historical. Related documents: [Module switches](module-switches.md) and [minimal-mode audit](minimal-mode-audit.md).
 
 Use **Go to determine effective capabilities and UI contributions, with Web composing feature components into fixed slots**. Parse configuration once in Go; Web consumes the composition result without repeating preset defaults or override precedence. Features still have Go and TypeScript implementations, while business state, permissions, and enablement have one authority.
 
@@ -66,12 +66,12 @@ Arbitrary Pi TUI components therefore do not establish an equally flexible remot
 
 | Location | Current coupling | Proposed owner |
 | --- | --- | --- |
-| [Thread response and reads](../../internal/web/handlers.go#L129) | Top-level Goal/Notes fields; inactive-Thread reads construct concrete Stores after checking switches | Generic Thread state envelope; Module-owned read-only contributors |
-| [Frontend event projection](../../frontend/src/lib/thread-read-state.ts#L390) | Core reducer recognizes goal.updated / notes.updated and updates dedicated fields | Generic snapshot replacement; Go Modules provide business state |
-| [ThreadStatusPanel](../../frontend/src/components/thread/ThreadStatusPanel.tsx#L35) | Always mounts a combined Goal/Notes entry; missing values can still render goal idle | Fixed status slot, separate Goal/Notes contributions, shell-owned layout |
-| [AppShell file panel](../../frontend/src/components/AppShell.tsx#L334) | Scratchpad mode, toggle, requests, and refresh revision live in the application shell | File-root registration point; Scratchpad owns its root and loader |
-| [Web routes](../../internal/web/server.go#L214) / [file reads](../../internal/web/files.go#L119) | Core dispatches scratchpad subpaths and interprets its root | Module resource adapter; Web owns scope, authorization, and transport |
-| [Module contracts](../../internal/runtime/module/registry.go#L20) | Tool/context/policy lifecycles exist, but no complete Web contribution contract | Narrow state/resource and presentation seams; Engine stays independent of HTTP and React |
+| [Thread response and reads](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/handlers.go#L129) | Top-level Goal/Notes fields; inactive-Thread reads construct concrete Stores after checking switches | Generic Thread state envelope; Module-owned read-only contributors |
+| [Frontend event projection](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/lib/thread-read-state.ts#L390) | Core reducer recognizes goal.updated / notes.updated and updates dedicated fields | Generic snapshot replacement; Go Modules provide business state |
+| [ThreadStatusPanel](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/thread/ThreadStatusPanel.tsx#L35) | Always mounts a combined Goal/Notes entry; missing values can still render goal idle | Fixed status slot, separate Goal/Notes contributions, shell-owned layout |
+| [AppShell file panel](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/AppShell.tsx#L334) | Scratchpad mode, toggle, requests, and refresh revision live in the application shell | File-root registration point; Scratchpad owns its root and loader |
+| [Web routes](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/server.go#L214) / [file reads](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/files.go#L119) | Core dispatches scratchpad subpaths and interprets its root | Module resource adapter; Web owns scope, authorization, and transport |
+| [Module contracts](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/runtime/module/registry.go#L20) | Tool/context/policy lifecycles exist, but no complete Web contribution contract | Narrow state/resource and presentation seams; Engine stays independent of HTTP and React |
 
 Passing raw Go configuration into every page leaves these concrete Store, event-name, and layout dependencies intact. Renaming the fields into `map[string]any` while keeping goal/notes switches in Web core would not complete the separation either.
 

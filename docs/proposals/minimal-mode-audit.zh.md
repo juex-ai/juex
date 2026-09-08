@@ -2,6 +2,8 @@
 
 > [English](minimal-mode-audit.md) | 中文
 
+截至 2026-09-08 的状态：历史审计证据。后续实现与验收见 [PR #535](https://github.com/juex-ai/juex/pull/535) 和 [PR #536](https://github.com/juex-ai/juex/pull/536)，当前行为见 [配置说明](../../internal/app/config/README.zh.md)。下文关于能力缺失和名称尚不支持的描述均针对审计基线，不代表当前 main。
+
 审计时间：2026-09-06。源码基线：`2b0c1bb`，工作区 `/Users/hejinhai/git/project/juex`。本次完成源码审计和隔离探针，没有修改产品代码、用户配置或运行中的 Agent。下列新模块名、接口名和模式配置都是建议，尚未实现。
 
 结论：现有 Module 框架已经能够提供零工具、零普通请求系统提示词的运行方式，但目前不能仅通过配置得到可用的 `read + write + edit` 加现有三项 Shell 工具的极简组合。主要问题是模块粒度过大、功能准备发生在注册之前、少数功能策略仍写在 Framework/Foundation 中。无需推翻生命周期框架；需要有针对性地拆模块和补少量接口。
@@ -41,7 +43,7 @@
 | `context-control` | `context_new`、`context_compact` | 关闭模型主动操作和容量提醒 | 已有模块开关；它不控制宿主 `/new`、`/compact` 或自动压缩机制 |
 | `mcp` | 按连接的服务器动态增加 | 关闭 | 已有模块开关，App/Web 启动路径有关闭检查 |
 
-空配置共 34 个静态工具，外部 MCP 工具另计。工具注册来源见 [runtime_modules.go](../../internal/app/runtime_modules.go#L117)、[BuiltinProviders](../../internal/tools/builtin.go#L70)、[Worker 工具](../../internal/app/worker_threads.go#L1195)、[Observable 工具](../../internal/observable/tools.go#L123)。
+空配置共 34 个静态工具，外部 MCP 工具另计。工具注册来源见 [runtime_modules.go](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/runtime_modules.go#L117)、[BuiltinProviders](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/builtin.go#L70)、[Worker 工具](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/worker_threads.go#L1195)、[Observable 工具](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/observable/tools.go#L123)。
 
 **其他上下文与能力的覆盖情况**
 
@@ -66,7 +68,7 @@
 | 模型选择/回退、认证、环境、Sandbox | 基础配置/执行服务 | 不必为极简模式全部改成 Module；单模型可通过模型列表表达，保留执行安全和取消约束 |
 | Thread、Input、Turn、Generation、Usage、历史、SSE/Web/CLI | Framework/Foundation 与宿主接口 | 核心运行和用户操作能力，不是额外模型工具；极简模式不应破坏持久化与控制面 |
 
-关键来源：[AGENTS.md / Thread context](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/modules/promptcontext/module.go#L28)、[隐藏 builtin guides](../../internal/skills/builtin.go#L79)、[运行时上下文消息](../../internal/runtime/active_context.go#L76)、[资源前置解析](../../internal/app/resource_refs.go#L72)、[Extension 环境合并](../../internal/app/agent_runtime.go#L76)。
+关键来源：[AGENTS.md / Thread context](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/modules/promptcontext/module.go#L28)、[隐藏 builtin guides](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/skills/builtin.go#L79)、[运行时上下文消息](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/active_context.go#L76)、[资源前置解析](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/resource_refs.go#L72)、[Extension 环境合并](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/agent_runtime.go#L76)。
 
 **优先改造清单：让极简模式真正可用**
 
@@ -82,7 +84,7 @@
 | A6 | P0 / Strong | 根据配置解析和装配后的最终能力集合，生成工具描述及结果中的可选高级建议。基础工具保留独立完整的说明与错误信息，高级功能启用时才追加对应建议；不让基础工具自行读取 YAML 或依赖高级模块实现 | 任意支持的模块组合中，不建议调用不可用工具或修改不存在的状态模块；检查组合所需全部工具是否可用，例如分块写不能只判断 write_begin |
 | A7 | P0 / Strong | `juex.yaml` 增加 `preset`，支持 `minimal` 与建议命名 `standard`；先合并各层 preset 和显式开关，再让显式开关覆盖预设默认值，最终输出一份有效能力集合 | 新增可选模块不会自动进入 minimal；高层仅更换 preset 不会抹掉低层显式开关；相同开关仍由高层覆盖低层 |
 
-A1–A3 依据：[内置打包](../../internal/tools/builtin.go#L70)、[文件工具开关和 schema](../../internal/tools/builtin_file.go#L16)、[Shell 会话协议](../../internal/tools/builtin_shell.go#L16)。A6 依据：[错误追加指南](../../internal/runtime/loop.go#L1570)、[Group 到 Skill 的映射](../../internal/tools/registry.go#L49)。A7 依据：[缺省启用规则](../../internal/config/modules.go#L21)。
+A1–A3 依据：[内置打包](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/builtin.go#L70)、[文件工具开关和 schema](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/builtin_file.go#L16)、[Shell 会话协议](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/builtin_shell.go#L16)。A6 依据：[错误追加指南](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/loop.go#L1570)、[Group 到 Skill 的映射](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/registry.go#L49)。A7 依据：[缺省启用规则](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/config/modules.go#L21)。
 
 2026-09-06 讨论补充：用户确认工具的高级建议应随最终启用状态变化，并确认以 `preset` 提供预设、显式开关优先于预设。以下为具体语义建议，尚未实现。
 
@@ -125,17 +127,17 @@ modules:
 
 证据定位：
 
-- B1：[app.New 构造](../../internal/app/app.go#L340)、[恢复](../../internal/app/app.go#L682)、[恢复实现](../../internal/tools/chunked_write.go#L40)。
-- B2：[Runtime 结果识别](../../internal/runtime/loop.go#L1668)、[Runtime 历史折叠](../../internal/runtime/context_projection.go#L129)、[Provider 历史折叠](../../internal/llm/provider_projection.go#L44)、[功能专用 Block 字段](../../internal/llm/types.go#L89)。
-- B3：[Thread 创建](../../internal/thread/store.go#L168)、[通用上下文中的专用字段](../../internal/runtime/module/registry.go#L33)。
-- B4：[插件 Hook 文件加载](../../internal/app/resource_refs.go#L363)、[配置层 Hook 解析](../../internal/config/config.go#L973)。
-- B5：[状态专用接口](../../internal/runtime/compaction_summary.go#L20)、[固定摘要指导](../../internal/runtime/contextbudget/summary.go#L74)、[状态查询](../../internal/runtime/thread_state_modules.go#L8)。
-- B6：[资源启动后专门激活](../../internal/app/app.go#L692)、[恢复屏障](../../internal/app/pending_recovery.go#L293)。
-- B7：[分组驱动串行性](../../internal/runtime/loop.go#L1551)。
-- B8：[MCP 诊断](../../internal/cli/doctor.go#L495)、[Skills 诊断](../../internal/cli/doctor.go#L602)。
-- B9：[运行时状态装配](../../internal/app/runtime_status.go#L257)。
-- B10：[错误分类](../../internal/runtime/tool_failure.go#L117)。
-- B11：[当前只处理启用模块且保留禁用文件的契约](../../internal/runtime/module/lifecycle.go#L41)。这是需要修改的当前行为；目标清理语义见 [工作状态生命周期](module-ui-research.zh.md#工作状态的删除与保留)。
+- B1：[app.New 构造](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/app.go#L340)、[恢复](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/app.go#L682)、[恢复实现](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/chunked_write.go#L40)。
+- B2：[Runtime 结果识别](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/loop.go#L1668)、[Runtime 历史折叠](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/context_projection.go#L129)、[Provider 历史折叠](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/llm/provider_projection.go#L44)、[功能专用 Block 字段](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/llm/types.go#L89)。
+- B3：[Thread 创建](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/thread/store.go#L168)、[通用上下文中的专用字段](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/module/registry.go#L33)。
+- B4：[插件 Hook 文件加载](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/resource_refs.go#L363)、[配置层 Hook 解析](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/config/config.go#L973)。
+- B5：[状态专用接口](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/compaction_summary.go#L20)、[固定摘要指导](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/contextbudget/summary.go#L74)、[状态查询](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/thread_state_modules.go#L8)。
+- B6：[资源启动后专门激活](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/app.go#L692)、[恢复屏障](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/pending_recovery.go#L293)。
+- B7：[分组驱动串行性](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/loop.go#L1551)。
+- B8：[MCP 诊断](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/cli/doctor.go#L495)、[Skills 诊断](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/cli/doctor.go#L602)。
+- B9：[运行时状态装配](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/runtime_status.go#L257)。
+- B10：[错误分类](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/tool_failure.go#L117)。
+- B11：[当前只处理启用模块且保留禁用文件的契约](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/module/lifecycle.go#L41)。这是需要修改的当前行为；目标清理语义见 [工作状态生命周期](module-ui-research.zh.md#工作状态的删除与保留)。
 
 **生命周期接口的判断**
 
@@ -174,7 +176,7 @@ modules:
 - 普通模式回归已有工具、MCP/Observable 恢复屏障和逆序关闭；Main/Worker 继承同一有效模块组合。
 - 在实际目标小模型上单独测首 token 延迟、任务成功率、错误恢复、工具调用合法率和上下文占用。本次未测模型表现，不能从工具数下降直接断言效果提升。
 
-已有架构测试会通过 B2 这类语义耦合，因为它主要检查 import，并把 `internal/chunkedwrite`、`internal/tools`、`internal/llm` 列为 Foundation，无法发现同包中的 Goal/Notes 实现和工具名分支。应增加跨包行为测试和合理的所有权规则，不添加只证明旧名称不存在的测试。见 [boundary_test.go](../../internal/architecture/boundary_test.go#L36)。
+已有架构测试会通过 B2 这类语义耦合，因为它主要检查 import，并把 `internal/chunkedwrite`、`internal/tools`、`internal/llm` 列为 Foundation，无法发现同包中的 Goal/Notes 实现和工具名分支。应增加跨包行为测试和合理的所有权规则，不添加只证明旧名称不存在的测试。见 [boundary_test.go](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/architecture/boundary_test.go#L36)。
 
 文档也存在范围偏差：[ARCHITECTURE.md](../../ARCHITECTURE.md) 描述关闭 Feature 会阻止构造、副作用和发布，但当前保证主要覆盖注册的工厂，尚未覆盖插件预处理、分块写管理器和 Scratchpad。改造时应同步更新架构边界和配置说明，并维护中英文对照；本次审计没有直接改写已接受的产品契约。
 

@@ -1,6 +1,8 @@
-**Proposed JueX Module Switches (Design Proposal; Not Implemented)**
+**JueX Module Switches: Original Design Inventory**
 
 > English | [中文](module-switches.zh.md)
+
+Status: the preset and disablement design has shipped, including [PR #535](https://github.com/juex-ai/juex/pull/535) and [PR #536](https://github.com/juex-ai/juex/pull/536). Updated: 2026-09-08. The 18-module inventory below records the original discussion; the [current configuration contract](../../internal/app/config/README.md) is authoritative and also includes the subsequently added input-tracking module.
 
 Following the minimal-mode discussion on 2026-09-06, this proposal defines 18 Module switches using `modules.<id>.enabled`. `preset` supports `minimal` and the proposed name `standard`. Explicit switches override the preset; repeated explicit switches retain the existing configuration-layer precedence.
 
@@ -52,7 +54,7 @@ This iteration does not add Module switches for the following:
 
 The current `builtin-tools` splits into the first five entries. `thread-context` splits into contributions from `operating-context`, `scratchpad`, and `shell`. `project-guidance` is proposed to become `agents-md`. Other existing Modules retain their feature identities, and `extensions` becomes a new composition-time Module. Implementation uses the new configuration contract without forwarding old names.
 
-Example target configuration; these new names are not yet supported by the product:
+Original target configuration example; see the current configuration contract for supported names:
 
 ```yaml
 preset: minimal

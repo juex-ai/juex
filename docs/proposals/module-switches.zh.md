@@ -1,6 +1,8 @@
-**JueX 预计模块开关清单（设计建议，尚未实现）**
+**JueX 模块开关：原始设计清单**
 
 > [English](module-switches.md) | 中文
+
+状态：预设与关闭行为已落地，包括 [PR #535](https://github.com/juex-ai/juex/pull/535) 和 [PR #536](https://github.com/juex-ai/juex/pull/536)。更新：2026-09-08。下方 18 项清单记录原始讨论；实际支持情况以 [当前配置契约](../../internal/app/config/README.zh.md) 为准，其中也包含后来增加的 input-tracking 模块。
 
 根据 2026-09-06 的极简模式讨论，建议本轮收敛为 18 个模块开关，统一使用 `modules.<id>.enabled`。`preset` 支持 `minimal` 和建议命名 `standard`，显式开关覆盖预设。同名显式开关仍按现有配置层级合并。
 
@@ -52,7 +54,7 @@ Memory 根据后续决定从 `juex-extensions/extensions/memory` 回归为独立
 
 当前的 `builtin-tools` 将拆成前五项，`thread-context` 拆成 operating-context / scratchpad / shell 的对应贡献，`project-guidance` 建议改名 agents-md。其余已存在模块保留清晰的功能身份，extensions 为新增的装配期模块。实施使用新配置契约，不增加旧名称转发。
 
-配置示例（目标语法，当前产品尚不支持这些新名称）：
+原始目标配置示例；当前支持的名称以配置契约为准：
 
 ```yaml
 preset: minimal

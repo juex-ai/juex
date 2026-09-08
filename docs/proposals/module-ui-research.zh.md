@@ -2,7 +2,7 @@
 
 > [English](module-ui-research.md) | 中文
 
-调研日期：2026-09-06。本文是供评论的设计建议，不是已实现的产品契约。相关方案：[模块开关清单](module-switches.zh.md)、[极简模式审计](minimal-mode-audit.zh.md)。
+调研日期：2026-09-06。状态更新于 2026-09-08：固定插槽装配已通过 [PR #534](https://github.com/juex-ai/juex/pull/534) 实现。本文保留调研与原始建议，当前契约见 [DESIGN.md](../../DESIGN.zh.md) 和 [前端 README](../../frontend/README.zh.md)；下方缺口清单是历史记录。相关方案：[模块开关清单](module-switches.zh.md)、[极简模式审计](minimal-mode-audit.zh.md)。
 
 建议采用 **Go 决定有效能力和 UI 贡献，Web 通过固定插槽装配功能组件**。配置只在 Go 解析一次；Web 消费装配结果，不重复实现 preset、默认值和开关优先级。功能仍分别有 Go 和 TypeScript 实现，但业务状态、权限和启用决策只有一个权威来源。
 
@@ -66,12 +66,12 @@ RPC 模式暴露的是另一条边界：select/confirm/input/editor 等转换成
 
 | 位置 | 当前耦合 | 建议归属 |
 | --- | --- | --- |
-| [Thread 响应及读取](../../internal/web/handlers.go#L129) | 顶层 Goal/Notes 字段；非活动 Thread 路径直接按开关构造具体 Store | 通用 Thread 状态容器；具体读取交给模块的只读贡献者 |
-| [前端事件投影](../../frontend/src/lib/thread-read-state.ts#L390) | 核心 reducer 识别 goal.updated / notes.updated 并更新专用字段 | 通用模块快照替换；具体业务状态由 Go 模块提供 |
-| [ThreadStatusPanel](../../frontend/src/components/thread/ThreadStatusPanel.tsx#L35) | 总会挂载 Goal/Notes 合并入口；缺少值时仍能显示 goal idle | 固定状态区插槽；Goal/Notes 分别贡献，壳只管理布局 |
-| [AppShell 文件面板](../../frontend/src/components/AppShell.tsx#L334) | Scratchpad 模式、切换按钮、请求及刷新 revision 写在总壳 | 文件区域注册点；Scratchpad 提供自己的根和加载器 |
-| [Web 路由](../../internal/web/server.go#L214) / [文件读取](../../internal/web/files.go#L119) | 核心分派 scratchpad 子路径并理解具体根 | 模块拥有资源适配，Web 只提供作用域、鉴权和传输 |
-| [Module 接口](../../internal/runtime/module/registry.go#L20) | 已有工具/上下文/策略生命周期，没有完整的 Web 贡献契约 | 新增窄的状态/资源与展示贡献边界，保持 Engine 不依赖 HTTP 或 React |
+| [Thread 响应及读取](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/handlers.go#L129) | 顶层 Goal/Notes 字段；非活动 Thread 路径直接按开关构造具体 Store | 通用 Thread 状态容器；具体读取交给模块的只读贡献者 |
+| [前端事件投影](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/lib/thread-read-state.ts#L390) | 核心 reducer 识别 goal.updated / notes.updated 并更新专用字段 | 通用模块快照替换；具体业务状态由 Go 模块提供 |
+| [ThreadStatusPanel](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/thread/ThreadStatusPanel.tsx#L35) | 总会挂载 Goal/Notes 合并入口；缺少值时仍能显示 goal idle | 固定状态区插槽；Goal/Notes 分别贡献，壳只管理布局 |
+| [AppShell 文件面板](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/AppShell.tsx#L334) | Scratchpad 模式、切换按钮、请求及刷新 revision 写在总壳 | 文件区域注册点；Scratchpad 提供自己的根和加载器 |
+| [Web 路由](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/server.go#L214) / [文件读取](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/files.go#L119) | 核心分派 scratchpad 子路径并理解具体根 | 模块拥有资源适配，Web 只提供作用域、鉴权和传输 |
+| [Module 接口](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/runtime/module/registry.go#L20) | 已有工具/上下文/策略生命周期，没有完整的 Web 贡献契约 | 新增窄的状态/资源与展示贡献边界，保持 Engine 不依赖 HTTP 或 React |
 
 只把 Go 原始配置传给每个页面，无法消除上面的具体 Store、事件名和布局接线。只把这些状态改名放入 `map[string]any`，但仍在 Web 核心里 switch goal/notes，也没有完成解耦。
 

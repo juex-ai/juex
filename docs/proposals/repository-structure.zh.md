@@ -2,7 +2,7 @@
 
 > [English](repository-structure.md) | 中文
 
-状态：整体结构、命名及 Foundation 范围已确认；逐包映射待评审，尚未实施。日期：2026-09-07。
+状态：已通过 [PR #537](https://github.com/juex-ai/juex/pull/537) 实现。更新：2026-09-08。下方清单及迁移讨论描述 2026-09-07 的源码快照；当前归属和路径以 [ARCHITECTURE.md](../../ARCHITECTURE.zh.md) 为准，不以此历史包映射为准。
 
 本文提出代码归属、包边界和目录组织的讨论基线，不替代当前 [架构契约](../../ARCHITECTURE.zh.md) 或 [ADR-0001](../adr/0001-lifecycle-driven-module-architecture.zh.md)。本文已补全基于当前源码的生产使用者清单；逐包目标归属及拆分边界供迁移前评审。
 

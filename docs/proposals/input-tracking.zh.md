@@ -2,7 +2,7 @@
 
 > [English](input-tracking.md) | 中文
 
-状态：待评审，尚未实施。更新：2026-09-08。
+状态：已通过 [PR #538](https://github.com/juex-ai/juex/pull/538) 实现。更新：2026-09-08。下文保留设计讨论；已交付行为、限制和升级要求以 [输入跟踪模块](../../internal/features/inputtracking/README.zh.md) 为准。
 
 建议在现有输入机制上增加一个简单的持久化勾选清单：框架自动登记，recitation 自动展示未勾选输入，模型处理后调用工具勾选。本文是设计建议，不替代当前 DOMAIN 与 ARCHITECTURE。
 

@@ -2,7 +2,7 @@
 
 > English | [中文](repository-structure.zh.md)
 
-Status: overall structure, naming, and Foundation scope confirmed; package mapping awaits review. Not implemented. Date: 2026-09-07.
+Status: implemented in [PR #537](https://github.com/juex-ai/juex/pull/537). Updated: 2026-09-08. The inventory and migration discussion below describe the 2026-09-07 source snapshot; current ownership and paths are defined by [ARCHITECTURE.md](../../ARCHITECTURE.md), not this historical package map.
 
 This document proposes ownership, package boundaries, and directory organization for discussion. It does not replace the current [architecture contract](../../ARCHITECTURE.md) or [ADR-0001](../adr/0001-lifecycle-driven-module-architecture.md). The production-consumer inventory has been completed from current source; package destinations and split boundaries are ready for pre-migration review.
 

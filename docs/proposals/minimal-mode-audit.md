@@ -2,6 +2,8 @@
 
 > English | [中文](minimal-mode-audit.zh.md)
 
+Status as of 2026-09-08: historical audit evidence. Subsequent implementation and acceptance are recorded in [PR #535](https://github.com/juex-ai/juex/pull/535) and [PR #536](https://github.com/juex-ai/juex/pull/536); see [Configuration](../../internal/app/config/README.md) for current behavior. Statements below about missing capabilities and unsupported names refer to the audited baseline, not current main.
+
 Audit date: 2026-09-06. Source baseline: `2b0c1bb`, workspace `/Users/hejinhai/git/project/juex`. This audit inspected source and ran isolated probes without modifying product code, user configuration, or running Agents. New Module names, interfaces, and mode configuration below are proposals, not implemented features.
 
 The existing Module framework can run with zero tools and an empty ordinary-request system prompt. However, configuration alone cannot yet produce a usable composition of `read + write + edit` plus the three existing Shell tools. The main gaps are coarse Module boundaries, feature preparation before registration, and feature-specific policies in Framework/Foundation. The lifecycle framework does not need replacement; focused Module splits and a few narrow interfaces are needed.
@@ -41,7 +43,7 @@ A second probe disabled all Modules while allowing a test Extension with an inte
 | `context-control` | `context_new`, `context_compact` | Disable model-initiated operations and capacity reminders | Existing switch does not control host `/new`, `/compact`, or automatic compaction |
 | `mcp` | Dynamic tools from connected servers | Disable | Existing switch is checked by App/Web startup |
 
-The empty configuration exposes 34 static tools; external MCP tools are additional. Registration sources: [runtime_modules.go](../../internal/app/runtime_modules.go#L117), [BuiltinProviders](../../internal/tools/builtin.go#L70), [Worker tools](../../internal/app/worker_threads.go#L1195), and [Observable tools](../../internal/observable/tools.go#L123).
+The empty configuration exposes 34 static tools; external MCP tools are additional. Registration sources: [runtime_modules.go](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/runtime_modules.go#L117), [BuiltinProviders](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/builtin.go#L70), [Worker tools](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/worker_threads.go#L1195), and [Observable tools](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/observable/tools.go#L123).
 
 **Other context and capabilities**
 
@@ -66,7 +68,7 @@ The empty configuration exposes 34 static tools; external MCP tools are addition
 | Model selection/fallback, authentication, environment, Sandbox | Basic configuration/execution services | Do not all need Module conversion for minimal mode. A single model can be expressed through the model list; preserve execution safety and cancellation |
 | Thread, Input, Turn, Generation, Usage, history, SSE/Web/CLI | Framework/Foundation and host interfaces | Core execution and user operations, not additional model tools. Minimal mode must preserve persistence and the control plane |
 
-Key sources: [AGENTS.md and Thread context](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/modules/promptcontext/module.go#L28), [hidden builtin guides](../../internal/skills/builtin.go#L79), [runtime-context messages](../../internal/runtime/active_context.go#L76), [resource preprocessing](../../internal/app/resource_refs.go#L72), and [Extension environment merging](../../internal/app/agent_runtime.go#L76).
+Key sources: [AGENTS.md and Thread context](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/modules/promptcontext/module.go#L28), [hidden builtin guides](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/skills/builtin.go#L79), [runtime-context messages](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/active_context.go#L76), [resource preprocessing](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/resource_refs.go#L72), and [Extension environment merging](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/agent_runtime.go#L76).
 
 **Required changes for a usable six-tool mode**
 
@@ -82,7 +84,7 @@ P0 means necessary for the target, P1 means necessary for complete Module separa
 | A6 | P0 / Strong | Generate descriptions and optional advanced suggestions from effective configured/composed capabilities. Basic tools keep complete basic guidance and errors; they neither read YAML themselves nor depend on advanced implementations | Supported combinations never suggest unavailable tools or absent state Modules; check all required tools, not only write_begin |
 | A7 | P0 / Strong | Add `preset` with `minimal` and proposed `standard`; merge presets and explicit switches across layers before letting explicit values override preset defaults | New optional Modules do not enter minimal automatically. A higher-layer preset alone does not erase lower-layer explicit switches; repeated explicit switches retain layer precedence |
 
-A1–A3 sources: [builtin grouping](../../internal/tools/builtin.go#L70), [file-tool switches/schema](../../internal/tools/builtin_file.go#L16), and [Shell sessions](../../internal/tools/builtin_shell.go#L16). A6 sources: [error guide injection](../../internal/runtime/loop.go#L1570) and [Group-to-Skill mapping](../../internal/tools/registry.go#L49). A7 source: [default enablement](../../internal/config/modules.go#L21).
+A1–A3 sources: [builtin grouping](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/builtin.go#L70), [file-tool switches/schema](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/builtin_file.go#L16), and [Shell sessions](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/builtin_shell.go#L16). A6 sources: [error guide injection](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/loop.go#L1570) and [Group-to-Skill mapping](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/registry.go#L49). A7 source: [default enablement](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/config/modules.go#L21).
 
 Discussion update, 2026-09-06: the user confirmed that advanced suggestions should follow effective enablement, and that `preset` supplies defaults overridden by explicit switches. The following concrete semantics are proposed, not implemented:
 
@@ -125,17 +127,17 @@ Tool construction/execution consumes effective capabilities, not `preset == mini
 
 Evidence locations:
 
-- B1: [construction](../../internal/app/app.go#L340), [recovery call](../../internal/app/app.go#L682), [recovery implementation](../../internal/tools/chunked_write.go#L40).
-- B2: [Runtime result recognition](../../internal/runtime/loop.go#L1668), [Runtime history folding](../../internal/runtime/context_projection.go#L129), [Provider folding](../../internal/llm/provider_projection.go#L44), [feature-specific Block field](../../internal/llm/types.go#L89).
-- B3: [Thread creation](../../internal/thread/store.go#L168), [dedicated context field](../../internal/runtime/module/registry.go#L33).
-- B4: [Extension Hook loading](../../internal/app/resource_refs.go#L363), [configuration-layer parsing](../../internal/config/config.go#L973).
-- B5: [state interfaces](../../internal/runtime/compaction_summary.go#L20), [fixed summary guidance](../../internal/runtime/contextbudget/summary.go#L74), [state queries](../../internal/runtime/thread_state_modules.go#L8).
-- B6: [explicit activation](../../internal/app/app.go#L692), [recovery barrier](../../internal/app/pending_recovery.go#L293).
-- B7: [group-based serialization](../../internal/runtime/loop.go#L1551).
-- B8: [MCP diagnostics](../../internal/cli/doctor.go#L495), [Skills diagnostics](../../internal/cli/doctor.go#L602).
-- B9: [runtime status composition](../../internal/app/runtime_status.go#L257).
-- B10: [error classification](../../internal/runtime/tool_failure.go#L117).
-- B11: [current enabled-only cleanup contract retaining disabled files](../../internal/runtime/module/lifecycle.go#L41). This behavior must change; see [working-state lifecycle](module-ui-research.md#working-state-deletion-and-retention) for target semantics.
+- B1: [construction](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/app.go#L340), [recovery call](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/app.go#L682), [recovery implementation](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/tools/chunked_write.go#L40).
+- B2: [Runtime result recognition](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/loop.go#L1668), [Runtime history folding](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/context_projection.go#L129), [Provider folding](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/llm/provider_projection.go#L44), [feature-specific Block field](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/llm/types.go#L89).
+- B3: [Thread creation](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/thread/store.go#L168), [dedicated context field](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/module/registry.go#L33).
+- B4: [Extension Hook loading](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/resource_refs.go#L363), [configuration-layer parsing](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/config/config.go#L973).
+- B5: [state interfaces](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/compaction_summary.go#L20), [fixed summary guidance](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/contextbudget/summary.go#L74), [state queries](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/thread_state_modules.go#L8).
+- B6: [explicit activation](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/app.go#L692), [recovery barrier](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/pending_recovery.go#L293).
+- B7: [group-based serialization](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/loop.go#L1551).
+- B8: [MCP diagnostics](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/cli/doctor.go#L495), [Skills diagnostics](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/cli/doctor.go#L602).
+- B9: [runtime status composition](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/app/runtime_status.go#L257).
+- B10: [error classification](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/tool_failure.go#L117).
+- B11: [current enabled-only cleanup contract retaining disabled files](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/runtime/module/lifecycle.go#L41). This behavior must change; see [working-state lifecycle](module-ui-research.md#working-state-deletion-and-retention) for target semantics.
 
 **Lifecycle interface assessment**
 
@@ -174,7 +176,7 @@ Acceptance must cover actual behavior:
 - Regress ordinary-mode tools, MCP/Observable recovery barriers, and reverse shutdown; Main/Workers inherit effective composition consistently.
 - Separately benchmark real target small models for first-token latency, task success, error recovery, valid tool calls, and context usage. This audit did not measure model performance; fewer tools alone do not prove better results.
 
-Existing architecture tests allow semantic coupling such as B2 because they primarily inspect imports and classify `internal/chunkedwrite`, `internal/tools`, and `internal/llm` as Foundation. They cannot catch Goal/Notes implementations in the same package or tool-name branches. Add cross-package behavior tests and proportionate ownership rules, not tests whose only purpose is proving old names absent. See [boundary_test.go](../../internal/architecture/boundary_test.go#L36).
+Existing architecture tests allow semantic coupling such as B2 because they primarily inspect imports and classify `internal/chunkedwrite`, `internal/tools`, and `internal/llm` as Foundation. They cannot catch Goal/Notes implementations in the same package or tool-name branches. Add cross-package behavior tests and proportionate ownership rules, not tests whose only purpose is proving old names absent. See [boundary_test.go](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/architecture/boundary_test.go#L36).
 
 There is also a documentation scope mismatch: [ARCHITECTURE.md](../../ARCHITECTURE.md) says Feature disablement prevents construction, side effects, and publication, while the current guarantee mainly covers registered factories, not Extension preprocessing, the chunked-write manager, or Scratchpad. Update the architecture boundaries and configuration guidance alongside implementation, maintaining language peers. This audit did not directly rewrite the accepted product contract.
 
