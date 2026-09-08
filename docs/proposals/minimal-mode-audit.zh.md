@@ -184,5 +184,5 @@ modules:
 
 - 现有 Module 构造过滤、启动失败逆序回滚、App 禁用模块、`tests/e2e` 中 ModuleLifecycle 相关测试通过。
 - 架构边界及三个 `internal/modules` 包的完整测试通过：`mise exec -- go test ./internal/architecture ./internal/modules/... -count=1`。
-- 隔离探针使用 `go test -overlay` 注入临时测试，没有向仓库添加测试文件。[探针源码](/private/tmp/juex_minimal_mode_audit_test.go) 和 [overlay](/private/tmp/juex_minimal_audit_overlay.json) 可在临时目录保留期间复现：`mise exec -- go test -overlay /private/tmp/juex_minimal_audit_overlay.json ./internal/app -run '^TestMinimalAudit' -v -count=1`。
+- 隔离探针使用未提交的临时 go test overlay；其观察结果属于历史证据，不是仓库内可复现的测试夹具。当前验收覆盖见 [module_acceptance_test.go](../../tests/e2e/module_acceptance_test.go)。
 - 检查范围包括 Module/config、App 与资源发现、内置工具、Skills/Hooks/MCP/Observables、Thread 存储、Runtime/LLM 投影、压缩、诊断和运行时状态；没有运行完整仓库测试或浏览器回归，也没有测试真实模型服务。

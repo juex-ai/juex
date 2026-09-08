@@ -2,7 +2,7 @@
 
 > [English](fleet-shared-services.md) | 中文
 
-状态：评审草案；整体方向已讨论，具体设计待确认，尚未实现。日期：2026-09-07。
+状态：评审草案；整体方向已讨论，具体设计待确认，尚未实现。更新：2026-09-08。
 
 本文定义 Fleet 拥有的共享服务及 Agent Module 的访问方式，保留现有 [Module 架构](../adr/0001-lifecycle-driven-module-architecture.zh.md) 和 [执行契约](../../DOMAIN.zh.md)。文档获准不代表实现已经完成。
 
@@ -70,12 +70,12 @@ Fleet Client Module 负责参与运行生命周期，普通客户端库可以实
 | 当前区域 | 提议职责 |
 | --- | --- |
 | `internal/fleet` | 继续拥有注册 Agent 的生命周期操作，通过注入的服务接口暴露。 |
-| `internal/fleetweb` | 在现有 Server 基础上接入面向 Agent 的操作，不把业务规则放进 Handler。 |
+| `internal/entrypoints/fleethttp` | 在现有 Server 基础上接入面向 Agent 的操作，不把业务规则放进 Handler。 |
 | `internal/app` | 在相应进程入口显式组装 Fleet 服务或 Agent 客户端资源。 |
-| `internal/runtime/module` | 复用 Agent Runtime 和 Thread 的能力契约。 |
+| `internal/framework/module` | 复用 Agent Runtime 和 Thread 的能力契约。 |
 | Feature 实现 | 拥有 Memory、Supervisor 管理工具及其服务适配。 |
 
-最终包路径可以跟随独立的 [仓库结构提案](repository-structure.zh.md)。无需先完成全仓库目录迁移才能实现本提案。
+仓库归属迁移已经完成。新增包应遵循当前 [架构契约](../../ARCHITECTURE.zh.md)；独立的 [仓库结构提案](repository-structure.zh.md) 保留原始决策依据。
 
 ## 通信契约
 

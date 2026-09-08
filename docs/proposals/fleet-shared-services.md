@@ -2,7 +2,7 @@
 
 > English | [中文](fleet-shared-services.zh.md)
 
-Status: draft for review; overall direction discussed, details proposed, not implemented. Date: 2026-09-07.
+Status: draft for review; overall direction discussed, details proposed, not implemented. Updated: 2026-09-08.
 
 This proposal defines Fleet-owned shared services and their access from Agent Modules. It preserves the current [Module architecture](../adr/0001-lifecycle-driven-module-architecture.md) and [execution contracts](../../DOMAIN.md). Acceptance of this document does not imply implementation completion.
 
@@ -70,12 +70,12 @@ The current package boundaries provide the starting points:
 | Current area | Proposed responsibility |
 | --- | --- |
 | `internal/fleet` | Continue owning Agent registry-wide lifecycle operations; expose them through an injected service interface. |
-| `internal/fleetweb` | Adapt the existing server for Agent-facing operations without moving business rules into handlers. |
+| `internal/entrypoints/fleethttp` | Adapt the existing server for Agent-facing operations without moving business rules into handlers. |
 | `internal/app` | Explicitly assemble Fleet services or Agent client resources at their respective process entry paths. |
-| `internal/runtime/module` | Reuse Agent Runtime and Thread capability contracts. |
+| `internal/framework/module` | Reuse Agent Runtime and Thread capability contracts. |
 | Feature implementations | Own Memory and Supervisor management tools and their service adapters. |
 
-Final package paths can follow the separate [repository structure proposal](repository-structure.md). This proposal does not require a repository-wide relocation first.
+The repository ownership migration is complete. New packages must follow the current [architecture contract](../../ARCHITECTURE.md); the separate [repository structure proposal](repository-structure.md) records the original rationale.
 
 ## Communication Contract
 

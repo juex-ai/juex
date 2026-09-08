@@ -184,5 +184,5 @@ There is also a documentation scope mismatch: [ARCHITECTURE.md](../../ARCHITECTU
 
 - Existing factory-filtering, reverse-startup-rollback, App disablement, and tests/e2e ModuleLifecycle tests passed.
 - Architecture and all three internal/modules package suites passed: `mise exec -- go test ./internal/architecture ./internal/modules/... -count=1`.
-- Isolated probes used go test overlays without adding tests to the repository. The [probe source](/private/tmp/juex_minimal_mode_audit_test.go) and [overlay](/private/tmp/juex_minimal_audit_overlay.json) remain reproducible while their temporary files exist: `mise exec -- go test -overlay /private/tmp/juex_minimal_audit_overlay.json ./internal/app -run '^TestMinimalAudit' -v -count=1`.
+- Isolated probes used temporary go test overlays that were not committed. Their observations are historical evidence, not a reproducible repository test fixture. Current acceptance coverage lives in [module_acceptance_test.go](../../tests/e2e/module_acceptance_test.go).
 - Inspected Module/config, App/resource discovery, builtin tools, Skills/Hooks/MCP/Observables, Thread storage, Runtime/LLM projection, compaction, diagnostics, and status. No full-repository test run, browser regression, or real model-service evaluation was performed.
