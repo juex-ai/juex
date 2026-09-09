@@ -11,7 +11,6 @@ import { useStickToBottomContext } from "use-stick-to-bottom";
 
 import {
   getThread,
-  getThreadContext,
   getThreadStatus,
   interrupt,
   startTurn,
@@ -68,7 +67,6 @@ export function Thread() {
         initialState: createThreadReadState(),
         onStateChange: setReadState,
         getThread,
-        getThreadContext,
         startTurn,
         subscribeEvents,
         logError: (message, error) => console.error(message, error),
@@ -82,7 +80,6 @@ export function Thread() {
     data,
     loadError,
     projection,
-    activeContext,
     composerHint,
     submitError,
     loadingOlderMessages,
@@ -253,7 +250,6 @@ export function Thread() {
       </Conversation>
       <ThreadComposer
         key={id}
-        activeContext={activeContext}
         agentRuntimeHealthy={agentRuntimeHealthy}
         canSend={canSend}
         composerHint={composerHint}

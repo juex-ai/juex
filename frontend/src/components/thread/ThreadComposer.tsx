@@ -18,9 +18,7 @@ import {
   usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
-import { ThreadStatusPanel } from "@/components/thread/ThreadStatusPanel";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
   TooltipContent,
@@ -40,7 +38,6 @@ import type { LiveThreadProjection } from "@/lib/live-thread-projection";
 import { threadReadOnlyMessage } from "@/lib/thread-access";
 import { cn } from "@/lib/utils";
 import type {
-  ActiveContextSnapshot,
   AgentRuntimeStatusSnapshot,
   MediaRef,
   ThreadShowResponse,
@@ -53,7 +50,6 @@ type PromptAttachmentFile = {
 };
 
 export function ThreadComposer({
-  activeContext,
   agentRuntimeHealthy,
   canSend,
   composerHint,
@@ -68,7 +64,6 @@ export function ThreadComposer({
   runtimeStatus,
   submitError,
 }: {
-  activeContext?: ActiveContextSnapshot | null;
   agentRuntimeHealthy: boolean;
   canSend: boolean;
   composerHint: string | null;
@@ -132,9 +127,6 @@ export function ThreadComposer({
     return (
       <div className="shrink-0 px-4 py-3 md:px-6">
         <div className="mx-auto w-full max-w-[760px]">
-          <div aria-label="Thread status" role="group" className="mb-2 flex flex-wrap items-center gap-2">
-            <ThreadStatusPanel activeContext={activeContext} data={data} runtimeStatus={runtimeStatus} />
-          </div>
           <QueuedInputStack items={queuedInputs} />
           {!agentRuntimeHealthy ? (
             <AgentRuntimeStateBar />
@@ -249,22 +241,6 @@ export function ThreadComposer({
                       role="group"
                     >
                       <ComposerAttachmentButton />
-                    </div>
-                    <Separator
-                      className="h-4 !self-center"
-                      orientation="vertical"
-                      decorative
-                    />
-                    <div
-                      className="flex min-w-0 items-center gap-1"
-                      aria-label="Thread status"
-                      role="group"
-                    >
-                      <ThreadStatusPanel
-                        activeContext={activeContext}
-                        data={data}
-                        runtimeStatus={runtimeStatus}
-                      />
                     </div>
                   </PromptInputTools>
                   <div className="flex shrink-0 items-center gap-1">

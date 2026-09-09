@@ -1,11 +1,6 @@
 import { ThreadStatusSlot } from "@/modules/ThreadStatusSlot";
-import { CircleGaugeIcon } from "lucide-react";
+import { InspectorSection } from "./InspectorSection";
 
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   runtimeContextModelLabel,
   runtimeContextPercentLabel,
@@ -13,23 +8,16 @@ import {
   runtimeTokenUsageDetailLabel,
 } from "@/lib/runtime-display";
 import type {
-  ActiveContextSnapshot,
   AgentRuntimeStatusSnapshot,
   ContextUsage,
-  ThreadShowResponse,
   TokenUsage,
 } from "@/types";
 
-const STATUS_CONTROL_CLASS =
-  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-sm border border-border/70 bg-background px-2 font-mono text-[11px] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-background";
-
 export function ThreadStatusPanel({
-  activeContext,
-  data,
+  threadID,
   runtimeStatus,
 }: {
-  activeContext?: ActiveContextSnapshot | null;
-  data: ThreadShowResponse;
+  threadID: string;
   runtimeStatus?: AgentRuntimeStatusSnapshot;
 }) {
   return (
@@ -37,67 +25,38 @@ export function ThreadStatusPanel({
       {runtimeStatus ? (
         <ContextUsageLabel
           usage={runtimeStatus.context_usage}
-          activeContext={activeContext}
           tokenUsage={runtimeStatus.token_usage}
         />
       ) : (
-        <span className="text-xs text-muted-foreground">Context usage unavailable</span>
+        <InspectorSection title="Context" summary="Unavailable"><p className="text-muted-foreground">Context usage unavailable</p></InspectorSection>
       )}
-      <ThreadStatusSlot threadID={data.id} />
+      <ThreadStatusSlot threadID={threadID} />
     </>
   );
 }
 
 function ContextUsageLabel({
   usage,
-  activeContext,
   tokenUsage,
 }: {
   usage?: ContextUsage;
-  activeContext?: ActiveContextSnapshot | null;
   tokenUsage: TokenUsage;
 }) {
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={STATUS_CONTROL_CLASS}
-          aria-label={`Open context usage: ${runtimeContextPercentLabel(usage)}`}
-        >
-          <CircleGaugeIcon className="size-3" aria-hidden="true" />
-          context {runtimeContextPercentLabel(usage)}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="block max-h-[24rem] max-w-[calc(100vw-2rem)] space-y-1.5 overflow-auto font-mono text-xs"
-      >
-        {usage ? (
-          <ContextUsageTooltip
-            usage={usage}
-            activeContext={activeContext}
-            tokenUsage={tokenUsage}
-          />
-        ) : (
-          <>
-            <div>No context usage yet</div>
-            <TokenUsageTooltipLine usage={tokenUsage} />
-            <ActiveContextDebugLine snapshot={activeContext} />
-          </>
-        )}
-      </PopoverContent>
-    </Popover>
+    <InspectorSection title="Context" summary={runtimeContextPercentLabel(usage)}>
+      {usage ? <ContextUsageTooltip usage={usage} tokenUsage={tokenUsage} /> : <>
+        <div>No context usage yet</div>
+        <TokenUsageTooltipLine usage={tokenUsage} />
+      </>}
+    </InspectorSection>
   );
 }
 
 function ContextUsageTooltip({
   usage,
-  activeContext,
   tokenUsage,
 }: {
   usage: ContextUsage;
-  activeContext?: ActiveContextSnapshot | null;
   tokenUsage: TokenUsage;
 }) {
   const windowTokens = usage.context_window ?? 0;
@@ -128,29 +87,12 @@ function ContextUsageTooltip({
           </div>
         ))}
       </div>
-      <ActiveContextDebugLine snapshot={activeContext} />
     </>
   );
 }
 
 function TokenUsageTooltipLine({ usage }: { usage: TokenUsage }) {
   return <div>{runtimeTokenUsageDetailLabel(usage)}</div>;
-}
-
-function ActiveContextDebugLine({
-  snapshot,
-}: {
-  snapshot?: ActiveContextSnapshot | null;
-}) {
-  if (!snapshot) return null;
-  const count = snapshot.messages?.length ?? 0;
-  const tokens = snapshot.estimated_tokens ?? 0;
-  return (
-    <div className="text-muted-foreground">
-      active provider context {count} messages, ~{formatTokenCount(tokens)}{" "}
-      estimated tokens
-    </div>
-  );
 }
 
 function formatTokenCount(value: number): string {

@@ -57,6 +57,7 @@ type Server struct {
 	statusStream        *statusapi.ActivityStore
 	resources           *resourceEventHub
 	inputStatuses       runtime.InputStatusReader
+	recitations         runtime.RecitationReader
 
 	// createMu serializes live Thread creation and restoration.
 	createMu        sync.Mutex
@@ -224,6 +225,8 @@ func (s *Server) dispatchReadOnlyThread(w http.ResponseWriter, r *http.Request) 
 	switch rest {
 	case "":
 		s.handleThreadShow(w, r, id)
+	case "recitation":
+		s.handleThreadRecitation(w, r, id)
 	case "context":
 		s.handleThreadContext(w, r, id)
 	default:
@@ -287,6 +290,8 @@ func (s *Server) dispatchThread(w http.ResponseWriter, r *http.Request) {
 		s.handleThreadStatusEvents(w, r, id)
 	case rest == "compact" && r.Method == http.MethodPost:
 		s.handleCompactThread(w, r, id)
+	case rest == "recitation" && r.Method == http.MethodGet:
+		s.handleThreadRecitation(w, r, id)
 	case rest == "context" && r.Method == http.MethodGet:
 		s.handleThreadContext(w, r, id)
 	case rest == "modules" || strings.HasPrefix(rest, "modules/"):

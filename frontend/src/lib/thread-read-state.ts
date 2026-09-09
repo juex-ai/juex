@@ -16,7 +16,6 @@ import {
 import { isCompactCommandInput } from "./compact-ui.ts";
 import { mergeOlderThreadPage } from "./thread-messages.ts";
 import type {
-  ActiveContextSnapshot,
   BrowserEvent,
   MediaRef,
   ThreadShowResponse,
@@ -27,7 +26,6 @@ export type ThreadReadState = {
   data: ThreadShowResponse | null;
   loadError: string | null;
   projection: LiveThreadProjection;
-  activeContext: ActiveContextSnapshot | null;
   composerHint: string | null;
   submitError: string | null;
   loadingOlderMessages: boolean;
@@ -71,7 +69,6 @@ export function createThreadReadState(): ThreadReadState {
     data: null,
     loadError: null,
     projection: createLiveThreadProjection(),
-    activeContext: null,
     composerHint: null,
     submitError: null,
     loadingOlderMessages: false,
@@ -87,7 +84,6 @@ export function resetThreadReadState(
     data: null,
     loadError: null,
     projection: resetLiveThreadProjection(),
-    activeContext: null,
     composerHint: null,
     submitError: null,
     loadingOlderMessages: false,
@@ -142,24 +138,11 @@ export function projectThreadLoadFailed(
     ...state,
     data: null,
     loadError: errorMessage(error),
-    activeContext: null,
     loadingOlderMessages: false,
     olderMessagesError: null,
   };
 }
 
-export function projectActiveContextLoaded(
-  state: ThreadReadState,
-  activeContext: ActiveContextSnapshot,
-): ThreadReadState {
-  return { ...state, activeContext };
-}
-
-export function projectActiveContextFailed(
-  state: ThreadReadState,
-): ThreadReadState {
-  return { ...state, activeContext: null };
-}
 
 export function projectLoadOlderStarted(
   state: ThreadReadState,

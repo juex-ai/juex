@@ -17,7 +17,7 @@ import {
   useMatch,
   useNavigate,
 } from "react-router-dom";
-import { AlertTriangle, Plus } from "lucide-react";
+import { AlertTriangle, PanelRightOpen, Plus } from "lucide-react";
 
 import {
   listAgents,
@@ -25,7 +25,7 @@ import {
   subscribeAgentResourceEvents,
   subscribeFleetEvents,
 } from "@/api";
-import { FileTreePanel } from "@/components/FileTreePanel";
+import { ThreadSidebar } from "@/components/thread/ThreadSidebar";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -125,6 +125,7 @@ export function AppShell() {
   const [shellHeader, setShellHeader] = useState<ShellHeaderState | null>(null);
   const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
+  const sidebarEntry = useRef<HTMLButtonElement>(null);
   const currentAgent =
     agents.find((candidate) => candidate.id === agentId) ?? null;
   const invalidAgentRoute =
@@ -336,6 +337,7 @@ export function AppShell() {
   return (
     <ShellTitleContext.Provider value={shellTitleContext}>
       <FleetAgentProvider value={runtimeContext}>
+        <ThreadModulesProvider value={moduleState}>
         <div className="fixed inset-0 flex h-svh min-h-0 overflow-clip bg-background">
           <div className="hidden min-[760px]:flex">{sidebar}</div>
           <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
@@ -360,18 +362,9 @@ export function AppShell() {
               threadStatus={shellHeader?.pathname === location.pathname ? shellHeader.threadStatus : undefined}
               threadID={threadID}
               activeTab={activeTab}
-              filePanelTitle={filePanelTitle}
               settings={settings}
-              workspaceOpen={workspaceOpen}
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
-              onToggleWorkspace={() => {
-                if (!workspaceAvailable) return;
-                if (workspaceDocked) {
-                  setWorkspaceDockOpen((open) => !open);
-                } else {
-                  setWorkspaceSheetOpen(true);
-                }
-              }}
+
             />
             {failedAgent ? (
               <div
@@ -398,7 +391,7 @@ export function AppShell() {
               </div>
             ) : null}
 
-            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                 {(fleetError ?? rosterError) && !agentsLoaded ? (
                   <div
@@ -432,21 +425,22 @@ export function AppShell() {
                     Loading agent...
                   </div>
                 ) : (
-                  <ThreadModulesProvider value={moduleState}>
-                    <Outlet key={agentId || "fleet-settings"} />
-                  </ThreadModulesProvider>
+                  <Outlet key={agentId || "fleet-settings"} />
                 )}
               </div>
-              {workspaceDockOpen && workspaceAvailable ? (
-                <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] shrink-0 flex-col overflow-hidden border-l bg-card xl:flex">
-                  <FileTreePanel
-                    active={workspaceDocked}
-                    key={filePanelKey}
-                    rootKey={filePanelKey}
-                    title={filePanelTitle}
-                    {...filePanelProps}
-                  />
-                </div>
+              {workspaceDocked && workspaceDockOpen && workspaceAvailable ? (
+                <aside aria-label="Thread sidebar" className="h-full w-[clamp(18rem,24vw,22rem)] shrink-0 overflow-hidden border-l bg-card">
+                  <ThreadSidebar key={`${agentId}:${threadID}`} agentID={agentId} threadID={threadID}
+                    filePanel={{ ...filePanelProps, title: filePanelTitle, rootKey: filePanelKey }}
+                    onClose={() => { setWorkspaceDockOpen(false); requestAnimationFrame(() => sidebarEntry.current?.focus()); }} />
+                </aside>
+              ) : null}
+              {workspaceAvailable && !workspaceOpen ? (
+                <button ref={sidebarEntry} type="button" aria-label="Open sidebar" title="Status and files"
+                  className="absolute right-0 top-1/2 z-20 flex h-14 w-8 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 bg-card text-muted-foreground shadow-sm outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35"
+                  onClick={() => workspaceDocked ? setWorkspaceDockOpen(true) : setWorkspaceSheetOpen(true)}>
+                  <PanelRightOpen className="size-4" />
+                </button>
               ) : null}
             </div>
           </div>
@@ -456,25 +450,21 @@ export function AppShell() {
             onOpenChange={setWorkspaceSheetOpen}
           >
             <SheetContent
-              className="flex !w-[min(100vw,22rem)] !max-w-none flex-col gap-0 bg-card p-0 sm:!max-w-md xl:hidden"
-              side="right"
+              className="flex !w-[min(100vw,22rem)] !max-w-none flex-col gap-0 bg-card p-0 xl:hidden"
+              side="right" showCloseButton={false}
+              onCloseAutoFocus={(event) => { event.preventDefault(); sidebarEntry.current?.focus(); }}
             >
               <SheetHeader className="sr-only">
-                <SheetTitle>{filePanelTitle}</SheetTitle>
-                <SheetDescription>
-                  Browse files in the current {filePanelTitle.toLowerCase()}.
-                </SheetDescription>
+                <SheetTitle>Thread sidebar</SheetTitle>
+                <SheetDescription>Inspect Thread status and browse files.</SheetDescription>
               </SheetHeader>
-              <FileTreePanel
-                active={!workspaceDocked && workspaceSheetOpen}
-                key={filePanelKey}
-                rootKey={filePanelKey}
-                title={filePanelTitle}
-                {...filePanelProps}
-              />
+              <ThreadSidebar key={`${agentId}:${threadID}`} agentID={agentId} threadID={threadID}
+                filePanel={{ ...filePanelProps, title: filePanelTitle, rootKey: filePanelKey }}
+                onClose={() => setWorkspaceSheetOpen(false)} />
             </SheetContent>
           </Sheet>
         </div>
+        </ThreadModulesProvider>
       </FleetAgentProvider>
     </ShellTitleContext.Provider>
   );

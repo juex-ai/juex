@@ -95,7 +95,7 @@ Agent process health、Thread retention state 与 Thread execution state 是三�
 独立信号。断连与 reconciliation failure 必须明确展示，不能表现为空白或静默冻结。
 
 模块 UI 仅使用 Thread 状态区和可选文件根两个固定插槽，由服务端贡献决定是否
-展示。Goal 与 Notes 使用独立的紧凑控件；启用但为空的模块与禁用模块明确区分。
+展示。Goal 与 Notes 在右侧栏中独立展开详情；启用但为空的模块与禁用模块明确区分。
 未知或失败的 renderer 显示局部不可用状态，不阻断 Thread。Thread 归档或 Agent
 停机后，仍可查看可读的模块内容。
 
@@ -103,6 +103,15 @@ Workspace 是默认文件根。选择模块根后才加载对应资源。移除�
 并清理请求、订阅和预览。Agent、Thread 或 composition 改变也会重置选择；同一
 composition 内的普通状态更新与重连保留选择。
 只读文件根按需刷新，不建立实时资源订阅。
+
+Thread 侧栏在 Status 中集中展示 Context、模块状态和 Recitation，在 Files 中
+浏览文件。侧栏边缘是唯一入口；输入框仅保留消息操作。桌面固定展示侧栏，Pad
+和手机使用抽屉。点击 Agent 标题进入 Chat，Runtime 使用独立导航按钮。
+
+Recitation 展示最近一次普通请求准备时记录的有序片段及时间。它是历史证据，
+不是当前预览，也不能证明 Provider 已收到请求。查看时仅读取日志，不收集模块
+上下文。当前 Goal、Notes 可以与该快照不同。没有请求记录、请求中没有片段和
+读取失败必须明确区分。
 
 ## 布局与视觉
 

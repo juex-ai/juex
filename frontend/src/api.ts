@@ -1,6 +1,6 @@
 import type { ThreadModulesSnapshot } from "./module-schema";
 import type {
-  ActiveContextSnapshot,
+  RecitationSnapshot,
   BrowserEvent,
   CompactThreadResponse,
   CreateThreadResponse,
@@ -285,12 +285,12 @@ export async function compactThread(
   );
 }
 
-export async function getThreadContext(
-  id: string,
-): Promise<ActiveContextSnapshot> {
-  return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/context`)),
-  );
+export async function getThreadRecitation(
+  agentID: string,
+  threadID: string,
+  signal?: AbortSignal,
+): Promise<RecitationSnapshot | null> {
+  return jsonOrThrow(await fetch(`/agents/${encodeURIComponent(agentID)}/api/threads/${encodeURIComponent(threadID)}/recitation`, { signal }));
 }
 
 // SubscribeOptions configures the SSE subscription.

@@ -13,13 +13,6 @@ const composerSource = readFileSync(
   ),
   "utf8",
 );
-const statusSource = readFileSync(
-  new URL(
-    "../../frontend/src/components/thread/ThreadStatusPanel.tsx",
-    import.meta.url,
-  ),
-  "utf8",
-);
 const controllerSource = readFileSync(
   new URL(
     "../../frontend/src/lib/thread-read-controller.ts",
@@ -38,27 +31,6 @@ const promptInputSource = readFileSync(
   ),
   "utf8",
 );
-
-test("composer groups utility actions before matching status controls", () => {
-  const actions = composerSource.indexOf('aria-label="Composer actions"');
-  const separator = composerSource.indexOf('orientation="vertical"');
-  const status = composerSource.indexOf('aria-label="Thread status"', separator);
-  assert.ok(actions >= 0 && separator > actions && status > separator);
-  assert.match(
-    composerSource,
-    /aria-label="Composer actions"\s+role="group"/,
-  );
-  assert.match(
-    composerSource,
-    /aria-label="Thread status"\s+role="group"/,
-  );
-  assert.match(statusSource, /STATUS_CONTROL_CLASS/);
-  assert.match(statusSource, /<PopoverTrigger asChild>/);
-  assert.doesNotMatch(
-    statusSource,
-    /ContextUsageLabel[\s\S]{0,600}<TooltipTrigger/,
-  );
-});
 
 test("composer stages image previews above draft text at the top-left", () => {
   const composer = composerSource.match(
@@ -270,11 +242,6 @@ test("active thread composer floats without consuming conversation layout", () =
     /<PromptInputTextarea[\s\S]*className="max-h-\[min\(12rem,30dvh\)\]"/,
   );
   assert.match(composerSource, /safe-area-inset-bottom/);
-  assert.match(
-    composerSource,
-    /<Separator[\s\S]*className="h-4 !self-center"[\s\S]*orientation="vertical"/,
-    "the vertical separator must override the primitive's stretch alignment",
-  );
   assert.doesNotMatch(composerSource, /max-h-\[calc\(100dvh_/);
   assert.doesNotMatch(
     composerSource,

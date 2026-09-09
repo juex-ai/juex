@@ -584,7 +584,7 @@ func isReadOnlyAgentPath(path string) bool {
 		return false
 	}
 	if len(parts) == 2 {
-		return parts[1] == "context" || parts[1] == "modules"
+		return parts[1] == "context" || parts[1] == "recitation" || parts[1] == "modules"
 	}
 	if parts[1] != "modules" {
 		return false

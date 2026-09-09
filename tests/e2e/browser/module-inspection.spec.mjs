@@ -77,7 +77,7 @@ async function openModuleThread(page, mode = "ready", options = {}) {
     if (path.endsWith("/resources/files/tree")) { resourceReads++; return json({ name: "scratchpad", path: "/", is_dir: true, children: [{ name: "draft.md", path: "draft.md", is_dir: false }] }); }
     if (path.endsWith("/resources/files/content")) { resourceReads++; return json({ path: "draft.md", content: "Scoped file preview", kind: "text", size: 19, truncated: false }); }
     if (path.endsWith("/files/tree")) return json({ name: "workspace", path: "/", is_dir: true, children: [] });
-    if (path.endsWith("/context")) return json({ messages: [], estimated_tokens: 0 });
+    if (path.endsWith("/recitation")) return options.recitation ? options.recitation(route) : json(null);
     if (path.endsWith("/status")) return json({ cursor: "cursor-1", thread: { id: threadID, alias: "main", state: "idle", working: false, pending_count: 0, max_pending_inputs: 8, can_accept_input: true }, tools: [], token_usage: { input_tokens: 0, output_tokens: 0 } });
     if (/\/threads\/[^/]+$/.test(path)) return json({ thread_id: threadID, alias: "main", dir: `/tmp/module-browser/${threadID}`, retention_state: options.readOnly ? "archived" : "active", execution_state: "idle", created_at: "2026-09-07T00:00:00Z", last_activity_at: "2026-09-07T00:00:00Z", revision: 1, generation_id: "g1", turn_count: 0, pending_input_count: 0, items: [], has_more_before: false, event_cursor: "cursor-1" });
     return route.fulfill({ status: 404, body: "not found" });
@@ -98,6 +98,7 @@ test("module state loads through the shared snapshot and file resources stay laz
   await expect(page.getByText("Check scoped resources", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   expect(reads()).toBe(0);
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
@@ -133,6 +134,7 @@ test("a directory refresh preserves an in-flight module file preview", async ({ 
       path: "draft.md", content: "Preview survives directory refresh", kind: "text", size: 34, truncated: false,
     }) });
   });
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await contentStarted;
@@ -146,6 +148,7 @@ test("a directory refresh preserves an in-flight module file preview", async ({ 
 test("module controls share one Thread subscription", async ({ page }) => {
   await openModuleThread(page);
   await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.moduleSources.filter((source) => source.readyState !== EventSource.CLOSED).length)).toBe(1);
@@ -158,7 +161,9 @@ test("stream failure marks retained module state unavailable and the same baseli
   await page.evaluate(() => window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).fail());
   await expect(page.getByText("Module state unavailable", { exact: true })).toBeVisible();
   await expect(badge).toBeVisible();
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "File root" })).toBeVisible();
+  await page.getByRole("tab", { name: "Status", exact: true }).click();
   await page.evaluate(() => window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).sendBaseline());
   await expect(badge).toBeVisible();
   await expect(page.getByText("Module state unavailable", { exact: true })).toHaveCount(0);
@@ -210,6 +215,7 @@ test("Goal and Notes independently follow the server contribution list", async (
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toHaveCount(0);
   await publishModules(page, { only: ["notes"] });
   await expect(page.getByRole("button", { name: /^Open goal:/ })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Status", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
   await publishModules(page, { only: [] });
   await expect(page.getByRole("button", { name: /^Open (goal|notes):/ })).toHaveCount(0);
@@ -227,6 +233,7 @@ test("disabling a selected root cancels preview and subscription and forgets the
     await held;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ path: "draft.md", content: "Late disabled content", size: 1, truncated: false }) }).catch(() => {});
   });
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await started;
@@ -242,6 +249,7 @@ test("disabling a selected root cancels preview and subscription and forgets the
   await expect(page.getByRole("combobox", { name: "File root" })).toHaveValue("workspace");
   expect(reads()).toBe(beforeLate);
   await page.unroute("**/resources/files/content?*");
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   expect(reads()).toBeGreaterThan(beforeLate);
@@ -249,6 +257,7 @@ test("disabling a selected root cancels preview and subscription and forgets the
 
 test("preview and unrelated snapshots preserve the selected root subscription", async ({ page }) => {
   const reads = await openModuleThread(page);
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
@@ -267,13 +276,16 @@ test("unsupported and broken renderers leave other contributions usable", async 
   await publishModules(page, { unknown: true, version: true });
   await expect(page.getByText("future.status v1 unavailable: unsupported contribution")).toBeVisible();
   await expect(page.getByText("goal.status v2 unavailable: unsupported contribution")).toBeVisible();
+  await page.getByRole("tab", { name: "Status", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
   await publishModules(page, { broken: true });
   await expect(page.getByText("Notes unavailable: display error")).toBeVisible();
   await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   await publishModules(page);
+  await page.getByRole("tab", { name: "Status", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
   await page.getByRole("button", { name: /^Open notes:/ }).click();
   await publishModules(page, { notes: "Updated notes stay open" });
@@ -284,10 +296,11 @@ for (const mode of ["readOnly", "stopped"]) {
   test(`${mode} Threads retain readable module slots`, async ({ page }) => {
     await openModuleThread(page, "ready", { [mode]: true });
     await page.getByRole("button", { name: /^Open goal:/ }).click();
-    await expect(page.getByText("Goal · Read only", { exact: true })).toBeVisible();
+    await expect(page.locator("details[open]").getByText("Read only", { exact: true })).toBeVisible();
     await expect(page.getByText("Verify module views", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
-    await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
     await page.getByRole("button", { name: "draft.md", exact: true }).click();
     await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
     expect(await page.evaluate(() => window.fileSources.length)).toBe(0);
@@ -312,13 +325,15 @@ test("initial snapshot loading is distinct from disabled and empty modules", asy
 for (const route of ["/agents/test-agent/threads/1", "/agents/other-agent/threads/0"]) {
   test(`module roots reject old callbacks after switching to ${route}`, async ({ page }) => {
     await openModuleThread(page);
-    await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
     await page.getByRole("button", { name: "draft.md", exact: true }).click();
     await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
     await page.evaluate((route) => {
       window.history.pushState({}, "", route);
       window.dispatchEvent(new PopStateEvent("popstate"));
     }, route);
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "File root" })).toHaveValue("workspace");
     await expect(page.getByText("Scoped file preview", { exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => window.fileSources.every((source) => source.readyState === EventSource.CLOSED))).toBe(true);
@@ -326,9 +341,11 @@ for (const route of ["/agents/test-agent/threads/1", "/agents/other-agent/thread
       window.fileSources.forEach((source) => source.changed());
       window.moduleSources.filter((source) => source.readyState === EventSource.CLOSED).forEach((source) => source.send({ ...window.moduleBaseline, revision: "late", ui: [], modules: {} }));
     });
+    await page.getByRole("tab", { name: "Status", exact: true }).click();
     await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
     const treeResponse = page.waitForResponse((response) => response.url().includes(`${route.replace("/threads/", "/api/threads/")}/modules/scratchpad/resources/files/tree`));
-    await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
     await treeResponse;
     await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
     expect(await page.evaluate(() => window.moduleSources.filter((source) => source.readyState !== EventSource.CLOSED).length)).toBe(1);
@@ -338,20 +355,22 @@ for (const route of ["/agents/test-agent/threads/1", "/agents/other-agent/thread
 test("mobile file sheet follows module removal without retaining its preview", async ({ page }) => {
   await openModuleThread(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Show workspace", exact: true }).click();
+  await page.getByRole("button", { name: "Open sidebar", exact: true }).click();
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
   await publishModules(page, { only: ["notes"] });
   await expect(page.getByText("Scoped file preview", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh workspace", exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: "Status", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Open goal:/ })).toHaveCount(0);
 });
 
 test("read-only transitions stop file subscriptions while manual refresh remains available", async ({ page }) => {
   const reads = await openModuleThread(page);
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.fileSources.length)).toBe(1);
@@ -366,3 +385,98 @@ test("read-only transitions stop file subscriptions while manual refresh remains
   await publishModules(page, { readOnly: false });
   await expect.poll(() => page.evaluate(() => window.fileSources.filter((source) => source.readyState !== EventSource.CLOSED).length)).toBe(1);
 });
+
+test("Thread state stays in the sidebar and the Agent title opens Chat", async ({ page }) => {
+  await openModuleThread(page);
+  const sidebar = page.getByRole("complementary", { name: "Thread sidebar" });
+  await expect(sidebar.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+  await expect(page.locator("header").getByRole("link", { name: "Chat with test-agent" })).toHaveAttribute("href", "/agents/test-agent");
+  await expect(page.locator("header").getByRole("link", { name: "Runtime", exact: true })).toHaveAttribute("href", "/agents/test-agent/runtime");
+  await expect(page.getByRole("tab", { name: "Status", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Close sidebar", exact: true }).click();
+  await expect(sidebar).toHaveCount(0);
+  await page.getByRole("button", { name: "Open sidebar", exact: true }).click();
+  await expect(sidebar).toBeVisible();
+});
+
+for (const viewport of [{ width: 820, height: 1180 }, { width: 1180, height: 820 }, { width: 390, height: 844 }, { width: 320, height: 720 }]) {
+  test(`sidebar drawer preserves the composer at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await openModuleThread(page);
+    await page.setViewportSize(viewport);
+    const composer = page.getByPlaceholder("Ask juex anything...");
+    await composer.fill("Keep my draft");
+    const entry = page.getByRole("button", { name: "Open sidebar", exact: true });
+    await entry.click();
+    const drawer = page.getByRole("dialog", { name: "Thread sidebar", exact: true });
+    await expect(drawer).toBeVisible();
+    await drawer.getByRole("button", { name: /^Open notes:/ }).click();
+    await expect(drawer.getByText("Check scoped resources", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const bounds = await drawer.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
+    await page.keyboard.press("Escape");
+    await expect(drawer).toHaveCount(0);
+    await expect(entry).toBeFocused();
+    await expect(composer).toHaveValue("Keep my draft");
+    await expect(page.locator("header").getByRole("link", { name: "Runtime", exact: true })).toBeVisible();
+  });
+}
+
+const recordedRecitation = (text) => ({ epoch_id: text, turn_id: "turn", recorded_at: "2026-09-09T04:00:00Z", generation_id: "g1", iter: 0,
+  fragments: [{ message_id: "runtime-notes", text: `## Notes\n${text}` }] });
+
+test("Recitation is scoped to visible Status and rejects responses from a previous open", async ({ page }) => {
+  const pending = [];
+  await openModuleThread(page, "ready", { recitation: (route) => { pending.push(route); } });
+  await expect.poll(() => pending.length).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Close sidebar", exact: true }).click();
+  const old = pending.splice(0);
+  await page.getByRole("button", { name: "Open sidebar", exact: true }).click();
+  await expect.poll(() => pending.length).toBeGreaterThan(0);
+  await pending.at(-1).fulfill({ json: recordedRecitation("Current recorded text") });
+  await page.getByRole("button", { name: /^Open recitation:/ }).click();
+  await page.locator("summary").filter({ hasText: /^Notes$/ }).click();
+  await expect(page.getByText("Current recorded text", { exact: false })).toBeVisible();
+  for (const route of old) await route.fulfill({ json: recordedRecitation("Obsolete recorded text") }).catch(() => {});
+  await expect(page.getByText("Obsolete recorded text", { exact: false })).toHaveCount(0);
+  const count = pending.length;
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await publishModules(page, { only: ["notes"] });
+  await expect(page.getByRole("button", { name: "Refresh workspace", exact: true })).toBeVisible();
+  expect(pending.length).toBe(count);
+});
+
+test("Recitation keeps errors distinct from an empty recorded request and recovers", async ({ page }) => {
+  let failed = true;
+  await openModuleThread(page, "ready", { recitation: (route) => failed
+    ? route.fulfill({ status: 500, json: { error: { message: "Recorded context unreadable" } } })
+    : route.fulfill({ json: { ...recordedRecitation("empty"), fragments: [] } }) });
+  await page.getByRole("button", { name: "Open recitation: Unavailable" }).click();
+  await expect(page.getByText("Recorded context unreadable", { exact: true })).toBeVisible();
+  failed = false;
+  await page.getByRole("button", { name: "Refresh Recitation" }).click();
+  await expect(page.getByText("This request contains no Recitation fragments.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Recorded context unreadable", { exact: true })).toHaveCount(0);
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`Recitation ignores an old ${outcome} after Agent A to B to A`, async ({ page }) => {
+    const pending = [];
+    await openModuleThread(page, "ready", { recitation: (route) => { pending.push(route); } });
+    await expect.poll(() => pending.length).toBeGreaterThan(0);
+    const old = pending.splice(0);
+    for (const agent of ["other-agent", "test-agent"]) {
+      await page.evaluate((agent) => { window.history.pushState({}, "", `/agents/${agent}/threads/0`); window.dispatchEvent(new PopStateEvent("popstate")); }, agent);
+      await expect(page.locator("header").getByRole("link", { name: `Chat with ${agent}` })).toBeVisible();
+      await expect.poll(() => pending.some((route) => route.request().url().includes(`/agents/${agent}/`))).toBe(true);
+    }
+    const current = pending.filter((route) => route.request().url().includes("/agents/test-agent/")).at(-1);
+    await current.fulfill({ json: recordedRecitation("Newest scope") });
+    for (const route of old) await route.fulfill(outcome === "success" ? { json: recordedRecitation("Obsolete scope") } : { status: 500, json: { error: { message: "Obsolete failure" } } }).catch(() => {});
+    await page.getByRole("button", { name: "Open recitation: 1 fragments · latest request" }).click();
+    await page.locator("summary").filter({ hasText: /^Notes$/ }).click();
+    await expect(page.getByText("Newest scope", { exact: false })).toBeVisible();
+    await expect(page.getByText(/Obsolete/)).toHaveCount(0);
+  });
+}
