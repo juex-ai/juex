@@ -114,3 +114,4 @@ CI 始终检查文档。仅修改普通 Markdown 时，跳过前端检查、lint
 - [PHILOSOPHY.zh.md](PHILOSOPHY.zh.md)：产品原则与取舍。
 - [DESIGN.zh.md](DESIGN.zh.md)：稳定的 Web 交互与视觉规范。
 - [docs/adr/](docs/adr)：持久架构决策的原因。
+

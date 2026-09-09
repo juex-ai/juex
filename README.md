@@ -125,3 +125,4 @@ files, or an unavailable change comparison run the full CI suite.
 - [PHILOSOPHY.md](PHILOSOPHY.md): product principles and trade-offs.
 - [DESIGN.md](DESIGN.md): stable Web interaction and visual contract.
 - [docs/adr/](docs/adr): rationale for durable architecture decisions.
+
