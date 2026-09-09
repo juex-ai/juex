@@ -104,6 +104,9 @@ Explorer 列表来自 Agent index。
 [Juex local-test skill](.agents/skills/juex-localtest/SKILL.zh.md) 为准。
 前端开发说明见 [frontend/README.zh.md](frontend/README.zh.md)。
 
+CI 始终检查文档。仅修改普通 Markdown 时，跳过前端检查、lint 和 Go 测试；
+修改内嵌运行时 Markdown、非 Markdown 文件，或无法确定改动范围时，运行完整 CI。
+
 ## 文档地图
 
 - [DOMAIN.zh.md](DOMAIN.zh.md)：词汇、所有权、生命周期和不变量。
