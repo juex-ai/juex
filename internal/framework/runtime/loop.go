@@ -948,7 +948,7 @@ func (e *Engine) persistAcceptedInputAfterPreparationFailureLocked(turnID string
 }
 
 func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {
-	persisted, err := e.currentThread().AppendAssigned(userMsg)
+	persisted, err := e.appendInputMessage(userMsg)
 	if err != nil {
 		return fmt.Errorf("thread append user: %w", err)
 	}
@@ -2157,7 +2157,7 @@ func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID stri
 }
 
 func (e *Engine) appendRecoveredTurnInputLocked(message llm.Message) error {
-	persisted, err := e.currentThread().AppendAssigned(message)
+	persisted, err := e.appendInputMessage(message)
 	if err != nil {
 		return fmt.Errorf("thread append recovered user: %w", err)
 	}
@@ -2296,7 +2296,7 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 		if err := e.emitProjectionApplied(turnID, projection); err != nil {
 			return fmt.Errorf("commit pending input projection: %w", err)
 		}
-		if err := threadState.Append(msg); err != nil {
+		if _, err := e.appendInputMessage(msg); err != nil {
 			return fmt.Errorf("thread append pending input: %w", err)
 		}
 		if item.RecordID != "" {

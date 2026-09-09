@@ -128,6 +128,38 @@ func TestInputTrackingMidTurnChecklistAndAnswerCommit(t *testing.T) {
 			if available != enabled {
 				t.Fatalf("tool availability=%v enabled=%v", available, enabled)
 			}
+			_, history := a.Thread.Snapshot()
+			var messageIDs []string
+			for _, message := range history {
+				if message.Role == llm.RoleUser {
+					messageIDs = append(messageIDs, message.ID)
+				}
+			}
+			reader := &runtime.InputStatusReader{}
+			page, readErr := reader.Read(a.Thread.Dir, messageIDs)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if !enabled && len(page.Messages) != 0 {
+				t.Fatal("disabled input received a tracking association")
+			}
+			if enabled {
+				if len(page.Messages) != 4 {
+					t.Fatalf("direct/queued associations: %+v", page)
+				}
+				checkedCount := 0
+				for _, status := range page.Messages {
+					if status.CheckedAt != nil {
+						checkedCount++
+						if status.InputID != questionID || status.CheckMessageID == status.MessageID {
+							t.Fatalf("wrong input checked: %+v", status)
+						}
+					}
+				}
+				if checkedCount != 1 {
+					t.Fatalf("checked %d inputs, want only status question", checkedCount)
+				}
+			}
 			if !enabled {
 				return
 			}

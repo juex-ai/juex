@@ -27,6 +27,10 @@ type BrowserEvent struct {
 	sequence      uint64
 }
 
+func isInputTrackingEvent(kind string) bool {
+	return kind == juexruntime.InputTrackedType || kind == juexruntime.InputCheckedType || kind == juexruntime.InputScopeChangedType
+}
+
 func browserEventTypes() []string {
 	return eventcatalog.Default().BrowserTypes()
 }
@@ -75,12 +79,13 @@ func browserToolOutputDeltaVisible(turnID string, payload json.RawMessage, statu
 }
 
 type browserEventProjection struct {
-	status *juexruntime.StatusStore
-	stream *broadcaster
+	status        *juexruntime.StatusStore
+	stream        *broadcaster
+	inputTracking bool
 }
 
 func (p browserEventProjection) Publish(event events.Event) {
-	if p.status == nil || p.stream == nil {
+	if p.status == nil || p.stream == nil || (!p.inputTracking && isInputTrackingEvent(event.Type)) {
 		return
 	}
 	projected, visible, err := browserEventFromRuntime(

@@ -104,3 +104,46 @@ func TestEventStoreSnapshotSurvivesThreadDirectoryMove(t *testing.T) {
 		t.Fatalf("captured journals after move = %#v", journals)
 	}
 }
+
+func TestPassiveSnapshotVisitsOnlyNewCommitsAcrossGenerations(t *testing.T) {
+	store := NewStore(t.TempDir())
+	target, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	snapshot, err := CaptureEventStoreSnapshot(target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sequences []uint64
+	visit := func(commit Commit) error { sequences = append(sequences, commit.Seq); return nil }
+	cursor, err := snapshot.VisitAfter(EventCursor{}, visit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Close()
+	if len(sequences) == 0 {
+		t.Fatal("missing initial commit")
+	}
+	if _, err := target.BeginNewGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = CaptureEventStoreSnapshot(target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	if err := target.AppendEvent(events.Event{Type: "turn.started", TurnID: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	sequences = nil
+	next, err := snapshot.VisitAfter(cursor, visit)
+	if err != nil || len(sequences) != 1 || sequences[0] != cursor.Seq+1 {
+		t.Fatalf("incremental: %v %+v %v", sequences, next, err)
+	}
+	sequences = nil
+	if _, err := snapshot.VisitAfter(next, visit); err != nil || len(sequences) != 0 {
+		t.Fatalf("unchanged: %v %v", sequences, err)
+	}
+}

@@ -1,3 +1,4 @@
+import { reconcileInputStatus } from "../modules/input-tracking/state.ts";
 import {
   clearLiveThreadTranscript,
   clearLocalCompactMessages,
@@ -97,8 +98,11 @@ export function resetThreadReadState(
 export function projectThreadLoaded(
   state: ThreadReadState,
   data: ThreadShowResponse,
-  opts?: { preserveLiveMessages?: boolean },
+  opts?: { preserveLiveMessages?: boolean; preserveLoadedHistory?: boolean },
 ): ThreadReadState {
+  if (opts?.preserveLoadedHistory && state.data?.id === data.id) {
+    data = mergeOlderThreadPage(data, state.data);
+  }
   const projection = opts?.preserveLiveMessages
     ? reconcilePersistedLiveMessages(state.projection, data.messages)
     : clearLiveThreadTranscript(state.projection);
@@ -108,7 +112,7 @@ export function projectThreadLoaded(
     loadError: null,
     loadingOlderMessages: false,
     olderMessagesError: null,
-    projection,
+    projection: { ...projection, inputTracking: reconcileInputStatus(data.input_tracking, projection.inputTracking) },
   };
 }
 

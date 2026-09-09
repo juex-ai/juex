@@ -693,3 +693,27 @@ test("disconnect clears status and rejects an in-flight snapshot until reconnect
   assert.equal((projected as AgentRuntimeStatusSnapshot | undefined)?.cursor, "reconnected");
   controller.dispose();
 });
+
+test("reconnect refreshes module gating without dropping loaded history and ignores an older baseline", async () => {
+  let onOpen=()=>{};
+  let state=createThreadReadState();
+  const pending: Array<(page:ThreadShowResponse)=>void>=[];
+  const input={input_id:"input-one",message_id:"old-message",scope_id:"g000001"};
+  const initial=thread("s1",[{id:"old-message",role:"user",blocks:[{type:"text",text:"old input"}]}]);
+  initial.input_tracking={scope_id:input.scope_id,messages:{[input.message_id]:input}};
+  const controller=createThreadReadController({
+    ...ports(),initialState:{...state,data:initial},onStateChange:next=>{state=next;},
+    getThread:()=>new Promise(resolve=>pending.push(resolve)),
+    subscribeEvents:(_id,opts)=>{onOpen=opts.onOpen!;return()=>{};},
+  });
+  controller.setRoute("s1");controller.subscribeLiveEvents("s1");
+  const stale=controller.refresh("s1");
+  onOpen();
+  pending[1](thread("s1"));
+  await Promise.resolve();await Promise.resolve();
+  pending[0](initial);await stale;
+  assert.equal(state.data?.input_tracking,undefined);
+  assert.equal(state.data?.messages[0].id,"old-message");
+  assert.deepEqual(state.projection.inputTracking,{messages:{},checks:{}});
+  controller.dispose();
+});

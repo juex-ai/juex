@@ -48,3 +48,12 @@ Deployment is a clean break from the former pending-input filename and
 Generation seeds. Before upgrading an existing Agent, settle or manually hand
 off outstanding inputs and old context; no legacy reads or automatic migration
 are provided. Merely disabling this Module does not reverse the storage change.
+
+Thread messages expose a read-only check marker only while this Module is
+enabled. The marker links the original message to its input ID and committed
+check evidence; it does not infer completion from Turn settlement or a missing
+checklist record. Associations share the original message commit and survive
+checklist pruning, compaction, pagination and restart. Inputs without a durable
+association stay unmarked. `/new` ends an unchecked input's tracking scope without
+checking it. The existing history API and SSE carry these annotations; disabled
+tracking does not read or publish them.
