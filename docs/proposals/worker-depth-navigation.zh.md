@@ -43,11 +43,12 @@ Main 深度为 0，每条 parent 关系增加 1 层：
 
 - 达到或超过上限的 Thread 不装配 worker-threads 模块，对该 Thread 而言该模块不存在。模块的全部工具、工具 schema、提示词、指导、资源和生命周期贡献均不发布、不初始化；不是只隐藏 thread_create。
 - 因此 max_depth=1 时，仅 Main 拥有 worker-threads；max_depth=2 时，Main 与第一层 Worker 拥有该模块，第二层及更深 Thread 不拥有。最终可用性由模块配置开关与当前 Thread 深度共同决定，不改写 Agent 的全局配置。
-- 到达上限的 Worker 自身仍正常执行并可由父 Thread 管理；限制的是它向下管理 Worker 的模块能力。已有深层 Thread 同样按此规则装配。外部用户的 Thread Explorer、历史与存储管理不属于该 Thread 的模块贡献，继续保留。
+- 符合新上限的 Worker 自身仍正常执行；其父 Thread 深度低于上限且启用了模块时，仍可管理它。限制的是 Worker 自身向下管理的模块能力。外部用户的 Thread Explorer、历史与存储管理不属于该 Thread 的模块贡献，继续保留。
 - 服务端必须校验实际持久 parent 链，不能仅靠隐藏工具或提示词限制。模型工具、HTTP、CLI 间接调用和内部 Runtime 创建共用规则。
 - 模型创建的 parent 仍从调用 Thread 推导，不允许模型伪造。
 - 超深请求在创建目录、写索引、启动子 Runtime 和调用子 Provider 之前失败，错误明确指出 max_depth。
-- 已存在的深层 Thread 不删除、不迁移、不改写 parent；历史、用量、生命周期管理和既有执行继续遵循原有规则，但不能继续向下创建。
+- 已存在的深层 Thread 不删除、不迁移、不改写 parent，历史与用量保留。若其父 Thread 已达到新上限，父方不再具有发送、订阅、停止等 worker-threads 能力；不为历史子节点例外恢复模块或管理工具。
+- 这些历史深层 Thread 的恢复、执行、停止和保留管理由宿主执行/生命周期接口承担，用户通过现有 API、CLI 或界面操作，仍受 Agent 级模块开关及既有运行约束控制。恢复和清理不得依赖为上限父 Thread 重新装配模块；既有订阅/结果交接按正常停机与恢复规则收口，不恢复不可用的父方订阅。仍禁止继续向下创建。
 - 重启或单独打开 Worker 后按持久父链计算；归档祖先不使深度归零；缺失 parent 或环形异常拒绝创建。
 - 维持模块关闭后可管理 Thread 存储的契约；允许的存储创建入口也遵守层数限制，避免重新启用后绕过。
 
@@ -109,7 +110,7 @@ reviewer · #abc123  [Idle]
 
 1. 配置测试覆盖默认 1、显式 1/2、非法值/类型、其他模块误用、enabled 独立合并、imports 与 Agent overlay 保存读取。
 2. 模型/API/CLI 跨包测试覆盖两种上限：允许层创建成功、超限失败、无残留 Thread 状态且无子 Provider 调用；检查实际 Provider 请求、工具目录和模块生命周期，证明上限 Thread 没有任何 worker-threads 工具、schema、提示词、指导或资源，也不初始化模块。
-3. 覆盖重启、单独恢复、已存在深层 Thread、归档祖先和坏父链；历史保留、深度不被重置，上限 Worker 自身仍可执行、接收父方工作并被管理。
+3. 覆盖重启、单独恢复、归档祖先和坏父链；历史保留、深度不被重置。符合上限的 Worker 可接收仍拥有模块的父方工作。另用“旧 depth=2、改为 max_depth=1”验证：depth=1 父方完全无模块，旧子节点由宿主接口恢复、执行、停止和管理，订阅/交接正确收口，不因保留历史而复活父方工具或模块。
 4. 浏览器验证列表紧凑、统计可读；父标记跨区域定位、焦点、高亮及三秒后清除、重复点击与缺失父行。
 5. 浏览器验证导航两行身份、Thread 状态及切换，导航高度保持 52px；特别覆盖当前 Thread 空闲但其他 Thread 工作、归档/加载/断线、Thread Explorer/Runtime 页面、窄屏与长 alias。父行定位同时覆盖减少动态效果。
 6. 实现阶段遵循 [juex-localtest](../../.agents/skills/juex-localtest/SKILL.zh.md)，按变更范围完成自动化与重建产物的浏览器/API 验证。

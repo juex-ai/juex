@@ -61,11 +61,11 @@ Main has depth 0. Each parent edge adds one level:
   and first-level Workers have it; second-level and deeper Threads do not.
   Effective availability combines the configured module switch and the current
   Thread depth without rewriting the Agent's global configuration.
-- A Worker at the limit still executes normally and can be managed by its
-  parent. The restriction concerns its own module for managing Workers below
-  it. Existing deeper Threads follow the same composition rule. User-facing
-  Thread Explorer, history, and storage management remain available because
-  they are not contributions of that Thread's module.
+- A Worker within the new limit still executes normally. Its parent can manage
+  it when that parent is below the limit and has the module enabled. The
+  restriction concerns the Worker's own module for managing descendants.
+  User-facing Thread Explorer, history, and storage management remain available
+  because they are not contributions of that Thread's module.
 - The server validates the persisted parent chain. Hidden tools or prompt
   guidance alone are insufficient. Model tools, HTTP, indirect CLI calls, and
   internal Runtime creation share the same rule.
@@ -74,9 +74,18 @@ Main has depth 0. Each parent edge adds one level:
 - Reject excessive depth before creating directories, writing the index,
   starting a child Runtime, or calling a child Provider. The error identifies
   `max_depth` clearly.
-- Do not delete, migrate, or reparent existing deeper Threads. Their history,
-  usage, lifecycle management, and existing execution retain their established
-  rules, but they cannot create further descendants.
+- Do not delete, migrate, or reparent existing deeper Threads; preserve their
+  history and usage. If their parent is at the new limit, that parent loses
+  Worker send, subscribe, stop, and other module capabilities. Existing children
+  do not justify restoring a management-only module or tools on that parent.
+- Host execution and lifecycle interfaces own recovery, execution, stopping,
+  and retention management for these existing deeper Threads. Users access
+  them through existing API, CLI, or UI operations, subject to Agent-level
+  module enablement and existing execution constraints. Recovery and cleanup
+  must not require composing the module on a capped parent. Settle existing
+  subscriptions and result handoffs through normal shutdown and recovery rules;
+  do not restore unavailable parent subscriptions. Further creation remains
+  prohibited.
 - Compute depth from persisted parents after restart or when opening a Worker
   independently. Archived ancestors do not reset depth. Missing parents or
   cycles reject creation.
@@ -188,9 +197,13 @@ permissions framework or tree component.
    call. Inspect actual Provider requests, tool catalogs, and module lifecycles
    to prove that capped Threads receive no `worker-threads` tools, schemas,
    prompts, guidance, or resources, and never initialize the module.
-3. Cover restart, independent restoration, existing deeper Threads, archived
-   ancestors, and invalid parent chains. Preserve history and depth; capped
-   Workers still execute, accept work from their parent, and remain manageable.
+3. Cover restart, independent restoration, archived ancestors, and invalid
+   parent chains while preserving history and depth. Workers within the limit
+   can accept work from parents that still have the module. Also test an
+   existing depth-2 Worker after changing to `max_depth=1`: the depth-1 parent
+   has no module, host interfaces recover, execute, stop, and manage the child,
+   subscriptions and handoffs settle correctly, and retained history never
+   restores the parent's tools or module.
 4. Browser checks cover compact readable statistics, parent navigation across
    sections, focus, highlight expiry after three seconds, repeated activation,
    and missing parents.
