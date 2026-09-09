@@ -46,7 +46,7 @@ func reconcileNextSteps(candidate, notes string) string {
 	pending := map[string]string{}
 	completed := map[string]bool{}
 	var order []string
-	var notesSyntax markdown.LiteralBlocks
+	var notesSyntax markdown.ListLiteralBlocks
 	for _, line := range strings.Split(notes, "\n") {
 		if notesSyntax.Literal(line) {
 			continue
@@ -68,7 +68,7 @@ func reconcileNextSteps(candidate, notes string) string {
 	}
 	seen := map[string]bool{}
 	var lines []string
-	var candidateSyntax markdown.LiteralBlocks
+	var candidateSyntax markdown.ListLiteralBlocks
 	for _, line := range strings.Split(candidate, "\n") {
 		if candidateSyntax.Literal(line) {
 			lines = append(lines, line)
@@ -77,7 +77,8 @@ func reconcileNextSteps(candidate, notes string) string {
 		key, listEntry := nextStepKey(line)
 		if original, ok := pending[key]; ok {
 			if !seen[key] {
-				lines = append(lines, original)
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				lines = append(lines, indent+original)
 				seen[key] = true
 			}
 		} else if !listEntry || !completed[key] {
