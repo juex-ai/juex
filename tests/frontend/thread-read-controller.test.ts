@@ -624,3 +624,36 @@ class FakeTimers {
     timer.callback();
   }
 }
+
+
+test("disconnect clears status and rejects an in-flight snapshot until reconnection", async () => {
+  let onError: (event: Event) => void = () => {};
+  let onOpen: () => void = () => {};
+  let resolveStatus: (value: AgentRuntimeStatusSnapshot) => void = () => {};
+  let projected: AgentRuntimeStatusSnapshot | undefined = runtimeStatus("old");
+  const controller = createThreadReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      onError = opts.onError!;
+      onOpen = opts.onOpen!;
+      return () => {};
+    },
+  });
+  controller.setRoute("s1");
+  controller.configureLiveStatus({
+    load: () => new Promise((resolve) => { resolveStatus = resolve; }),
+    apply: (_id, status) => { projected = status; },
+    clear: () => { projected = undefined; },
+  });
+  controller.subscribeLiveEvents("s1");
+  onError(new Event("error"));
+  assert.equal(projected, undefined);
+  resolveStatus(runtimeStatus("late"));
+  await Promise.resolve();
+  assert.equal(projected, undefined);
+  onOpen();
+  resolveStatus(runtimeStatus("reconnected"));
+  await Promise.resolve();
+  assert.equal((projected as AgentRuntimeStatusSnapshot | undefined)?.cursor, "reconnected");
+  controller.dispose();
+});

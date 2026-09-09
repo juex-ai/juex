@@ -14,8 +14,10 @@ async function fixture(page, options = {}) {
     ...Array.from({ length: 24 }, (_, i) => item(`filler${i}`, `worker ${i}`, "0")), item("old", "archived parent", "0", true)];
   if (options.longAlias) rows.find((r) => r.thread_id === "child").alias = options.longAlias;
   await page.addInitScript(() => {
+    window.sources = [];
     window.EventSource = class extends EventTarget {
       static OPEN = 1; static CLOSED = 2; static CONNECTING = 0;
+      constructor(url) { super(); this.url = String(url); window.sources.push(this); }
       readyState = 1; close() { this.readyState = 2; }
     };
   });
@@ -31,7 +33,7 @@ async function fixture(page, options = {}) {
     if (path.endsWith("/files/tree")) return json({ name: "workspace", path: "/", is_dir: true, children: [] });
     if (path.endsWith("/context")) return json({ messages: [], estimated_tokens: 0 });
     const id = path.match(/\/threads\/([^/]+)/)?.[1];
-    if (path.endsWith("/status")) return json({ thread: { id, state: id === "child" ? "turn_active" : "idle", working: id === "child", pending_count: 0, can_accept_input: true }, tools: [], token_usage: {} });
+    if (path.endsWith("/status")) return json({ thread: { id, alias: options.staleAlias, state: id === "child" ? "turn_active" : "idle", working: id === "child", pending_count: 0, can_accept_input: true }, tools: [], token_usage: {} });
     if (/\/threads\/[^/]+$/.test(path)) {
       if (options.hold && id === "child") await options.hold;
       return json({ ...rows.find((r) => r.thread_id === id), dir: `/tmp/${id}`, revision: 1, generation_id: "g1", items: [], has_more_before: false, event_cursor: "cursor-1" });
@@ -129,4 +131,28 @@ test("loading and stopped Threads do not inherit an idle or previous status", as
   await fixture(page, { stopped: true });
   await page.goto("/agents/agent-a/threads/0");
   await expect(page.locator("header").getByLabel("Current Thread status")).toHaveText("Unknown");
+});
+
+
+test("header prefers current metadata alias and marks disconnected status unknown", async ({ page }) => {
+  await fixture(page, { staleAlias: "old alias" });
+  await page.goto("/agents/agent-a/threads/child");
+  const header = page.locator("header");
+  await expect(header.getByLabel("Current Thread status")).toHaveText("Working");
+  await expect(header).toContainText("reviewer · #child");
+  await expect(header).not.toContainText("old alias");
+  await page.evaluate(() => {
+    const source = window.sources.find((s) => s.url.includes("/threads/child/events") && s.readyState === 1);
+    source.readyState = 0;
+    source.onerror?.(new Event("error"));
+    source.dispatchEvent(new Event("error"));
+  });
+  await expect(header.getByLabel("Current Thread status")).toHaveText("Unknown");
+  await page.evaluate(() => {
+    const source = window.sources.find((s) => s.url.includes("/threads/child/events") && s.readyState === 0);
+    source.readyState = 1;
+    source.onopen?.(new Event("open"));
+    source.dispatchEvent(new Event("open"));
+  });
+  await expect(header.getByLabel("Current Thread status")).toHaveText("Working");
 });
