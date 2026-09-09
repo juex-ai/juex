@@ -22,7 +22,7 @@ func TestBundleCommandResolvesArchivedThreadAlias(t *testing.T) {
 	if err := mainThread.Close(); err != nil {
 		t.Fatal(err)
 	}
-	target, err := store.CreateWorker(thread.MainID, "reviewer")
+	target, err := store.CreateWorker(thread.MainID, "reviewer", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

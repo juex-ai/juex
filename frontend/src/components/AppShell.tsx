@@ -63,8 +63,10 @@ type ShellTitleContextValue = {
 };
 
 type ShellHeaderState = {
+  pathname: string;
   title: string | null;
   updatedAt?: string | null;
+  threadStatus?: "Idle" | "Working" | "Failed" | "Archived" | "Unknown";
 };
 
 const ShellTitleContext = createContext<ShellTitleContextValue | null>(null);
@@ -72,16 +74,18 @@ const ShellTitleContext = createContext<ShellTitleContextValue | null>(null);
 export function useShellTitle(
   title: string | null,
   updatedAt: string | null = null,
+  threadStatus?: ShellHeaderState["threadStatus"],
 ) {
   const context = useContext(ShellTitleContext);
+  const { pathname } = useLocation();
 
   useEffect(() => {
-    context?.setShellHeader({ title, updatedAt });
-  }, [context, title, updatedAt]);
+    context?.setShellHeader({ pathname, title, updatedAt, threadStatus });
+  }, [context, pathname, title, updatedAt, threadStatus]);
 
   useEffect(() => {
-    return () => context?.setShellHeader({ title: null, updatedAt: null });
-  }, [context]);
+    return () => context?.setShellHeader({ pathname, title: null });
+  }, [context, pathname]);
 }
 
 export function AppShell() {
@@ -118,6 +122,7 @@ export function AppShell() {
     () => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
   );
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [shellHeader, setShellHeader] = useState<ShellHeaderState | null>(null);
   const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
   const currentAgent =
@@ -294,7 +299,7 @@ export function AppShell() {
     ],
   );
   const shellTitleContext = useMemo<ShellTitleContextValue>(
-    () => ({ setShellHeader: () => {} }),
+    () => ({ setShellHeader }),
     [],
   );
 
@@ -351,6 +356,9 @@ export function AppShell() {
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <FleetStageHeader
               agent={currentAgent}
+              contextTitle={shellHeader?.pathname === location.pathname ? shellHeader.title : null}
+              threadStatus={shellHeader?.pathname === location.pathname ? shellHeader.threadStatus : undefined}
+              threadID={threadID}
               activeTab={activeTab}
               filePanelTitle={filePanelTitle}
               settings={settings}

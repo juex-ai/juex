@@ -82,7 +82,7 @@ func TestDisabledWorkerPausesPendingRecoveryAndPreservesMaintenance(t *testing.T
 	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
-	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "retained")
+	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "retained", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestDisabledWorkerNewContextDoesNotGreet(t *testing.T) {
 	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
-	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "maintenance")
+	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "maintenance", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestDisabledWorkerSkipsThreadStartPolicies(t *testing.T) {
 		if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 			t.Fatal(err)
 		}
-		worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "startup")
+		worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker(thread.MainID, "startup", 2)
 		if err != nil {
 			t.Fatal(err)
 		}

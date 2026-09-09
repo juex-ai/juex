@@ -12,6 +12,7 @@ type ThreadAttachmentRequest struct {
 	ThreadID       string
 	ParentThreadID string
 	Alias          string
+	WorkerMaxDepth int
 }
 
 type ThreadAttachment struct {
@@ -27,6 +28,15 @@ func AttachThread(stateDir string, request ThreadAttachmentRequest) (ThreadAttac
 		return ThreadAttachment{}, fmt.Errorf("app: Agent state directory is required")
 	}
 	store := thread.NewStore(stateDir)
+	maxDepth := request.WorkerMaxDepth
+	if maxDepth == 0 {
+		maxDepth = 1
+	}
+	if request.ParentThreadID != "" {
+		if err := store.CheckWorkerDepth(request.ParentThreadID, maxDepth); err != nil {
+			return ThreadAttachment{}, err
+		}
+	}
 	if err := store.RecoverLayout(); err != nil {
 		return ThreadAttachment{}, err
 	}
@@ -36,7 +46,7 @@ func AttachThread(stateDir string, request ThreadAttachmentRequest) (ThreadAttac
 	var err error
 	switch {
 	case request.ParentThreadID != "":
-		target, err = store.CreateWorker(request.ParentThreadID, request.Alias)
+		target, err = store.CreateWorker(request.ParentThreadID, request.Alias, maxDepth)
 		created = err == nil
 	case request.ThreadID == "" || request.ThreadID == thread.MainID:
 		target, err = store.EnsureMain()

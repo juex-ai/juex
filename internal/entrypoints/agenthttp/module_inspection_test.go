@@ -89,7 +89,7 @@ func TestModuleInspectionGenericResourceOperationAndArchivedPermissions(t *testi
 		}},
 	}}}
 	store := thread.NewStore(s.opts.Cfg.AgentStateDir)
-	worker, err := store.CreateWorker("0", "")
+	worker, err := store.CreateWorker("0", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestModuleResourceHeartbeatDoesNotPublishChanges(t *testing.T) {
 func TestModuleOperationSerializesWithThreadArchive(t *testing.T) {
 	s := newTestServer(t)
 	store := thread.NewStore(s.opts.Cfg.AgentStateDir)
-	worker, err := store.CreateWorker("0", "")
+	worker, err := store.CreateWorker("0", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

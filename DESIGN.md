@@ -25,6 +25,12 @@ The stable route hierarchy is Fleet, selected Agent, Thread list, Thread
 detail, and Runtime views. Main Thread is the default Agent destination.
 Thread Explorer owns both current work and archived history.
 
+The fixed-height Agent navigation shows the Agent name above the viewed
+Thread's alias/id and its own status. Loading or unknown state never implies
+Idle; archived Threads show Archived. Agent process health remains separate.
+Explorer and Runtime show their page context without a Thread status badge.
+Long identities truncate with their full title available; tabs stay usable.
+
 Route names and parameter syntax are implementation details owned by the
 router.
 
@@ -39,6 +45,13 @@ operability understandable without opening the Thread:
 - Turn and Context Generation counts;
 - pending Input count and current context usage;
 - one cumulative Token Usage label.
+
+Rows use compact spacing without repeated identity icons. A parent marker
+beside the alias/id uses the complete list snapshot. Activating it focuses and
+centers the parent row, including across sections, with a three-second
+highlight that restarts on repeat activation. It does not open a conversation.
+Missing parents have an unavailable marker. Long names, keyboard navigation,
+narrow screens, and reduced-motion preferences remain supported.
 
 Main appears like a normal Thread but cannot be renamed, archived, or deleted.
 An idle Worker can be archived. An archived Worker can be restored or

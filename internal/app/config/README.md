@@ -24,6 +24,15 @@ submitted sparse YAML without expanding defaults. Unknown presets, module IDs,
 and settings are rejected by the same configuration parser used for loading
 and saving. Canonical module IDs use kebab-case.
 
+`modules.worker-threads.max_depth` defaults to 1 and accepts only integer 1
+or 2. Main has depth 0; each parent link adds one. This field merges separately
+from `enabled`, including imports and Agent overlays. Explicit null or invalid
+depths fail even when disabled; other modules do not accept this setting.
+At the limit the Thread has no Worker module, while its own execution remains
+controlled by the Agent-level switch. Existing deep history is retained and
+host lifecycle operations remain available. Storage creation also obeys the
+depth limit. Configuration changes use the existing Agent restart mechanism.
+
 Tool modules assemble independently. A bare minimal preset serves three basic
 file tools and three shell tools. Shell owns its sessions and syntax guidance.
 The final runtime tool catalog determines descriptions, schemas, and recovery

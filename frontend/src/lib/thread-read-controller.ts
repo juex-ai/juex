@@ -219,7 +219,15 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
         statusRevision += 1;
         status.apply(threadID, snapshot);
       } catch (error) {
-        if (!subscribed || generation !== refreshGeneration) return;
+        if (
+          !subscribed ||
+          !isLatestThreadRoute(route, threadID) ||
+          generation !== refreshGeneration ||
+          revision !== statusRevision
+        ) {
+          return;
+        }
+        status.clear(threadID);
         status.onRefreshError?.(error);
       }
     };
@@ -246,6 +254,8 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
       },
       onError: (event) => {
         if (!subscribed || !isLatestThreadRoute(route, threadID)) return;
+        statusRevision += 1;
+        status?.clear(threadID);
         status?.onStreamError?.(event);
       },
     });

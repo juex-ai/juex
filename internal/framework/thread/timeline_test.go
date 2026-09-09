@@ -219,7 +219,7 @@ func TestTimelineRejectsMismatchedCursorIdentityAndSequence(t *testing.T) {
 		t.Fatalf("sequence mismatch error = %v, want corrupt Journal", err)
 	}
 
-	worker, err := store.CreateWorker(MainID, "cursor-owner")
+	worker, err := store.CreateWorker(MainID, "cursor-owner", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

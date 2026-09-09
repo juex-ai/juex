@@ -596,7 +596,7 @@ func seedWebWorker(t *testing.T, srv *Server, text string) thread.Info {
 		t.Fatal(err)
 	}
 	_ = main.Close()
-	target, err := store.CreateWorker(thread.MainID, "notification-isolation")
+	target, err := store.CreateWorker(thread.MainID, "notification-isolation", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

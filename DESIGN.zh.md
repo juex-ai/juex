@@ -23,6 +23,11 @@ Command 使用 HTTP，snapshot 与 event stream 提供状态。重连时从权�
 稳定层级是 Fleet、selected Agent、Thread list、Thread detail 和 Runtime view。
 Main Thread 是 Agent 默认目的地。Thread Explorer 同时承载当前工作与归档历史。
 
+Agent 导航栏保持固定高度，上行显示 Agent 名称，下行显示当前 Thread 的
+alias/id 及其自身状态。加载或未知状态不能默认显示 Idle；归档显示 Archived。
+Agent 进程健康独立展示。Explorer 与 Runtime 显示页面上下文，不显示 Thread
+状态标签。长名称截断并可查看完整标题，切换标签始终可用。
+
 具体 route 名称和参数语法属于 router 实现细节。
 
 ## Thread Explorer
@@ -35,6 +40,11 @@ Active 与 Archived 分开展示。每一行无需打开 Thread 就应说明身�
 - Turn 与 Context Generation 数量；
 - pending Input 数量与当前 context usage；
 - 一个累计 Token Usage label。
+
+列表行采用紧凑间距，不重复展示身份图标。alias/id 旁的 parent 标记从完整
+列表快照取值；激活后跨区域聚焦并滚动至父行居中，高亮三秒，重复激活重置
+计时，不打开对话。缺失父行显示不可用标记。长名称、键盘导航、窄屏和
+减少动态效果偏好都应得到支持。
 
 Main 的视觉表现与普通 Thread 一致，但不能 rename、archive 或 delete。Idle
 Worker 可以 archive；Archived Worker 可以 restore，或在明确确认后永久删除。

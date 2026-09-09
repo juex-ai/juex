@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Archive, ArchiveRestore, MessageSquareText, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { archiveThread, createThread, deleteThread, listThreads, unarchiveThread } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
@@ -24,7 +24,14 @@ import { cn } from "@/lib/utils";
 import type { ThreadListItem } from "@/types";
 
 const THREAD_METADATA_BADGE_CLASS =
-  "h-5 border-border/70 bg-muted/30 px-2 font-mono text-[11px] font-normal text-muted-foreground";
+  "h-[18px] border-border/70 bg-muted/30 px-1.5 font-mono text-[10px] font-normal text-muted-foreground";
+
+type ThreadNavigation = {
+  byID: Map<string, ThreadListItem>;
+  highlightedID: string | null;
+  registerRow: (id: string, element: HTMLDivElement | null) => void;
+  locate: (id: string) => void;
+};
 
 export function ThreadExplorer() {
   const navigate = useNavigate();
@@ -38,6 +45,30 @@ export function ThreadExplorer() {
   const [workerAlias, setWorkerAlias] = useState("");
   const [mutatingID, setMutatingID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [highlightedID, setHighlightedID] = useState<string | null>(null);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rows = useRef(new Map<string, HTMLDivElement>());
+  const byID = useMemo(() => new Map([...active, ...archived].map((thread) => [thread.thread_id, thread])), [active, archived]);
+  const registerRow = useCallback((id: string, element: HTMLDivElement | null) => {
+    if (element) rows.current.set(id, element);
+    else rows.current.delete(id);
+  }, []);
+  const locate = useCallback((id: string) => {
+    const row = rows.current.get(id);
+    if (!row) return;
+    if (highlightTimer.current !== null) clearTimeout(highlightTimer.current);
+    row.focus({ preventScroll: true });
+    row.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+    setHighlightedID(id);
+    highlightTimer.current = setTimeout(() => {
+      setHighlightedID(null);
+      highlightTimer.current = null;
+    }, 3000);
+  }, []);
+  useEffect(() => () => {
+    if (highlightTimer.current !== null) clearTimeout(highlightTimer.current);
+  }, []);
+  const threadNavigation = { byID, highlightedID, registerRow, locate };
   const mutationsEnabled = agentsLoaded && agent?.runtime_health === "healthy";
   useShellTitle("Threads");
 
@@ -122,8 +153,8 @@ export function ThreadExplorer() {
           <div className="rounded-md border bg-card px-4 py-8 text-sm text-muted-foreground">Loading threads...</div>
         ) : (
           <>
-            <ThreadSection title="Active" empty="No active threads." threads={active} mutatingID={mutatingID} mutationsEnabled={mutationsEnabled} onAction={(thread) => void mutate(thread, "archive")} />
-            <ThreadSection title="Archived" empty="No archived threads." threads={archived} archived mutatingID={mutatingID} mutationsEnabled={mutationsEnabled} onAction={(thread) => void mutate(thread, "unarchive")} onDelete={(thread) => void mutate(thread, "delete")} />
+            <ThreadSection navigation={threadNavigation} title="Active" empty="No active threads." threads={active} mutatingID={mutatingID} mutationsEnabled={mutationsEnabled} onAction={(thread) => void mutate(thread, "archive")} />
+            <ThreadSection navigation={threadNavigation} title="Archived" empty="No archived threads." threads={archived} archived mutatingID={mutatingID} mutationsEnabled={mutationsEnabled} onAction={(thread) => void mutate(thread, "unarchive")} onDelete={(thread) => void mutate(thread, "delete")} />
           </>
         )}
       </div>
@@ -165,7 +196,8 @@ export function ThreadExplorer() {
   );
 }
 
-function ThreadSection({ title, empty, threads, archived = false, mutatingID, mutationsEnabled, onAction, onDelete }: {
+function ThreadSection({ navigation, title, empty, threads, archived = false, mutatingID, mutationsEnabled, onAction, onDelete }: {
+  navigation: ThreadNavigation;
   title: string;
   empty: string;
   threads: ThreadListItem[];
@@ -181,7 +213,7 @@ function ThreadSection({ title, empty, threads, archived = false, mutatingID, mu
       <div className="overflow-hidden rounded-md border bg-card shadow-[var(--shadow-xs)]">
         {threads.length === 0 ? <div className="px-4 py-8 text-sm text-muted-foreground">{empty}</div> : (
           <div className="divide-y">
-            {threads.map((thread) => <ThreadRow key={thread.thread_id} thread={thread} archived={archived} busy={mutatingID === thread.thread_id} mutationsEnabled={mutationsEnabled} onAction={() => onAction(thread)} onDelete={onDelete ? () => onDelete(thread) : undefined} />)}
+            {threads.map((thread) => <ThreadRow navigation={navigation} key={thread.thread_id} thread={thread} archived={archived} busy={mutatingID === thread.thread_id} mutationsEnabled={mutationsEnabled} onAction={() => onAction(thread)} onDelete={onDelete ? () => onDelete(thread) : undefined} />)}
           </div>
         )}
       </div>
@@ -189,7 +221,8 @@ function ThreadSection({ title, empty, threads, archived = false, mutatingID, mu
   );
 }
 
-function ThreadRow({ thread, archived, busy, mutationsEnabled, onAction, onDelete }: {
+function ThreadRow({ navigation, thread, archived, busy, mutationsEnabled, onAction, onDelete }: {
+  navigation: ThreadNavigation;
   thread: ThreadListItem;
   archived: boolean;
   busy: boolean;
@@ -198,14 +231,27 @@ function ThreadRow({ thread, archived, busy, mutationsEnabled, onAction, onDelet
   onDelete?: () => void;
 }) {
   const main = thread.thread_id === "0";
+  const parentID = thread.parent_thread_id;
+  const parent = parentID ? navigation.byID.get(parentID) : undefined;
+  const parentTitle = parent ? threadListTitle(parent) : `#${parentID}`;
+  const highlighted = navigation.highlightedID === thread.thread_id;
   return (
-    <div className="group/thread-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 hover:bg-muted/60">
-      <div className="min-w-0 px-1 py-2">
-        <Link to={threadHref(thread.thread_id)} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/35">
-          <span className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary"><MessageSquareText className="size-4" /></span>
-          <span className="block truncate text-sm font-medium text-foreground">{threadListTitle(thread)}</span>
-        </Link>
-        <div className="ml-11 mt-1 flex flex-wrap gap-1.5">
+    <div ref={(element) => navigation.registerRow(thread.thread_id, element)} tabIndex={-1} data-thread-id={thread.thread_id} data-highlighted={highlighted}
+      className={cn("group/thread-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 px-2 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35", highlighted ? "bg-[var(--juex-gold-400)]/20 ring-1 ring-inset ring-[var(--juex-gold-400)]/60" : "hover:bg-muted/60")}>
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+          <Link to={threadHref(thread.thread_id)} title={threadListTitle(thread)} className="min-w-0 max-w-full truncate rounded-sm text-sm font-medium leading-5 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/35">
+            {threadListTitle(thread)}
+          </Link>
+          {!main && parentID ? (
+            <button type="button" disabled={!parent} onClick={() => navigation.locate(parentID)}
+              title={parent ? `Locate parent: ${parentTitle}` : `Parent #${parentID} is unavailable`}
+              className="max-w-full truncate rounded border border-border/70 bg-muted/30 px-1 text-[10px] leading-4 text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-60">
+              parent → {parentTitle}
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-0.5 flex flex-wrap gap-1">
           <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>{humanAgo(thread.last_activity_at)}</Badge>
           <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>{thread.retention_state === "archived" ? "archived" : thread.execution_state}</Badge>
           <Badge variant="outline" className={THREAD_METADATA_BADGE_CLASS}>{thread.turn_count} turns</Badge>

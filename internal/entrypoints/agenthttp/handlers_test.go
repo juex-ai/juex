@@ -254,6 +254,7 @@ func TestThreadAPICopiesModelAwareUsageFromMetadataAndIndex(t *testing.T) {
 
 func TestThreadAPICreatesNestedWorkerWithExplicitParent(t *testing.T) {
 	server := newTestServer(t)
+	server.opts.Cfg.WorkerThreadMaxDepth = 2
 	httpServer := httptest.NewServer(server.APIHandler())
 	defer httpServer.Close()
 

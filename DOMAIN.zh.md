@@ -39,8 +39,15 @@ Worker 使用相同的 Thread 模型：
 - 历史、上下文、工作状态、pending Input 和订阅相互独立；
 - 可以使用 Agent 共享资源，但不接收 Observation。
 
-`worker-threads` Module 控制 Worker 执行，不控制 Thread 存储。禁用时暂停
+Agent 级 `worker-threads.enabled` 控制 Worker 执行，不控制 Thread 存储。禁用时暂停
 pending Input 恢复，仍可读取历史、管理保留状态，并执行宿主 `/new` 与 `/compact`。
+
+`worker-threads.max_depth` 默认 1，只接受 1 或 2，Main 深度为 0。创建时校验
+持久父链，归档祖先也计入深度。达到或超过上限的 Thread 完全不装配
+`worker-threads` Module、工具及生命周期贡献；Agent 级开关启用时，该 Thread
+自身仍可执行。已有深层 Thread 保留历史和 parent，宿主接口可以恢复、执行、
+停止和管理它们，无需为已达上限的父 Thread 恢复模块。深度限制不约束 Worker
+总数或 token 预算。
 
 创建者和结果目的地不是 Worker 属性。任何关注结果的调用方都自行订阅。
 Parent 只表达拓扑，不表示投递路由。

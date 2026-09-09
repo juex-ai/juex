@@ -157,8 +157,13 @@ export function Thread() {
   ]);
 
   useShellTitle(
-    data ? threadTitle(data.alias, data.id) : null,
-    data?.last_active_at ?? null,
+    data?.id === id ? threadTitle(data.alias, data.id) : null,
+    data?.id === id ? data.last_active_at : null,
+    !data || data.id !== id ? undefined
+      : data.retention_state === "archived" ? "Archived"
+      : !agentRuntimeHealthy || !runtimeStatus || runtimeStatus.thread.id !== id ? "Unknown"
+      : runtimeStatus.thread.state === "failed" ? "Failed"
+      : runtimeStatus.thread.working ? "Working" : "Idle",
   );
 
   const messages = useMemo<ChatMessage[]>(

@@ -55,7 +55,7 @@ func TestCreateIncludesGenerationJournalsAndRedacts(t *testing.T) {
 func TestCreateReadsArchivedThread(t *testing.T) {
 	cfg, main := bundleThreadFixture(t)
 	store := thread.NewStore(cfg.StateDir)
-	worker, err := store.CreateWorker(main.ID, "archived")
+	worker, err := store.CreateWorker(main.ID, "archived", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

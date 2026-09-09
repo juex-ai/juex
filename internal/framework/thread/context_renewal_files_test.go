@@ -70,7 +70,7 @@ func TestRecoverLayoutRestoresInactiveWorkerContextRenewalFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "interrupted-worker")
+	worker, err := store.CreateWorker(MainID, "interrupted-worker", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestRecoverLayoutUsesCommittedMetadataForContextRenewalFiles(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "committed-worker")
+	worker, err := store.CreateWorker(MainID, "committed-worker", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestDeleteArchivedStopsWhenContextRenewalRecoveryIsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "invalid-recovery")
+	worker, err := store.CreateWorker(MainID, "invalid-recovery", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestDeleteArchivedUsesJournalGenerationForContextRenewalFiles(t *testing.T)
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "committed-delete")
+	worker, err := store.CreateWorker(MainID, "committed-delete", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

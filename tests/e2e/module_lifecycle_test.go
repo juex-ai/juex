@@ -218,7 +218,7 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = application.CloseAndWait() })
 
-	worker, err := application.ThreadStore.CreateWorker(thread.MainID, "recover-before-archive")
+	worker, err := application.ThreadStore.CreateWorker(thread.MainID, "recover-before-archive", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

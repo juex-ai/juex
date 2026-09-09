@@ -36,7 +36,7 @@ func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	worker, err := store.CreateWorker("0", "")
+	worker, err := store.CreateWorker("0", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

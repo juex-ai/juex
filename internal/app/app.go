@@ -167,6 +167,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	runtimePaths := cfg.RuntimePaths()
+	if opts.parentThreadID != "" {
+		if err := thread.NewStore(runtimePaths.StateDir).CheckWorkerDepth(opts.parentThreadID, cfg.WorkerMaxDepth()); err != nil {
+			return nil, err
+		}
+	}
 	runtimeLimits := cfg.RuntimeLimits()
 	var agentRuntime AgentRuntimeResolution
 	if opts.AgentRuntime != nil {
@@ -305,6 +310,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		ThreadID:       opts.ThreadID,
 		ParentThreadID: opts.parentThreadID,
 		Alias:          opts.Alias,
+		WorkerMaxDepth: cfg.WorkerMaxDepth(),
 	})
 	if err != nil {
 		return nil, err
@@ -340,6 +346,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		}
 		createdApp = nil
 	}()
+	threadDepth, err := attachment.Store.Depth(threadState.ID)
+	if err != nil {
+		closeThreadResources()
+		return nil, err
+	}
 	eventCatalog := eventcatalog.Default()
 	eventSink = events.NewDurableSink(threadState)
 	eventSink.SetCatalog(eventCatalog)
@@ -493,9 +504,9 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		},
 		{
 			ID:      workerthreadsmodule.ModuleID,
-			Enabled: cfg.ModuleEnabled(string(workerthreadsmodule.ModuleID)),
+			Enabled: cfg.ModuleEnabled(string(workerthreadsmodule.ModuleID)) && threadDepth < cfg.WorkerMaxDepth(),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				manager := a.NewWorkerManager(a.prepareWorkerChild)
+				manager := a.NewWorkerManager(a.prepareWorkerChild, cfg.WorkerMaxDepth())
 				return workerthreadsmodule.New(manager), nil
 			},
 		},

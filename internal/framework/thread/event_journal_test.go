@@ -70,7 +70,7 @@ func TestEventStoreSnapshotSurvivesThreadDirectoryMove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := store.CreateWorker(main.ID, "snapshot-move")
+	worker, err := store.CreateWorker(main.ID, "snapshot-move", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

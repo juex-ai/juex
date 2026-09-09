@@ -58,11 +58,11 @@ func (s *Store) EnsureMain() (*Thread, error) {
 	return s.createLocked(MainID, MainAlias, "")
 }
 
-func (s *Store) CreateWorker(parentID, alias string) (*Thread, error) {
+func (s *Store) CreateWorker(parentID, alias string, maxDepth int) (*Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !ValidID(parentID) {
-		return nil, fmt.Errorf("%w: parent %q", ErrInvalidID, parentID)
+	if err := s.checkWorkerDepthLocked(parentID, maxDepth); err != nil {
+		return nil, err
 	}
 	index, err := s.loadOrRebuildIndexLocked()
 	if err != nil {

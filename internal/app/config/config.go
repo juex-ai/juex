@@ -57,6 +57,7 @@ type Config struct {
 	Skills                    SkillsConfig
 	Preset                    string
 	Modules                   ModulePolicy
+	WorkerThreadMaxDepth      int
 	Extensions                ExtensionPolicy
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool

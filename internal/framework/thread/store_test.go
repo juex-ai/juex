@@ -28,7 +28,7 @@ func TestStoreCreatesAndReplaysMainAndWorker(t *testing.T) {
 	if main.ID != MainID || main.Alias != MainAlias || main.ParentThreadID != "" {
 		t.Fatalf("Main = %#v", main)
 	}
-	worker, err := store.CreateWorker(MainID, "reviewer")
+	worker, err := store.CreateWorker(MainID, "reviewer", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestRecoverLayoutRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			worker, err := store.CreateWorker(MainID, "recover-me")
+			worker, err := store.CreateWorker(MainID, "recover-me", 2)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,7 +274,7 @@ func TestRecoverLayoutRebuildsIndexFromMetadataWithoutOpeningJournals(t *testing
 			if projection.ThreadID != workerID {
 				t.Fatalf("metadata = %#v", projection)
 			}
-			if _, err := store.CreateWorker(MainID, "recover-me"); err == nil {
+			if _, err := store.CreateWorker(MainID, "recover-me", 2); err == nil {
 				t.Fatal("duplicate alias unexpectedly succeeded after index rebuild")
 			}
 		})
@@ -372,7 +372,7 @@ func TestRecoverLayoutRejectsMissingOrMalformedAuthoritativeMetadata(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			worker, err := store.CreateWorker(MainID, "authoritative")
+			worker, err := store.CreateWorker(MainID, "authoritative", 2)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -420,11 +420,11 @@ func TestRecoverLayoutRejectsAgentWideMetadataConflicts(t *testing.T) {
 				t.Fatal(err)
 			}
 			store.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, 6), bytes.Repeat([]byte{1}, 6)...))
-			first, err := store.CreateWorker(MainID, "first")
+			first, err := store.CreateWorker(MainID, "first", 2)
 			if err != nil {
 				t.Fatal(err)
 			}
-			second, err := store.CreateWorker(MainID, "second")
+			second, err := store.CreateWorker(MainID, "second", 2)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -482,7 +482,7 @@ func TestAliasMetadataCommitsBeforeIndexFailureAndIsRepairable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "before")
+	worker, err := store.CreateWorker(MainID, "before", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestStaleStoreHandleCannotOverwriteAuthoritativeMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = main.Close() }()
-			fresh, err := store.CreateWorker(MainID, "original")
+			fresh, err := store.CreateWorker(MainID, "original", 2)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -639,7 +639,7 @@ func TestBackwardClockRejectsJournalCommitBeforeWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "clock")
+	worker, err := store.CreateWorker(MainID, "clock", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -825,7 +825,7 @@ func TestIndependentStoreHandlesSerializeIndexUpdates(t *testing.T) {
 			if i%2 == 1 {
 				store = second
 			}
-			worker, createErr := store.CreateWorker(MainID, fmt.Sprintf("worker-%02d", i))
+			worker, createErr := store.CreateWorker(MainID, fmt.Sprintf("worker-%02d", i), 2)
 			if createErr == nil {
 				createErr = worker.Close()
 			}
@@ -856,17 +856,17 @@ func TestWorkerAliasMustBeUniqueAcrossActiveAndArchivedThreads(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "reviewer")
+	worker, err := store.CreateWorker(MainID, "reviewer", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateWorker(MainID, "reviewer"); err == nil {
+	if _, err := store.CreateWorker(MainID, "reviewer", 2); err == nil {
 		t.Fatal("duplicate active alias was accepted")
 	}
 	if err := store.Archive(worker); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateWorker(MainID, "reviewer"); err == nil {
+	if _, err := store.CreateWorker(MainID, "reviewer", 2); err == nil {
 		t.Fatal("duplicate archived alias was accepted")
 	}
 }
@@ -878,21 +878,21 @@ func TestWorkerAliasUniquenessMatchesCaseInsensitiveClientResolution(t *testing.
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "Reviewer")
+	worker, err := store.CreateWorker(MainID, "Reviewer", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = worker.Close() }()
-	if _, err := store.CreateWorker(MainID, "reviewer"); err == nil {
+	if _, err := store.CreateWorker(MainID, "reviewer", 2); err == nil {
 		t.Fatal("case-insensitive duplicate alias was accepted")
 	}
-	if _, err := store.CreateWorker(MainID, "MAIN"); err == nil {
+	if _, err := store.CreateWorker(MainID, "MAIN", 2); err == nil {
 		t.Fatal("case-insensitive reserved Main alias was accepted")
 	}
-	if _, err := store.CreateWorker(MainID, MainID); err == nil {
+	if _, err := store.CreateWorker(MainID, MainID, 2); err == nil {
 		t.Fatal("Main Thread ID was accepted as a Worker alias")
 	}
-	if _, err := store.CreateWorker(MainID, worker.ID); err == nil {
+	if _, err := store.CreateWorker(MainID, worker.ID, 2); err == nil {
 		t.Fatal("Worker Thread ID was accepted as another Worker alias")
 	}
 	if err := worker.ApplyAlias(worker.ID); err == nil {
@@ -909,7 +909,7 @@ func TestCreateWorkerDoesNotReuseArchivedThreadID(t *testing.T) {
 	}
 	defer func() { _ = main.Close() }()
 	store.random = bytes.NewReader(bytes.Repeat([]byte{0}, 6))
-	archived, err := store.CreateWorker(MainID, "archived-worker")
+	archived, err := store.CreateWorker(MainID, "archived-worker", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -921,7 +921,7 @@ func TestCreateWorkerDoesNotReuseArchivedThreadID(t *testing.T) {
 	}
 
 	store.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, 6), bytes.Repeat([]byte{1}, 6)...))
-	created, err := store.CreateWorker(MainID, "new-worker")
+	created, err := store.CreateWorker(MainID, "new-worker", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -945,14 +945,14 @@ func TestCreateWorkerRetriesGeneratedAliasCollision(t *testing.T) {
 	}
 	defer func() { _ = main.Close() }()
 	store.random = bytes.NewReader(bytes.Repeat([]byte{2}, 6))
-	existing, err := store.CreateWorker(MainID, DefaultWorkerAlias("000000"))
+	existing, err := store.CreateWorker(MainID, DefaultWorkerAlias("000000"), 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = existing.Close() }()
 
 	store.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, 6), bytes.Repeat([]byte{1}, 6)...))
-	created, err := store.CreateWorker(MainID, "")
+	created, err := store.CreateWorker(MainID, "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -971,14 +971,14 @@ func TestCreateWorkerDoesNotGenerateIDReservedByAlias(t *testing.T) {
 	}
 	defer func() { _ = main.Close() }()
 	store.random = bytes.NewReader(bytes.Repeat([]byte{2}, 6))
-	existing, err := store.CreateWorker(MainID, "000000")
+	existing, err := store.CreateWorker(MainID, "000000", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = existing.Close() }()
 
 	store.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, 6), bytes.Repeat([]byte{1}, 6)...))
-	created, err := store.CreateWorker(MainID, "new-worker")
+	created, err := store.CreateWorker(MainID, "new-worker", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,7 +994,7 @@ func TestNewThreadDefersOptionalWorkingStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := store.CreateWorker(MainID, "optional-storage")
+	worker, err := store.CreateWorker(MainID, "optional-storage", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

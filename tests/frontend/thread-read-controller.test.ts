@@ -301,6 +301,42 @@ test("stream event wins over an older initial status request", async () => {
   assert.deepEqual(projectedCursors, ["event-newer"]);
 });
 
+test("a stale status failure cannot clear newer events or a different route", async () => {
+  let onEvent: (event: BrowserEvent) => void = () => {};
+  let onOpen: () => void = () => {};
+  let rejectStatus: (error: Error) => void = () => {};
+  let projectedStatus: AgentRuntimeStatusSnapshot | undefined;
+  let refreshErrors = 0;
+  const controller = createThreadReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      onEvent = opts.onEvent;
+      onOpen = opts.onOpen ?? (() => {});
+      return () => {};
+    },
+  });
+  controller.setRoute("s1");
+  controller.configureLiveStatus({
+    load: () => new Promise((_resolve, reject) => { rejectStatus = reject; }),
+    apply: (_id, status) => { projectedStatus = status; },
+    clear: () => { projectedStatus = undefined; },
+    onRefreshError: () => { refreshErrors++; },
+  });
+  controller.subscribeLiveEvents("s1");
+  onEvent(turnStartedEvent("newer"));
+  rejectStatus(new Error("older calibration failed"));
+  await Promise.resolve();
+  assert.equal(projectedStatus?.cursor, "event-newer");
+  assert.equal(refreshErrors, 0);
+
+  onOpen();
+  controller.setRoute("s2");
+  rejectStatus(new Error("previous route calibration failed"));
+  await Promise.resolve();
+  assert.equal(projectedStatus?.cursor, "event-newer");
+  assert.equal(refreshErrors, 0);
+});
+
 test("subscription cleanup closes transport before clearing status", () => {
   const lifecycle: string[] = [];
   const controller = createThreadReadController({
@@ -624,3 +660,36 @@ class FakeTimers {
     timer.callback();
   }
 }
+
+
+test("disconnect clears status and rejects an in-flight snapshot until reconnection", async () => {
+  let onError: (event: Event) => void = () => {};
+  let onOpen: () => void = () => {};
+  let resolveStatus: (value: AgentRuntimeStatusSnapshot) => void = () => {};
+  let projected: AgentRuntimeStatusSnapshot | undefined = runtimeStatus("old");
+  const controller = createThreadReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      onError = opts.onError!;
+      onOpen = opts.onOpen!;
+      return () => {};
+    },
+  });
+  controller.setRoute("s1");
+  controller.configureLiveStatus({
+    load: () => new Promise((resolve) => { resolveStatus = resolve; }),
+    apply: (_id, status) => { projected = status; },
+    clear: () => { projected = undefined; },
+  });
+  controller.subscribeLiveEvents("s1");
+  onError(new Event("error"));
+  assert.equal(projected, undefined);
+  resolveStatus(runtimeStatus("late"));
+  await Promise.resolve();
+  assert.equal(projected, undefined);
+  onOpen();
+  resolveStatus(runtimeStatus("reconnected"));
+  await Promise.resolve();
+  assert.equal((projected as AgentRuntimeStatusSnapshot | undefined)?.cursor, "reconnected");
+  controller.dispose();
+});

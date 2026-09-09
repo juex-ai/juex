@@ -14,10 +14,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  agentStateLabel,
-  agentStatusText,
   agentTabPath,
-  agentVisualState,
   type AgentStageTab,
 } from "@/lib/fleet-shell";
 import { cn } from "@/lib/utils";
@@ -30,6 +27,9 @@ const TABS: Array<{ id: AgentStageTab; label: string }> = [
 
 export function FleetStageHeader({
   agent,
+  contextTitle,
+  threadStatus,
+  threadID,
   activeTab,
   filePanelTitle,
   settings,
@@ -38,6 +38,9 @@ export function FleetStageHeader({
   onToggleWorkspace,
 }: {
   agent: AgentStatus | null;
+  contextTitle: string | null;
+  threadStatus?: "Idle" | "Working" | "Failed" | "Archived" | "Unknown";
+  threadID: string;
   activeTab: AgentStageTab;
   filePanelTitle: string;
   settings: boolean;
@@ -45,13 +48,14 @@ export function FleetStageHeader({
   onOpenMobileSidebar: () => void;
   onToggleWorkspace: () => void;
 }) {
-  const state = agent ? agentVisualState(agent) : "stopped";
+  const agentTitle = settings ? "Fleet settings" : agent?.name || agent?.id || "Fleet";
+  const pageTitle = contextTitle || (threadID ? `Loading #${threadID}…` : activeTab === "runtime" ? "Runtime" : "Threads");
   const filePanelActionLabel = workspaceOpen
     ? `Hide ${filePanelTitle.toLowerCase()}`
     : `Show ${filePanelTitle.toLowerCase()}`;
 
   return (
-    <header className="flex min-h-[var(--juex-header-height)] shrink-0 items-center gap-2 border-b bg-card px-3 shadow-[var(--shadow-xs)] md:px-4">
+    <header className="flex h-[var(--juex-header-height)] shrink-0 items-center gap-1 border-b bg-card px-2 shadow-[var(--shadow-xs)] sm:gap-2 md:px-4">
       <Button
         type="button"
         variant="ghost"
@@ -63,29 +67,34 @@ export function FleetStageHeader({
         <Menu className="size-4" />
       </Button>
 
-      <div className="flex min-w-0 shrink-0 items-center gap-2">
-        <div className="truncate text-sm font-semibold text-foreground">
-          {settings ? "Fleet settings" : agent?.name || agent?.id || "Fleet"}
+      <div className="flex min-w-0 max-w-[min(40vw,24rem)] flex-1 flex-col justify-center gap-0.5 sm:flex-initial">
+        <div title={agentTitle} className="truncate text-sm font-semibold leading-4 text-foreground">
+          {agentTitle}
         </div>
-        {!settings && agent ? (
-          <span
-            className={cn(
-              "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none text-muted-foreground",
-              state === "working" &&
-                "border-[var(--juex-gold-400)]/50 bg-[var(--juex-gold-400)]/10 text-primary",
-              state === "failed" &&
-                "border-destructive/40 bg-destructive/5 text-destructive",
-            )}
-            title={agentStatusText(agent)}
-          >
-            {agentStateLabel(agent)}
-          </span>
+        {!settings ? (
+          <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-3.5 text-muted-foreground">
+            <span title={pageTitle} className="truncate">{pageTitle}</span>
+            {threadID && threadStatus ? (
+                <span
+                  aria-label="Current Thread status"
+                  className={cn(
+                    "shrink-0 rounded-full border px-1.5 py-px text-[9px] font-medium leading-3",
+                    threadStatus === "Working" &&
+                      "border-[var(--juex-gold-400)]/50 bg-[var(--juex-gold-400)]/10 text-primary",
+                    threadStatus === "Failed" &&
+                      "border-destructive/40 bg-destructive/5 text-destructive",
+                  )}
+                >
+                  {threadStatus}
+                </span>
+            ) : null}
+          </div>
         ) : null}
       </div>
 
       {!settings && agent ? (
         <nav
-          className="ml-2 flex min-w-0 flex-1 self-stretch overflow-x-auto"
+          className="flex shrink-0 self-stretch sm:ml-2 sm:flex-1"
           aria-label="Agent views"
         >
           {TABS.map((tab) => (
@@ -93,7 +102,7 @@ export function FleetStageHeader({
               key={tab.id}
               to={agentTabPath(agent.id, tab.id)}
               className={cn(
-                "relative flex shrink-0 items-center px-2.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35 sm:px-3",
+                "relative flex shrink-0 items-center px-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35 sm:px-3",
                 activeTab === tab.id &&
                   "text-primary after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-[var(--juex-gold-400)]",
               )}
