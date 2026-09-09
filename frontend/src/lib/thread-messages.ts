@@ -32,6 +32,11 @@ export function mergeOlderThreadPage(
   return {
     ...current,
     messages: [...olderMessages, ...currentMessages],
+    input_tracking: current.input_tracking ? {
+      ...current.input_tracking,
+      messages: { ...older.input_tracking?.messages, ...current.input_tracking.messages },
+      error: current.input_tracking.error || older.input_tracking?.error,
+    } : undefined,
     has_more_before: older.has_more_before,
     oldest_message_id: older.oldest_message_id,
   };

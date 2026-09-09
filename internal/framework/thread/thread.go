@@ -203,8 +203,10 @@ func (t *Thread) Append(message llm.Message) error {
 	return err
 }
 
-func (t *Thread) AppendAssigned(message llm.Message) (llm.Message, error) {
-	messages, err := t.AppendBatchAssigned([]llm.Message{message})
+// Associated events share the message's durable commit, so readers never see
+// an input without its identity association after a crash.
+func (t *Thread) AppendAssigned(message llm.Message, associated ...events.Event) (llm.Message, error) {
+	messages, err := t.appendBatchAssigned([]llm.Message{message}, associated)
 	if len(messages) == 0 {
 		return llm.Message{}, err
 	}
@@ -217,6 +219,10 @@ func (t *Thread) AppendBatch(messages []llm.Message) error {
 }
 
 func (t *Thread) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, error) {
+	return t.appendBatchAssigned(messages, nil)
+}
+
+func (t *Thread) appendBatchAssigned(messages []llm.Message, associated []events.Event) ([]llm.Message, error) {
 	if len(messages) == 0 {
 		return nil, nil
 	}
@@ -232,6 +238,12 @@ func (t *Thread) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, err
 	for i, message := range messages {
 		prepared[i] = prepareMessage(message)
 		facts[i] = Fact{Type: FactMessageAppended, GenerationID: generationID, Message: &prepared[i]}
+	}
+	for _, event := range associated {
+		if !event.Transient {
+			event = events.Normalize(event)
+			facts = append(facts, Fact{Type: FactEventRecorded, Event: &event})
+		}
 	}
 	_, err := t.AppendFacts(facts...)
 	return prepared, err

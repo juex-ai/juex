@@ -205,6 +205,7 @@ interface RawThreadTimelineItem {
 }
 
 interface RawThreadShowResponse extends RawThreadInfo {
+  input_tracking?: ThreadShowResponse["input_tracking"];
   items: RawThreadTimelineItem[];
   event_cursor?: string;
   has_more_before?: boolean;
@@ -233,6 +234,7 @@ function normalizeThreadInfo(raw: RawThreadInfo): ThreadInfo {
 function normalizeThreadShow(raw: RawThreadShowResponse): ThreadShowResponse {
   return {
     ...normalizeThreadInfo(raw),
+    input_tracking: raw.input_tracking,
     messages: (raw.items ?? []).flatMap((item) => timelineMessage(item)),
     event_cursor: raw.event_cursor ?? "",
     has_more_before: raw.has_more_before,

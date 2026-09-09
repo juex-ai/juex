@@ -15,3 +15,5 @@ Framework 拥有 `inputs.json`、输入原文、勾选事实和恢复机制。Mo
 勾选是模型的判断，不是工作正确性的证明。清单不增加自动 continuation 或结束门禁。确定性覆盖位于 Framework 测试和 `tests/e2e/input_tracking_test.go`；真实模型 A/B 测试 `TestLiveInputTrackingAB` 需显式使用 `integration,input_tracking_eval` build tags，漏办、重复动作、提前勾选和调用/token 成本记录在 `.tmp/reports/input-tracking/`。
 
 部署采用 clean break，原待输入文件名和 Generation seed 不再沿用。升级已有 Agent 前，需要完成或手动交接未处理输入及旧上下文；不提供旧格式读取或自动迁移。单独关闭此 Module 不会回退存储格式。
+
+仅启用此 Module 时，Thread 消息显示只读勾选标记。标记关联输入原始消息、input ID 和已提交的勾选证据，不会根据 Turn 结束或清单记录消失推断完成。关联与原始消息在同一提交中持久化，清单裁剪、压缩、分页和重启后仍保留。没有持久关联的输入不补标。`/new` 结束未勾选输入的追踪范围，不会将其标记为已处理。标记复用现有历史 API 和 SSE；关闭追踪时不读取或发布这些信息。

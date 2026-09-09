@@ -15,6 +15,55 @@ import (
 )
 
 const InputCheckedType = "input.checked"
+const InputTrackedType = "input.tracked"
+const InputScopeChangedType = "input.scope_changed"
+
+type InputScopeChangedPayload struct {
+	ScopeID string `json:"scope_id"`
+}
+
+// MessageID identifies the original input, unlike InputCheckedPayload.MessageID
+// which identifies the assistant message containing the check tool call.
+type InputTrackedPayload struct {
+	InputID   string `json:"input_id"`
+	MessageID string `json:"message_id"`
+	ScopeID   string `json:"scope_id"`
+}
+
+func (q *PendingInputQueue) inputAssociation(message llm.Message) (events.Event, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
+		return events.Event{}, err
+	}
+	for _, record := range q.records {
+		if record.MessageID == message.ID && record.ScopeID != "" && !message.PolicyBlocked {
+			return events.Normalize(events.Event{Type: InputTrackedType, TurnID: record.TurnID,
+				Payload: InputTrackedPayload{InputID: record.ID, MessageID: message.ID, ScopeID: record.ScopeID}}), nil
+		}
+	}
+	return events.Event{}, nil
+}
+
+func (e *Engine) appendInputMessage(message llm.Message) (llm.Message, error) {
+	var associated []events.Event
+	if q := e.currentPendingInputQueue(); q != nil {
+		event, err := q.inputAssociation(message)
+		if err != nil {
+			return llm.Message{}, err
+		}
+		if event.ID != "" {
+			associated = append(associated, event)
+		}
+	}
+	persisted, err := e.currentThread().AppendAssigned(message, associated...)
+	if err == nil && e.Bus != nil {
+		for _, event := range associated {
+			e.Bus.PublishCommitted(event)
+		}
+	}
+	return persisted, err
+}
 
 // The checklist has a separate bound from the live delivery queue.
 const maxTrackedInputs = 256

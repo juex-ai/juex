@@ -119,6 +119,63 @@ func (s *EventStoreSnapshot) Events() ([]events.Event, error) {
 	return result, nil
 }
 
+// VisitAfter incrementally reads committed facts without opening a mutable
+// Thread. The returned cursor belongs to this snapshot, including rollovers.
+func (s *EventStoreSnapshot) VisitAfter(after EventCursor, visit func(Commit) error) (EventCursor, error) {
+	if s == nil || s.closed {
+		return EventCursor{}, fmt.Errorf("thread: EventStore snapshot closed")
+	}
+	startIndex := 0
+	if after.GenerationID != "" {
+		startIndex = -1
+		for i, generation := range s.generations {
+			if generation.ID == after.GenerationID {
+				startIndex = i
+				break
+			}
+		}
+		if startIndex < 0 {
+			return EventCursor{}, fmt.Errorf("%w: unknown cursor generation", ErrInvalidMetadata)
+		}
+	}
+	wantSeq := after.Seq + 1
+	for index := startIndex; index < len(s.generations); index++ {
+		generation := s.generations[index]
+		start := int64(0)
+		if index == startIndex {
+			start = after.Offset
+		}
+		end, err := generation.file.ReadForwardTo(start, generation.End, func(record jsonl.Record) error {
+			commit, err := decodeGenerationCommit(generation.ID, record)
+			if err != nil {
+				return err
+			}
+			if commit.Seq != wantSeq {
+				return fmt.Errorf("%w: sequence %d, want %d", ErrCorruptJournal, commit.Seq, wantSeq)
+			}
+			if err := validateCommit(s.threadID, commit.Commit); err != nil {
+				return err
+			}
+			if err := visit(commit.Commit); err != nil {
+				return err
+			}
+			wantSeq++
+			return nil
+		})
+		if err != nil {
+			return EventCursor{}, err
+		}
+		if end != generation.End {
+			return EventCursor{}, fmt.Errorf("%w: incomplete snapshot", ErrCorruptJournal)
+		}
+	}
+	if wantSeq-1 != s.lastSeq {
+		return EventCursor{}, fmt.Errorf("%w: incomplete sequence", ErrCorruptJournal)
+	}
+	last := s.generations[len(s.generations)-1]
+	return EventCursor{GenerationID: last.ID, Seq: s.lastSeq, Offset: last.End}, nil
+}
+
 func (s *EventStoreSnapshot) Close() error {
 	if s == nil || s.closed {
 		return nil

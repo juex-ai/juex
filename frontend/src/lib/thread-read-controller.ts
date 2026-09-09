@@ -36,6 +36,7 @@ export type ThreadReadRouteSnapshot = {
 
 export type ThreadReadRefreshOptions = {
   preserveLiveMessages?: boolean;
+  preserveLoadedHistory?: boolean;
   recordLoadFailure?: boolean;
 };
 
@@ -152,6 +153,7 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
       if (effect.type === "refresh") {
         void refresh(route.id, {
           preserveLiveMessages: effect.preserveLiveMessages,
+          preserveLoadedHistory: effect.preserveLoadedHistory,
         });
         continue;
       }
@@ -162,18 +164,22 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
     }
   }
 
+  let historyRevision = 0;
+  let contextRevision = 0;
+
   async function refresh(
     threadID = route.id,
     opts: ThreadReadRefreshOptions = {},
   ) {
     if (!threadID) return;
+    const revision = ++historyRevision;
     try {
       const next = await ports.getThread(threadID);
-      if (!isLatestThreadRoute(route, threadID)) return;
+      if (!isLatestThreadRoute(route, threadID) || revision !== historyRevision) return;
       updateReadState((prev) => projectThreadLoaded(prev, next, opts));
       await refreshActiveContext(threadID);
     } catch (error) {
-      if (!isLatestThreadRoute(route, threadID)) return;
+      if (!isLatestThreadRoute(route, threadID) || revision !== historyRevision) return;
       logError("getThread failed", error);
       if (opts.recordLoadFailure) {
         updateReadState((prev) => projectThreadLoadFailed(prev, error));
@@ -183,12 +189,18 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
 
   async function refreshActiveContext(threadID = route.id) {
     if (!threadID) return;
+    const revision = ++contextRevision;
+    const history = historyRevision;
+    const isCurrent = () =>
+      isLatestThreadRoute(route, threadID) &&
+      revision === contextRevision &&
+      history === historyRevision;
     try {
       const context = await ports.getThreadContext(threadID);
-      if (!isLatestThreadRoute(route, threadID)) return;
+      if (!isCurrent()) return;
       updateReadState((prev) => projectActiveContextLoaded(prev, context));
     } catch (error) {
-      if (!isLatestThreadRoute(route, threadID)) return;
+      if (!isCurrent()) return;
       logError("getThreadContext failed", error);
       updateReadState(projectActiveContextFailed);
     }
@@ -251,6 +263,8 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
       },
       onOpen: () => {
         void refreshStatus();
+        // Restart can change the effective module composition while this page stays open.
+        void refresh(threadID, { preserveLiveMessages: true, preserveLoadedHistory: true });
       },
       onError: (event) => {
         if (!subscribed || !isLatestThreadRoute(route, threadID)) return;

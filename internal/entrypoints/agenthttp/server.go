@@ -56,6 +56,7 @@ type Server struct {
 	startedAt           time.Time
 	statusStream        *statusapi.ActivityStore
 	resources           *resourceEventHub
+	inputStatuses       runtime.InputStatusReader
 
 	// createMu serializes live Thread creation and restoration.
 	createMu        sync.Mutex
@@ -649,8 +650,9 @@ func (s *Server) bindThreadAgent(a *agent.Agent, main *app.App, ownsAgent bool) 
 	as.turns = newWebTurnTransport(a)
 	a.AddEventProjection(s.resources)
 	a.AddEventProjection(browserEventProjection{
-		status: a.Status,
-		stream: as.bcast,
+		status:        a.Status,
+		stream:        as.bcast,
+		inputTracking: s.opts.Cfg.ModuleEnabled("input-tracking"),
 	})
 	identity, ok := a.ThreadIdentity()
 	if !ok {

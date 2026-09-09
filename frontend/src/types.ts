@@ -154,7 +154,31 @@ export interface ThreadInfo {
   context_usage?: ContextUsage;
 }
 
+export interface InputStatus {
+  input_id: string;
+  message_id: string;
+  scope_id: string;
+  checked_at?: string;
+  check_message_id?: string;
+  tool_use_id?: string;
+}
+
+export interface InputCheck {
+  input_ids: string[];
+  scope_id: string;
+  checked_at: string;
+  message_id: string;
+  tool_use_id: string;
+}
+
+export interface InputStatusPage {
+  scope_id: string;
+  messages: Record<string, InputStatus>;
+  error?: string;
+}
+
 export interface ThreadShowResponse extends ThreadInfo {
+  input_tracking?: InputStatusPage;
   messages: Message[];
   model?: string;
   event_cursor: string;
@@ -339,6 +363,9 @@ export interface ActiveContextSnapshot {
 }
 
 export const BROWSER_EVENT_TYPES = [
+  "input.checked",
+  "input.tracked",
+  "input.scope_changed",
   "turn.admitted",
   "turn.started",
   "turn.phase",
@@ -900,6 +927,9 @@ export interface NotesErroredPayload {
 }
 
 export type BrowserEvent =
+  | (BrowserEventBase<"input.tracked"> & { payload: InputStatus })
+  | (BrowserEventBase<"input.scope_changed"> & { payload: { scope_id: string } })
+  | (BrowserEventBase<"input.checked"> & { payload: InputCheck })
   | (BrowserEventBase<"turn.admitted"> & { payload: TurnAdmittedPayload })
   | (BrowserEventBase<"turn.started"> & { payload: TurnStartedPayload })
   | (BrowserEventBase<"turn.phase"> & { payload: TurnPhasePayload })

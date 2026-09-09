@@ -16,6 +16,8 @@ import {
   RadioIcon,
 } from "lucide-react";
 
+import { InputCheckMarker } from "@/modules/input-tracking/InputCheckMarker";
+import type { InputStatusPage } from "@/types";
 import { AssistantMarkdown } from "@/components/AssistantMarkdown";
 import { ImageBlock } from "@/components/ImageBlock";
 import { ObservationAttachments } from "@/components/thread/ObservationAttachments";
@@ -92,6 +94,7 @@ import { cn } from "@/lib/utils";
 import type { MediaRef } from "@/types";
 
 type MessageGroupRendererProps = {
+  annotation?: ReactNode;
   compactCommand?: ProjectedCompactCommand;
   group: MessageGroup;
   modelLabel?: string;
@@ -114,10 +117,12 @@ const messageGroupRendererRegistry: Record<
 };
 
 export function ThreadTranscript({
+  inputTracking,
   compactCommands,
   items,
   modelLabels,
 }: {
+  inputTracking?: InputStatusPage;
   compactCommands: Record<string, ProjectedCompactCommand>;
   items: readonly TranscriptItem[];
   modelLabels: readonly (string | undefined)[];
@@ -137,6 +142,7 @@ export function ThreadTranscript({
       <MessageGroupRow
         key={item.key}
         group={item.group}
+        annotation={item.group.id && inputTracking?.messages[item.group.id] ? <InputCheckMarker status={inputTracking.messages[item.group.id]} scopeID={inputTracking.scope_id} /> : undefined}
         modelLabel={modelLabel}
         compactCommand={
           item.group.id ? compactCommands[item.group.id] : undefined
@@ -276,6 +282,7 @@ function AssistantWorkContent({ group }: { group: MessageGroup }) {
 }
 
 function DefaultMessageGroup({
+  annotation,
   group,
   modelLabel,
 }: MessageGroupRendererProps) {
@@ -359,6 +366,7 @@ function DefaultMessageGroup({
           </div>
         ) : null}
         <MessageMetaActions
+          annotation={group.role === "user" ? annotation : undefined}
           copyText={canCopyMessage ? copyText : undefined}
           createdAt={group.createdAt}
           align={group.role === "user" ? "end" : "start"}
@@ -848,16 +856,18 @@ function CompactMessage({
 }
 
 function MessageMetaActions({
+  annotation,
   copyText,
   createdAt,
   align,
 }: {
+  annotation?: ReactNode;
   copyText?: string;
   createdAt?: string;
   align: "start" | "end";
 }) {
   const sentTime = formatMessageSentAt(createdAt);
-  if (!copyText && !sentTime) return null;
+  if (!annotation && !copyText && !sentTime) return null;
   const timeElement = sentTime ? (
     <time
       dateTime={createdAt}
@@ -870,12 +880,13 @@ function MessageMetaActions({
     <MessageActions
       aria-label={copyText ? undefined : `Sent ${sentTime}`}
       className={cn(
-        "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
+        annotation ? "opacity-100" : "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         align === "end" ? "justify-end pr-1" : "justify-start pl-1",
       )}
       tabIndex={copyText ? undefined : 0}
     >
+      {annotation}
       {align === "end" ? timeElement : null}
       {copyText ? (
         <CopyTextButton

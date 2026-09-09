@@ -30,6 +30,7 @@ import {
   useFleetAgent,
 } from "@/components/fleet/FleetAgentContext";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { mergeInputStatus } from "@/modules/input-tracking/state";
 import { ThreadTranscript } from "@/components/thread/ThreadTranscript";
 import { Button } from "@/components/ui/button";
 import {
@@ -87,6 +88,7 @@ export function Thread() {
     loadingOlderMessages,
     olderMessagesError,
   } = readState;
+  const inputTracking = useMemo(() => mergeInputStatus(data?.input_tracking, projection.inputTracking), [data?.input_tracking, projection.inputTracking]);
   const agentRuntimeHealthy =
     !agentsLoaded || agent?.runtime_health === "healthy";
 
@@ -236,7 +238,9 @@ export function Thread() {
               }
             />
           ) : null}
+          {data?.input_tracking?.error ? <p role="status" className="text-xs text-muted-foreground">{data.input_tracking.error}</p> : null}
           <ThreadTranscript
+            inputTracking={inputTracking}
             compactCommands={projection.compactCommands}
             items={transcriptItems}
             modelLabels={modelLabels}

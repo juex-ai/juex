@@ -1,4 +1,7 @@
 [
+  "input.checked",
+  "input.tracked",
+  "input.scope_changed",
   "turn.admitted",
   "turn.started",
   "turn.phase",

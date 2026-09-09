@@ -134,10 +134,11 @@ func (s *Server) createWorkerThread(w http.ResponseWriter, r *http.Request) {
 
 type threadShowResponse struct {
 	thread.Info
-	Items          []thread.TimelineItem `json:"items"`
-	EventCursor    string                `json:"event_cursor,omitempty"`
-	HasMoreBefore  bool                  `json:"has_more_before"`
-	PreviousCursor string                `json:"previous_cursor,omitempty"`
+	Items          []thread.TimelineItem    `json:"items"`
+	InputTracking  *runtime.InputStatusPage `json:"input_tracking,omitempty"`
+	EventCursor    string                   `json:"event_cursor,omitempty"`
+	HasMoreBefore  bool                     `json:"has_more_before"`
+	PreviousCursor string                   `json:"previous_cursor,omitempty"`
 }
 
 func parseTimelineWindow(r *http.Request) (string, int, error) {
@@ -177,6 +178,7 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 			return nil
 		})
 		if err == nil {
+			s.annotateInputs(id, &response)
 			writeJSON(w, http.StatusOK, response)
 			return
 		}
@@ -201,10 +203,37 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, threadShowResponse{
+	response := threadShowResponse{
 		Info: info, Items: page.Items, HasMoreBefore: page.HasMoreBefore,
 		PreviousCursor: page.PreviousCursor,
-	})
+	}
+	s.annotateInputs(id, &response)
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) annotateInputs(id string, response *threadShowResponse) {
+	if !s.opts.Cfg.ModuleEnabled("input-tracking") {
+		return
+	}
+	response.InputTracking = &runtime.InputStatusPage{Messages: map[string]runtime.InputStatus{}}
+	metadata, err := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir).Inspect(id)
+	if err != nil {
+		response.InputTracking.Error = "Input status is unavailable"
+		return
+	}
+	var ids []string
+	for _, item := range response.Items {
+		if item.Message != nil && item.Message.Role == llm.RoleUser {
+			ids = append(ids, item.Message.ID)
+		}
+	}
+	page, err := s.inputStatuses.Read(metadata.Dir, ids)
+	if err != nil {
+		log.Printf("web: input status for %s: %v", id, err)
+		response.InputTracking.Error = "Input status is unavailable"
+		return
+	}
+	response.InputTracking = &page
 }
 
 func (s *Server) handleArchiveThread(w http.ResponseWriter, r *http.Request, id string) {
@@ -544,6 +573,9 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 				replayBoundary := active.bcast.replayBoundary(subscription, replayed)
 				replayDeduper = newBrowserReplayDeduplicator(replayed, replayBoundary)
 				for _, event := range replayed {
+					if !s.opts.Cfg.ModuleEnabled("input-tracking") && isInputTrackingEvent(event.Type) {
+						continue
+					}
 					if err := writeBrowserSSEFrame(w, event); err != nil {
 						return
 					}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/juex-ai/juex/internal/foundation/events"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -79,4 +80,9 @@ func (e *Engine) finishContextRenewal(ctx context.Context, modules *runtimemodul
 	e.pendingPolicyRuntimeContext = nil
 	e.policyRuntimeContextMu.Unlock()
 	runtimemodule.NotifyContextRenewed(context.WithoutCancel(ctx), modules, e.RuntimeModules)
+	if e.TrackUserInputs && e.Bus != nil {
+		// The Generation boundary is already durable; connected views need only
+		// an invalidation. Reconnecting views read a fresh history baseline.
+		_ = e.Bus.Emit(events.Event{Type: InputScopeChangedType, Transient: true, Payload: InputScopeChangedPayload{ScopeID: e.currentThread().ContextScopeID()}})
+	}
 }

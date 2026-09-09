@@ -1,3 +1,4 @@
+import { createLiveInputStatus, projectInputStatusEvent, type LiveInputStatus } from "../modules/input-tracking/state.ts";
 import { assistantBlocksFromEventPayload } from "./assistant-blocks.ts";
 import {
   isLocalCompactMessage,
@@ -28,6 +29,7 @@ import type {
 } from "../types.ts";
 
 export type LiveThreadProjection = {
+  inputTracking: LiveInputStatus;
   messages: Message[];
   queuedInput: QueuedInputState;
   // Empty slots reserve announced drain positions missing from local queue state.
@@ -44,6 +46,7 @@ export type ProjectedCompactCommand = {
 export type LiveThreadProjectionEffect = {
   type: "refresh";
   preserveLiveMessages?: boolean;
+  preserveLoadedHistory?: boolean;
 };
 
 export type LiveThreadProjectionResult = {
@@ -54,6 +57,7 @@ export type LiveThreadProjectionResult = {
 export function createLiveThreadProjection(): LiveThreadProjection {
   return {
     messages: [],
+    inputTracking: createLiveInputStatus(),
     queuedInput: createQueuedInputState(),
     drainingQueuedInputs: [],
     compactAdmissionTurnID: null,
@@ -235,6 +239,13 @@ export function projectLiveThreadEvent(
   const effects: LiveThreadProjectionEffect[] = [];
 
   switch (event.type) {
+    case "input.scope_changed":
+      effects.push({ type: "refresh", preserveLiveMessages: true, preserveLoadedHistory: true });
+      break;
+    case "input.tracked":
+    case "input.checked":
+      next = { ...next, inputTracking: projectInputStatusEvent(next.inputTracking, event) };
+      break;
     case "turn.admitted":
       if (
         event.turn_id &&
