@@ -94,7 +94,7 @@ func TestInputAssociationCommitContainsOriginalMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer snapshot.Close()
+	defer func() { _ = snapshot.Close() }()
 	found := false
 	_, err = snapshot.VisitAfter(thread.EventCursor{}, func(commit thread.Commit) error {
 		original, association := false, false
