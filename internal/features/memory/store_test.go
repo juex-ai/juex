@@ -69,6 +69,42 @@ func TestStoreEntryLifecycleAndIndex(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsCaseCollisionsWithoutChangingKnowledge(t *testing.T) {
+	store := NewStore(t.TempDir())
+	original := Entry{Name: "Project", Description: "Original knowledge", Type: "project", Body: "Keep this fact."}
+	first, err := store.Write(t.Context(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(storeDirectory(store), "Project.md")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"project", "PROJECT"} {
+		collision := original
+		collision.Name, collision.Body = name, "Wrong replacement"
+		if _, err := NewStore(store.agentDir).Write(t.Context(), collision); err == nil {
+			t.Errorf("accepted case-colliding write %q", name)
+		}
+		if err := store.Delete(t.Context(), name); err == nil {
+			t.Errorf("accepted case-colliding delete %q", name)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("collision changed existing entry: %q, %v", after, err)
+	}
+	original.Body = "Explicit same-name update"
+	updated, err := store.Write(t.Context(), original)
+	if err != nil || !updated.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("same-name update lost creation time: %+v, %v", updated, err)
+	}
+	if err := store.Delete(t.Context(), original.Name); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStoreValidationAndBadEntries(t *testing.T) {
 	store := NewStore(t.TempDir())
 	valid := Entry{Name: "good", Description: "Stable fact", Type: "project", Body: "Original"}

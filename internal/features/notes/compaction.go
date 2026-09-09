@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/foundation/markdown"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
@@ -45,9 +46,13 @@ func reconcileNextSteps(candidate, notes string) string {
 	pending := map[string]string{}
 	completed := map[string]bool{}
 	var order []string
+	var notesSyntax markdown.ListLiteralBlocks
 	for _, line := range strings.Split(notes, "\n") {
+		if notesSyntax.Literal(line) {
+			continue
+		}
 		line = strings.TrimSpace(line)
-		key := nextStepKey(line)
+		key, _ := nextStepKey(line)
 		if key == "" {
 			continue
 		}
@@ -63,14 +68,20 @@ func reconcileNextSteps(candidate, notes string) string {
 	}
 	seen := map[string]bool{}
 	var lines []string
+	var candidateSyntax markdown.ListLiteralBlocks
 	for _, line := range strings.Split(candidate, "\n") {
-		key := nextStepKey(line)
+		if candidateSyntax.Literal(line) {
+			lines = append(lines, line)
+			continue
+		}
+		key, listEntry := nextStepKey(line)
 		if original, ok := pending[key]; ok {
 			if !seen[key] {
-				lines = append(lines, original)
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				lines = append(lines, indent+original)
 				seen[key] = true
 			}
-		} else if !completed[key] {
+		} else if !listEntry || !completed[key] {
 			lines = append(lines, line)
 		}
 	}
@@ -79,12 +90,14 @@ func reconcileNextSteps(candidate, notes string) string {
 			lines = append(lines, pending[key])
 		}
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	return strings.Trim(strings.Join(lines, "\n"), "\r\n")
 }
 
-func nextStepKey(line string) string {
+func nextStepKey(line string) (string, bool) {
 	line = strings.ToLower(strings.TrimSpace(line))
+	listEntry := false
 	if len(line) > 1 && strings.ContainsRune("-*+", rune(line[0])) && (line[1] == ' ' || line[1] == '\t') {
+		listEntry = true
 		line = strings.TrimSpace(line[1:])
 	} else {
 		end := 0
@@ -92,6 +105,7 @@ func nextStepKey(line string) string {
 			end++
 		}
 		if end > 0 && len(line) > end+1 && (line[end] == '.' || line[end] == ')') && (line[end+1] == ' ' || line[end+1] == '\t') {
+			listEntry = true
 			line = strings.TrimSpace(line[end+1:])
 		}
 	}
@@ -101,5 +115,5 @@ func nextStepKey(line string) string {
 			break
 		}
 	}
-	return strings.Join(strings.Fields(line), " ")
+	return strings.Join(strings.Fields(line), " "), listEntry
 }

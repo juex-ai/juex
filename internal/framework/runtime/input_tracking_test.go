@@ -72,6 +72,70 @@ func TestInputTrackingRetainsUncheckedWithoutRequeue(t *testing.T) {
 	}
 }
 
+func TestInputTrackingRecheckSurvivesRepeatedCompactionAndRestart(t *testing.T) {
+	q, target := trackedQueue(t)
+	checked := deliverTracked(t, q, "handled request")
+	settleTracked(t, q, checked)
+	if _, _, err := q.checkInputs(t.Context(), []string{checked.ID}, "check"); err != nil {
+		t.Fatal(err)
+	}
+	for cycle := range 2 {
+		later := deliverTracked(t, q, fmt.Sprintf("later request %d", cycle))
+		settleTracked(t, q, later)
+		if _, err := target.BeginCompactedGeneration(llm.TextMessage(llm.RoleUser, "summary"), false, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := target.Close(); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		target, err = thread.Load(target.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func(target *thread.Thread) { _ = target.Close() }(target)
+		q = NewPendingInputQueue(target.Dir, PendingInputQueueOptions{Thread: target, TrackUserInputs: true})
+		if _, event, err := q.checkInputs(t.Context(), []string{checked.ID}, "retry"); err != nil || event.Type != "" {
+			t.Fatalf("cycle %d recheck lost idempotency: %+v, %v", cycle, event, err)
+		}
+		if replay, err := q.Replayable("", 0); err != nil || len(replay) != 0 {
+			t.Fatalf("checks replayed work: %+v, %v", replay, err)
+		}
+		recorded, err := target.ReadEvents()
+		if err != nil {
+			t.Fatal(err)
+		}
+		checks := 0
+		for _, event := range recorded {
+			if event.Type == InputCheckedType {
+				checks++
+			}
+		}
+		if checks != 1 {
+			t.Fatalf("recheck duplicated durable facts: %d", checks)
+		}
+	}
+	if _, err := target.BeginNewGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.BeginCompactedGeneration(llm.TextMessage(llm.RoleUser, "new-scope summary"), false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	target, err = thread.Load(target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = target.Close() }()
+	q = NewPendingInputQueue(target.Dir, PendingInputQueueOptions{Thread: target, TrackUserInputs: true})
+	if _, _, err := q.checkInputs(t.Context(), []string{checked.ID}, "new scope"); err == nil {
+		t.Fatal("previous-scope check was retained")
+	}
+}
+
 func TestInputTrackingBatchValidationAndExecutionIndependence(t *testing.T) {
 	q, _ := trackedQueue(t)
 	first := deliverTracked(t, q, "do work")

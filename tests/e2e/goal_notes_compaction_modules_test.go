@@ -23,6 +23,51 @@ type moduleSummaryProvider struct {
 	summary string
 }
 
+func TestNotesLiteralExamplesSurviveCompaction(t *testing.T) {
+	isolateModuleConfig(t)
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{notesmodule.ModuleID: {Enabled: true}}}
+	cfg.Compaction = config.DefaultCompactionConfig()
+	cfg.Compaction.KeepRecentTokens = 1
+	const literal = "    - [x] deploy\n\nExample:\n```markdown\n- [x] deploy\n- [x] pending\n```\n\n    - [x] deploy\n\t- [x] pending"
+	const nestedLiteral = "- Examples\n    - Nested\n      ~~~markdown\n      - [ ] example-only\n      ~~~"
+	provider := &moduleSummaryProvider{summary: "## Goal\nPreserve examples\n## Next Steps\n" + literal + "\n\ndeploy\n- [ ] deploy\n- [x] pending\n- Parent\n    - [ ] completed child\n" + nestedLiteral}
+	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: provider, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	_, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
+	if _, err := notes.Update("- [x] deploy\n- [ ] pending\n- Parent\n    - [ ] pending child\n    - [x] completed child\n\n```markdown\n- [ ] notes-example-only\n```\n" + nestedLiteral); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(notes.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for cycle := range 2 {
+		if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("Material to compact. ", 100))); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Thread.Append(llm.TextMessage(llm.RoleAssistant, "Recorded.")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err != nil {
+			t.Fatal(err)
+		}
+		summary := a.Thread.History[0].FirstText()
+		if !strings.Contains(summary, literal+"\n\ndeploy\n- [ ] pending") || strings.Contains(summary, "notes-example-only") || strings.Contains(summary, "- [ ] deploy") {
+			t.Fatalf("cycle %d changed literal content or checklist meaning: %s", cycle, summary)
+		}
+		if !strings.Contains(summary, "- [ ] pending child") || strings.Contains(summary, "completed child") || !strings.Contains(summary, nestedLiteral) || strings.Count(summary, "example-only") != 1 {
+			t.Fatalf("cycle %d lost nested checklist or changed list examples: %s", cycle, summary)
+		}
+	}
+	after, err := os.ReadFile(notes.Path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("compaction changed Notes authority: %v", err)
+	}
+}
+
 func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
 	isolateModuleConfig(t)
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: true}}}

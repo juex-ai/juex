@@ -8,7 +8,7 @@ import (
 
 func TestReconcileNextStepsPreservesChecklistMeaningAndOtherActions(t *testing.T) {
 	const notes = "- [x] completed item\n- [ ] Run the Live evaluation.\n- [ ] test\n- [ ] deploy"
-	for _, candidate := range []string{"", "ship latest build", "- run the live evaluation.\n- [x] deploy\n- [ ] completed item\n- Keep another action", "1. Run the Live evaluation.\n2. [x] deploy\n3. [ ] completed item\n4. Keep another action"} {
+	for _, candidate := range []string{"", "ship latest build", "Run the Live evaluation.", "- run the live evaluation.\n- [x] deploy\n- [ ] completed item\n- Keep another action", "1. Run the Live evaluation.\n2. [x] deploy\n3. [ ] completed item\n4. Keep another action"} {
 		got := reconcileNextSteps(candidate, notes)
 		for _, want := range []string{"- [ ] Run the Live evaluation.", "- [ ] test", "- [ ] deploy"} {
 			if !strings.Contains(got, want) {
@@ -17,6 +17,9 @@ func TestReconcileNextStepsPreservesChecklistMeaningAndOtherActions(t *testing.T
 		}
 		if strings.Contains(got, "completed item") || strings.Contains(got, "- [x] deploy") {
 			t.Errorf("wrong checklist status: %s", got)
+		}
+		if strings.Count(got, "Run the Live evaluation.") != 1 {
+			t.Errorf("duplicated pending action: %s", got)
 		}
 		for _, unrelated := range []string{"ship latest build", "- Keep another action", "4. Keep another action"} {
 			if strings.Contains(candidate, unrelated) && !strings.Contains(got, unrelated) {
@@ -52,5 +55,64 @@ func TestCompactionReconciliationUsesFrozenNotes(t *testing.T) {
 	after, err := os.ReadFile(store.Path)
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("compaction wrote authority: %v", err)
+	}
+}
+
+func TestReconcileNextStepsPreservesLiteralContent(t *testing.T) {
+	for name, literal := range map[string]string{
+		"backticks": "````markdown\n- [x] deploy\n```\n- [x] pending\n````",
+		"tildes":    "~~~text\n- [x] deploy\n- [x] pending\n~~~",
+		"indented":  "    - [x] deploy\n\t- [x] pending",
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := literal + "\n\ndeploy\n- [ ] deploy\n- [x] pending"
+			want := literal + "\n\ndeploy\n- [ ] pending"
+			if got := reconcileNextSteps(candidate, "- [x] deploy\n- [ ] pending"); got != want {
+				t.Fatalf("literal content or prose changed:\n%s\nwant:\n%s", got, want)
+			}
+			if got := reconcileNextSteps("- Keep action", "Example:\n"+literal+"\n- [ ] real task"); got != "- Keep action\n- [ ] real task" {
+				t.Fatalf("literal Notes text became an action: %s", got)
+			}
+		})
+	}
+}
+
+func TestReconcileNextStepsPreservesNestedChecklists(t *testing.T) {
+	for name, parent := range map[string]string{
+		"bullet": "- Parent", "ordered": "1. Parent", "wide ordered": "10. Parent",
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, indent := range []string{"    ", "\t"} {
+				notes := parent + "\n" + indent + "- [ ] child\n" + indent + "- [x] completed child"
+				for _, candidate := range []string{"", parent + "\n" + indent + "- [x] child\n" + indent + "- [ ] completed child"} {
+					got := reconcileNextSteps(candidate, notes)
+					if strings.Count(got, "- [ ] child") != 1 || strings.Contains(got, "completed child") || strings.Contains(got, "[x] child") {
+						t.Fatalf("nested checklist lost or stale: %q", got)
+					}
+					if again := reconcileNextSteps(got, notes); again != got {
+						t.Fatalf("nested reconciliation unstable: %q -> %q", got, again)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileNextStepsPreservesListLiteralBlocks(t *testing.T) {
+	for name, literal := range map[string]string{
+		"indented code":      "- Examples\n\n      - [x] completed\n      - [ ] example-only",
+		"nested fenced code": "- Examples\n    - Nested\n      ~~~text\n      - [x] completed\n      - [ ] example-only\n      ~~~",
+		"fence after marker": "- ```markdown\n  - [x] completed\n  - [ ] example-only\n  ```",
+		"after list":         "- List\n\nExample:\n\n    - [x] completed\n    - [ ] example-only",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := reconcileNextSteps(literal+"\n- [ ] completed", "- [x] completed\n- [ ] pending")
+			if got != literal+"\n- [ ] pending" {
+				t.Fatalf("list example changed: %q", got)
+			}
+			if got := reconcileNextSteps("", literal+"\n- [ ] real task"); got != "- [ ] real task" {
+				t.Fatalf("list example became a task: %q", got)
+			}
+		})
 	}
 }

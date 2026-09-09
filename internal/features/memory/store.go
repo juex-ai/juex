@@ -73,7 +73,7 @@ func (s *Store) Write(ctx context.Context, entry Entry) (Entry, error) {
 	var committed Entry
 	err := s.withLock(ctx, true, func(root *os.Root) error {
 		name := entry.Name + ".md"
-		if err := regularEntryOrMissing(root, name); err != nil {
+		if err := writableEntryName(root, name); err != nil {
 			return err
 		}
 		now := time.Now().UTC()
@@ -110,7 +110,7 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	}
 	return s.withLock(ctx, true, func(root *os.Root) error {
 		file := name + ".md"
-		if err := regularEntryOrMissing(root, file); err != nil {
+		if err := writableEntryName(root, file); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -229,7 +229,7 @@ func regularEntryOrMissing(root *os.Root, name string) error {
 	return nil
 }
 
-func loadEntries(ctx context.Context, root *os.Root) ([]Entry, error) {
+func directoryEntries(root *os.Root) ([]os.DirEntry, error) {
 	directory, err := root.Open(".")
 	if err != nil {
 		return nil, err
@@ -237,6 +237,29 @@ func loadEntries(ctx context.Context, root *os.Root) ([]Entry, error) {
 	files, readErr := directory.ReadDir(-1)
 	closeErr := directory.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// Check actual directory spellings under the transaction lock, even on a
+// case-sensitive host, so moving knowledge between platforms cannot merge names.
+func writableEntryName(root *os.Root, name string) error {
+	files, err := directoryEntries(root)
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		if file.Name() != name && strings.EqualFold(file.Name(), name) {
+			return fmt.Errorf("memory name %q conflicts with existing %q; use its exact spelling", name, file.Name())
+		}
+	}
+	return regularEntryOrMissing(root, name)
+}
+
+func loadEntries(ctx context.Context, root *os.Root) ([]Entry, error) {
+	files, err := directoryEntries(root)
+	if err != nil {
 		return nil, err
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })

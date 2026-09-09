@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
+	"github.com/juex-ai/juex/internal/foundation/markdown"
 	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 )
 
@@ -24,11 +25,11 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 		sections := map[string]string{}
 		var preamble []string
 		var current string
-		var syntax compactionSummarySyntax
+		var syntax markdown.LiteralBlocks
 		// Parse once, before inserting any protected multiline data. A value may
 		// itself contain a heading; it must not become a new structural section.
 		for _, line := range strings.Split(summary, "\n") {
-			literal := syntax.literal(line)
+			literal := syntax.Literal(line)
 			heading, isHeading := canonicalSummaryHeading(line, headings)
 			if !literal && isHeading {
 				if _, duplicate := sections[heading]; duplicate {
@@ -41,7 +42,7 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 				sections[current] += line + "\n"
 			}
 		}
-		if syntax.fence != 0 {
+		if syntax.InFence() {
 			return "", fmt.Errorf("compaction summary contains an unterminated literal block")
 		}
 		for _, part := range state.Contributions {
@@ -52,7 +53,8 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 			if err := cancellation.ContextError(ctx); err != nil {
 				return "", err
 			}
-			body, err := part.Reconcile(ctx, strings.TrimSpace(sections[heading]))
+			// Leading indentation can identify a literal block in the first line.
+			body, err := part.Reconcile(ctx, strings.Trim(sections[heading], "\r\n"))
 			if err != nil {
 				return "", fmt.Errorf("runtime module %q compaction section: %w", part.ModuleID, err)
 			}

@@ -11,7 +11,9 @@ App resolves relative embedding paths before supplying the absolute Agent scope.
 
 Entry Markdown files are authoritative. Their YAML frontmatter contains name,
 single-line description, type (`user`, `feedback`, `project`, or `reference`),
-creation time, and update time. Same-name writes preserve creation time.
+creation time, and update time. Exact-name writes preserve creation time.
+Writes and deletes reject a different spelling of an existing name under
+case-insensitive comparison on every platform; they never rename or merge entries.
 Names exclude `MEMORY` and Windows device basenames on every platform, including
 device names followed by a dot and suffix. Search uses literal substrings with
 Unicode simple case folding across metadata and
