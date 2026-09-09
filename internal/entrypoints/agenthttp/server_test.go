@@ -207,7 +207,7 @@ func TestServerThreadsShareProcessModelHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).CreateWorker(thread.MainID, "model-health")
+	worker, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).CreateWorker(thread.MainID, "model-health", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

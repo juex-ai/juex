@@ -141,8 +141,8 @@ func (a *Agent) BindRuntimeModules(set *runtimemodule.Set) {
 	a.Engine.RuntimeModules = set
 }
 
-func (a *Agent) NewWorkerManager(prepare func(string) (PreparedChild, error)) *WorkerManager {
-	a.workers = newWorkerThreadManager(a, prepare)
+func (a *Agent) NewWorkerManager(prepare func(string) (PreparedChild, error), maxDepth int) *WorkerManager {
+	a.workers = newWorkerThreadManager(a, prepare, maxDepth)
 	return a.workers
 }
 

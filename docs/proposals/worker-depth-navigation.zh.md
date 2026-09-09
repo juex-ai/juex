@@ -2,13 +2,13 @@
 
 > [English](worker-depth-navigation.md) | 中文
 
-状态：提案，功能尚未实现。更新：2026-09-09。
+状态：已实现。更新：2026-09-09。
 实施任务：Taskline `bfb66d37-fc99-425b-b389-6836515b7af7`。
 建议强度：Strong。
 
 ## 问题与目标
 
-目前 Worker 可以继续创建 Worker，没有嵌套层数限制。debaga 在 2026-09-08 发起的 CLI Proxy API 排查衍生了 310 个 Worker，最深 17 层，Worker 累计用量 221,226,752 tokens。层数限制用于阻止递归扩展，不等价于 Worker 总量、并发数或 token 预算限制。
+变更前 Worker 可以继续创建 Worker，没有嵌套层数限制。debaga 在 2026-09-08 发起的 CLI Proxy API 排查衍生了 310 个 Worker，最深 17 层，Worker 累计用量 221,226,752 tokens。层数限制用于阻止递归扩展，不等价于 Worker 总量、并发数或 token 预算限制。
 
 Thread Explorer 每行有重复图标、留白偏大，未展示父子关系；对话正文区域缺少持续可见的当前 Thread 身份。
 
@@ -120,6 +120,6 @@ reviewer · #abc123  [Idle]
 
 不增加每层数量、总 Worker 数、并发数或 token 预算限制；不清理 debaga 已有 Thread；不做树状 UI；本提案不部署或重启本机 Agent。
 
-## 后续实施
+## 交付
 
-本文件是后续 Agent 的设计输入；提案合并不代表功能已实现，也不自动启动实施任务。实施前重新核对当前代码、相关领域契约和 Taskline 状态。交付后更新长期契约并收敛本提案的状态，避免把计划当成已交付行为。
+已由关联 Taskline 任务实现。长期契约已同步至 [DOMAIN](../../DOMAIN.zh.md)、[DESIGN](../../DESIGN.zh.md) 和[配置说明](../../internal/app/config/README.zh.md)。本文件保留已批准的设计，具体实现以代码和测试为准。

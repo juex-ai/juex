@@ -164,10 +164,10 @@ func TestModuleAcceptanceLayeredMainWorkerRequests(t *testing.T) {
 					if role == "Main" {
 						mainNames = names
 					} else {
-						// External observation management belongs to Main; all other
-						// enabled capabilities use the same composition in Workers.
+						// Observation management is Main-only; default-depth Workers
+						// also have no downward Worker management module.
 						workerNames := slices.DeleteFunc(slices.Clone(mainNames), func(name string) bool {
-							return strings.HasPrefix(name, "observable_") || name == "schedule_create"
+							return strings.HasPrefix(name, "observable_") || name == "schedule_create" || strings.HasPrefix(name, "thread_")
 						})
 						if !slices.Equal(names, workerNames) {
 							t.Fatalf("Worker tools=%v, expected=%v", names, workerNames)
@@ -195,7 +195,7 @@ func TestModuleAcceptanceLayeredMainWorkerRequests(t *testing.T) {
 						t.Logf("MODULE_BUDGET %s/%s/%s tools=%d %s", tc.name, role, stage, len(names), data)
 					}
 					if role == "Main" && tc.workers {
-						worker, err := application.ThreadStore.CreateWorker(thread.MainID, fmt.Sprintf("%s-worker", tc.name))
+						worker, err := application.ThreadStore.CreateWorker(thread.MainID, fmt.Sprintf("%s-worker", tc.name), 2)
 						if err != nil {
 							t.Fatal(err)
 						}

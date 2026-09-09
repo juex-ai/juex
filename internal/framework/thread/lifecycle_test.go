@@ -19,7 +19,7 @@ func TestArchiveUnarchivePreservesGenerationAndModuleFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "worker")
+	worker, err := store.CreateWorker(MainID, "worker", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,11 +132,11 @@ func TestDeleteArchivedRejectsParentAndRemovesEligibleWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	parent, err := store.CreateWorker(MainID, "parent")
+	parent, err := store.CreateWorker(MainID, "parent", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := store.CreateWorker(parent.ID, "child")
+	child, err := store.CreateWorker(parent.ID, "child", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,11 +174,11 @@ func TestArchiveParentRequiresChildrenToBeArchivedFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	parent, err := store.CreateWorker(MainID, "parent")
+	parent, err := store.CreateWorker(MainID, "parent", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := store.CreateWorker(parent.ID, "child")
+	child, err := store.CreateWorker(parent.ID, "child", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestRollbackWorkerCreationRemovesIdentityForRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "retry-me")
+	worker, err := store.CreateWorker(MainID, "retry-me", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestRollbackWorkerCreationRemovesIdentityForRetry(t *testing.T) {
 	if _, err := store.OpenActive(workerID); !os.IsNotExist(err) {
 		t.Fatalf("rolled-back Worker still opens: %v", err)
 	}
-	retried, err := store.CreateWorker(MainID, "retry-me")
+	retried, err := store.CreateWorker(MainID, "retry-me", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestRecoverLayoutFinishesInterruptedTrashOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "delete-me")
+	worker, err := store.CreateWorker(MainID, "delete-me", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestRecoverLayoutUsesMetadataWithoutOpeningJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = main.Close() }()
-	worker, err := store.CreateWorker(MainID, "interrupted-archive")
+	worker, err := store.CreateWorker(MainID, "interrupted-archive", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

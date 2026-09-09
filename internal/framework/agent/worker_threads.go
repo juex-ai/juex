@@ -47,8 +47,9 @@ type workerThreadReservation struct {
 }
 
 type WorkerManager struct {
-	parent  *Agent
-	prepare func(string) (PreparedChild, error)
+	parent   *Agent
+	prepare  func(string) (PreparedChild, error)
+	maxDepth int
 
 	lifecycleMu     sync.RWMutex
 	transitionMu    sync.Mutex
@@ -70,9 +71,10 @@ type WorkerManager struct {
 	cleanupErr      error
 }
 
-func newWorkerThreadManager(parent *Agent, prepare func(string) (PreparedChild, error)) *WorkerManager {
+func newWorkerThreadManager(parent *Agent, prepare func(string) (PreparedChild, error), maxDepth int) *WorkerManager {
 	m := &WorkerManager{
 		parent:         parent,
+		maxDepth:       maxDepth,
 		threads:        map[string]*managedWorkerThread{},
 		reservations:   map[string]*workerThreadReservation{},
 		deliveryDone:   make(chan struct{}),
@@ -105,6 +107,9 @@ func (m *WorkerManager) Create(ctx context.Context, query, alias, model string, 
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return WorkerThreadStatus{}, errors.New("thread_create requires a non-empty query")
+	}
+	if err := m.parent.ThreadStore.CheckWorkerDepth(m.parent.Thread.ID, m.maxDepth); err != nil {
+		return WorkerThreadStatus{}, err
 	}
 	prepared, err := m.prepare(model)
 	if err != nil {
@@ -237,7 +242,7 @@ func (m *WorkerManager) Create(ctx context.Context, query, alias, model string, 
 func (m *WorkerManager) reserveWorkerThread(alias string) (ThreadIdentitySnapshot, error) {
 	m.creationMu.Lock()
 	defer m.creationMu.Unlock()
-	target, err := m.parent.ThreadStore.CreateWorker(m.parent.Thread.ID, alias)
+	target, err := m.parent.ThreadStore.CreateWorker(m.parent.Thread.ID, alias, m.maxDepth)
 	if err != nil {
 		return ThreadIdentitySnapshot{}, err
 	}

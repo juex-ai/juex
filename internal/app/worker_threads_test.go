@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -26,13 +27,17 @@ type workerProvider struct {
 	started  chan struct{}
 	release  chan struct{}
 	calls    int
+	specs    []llm.ToolSpec
+	history  []llm.Message
 }
 
 func (p *workerProvider) Name() string { return "worker-test" }
 
-func (p *workerProvider) Complete(ctx context.Context, _ string, _ []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+func (p *workerProvider) Complete(ctx context.Context, _ string, history []llm.Message, specs []llm.ToolSpec) (llm.Response, error) {
 	p.mu.Lock()
 	p.calls++
+	p.specs = append([]llm.ToolSpec(nil), specs...)
+	p.history = append([]llm.Message(nil), history...)
 	first := p.calls == 1
 	p.mu.Unlock()
 	if first && p.started != nil {
@@ -53,9 +58,15 @@ func (p *workerProvider) Complete(ctx context.Context, _ string, _ []llm.Message
 
 func newWorkerTestApp(t *testing.T, parentProvider llm.Provider, children ...llm.Provider) *App {
 	t.Helper()
+	return newWorkerDepthTestApp(t, 1, parentProvider, children...)
+}
+
+func newWorkerDepthTestApp(t *testing.T, maxDepth int, parentProvider llm.Provider, children ...llm.Provider) *App {
+	t.Helper()
 	workDir := t.TempDir()
 	stateDir := filepath.Join(workDir, ".juex")
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir, AgentStateDir: stateDir}
+	cfg.WorkerThreadMaxDepth = maxDepth
 	var mu sync.Mutex
 	next := 0
 	app, err := New(Options{
@@ -97,7 +108,7 @@ func waitWorkerState(t *testing.T, app interface{ Workers() *agent.WorkerManager
 	return agent.WorkerThreadStatus{}
 }
 
-func TestWorkerToolsRegisterOnEveryActiveThread(t *testing.T) {
+func TestWorkerModuleAbsentAtDefaultDepthLimit(t *testing.T) {
 	child := &workerProvider{response: "done"}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, child)
 	for _, name := range []string{workerthreadsmodule.ToolCreate, workerthreadsmodule.ToolList, workerthreadsmodule.ToolStatus, workerthreadsmodule.ToolSubscribe} {
@@ -113,14 +124,67 @@ func TestWorkerToolsRegisterOnEveryActiveThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = worker.Close() }()
-	if _, ok := worker.Engine.Tools.Get(workerthreadsmodule.ToolCreate); !ok {
-		t.Fatal("Worker missing Worker creation tools")
+	assertNoWorkerModule(t, worker.Agent)
+	if _, err := worker.Run(context.Background(), "execute without delegation"); err != nil {
+		t.Fatal(err)
+	}
+	child.mu.Lock()
+	defer child.mu.Unlock()
+	for _, spec := range child.specs {
+		if strings.HasPrefix(spec.Name, "thread_") {
+			t.Fatalf("provider saw Worker schema %s", spec.Name)
+		}
+	}
+	for _, message := range child.history {
+		for _, block := range message.Blocks {
+			if strings.Contains(block.Text, "thread_create") {
+				t.Fatal("provider saw unavailable Worker guidance")
+			}
+		}
+	}
+}
+
+func TestWorkerInternalCreateRejectsBeforeStartup(t *testing.T) {
+	main := newWorkerTestApp(t, &workerProvider{response: "ack"})
+	worker, err := main.ThreadStore.CreateWorker(thread.MainID, "parent", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = worker.Close()
+	before, err := os.ReadFile(main.ThreadStore.IndexPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &workerProvider{response: "unexpected"}
+	if _, err := New(Options{Config: main.cfg, Provider: provider, parentThreadID: worker.ID, DisableMCP: true}); err == nil || !strings.Contains(err.Error(), "max_depth=1") {
+		t.Fatalf("error = %v", err)
+	}
+	after, err := os.ReadFile(main.ThreadStore.IndexPath())
+	if err != nil || string(before) != string(after) || provider.calls != 0 {
+		t.Fatal("rejected creation had side effects")
+	}
+}
+
+func assertNoWorkerModule(t *testing.T, worker *agent.Agent) {
+	t.Helper()
+	if worker.Workers() != nil {
+		t.Fatal("capped Thread initialized WorkerManager")
+	}
+	for _, mod := range worker.Engine.RuntimeModules.Modules() {
+		if mod.ID() == workerthreadsmodule.ModuleID {
+			t.Fatal("capped Thread registered worker-threads lifecycle contributions")
+		}
+	}
+	for _, name := range []string{workerthreadsmodule.ToolCreate, workerthreadsmodule.ToolList, workerthreadsmodule.ToolStatus, workerthreadsmodule.ToolSend, workerthreadsmodule.ToolSubscribe, workerthreadsmodule.ToolStop, workerthreadsmodule.ToolArchive} {
+		if _, ok := worker.Engine.Tools.Get(name); ok {
+			t.Fatalf("capped Thread exposes %s", name)
+		}
 	}
 }
 
 func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 	childProvider := &workerProvider{response: "done"}
-	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, childProvider)
+	main := newWorkerDepthTestApp(t, 2, &workerProvider{response: "ack"}, childProvider)
 	childStatus, err := main.Workers().Create(context.Background(), "first", "reviewer", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +212,7 @@ func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 	if grandchildApp.Thread.ParentThreadID != childStatus.ThreadID {
 		t.Fatalf("grandchild parent = %q, want calling Worker %q", grandchildApp.Thread.ParentThreadID, childStatus.ThreadID)
 	}
+	assertNoWorkerModule(t, grandchildApp)
 	managed, err := main.ArchiveManagedWorker(context.Background(), grandchildStatus.ThreadID)
 	if err != nil || !managed {
 		t.Fatalf("archive managed grandchild = %v, %v; want true, nil", managed, err)
@@ -161,7 +226,7 @@ func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 
 func TestManagedWorkerParentArchiveKeepsRuntimeWhenChildIsActive(t *testing.T) {
 	childProvider := &workerProvider{response: "done"}
-	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, childProvider)
+	main := newWorkerDepthTestApp(t, 2, &workerProvider{response: "ack"}, childProvider)
 	parentStatus, err := main.Workers().Create(context.Background(), "parent", "parent-worker", "", false)
 	if err != nil {
 		t.Fatal(err)

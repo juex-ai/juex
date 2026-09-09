@@ -58,8 +58,9 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 	for name, application := range map[string]*agent.Agent{"Main": main.Agent, "Worker": worker} {
 		for module, tool := range map[string]string{"goal": "get_goal", "notes": "update_notes", "context-control": "context_new", "skills": "skill_search", "basic-file-tools": "read", "worker-threads": "thread_create"} {
 			_, available := application.Engine.Tools.Get(tool)
-			if available != cfg.ModuleEnabled(module) {
-				t.Errorf("%s %s availability = %v, configuration = %v", name, tool, available, cfg.ModuleEnabled(module))
+			want := cfg.ModuleEnabled(module) && (name == "Main" || module != "worker-threads")
+			if available != want {
+				t.Errorf("%s %s availability = %v, want %v under configured scope/depth", name, tool, available, want)
 			}
 		}
 		if err := app.ReadRuntimeModuleSnapshot(application, func(active app.RuntimeModuleSnapshot) error {

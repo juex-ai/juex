@@ -93,7 +93,7 @@ func TestContextModulesOwnThreadResources(t *testing.T) {
 					if err = main.Close(); err != nil {
 						t.Fatal(err)
 					}
-					target, err := store.CreateWorker(thread.MainID, "resource-worker")
+					target, err := store.CreateWorker(thread.MainID, "resource-worker", 2)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -182,7 +182,7 @@ func TestDisabledScratchpadPreservesUnavailableExistingDirectory(t *testing.T) {
 				if err = main.Close(); err != nil {
 					t.Fatal(err)
 				}
-				target, err := store.CreateWorker(thread.MainID, "retained-worker")
+				target, err := store.CreateWorker(thread.MainID, "retained-worker", 2)
 				if err != nil {
 					t.Fatal(err)
 				}

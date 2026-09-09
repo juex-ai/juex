@@ -29,7 +29,7 @@ func TestModuleRetirementCoversInactiveAndArchivedThreadsWithoutReadingBodies(t 
 	}
 	dirs := []string{main.Thread.Dir}
 	for _, archive := range []bool{false, true} {
-		worker, err := main.ThreadStore.CreateWorker(thread.MainID, "")
+		worker, err := main.ThreadStore.CreateWorker(thread.MainID, "", 2)
 		if err != nil {
 			t.Fatal(err)
 		}

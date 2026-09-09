@@ -2,13 +2,13 @@
 
 > English | [中文](worker-depth-navigation.zh.md)
 
-Status: proposal; functionality is not implemented. Updated: 2026-09-09.
+Status: implemented. Updated: 2026-09-09.
 Implementation task: Taskline `bfb66d37-fc99-425b-b389-6836515b7af7`.
 Recommendation: Strong.
 
 ## Problem and Goal
 
-Workers can currently create more Workers without a nesting limit. A CLI Proxy
+Before this change, Workers could create more Workers without a nesting limit. A CLI Proxy
 API investigation started by debaga on 2026-09-08 produced 310 Workers, reached
 17 levels, and recorded 221,226,752 Worker tokens. A depth limit prevents
 recursive expansion; it is not a Worker count, concurrency, or token budget.
@@ -223,10 +223,9 @@ No per-level count, total Worker count, concurrency, or token budget is added.
 Do not clean up existing debaga Threads or introduce a tree UI. Publishing this
 proposal does not deploy or restart local Agents.
 
-## Subsequent Implementation
+## Delivery
 
-This document is design input for a subsequent Agent. Merging the proposal does
-not implement the feature or automatically start the implementation task.
-Recheck current code, domain contracts, and Taskline state before implementation.
-After delivery, update the durable contracts and reconcile this proposal's
-status so planned behavior is not mistaken for shipped functionality.
+Implemented by the linked Taskline task. The durable contracts now live in
+[DOMAIN](../../DOMAIN.md), [DESIGN](../../DESIGN.md), and the
+[configuration guide](../../internal/app/config/README.md). This document
+records the approved design; code and tests remain the implementation authority.

@@ -46,11 +46,15 @@ func (s *Store) WithActiveInspection(id string, apply func(Inspection) error) er
 }
 
 func (s *Store) Inspect(id string) (Inspection, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inspectLocked(id)
+}
+
+func (s *Store) inspectLocked(id string) (Inspection, error) {
 	if !ValidID(id) {
 		return Inspection{}, fmt.Errorf("%w: %q", ErrInvalidID, id)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, root := range []string{s.ThreadsDir(), s.ArchiveDir()} {
 		dir := filepath.Join(root, id)
 		if err := validateInspectionDirectory(s.agentStateDir, dir); err != nil {

@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"sort"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -19,7 +21,17 @@ type ModuleSettings struct {
 }
 
 type moduleConfig struct {
-	Enabled optionalBool `yaml:"enabled"`
+	Enabled  optionalBool `yaml:"enabled"`
+	MaxDepth yaml.Node    `yaml:"max_depth"`
+}
+
+// WorkerMaxDepth is independent of preset and module enablement. Zero is the
+// unset programmatic value; YAML accepts only explicit integers 1 and 2.
+func (c Config) WorkerMaxDepth() int {
+	if c.WorkerThreadMaxDepth == 0 {
+		return 1
+	}
+	return c.WorkerThreadMaxDepth
 }
 
 func (c Config) EffectivePreset() string {
@@ -50,6 +62,9 @@ func (c Config) ModuleEnabled(id string) bool {
 }
 
 func (c Config) ValidateModules() error {
+	if depth := c.WorkerMaxDepth(); depth != 1 && depth != 2 {
+		return fmt.Errorf("config: modules.worker-threads.max_depth must be 1 or 2")
+	}
 	if err := c.ModuleInventory.validate(); err != nil {
 		return err
 	}
@@ -90,6 +105,16 @@ func applyModulesConfig(cfg *Config, modules map[string]moduleConfig) error {
 			return fmt.Errorf("unsupported module %q", id)
 		}
 		fileSettings := modules[id]
+		if node := fileSettings.MaxDepth; node.Kind != 0 {
+			if id != "worker-threads" {
+				return fmt.Errorf("module %q does not support max_depth", id)
+			}
+			var depth int
+			if node.Tag != "!!int" || node.Decode(&depth) != nil || (depth != 1 && depth != 2) {
+				return fmt.Errorf("modules.worker-threads.max_depth must be the integer 1 or 2")
+			}
+			cfg.WorkerThreadMaxDepth = depth
+		}
 		if !fileSettings.Enabled.Set {
 			continue
 		}

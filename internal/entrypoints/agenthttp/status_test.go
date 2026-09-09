@@ -199,7 +199,7 @@ func TestSSEResumeCursorPresenceContract(t *testing.T) {
 func TestPersistedWorkerStatusReadDoesNotOpenRuntime(t *testing.T) {
 	server := newTestServer(t)
 	store := thread.NewStore(server.opts.Cfg.RuntimePaths().StateDir)
-	worker, err := store.CreateWorker(thread.MainID, "status-only")
+	worker, err := store.CreateWorker(thread.MainID, "status-only", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

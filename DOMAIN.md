@@ -41,9 +41,18 @@ A Worker uses the same Thread model:
 - history, context, work state, pending Inputs, and subscriptions are independent;
 - it may use shared Agent resources, but it does not receive Observations.
 
-The `worker-threads` Module controls Worker execution, not Thread storage.
-When disabled, pending Input recovery pauses while history, retention management,
-and host `/new` and `/compact` remain available.
+Agent-level `worker-threads.enabled` controls Worker execution, not Thread
+storage. When disabled, pending Input recovery pauses while history, retention
+management, and host `/new` and `/compact` remain available.
+
+`worker-threads.max_depth` defaults to 1 and accepts 1 or 2, counting Main as
+depth 0. Creation validates the persisted parent chain, including archived
+ancestors. A Thread at or beyond the limit has no `worker-threads` Module or
+its tools and lifecycle contributions. Its own execution remains available
+when the Agent-level switch is on. Existing deeper Threads retain their history
+and parentage; host interfaces can recover, execute, stop, and manage them
+without restoring their capped parent's Module. Depth limits do not constrain
+the total Worker count or token budget.
 
 The creator and result destination are not Worker properties. Any interested
 caller subscribes to the Worker. Parent identity expresses topology, not

@@ -94,14 +94,14 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "modules:\n  skills:\n    enabled: true\n  shell:\n    enabled: false\n")
 	writeTextFile(t, filepath.Join(home, "juex.yaml"), "preset: standard\n")
-	writeTextFile(t, filepath.Join(work, ".juex", "import.yaml"), "preset: minimal\nmodules:\n  notes:\n    enabled: true\n")
+	writeTextFile(t, filepath.Join(work, ".juex", "import.yaml"), "preset: minimal\nmodules:\n  notes:\n    enabled: true\n  worker-threads:\n    max_depth: 2\n")
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), "imports:\n  - source: import.yaml\n")
 	resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: work})
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeTextFile(t, filepath.Join(resolved.Address.StateDir(), "switches.yaml"), "modules:\n  notes:\n    enabled: false\n")
-	content := []byte("imports:\n  - source: switches.yaml\npreset: minimal\nmodules:\n  goal:\n    enabled: true\n")
+	content := []byte("imports:\n  - source: switches.yaml\npreset: minimal\nmodules:\n  goal:\n    enabled: true\n  worker-threads:\n    enabled: true\n")
 	validated, err := ValidateAgentConfig(testModuleInventory(), content, home, resolved.Agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -124,10 +124,13 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(validated.Modules, loaded.Modules) {
 		t.Fatalf("validation modules %+v != reload %+v", validated.Modules, loaded.Modules)
 	}
+	if validated.WorkerMaxDepth() != 2 || loaded.WorkerMaxDepth() != 2 || !loaded.ModuleEnabled("worker-threads") {
+		t.Fatal("imported depth was lost during sparse overlay save/reload")
+	}
 	if !loaded.ModuleEnabled("goal") || !loaded.ModuleEnabled("skills") || loaded.ModuleEnabled("shell") || loaded.ModuleEnabled("notes") || loaded.ModuleEnabled("mcp") {
 		t.Fatalf("wrong effective policy: %+v", loaded.Modules)
 	}
-	for _, invalid := range []string{"preset: typo\n", "modules:\n  typo: {}\n"} {
+	for _, invalid := range []string{"preset: typo\n", "modules:\n  typo: {}\n", "modules:\n  worker-threads:\n    max_depth: null\n"} {
 		if _, err := WriteAgentConfig(testModuleInventory(), []byte(invalid), home, resolved.Agent.ID, nil); err == nil {
 			t.Fatalf("saved invalid configuration %q", invalid)
 		}

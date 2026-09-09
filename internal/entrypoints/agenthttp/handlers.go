@@ -104,6 +104,16 @@ func (s *Server) createWorkerThread(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	store := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir)
+	parentID := strings.TrimSpace(request.ParentThreadID)
+	if parentID == "" {
+		parentID = thread.MainID
+	}
+	if parentID != thread.MainID {
+		if err := store.CheckWorkerDepth(parentID, s.opts.Cfg.WorkerMaxDepth()); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+	}
 	main, err := store.EnsureMain()
 	if err == nil {
 		err = main.Close()
@@ -112,11 +122,7 @@ func (s *Server) createWorkerThread(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	parentID := strings.TrimSpace(request.ParentThreadID)
-	if parentID == "" {
-		parentID = thread.MainID
-	}
-	target, err := store.CreateWorker(parentID, request.Alias)
+	target, err := store.CreateWorker(parentID, request.Alias, s.opts.Cfg.WorkerMaxDepth())
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return

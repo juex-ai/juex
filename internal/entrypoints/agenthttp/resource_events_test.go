@@ -326,7 +326,7 @@ func TestResourceEventHubWatchesExternalThreadIndexChange(t *testing.T) {
 	}
 	defer subscription.cancel()
 
-	created, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).CreateWorker(thread.MainID, "external-index-change")
+	created, err := thread.NewStore(srv.opts.Cfg.RuntimePaths().StateDir).CreateWorker(thread.MainID, "external-index-change", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

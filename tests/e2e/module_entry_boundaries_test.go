@@ -109,7 +109,7 @@ func TestWorkerDisabledAPIKeepsHistoryAndHostMaintenance(t *testing.T) {
 	if err := agent.EnsureMainThread(cfg.RuntimePaths().StateDir); err != nil {
 		t.Fatal(err)
 	}
-	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker("0", "retained")
+	worker, err := thread.NewStore(cfg.AgentStateDir).CreateWorker("0", "retained", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

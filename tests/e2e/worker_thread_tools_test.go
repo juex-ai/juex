@@ -46,6 +46,11 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 	}
 	last := lastDirectUserText(history)
 	if last == "Reply with exactly WORKER_OK" {
+		for _, spec := range specs {
+			if strings.HasPrefix(spec.Name, "thread_") {
+				return llm.Response{}, fmt.Errorf("capped Worker received %s schema", spec.Name)
+			}
+		}
 		p.startOnce.Do(func() { close(p.childStarted) })
 		select {
 		case <-ctx.Done():

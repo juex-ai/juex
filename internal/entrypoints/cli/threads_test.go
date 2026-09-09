@@ -10,9 +10,47 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/app/modulecatalog"
+	"github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
+
+func TestThreadClientHonorsServerWorkerDepth(t *testing.T) {
+	for _, maxDepth := range []int{1, 2} {
+		t.Run(fmt.Sprint(maxDepth), func(t *testing.T) {
+			server := agenthttp.NewServer(agenthttp.Options{Cfg: config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), WorkerThreadMaxDepth: maxDepth}})
+			defer server.Close()
+			httpServer := httptest.NewServer(server.APIHandler())
+			defer httpServer.Close()
+			target, err := endpoint.Parse(strings.Replace(httpServer.URL, "http://", "tcp://", 1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			transport := target.NewTransport()
+			defer transport.CloseIdleConnections()
+			client := &agentClient{target: target, client: &http.Client{Transport: transport}}
+			parentID := "0"
+			for depth := 1; depth <= maxDepth; depth++ {
+				alias := fmt.Sprintf("worker-%d", depth)
+				var created thread.Info
+				if err := client.doJSON(t.Context(), http.MethodPost, "/api/threads", map[string]string{"parent_thread_id": parentID, "alias": alias}, &created); err != nil {
+					t.Fatal(err)
+				}
+				resolved, err := client.resolveThread(t.Context(), alias, false)
+				if err != nil || resolved.ThreadID != created.ID {
+					t.Fatalf("resolve parent alias: %+v, %v", resolved, err)
+				}
+				parentID = resolved.ThreadID
+			}
+			err = client.doJSON(t.Context(), http.MethodPost, "/api/threads", map[string]string{"parent_thread_id": parentID}, nil)
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("max_depth=%d", maxDepth)) {
+				t.Fatalf("CLI client error = %v", err)
+			}
+		})
+	}
+}
 
 func TestAgentClientResolvesThreadIDAndAliasAcrossIndexSections(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
