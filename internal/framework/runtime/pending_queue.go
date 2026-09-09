@@ -164,7 +164,7 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 			return PendingInputRecord{}, ErrPendingInputHandled
 		}
 	} else {
-		id = nextUniquePendingInputID(q.records, newPendingInputID)
+		id = nextUniquePendingInputID(q.records, newInputID)
 	}
 	now := q.nowMillis()
 	ttl := opts.TTL
@@ -226,7 +226,7 @@ func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuse
 		}
 	}
 
-	id := nextUniquePendingInputID(q.records, newPendingInputID)
+	id := nextUniquePendingInputID(q.records, newInputID)
 	now := q.nowMillis()
 	msg.ID = pendingInputMessageID(id, now)
 	if msg.Blocks == nil {
@@ -1074,7 +1074,7 @@ func nextUniquePendingInputID(records map[string]PendingInputRecord, next func()
 	}
 }
 
-func newPendingInputID() string { return "pending-" + newID() }
+func newInputID() string { return "input-" + newID() }
 
 func pendingInputMessageID(id string, createdAt time.Time) string {
 	return thread.StableMessageID(createdAt, id)
