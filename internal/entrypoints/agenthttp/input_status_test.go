@@ -21,7 +21,9 @@ func TestThreadInputStatusPagesArchivedAndEffectiveModuleGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	main.Close()
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
 	worker, err := store.CreateWorker(thread.MainID, "tracked", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +92,7 @@ func TestDisabledInputStatusDoesNotOpenJournals(t *testing.T) {
 	s.opts.Cfg.Modules = config.ModulePolicy{"input-tracking": {Enabled: false}}
 	response := threadShowResponse{}
 	s.annotateInputs("nonexistent", &response)
-	if response.InputTracking != nil || !reflect.DeepEqual(s.inputStatuses, runtime.InputStatusReader{}) {
+	if response.InputTracking != nil || !reflect.DeepEqual(&s.inputStatuses, &runtime.InputStatusReader{}) {
 		t.Fatal("disabled projection read tracking state")
 	}
 }

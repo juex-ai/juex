@@ -45,7 +45,7 @@ func (r *InputStatusReader) Read(dir string, messageIDs []string) (InputStatusPa
 	if err != nil {
 		return InputStatusPage{}, err
 	}
-	defer snapshot.Close()
+	defer func() { _ = snapshot.Close() }()
 	if r.indexes == nil {
 		r.indexes = map[string]*inputStatusIndex{}
 	}

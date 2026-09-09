@@ -111,7 +111,7 @@ func TestPassiveSnapshotVisitsOnlyNewCommitsAcrossGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer target.Close()
+	defer func() { _ = target.Close() }()
 	snapshot, err := CaptureEventStoreSnapshot(target.Dir)
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +122,9 @@ func TestPassiveSnapshotVisitsOnlyNewCommitsAcrossGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot.Close()
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if len(sequences) == 0 {
 		t.Fatal("missing initial commit")
 	}
@@ -133,7 +135,7 @@ func TestPassiveSnapshotVisitsOnlyNewCommitsAcrossGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer snapshot.Close()
+	defer func() { _ = snapshot.Close() }()
 	if err := target.AppendEvent(events.Event{Type: "turn.started", TurnID: "later"}); err != nil {
 		t.Fatal(err)
 	}
