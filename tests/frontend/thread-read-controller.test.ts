@@ -717,3 +717,74 @@ test("reconnect refreshes module gating without dropping loaded history and igno
   assert.deepEqual(state.projection.inputTracking,{messages:{},checks:{}});
   controller.dispose();
 });
+
+for (const staleOutcome of ["success", "failure"] as const) {
+  test(`reconnect context survives an older context ${staleOutcome}`, async () => {
+    let onOpen = () => {};
+    const contexts: Array<{
+      resolve: (context: ActiveContextSnapshot) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const controller = createThreadReadController({
+      ...ports(),
+      getThreadContext: () => new Promise((resolve, reject) => contexts.push({ resolve, reject })),
+      subscribeEvents: (_id, opts) => { onOpen = opts.onOpen!; return () => {}; },
+    });
+    controller.setRoute("s1");
+    controller.subscribeLiveEvents("s1");
+    const initial = controller.refresh();
+    await flushPromises();
+    onOpen();
+    await flushPromises();
+    const current = { ...activeContext(), estimated_tokens: 200 };
+    contexts[1].resolve(current);
+    await flushPromises();
+    if (staleOutcome === "success") {
+      contexts[0].resolve({ ...activeContext(), estimated_tokens: 100 });
+    } else {
+      contexts[0].reject(new Error("old request failed"));
+    }
+    await initial;
+    assert.deepEqual(controller.currentState().activeContext, current);
+    controller.dispose();
+  });
+}
+
+test("a new history request invalidates context while its history is still loading", async () => {
+  let resolveContext: (context: ActiveContextSnapshot) => void = () => {};
+  const histories: Array<(page: ThreadShowResponse) => void> = [];
+  const controller = createThreadReadController({
+    ...ports(),
+    getThread: () => new Promise((resolve) => histories.push(resolve)),
+    getThreadContext: () => new Promise((resolve) => { resolveContext = resolve; }),
+  });
+  controller.setRoute("s1");
+  const initial = controller.refresh();
+  histories[0](thread("s1"));
+  await flushPromises();
+  const current = controller.refresh();
+  resolveContext({ ...activeContext(), estimated_tokens: 100 });
+  await initial;
+  assert.equal(controller.currentState().activeContext, null);
+  histories[1](thread("s1"));
+  await flushPromises();
+  resolveContext({ ...activeContext(), estimated_tokens: 200 });
+  await current;
+  assert.equal(controller.currentState().activeContext?.estimated_tokens, 200);
+});
+
+test("standalone context refreshes apply only the latest request", async () => {
+  const contexts: Array<(context: ActiveContextSnapshot) => void> = [];
+  const controller = createThreadReadController({
+    ...ports(),
+    getThreadContext: () => new Promise((resolve) => contexts.push(resolve)),
+  });
+  controller.setRoute("s1");
+  const older = controller.refreshActiveContext();
+  const newer = controller.refreshActiveContext();
+  contexts[1]({ ...activeContext(), estimated_tokens: 200 });
+  await newer;
+  contexts[0]({ ...activeContext(), estimated_tokens: 100 });
+  await older;
+  assert.equal(controller.currentState().activeContext?.estimated_tokens, 200);
+});

@@ -165,6 +165,7 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
   }
 
   let historyRevision = 0;
+  let contextRevision = 0;
 
   async function refresh(
     threadID = route.id,
@@ -188,12 +189,18 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
 
   async function refreshActiveContext(threadID = route.id) {
     if (!threadID) return;
+    const revision = ++contextRevision;
+    const history = historyRevision;
+    const isCurrent = () =>
+      isLatestThreadRoute(route, threadID) &&
+      revision === contextRevision &&
+      history === historyRevision;
     try {
       const context = await ports.getThreadContext(threadID);
-      if (!isLatestThreadRoute(route, threadID)) return;
+      if (!isCurrent()) return;
       updateReadState((prev) => projectActiveContextLoaded(prev, context));
     } catch (error) {
-      if (!isLatestThreadRoute(route, threadID)) return;
+      if (!isCurrent()) return;
       logError("getThreadContext failed", error);
       updateReadState(projectActiveContextFailed);
     }
