@@ -111,9 +111,12 @@ test("fixed-height header follows the viewed Thread independently of Agent activ
   await page.getByRole("link", { name: "Thread Explorer", exact: true }).click();
   await page.getByRole("link", { name: "archived parent · #old", exact: true }).click();
   await expect(header.getByLabel("Current Thread status")).toHaveText("Archived");
-  await page.getByRole("navigation", { name: "Agent views" }).getByRole("link", { name: "Runtime" }).click();
+  await header.getByRole("link", { name: "Runtime", exact: true }).click();
   await expect(header).toContainText("Runtime");
   await expect(header.getByLabel("Current Thread status")).toHaveCount(0);
+  await expect(header.getByRole("link", { name: "Runtime", exact: true })).toHaveAttribute("aria-current", "page");
+  await header.getByRole("link", { name: "Chat with debaga" }).click();
+  await expect(header).toContainText("main · #0");
 });
 
 test("loading and stopped Threads do not inherit an idle or previous status", async ({ page }) => {

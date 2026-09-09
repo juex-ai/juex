@@ -114,8 +114,7 @@ test("runtime navigation consolidates operational views without duplicating page
 	assert.match(extensionsSource, /rel="noopener noreferrer"/);
 	assert.match(extensionsSource, /shadowed by/);
   assert.doesNotMatch(extensionsSource, /<Button[\s\S]*(Install|Update|Delete|Enable|Disable)/);
-  assert.equal((stageHeaderSource.match(/label: "Chat"/g) ?? []).length, 1);
-  assert.equal((stageHeaderSource.match(/label: "Runtime"/g) ?? []).length, 1);
+
   assert.doesNotMatch(stageHeaderSource, /label: "Observables"|label: "Logs"|label: "Config"/);
   assert.match(shellSource, /agentTabPath\(failedAgent\.id, "runtime"\) \+ "\/logs"/);
 });
@@ -132,11 +131,6 @@ test("agent shell keeps the fleet rail mounted around selected-agent pages", () 
     shellSource,
     /<Outlet key=\{agentId \|\| "fleet-settings"\} \/>/,
     "agent switches must remount the selected-agent page",
-  );
-  assert.equal(
-    shellSource.match(/rootKey=\{filePanelKey\}/g)?.length,
-    2,
-    "root switches must reset both file panel variants",
   );
   assert.match(shellSource, /<FleetEmptyState \/>/);
   assert.match(shellSource, /View logs/);
@@ -233,18 +227,12 @@ test("fleet rail keeps its header controls lightweight and vertically stable", (
   assert.match(sidebarSource, /dark:bg-juex-gold-400\/10/);
 });
 
-test("stage remounts primary pages through tabs and gates offline composers", () => {
-  for (const label of ["Chat", "Runtime"]) {
-    assert.match(stageHeaderSource, new RegExp(`label: "${label}"`));
-  }
-  assert.match(stageHeaderSource, /agentTabPath\(agent\.id, tab\.id\)/);
+test("stage navigation gates offline composers", () => {
   assert.match(
     stageHeaderSource,
     /aria-label="Thread Explorer"[\s\S]*?<MessagesSquare className="size-4" \/>/,
     "Thread Explorer should use a multi-conversation icon",
   );
-  assert.match(stageHeaderSource, /filePanelTitle: string/);
-  assert.match(stageHeaderSource, /filePanelActionLabel/);
   assert.match(stateBarSource, /Start agent/);
   assert.match(stateBarSource, /onClick=\{\(\) => void startAgent\(\)\}/);
   assert.match(

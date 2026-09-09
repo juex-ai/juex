@@ -393,6 +393,8 @@ func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
 		{path: "/api/threads", want: true},
 		{path: "/api/threads/" + threadID, want: true},
 		{path: "/api/threads/" + threadID + "/context", want: true},
+		{path: "/api/threads/" + threadID + "/recitation", want: true},
+		{path: "/api/threads/" + threadID + "/recitation/extra", want: false},
 		{path: "/api/threads/" + threadID + "/modules", want: true},
 		{path: "/api/threads/" + threadID + "/modules/events", want: true},
 		{path: "/api/threads/" + threadID + "/modules/example/resources/files/tree", want: true},

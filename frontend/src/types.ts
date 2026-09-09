@@ -357,9 +357,13 @@ export interface CompactThreadResponse {
   first_kept_message_id?: string;
 }
 
-export interface ActiveContextSnapshot {
-  messages: Message[];
-  estimated_tokens: number;
+export interface RecitationSnapshot {
+  epoch_id: string;
+  turn_id: string;
+  recorded_at: string;
+  generation_id: string;
+  iter: number;
+  fragments: Array<{ message_id: string; text: string }>;
 }
 
 export const BROWSER_EVENT_TYPES = [

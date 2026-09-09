@@ -516,6 +516,20 @@ func (s *Server) handleCompactThread(w http.ResponseWriter, r *http.Request, id 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleThreadRecitation(w http.ResponseWriter, _ *http.Request, id string) {
+	metadata, err := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir).Inspect(id)
+	if err != nil {
+		writeThreadLookupError(w, id, err)
+		return
+	}
+	snapshot, err := s.recitations.Read(metadata.Dir)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", "Recorded Recitation is unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
 func (s *Server) handleThreadContext(w http.ResponseWriter, _ *http.Request, id string) {
 	if value, ok := s.threads.Load(id); ok {
 		if snapshot, ok := value.(*activeThread).agent.ActiveContextForThread(id); ok {
