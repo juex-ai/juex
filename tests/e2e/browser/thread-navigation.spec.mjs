@@ -156,3 +156,28 @@ test("header prefers current metadata alias and marks disconnected status unknow
   });
   await expect(header.getByLabel("Current Thread status")).toHaveText("Working");
 });
+
+test("switching Agents with the same Thread ID resets the header while loading", async ({ page }) => {
+  await fixture(page);
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  await page.route(/\/agents\/agent-b\/api\/threads\/0$/, async (route) => {
+    await hold;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      ...item("0", "other main"), dir: "/tmp/other", revision: 1, generation_id: "g1",
+      items: [], has_more_before: false, event_cursor: "cursor-1",
+    }) });
+  });
+  await page.goto("/agents/agent-a/threads/0");
+  const header = page.locator("header");
+  await expect(header).toContainText("main · #0");
+  await page.evaluate(() => {
+    history.pushState({}, "", "/agents/agent-b/threads/0");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(header).toContainText("other");
+  await expect(header).not.toContainText("main · #0");
+  release();
+  await expect(header).toContainText("other main · #0");
+  await expect(header).not.toContainText("debaga");
+});
