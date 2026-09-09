@@ -114,6 +114,10 @@ Use the repository-local
 verification workflow. Frontend-specific setup is in
 [frontend/README.md](frontend/README.md).
 
+CI always checks documentation. Changes limited to ordinary Markdown skip
+frontend checks, lint, and Go tests; embedded runtime Markdown, non-Markdown
+files, or an unavailable change comparison run the full CI suite.
+
 ## Documentation Map
 
 - [DOMAIN.md](DOMAIN.md): vocabulary, ownership, lifecycles, and invariants.
