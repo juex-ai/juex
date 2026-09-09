@@ -8,6 +8,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/markdown"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
 	"github.com/juex-ai/juex/internal/framework/provenance"
 )
@@ -440,9 +441,9 @@ var compactionSummaryHeadings = []string{
 
 func normalizeCompactionSummaryHeadings(summary string) string {
 	lines := strings.Split(summary, "\n")
-	var syntax compactionSummarySyntax
+	var syntax markdown.LiteralBlocks
 	for index, line := range lines {
-		if syntax.literal(line) {
+		if syntax.Literal(line) {
 			continue
 		}
 		if heading, ok := canonicalCompactionSummaryHeading(line); ok {

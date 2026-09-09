@@ -32,13 +32,13 @@ func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.T
 		{Name: ToolSearch, Description: "Search durable Agent memory by literal, case-insensitive substring across metadata and body. An empty query returns all entries.", Schema: objectSchema(map[string]any{
 			"query": map[string]any{"type": "string"},
 		}, "query")},
-		{Name: ToolWrite, Description: "Save explicitly requested stable knowledge shared by this Agent's Threads. Replaces the same name and preserves its creation time. Use user, feedback, project, or reference; do not save temporary progress or secrets.", Schema: objectSchema(map[string]any{
+		{Name: ToolWrite, Description: "Save explicitly requested stable knowledge shared by this Agent's Threads. Replaces the exact same name and preserves its creation time; case variants of existing names are rejected. Use user, feedback, project, or reference; do not save temporary progress or secrets.", Schema: objectSchema(map[string]any{
 			"name":        map[string]any{"type": "string", "description": "1-128 ASCII letters, digits, underscores, dots, or hyphens; start with a letter or digit. MEMORY and Windows device names (CON, NUL, PRN, AUX, COM1-9, LPT1-9, also before a dot) are reserved."},
 			"description": map[string]any{"type": "string", "description": "Nonempty single-line summary."},
 			"type":        map[string]any{"type": "string", "enum": []string{"user", "feedback", "project", "reference"}},
 			"body":        map[string]any{"type": "string", "description": "Stable knowledge in Markdown."},
 		}, "name", "description", "type", "body")},
-		{Name: ToolDelete, Description: "Explicitly delete one durable Agent memory by name. Deleting an absent entry succeeds.", Schema: objectSchema(map[string]any{
+		{Name: ToolDelete, Description: "Explicitly delete one durable Agent memory by its exact name. Case variants of existing names are rejected. Deleting an absent entry succeeds.", Schema: objectSchema(map[string]any{
 			"name": map[string]any{"type": "string"},
 		}, "name")},
 	}

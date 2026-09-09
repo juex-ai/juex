@@ -59,6 +59,43 @@ func memoryWriteInput(name, body string) map[string]any {
 	return map[string]any{"name": name, "description": "Stable project fact", "type": "project", "body": body}
 }
 
+func TestMemoryToolsRejectCaseCollisions(t *testing.T) {
+	isolateModuleConfig(t)
+	provider := &bareScriptProvider{steps: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			memoryCall("original", memory.ToolWrite, memoryWriteInput("Project", "Keep original knowledge")),
+			memoryCall("collision-write", memory.ToolWrite, memoryWriteInput("project", "Wrong replacement")),
+			memoryCall("collision-delete", memory.ToolDelete, map[string]any{"name": "PROJECT"}),
+			memoryCall("search-original", memory.ToolSearch, map[string]any{"query": ""}),
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "Knowledge preserved"), StopReason: llm.StopEndTurn},
+	}}
+	a := memoryApp(t, memoryConfig(t), provider)
+	if _, err := a.Run(t.Context(), "Save Project and verify case variants cannot replace or delete it."); err != nil {
+		t.Fatal(err)
+	}
+	results := map[string]llm.Block{}
+	for _, message := range provider.history[len(provider.history)-1] {
+		for _, block := range message.Blocks {
+			if block.Type == llm.BlockToolResult {
+				results[block.ToolUseID] = block
+			}
+		}
+	}
+	for _, id := range []string{"collision-write", "collision-delete"} {
+		if result, ok := results[id]; !ok || !result.IsError || !strings.Contains(result.Content, "conflicts with existing") {
+			t.Fatalf("collision %s not reported as an error: %+v", id, result)
+		}
+	}
+	assertSuccessfulProviderToolResults(t, provider.history[len(provider.history)-1], map[string]string{"original": "Keep original knowledge", "search-original": "Keep original knowledge"})
+	var found struct {
+		Memories []memory.Entry `json:"memories"`
+	}
+	if err := json.Unmarshal([]byte(results["search-original"].Content), &found); err != nil || len(found.Memories) != 1 || found.Memories[0].Name != "Project" {
+		t.Fatalf("case collision changed entry identity: %+v, %v", found, err)
+	}
+}
+
 func TestEndToEnd_ManuallyCopiedMemoryKeepsExtensionDataAndOtherProviders(t *testing.T) {
 	isolateModuleConfig(t)
 	cfg := memoryConfig(t)

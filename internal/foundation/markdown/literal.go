@@ -1,15 +1,18 @@
-package runtime
+// Package markdown provides syntax guards for line-oriented text transforms.
+package markdown
 
 import "strings"
 
-// Summary sections use Markdown headings, but literal code/text blocks may
-// contain identical lines. Share this state between normalization and parsing.
-type compactionSummarySyntax struct {
+// LiteralBlocks identifies fenced and indented literal lines so callers can
+// transform surrounding headings or lists without rewriting examples.
+type LiteralBlocks struct {
 	fence  byte
 	length int
 }
 
-func (s *compactionSummarySyntax) literal(line string) bool {
+// Literal consumes one line and reports whether it belongs to a literal block,
+// including the opening and closing fences.
+func (s *LiteralBlocks) Literal(line string) bool {
 	trimmed := strings.TrimLeft(line, " ")
 	if len(line)-len(trimmed) >= 4 || strings.HasPrefix(trimmed, "\t") {
 		return true
@@ -33,3 +36,6 @@ func (s *compactionSummarySyntax) literal(line string) bool {
 	}
 	return false
 }
+
+// InFence reports whether a fenced block still needs a closing delimiter.
+func (s *LiteralBlocks) InFence() bool { return s.fence != 0 }

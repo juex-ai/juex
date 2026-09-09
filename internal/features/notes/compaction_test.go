@@ -54,3 +54,22 @@ func TestCompactionReconciliationUsesFrozenNotes(t *testing.T) {
 		t.Fatalf("compaction wrote authority: %v", err)
 	}
 }
+
+func TestReconcileNextStepsPreservesLiteralContent(t *testing.T) {
+	for name, literal := range map[string]string{
+		"backticks": "````markdown\n- [x] deploy\n```\n- [x] pending\n````",
+		"tildes":    "~~~text\n- [x] deploy\n- [x] pending\n~~~",
+		"indented":  "    - [x] deploy\n\t- [x] pending",
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := literal + "\n\ndeploy\n- [ ] deploy\n- [x] pending"
+			want := literal + "\n\ndeploy\n- [ ] pending"
+			if got := reconcileNextSteps(candidate, "- [x] deploy\n- [ ] pending"); got != want {
+				t.Fatalf("literal content or prose changed:\n%s\nwant:\n%s", got, want)
+			}
+			if got := reconcileNextSteps("- Keep action", "Example:\n"+literal+"\n- [ ] real task"); got != "- Keep action\n- [ ] real task" {
+				t.Fatalf("literal Notes text became an action: %s", got)
+			}
+		})
+	}
+}

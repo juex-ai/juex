@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/foundation/markdown"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 )
 
@@ -45,7 +46,11 @@ func reconcileNextSteps(candidate, notes string) string {
 	pending := map[string]string{}
 	completed := map[string]bool{}
 	var order []string
+	var notesSyntax markdown.LiteralBlocks
 	for _, line := range strings.Split(notes, "\n") {
+		if notesSyntax.Literal(line) {
+			continue
+		}
 		line = strings.TrimSpace(line)
 		key := nextStepKey(line)
 		if key == "" {
@@ -63,7 +68,12 @@ func reconcileNextSteps(candidate, notes string) string {
 	}
 	seen := map[string]bool{}
 	var lines []string
+	var candidateSyntax markdown.LiteralBlocks
 	for _, line := range strings.Split(candidate, "\n") {
+		if candidateSyntax.Literal(line) {
+			lines = append(lines, line)
+			continue
+		}
 		key := nextStepKey(line)
 		if original, ok := pending[key]; ok {
 			if !seen[key] {
@@ -79,7 +89,7 @@ func reconcileNextSteps(candidate, notes string) string {
 			lines = append(lines, pending[key])
 		}
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	return strings.Trim(strings.Join(lines, "\n"), "\r\n")
 }
 
 func nextStepKey(line string) string {
@@ -93,6 +103,8 @@ func nextStepKey(line string) string {
 		}
 		if end > 0 && len(line) > end+1 && (line[end] == '.' || line[end] == ')') && (line[end+1] == ' ' || line[end+1] == '\t') {
 			line = strings.TrimSpace(line[end+1:])
+		} else {
+			return ""
 		}
 	}
 	for _, prefix := range []string{"[ ]", "[x]"} {
