@@ -7,12 +7,12 @@ const fileTreeSource = readFileSync(
   "utf8",
 );
 
-test("file tree panel supports a scoped loader, empty state, and header action", () => {
+test("file tree panel supports a scoped loader, empty state, and header title", () => {
   assert.match(fileTreeSource, /loadTree = getFileTree/);
   assert.match(fileTreeSource, /emptyLabel/);
   assert.match(fileTreeSource, /title = "Workspace"/);
-  assert.match(fileTreeSource, /headerAction\?: ReactNode/);
-  assert.match(fileTreeSource, /\{headerAction\}/);
+  assert.match(fileTreeSource, /headerTitle\?: ReactNode/);
+  assert.match(fileTreeSource, /headerTitle \?\?/);
   assert.match(fileTreeSource, /rootKey\?: string/);
   assert.match(fileTreeSource, /useLayoutEffect\(\(\) => \{/);
 });

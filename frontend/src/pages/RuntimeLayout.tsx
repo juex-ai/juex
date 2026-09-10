@@ -6,13 +6,7 @@ import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { runtimeModuleEnabled } from "@/lib/runtime-view";
 import type { RuntimeStatusResponse } from "@/types";
 
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { ViewSelector } from "@/components/ViewSelector";
 import {
   runtimeSectionFromPath,
   runtimeSectionPath,
@@ -63,31 +57,13 @@ export function RuntimeLayout() {
         <h1 className="font-serif text-xl italic leading-none text-primary">
           Runtime
         </h1>
-        <Select
+        <ViewSelector label="Runtime section" align="end"
           value={section}
           onValueChange={(value) =>
             navigate(runtimeSectionPath(agentId, value as RuntimeSection))
           }
-        >
-          <SelectTrigger
-            size="sm"
-            className="min-w-36"
-            aria-label="Runtime section"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="end">
-            {runtimeSections.map((item) => (
-              <SelectItem
-                key={item.id}
-                value={item.id}
-                disabled={data !== null && !sectionEnabled(item.id)}
-              >
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          options={runtimeSections.map((item) => ({ value: item.id, label: item.label, disabled: data !== null && !sectionEnabled(item.id) }))}
+        />
       </div>
       {needsCatalog && !data ? (
         error ? (

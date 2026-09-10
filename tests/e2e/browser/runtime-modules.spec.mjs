@@ -81,3 +81,30 @@ test("configuration and logs do not request the execution catalog", async ({ pag
   }
   expect(reads.runtimeReads()).toBe(0);
 });
+
+for (const width of [1440, 820, 390, 320]) {
+  test(`runtime selector is bounded and keyboard navigable at ${width}px`, async ({ page }) => {
+    await runtimeFixture(page);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/agents/test-agent/runtime');
+    const trigger = page.getByRole('combobox', { name: 'Runtime section' });
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    const current = page.getByRole('option', { name: 'Overview', exact: true });
+    await expect(current).toBeFocused();
+    await expect(current).toHaveAttribute('data-state', 'checked');
+    const bounds = await page.getByRole('listbox').boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    await page.keyboard.press('ArrowDown');
+    await expect(page.getByRole('option', { name: 'Logs', exact: true })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/\/runtime\/logs$/);
+    await expect(trigger).toHaveText('Logs');
+    await expect(trigger).toBeFocused();
+    await trigger.click();
+    await page.keyboard.press('Escape');
+    await expect(trigger).toBeFocused();
+    await expect(page.getByRole('link', { name: 'Thread Explorer' })).toBeVisible();
+  });
+}

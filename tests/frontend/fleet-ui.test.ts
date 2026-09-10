@@ -230,7 +230,7 @@ test("fleet rail keeps its header controls lightweight and vertically stable", (
 test("stage navigation gates offline composers", () => {
   assert.match(
     stageHeaderSource,
-    /aria-label="Thread Explorer"[\s\S]*?<MessagesSquare className="size-4" \/>/,
+    /aria-label="Thread Explorer"[\s\S]*?<MessagesSquare className="size-4" aria-hidden="true" \/>/,
     "Thread Explorer should use a multi-conversation icon",
   );
   assert.match(stateBarSource, /Start agent/);

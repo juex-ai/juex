@@ -2,7 +2,10 @@ import {
   SlidersHorizontal,
   Menu,
   MessagesSquare,
+  PanelRightClose,
+  PanelRightOpen,
 } from "lucide-react";
+import type { Ref } from "react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -27,6 +30,8 @@ export function FleetStageHeader({
   activeTab,
   settings,
   onOpenMobileSidebar,
+  sidebar,
+  sidebarTriggerRef,
 }: {
   agent: AgentStatus | null;
   contextTitle: string | null;
@@ -35,6 +40,8 @@ export function FleetStageHeader({
   activeTab: AgentStageTab;
   settings: boolean;
   onOpenMobileSidebar: () => void;
+  sidebar?: { open: boolean; onToggle: () => void };
+  sidebarTriggerRef?: Ref<HTMLButtonElement>;
 }) {
   const agentTitle = settings ? "Fleet settings" : agent?.name || agent?.id || "Fleet";
   const pageTitle = contextTitle || (threadID ? `Loading #${threadID}…` : activeTab === "runtime" ? "Runtime" : "Threads");
@@ -45,7 +52,7 @@ export function FleetStageHeader({
         type="button"
         variant="ghost"
         size="icon"
-        className="shrink-0 min-[760px]:hidden"
+        className="size-11 shrink-0 min-[760px]:hidden"
         onClick={onOpenMobileSidebar}
         aria-label="Open fleet agents"
       >
@@ -84,34 +91,49 @@ export function FleetStageHeader({
       ) : <div className="min-w-0 flex-1 truncate text-sm font-semibold">{agentTitle}</div>}
 
       {!settings && agent ? (
-        <Button asChild variant={activeTab === "runtime" ? "secondary" : "ghost"} size="sm" className="min-h-11 shrink-0 px-2">
-          <Link to={agentTabPath(agent.id, "runtime")} aria-current={activeTab === "runtime" ? "page" : undefined}>
-            <SlidersHorizontal className="size-3.5" aria-hidden="true" />
-            Runtime
-          </Link>
-        </Button>
-      ) : null}
-
-      {!settings && agent && activeTab === "chat" ? (
         <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button asChild variant={activeTab === "runtime" ? "secondary" : "ghost"} size="sm" className="size-11 shrink-0 px-0 sm:w-auto sm:gap-2 sm:px-3">
+                <Link to={agentTabPath(agent.id, "runtime")} aria-label="Runtime" aria-current={activeTab === "runtime" ? "page" : undefined}>
+                  <SlidersHorizontal className="size-4" aria-hidden="true" />
+                  <span className="hidden sm:inline">Runtime</span>
+                </Link>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Runtime</TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 asChild
-                variant="ghost"
-                size="icon"
-                className="size-11 shrink-0"
+                variant={activeTab === "chat" && !threadID ? "secondary" : "ghost"}
+                size="sm"
+                className="size-11 shrink-0 px-0 sm:w-auto sm:gap-2 sm:px-3"
               >
                 <Link
                   to={`${agentTabPath(agent.id, "chat")}/threads`}
                   aria-label="Thread Explorer"
+                  aria-current={activeTab === "chat" && !threadID ? "page" : undefined}
                 >
-                  <MessagesSquare className="size-4" />
+                  <MessagesSquare className="size-4" aria-hidden="true" />
+                  <span className="hidden sm:inline">Threads</span>
                 </Link>
               </Button>
             </TooltipTrigger>
             <TooltipContent>Thread Explorer</TooltipContent>
           </Tooltip>
+          {sidebar ? <Tooltip>
+            <TooltipTrigger asChild>
+              <Button ref={sidebarTriggerRef} type="button" variant={sidebar.open ? "secondary" : "ghost"}
+                size="icon" className="size-11 shrink-0" onClick={sidebar.onToggle}
+                aria-label={sidebar.open ? "Close sidebar" : "Open sidebar"}
+                aria-expanded={sidebar.open} aria-controls={sidebar.open ? "thread-sidebar" : undefined}>
+                {sidebar.open ? <PanelRightClose className="size-4" aria-hidden="true" /> : <PanelRightOpen className="size-4" aria-hidden="true" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{sidebar.open ? "Close sidebar" : "Status and files"}</TooltipContent>
+          </Tooltip> : null}
         </TooltipProvider>
       ) : null}
     </header>

@@ -2,6 +2,11 @@ import { createRequire } from "node:module";
 const require = createRequire(new URL("../../../frontend/package.json", import.meta.url));
 const { expect, test } = require("@playwright/test");
 
+async function selectScratchpad(page) {
+  await page.getByRole("combobox", { name: "File root" }).click();
+  await page.getByRole("option", { name: "Scratchpad", exact: true }).click();
+}
+
 async function openModuleThread(page, mode = "ready", options = {}) {
   let resourceReads = 0;
   const enabled = mode !== "disabled";
@@ -99,7 +104,7 @@ test("module state loads through the shared snapshot and file resources stay laz
   await page.keyboard.press("Escape");
   expect(reads()).toBe(0);
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
   expect(reads()).toBeGreaterThanOrEqual(2);
@@ -135,7 +140,7 @@ test("a directory refresh preserves an in-flight module file preview", async ({ 
     }) });
   });
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await contentStarted;
   const refreshed = page.waitForResponse("**/resources/files/tree");
@@ -149,7 +154,7 @@ test("module controls share one Thread subscription", async ({ page }) => {
   await openModuleThread(page);
   await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.moduleSources.filter((source) => source.readyState !== EventSource.CLOSED).length)).toBe(1);
 });
@@ -234,7 +239,7 @@ test("disabling a selected root cancels preview and subscription and forgets the
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ path: "draft.md", content: "Late disabled content", size: 1, truncated: false }) }).catch(() => {});
   });
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await started;
   await publishModules(page, { only: ["goal", "notes"] });
@@ -246,11 +251,11 @@ test("disabling a selected root cancels preview and subscription and forgets the
   releaseContent();
   await expect(page.getByText("Late disabled content")).toHaveCount(0);
   await publishModules(page);
-  await expect(page.getByRole("combobox", { name: "File root" })).toHaveValue("workspace");
+  await expect(page.getByRole("combobox", { name: "File root" })).toHaveText("Workspace");
   expect(reads()).toBe(beforeLate);
   await page.unroute("**/resources/files/content?*");
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   expect(reads()).toBeGreaterThan(beforeLate);
 });
@@ -258,7 +263,7 @@ test("disabling a selected root cancels preview and subscription and forgets the
 test("preview and unrelated snapshots preserve the selected root subscription", async ({ page }) => {
   const reads = await openModuleThread(page);
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
   const beforeUpdate = reads();
@@ -268,7 +273,7 @@ test("preview and unrelated snapshots preserve the selected root subscription", 
   expect(await page.evaluate(() => window.fileSources.length)).toBe(1);
   await publishModules(page, { composition: "restarted" });
   await expect(page.getByText("Scoped file preview", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "File root" })).toHaveValue("workspace");
+  await expect(page.getByRole("combobox", { name: "File root" })).toHaveText("Workspace");
 });
 
 test("unsupported and broken renderers leave other contributions usable", async ({ page }) => {
@@ -282,7 +287,7 @@ test("unsupported and broken renderers leave other contributions usable", async 
   await expect(page.getByText("Notes unavailable: display error")).toBeVisible();
   await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   await publishModules(page);
   await page.getByRole("tab", { name: "Status", exact: true }).click();
@@ -300,7 +305,7 @@ for (const mode of ["readOnly", "stopped"]) {
     await expect(page.getByText("Verify module views", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
     await page.getByRole("button", { name: "draft.md", exact: true }).click();
     await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
     expect(await page.evaluate(() => window.fileSources.length)).toBe(0);
@@ -326,7 +331,7 @@ for (const route of ["/agents/test-agent/threads/1", "/agents/other-agent/thread
   test(`module roots reject old callbacks after switching to ${route}`, async ({ page }) => {
     await openModuleThread(page);
     await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
     await page.getByRole("button", { name: "draft.md", exact: true }).click();
     await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
     await page.evaluate((route) => {
@@ -334,7 +339,7 @@ for (const route of ["/agents/test-agent/threads/1", "/agents/other-agent/thread
       window.dispatchEvent(new PopStateEvent("popstate"));
     }, route);
     await page.getByRole("tab", { name: "Files", exact: true }).click();
-    await expect(page.getByRole("combobox", { name: "File root" })).toHaveValue("workspace");
+    await expect(page.getByRole("combobox", { name: "File root" })).toHaveText("Workspace");
     await expect(page.getByText("Scoped file preview", { exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => window.fileSources.every((source) => source.readyState === EventSource.CLOSED))).toBe(true);
     await page.evaluate(() => {
@@ -345,7 +350,7 @@ for (const route of ["/agents/test-agent/threads/1", "/agents/other-agent/thread
     await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
     const treeResponse = page.waitForResponse((response) => response.url().includes(`${route.replace("/threads/", "/api/threads/")}/modules/scratchpad/resources/files/tree`));
     await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
     await treeResponse;
     await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
     expect(await page.evaluate(() => window.moduleSources.filter((source) => source.readyState !== EventSource.CLOSED).length)).toBe(1);
@@ -357,7 +362,7 @@ test("mobile file sheet follows module removal without retaining its preview", a
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Open sidebar", exact: true }).click();
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await expect(page.getByText("Scoped file preview", { exact: true })).toBeVisible();
   await publishModules(page, { only: ["notes"] });
@@ -371,7 +376,7 @@ test("mobile file sheet follows module removal without retaining its preview", a
 test("read-only transitions stop file subscriptions while manual refresh remains available", async ({ page }) => {
   const reads = await openModuleThread(page);
   await page.getByRole("tab", { name: "Files", exact: true }).click();
-  await page.getByRole("combobox", { name: "File root" }).selectOption("scratchpad.files");
+  await selectScratchpad(page);
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.fileSources.length)).toBe(1);
   await publishModules(page, { readOnly: true });
@@ -480,3 +485,59 @@ for (const outcome of ["success", "failure"]) {
     await expect(page.getByText(/Obsolete/)).toHaveCount(0);
   });
 }
+
+for (const width of [1440, 820, 390, 320]) {
+  test(`header controls keep their place and responsive labels at ${width}px`, async ({ page }) => {
+    await openModuleThread(page);
+    await page.setViewportSize({ width, height: 900 });
+    const header = page.locator('header');
+    const runtime = header.getByRole('link', { name: 'Runtime', exact: true });
+    const threads = header.getByRole('link', { name: 'Thread Explorer', exact: true });
+    const toggle = header.getByRole('button', { name: width >= 1280 ? 'Close sidebar' : 'Open sidebar', exact: true });
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-expanded', String(width >= 1280));
+    for (const [link, label] of [[runtime, 'Runtime'], [threads, 'Threads']]) {
+      await expect(link).toBeVisible();
+      if (width >= 640) await expect(link.getByText(label, { exact: true })).toBeVisible();
+      else await expect(link.getByText(label, { exact: true })).toBeHidden();
+    }
+    const toggleBounds = await toggle.boundingBox();
+    const threadsBounds = await threads.boundingBox();
+    expect(toggleBounds.y + toggleBounds.height).toBeLessThanOrEqual(52);
+    expect(toggleBounds.x).toBeGreaterThanOrEqual(threadsBounds.x + threadsBounds.width);
+    expect(toggleBounds.width).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(header.getByText('main · #0', { exact: true })).toBeVisible();
+    await expect(header.getByLabel('Current Thread status')).toBeVisible();
+    await runtime.click();
+    await expect(threads).toBeVisible();
+    await expect(threads).toHaveAttribute('href', '/agents/test-agent/threads');
+    await threads.click();
+    await expect(page).toHaveURL(/\/agents\/test-agent\/threads$/);
+    await expect(threads).toHaveAttribute('aria-current', 'page');
+    await header.getByRole('link', { name: 'Chat with test-agent' }).click();
+    await expect(page).toHaveURL(/\/agents\/test-agent\/threads\/0$/);
+  });
+}
+
+test('file root is a single keyboard selector with selection and focus restoration', async ({ page }) => {
+  await openModuleThread(page);
+  await page.getByRole('tab', { name: 'Files', exact: true }).click();
+  const root = page.getByRole('combobox', { name: 'File root' });
+  await expect(root).toContainText('Workspace');
+  const toolbar = root.locator('..');
+  await expect(toolbar.getByText('Workspace', { exact: true })).toHaveCount(1);
+  await root.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('option', { name: 'Workspace', exact: true })).toHaveAttribute('data-state', 'checked');
+  await expect(page.getByRole('option', { name: 'Workspace', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('option', { name: 'Scratchpad', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(root).toContainText('Scratchpad');
+  await expect(root).toBeFocused();
+  await expect(page.getByRole('button', { name: 'draft.md', exact: true })).toBeVisible();
+  await root.click();
+  await page.keyboard.press('Escape');
+  await expect(root).toBeFocused();
+});

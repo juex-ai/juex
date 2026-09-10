@@ -40,7 +40,7 @@ import {
 type FileTreePanelProps = {
   active?: boolean;
   emptyLabel?: string;
-  headerAction?: ReactNode;
+  headerTitle?: ReactNode;
   loadTree?: LoadFileTree;
   loadContent?: typeof getFileContent;
   rawURL?: typeof getFileRawURL;
@@ -55,7 +55,7 @@ type FileTreePanelProps = {
 export function FileTreePanel({
   active: visible = true,
   emptyLabel = "This directory is empty.",
-  headerAction,
+  headerTitle,
   loadTree = getFileTree,
   loadContent = getFileContent,
   rawURL = getFileRawURL,
@@ -176,11 +176,8 @@ export function FileTreePanel({
 
   return (
     <div className="flex h-full min-w-0 flex-col bg-card text-card-foreground">
-      <div className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between gap-2 border-b px-4 pr-12 font-sans text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:pr-4">
-        <div className="flex min-w-0 items-center gap-1">
-          <span className="truncate">{title}</span>
-          {headerAction}
-        </div>
+      <div className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between gap-2 border-b px-3">
+        {headerTitle ?? <span className="truncate px-2.5 text-sm font-medium">{title}</span>}
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -188,7 +185,7 @@ export function FileTreePanel({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-7 text-muted-foreground hover:text-foreground"
+                className="size-11 text-muted-foreground hover:text-foreground sm:size-9 pointer-coarse:size-11"
                 onClick={handleRefreshClick}
                 disabled={refreshing || !active}
                 aria-label={refreshLabel}

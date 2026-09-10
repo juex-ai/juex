@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { ViewSelector } from "@/components/ViewSelector";
 import type { ThreadModulesSnapshot } from "@/module-schema";
 import { moduleContributions } from "./registry";
 import { resolveContributions } from "./resolve";
@@ -8,6 +9,8 @@ export function useModuleFilePanel({ agentID, threadID, snapshot, workspaceHealt
   agentID: string; threadID: string; snapshot?: ThreadModulesSnapshot; workspaceHealthy: boolean; workspaceRevision: number;
 }) {
   const { files } = useMemo(() => resolveContributions(snapshot, moduleContributions), [snapshot]);
+  // Root changes remount the file panel; return menu focus to its new trigger.
+  const rootSelectorRef = useRef<HTMLButtonElement>(null);
   const scopeKey = JSON.stringify([agentID, threadID, snapshot?.composition_revision]);
   const [selection, setSelection] = useState({ scopeKey, id: "workspace" });
   const selected = selection.scopeKey === scopeKey ? files.find((item) => item.id === selection.id) : undefined;
@@ -26,12 +29,9 @@ export function useModuleFilePanel({ agentID, threadID, snapshot, workspaceHealt
     subscribeChanges: snapshot?.read_only ? undefined : ports.subscribeChanges,
     refreshRevision: selected ? 0 : workspaceRevision,
     refreshLabel: `Refresh ${title.toLowerCase()}`,
-    headerAction: files.length ? <select aria-label="File root" value={selected?.id ?? "workspace"}
-      className="h-7 min-w-0 max-w-28 rounded-sm border bg-background px-1 text-xs font-normal normal-case tracking-normal text-foreground"
-      onChange={(event) => setSelection({ scopeKey, id: event.target.value })}>
-      <option value="workspace">Workspace</option>
-      {files.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-    </select> : undefined,
+    headerTitle: files.length ? <ViewSelector label="File root" triggerRef={rootSelectorRef} value={selected?.id ?? "workspace"}
+      options={[{ value: "workspace", label: "Workspace" }, ...files.map((item) => ({ value: item.id, label: item.label }))]}
+      onValueChange={(id) => setSelection({ scopeKey, id })} /> : undefined,
   };
 }
 

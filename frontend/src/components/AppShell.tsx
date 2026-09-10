@@ -17,7 +17,7 @@ import {
   useMatch,
   useNavigate,
 } from "react-router-dom";
-import { AlertTriangle, PanelRightOpen, Plus } from "lucide-react";
+import { AlertTriangle, Plus } from "lucide-react";
 
 import {
   listAgents,
@@ -364,7 +364,11 @@ export function AppShell() {
               activeTab={activeTab}
               settings={settings}
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
-
+              sidebar={workspaceAvailable ? {
+                open: workspaceOpen,
+                onToggle: () => workspaceDocked ? setWorkspaceDockOpen((open) => !open) : setWorkspaceSheetOpen((open) => !open),
+              } : undefined}
+              sidebarTriggerRef={sidebarEntry}
             />
             {failedAgent ? (
               <div
@@ -429,18 +433,10 @@ export function AppShell() {
                 )}
               </div>
               {workspaceDocked && workspaceDockOpen && workspaceAvailable ? (
-                <aside aria-label="Thread sidebar" className="h-full w-[clamp(18rem,24vw,22rem)] shrink-0 overflow-hidden border-l bg-card">
+                <aside id="thread-sidebar" aria-label="Thread sidebar" className="h-full w-[clamp(18rem,24vw,22rem)] shrink-0 overflow-hidden border-l bg-card">
                   <ThreadSidebar key={`${agentId}:${threadID}`} agentID={agentId} threadID={threadID}
-                    filePanel={{ ...filePanelProps, title: filePanelTitle, rootKey: filePanelKey }}
-                    onClose={() => { setWorkspaceDockOpen(false); requestAnimationFrame(() => sidebarEntry.current?.focus()); }} />
+                    filePanel={{ ...filePanelProps, title: filePanelTitle, rootKey: filePanelKey }} />
                 </aside>
-              ) : null}
-              {workspaceAvailable && !workspaceOpen ? (
-                <button ref={sidebarEntry} type="button" aria-label="Open sidebar" title="Status and files"
-                  className="absolute right-0 top-1/2 z-20 flex h-14 w-8 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 bg-card text-muted-foreground shadow-sm outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35"
-                  onClick={() => workspaceDocked ? setWorkspaceDockOpen(true) : setWorkspaceSheetOpen(true)}>
-                  <PanelRightOpen className="size-4" />
-                </button>
               ) : null}
             </div>
           </div>
@@ -450,6 +446,7 @@ export function AppShell() {
             onOpenChange={setWorkspaceSheetOpen}
           >
             <SheetContent
+              id="thread-sidebar"
               className="flex !w-[min(100vw,22rem)] !max-w-none flex-col gap-0 bg-card p-0 xl:hidden"
               side="right" showCloseButton={false}
               onCloseAutoFocus={(event) => { event.preventDefault(); sidebarEntry.current?.focus(); }}
