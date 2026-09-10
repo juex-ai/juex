@@ -10,7 +10,7 @@ import { InspectorSection } from "./InspectorSection";
 import { ThreadStatusPanel } from "./ThreadStatusPanel";
 
 export function ThreadSidebar({ agentID, threadID, filePanel, onClose }: {
-  agentID: string; threadID: string; filePanel: ComponentProps<typeof FileTreePanel>; onClose: () => void;
+  agentID: string; threadID: string; filePanel: ComponentProps<typeof FileTreePanel>; onClose?: () => void;
 }) {
   const [tab, setTab] = useState(threadID ? "status" : "files");
   return <Tabs.Root value={tab} onValueChange={setTab} className="flex h-full min-h-0 min-w-0 flex-col">
@@ -19,9 +19,9 @@ export function ThreadSidebar({ agentID, threadID, filePanel, onClose }: {
         {threadID ? <SidebarTab value="status">Status</SidebarTab> : null}
         <SidebarTab value="files">Files</SidebarTab>
       </Tabs.List>
-      <Button size="icon" variant="ghost" className="size-11 shrink-0" aria-label="Close sidebar" onClick={onClose}>
+      {onClose ? <Button size="icon" variant="ghost" className="size-11 shrink-0" aria-label="Close sidebar" onClick={onClose}>
         <PanelRightClose className="size-4" />
-      </Button>
+      </Button> : null}
     </div>
     {threadID ? <Tabs.Content value="status" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)] outline-none">
       <ThreadState agentID={agentID} threadID={threadID} />

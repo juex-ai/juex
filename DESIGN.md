@@ -123,9 +123,15 @@ ordinary state updates and reconnects within the same composition preserve it.
 Read-only file roots refresh on demand without a live resource subscription.
 
 The Thread sidebar groups Context, module status and Recitation under Status,
-with file browsing under Files. The sidebar edge is its only entry; the composer
-contains message actions. Desktop docks the panel; tablet and phone use a drawer.
-The Agent title opens Chat; Runtime has a separate navigation button.
+with file browsing under Files. Its toggle stays at the far right of the Agent
+header; the composer contains message actions. Desktop docks the panel; tablet
+and phone use a drawer. The Agent title opens Chat. Runtime and Threads remain
+available across both views, with icons and labels on wide screens and accessible
+icons on narrow screens.
+
+Files and Runtime use the same lightweight current-view selector with checked
+options and keyboard navigation. The Files selector replaces a repeated root
+heading; a single available root appears as plain text.
 
 Recitation shows the latest recorded normal request preparation with its time and
 ordered fragments. It is historical evidence, not a current preview or proof of
