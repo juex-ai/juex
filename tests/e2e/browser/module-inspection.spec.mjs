@@ -84,7 +84,7 @@ async function openModuleThread(page, mode = "ready", options = {}) {
     if (path.endsWith("/files/tree")) return json({ name: "workspace", path: "/", is_dir: true, children: [] });
     if (path.endsWith("/recitation")) return options.recitation ? options.recitation(route) : json(null);
     if (path.endsWith("/status")) return json({ cursor: "cursor-1", thread: { id: threadID, alias: "main", state: "idle", working: false, pending_count: 0, max_pending_inputs: 8, can_accept_input: true }, tools: [], token_usage: { input_tokens: 0, output_tokens: 0 } });
-    if (/\/threads\/[^/]+$/.test(path)) return json({ thread_id: threadID, alias: "main", dir: `/tmp/module-browser/${threadID}`, retention_state: options.readOnly ? "archived" : "active", execution_state: "idle", created_at: "2026-09-07T00:00:00Z", last_activity_at: "2026-09-07T00:00:00Z", revision: 1, generation_id: "g1", turn_count: 0, pending_input_count: 0, items: [], has_more_before: false, event_cursor: "cursor-1" });
+    if (/\/threads\/[^/]+$/.test(path)) return json({ thread_id: threadID, alias: "main", dir: `/tmp/module-browser/${threadID}`, retention_state: options.readOnly ? "archived" : "active", execution_state: "idle", created_at: "2026-09-07T00:00:00Z", last_activity_at: "2026-09-07T00:00:00Z", revision: 1, generation_id: "g1", turn_count: 0, pending_input_count: 0, items: options.items ?? [], has_more_before: false, event_cursor: "cursor-1" });
     return route.fulfill({ status: 404, body: "not found" });
   });
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -400,8 +400,11 @@ test("Thread state stays in the sidebar and the Agent title opens Chat", async (
   await expect(page.getByRole("tab", { name: "Status", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("button", { name: "Close sidebar", exact: true }).click();
   await expect(sidebar).toHaveCount(0);
-  await page.getByRole("button", { name: "Open sidebar", exact: true }).click();
+  const entry = page.getByRole("button", { name: "Open sidebar", exact: true });
+  await expect(entry).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(sidebar).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Close sidebar", exact: true })).toBeFocused();
 });
 
 for (const viewport of [{ width: 820, height: 1180 }, { width: 1180, height: 820 }, { width: 390, height: 844 }, { width: 320, height: 720 }]) {
@@ -487,36 +490,79 @@ for (const outcome of ["success", "failure"]) {
 }
 
 for (const width of [1440, 820, 390, 320]) {
-  test(`header controls keep their place and responsive labels at ${width}px`, async ({ page }) => {
+  test(`sidebar controls belong to the content while navigation keeps responsive labels at ${width}px`, async ({ page }) => {
     await openModuleThread(page);
     await page.setViewportSize({ width, height: 900 });
     const header = page.locator('header');
     const runtime = header.getByRole('link', { name: 'Runtime', exact: true });
     const threads = header.getByRole('link', { name: 'Thread Explorer', exact: true });
-    const toggle = header.getByRole('button', { name: width >= 1280 ? 'Close sidebar' : 'Open sidebar', exact: true });
-    await expect(toggle).toBeVisible();
-    await expect(toggle).toHaveAttribute('aria-expanded', String(width >= 1280));
     for (const [link, label] of [[runtime, 'Runtime'], [threads, 'Threads']]) {
       await expect(link).toBeVisible();
       if (width >= 640) await expect(link.getByText(label, { exact: true })).toBeVisible();
       else await expect(link.getByText(label, { exact: true })).toBeHidden();
     }
-    const toggleBounds = await toggle.boundingBox();
-    const threadsBounds = await threads.boundingBox();
-    expect(toggleBounds.y + toggleBounds.height).toBeLessThanOrEqual(52);
-    expect(toggleBounds.x).toBeGreaterThanOrEqual(threadsBounds.x + threadsBounds.width);
-    expect(toggleBounds.width).toBeGreaterThanOrEqual(44);
+    const entry = page.getByRole('button', { name: 'Open sidebar', exact: true });
+    const close = page.getByRole('button', { name: 'Close sidebar', exact: true });
+    if (width >= 1280) await close.click();
+    await expect(entry).toBeVisible();
+    const entryBounds = await entry.boundingBox();
+    const headerBounds = await header.boundingBox();
+    expect(entryBounds.y).toBeGreaterThanOrEqual(headerBounds.y + headerBounds.height);
+    expect(entryBounds.y).toBeLessThan(headerBounds.y + headerBounds.height + 16);
+    expect(entryBounds.x + entryBounds.width).toBeGreaterThanOrEqual(width - 16);
+    expect(entryBounds.width).toBeGreaterThanOrEqual(44);
+    const conversation = await page.getByRole('log').boundingBox();
+    expect(conversation.x + conversation.width).toBeLessThanOrEqual(entryBounds.x);
+    await entry.click();
+    const panel = page.locator('#thread-sidebar');
+    const panelClose = panel.getByRole('button', { name: 'Close sidebar', exact: true });
+    await expect(panelClose).toBeVisible();
+    await expect(entry).toBeHidden();
+    const closeBounds = await panelClose.boundingBox();
+    const panelBounds = await panel.boundingBox();
+    const statusBounds = await panel.getByRole('tab', { name: 'Status', exact: true }).boundingBox();
+    expect(closeBounds.x - panelBounds.x).toBeLessThanOrEqual(16);
+    expect(closeBounds.y - panelBounds.y).toBeLessThanOrEqual(12);
+    expect(closeBounds.x + closeBounds.width).toBeLessThanOrEqual(statusBounds.x);
+    await panelClose.click();
+    await expect(entry).toBeFocused();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(header.getByText('main · #0', { exact: true })).toBeVisible();
     await expect(header.getByLabel('Current Thread status')).toBeVisible();
     await runtime.click();
+    await expect(entry).toBeHidden();
+    await expect(close).toBeHidden();
     await expect(threads).toBeVisible();
     await expect(threads).toHaveAttribute('href', '/agents/test-agent/threads');
     await threads.click();
     await expect(page).toHaveURL(/\/agents\/test-agent\/threads$/);
     await expect(threads).toHaveAttribute('aria-current', 'page');
+    await entry.click();
+    await expect(page.getByRole('tab', { name: 'Files', exact: true })).toBeVisible();
+    await close.click();
     await header.getByRole('link', { name: 'Chat with test-agent' }).click();
     await expect(page).toHaveURL(/\/agents\/test-agent\/threads\/0$/);
+  });
+}
+
+for (const width of [1440, 390]) {
+  test(`sidebar opener stays above the scrolling conversation at ${width}px`, async ({ page }) => {
+    await openModuleThread(page, 'ready', { items: Array.from({ length: 30 }, (_, index) => ({
+      type: 'message', seq: index + 1, at: '2026-09-07T00:00:00Z',
+      message: { id: `message-${index}`, role: index % 2 ? 'assistant' : 'user',
+        blocks: [{ type: 'text', text: `Message ${index}. ` + 'Conversation content remains readable. '.repeat(10) }] },
+    })) });
+    await page.setViewportSize({ width, height: 900 });
+    if (width >= 1280) await page.getByRole('button', { name: 'Close sidebar', exact: true }).click();
+    const entry = page.getByRole('button', { name: 'Open sidebar', exact: true });
+    const bounds = await entry.boundingBox();
+    const scroll = page.getByRole('log').locator('.overflow-y-auto').first();
+    await expect.poll(() => scroll.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await scroll.evaluate((element) => { element.scrollTop = 0; });
+    await expect(page.getByRole('button', { name: 'Scroll to latest message' })).toBeVisible();
+    expect(await entry.boundingBox()).toEqual(bounds);
+    await entry.click();
+    await expect(page.locator('#thread-sidebar')).toBeVisible();
   });
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps, type Ref } from "react";
 import { Tabs } from "radix-ui";
 import { PanelRightClose } from "lucide-react";
 import { getThreadRecitation } from "@/api";
@@ -9,19 +9,19 @@ import type { RecitationSnapshot } from "@/types";
 import { InspectorSection } from "./InspectorSection";
 import { ThreadStatusPanel } from "./ThreadStatusPanel";
 
-export function ThreadSidebar({ agentID, threadID, filePanel, onClose }: {
-  agentID: string; threadID: string; filePanel: ComponentProps<typeof FileTreePanel>; onClose?: () => void;
+export function ThreadSidebar({ agentID, threadID, filePanel, onClose, closeButtonRef }: {
+  agentID: string; threadID: string; filePanel: ComponentProps<typeof FileTreePanel>; onClose: () => void; closeButtonRef?: Ref<HTMLButtonElement>;
 }) {
   const [tab, setTab] = useState(threadID ? "status" : "files");
   return <Tabs.Root value={tab} onValueChange={setTab} className="flex h-full min-h-0 min-w-0 flex-col">
-    <div className="flex min-h-14 shrink-0 items-center gap-2 border-b px-3">
+    <div className="flex min-h-14 shrink-0 items-center gap-1 border-b pl-1 pr-3">
+      <Button ref={closeButtonRef} size="icon" variant="ghost" className="size-11 shrink-0" aria-label="Close sidebar" title="Close sidebar" onClick={onClose}>
+        <PanelRightClose className="size-4" aria-hidden="true" />
+      </Button>
       <Tabs.List aria-label="Sidebar views" className="flex min-w-0 flex-1 gap-1">
         {threadID ? <SidebarTab value="status">Status</SidebarTab> : null}
         <SidebarTab value="files">Files</SidebarTab>
       </Tabs.List>
-      {onClose ? <Button size="icon" variant="ghost" className="size-11 shrink-0" aria-label="Close sidebar" onClick={onClose}>
-        <PanelRightClose className="size-4" />
-      </Button> : null}
     </div>
     {threadID ? <Tabs.Content value="status" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)] outline-none">
       <ThreadState agentID={agentID} threadID={threadID} />

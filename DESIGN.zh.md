@@ -105,8 +105,11 @@ composition 内的普通状态更新与重连保留选择。
 只读文件根按需刷新，不建立实时资源订阅。
 
 Thread 侧栏在 Status 中集中展示 Context、模块状态和 Recitation，在 Files 中
-浏览文件。开关固定在 Agent 顶栏最右侧；输入框仅保留消息操作。桌面固定展示
-侧栏，Pad 和手机使用抽屉。点击 Agent 标题进入 Chat。Runtime 和 Threads 在
+浏览文件。收起时，展开入口位于 Agent 导航下方、内容区域的右上边缘，处于消息
+滚动容器之外，并预留空间，避免遮挡正文和滚动条。展开后，收起按钮位于侧栏
+左上角，排在 Status 和 Files 前面。收起后键盘焦点返回展开入口。输入框仅保留
+消息操作。桌面固定展示侧栏，Pad 和手机使用抽屉。Thread Explorer 保留 Files，
+Runtime 不显示侧栏。点击 Agent 标题进入 Chat。Runtime 和 Threads 在
 两个视图中均可访问，宽屏显示图标与文字，窄屏显示带可访问名称的图标。
 
 Files 和 Runtime 使用一致的轻量当前视图选择器，提供选中标记和键盘操作。
