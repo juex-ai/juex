@@ -517,6 +517,8 @@ for (const width of [1440, 820, 390, 320]) {
     const panel = page.locator('#thread-sidebar');
     const panelClose = panel.getByRole('button', { name: 'Close sidebar', exact: true });
     await expect(panelClose).toBeVisible();
+    // Measure the settled drawer, not different frames of its entrance animation.
+    await panel.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
     await expect(entry).toBeHidden();
     const closeBounds = await panelClose.boundingBox();
     const panelBounds = await panel.boundingBox();
