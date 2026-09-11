@@ -17,7 +17,7 @@ import {
   useMatch,
   useNavigate,
 } from "react-router-dom";
-import { AlertTriangle, Plus } from "lucide-react";
+import { AlertTriangle, PanelRightOpen, Plus } from "lucide-react";
 
 import {
   listAgents,
@@ -126,6 +126,7 @@ export function AppShell() {
   const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
   const sidebarEntry = useRef<HTMLButtonElement>(null);
+  const sidebarClose = useRef<HTMLButtonElement>(null);
   const currentAgent =
     agents.find((candidate) => candidate.id === agentId) ?? null;
   const invalidAgentRoute =
@@ -314,6 +315,20 @@ export function AppShell() {
     ? workspaceDockOpen && workspaceAvailable
     : workspaceSheetOpen && workspaceAvailable;
 
+  function openWorkspace() {
+    if (workspaceDocked) {
+      setWorkspaceDockOpen(true);
+      requestAnimationFrame(() => sidebarClose.current?.focus());
+    } else {
+      setWorkspaceSheetOpen(true);
+    }
+  }
+
+  function closeWorkspaceDock() {
+    setWorkspaceDockOpen(false);
+    requestAnimationFrame(() => sidebarEntry.current?.focus());
+  }
+
   const sidebar = (
     <FleetSidebar
       agents={agents}
@@ -364,11 +379,6 @@ export function AppShell() {
               activeTab={activeTab}
               settings={settings}
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
-              sidebar={workspaceAvailable ? {
-                open: workspaceOpen,
-                onToggle: () => workspaceDocked ? setWorkspaceDockOpen((open) => !open) : setWorkspaceSheetOpen((open) => !open),
-              } : undefined}
-              sidebarTriggerRef={sidebarEntry}
             />
             {failedAgent ? (
               <div
@@ -432,9 +442,20 @@ export function AppShell() {
                   <Outlet key={agentId || "fleet-settings"} />
                 )}
               </div>
+              {workspaceAvailable ? (
+                <div hidden={workspaceOpen} className="w-13 shrink-0 px-1 pt-1.5">
+                  <Button ref={sidebarEntry} type="button" variant="ghost" size="icon" className="size-11"
+                    aria-label="Open sidebar" title={threadID ? "Status and files" : "Files"}
+                    aria-expanded={workspaceOpen} aria-controls={workspaceOpen ? "thread-sidebar" : undefined}
+                    onClick={openWorkspace}>
+                    <PanelRightOpen className="size-4" aria-hidden="true" />
+                  </Button>
+                </div>
+              ) : null}
               {workspaceDocked && workspaceDockOpen && workspaceAvailable ? (
                 <aside id="thread-sidebar" aria-label="Thread sidebar" className="h-full w-[clamp(18rem,24vw,22rem)] shrink-0 overflow-hidden border-l bg-card">
                   <ThreadSidebar key={`${agentId}:${threadID}`} agentID={agentId} threadID={threadID}
+                    onClose={closeWorkspaceDock} closeButtonRef={sidebarClose}
                     filePanel={{ ...filePanelProps, title: filePanelTitle, rootKey: filePanelKey }} />
                 </aside>
               ) : null}

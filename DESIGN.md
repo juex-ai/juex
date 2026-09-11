@@ -123,9 +123,13 @@ ordinary state updates and reconnects within the same composition preserve it.
 Read-only file roots refresh on demand without a live resource subscription.
 
 The Thread sidebar groups Context, module status and Recitation under Status,
-with file browsing under Files. Its toggle stays at the far right of the Agent
-header; the composer contains message actions. Desktop docks the panel; tablet
-and phone use a drawer. The Agent title opens Chat. Runtime and Threads remain
+with file browsing under Files. When closed, its opener sits at the upper-right
+edge of the content area below Agent navigation, outside the message scroller
+with space reserved so it cannot cover content or the scrollbar. The open panel
+places its close button at the upper-left before Status and Files. Closing
+returns keyboard focus to the opener. The composer contains message actions.
+Desktop docks the panel; tablet and phone use a drawer. Thread Explorer retains
+Files; Runtime has no sidebar. The Agent title opens Chat. Runtime and Threads remain
 available across both views, with icons and labels on wide screens and accessible
 icons on narrow screens.
 

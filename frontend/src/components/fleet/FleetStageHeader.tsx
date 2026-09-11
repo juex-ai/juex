@@ -2,10 +2,7 @@ import {
   SlidersHorizontal,
   Menu,
   MessagesSquare,
-  PanelRightClose,
-  PanelRightOpen,
 } from "lucide-react";
-import type { Ref } from "react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -30,8 +27,6 @@ export function FleetStageHeader({
   activeTab,
   settings,
   onOpenMobileSidebar,
-  sidebar,
-  sidebarTriggerRef,
 }: {
   agent: AgentStatus | null;
   contextTitle: string | null;
@@ -40,8 +35,6 @@ export function FleetStageHeader({
   activeTab: AgentStageTab;
   settings: boolean;
   onOpenMobileSidebar: () => void;
-  sidebar?: { open: boolean; onToggle: () => void };
-  sidebarTriggerRef?: Ref<HTMLButtonElement>;
 }) {
   const agentTitle = settings ? "Fleet settings" : agent?.name || agent?.id || "Fleet";
   const pageTitle = contextTitle || (threadID ? `Loading #${threadID}…` : activeTab === "runtime" ? "Runtime" : "Threads");
@@ -123,17 +116,6 @@ export function FleetStageHeader({
             </TooltipTrigger>
             <TooltipContent>Thread Explorer</TooltipContent>
           </Tooltip>
-          {sidebar ? <Tooltip>
-            <TooltipTrigger asChild>
-              <Button ref={sidebarTriggerRef} type="button" variant={sidebar.open ? "secondary" : "ghost"}
-                size="icon" className="size-11 shrink-0" onClick={sidebar.onToggle}
-                aria-label={sidebar.open ? "Close sidebar" : "Open sidebar"}
-                aria-expanded={sidebar.open} aria-controls={sidebar.open ? "thread-sidebar" : undefined}>
-                {sidebar.open ? <PanelRightClose className="size-4" aria-hidden="true" /> : <PanelRightOpen className="size-4" aria-hidden="true" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{sidebar.open ? "Close sidebar" : "Status and files"}</TooltipContent>
-          </Tooltip> : null}
         </TooltipProvider>
       ) : null}
     </header>
