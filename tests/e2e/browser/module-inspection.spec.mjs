@@ -510,9 +510,12 @@ for (const width of [1440, 820, 390, 320]) {
     expect(entryBounds.y).toBeGreaterThanOrEqual(headerBounds.y + headerBounds.height);
     expect(entryBounds.y).toBeLessThan(headerBounds.y + headerBounds.height + 16);
     expect(entryBounds.x + entryBounds.width).toBeGreaterThanOrEqual(width - 16);
-    expect(entryBounds.width).toBeGreaterThanOrEqual(44);
+    expect(entryBounds.width).toBe(32);
+    expect(entryBounds.height).toBe(56);
     const conversation = await page.getByRole('log').boundingBox();
-    expect(conversation.x + conversation.width).toBeLessThanOrEqual(entryBounds.x);
+    expect(conversation.x + conversation.width).toBe(width);
+    expect(entryBounds.x).toBeGreaterThan(conversation.x);
+    expect(entryBounds.x + entryBounds.width).toBe(conversation.x + conversation.width);
     await entry.click();
     const panel = page.locator('#thread-sidebar');
     const panelClose = panel.getByRole('button', { name: 'Close sidebar', exact: true });
