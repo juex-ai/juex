@@ -124,8 +124,9 @@ Read-only file roots refresh on demand without a live resource subscription.
 
 The Thread sidebar groups Context, module status and Recitation under Status,
 with file browsing under Files. When closed, its opener sits at the upper-right
-edge of the content area below Agent navigation, outside the message scroller
-with space reserved so it cannot cover content or the scrollbar. The open panel
+edge of the content area below Agent navigation as a narrow floating tab. It
+overlays the content edge and scrollbar without reserving a column, and stays
+fixed while messages scroll. The open panel
 places its close button at the upper-left before Status and Files. Closing
 returns keyboard focus to the opener. The composer contains message actions.
 Desktop docks the panel; tablet and phone use a drawer. Thread Explorer retains

@@ -442,15 +442,14 @@ export function AppShell() {
                   <Outlet key={agentId || "fleet-settings"} />
                 )}
               </div>
-              {workspaceAvailable ? (
-                <div hidden={workspaceOpen} className="w-13 shrink-0 px-1 pt-1.5">
-                  <Button ref={sidebarEntry} type="button" variant="ghost" size="icon" className="size-11"
-                    aria-label="Open sidebar" title={threadID ? "Status and files" : "Files"}
-                    aria-expanded={workspaceOpen} aria-controls={workspaceOpen ? "thread-sidebar" : undefined}
-                    onClick={openWorkspace}>
-                    <PanelRightOpen className="size-4" aria-hidden="true" />
-                  </Button>
-                </div>
+              {workspaceAvailable && !workspaceOpen ? (
+                <button ref={sidebarEntry} type="button"
+                  className="absolute right-0 top-1.5 z-20 flex h-14 w-8 items-center justify-center rounded-l-md border border-r-0 bg-card text-muted-foreground shadow-sm outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35"
+                  aria-label="Open sidebar" title={threadID ? "Status and files" : "Files"}
+                  aria-expanded={false}
+                  onClick={openWorkspace}>
+                  <PanelRightOpen className="size-4" aria-hidden="true" />
+                </button>
               ) : null}
               {workspaceDocked && workspaceDockOpen && workspaceAvailable ? (
                 <aside id="thread-sidebar" aria-label="Thread sidebar" className="h-full w-[clamp(18rem,24vw,22rem)] shrink-0 overflow-hidden border-l bg-card">
