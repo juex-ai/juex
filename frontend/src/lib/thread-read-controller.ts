@@ -285,8 +285,9 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
       projectPendingSubmit(prev, prompt, submittedAt),
     );
     try {
+      // Acceptance belongs to the submitted Input even after its view unmounts.
       const turn = await ports.startTurn(threadID, prompt, attachments);
-      if (!isLatestThreadRoute(route, threadID)) return false;
+      if (!isLatestThreadRoute(route, threadID)) return true;
       runThreadReadResult(
         projectStartTurnSucceeded(
           state,

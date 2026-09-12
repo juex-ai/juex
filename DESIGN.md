@@ -31,6 +31,13 @@ Idle; archived Threads show Archived. Agent process health remains separate.
 Explorer and Runtime show their page context without a Thread status badge.
 Long identities truncate with their full title available; tabs stay usable.
 
+The mobile Agent drawer initially focuses the selected Agent navigation link,
+or a safe navigation link when none is selected. Closing it returns focus to
+its opener. Lifecycle actions live in a labeled action menu, separate from
+navigation. Stop, Restart, and Disable require confirmation naming the Agent
+and explaining the effect on active work and pending inputs; Cancel receives
+initial focus. Start and Enable remain direct actions.
+
 Route names and parameter syntax are implementation details owned by the
 router.
 
@@ -84,7 +91,12 @@ last-known content with an explicit stale/error state.
 
 The composer accepts text, attachments, or attachment-only Input. It clears
 only after durable acceptance and distinguishes accepted/pending state from
-Turn execution. Stop is available only for active work.
+Turn execution. Stop is available only for active work; entering text or adding
+attachments changes that action to Queue message while work is active.
+Unsent text drafts survive in-app navigation within the mounted browser app,
+isolated by Agent and Thread. Acceptance clears only the matching submitted
+text, including when the user has navigated away; failures and newer edits
+preserve the draft. Reload persistence and attachment drafts are not included.
 
 The UI never assumes that the next Assistant message is the response to the
 latest Input. Input, message, Tool, and Turn identities come from durable

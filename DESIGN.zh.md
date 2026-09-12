@@ -28,6 +28,11 @@ alias/id 及其自身状态。加载或未知状态不能默认显示 Idle；归
 Agent 进程健康独立展示。Explorer 与 Runtime 显示页面上下文，不显示 Thread
 状态标签。长名称截断并可查看完整标题，切换标签始终可用。
 
+手机 Agent 抽屉打开时聚焦当前 Agent 的导航链接；没有选中 Agent 时聚焦安全
+导航链接。关闭后焦点回到打开按钮。生命周期操作放在有文字标签的操作菜单中，
+与导航分离。Stop、Restart、Disable 需要确认，明确 Agent 名称及对运行中工作和
+排队输入的影响，默认聚焦 Cancel。Start 和 Enable 保持直接操作。
+
 具体 route 名称和参数语法属于 router 实现细节。
 
 ## Thread Explorer
@@ -72,7 +77,10 @@ Active Thread 显示 composer；Archived Thread 只读。Agent 或 Runtime 不�
 ## Input 与 Transcript
 
 Composer 接受文本、附件或只有附件的 Input。只有持久接受成功后才清空，并把
-accepted/pending 与 Turn execution 区分展示。Stop 只在工作进行中可用。
+accepted/pending 与 Turn execution 区分展示。Stop 只在工作进行中可用；此时输入
+文字或添加附件后，操作变为 Queue message。未发送文字草稿在当前浏览器应用的
+页面导航中保留，按 Agent 和 Thread 隔离。即使已切走，接受成功也只清理对应的
+已提交文字；失败及后续编辑保留草稿。刷新后的持久化和附件草稿不在此范围。
 
 UI 不假设下一条 Assistant 消息就是最新 Input 的回答。Input、message、Tool 与
 Turn identity 都来自持久记录。

@@ -3,6 +3,7 @@ import {
   Menu,
   MessagesSquare,
 } from "lucide-react";
+import type { Ref } from "react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ export function FleetStageHeader({
   activeTab,
   settings,
   onOpenMobileSidebar,
+  mobileSidebarButtonRef,
 }: {
   agent: AgentStatus | null;
   contextTitle: string | null;
@@ -35,6 +37,7 @@ export function FleetStageHeader({
   activeTab: AgentStageTab;
   settings: boolean;
   onOpenMobileSidebar: () => void;
+  mobileSidebarButtonRef?: Ref<HTMLButtonElement>;
 }) {
   const agentTitle = settings ? "Fleet settings" : agent?.name || agent?.id || "Fleet";
   const pageTitle = contextTitle || (threadID ? `Loading #${threadID}…` : activeTab === "runtime" ? "Runtime" : "Threads");
@@ -47,6 +50,7 @@ export function FleetStageHeader({
         size="icon"
         className="size-11 shrink-0 min-[760px]:hidden"
         onClick={onOpenMobileSidebar}
+        ref={mobileSidebarButtonRef}
         aria-label="Open fleet agents"
       >
         <Menu className="size-4" />
