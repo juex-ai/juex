@@ -25,6 +25,7 @@ import {
   subscribeAgentResourceEvents,
   subscribeFleetEvents,
 } from "@/api";
+import { ThreadDraftsProvider } from "@/components/thread/ThreadDrafts";
 import { ThreadSidebar } from "@/components/thread/ThreadSidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,7 +42,7 @@ import {
   agentTabFromPath,
   agentTabPath,
   agentVisualState,
-  nextAgentLifecycleAction,
+  type AgentLifecycleAction,
   resolveAgentSelection,
 } from "@/lib/fleet-shell";
 import { AgentViewModelStore } from "@/lib/agent-view-model-store";
@@ -89,6 +90,8 @@ export function useShellTitle(
 }
 
 export function AppShell() {
+  const mobileSidebarContent = useRef<HTMLDivElement>(null);
+  const mobileSidebarButton = useRef<HTMLButtonElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const agentMatch = useMatch("/agents/:agentId/*");
@@ -254,8 +257,7 @@ export function AppShell() {
 
   const moduleState = useThreadModuleSubscription(threadID);
   const runLifecycle = useCallback(
-    async (agent: AgentStatus) => {
-      const action = nextAgentLifecycleAction(agent);
+    async (agent: AgentStatus, action: AgentLifecycleAction) => {
       setBusyAgentID(agent.id);
       setFleetError(null);
       try {
@@ -268,6 +270,7 @@ export function AppShell() {
             : `Failed to ${action} ${agent.name || agent.id}.`;
         await refreshAgents();
         setFleetError(actionError);
+        return actionError;
       } finally {
         setBusyAgentID(null);
       }
@@ -277,7 +280,7 @@ export function AppShell() {
 
   const startCurrentAgent = useCallback(async () => {
     if (!currentAgent) return;
-    await runLifecycle(currentAgent);
+    await runLifecycle(currentAgent, "start");
   }, [currentAgent, runLifecycle]);
 
   const runtimeContext = useMemo(
@@ -339,7 +342,7 @@ export function AppShell() {
       onCollapse={() => setSidebarCollapsed(true)}
       onExpand={() => setSidebarCollapsed(false)}
       onNavigate={() => setMobileSidebarOpen(false)}
-      onToggleLifecycle={(agent) => void runLifecycle(agent)}
+      onLifecycleAction={(agent, action) => runLifecycle(agent, action)}
     />
   );
   const emptyFleet =
@@ -353,11 +356,20 @@ export function AppShell() {
     <ShellTitleContext.Provider value={shellTitleContext}>
       <FleetAgentProvider value={runtimeContext}>
         <ThreadModulesProvider value={moduleState}>
+        <ThreadDraftsProvider>
         <div className="fixed inset-0 flex h-svh min-h-0 overflow-clip bg-background">
           <div className="hidden min-[760px]:flex">{sidebar}</div>
           <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
             <SheetContent
               side="left"
+              ref={mobileSidebarContent}
+              onOpenAutoFocus={(event) => {
+                event.preventDefault();
+                const content = mobileSidebarContent.current;
+                const target = content?.querySelector<HTMLAnchorElement>('a[aria-current="true"]') ?? content?.querySelector<HTMLAnchorElement>('a[href]');
+                target?.focus();
+              }}
+              onCloseAutoFocus={(event) => { event.preventDefault(); mobileSidebarButton.current?.focus(); }}
               className="data-[side=left]:w-[min(84vw,268px)] max-w-none gap-0 border-r p-0 min-[760px]:hidden"
             >
               <SheetHeader className="sr-only">
@@ -378,6 +390,7 @@ export function AppShell() {
               threadID={threadID}
               activeTab={activeTab}
               settings={settings}
+              mobileSidebarButtonRef={mobileSidebarButton}
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
             />
             {failedAgent ? (
@@ -481,6 +494,7 @@ export function AppShell() {
             </SheetContent>
           </Sheet>
         </div>
+        </ThreadDraftsProvider>
         </ThreadModulesProvider>
       </FleetAgentProvider>
     </ShellTitleContext.Provider>

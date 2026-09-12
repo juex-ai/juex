@@ -1,16 +1,14 @@
 import {
   Gauge,
-  LoaderCircle,
   PanelLeftClose,
   PanelLeftOpen,
-  Play,
   Plus,
   SlidersHorizontal,
-  Square,
 } from "lucide-react";
 import type { ReactElement } from "react";
 import { Link, useLocation } from "react-router-dom";
 
+import { AgentActionsMenu } from "@/components/fleet/AgentActionsMenu";
 import { LogoMark } from "@/components/LogoMark";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +22,7 @@ import {
   agentTabPath,
   agentVisualState,
   nextAgentLifecycleAction,
+  type AgentLifecycleAction,
 } from "@/lib/fleet-shell";
 import { agentSwitchPath } from "@/lib/fleet-routes";
 import { cn } from "@/lib/utils";
@@ -41,7 +40,7 @@ type FleetSidebarProps = {
   onCollapse: () => void;
   onExpand: () => void;
   onNavigate?: () => void;
-  onToggleLifecycle: (agent: AgentStatus) => void;
+  onLifecycleAction: (agent: AgentStatus, action: AgentLifecycleAction) => Promise<string | void>;
 };
 
 export function FleetSidebar({
@@ -53,7 +52,7 @@ export function FleetSidebar({
   onCollapse,
   onExpand,
   onNavigate,
-  onToggleLifecycle,
+  onLifecycleAction,
 }: FleetSidebarProps) {
   const location = useLocation();
   const compact = collapsed && !mobile;
@@ -159,7 +158,7 @@ export function FleetSidebar({
             busy={busyAgentID === agent.id}
             currentPath={location.pathname}
             onNavigate={onNavigate}
-            onToggleLifecycle={() => onToggleLifecycle(agent)}
+            onLifecycleAction={(action) => onLifecycleAction(agent, action)}
           />
         ))}
       </nav>
@@ -205,7 +204,7 @@ function AgentRailRow({
   busy,
   currentPath,
   onNavigate,
-  onToggleLifecycle,
+  onLifecycleAction,
 }: {
   agent: AgentStatus;
   selected: boolean;
@@ -214,7 +213,7 @@ function AgentRailRow({
   busy: boolean;
   currentPath: string;
   onNavigate?: () => void;
-  onToggleLifecycle: () => void;
+  onLifecycleAction: (action: AgentLifecycleAction) => Promise<string | void>;
 }) {
   const state = agentVisualState(agent);
   const pendingCount = agent.activity?.pending_input_count ?? 0;
@@ -283,28 +282,8 @@ function AgentRailRow({
           )}
         >
           <TooltipProvider delayDuration={200}>
-            <AgentActionTooltip
-              mobile={mobile}
-              label={lifecycleAction === "stop" ? "Stop agent" : "Start agent"}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                disabled={busy || (!agent.enabled && lifecycleAction === "start")}
-                onClick={onToggleLifecycle}
-                aria-label={`${lifecycleAction === "stop" ? "Stop" : "Start"} ${name}`}
-              >
-                {busy ? (
-                  <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-                ) : lifecycleAction === "stop" ? (
-                  <Square className="size-3.5" />
-                ) : (
-                  <Play className="size-3.5" />
-                )}
-              </Button>
-            </AgentActionTooltip>
+            <AgentActionsMenu agent={agent} busy={busy} primaryAction={lifecycleAction}
+              onAction={onLifecycleAction} />
             <AgentActionTooltip mobile={mobile} label="Runtime">
               <Button
                 asChild

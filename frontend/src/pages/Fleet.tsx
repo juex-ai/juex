@@ -4,17 +4,12 @@ import {
   Check,
   ChevronRight,
   Circle,
-  CircleCheck,
-  CircleOff,
   FileCog,
   Folder,
   FolderOpen,
-  Play,
   Plus,
   RefreshCw,
-  RotateCw,
   ScrollText,
-  Square,
   Trash2,
 } from "lucide-react";
 
@@ -29,6 +24,7 @@ import {
   setAgentEnabled,
   subscribeFleetEvents,
 } from "@/api";
+import { AgentActionsMenu, type AgentMenuAction } from "@/components/fleet/AgentActionsMenu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -76,7 +72,7 @@ import type { AgentStatus, DirectoryListing, FleetStatus } from "@/types";
 type LifecycleAction = "start" | "stop" | "restart";
 
 const FLEET_ROSTER_GRID_CLASS =
-  "grid grid-cols-[minmax(13rem,1fr)_minmax(18rem,1.4fr)_8rem_9rem_15rem]";
+  "grid grid-cols-[minmax(13rem,1fr)_minmax(18rem,1.4fr)_8rem_9rem_9rem]";
 
 export function Fleet() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -202,23 +198,25 @@ export function Fleet() {
           : `Failed to ${action} ${agent.name || agent.id}.`;
       await refresh({ quiet: true });
       setError(actionError);
+      return actionError;
     } finally {
       setBusyAgent(null);
     }
   }
 
-  async function toggleEnabled(agent: AgentStatus) {
+  async function toggleEnabled(agent: AgentStatus, enabled: boolean) {
     setBusyAgent(agent.id);
     setError(null);
     try {
-      replaceAgent(await setAgentEnabled(agent.id, !agent.enabled));
+      replaceAgent(await setAgentEnabled(agent.id, enabled));
     } catch (cause) {
       const actionError =
         cause instanceof Error
           ? cause.message
-          : `Failed to ${agent.enabled ? "disable" : "enable"} ${agent.name || agent.id}.`;
+          : `Failed to ${enabled ? "enable" : "disable"} ${agent.name || agent.id}.`;
       await refresh({ quiet: true });
       setError(actionError);
+      return actionError;
     } finally {
       setBusyAgent(null);
     }
@@ -321,7 +319,7 @@ export function Fleet() {
           </div>
 
           <div className="overflow-x-auto rounded-md border bg-card shadow-[var(--shadow-xs)]">
-            <div className="min-w-[63rem]">
+            <div className="min-w-[57rem]">
               <div
                 className={cn(
                   FLEET_ROSTER_GRID_CLASS,
@@ -349,8 +347,9 @@ export function Fleet() {
                       key={agent.id}
                       agent={agent}
                       busy={busyAgent === agent.id}
-                      onAction={(action) => void runAction(agent, action)}
-                      onToggleEnabled={() => void toggleEnabled(agent)}
+                      onAction={(action) => action === "enable" || action === "disable"
+                        ? toggleEnabled(agent, action === "enable")
+                        : runAction(agent, action)}
                       onRemove={() => setRemoveTarget(agent)}
                     />
                   ))}
@@ -408,13 +407,11 @@ function AgentRow({
   agent,
   busy,
   onAction,
-  onToggleEnabled,
   onRemove,
 }: {
   agent: AgentStatus;
   busy: boolean;
-  onAction: (action: LifecycleAction) => void;
-  onToggleEnabled: () => void;
+  onAction: (action: AgentMenuAction) => Promise<string | void>;
   onRemove: () => void;
 }) {
   const base = agentPagePath(agent.id);
@@ -495,58 +492,9 @@ function AgentRow({
       </div>
       <div className="flex items-center justify-end gap-1 px-3 py-3">
         <TooltipProvider delayDuration={250}>
-          <AgentAction
-            label={
-              lifecycleAction === "start" ? "Start agent" : "Stop agent"
-            }
-            disabled={
-              busy || (lifecycleAction === "start" && !agent.enabled)
-            }
-            onClick={() => onAction(lifecycleAction)}
-            icon={
-              lifecycleAction === "start" ? (
-                <Play className="size-3.5" />
-              ) : (
-                <Square className="size-3.5" />
-              )
-            }
-          />
-          <AgentAction
-            label="Restart agent"
-            disabled={
-              busy || !agent.enabled || agent.runtime_health === "stopped"
-            }
-            onClick={() => onAction("restart")}
-            icon={
-              <RotateCw
-                className={cn(
-                  "size-3.5",
-                  busy && "animate-spin motion-reduce:animate-none",
-                )}
-              />
-            }
-          />
-          <AgentAction
-            label={agent.enabled ? "Disable agent" : "Enable agent"}
-            disabled={busy}
-            onClick={onToggleEnabled}
-            icon={
-              agent.enabled ? (
-                <CircleOff className="size-3.5" />
-              ) : (
-                <CircleCheck className="size-3.5" />
-              )
-            }
-          />
           <AgentLink label="View logs" to={`${base}/runtime/logs`} icon={<ScrollText className="size-3.5" />} />
           <AgentLink label="Edit config" to={`${base}/runtime/config`} icon={<FileCog className="size-3.5" />} />
-          <AgentAction
-            label="Remove agent"
-            disabled={busy}
-            onClick={onRemove}
-            destructive
-            icon={<Trash2 className="size-3.5" />}
-          />
+          <AgentActionsMenu agent={agent} busy={busy} primaryAction={lifecycleAction} onAction={onAction} management={{ onAction, onRemove }} />
         </TooltipProvider>
       </div>
     </div>
@@ -1237,42 +1185,6 @@ function pathBreadcrumbs(path: string): Array<{ label: string; path: string }> {
     crumbs.push({ label: segment, path: current });
   }
   return crumbs;
-}
-
-function AgentAction({
-  label,
-  disabled,
-  onClick,
-  icon,
-  destructive = false,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  destructive?: boolean;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className={cn(
-            destructive &&
-              "text-destructive hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive",
-          )}
-          disabled={disabled}
-          onClick={onClick}
-          aria-label={label}
-        >
-          {icon}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
 }
 
 function AgentLink({

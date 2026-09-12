@@ -53,7 +53,7 @@ import { threadTitle } from "@/lib/thread-title";
 import type { Message as ChatMessage } from "@/types";
 
 export function Thread() {
-  const { id = "" } = useParams<{ id: string }>();
+  const { id = "", agentId = "" } = useParams<{ id: string; agentId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const { agent, agentsLoaded, statusStore } = useFleetAgent();
@@ -250,6 +250,8 @@ export function Thread() {
       </Conversation>
       <ThreadComposer
         key={id}
+        agentID={agentId}
+        threadID={id}
         agentRuntimeHealthy={agentRuntimeHealthy}
         canSend={canSend}
         composerHint={composerHint}

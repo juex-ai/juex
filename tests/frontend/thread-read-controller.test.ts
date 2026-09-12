@@ -387,7 +387,7 @@ test("configured live status receives only current stream failures", () => {
   assert.equal(streamErrors, 1);
 });
 
-test("submitPrompt ignores late startTurn results after route changes", async () => {
+test("submitPrompt reports acceptance after navigation without projecting into the new route", async () => {
   let latestState = createThreadReadState();
   let resolveStart: (value: StartTurnResponse) => void = () => {};
   const controller = createThreadReadController({
@@ -406,7 +406,7 @@ test("submitPrompt ignores late startTurn results after route changes", async ()
   controller.setRoute("s2");
   resolveStart({ turn_id: "turn-stale" });
 
-  assert.equal(await submit, false);
+  assert.equal(await submit, true);
   assert.equal(latestState.projection.messages.length, 0);
 });
 

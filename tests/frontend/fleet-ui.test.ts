@@ -158,7 +158,7 @@ test("mobile fleet sheet and sidebar share one responsive width", () => {
   );
 });
 
-test("fleet rail exposes compact status and exactly two hover actions", () => {
+test("fleet rail exposes compact status and direct Runtime navigation", () => {
   assert.match(sidebarSource, /data-collapsed=\{compact \? "true" : "false"\}/);
   assert.match(sidebarSource, /aria-label="Expand fleet sidebar"/);
   assert.match(sidebarSource, /aria-label="Collapse fleet sidebar"/);
@@ -174,8 +174,8 @@ test("fleet rail exposes compact status and exactly two hover actions", () => {
   assert.doesNotMatch(sidebarSource, /bg-primary\/10" : "hover/);
   assert.equal(
     sidebarSource.match(/className="size-8"/g)?.length,
-    2,
-    "expanded agent rows should reveal one lifecycle action and one runtime action",
+    1,
+    "expanded agent rows keep a direct Runtime navigation action",
   );
 });
 
@@ -187,8 +187,8 @@ test("mobile fleet rail actions do not mount tooltip triggers", () => {
   );
   assert.equal(
     sidebarSource.match(/<AgentActionTooltip/g)?.length,
-    2,
-    "both lifecycle and Runtime actions should share the mobile-safe tooltip boundary",
+    1,
+    "Runtime navigation shares the mobile-safe tooltip boundary",
   );
 });
 
@@ -237,7 +237,7 @@ test("stage navigation gates offline composers", () => {
   assert.match(stateBarSource, /onClick=\{\(\) => void startAgent\(\)\}/);
   assert.match(
     shellSource,
-    /const action = nextAgentLifecycleAction\(agent\)/,
+    /await runLifecycle\(currentAgent, "start"\)/,
     "the selected-agent retry control must keep start semantics for failed runtimes",
   );
   assert.match(stateBarSource, /data-testid="agent-runtime-state-bar"/);
@@ -433,7 +433,7 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
 test("fleet settings condenses roster state and actions without losing lifecycle semantics", () => {
   assert.match(
     fleetSource,
-    /const FLEET_ROSTER_GRID_CLASS =\s+"grid grid-cols-\[minmax\(13rem,1fr\)_minmax\(18rem,1\.4fr\)_8rem_9rem_15rem\]"/,
+    /const FLEET_ROSTER_GRID_CLASS =\s+"grid grid-cols-\[minmax\(13rem,1fr\)_minmax\(18rem,1\.4fr\)_8rem_9rem_9rem\]"/,
   );
   assert.equal(
     fleetSource.match(/FLEET_ROSTER_GRID_CLASS/g)?.length,
@@ -459,28 +459,9 @@ test("fleet settings condenses roster state and actions without losing lifecycle
   assert.match(fleetSource, /formatProcessCPU/);
   assert.match(
     fleetSource,
-    /lifecycleAction === "start" \? "Start agent" : "Stop agent"/,
-  );
-  assert.match(
-    fleetSource,
-    /lifecycleAction === "start" \? \([\s\S]*?<Play[\s\S]*?\) : \([\s\S]*?<Square/,
-  );
-  assert.match(fleetSource, /agent\.enabled \? \([\s\S]*?<CircleOff/);
-  assert.match(fleetSource, /\) : \([\s\S]*?<CircleCheck/);
-  assert.match(
-    fleetSource,
     /!agent\.enabled && "bg-muted\/25"/,
     "disabled rows should be visibly muted without disabling the row",
   );
-
-  const action = fleetSource.match(
-    /function AgentAction\([\s\S]*?\n}\n\nfunction AgentLink/,
-  )?.[0];
-  assert.ok(action);
-  assert.match(action, /variant="ghost"/);
-  assert.match(action, /text-destructive/);
-  assert.match(action, /hover:bg-destructive\/10/);
-  assert.doesNotMatch(action, /variant=\{destructive \? "destructive"/);
 });
 
 test("vite proxies agent APIs without stealing selected-agent page routes", () => {

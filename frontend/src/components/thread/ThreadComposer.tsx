@@ -7,6 +7,7 @@ import {
   XIcon,
 } from "lucide-react";
 
+import { useThreadDraft } from "@/components/thread/ThreadDrafts";
 import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
 import {
   PromptInput,
@@ -50,6 +51,8 @@ type PromptAttachmentFile = {
 };
 
 export function ThreadComposer({
+  agentID,
+  threadID,
   agentRuntimeHealthy,
   canSend,
   composerHint,
@@ -64,6 +67,8 @@ export function ThreadComposer({
   runtimeStatus,
   submitError,
 }: {
+  agentID: string;
+  threadID: string;
   agentRuntimeHealthy: boolean;
   canSend: boolean;
   composerHint: string | null;
@@ -78,7 +83,7 @@ export function ThreadComposer({
   runtimeStatus?: AgentRuntimeStatusSnapshot;
   submitError: string | null;
 }) {
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useThreadDraft(agentID, threadID);
   const [attachmentCount, setAttachmentCount] = useState(0);
   const [overlayNode, setOverlayNode] = useState<HTMLDivElement | null>(null);
   const [pendingCompactText, setPendingCompactText] = useState<string | null>(
@@ -96,7 +101,7 @@ export function ThreadComposer({
       settleSubmittedComposerText(current, pendingCompactText),
     );
     setPendingCompactText(null);
-  }, [pendingCompactText, runtimeStatus?.turn?.phase]);
+  }, [pendingCompactText, runtimeStatus?.turn?.phase, setDraft]);
 
   useLayoutEffect(() => {
     if (!canSend || !overlayNode) {
