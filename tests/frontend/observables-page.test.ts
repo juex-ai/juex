@@ -97,23 +97,6 @@ test("Observables display resource source and hide delete for extension definiti
   assert.match(observableDetailSource, /observable\?\.source === "agent" \? \(/);
 });
 
-test("Schedule rows and details offer a distinct Run action", () => {
-  assert.match(observablesPageSource, /import \{[^}]*Zap[^}]*\} from "lucide-react"/);
-  assert.match(observablesPageSource, /runObservable/);
-  assert.match(observablesPageSource, /item\.source_type === "schedule"/);
-  assert.match(observablesPageSource, /aria-label="Run schedule now"/);
-  assert.match(observablesPageSource, /onAction\(item\.id, "run"\)/);
-
-  assert.match(observableDetailSource, /import \{[^}]*Zap[^}]*\} from "lucide-react"/);
-  assert.match(observableDetailSource, /runObservable/);
-  assert.match(observableDetailSource, /observable\?\.source_type === "schedule"/);
-  assert.match(observableDetailSource, /void runAction\("run"\)/);
-  assert.match(observableDetailSource, />\s*Run\s*<\/Button>/);
-  assert.match(
-    observableDetailSource,
-    /className="flex flex-wrap items-center justify-end gap-1"/,
-  );
-});
 
 test("Observable refreshes ignore superseded responses", () => {
   for (const source of [observablesPageSource, observableDetailSource]) {

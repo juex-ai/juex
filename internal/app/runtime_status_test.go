@@ -149,14 +149,14 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 			t.Fatalf("group %q tools are not sorted: %v", group.Group, names)
 		}
 		if wantGroup == toolcore.ToolGroupObservable {
-			if len(names) != 7 || !containsString(names, "schedule_create") {
-				t.Fatalf("observable tools = %v, want seven including schedule_create", names)
+			if len(names) != 6 {
+				t.Fatalf("observable tools = %v, want six command Observable tools", names)
 			}
 		}
 		count += len(group.Tools)
 	}
-	if status.Tools.Count != count || count != 38 {
-		t.Fatalf("tool count = %d, grouped=%d, want 38", status.Tools.Count, count)
+	if status.Tools.Count != count || count != 37 {
+		t.Fatalf("tool count = %d, grouped=%d, want 37", status.Tools.Count, count)
 	}
 }
 
@@ -193,8 +193,8 @@ func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 			specs = append(specs, llm.ToolSpec{Name: tool.Name, Description: tool.Description, Schema: tool.Schema})
 		}
 	}
-	if len(specs) != 18 {
-		t.Fatalf("Tier 2 tool count = %d, want 18", len(specs))
+	if len(specs) != 17 {
+		t.Fatalf("Tier 2 tool count = %d, want 17", len(specs))
 	}
 	if got := contextbudget.EstimateToolTokens(specs); got > 2100 {
 		t.Fatalf("Tier 2 tool estimate = %d tokens, want <= 2100 for eighteen tools", got)
@@ -237,15 +237,6 @@ func schemaContainsStringMetadata(value any, key string) bool {
 			if schemaContainsStringMetadata(child, key) {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
 		}
 	}
 	return false

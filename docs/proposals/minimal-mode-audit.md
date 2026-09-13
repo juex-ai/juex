@@ -37,7 +37,7 @@ A second probe disabled all Modules while allowing a test Extension with an inte
 | `builtin-tools`: Shell | `exec_command`, `write_stdin`, `list_shell_sessions` | Keep all three tools in one shell Module | The session protocol relies on these tools together; enable and disable them together |
 | `skills` | `skill_search`, `skill_load` | Disable | Tools and automatic Skill context can be disabled; other tools still refer to `skill_load` |
 | `worker-threads` | `thread_create`, `thread_list`, `thread_status`, `thread_send`, `thread_subscribe`, `thread_stop`, `thread_archive` | Disable | Existing switch prevents tool and Worker-manager construction |
-| `observables` | `observable_list`, `observable_create`, `schedule_create`, `observable_start`, `observable_stop`, `observable_delete`, `observable_observations` | Disable | Existing switch disables the Manager and command/schedule producers; MCP Notifications are a separate input source |
+| `observables` | `observable_list`, `observable_create`, `observable_start`, `observable_stop`, `observable_delete`, `observable_observations` | Disable | Existing switch disables the Manager and command producers; MCP Notifications are a separate input source |
 | `goal` | `get_goal`, `create_goal`, `update_goal` | Disable | Tools, live Goal context, and automatic continuation can be disabled |
 | `notes` | `update_notes` | Disable | Tools, live Notes context, and Module-state operations can be disabled |
 | `context-control` | `context_new`, `context_compact` | Disable model-initiated operations and capacity reminders | Existing switch does not control host `/new`, `/compact`, or automatic compaction |

@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Pause, Play, RefreshCw, Trash2, Zap } from "lucide-react";
+import { ArrowLeft, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 
 import {
   deleteObservable,
   getObservable,
-  runObservable,
   startObservable,
   stopObservable,
 } from "@/api";
@@ -75,7 +74,7 @@ export function ObservableDetail() {
     };
   }, [refresh, resourceRevision.observables]);
 
-  async function runAction(action: "run" | "start" | "stop" | "delete") {
+  async function runAction(action: "start" | "stop" | "delete") {
     if (!id) return;
     if (action === "delete" && !window.confirm(`Delete observable "${id}"?`)) {
       return;
@@ -83,9 +82,7 @@ export function ObservableDetail() {
     setBusy(true);
     setError(null);
     try {
-      if (action === "run") {
-        await runObservable(id);
-      } else if (action === "start") {
+      if (action === "start") {
         await startObservable(id);
       } else if (action === "stop") {
         await stopObservable(id);
@@ -151,18 +148,6 @@ export function ObservableDetail() {
               />
               Refresh
             </Button>
-            {observable?.source_type === "schedule" ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void runAction("run")}
-                disabled={busy}
-              >
-                <Zap className="size-3.5" />
-                Run
-              </Button>
-            ) : null}
             {observable?.state === "running" ? (
               <Button
                 type="button"
@@ -232,41 +217,17 @@ export function ObservableDetail() {
                       </span>
                     </div>
                   </DetailRow>
-                  {observable.source_type === "schedule" ? (
-                    <>
-                      <DetailRow label="Next">
-                        <span className="font-mono text-xs">
-                          {formatDateTime(observable.schedule?.next_occurrence)}
-                        </span>
-                      </DetailRow>
-                      <DetailRow label="Last emitted">
-                        <span className="font-mono text-xs">
-                          {formatDateTime(
-                            observable.schedule?.last_emitted_scheduled_at,
-                          )}
-                        </span>
-                      </DetailRow>
-                      <DetailRow label="Catch-up">
-                        <span className="font-mono text-xs">
-                          {observable.schedule?.catch_up_mode || "-"}
-                        </span>
-                      </DetailRow>
-                    </>
-                  ) : (
-                    <>
-                      <DetailRow label="Streams">
-                        <span className="font-mono text-xs">
-                          {(observable.streams ?? []).join(", ") || "-"}
-                        </span>
-                      </DetailRow>
-                      <DetailRow label="Batch">
-                        <span className="font-mono text-xs">
-                          {observable.batch?.interval_seconds ?? "-"}s /{" "}
-                          {observable.batch?.max_chars ?? "-"} chars
-                        </span>
-                      </DetailRow>
-                    </>
-                  )}
+                  <DetailRow label="Streams">
+                    <span className="font-mono text-xs">
+                      {(observable.streams ?? []).join(", ") || "-"}
+                    </span>
+                  </DetailRow>
+                  <DetailRow label="Batch">
+                    <span className="font-mono text-xs">
+                      {observable.batch?.interval_seconds ?? "-"}s /{" "}
+                      {observable.batch?.max_chars ?? "-"} chars
+                    </span>
+                  </DetailRow>
                   <DetailRow label="Run">
                     <span className="break-all font-mono text-xs">
                       {observable.run_id || "-"}
@@ -408,17 +369,7 @@ function ObservationList({
 }
 
 function detailSourceSummary(observable: ObservableDetailResponse["observable"]): string {
-  if (observable.source_type === "schedule") {
-    return observable.schedule?.summary || "schedule";
-  }
   return [observable.command, ...(observable.args ?? [])]
     .filter(Boolean)
     .join(" ") || "command";
-}
-
-function formatDateTime(iso?: string): string {
-  if (!iso) return "-";
-  const date = new Date(iso);
-  if (!Number.isFinite(date.getTime())) return iso;
-  return date.toLocaleString();
 }

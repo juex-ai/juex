@@ -1,13 +1,13 @@
 ---
 name: juex-observables
-description: Guide for JueX Observable and Schedule tools, routing, lifecycle, and schemas.
+description: Guide for JueX Observable tools, routing, lifecycle, and schemas.
 type: builtin-guide
 ---
 # JueX Observables
 
 > English | [中文](SKILL.zh.md)
 
-Load this guide when you need detailed Observable or Schedule workflows,
+Load this guide when you need detailed Observable workflows,
 constraints, or examples. Correct tool calls do not require a prior guide load.
 
 ## Routing
@@ -15,15 +15,10 @@ constraints, or examples. Correct tool calls do not require a prior guide load.
 - Call `observable_list` and wait for its result before deciding whether to
   create anything. Do not batch inspection with a dependent create: calls in
   one response are chosen before their results are available.
-- Reuse an equivalent running Schedule, even if its id differs. Compare
-  recurrence and Observation content in the read-only `schedule_config`
-  alongside runtime status. Create only when no equivalent exists. Do not
-  create a duplicate and later delete it as a substitute for inspection.
+- Reuse an equivalent running Observable even if its id differs. Do not create a duplicate.
 - Use `observable_create` only for a managed command whose stdout or stderr is
   parsed into durable Observations.
-- Use `schedule_create` for one-time, daily, monthly, or interval activation
-  that emits pre-authored content. Do not implement a Schedule with a polling
-  shell loop or command Observable.
+- Timed work is provided by the separately installed Calendar Extension through MCP tools and notifications.
 - Use `observable_start` and `observable_stop` for temporary process-lifetime
   changes. Configuration still controls the next JueX startup.
 - Use `observable_delete` only for permanent removal from the Agent-owned
@@ -54,35 +49,4 @@ Example:
 
 ```json
 {"id":"events","command":"event-cli","args":["watch","--json"],"streams":["stdout"],"parser":{"type":"jsonl","content_field":"content"},"batch":{"interval_seconds":10,"max_chars":1000},"on_exit":{"notify":"nonzero"}}
-```
-
-## Schedules
-
-`schedule_create` requires `observation.content` and exactly one recurrence:
-
-- `once.at`: an RFC3339 timestamp including timezone;
-- `daily.times`: `HH:MM` values, with required IANA `timezone` and optional
-  weekdays `mon` through `sun`;
-- `monthly.days`: calendar days 1 through 31, plus `monthly.times` containing
-  `HH:MM` values and a required IANA `timezone`; or
-- `interval.every_seconds`: at least 60 seconds.
-
-Monthly recurrence uses calendar months, not fixed seconds. A day that does not
-exist in a month is skipped rather than clamped or rolled forward. A local time
-inside a DST gap is skipped; a local time repeated by a DST fold emits once at
-the earlier UTC instant. Duplicate day or time values do not duplicate an
-occurrence.
-
-`observation.content` is at most 1000 characters. Attachments contain `path`
-and optional `media_type`. `catch_up.mode` is `none` or `latest`; optional
-`max_lateness_minutes` is 1 through 1440.
-
-Example:
-
-```json
-{"id":"weekday-brief","timezone":"Asia/Shanghai","daily":{"times":["09:00"],"weekdays":["mon","tue","wed","thu","fri"]},"catch_up":{"mode":"latest","max_lateness_minutes":120},"observation":{"kind":"heartbeat","severity":"info","content":"Prepare a concise work brief."}}
-```
-
-```json
-{"id":"monthly-brief","timezone":"Asia/Shanghai","monthly":{"days":[1,15,31],"times":["09:00"]},"catch_up":{"mode":"latest","max_lateness_minutes":120},"observation":{"kind":"heartbeat","severity":"info","content":"Prepare a monthly brief."}}
 ```

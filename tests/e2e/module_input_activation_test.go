@@ -31,7 +31,7 @@ func (p *activationHistoryProvider) Complete(_ context.Context, _ string, histor
 }
 
 func TestModuleInputActivationRestoresMainBeforeIndependentSources(t *testing.T) {
-	for _, source := range []string{"mcp", "schedule", "command"} {
+	for _, source := range []string{"mcp", "command"} {
 		t.Run(source, func(t *testing.T) {
 			work, state := t.TempDir(), t.TempDir()
 			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: work, AgentStateDir: state}
@@ -58,20 +58,11 @@ func TestModuleInputActivationRestoresMainBeforeIndependentSources(t *testing.T)
 				writeE2EConfig(t, filepath.Join(work, ".agents", "mcp.json"), string(data))
 			} else {
 				cfg.Modules = config.ModulePolicy{"observables": {Enabled: true}}
-				var spec observable.Spec
-				if source == "schedule" {
-					spec, err = observable.NewScheduleSpec("activation", "", observable.ScheduleSourceSpec{
-						Once:        &observable.OnceSchedule{At: time.Now().Add(300 * time.Millisecond).UTC().Format(time.RFC3339Nano)},
-						CatchUp:     observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
-						Observation: observable.ScheduleObservationSpec{Content: "new startup observation"},
-					})
-				} else {
-					spec, err = observable.NewCommandSpec("activation", "", observable.CommandSourceSpec{
-						Command: os.Args[0], Args: []string{"-test.run=^TestModuleInputCommandHelper$"},
-						Env:     map[string]string{"JUEX_ACTIVATION_HELPER": "1"},
-						Streams: []string{"stdout"}, OnExit: observable.OnExitSpec{Notify: "never"},
-					})
-				}
+				spec, err := observable.NewCommandSpec("activation", "", observable.CommandSourceSpec{
+					Command: os.Args[0], Args: []string{"-test.run=^TestModuleInputCommandHelper$"},
+					Env:     map[string]string{"JUEX_ACTIVATION_HELPER": "1"},
+					Streams: []string{"stdout"}, OnExit: observable.OnExitSpec{Notify: "never"},
+				})
 				if err != nil {
 					t.Fatal(err)
 				}

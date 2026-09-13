@@ -49,15 +49,6 @@ func TestBatcher_EmptyFlushDoesNothing(t *testing.T) {
 	}
 }
 
-func TestNewBatcherRejectsScheduleSpec(t *testing.T) {
-	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
-	spec := scheduleOnceSpec("schedule-batcher", fixedTime.Add(time.Hour))
-	batcher, err := observable.NewBatcher(spec, store, observable.BatcherOptions{})
-	if err == nil || !strings.Contains(err.Error(), "command source") {
-		t.Fatalf("NewBatcher() = %#v, %v; want command source error", batcher, err)
-	}
-}
-
 func TestBatcher_FlushDueFlushesQuietBatch(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
 	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{})

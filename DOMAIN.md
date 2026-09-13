@@ -121,9 +121,11 @@ totals and per-model breakdowns are materialized views of those facts.
 ## Observables
 
 Observable is the common model for external automated work. MCP Notifications,
-schedules, command output, and future producers emit
+command output, and future producers emit
 `observable.Observation` values. Producers belong to the Agent Runtime;
 durable delivery enters Main through the normal Input/Turn machinery.
+
+Timed work belongs to the Calendar Extension, which emits MCP Notifications.
 
 MCP clients are Agent-scoped and may serve every Thread. Calls still belong to
 the calling Thread, while MCP Notifications route only to Main.

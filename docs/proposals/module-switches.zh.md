@@ -26,7 +26,7 @@
 | `memory` | `memory_search`、`memory_write`、`memory_delete`（拟议内置名称） | 模块自带必要使用指导；正文按需通过工具返回，不自动注入全部记忆 | Agent 级持久知识、Markdown 条目与可重建索引；通过 ThreadStart/PostCompact 生命周期维护索引；关闭停止工具、指导和维护，保留知识 | 开 | 关 |
 | `context-control` | `context_new`、`context_compact` | 容量提醒和模型操作上下文的建议 | 接受模型的 Generation 切换/压缩请求；不拥有底层 Generation 持久化机制 | 开 | 关 |
 | `worker-threads` | `thread_create`、`thread_list`、`thread_status`、`thread_send`、`thread_subscribe`、`thread_stop`、`thread_archive` | 订阅后的 Worker 结果/通知；无需额外固定系统提示段 | Worker 执行管理、订阅、结果交付、停止和资源关闭；不是磁盘上全部 Thread 的存储开关 | 开 | 关 |
-| `observables` | `observable_list`、`observable_create`、`schedule_create`、`observable_start`、`observable_stop`、`observable_delete`、`observable_observations` | Observation 输入与按需指南；不是固定常驻提示段 | 命令/定时生产者、定义、状态、记录和 Main 投递 | 开 | 关 |
+| `observables` | `observable_list`、`observable_create`、`observable_start`、`observable_stop`、`observable_delete`、`observable_observations` | Observation 输入与按需指南；不是固定常驻提示段 | 命令生产者、定义、状态、记录和 Main 投递 | 开 | 关 |
 | `mcp` | 服务端声明的动态工具 | 工具 schema/结果、MCP Notification 输入 | MCP 连接、本地进程、工具目录、调用和通知；Agent 级共享与关闭 | 开 | 关 |
 | `hooks` | 无直接模型工具 | 外部命令 Hook 返回的额外上下文、继续提示、压缩指导 | Hook 资源解析及 ThreadStart、UserPromptSubmit、PreToolUse、PostToolUse、Stop、PreCompact、PostCompact 的命令执行 | 开 | 关 |
 | `extensions` | 无直接工具，资源交给相应承载模块 | 无直接常驻提示，内容由 Skills/Hooks/MCP 等承载模块贡献 | 装配阶段的插件发现、manifest、资源声明、环境默认值和私有数据路径；关闭在发现/解析前生效 | 开 | 关 |

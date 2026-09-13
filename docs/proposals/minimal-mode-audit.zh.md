@@ -37,7 +37,7 @@
 | `builtin-tools`：Shell | `exec_command`、`write_stdin`、`list_shell_sessions` | 保留现有三个工具，整体归属 shell 模块 | 当前会话协议依赖三个工具协作，应一起启停 |
 | `skills` | `skill_search`、`skill_load` | 关闭 | 工具和自动 Skills 提示可关闭；其他工具对 `skill_load` 的引用不会自动消失 |
 | `worker-threads` | `thread_create`、`thread_list`、`thread_status`、`thread_send`、`thread_subscribe`、`thread_stop`、`thread_archive` | 关闭 | 已有模块开关，工具和 Worker 管理器不再构造 |
-| `observables` | `observable_list`、`observable_create`、`schedule_create`、`observable_start`、`observable_stop`、`observable_delete`、`observable_observations` | 关闭 | 已有模块开关，关闭 Manager 和命令/定时生产者；MCP Notification 是另一条输入来源 |
+| `observables` | `observable_list`、`observable_create`、`observable_start`、`observable_stop`、`observable_delete`、`observable_observations` | 关闭 | 已有模块开关，关闭 Manager 和命令生产者；MCP Notification 是另一条输入来源 |
 | `goal` | `get_goal`、`create_goal`、`update_goal` | 关闭 | 工具、实时 Goal 上下文和自动继续策略可关闭 |
 | `notes` | `update_notes` | 关闭 | 工具、实时 Notes 上下文和模块状态操作可关闭 |
 | `context-control` | `context_new`、`context_compact` | 关闭模型主动操作和容量提醒 | 已有模块开关；它不控制宿主 `/new`、`/compact` 或自动压缩机制 |

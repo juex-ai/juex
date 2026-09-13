@@ -140,15 +140,8 @@ func ToolDefinitions() []toolcore.ToolDefinition {
 			Name:        "observable_create",
 			Group:       toolcore.ToolGroupObservable,
 			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
-			Description: "Create and start a command Observable; use schedule_create for timed work. ",
+			Description: "Create and start a command Observable. ",
 			Schema:      commandCreateSchema(),
-		},
-		{
-			Name:        "schedule_create",
-			Group:       toolcore.ToolGroupObservable,
-			Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-observables"},
-			Description: "Read observable_list results; reuse matches; no probe/poll. ",
-			Schema:      scheduleCreateSchema(),
 		},
 		{
 			Name:        "observable_start",
@@ -208,17 +201,6 @@ func observableTools(manager *Manager) []toolcore.Tool {
 			return jsonString(status)
 		}),
 		definitions[2].Bind(func(ctx context.Context, in map[string]any) (string, error) {
-			spec, err := scheduleSpecFromCreateInput(in)
-			if err != nil {
-				return "", err
-			}
-			status, err := manager.Create(ctx, spec)
-			if err != nil {
-				return "", err
-			}
-			return jsonString(status)
-		}),
-		definitions[3].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			id, err := requiredString(in, "id")
 			if err != nil {
 				return "", err
@@ -232,7 +214,7 @@ func observableTools(manager *Manager) []toolcore.Tool {
 			}
 			return jsonString(status)
 		}),
-		definitions[4].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		definitions[3].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			id, err := requiredString(in, "id")
 			if err != nil {
 				return "", err
@@ -246,7 +228,7 @@ func observableTools(manager *Manager) []toolcore.Tool {
 			}
 			return jsonString(status)
 		}),
-		definitions[5].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		definitions[4].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			id, err := requiredString(in, "id")
 			if err != nil {
 				return "", err
@@ -256,7 +238,7 @@ func observableTools(manager *Manager) []toolcore.Tool {
 			}
 			return jsonString(map[string]any{"deleted": id})
 		}),
-		definitions[6].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		definitions[5].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			_ = ctx
 			records, err := manager.Observations(ObservationFilter{
 				ObservableID: optionalString(in, "id"),
@@ -285,18 +267,6 @@ type commandCreateInput struct {
 	Observation CommandObservationSpec `json:"observation,omitempty"`
 }
 
-type scheduleCreateInput struct {
-	ID          string                  `json:"id"`
-	Name        string                  `json:"name,omitempty"`
-	Timezone    string                  `json:"timezone,omitempty"`
-	Once        *OnceSchedule           `json:"once,omitempty"`
-	Daily       *DailySchedule          `json:"daily,omitempty"`
-	Monthly     *MonthlySchedule        `json:"monthly,omitempty"`
-	Interval    *IntervalSchedule       `json:"interval,omitempty"`
-	CatchUp     CatchUpSpec             `json:"catch_up,omitempty"`
-	Observation ScheduleObservationSpec `json:"observation"`
-}
-
 func commandSpecFromCreateInput(in map[string]any) (Spec, error) {
 	input, err := decodeCreateInput[commandCreateInput](in)
 	if err != nil {
@@ -312,22 +282,6 @@ func commandSpecFromCreateInput(in map[string]any) (Spec, error) {
 		Filters:     input.Filters,
 		Batch:       input.Batch,
 		OnExit:      input.OnExit,
-		Observation: input.Observation,
-	})
-}
-
-func scheduleSpecFromCreateInput(in map[string]any) (Spec, error) {
-	input, err := decodeCreateInput[scheduleCreateInput](in)
-	if err != nil {
-		return Spec{}, fmt.Errorf("schedule_create: %w", err)
-	}
-	return NewScheduleSpec(input.ID, input.Name, ScheduleSourceSpec{
-		Timezone:    input.Timezone,
-		Once:        input.Once,
-		Daily:       input.Daily,
-		Monthly:     input.Monthly,
-		Interval:    input.Interval,
-		CatchUp:     input.CatchUp,
 		Observation: input.Observation,
 	})
 }
@@ -371,31 +325,6 @@ func commandCreateSchema() map[string]any {
 	}
 }
 
-func scheduleCreateSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"observation"},
-		"properties": map[string]any{
-			"id":          map[string]any{"type": "string"},
-			"name":        map[string]any{"type": "string"},
-			"timezone":    map[string]any{"type": "string"},
-			"once":        onceScheduleSchema(),
-			"daily":       dailyScheduleSchema(),
-			"monthly":     monthlyScheduleSchema(),
-			"interval":    intervalScheduleSchema(),
-			"catch_up":    catchUpSchema(),
-			"observation": scheduleObservationSchema(),
-		},
-		"oneOf": []any{
-			map[string]any{"required": []any{"once"}},
-			map[string]any{"required": []any{"daily"}},
-			map[string]any{"required": []any{"monthly"}},
-			map[string]any{"required": []any{"interval"}},
-		},
-	}
-}
-
 func commandObservationSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
@@ -403,20 +332,6 @@ func commandObservationSchema() map[string]any {
 		"properties": map[string]any{
 			"kind":     map[string]any{"type": "string"},
 			"severity": severitySchema(),
-		},
-	}
-}
-
-func scheduleObservationSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"content"},
-		"properties": map[string]any{
-			"kind":        map[string]any{"type": "string"},
-			"severity":    severitySchema(),
-			"content":     map[string]any{"type": "string"},
-			"attachments": map[string]any{"type": "array", "items": attachmentSchema()},
 		},
 	}
 }
@@ -436,18 +351,6 @@ func parserSchema() map[string]any {
 			"severity_field":    map[string]any{"type": "string"},
 			"time_field":        map[string]any{"type": "string"},
 			"attachments_field": map[string]any{"type": "string"},
-		},
-	}
-}
-
-func attachmentSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"path"},
-		"properties": map[string]any{
-			"path":       map[string]any{"type": "string"},
-			"media_type": map[string]any{"type": "string"},
 		},
 	}
 }
@@ -486,63 +389,6 @@ func onExitSchema() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"notify": map[string]any{"type": "string"},
-		},
-	}
-}
-
-func onceScheduleSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"at"},
-		"properties": map[string]any{
-			"at": map[string]any{"type": "string"},
-		},
-	}
-}
-
-func dailyScheduleSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"times"},
-		"properties": map[string]any{
-			"times":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"weekdays": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-		},
-	}
-}
-
-func monthlyScheduleSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"days", "times"},
-		"properties": map[string]any{
-			"days":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
-			"times": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-		},
-	}
-}
-
-func intervalScheduleSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"every_seconds"},
-		"properties": map[string]any{
-			"every_seconds": map[string]any{"type": "integer"},
-		},
-	}
-}
-
-func catchUpSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"mode":                 map[string]any{"type": "string"},
-			"max_lateness_minutes": map[string]any{"type": "integer"},
 		},
 	}
 }

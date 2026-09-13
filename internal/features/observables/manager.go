@@ -20,7 +20,6 @@ var (
 	ErrObservableNotFound = errors.New("observable: not found")
 	ErrManagerClosed      = errors.New("observable: manager closed")
 	ErrObservableDeleting = errors.New("observable: deleting")
-	ErrRunOnceUnsupported = errors.New("observable: run once unsupported")
 	ErrReadOnlyDefinition = errors.New("observable: read-only definition")
 )
 
@@ -168,33 +167,22 @@ type StatusCounts struct {
 }
 
 type ObservableStatus struct {
-	ID              string              `json:"id"`
-	Name            string              `json:"name,omitempty"`
-	Source          string              `json:"source"`
-	SourceType      string              `json:"source_type,omitempty"`
-	Command         string              `json:"command"`
-	Args            []string            `json:"args,omitempty"`
-	Streams         []string            `json:"streams,omitempty"`
-	Batch           BatchSpec           `json:"batch"`
-	ScheduleConfig  *ScheduleSourceSpec `json:"schedule_config,omitempty"`
-	Schedule        *ScheduleStatus     `json:"schedule,omitempty"`
-	State           string              `json:"state"`
-	RunID           string              `json:"run_id,omitempty"`
-	PID             int                 `json:"pid,omitempty"`
-	StartedAt       time.Time           `json:"started_at,omitempty"`
-	ExitedAt        time.Time           `json:"exited_at,omitempty"`
-	ExitCode        *int                `json:"exit_code,omitempty"`
-	LastError       string              `json:"last_error,omitempty"`
-	LastObservation ObservationRecord   `json:"last_observation,omitempty"`
-}
-
-type ScheduleStatus struct {
-	Summary                string     `json:"summary,omitempty"`
-	Timezone               string     `json:"timezone,omitempty"`
-	CatchUpMode            string     `json:"catch_up_mode,omitempty"`
-	NextOccurrence         *time.Time `json:"next_occurrence,omitempty"`
-	LastEvaluatedAt        *time.Time `json:"last_evaluated_at,omitempty"`
-	LastEmittedScheduledAt *time.Time `json:"last_emitted_scheduled_at,omitempty"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name,omitempty"`
+	Source          string            `json:"source"`
+	SourceType      string            `json:"source_type,omitempty"`
+	Command         string            `json:"command"`
+	Args            []string          `json:"args,omitempty"`
+	Streams         []string          `json:"streams,omitempty"`
+	Batch           BatchSpec         `json:"batch"`
+	State           string            `json:"state"`
+	RunID           string            `json:"run_id,omitempty"`
+	PID             int               `json:"pid,omitempty"`
+	StartedAt       time.Time         `json:"started_at,omitempty"`
+	ExitedAt        time.Time         `json:"exited_at,omitempty"`
+	ExitCode        *int              `json:"exit_code,omitempty"`
+	LastError       string            `json:"last_error,omitempty"`
+	LastObservation ObservationRecord `json:"last_observation,omitempty"`
 }
 
 func NewManager(opts ManagerOptions) (*Manager, error) {
@@ -401,29 +389,6 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		return err
 	}
 	return source.start(ctx, run)
-}
-
-func (m *Manager) RunOnce(ctx context.Context, id string) (ObservationRecord, error) {
-	if m == nil {
-		return ObservationRecord{}, fmt.Errorf("%w: nil manager", ErrManagerClosed)
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return ObservationRecord{}, ErrManagerClosed
-	}
-	if m.deleting[id] {
-		return ObservationRecord{}, fmt.Errorf("%w: %q", ErrObservableDeleting, id)
-	}
-	source, ok := m.sources[id]
-	if !ok {
-		return ObservationRecord{}, fmt.Errorf("%w: %q", ErrObservableNotFound, id)
-	}
-	runnable, ok := source.(runOnceSource)
-	if !ok {
-		return ObservationRecord{}, fmt.Errorf("%w: %q", ErrRunOnceUnsupported, id)
-	}
-	return runnable.runOnce(ctx)
 }
 
 func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, error) {
@@ -1114,13 +1079,6 @@ func (m *Manager) recordObservation(record ObservationRecord) (ObservationRecord
 		record.AttachmentState = ObservationAttachmentStateError
 	}
 	return m.store.RecordObservationOnce(record)
-}
-
-func (m *Manager) recordedObservations(id, sourceEventPrefix string, limit int) ([]ObservationRecord, error) {
-	if m == nil || m.store == nil {
-		return nil, nil
-	}
-	return m.store.RecordedObservationsBySourceEvent(id, sourceEventPrefix, limit)
 }
 
 func (m *Manager) submitDelivery(ctx context.Context, record ObservationRecord) bool {
