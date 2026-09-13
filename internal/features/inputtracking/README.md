@@ -56,4 +56,6 @@ checklist record. Associations share the original message commit and survive
 checklist pruning, compaction, pagination and restart. Inputs without a durable
 association stay unmarked. `/new` ends an unchecked input's tracking scope without
 checking it. The existing history API and SSE carry these annotations; disabled
-tracking does not read or publish them.
+tracking does not read or publish them. Reconnection refreshes the evidence for
+all loaded messages, including older pages, and replaces prior inspection errors
+without dropping the transcript or draft.

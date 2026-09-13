@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,11 @@ func TestThreadInputStatusPagesArchivedAndEffectiveModuleGate(t *testing.T) {
 			if len(latest.InputTracking.Messages) != 0 {
 				t.Fatal("untracked message was retroactively labeled")
 			}
+			var retained threadShowResponse
+			doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+worker.ID+"?limit=1&input_message_id="+first.ID+"&input_message_id=unknown", "", http.StatusOK, &retained)
+			if len(retained.Items) != 1 || retained.Items[0].Message.ID != second.ID || len(retained.InputTracking.Messages) != 1 || retained.InputTracking.Messages[first.ID].CheckedAt == nil {
+				t.Fatalf("retained message evidence changed transcript window: %+v", retained)
+			}
 			var older threadShowResponse
 			doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+worker.ID+"?limit=1&before="+latest.PreviousCursor, "", http.StatusOK, &older)
 			status := older.InputTracking.Messages[first.ID]
@@ -87,11 +93,23 @@ func TestThreadInputStatusPagesArchivedAndEffectiveModuleGate(t *testing.T) {
 	}
 }
 
+func TestThreadInputStatusRejectsUnboundedAnnotationRequests(t *testing.T) {
+	s := newTestServer(t)
+	server := httptest.NewServer(s.APIHandler())
+	defer server.Close()
+	for _, query := range []string{
+		"input_message_id=", "input_message_id=" + strings.Repeat("x", 257),
+		strings.Repeat("input_message_id=message&", 81),
+	} {
+		doJSON(t, http.MethodGet, server.URL+"/api/threads/0?"+query, "", http.StatusBadRequest, nil)
+	}
+}
+
 func TestDisabledInputStatusDoesNotOpenJournals(t *testing.T) {
 	s := newTestServer(t)
 	s.opts.Cfg.Modules = config.ModulePolicy{"input-tracking": {Enabled: false}}
 	response := threadShowResponse{}
-	s.annotateInputs("nonexistent", &response)
+	s.annotateInputs("nonexistent", &response, "retained-message")
 	if response.InputTracking != nil || !reflect.DeepEqual(&s.inputStatuses, &runtime.InputStatusReader{}) {
 		t.Fatal("disabled projection read tracking state")
 	}

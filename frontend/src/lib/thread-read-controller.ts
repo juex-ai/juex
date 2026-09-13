@@ -69,7 +69,7 @@ export type ThreadReadControllerPorts = {
   onStateChange: (state: ThreadReadState) => void;
   getThread: (
     id: string,
-    opts?: { before?: string; limit?: number },
+    opts?: { before?: string; limit?: number; inputMessageIDs?: string[] },
   ) => Promise<ThreadShowResponse>;
   startTurn: (
     id: string,
@@ -96,6 +96,7 @@ export function isLatestThreadRoute(
 export function createThreadReadController(ports: ThreadReadControllerPorts) {
   let state = ports.initialState ?? createThreadReadState();
   let route: ThreadReadRouteSnapshot = { id: "" };
+  let routeRevision = 0;
   let liveStatus: ThreadReadControllerLiveStatus | null = null;
   let liveResumeCursor: ThreadLiveSubscription | null = null;
   let composerHintTimer: TimerHandle | null = null;
@@ -119,6 +120,7 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
 
   function setRoute(id: string) {
     if (route.id !== id) {
+      routeRevision += 1;
       liveResumeCursor = null;
     }
     route = { id };
@@ -161,6 +163,7 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
   }
 
   let historyRevision = 0;
+  let loadedHistoryRevision = 0;
 
   async function refresh(
     threadID = route.id,
@@ -168,16 +171,26 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
   ) {
     if (!threadID) return;
     const revision = ++historyRevision;
-    try {
-      const next = await ports.getThread(threadID);
-      if (!isLatestThreadRoute(route, threadID) || revision !== historyRevision) return;
-      updateReadState((prev) => projectThreadLoaded(prev, next, opts));
-    } catch (error) {
-      if (!isLatestThreadRoute(route, threadID) || revision !== historyRevision) return;
-      logError("getThread failed", error);
-      if (opts.recordLoadFailure) {
-        updateReadState((prev) => projectThreadLoadFailed(prev, error));
+    const routeVersion = routeRevision;
+    while (routeVersion === routeRevision && revision === historyRevision) {
+      const loadedRevision = loadedHistoryRevision;
+      const inputMessageIDs = opts.preserveLoadedHistory && state.data?.id === threadID
+        ? [...state.data.messages, ...(opts.preserveLiveMessages ? state.projection.messages : [])]
+          .flatMap(message => message.role === "user" && message.id ? [message.id] : []) : [];
+      try {
+        const next = await ports.getThread(threadID, { inputMessageIDs });
+        if (routeVersion !== routeRevision || !isLatestThreadRoute(route, threadID) || revision !== historyRevision) return;
+        // Pagination can finish while this request is in flight. Include its inputs too.
+        if (opts.preserveLoadedHistory && loadedRevision !== loadedHistoryRevision) continue;
+        updateReadState((prev) => projectThreadLoaded(prev, next, opts));
+      } catch (error) {
+        if (routeVersion !== routeRevision || !isLatestThreadRoute(route, threadID) || revision !== historyRevision) return;
+        logError("getThread failed", error);
+        if (opts.recordLoadFailure) {
+          updateReadState((prev) => projectThreadLoadFailed(prev, error));
+        }
       }
+      return;
     }
   }
 
@@ -262,14 +275,22 @@ export function createThreadReadController(ports: ThreadReadControllerPorts) {
 
   async function loadOlderMessages(threadID: string, before?: string) {
     if (!before || state.loadingOlderMessages) return;
+    const routeVersion = routeRevision;
     updateReadState(projectLoadOlderStarted);
-    try {
-      const page = await ports.getThread(threadID, { before });
-      if (!isLatestThreadRoute(route, threadID)) return;
-      updateReadState((prev) => projectLoadOlderSucceeded(prev, page));
-    } catch (error) {
-      if (!isLatestThreadRoute(route, threadID)) return;
-      updateReadState((prev) => projectLoadOlderFailed(prev, error));
+    while (routeVersion === routeRevision && isLatestThreadRoute(route, threadID)) {
+      const revision = historyRevision;
+      try {
+        const page = await ports.getThread(threadID, { before });
+        if (routeVersion !== routeRevision || !isLatestThreadRoute(route, threadID)) return;
+        if (revision !== historyRevision) continue;
+        loadedHistoryRevision += 1;
+        updateReadState((prev) => projectLoadOlderSucceeded(prev, page));
+      } catch (error) {
+        if (routeVersion !== routeRevision || !isLatestThreadRoute(route, threadID)) return;
+        if (revision !== historyRevision) continue;
+        updateReadState((prev) => projectLoadOlderFailed(prev, error));
+      }
+      return;
     }
   }
 

@@ -97,7 +97,8 @@ export function projectThreadLoaded(
   opts?: { preserveLiveMessages?: boolean; preserveLoadedHistory?: boolean },
 ): ThreadReadState {
   if (opts?.preserveLoadedHistory && state.data?.id === data.id) {
-    data = mergeOlderThreadPage(data, state.data);
+    // Keep transcript position, but replace all annotations with fresh server evidence.
+    data = { ...mergeOlderThreadPage(data, state.data), input_tracking: data.input_tracking };
   }
   const projection = opts?.preserveLiveMessages
     ? reconcilePersistedLiveMessages(state.projection, data.messages)
@@ -106,7 +107,7 @@ export function projectThreadLoaded(
     ...state,
     data,
     loadError: null,
-    loadingOlderMessages: false,
+    loadingOlderMessages: opts?.preserveLoadedHistory ? state.loadingOlderMessages : false,
     olderMessagesError: null,
     projection: { ...projection, inputTracking: reconcileInputStatus(data.input_tracking, projection.inputTracking) },
   };
