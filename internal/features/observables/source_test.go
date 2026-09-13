@@ -24,35 +24,6 @@ type fakeSourceRuntime struct {
 	lastStopReason sourceStopReason
 }
 
-type fakeSourceKernel struct {
-	nowValue       time.Time
-	activationErr  error
-	recorded       []ObservationRecord
-	recordedID     string
-	recordedPrefix string
-	recordedLimit  int
-	submitted      atomic.Int32
-}
-
-func (f *fakeSourceKernel) activateRun(*observableRun, ObservableStatus) error {
-	return f.activationErr
-}
-func (f *fakeSourceKernel) publishStarted(*observableRun) error { return nil }
-func (f *fakeSourceKernel) finishRun(*observableRun, terminalOutcome) (bool, error) {
-	return true, nil
-}
-func (f *fakeSourceKernel) reportWorkerError(*observableRun, error) {}
-func (f *fakeSourceKernel) recordObservation(record ObservationRecord) (ObservationRecord, bool, error) {
-	return record, true, nil
-}
-
-func (f *fakeSourceKernel) submitDelivery(context.Context, ObservationRecord) bool {
-	f.submitted.Add(1)
-	return true
-}
-func (f *fakeSourceKernel) now() time.Time { return f.nowValue }
-func (f *fakeSourceKernel) isClosed() bool { return false }
-
 func (f *fakeSourceRuntime) start(ctx context.Context, run *observableRun) error {
 	if f.startFn != nil {
 		return f.startFn(ctx, run)

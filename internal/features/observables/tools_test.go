@@ -365,23 +365,3 @@ func schemaRequiredStrings(t *testing.T, schema map[string]any) []string {
 	}
 	return result
 }
-
-func schemaMatchingBranches(t *testing.T, branches []any, keys []string) int {
-	t.Helper()
-	present := make(map[string]bool, len(keys))
-	for _, key := range keys {
-		present[key] = true
-	}
-	matches := 0
-	for _, value := range branches {
-		branch := schemaMapFromValue(t, value)
-		matched := true
-		for _, required := range schemaRequiredStrings(t, branch) {
-			matched = matched && present[required]
-		}
-		if matched {
-			matches++
-		}
-	}
-	return matches
-}

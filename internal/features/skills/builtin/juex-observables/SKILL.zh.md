@@ -12,7 +12,7 @@ type: builtin-guide
 ## 路由
 
 - 调用 `observable_list` 并等待结果，然后再决定是否创建任何内容。不要把检查与依赖检查结果的 create 放在同一批次：同一 response 中的 call 会在结果可用前就被选定。
-- 复用等价且正在运行的 Observable，避免重复创建。
+- 复用等价且正在运行的 Observable，即使它的 id 不同。不要重复创建。
 - `observable_create` 仅用于 stdout 或 stderr 会被解析为持久 Observation 的受管命令。
 - 定时工作由单独安装的 Calendar Extension 通过 MCP 工具和通知提供。
 - 使用 `observable_start` 和 `observable_stop` 做进程生命周期内的临时改变。配置仍决定 Juex 下次启动时的状态。

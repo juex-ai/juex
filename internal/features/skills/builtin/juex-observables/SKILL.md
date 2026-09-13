@@ -15,7 +15,7 @@ constraints, or examples. Correct tool calls do not require a prior guide load.
 - Call `observable_list` and wait for its result before deciding whether to
   create anything. Do not batch inspection with a dependent create: calls in
   one response are chosen before their results are available.
-- Reuse an equivalent running Observable instead of creating duplicates.
+- Reuse an equivalent running Observable even if its id differs. Do not create a duplicate.
 - Use `observable_create` only for a managed command whose stdout or stderr is
   parsed into durable Observations.
 - Timed work is provided by the separately installed Calendar Extension through MCP tools and notifications.

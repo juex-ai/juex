@@ -242,15 +242,6 @@ func schemaContainsStringMetadata(value any, key string) bool {
 	return false
 }
 
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
