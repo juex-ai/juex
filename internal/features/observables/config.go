@@ -9,9 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
-
-	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 )
 
 const (
@@ -30,15 +27,7 @@ const (
 	DefaultBatchIntervalSeconds = MinBatchIntervalSeconds
 	DefaultBatchMaxChars        = MaxBatchChars
 
-	SourceTypeCommand  = "command"
-	SourceTypeSchedule = "schedule"
-
-	ScheduleCatchUpNone   = "none"
-	ScheduleCatchUpLatest = "latest"
-
-	DefaultScheduleKind       = "heartbeat"
-	MaxScheduleContentChars   = 1000
-	MinIntervalScheduleSecond = 60
+	SourceTypeCommand = "command"
 )
 
 type FileConfig struct {
@@ -77,54 +66,10 @@ type CommandSourceSpec struct {
 
 func (CommandSourceSpec) sourceType() string { return SourceTypeCommand }
 
-type ScheduleSourceSpec struct {
-	Timezone    string                  `json:"timezone,omitempty"`
-	Once        *OnceSchedule           `json:"once,omitempty"`
-	Daily       *DailySchedule          `json:"daily,omitempty"`
-	Monthly     *MonthlySchedule        `json:"monthly,omitempty"`
-	Interval    *IntervalSchedule       `json:"interval,omitempty"`
-	CatchUp     CatchUpSpec             `json:"catch_up,omitempty"`
-	Observation ScheduleObservationSpec `json:"observation"`
-}
-
-func (ScheduleSourceSpec) sourceType() string { return SourceTypeSchedule }
-
 type CommandObservationSpec struct {
 	Kind     string `json:"kind,omitempty"`
 	Severity string `json:"severity,omitempty"`
 }
-
-type ScheduleObservationSpec struct {
-	Kind        string           `json:"kind,omitempty"`
-	Severity    string           `json:"severity,omitempty"`
-	Content     string           `json:"content"`
-	Attachments []AttachmentSpec `json:"attachments,omitempty"`
-}
-
-type OnceSchedule struct {
-	At string `json:"at"`
-}
-
-type DailySchedule struct {
-	Times    []string `json:"times"`
-	Weekdays []string `json:"weekdays,omitempty"`
-}
-
-type MonthlySchedule struct {
-	Days  []int    `json:"days"`
-	Times []string `json:"times"`
-}
-
-type IntervalSchedule struct {
-	EverySeconds int `json:"every_seconds"`
-}
-
-type CatchUpSpec struct {
-	Mode               string `json:"mode,omitempty"`
-	MaxLatenessMinutes int    `json:"max_lateness_minutes,omitempty"`
-}
-
-type AttachmentSpec = eventmedia.AttachmentRef
 
 type Defaults struct {
 	Kind     string `json:"kind,omitempty"`
@@ -162,17 +107,8 @@ type commandRuntimeSpec struct {
 	Defaults Defaults
 }
 
-type scheduleRuntimeSpec struct {
-	ID string
-	ScheduleSourceSpec
-}
-
 func NewCommandSpec(id, name string, config CommandSourceSpec) (Spec, error) {
 	return ValidateSpec(Spec{ID: id, Name: name, source: cloneCommandSourceSpec(config)})
-}
-
-func NewScheduleSpec(id, name string, config ScheduleSourceSpec) (Spec, error) {
-	return ValidateSpec(Spec{ID: id, Name: name, source: cloneScheduleSourceSpec(config)})
 }
 
 func (spec Spec) SourceType() string {
@@ -190,14 +126,6 @@ func (spec Spec) CommandConfig() (CommandSourceSpec, bool) {
 	return cloneCommandSourceSpec(config), true
 }
 
-func (spec Spec) ScheduleConfig() (ScheduleSourceSpec, bool) {
-	config, ok := spec.source.(ScheduleSourceSpec)
-	if !ok {
-		return ScheduleSourceSpec{}, false
-	}
-	return cloneScheduleSourceSpec(config), true
-}
-
 func (spec Spec) commandRuntime() (commandRuntimeSpec, bool) {
 	config, ok := spec.CommandConfig()
 	if !ok {
@@ -213,20 +141,11 @@ func (spec Spec) commandRuntime() (commandRuntimeSpec, bool) {
 	}, true
 }
 
-func (spec Spec) scheduleRuntime() (scheduleRuntimeSpec, bool) {
-	config, ok := spec.ScheduleConfig()
-	if !ok {
-		return scheduleRuntimeSpec{}, false
-	}
-	return scheduleRuntimeSpec{ID: spec.ID, ScheduleSourceSpec: config}, true
-}
-
 type wireSpec struct {
-	ID             string              `json:"id"`
-	Name           string              `json:"name,omitempty"`
-	Type           string              `json:"type"`
-	CommandConfig  *CommandSourceSpec  `json:"command_config,omitempty"`
-	ScheduleConfig *ScheduleSourceSpec `json:"schedule_config,omitempty"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name,omitempty"`
+	Type          string             `json:"type"`
+	CommandConfig *CommandSourceSpec `json:"command_config,omitempty"`
 }
 
 type wireCommandSourceSpec struct {
@@ -243,11 +162,10 @@ type wireCommandSourceSpec struct {
 }
 
 type marshalWireSpec struct {
-	ID             string                 `json:"id"`
-	Name           string                 `json:"name,omitempty"`
-	Type           string                 `json:"type"`
-	CommandConfig  *wireCommandSourceSpec `json:"command_config,omitempty"`
-	ScheduleConfig *ScheduleSourceSpec    `json:"schedule_config,omitempty"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name,omitempty"`
+	Type          string                 `json:"type"`
+	CommandConfig *wireCommandSourceSpec `json:"command_config,omitempty"`
 }
 
 func (spec Spec) MarshalJSON() ([]byte, error) {
@@ -274,9 +192,6 @@ func (spec Spec) MarshalJSON() ([]byte, error) {
 			wireConfig.Observation = &config.Observation
 		}
 		wire.CommandConfig = &wireConfig
-	case SourceTypeSchedule:
-		config, _ := spec.ScheduleConfig()
-		wire.ScheduleConfig = &config
 	default:
 		return nil, fmt.Errorf("observable spec %q has no source", spec.ID)
 	}
@@ -299,17 +214,12 @@ func decodeWireSpec(data []byte) (Spec, error) {
 	}
 	switch strings.TrimSpace(wire.Type) {
 	case SourceTypeCommand:
-		if wire.CommandConfig == nil || wire.ScheduleConfig != nil {
-			return Spec{}, fmt.Errorf("type command requires command_config and forbids schedule_config")
+		if wire.CommandConfig == nil {
+			return Spec{}, fmt.Errorf("type command requires command_config")
 		}
 		return NewCommandSpec(wire.ID, wire.Name, *wire.CommandConfig)
-	case SourceTypeSchedule:
-		if wire.ScheduleConfig == nil || wire.CommandConfig != nil {
-			return Spec{}, fmt.Errorf("type schedule requires schedule_config and forbids command_config")
-		}
-		return NewScheduleSpec(wire.ID, wire.Name, *wire.ScheduleConfig)
 	default:
-		return Spec{}, fmt.Errorf("type must be command or schedule, got %q", wire.Type)
+		return Spec{}, fmt.Errorf("type must be command, got %q", wire.Type)
 	}
 }
 
@@ -386,27 +296,15 @@ func LoadConfigLenient(path string) (FileConfig, []ConfigIssue, error) {
 func rawEntryIdentity(data []byte, index int) (string, string, string) {
 	var raw map[string]json.RawMessage
 	_ = json.Unmarshal(data, &raw)
-	var id, name, typ string
+	var id, name string
 	_ = json.Unmarshal(raw["id"], &id)
 	_ = json.Unmarshal(raw["name"], &name)
-	_ = json.Unmarshal(raw["type"], &typ)
 	if !validID(strings.TrimSpace(id)) {
 		id = fmt.Sprintf("config-%d", index)
 	} else {
 		id = strings.TrimSpace(id)
 	}
-	hint := "command_config"
-	if typ == SourceTypeSchedule || raw["schedule_config"] != nil {
-		hint = "schedule_config"
-	} else if source := raw["source"]; source != nil {
-		var sourceType struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(source, &sourceType) == nil && sourceType.Type == SourceTypeSchedule {
-			hint = "schedule_config"
-		}
-	}
-	return id, name, hint
+	return id, name, "command_config"
 }
 
 func SaveConfig(path string, cfg FileConfig) error {
@@ -467,8 +365,6 @@ func ValidateSpec(spec Spec) (Spec, error) {
 	switch source := spec.source.(type) {
 	case CommandSourceSpec:
 		return validateCommandSpec(spec.ID, spec.Name, source)
-	case ScheduleSourceSpec:
-		return validateScheduleSpec(spec.ID, spec.Name, source)
 	default:
 		return Spec{}, fmt.Errorf("source is required")
 	}
@@ -542,111 +438,6 @@ func validateCommandSpec(id, name string, source CommandSourceSpec) (Spec, error
 	return Spec{ID: id, Name: name, source: source}, nil
 }
 
-func validateScheduleSpec(id, name string, source ScheduleSourceSpec) (Spec, error) {
-	source = cloneScheduleSourceSpec(source)
-	source.Observation.Kind = strings.TrimSpace(source.Observation.Kind)
-	source.Observation.Severity = strings.TrimSpace(source.Observation.Severity)
-	source.Observation.Content = strings.TrimSpace(source.Observation.Content)
-	var err error
-	source.Observation.Attachments, err = normalizeAttachments(source.Observation.Attachments)
-	if err != nil {
-		return Spec{}, err
-	}
-	if source.Observation.Kind == "" {
-		source.Observation.Kind = DefaultScheduleKind
-	}
-	if err := validateSeverity("observation.severity", source.Observation.Severity); err != nil {
-		return Spec{}, err
-	}
-	if source.Observation.Severity == "" {
-		source.Observation.Severity = DefaultSeverity
-	}
-	if source.Observation.Content == "" {
-		return Spec{}, fmt.Errorf("observation.content is required for schedule sources")
-	}
-	if len([]rune(source.Observation.Content)) > MaxScheduleContentChars {
-		return Spec{}, fmt.Errorf("observation.content must be at most %d characters", MaxScheduleContentChars)
-	}
-	enabled := 0
-	if source.Once != nil {
-		enabled++
-		if _, err := parseOnceAt(source.Once.At); err != nil {
-			return Spec{}, err
-		}
-	}
-	if source.Daily != nil {
-		enabled++
-		source.Timezone = strings.TrimSpace(source.Timezone)
-		if source.Timezone == "" {
-			return Spec{}, fmt.Errorf("schedule_config.timezone is required for daily schedules")
-		}
-		if _, err := time.LoadLocation(source.Timezone); err != nil {
-			return Spec{}, fmt.Errorf("schedule_config.timezone must be a valid IANA timezone: %w", err)
-		}
-		if len(source.Daily.Times) == 0 {
-			return Spec{}, fmt.Errorf("schedule_config.daily.times is required")
-		}
-		for _, value := range source.Daily.Times {
-			if _, err := parseDailyClock(value); err != nil {
-				return Spec{}, err
-			}
-		}
-		for _, value := range source.Daily.Weekdays {
-			if _, ok := weekdayNumber(value); !ok {
-				return Spec{}, fmt.Errorf("schedule_config.daily.weekdays contains invalid weekday %q", value)
-			}
-		}
-	}
-	if source.Monthly != nil {
-		enabled++
-		source.Timezone = strings.TrimSpace(source.Timezone)
-		if source.Timezone == "" {
-			return Spec{}, fmt.Errorf("schedule_config.timezone is required for monthly schedules")
-		}
-		if _, err := time.LoadLocation(source.Timezone); err != nil {
-			return Spec{}, fmt.Errorf("schedule_config.timezone must be a valid IANA timezone: %w", err)
-		}
-		if len(source.Monthly.Days) == 0 {
-			return Spec{}, fmt.Errorf("schedule_config.monthly.days is required")
-		}
-		for _, day := range source.Monthly.Days {
-			if day < 1 || day > 31 {
-				return Spec{}, fmt.Errorf("schedule_config.monthly.days values must be between 1 and 31, got %d", day)
-			}
-		}
-		if len(source.Monthly.Times) == 0 {
-			return Spec{}, fmt.Errorf("schedule_config.monthly.times is required")
-		}
-		for _, value := range source.Monthly.Times {
-			if _, err := parseScheduleClock("schedule_config.monthly.times", value); err != nil {
-				return Spec{}, err
-			}
-		}
-	}
-	if source.Interval != nil {
-		enabled++
-		if source.Interval.EverySeconds < MinIntervalScheduleSecond {
-			return Spec{}, fmt.Errorf("schedule_config.interval.every_seconds must be at least %d", MinIntervalScheduleSecond)
-		}
-	}
-	if enabled != 1 {
-		return Spec{}, fmt.Errorf("schedule source must set exactly one of once, daily, monthly, or interval")
-	}
-	if source.CatchUp.Mode == "" {
-		source.CatchUp.Mode = ScheduleCatchUpNone
-	}
-	switch source.CatchUp.Mode {
-	case ScheduleCatchUpNone:
-	case ScheduleCatchUpLatest:
-		if source.CatchUp.MaxLatenessMinutes < 1 || source.CatchUp.MaxLatenessMinutes > 1440 {
-			return Spec{}, fmt.Errorf("schedule_config.catch_up.max_lateness_minutes must be between 1 and 1440")
-		}
-	default:
-		return Spec{}, fmt.Errorf("schedule_config.catch_up.mode must be none or latest, got %q", source.CatchUp.Mode)
-	}
-	return Spec{ID: id, Name: name, source: source}, nil
-}
-
 func ExpandVariables(value, workDir string) string {
 	expanded, _ := expandRuntimeValue(value, map[string]string{
 		"WORKDIR":      workDir,
@@ -700,32 +491,6 @@ func cloneCommandSourceSpec(in CommandSourceSpec) CommandSourceSpec {
 	return out
 }
 
-func cloneScheduleSourceSpec(in ScheduleSourceSpec) ScheduleSourceSpec {
-	out := in
-	if in.Once != nil {
-		once := *in.Once
-		out.Once = &once
-	}
-	if in.Daily != nil {
-		daily := *in.Daily
-		daily.Times = append([]string(nil), in.Daily.Times...)
-		daily.Weekdays = append([]string(nil), in.Daily.Weekdays...)
-		out.Daily = &daily
-	}
-	if in.Monthly != nil {
-		monthly := *in.Monthly
-		monthly.Days = append([]int(nil), in.Monthly.Days...)
-		monthly.Times = append([]string(nil), in.Monthly.Times...)
-		out.Monthly = &monthly
-	}
-	if in.Interval != nil {
-		interval := *in.Interval
-		out.Interval = &interval
-	}
-	out.Observation.Attachments = append([]AttachmentSpec(nil), in.Observation.Attachments...)
-	return out
-}
-
 func cloneStringMap(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
@@ -743,22 +508,6 @@ func cloneParserSpec(in *ParserSpec) *ParserSpec {
 	}
 	out := *in
 	return &out
-}
-
-func normalizeAttachments(in []AttachmentSpec) ([]AttachmentSpec, error) {
-	if len(in) == 0 {
-		return nil, nil
-	}
-	out := make([]AttachmentSpec, 0, len(in))
-	for i, ref := range in {
-		ref.Path = strings.TrimSpace(ref.Path)
-		ref.MediaType = strings.TrimSpace(ref.MediaType)
-		if ref.Path == "" {
-			return nil, fmt.Errorf("observation.attachments[%d].path is required", i)
-		}
-		out = append(out, ref)
-	}
-	return out, nil
 }
 
 func validID(id string) bool {

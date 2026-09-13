@@ -167,7 +167,7 @@ func TestModuleAcceptanceLayeredMainWorkerRequests(t *testing.T) {
 						// Observation management is Main-only; default-depth Workers
 						// also have no downward Worker management module.
 						workerNames := slices.DeleteFunc(slices.Clone(mainNames), func(name string) bool {
-							return strings.HasPrefix(name, "observable_") || name == "schedule_create" || strings.HasPrefix(name, "thread_")
+							return strings.HasPrefix(name, "observable_") || strings.HasPrefix(name, "thread_")
 						})
 						if !slices.Equal(names, workerNames) {
 							t.Fatalf("Worker tools=%v, expected=%v", names, workerNames)

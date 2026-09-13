@@ -238,15 +238,6 @@ func (t *observationJSONTime) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type ScheduleStateRecord struct {
-	ObservableID           string    `json:"observable_id"`
-	Deleted                bool      `json:"deleted,omitempty"`
-	Paused                 bool      `json:"paused,omitempty"`
-	LastEvaluatedAt        time.Time `json:"last_evaluated_at,omitempty"`
-	LastEmittedScheduledAt time.Time `json:"last_emitted_scheduled_at,omitempty"`
-	UpdatedAt              time.Time `json:"updated_at"`
-}
-
 type StoreOptions struct {
 	Now func() time.Time
 }
@@ -393,38 +384,6 @@ func (s *Store) ListObservations(filter ObservationFilter) ([]ObservationRecord,
 	return out, nil
 }
 
-// RecordedObservationsBySourceEvent returns the newest durable recovery
-// candidates after applying all source filters. Filtering before limiting
-// prevents unrelated or already-transitioned records from hiding candidates.
-func (s *Store) RecordedObservationsBySourceEvent(observableID, sourceEventPrefix string, limit int) ([]ObservationRecord, error) {
-	if s == nil {
-		return nil, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	records, err := s.loadObservations()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ObservationRecord, 0)
-	for _, record := range records {
-		if record.ObservableID != observableID || record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, sourceEventPrefix) {
-			continue
-		}
-		out = append(out, record)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].ID > out[j].ID
-		}
-		return out[i].CreatedAt.After(out[j].CreatedAt)
-	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
-}
-
 func (s *Store) Observation(id string) (ObservationRecord, bool, error) {
 	if s == nil || stringsTrimSpace(id) == "" {
 		return ObservationRecord{}, false, nil
@@ -455,91 +414,6 @@ func (s *Store) FindObservationBySourceEventID(sourceEventID string) (Observatio
 		}
 	}
 	return ObservationRecord{}, false, nil
-}
-
-func (s *Store) DropRecordedScheduleObservations(observableID string, reason string) error {
-	if s == nil {
-		return fmt.Errorf("observable store: nil")
-	}
-	observableID = stringsTrimSpace(observableID)
-	if observableID == "" {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	path := filepath.Join(s.root, "observations.jsonl")
-	records, err := s.loadObservations()
-	if err != nil {
-		return err
-	}
-	prefix := scheduleSourceEventPrefix(observableID)
-	for _, record := range records {
-		if record.ObservableID != observableID || record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, prefix) {
-			continue
-		}
-		record.State = ObservationStateDropped
-		record.Error = reason
-		if err := appendJSONL(path, record); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) LatestScheduleStates() (map[string]ScheduleStateRecord, error) {
-	if s == nil {
-		return map[string]ScheduleStateRecord{}, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := map[string]ScheduleStateRecord{}
-	err := readJSONL(filepath.Join(s.root, "schedule_state.jsonl"), func(record ScheduleStateRecord) {
-		if record.ObservableID == "" {
-			return
-		}
-		if record.Deleted {
-			delete(out, record.ObservableID)
-			return
-		}
-		out[record.ObservableID] = record
-	})
-	return out, err
-}
-
-func (s *Store) ScheduleState(id string) (ScheduleStateRecord, bool, error) {
-	states, err := s.LatestScheduleStates()
-	if err != nil {
-		return ScheduleStateRecord{}, false, err
-	}
-	record, ok := states[id]
-	return record, ok, nil
-}
-
-func (s *Store) RecordScheduleState(record ScheduleStateRecord) error {
-	if s == nil {
-		return fmt.Errorf("observable store: nil")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if record.UpdatedAt.IsZero() {
-		record.UpdatedAt = s.now().UTC()
-	}
-	return appendJSONL(filepath.Join(s.root, "schedule_state.jsonl"), record)
-}
-
-func (s *Store) ClearScheduleState(id string) error {
-	if s == nil {
-		return fmt.Errorf("observable store: nil")
-	}
-	id = stringsTrimSpace(id)
-	if id == "" {
-		return nil
-	}
-	return s.RecordScheduleState(ScheduleStateRecord{
-		ObservableID: id,
-		Deleted:      true,
-		UpdatedAt:    s.now().UTC(),
-	})
 }
 
 func (s *Store) ArtifactPath(observableID, observationID string) string {

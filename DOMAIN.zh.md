@@ -98,9 +98,11 @@ fact。Input 包含 cached input，cached input 是其中命中缓存的子集�
 
 ## Observable
 
-Observable 是外部自动化工作的统一模型。MCP Notification、Schedule、
+Observable 是外部自动化工作的统一模型。MCP Notification、
 command output 和未来生产者都产生 `observable.Observation`。生产者属于
 Agent Runtime，持久投递通过正常 Input/Turn 机制进入 Main。
+
+定时工作属于 Calendar Extension，由它发出 MCP Notification。
 
 MCP client 属于 Agent，可服务所有 Thread。调用仍属于发起调用的 Thread，
 MCP Notification 则只路由 Main。

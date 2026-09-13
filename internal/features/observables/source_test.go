@@ -45,35 +45,13 @@ func (f *fakeSourceKernel) reportWorkerError(*observableRun, error) {}
 func (f *fakeSourceKernel) recordObservation(record ObservationRecord) (ObservationRecord, bool, error) {
 	return record, true, nil
 }
-func (f *fakeSourceKernel) recordedObservations(id, prefix string, limit int) ([]ObservationRecord, error) {
-	f.recordedID, f.recordedPrefix, f.recordedLimit = id, prefix, limit
-	return append([]ObservationRecord(nil), f.recorded...), nil
-}
+
 func (f *fakeSourceKernel) submitDelivery(context.Context, ObservationRecord) bool {
 	f.submitted.Add(1)
 	return true
 }
 func (f *fakeSourceKernel) now() time.Time { return f.nowValue }
 func (f *fakeSourceKernel) isClosed() bool { return false }
-
-type fakeScheduleStateStore struct {
-	state       ScheduleStateRecord
-	found       bool
-	recordErr   error
-	recordCalls atomic.Int32
-}
-
-func (f *fakeScheduleStateStore) ScheduleState(string) (ScheduleStateRecord, bool, error) {
-	return f.state, f.found, nil
-}
-func (f *fakeScheduleStateStore) RecordScheduleState(ScheduleStateRecord) error {
-	f.recordCalls.Add(1)
-	return f.recordErr
-}
-func (f *fakeScheduleStateStore) ClearScheduleState(string) error { return nil }
-func (f *fakeScheduleStateStore) DropRecordedScheduleObservations(string, string) error {
-	return nil
-}
 
 func (f *fakeSourceRuntime) start(ctx context.Context, run *observableRun) error {
 	if f.startFn != nil {
@@ -123,15 +101,6 @@ func TestSourceRuntimeFactoryResolvesSealedSources(t *testing.T) {
 	}
 	if _, ok := command.(*commandSourceRuntime); !ok {
 		t.Fatalf("command source = %T", command)
-	}
-	schedule, err := newSourceRuntime(mustScheduleSpec("schedule", ScheduleSourceSpec{
-		Interval: &IntervalSchedule{EverySeconds: 60}, Observation: ScheduleObservationSpec{Content: "tick"},
-	}), kernel, sourceDependencies{store: store})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := schedule.(*scheduleSourceRuntime); !ok {
-		t.Fatalf("schedule source = %T", schedule)
 	}
 }
 
@@ -236,122 +205,6 @@ func TestTerminalClaimPreventsWorkerOverwriteAndRollbackRetriesFinish(t *testing
 	if status.State != RunStateExited {
 		t.Fatalf("status = %s, want ordinary worker exit after rollback", status.State)
 	}
-}
-
-func TestScheduleStopAndNaturalExitHaveDeterministicTerminalOrdering(t *testing.T) {
-	t.Run("stop claim wins", func(t *testing.T) {
-		spec := mustScheduleSpec("stop-wins", ScheduleSourceSpec{
-			Once:        &OnceSchedule{At: time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)},
-			Observation: ScheduleObservationSpec{Content: "tick"},
-		})
-		source := &fakeSourceRuntime{}
-		mgr := newSourceTestManager(t, spec, source)
-		workerFinishing := make(chan struct{})
-		workerFinished := make(chan bool, 1)
-		stopQuiesced := make(chan struct{})
-		releaseStop := make(chan struct{})
-		source.startFn = func(_ context.Context, run *observableRun) error {
-			status := run.state
-			status.State = RunStateRunning
-			if err := mgr.activateRun(run, status); err != nil {
-				return err
-			}
-			go func() {
-				<-run.ctx.Done()
-				run.closeQuiesced()
-				close(workerFinishing)
-				finished, _ := mgr.finishRun(run, terminalOutcome{State: RunStateExited})
-				workerFinished <- finished
-				run.closeDone()
-			}()
-			return nil
-		}
-		source.stopFn = func(ctx context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
-			run.cancel()
-			if err := waitRunQuiesced(ctx, run); err != nil {
-				return sourceStopResult{}, err
-			}
-			close(stopQuiesced)
-			<-releaseStop
-			return sourceStopResult{Quiesced: true}, nil
-		}
-		if err := mgr.Start(context.Background(), spec.ID); err != nil {
-			t.Fatal(err)
-		}
-		stopResult := make(chan error, 1)
-		go func() { stopResult <- mgr.Stop(context.Background(), spec.ID) }()
-		select {
-		case <-stopQuiesced:
-		case <-time.After(time.Second):
-			t.Fatal("Stop did not quiesce the Schedule")
-		}
-		select {
-		case <-workerFinishing:
-		case <-time.After(time.Second):
-			t.Fatal("Schedule worker did not attempt natural exit")
-		}
-		select {
-		case finished := <-workerFinished:
-			t.Fatalf("Schedule worker finished before the Stop claim resolved: %v", finished)
-		default:
-		}
-		close(releaseStop)
-		if err := <-stopResult; err != nil {
-			t.Fatal(err)
-		}
-		if finished := <-workerFinished; finished {
-			t.Fatal("Schedule worker overwrote the claimed Stop terminal")
-		}
-		status, err := mgr.StatusByID(spec.ID)
-		if err != nil || status.State != RunStateStopped {
-			t.Fatalf("status after Stop won = %+v, %v", status, err)
-		}
-	})
-
-	t.Run("natural exit wins before stop", func(t *testing.T) {
-		spec := mustScheduleSpec("exit-wins", ScheduleSourceSpec{
-			Once:        &OnceSchedule{At: time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)},
-			Observation: ScheduleObservationSpec{Content: "tick"},
-		})
-		source := &fakeSourceRuntime{}
-		mgr := newSourceTestManager(t, spec, source)
-		exitNow := make(chan struct{})
-		workerFinished := make(chan bool, 1)
-		source.startFn = func(_ context.Context, run *observableRun) error {
-			status := run.state
-			status.State = RunStateRunning
-			if err := mgr.activateRun(run, status); err != nil {
-				return err
-			}
-			go func() {
-				<-exitNow
-				run.closeQuiesced()
-				finished, _ := mgr.finishRun(run, terminalOutcome{State: RunStateExited})
-				workerFinished <- finished
-				run.closeDone()
-			}()
-			return nil
-		}
-		if err := mgr.Start(context.Background(), spec.ID); err != nil {
-			t.Fatal(err)
-		}
-		close(exitNow)
-		select {
-		case finished := <-workerFinished:
-			if !finished {
-				t.Fatal("Schedule worker did not own the natural terminal")
-			}
-		case <-time.After(time.Second):
-			t.Fatal("Schedule worker did not finish")
-		}
-		if err := mgr.Stop(context.Background(), spec.ID); err != nil {
-			t.Fatal(err)
-		}
-		status, err := mgr.StatusByID(spec.ID)
-		if err != nil || status.State != RunStateExited {
-			t.Fatalf("status after natural exit won = %+v, %v", status, err)
-		}
-	})
 }
 
 func TestStopAndDeletePreserveRunWhenSourceDoesNotQuiesceWithoutError(t *testing.T) {
@@ -763,97 +616,6 @@ func TestStopQuiescedErrorCommitsOneErroredTerminal(t *testing.T) {
 	}
 	if runs[spec.ID].State != RunStateErrored {
 		t.Fatalf("terminal run = %+v", runs[spec.ID])
-	}
-}
-
-func TestScheduleStopPauseFailureReportsQuiesced(t *testing.T) {
-	now := time.Now().UTC()
-	kernel := &fakeSourceKernel{nowValue: now}
-	store := &fakeScheduleStateStore{found: true, recordErr: errors.New("pause failed")}
-	spec := mustScheduleSpec("pause", ScheduleSourceSpec{Interval: &IntervalSchedule{EverySeconds: 60}, Observation: ScheduleObservationSpec{Content: "tick"}})
-	runtimeSpec, _ := spec.scheduleRuntime()
-	source := &scheduleSourceRuntime{spec: runtimeSpec, kernel: kernel, store: store}
-	ctx, cancel := context.WithCancel(context.Background())
-	run := &observableRun{id: spec.ID, ctx: ctx, cancel: cancel, quiesced: make(chan struct{})}
-	run.closeQuiesced()
-	result, err := source.stop(context.Background(), run, sourceStopUser)
-	if err == nil || err.Error() != "pause failed" || !result.Quiesced {
-		t.Fatalf("stop = %+v, %v; want quiesced pause failure", result, err)
-	}
-}
-
-func TestScheduleShutdownDoesNotPersistPauseBaseline(t *testing.T) {
-	kernel := &fakeSourceKernel{nowValue: time.Now().UTC()}
-	store := &fakeScheduleStateStore{found: true}
-	spec := mustScheduleSpec("shutdown", ScheduleSourceSpec{Interval: &IntervalSchedule{EverySeconds: 60}, Observation: ScheduleObservationSpec{Content: "tick"}})
-	runtimeSpec, _ := spec.scheduleRuntime()
-	source := &scheduleSourceRuntime{spec: runtimeSpec, kernel: kernel, store: store}
-	ctx, cancel := context.WithCancel(context.Background())
-	run := &observableRun{id: spec.ID, ctx: ctx, cancel: cancel, quiesced: make(chan struct{})}
-	run.closeQuiesced()
-	result, err := source.stop(context.Background(), run, sourceStopShutdown)
-	if err != nil || !result.Quiesced {
-		t.Fatalf("shutdown stop = %+v, %v", result, err)
-	}
-	if store.recordCalls.Load() != 0 {
-		t.Fatalf("shutdown wrote %d pause records", store.recordCalls.Load())
-	}
-}
-
-func TestScheduleActivationFailureHasNoStartupSideEffects(t *testing.T) {
-	kernel := &fakeSourceKernel{
-		nowValue:      time.Now().UTC(),
-		activationErr: errors.New("persist running state"),
-	}
-	store := &fakeScheduleStateStore{found: true}
-	spec := mustScheduleSpec("activation-fails", ScheduleSourceSpec{
-		Interval:    &IntervalSchedule{EverySeconds: 60},
-		Observation: ScheduleObservationSpec{Content: "tick"},
-	})
-	runtimeSpec, _ := spec.scheduleRuntime()
-	source := &scheduleSourceRuntime{spec: runtimeSpec, kernel: kernel, store: store}
-	ctx, cancel := context.WithCancel(context.Background())
-	run := &observableRun{
-		id:             spec.ID,
-		runID:          "run-1",
-		ctx:            ctx,
-		cancel:         cancel,
-		state:          baseStatusFromSpec(spec, RunStateStarting),
-		quiesced:       make(chan struct{}),
-		done:           make(chan struct{}),
-		sourceDone:     make(chan struct{}),
-		startPublished: make(chan struct{}),
-		workerReady:    make(chan struct{}),
-	}
-	if err := source.start(context.Background(), run); !errors.Is(err, kernel.activationErr) {
-		t.Fatalf("start error = %v, want activation persistence failure", err)
-	}
-	if got := store.recordCalls.Load(); got != 0 {
-		t.Fatalf("schedule state writes = %d, want none before durable activation", got)
-	}
-	if got := kernel.submitted.Load(); got != 0 {
-		t.Fatalf("startup deliveries = %d, want none before durable activation", got)
-	}
-}
-
-func TestScheduleRecoveryUsesBoundedKernelQuery(t *testing.T) {
-	now := time.Now().UTC()
-	kernel := &fakeSourceKernel{
-		nowValue: now,
-		recorded: []ObservationRecord{{ID: "recorded", ObservableID: "recover", SourceEventID: "schedule:recover:one", State: ObservationStateRecorded}},
-	}
-	store := &fakeScheduleStateStore{}
-	spec := mustScheduleSpec("recover", ScheduleSourceSpec{Interval: &IntervalSchedule{EverySeconds: 60}, Observation: ScheduleObservationSpec{Content: "tick"}})
-	runtimeSpec, _ := spec.scheduleRuntime()
-	source := &scheduleSourceRuntime{spec: runtimeSpec, kernel: kernel, store: store}
-	if err := source.recoverRecorded(context.Background(), &observableRun{id: spec.ID}); err != nil {
-		t.Fatal(err)
-	}
-	if kernel.recordedID != spec.ID || kernel.recordedPrefix != scheduleSourceEventPrefix(spec.ID) || kernel.recordedLimit != scheduleRecoveryLimit {
-		t.Fatalf("bounded query = id:%q prefix:%q limit:%d", kernel.recordedID, kernel.recordedPrefix, kernel.recordedLimit)
-	}
-	if kernel.submitted.Load() != 1 {
-		t.Fatalf("submissions = %d", kernel.submitted.Load())
 	}
 }
 
@@ -1329,7 +1091,7 @@ func TestRecordObservationSourceEventIsAtomic(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_, wasCreated, err := store.RecordObservationOnce(ObservationRecord{
-				ObservableID: "schedule", SourceEventID: "schedule:same", Kind: "tick", Severity: "info", Content: "same", State: ObservationStateRecorded,
+				ObservableID: "producer", SourceEventID: "producer:same", Kind: "tick", Severity: "info", Content: "same", State: ObservationStateRecorded,
 			})
 			if err != nil {
 				t.Errorf("RecordObservationOnce: %v", err)
@@ -1343,7 +1105,7 @@ func TestRecordObservationSourceEventIsAtomic(t *testing.T) {
 	if created.Load() != 1 {
 		t.Fatalf("created = %d, want 1", created.Load())
 	}
-	records, err := store.ListObservations(ObservationFilter{ObservableID: "schedule"})
+	records, err := store.ListObservations(ObservationFilter{ObservableID: "producer"})
 	if err != nil || len(records) != 1 {
 		t.Fatalf("records = %+v, err=%v", records, err)
 	}

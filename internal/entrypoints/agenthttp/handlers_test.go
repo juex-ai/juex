@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,7 +16,6 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
-	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -88,37 +85,6 @@ func (p *pendingProvider) Complete(ctx context.Context, _ string, history []llm.
 		return llm.Response{}, context.DeadlineExceeded
 	}
 	return p.responses[index], nil
-}
-
-func TestWriteRunOnceErrorMapsDomainErrors(t *testing.T) {
-	tests := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
-	}{
-		{name: "not found", err: fmt.Errorf("%w: missing", observable.ErrObservableNotFound), wantStatus: http.StatusNotFound, wantCode: "not_found"},
-		{name: "closed", err: observable.ErrManagerClosed, wantStatus: http.StatusConflict, wantCode: "conflict"},
-		{name: "deleting", err: observable.ErrObservableDeleting, wantStatus: http.StatusConflict, wantCode: "conflict"},
-		{name: "unsupported", err: observable.ErrRunOnceUnsupported, wantStatus: http.StatusConflict, wantCode: "conflict"},
-		{name: "persistence", err: errors.New("persist observation"), wantStatus: http.StatusInternalServerError, wantCode: "general_error"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			writeRunOnceError(recorder, test.err)
-			if recorder.Code != test.wantStatus {
-				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
-			}
-			var body errorJSON
-			if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			if body.Error != test.wantCode {
-				t.Fatalf("error = %q, want %q", body.Error, test.wantCode)
-			}
-		})
-	}
 }
 
 func TestThreadAPIListCreateShowAndEOFPagination(t *testing.T) {

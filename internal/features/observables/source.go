@@ -42,17 +42,12 @@ type sourceRuntime interface {
 	statusSnapshot(ObservableStatus) ObservableStatus
 }
 
-type runOnceSource interface {
-	runOnce(context.Context) (ObservationRecord, error)
-}
-
 type sourceKernel interface {
 	activateRun(*observableRun, ObservableStatus) error
 	publishStarted(*observableRun) error
 	finishRun(*observableRun, terminalOutcome) (bool, error)
 	reportWorkerError(*observableRun, error)
 	recordObservation(ObservationRecord) (ObservationRecord, bool, error)
-	recordedObservations(string, string, int) ([]ObservationRecord, error)
 	submitDelivery(context.Context, ObservationRecord) bool
 	now() time.Time
 	isClosed() bool
@@ -80,13 +75,6 @@ func contextStep(ctx context.Context) error {
 	return ctx.Err()
 }
 
-type scheduleStateStore interface {
-	ScheduleState(string) (ScheduleStateRecord, bool, error)
-	RecordScheduleState(ScheduleStateRecord) error
-	ClearScheduleState(string) error
-	DropRecordedScheduleObservations(string, string) error
-}
-
 type sourceDependencies struct {
 	opts   ManagerOptions
 	store  *Store
@@ -104,12 +92,6 @@ func newSourceRuntime(spec Spec, kernel sourceKernel, deps sourceDependencies) (
 			return nil, fmt.Errorf("observable %q has no command configuration", spec.ID)
 		}
 		return &commandSourceRuntime{spec: command, kernel: kernel, opts: deps.opts, store: deps.store, origin: deps.origin}, nil
-	case SourceTypeSchedule:
-		schedule, ok := spec.scheduleRuntime()
-		if !ok {
-			return nil, fmt.Errorf("observable %q has no schedule configuration", spec.ID)
-		}
-		return &scheduleSourceRuntime{spec: schedule, kernel: kernel, store: deps.store, source: deps.origin.Source}, nil
 	default:
 		return nil, fmt.Errorf("observable %q has unsupported source type %q", spec.ID, spec.SourceType())
 	}
@@ -123,20 +105,7 @@ func statusFromSpec(spec Spec, state string) ObservableStatus {
 		status.Streams = append([]string(nil), commandSpec.Streams...)
 		status.Batch = commandSpec.Batch
 	}
-	if scheduleSpec, ok := spec.scheduleRuntime(); ok {
-		status.ScheduleConfig = scheduleConfigSnapshot(scheduleSpec)
-		status.Schedule = &ScheduleStatus{
-			Summary:     scheduleSummary(scheduleSpec),
-			Timezone:    scheduleSpec.Timezone,
-			CatchUpMode: scheduleSpec.CatchUp.Mode,
-		}
-	}
 	return status
-}
-
-func scheduleConfigSnapshot(spec scheduleRuntimeSpec) *ScheduleSourceSpec {
-	config := cloneScheduleSourceSpec(spec.ScheduleSourceSpec)
-	return &config
 }
 
 func baseStatusFromSpec(spec Spec, state string) ObservableStatus {

@@ -157,7 +157,7 @@ data. Active and archived Thread roots are separate, and lifecycle operations
 move the whole Thread directory. Agent media is stored separately.
 
 `observables.json` is the Agent-owned editable definition document;
-`observables/` contains generated run, delivery, idempotency, and schedule
+`observables/` contains generated run, delivery, and idempotency
 state. Extension bundles may contribute additional read-only definitions.
 
 ## Durable Input And Publication

@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Pause, Play, RefreshCw, Trash2, Zap } from "lucide-react";
+import { Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 
 import {
   deleteObservable,
   listObservables,
-  runObservable,
   startObservable,
   stopObservable,
 } from "@/api";
@@ -80,7 +79,7 @@ export function Observables() {
 
   async function runAction(
     id: string,
-    action: "run" | "start" | "stop" | "delete",
+    action: "start" | "stop" | "delete",
   ) {
     if (action === "delete" && !window.confirm(`Delete observable "${id}"?`)) {
       return;
@@ -88,9 +87,7 @@ export function Observables() {
     setBusyID(id);
     setError(null);
     try {
-      if (action === "run") {
-        await runObservable(id);
-      } else if (action === "start") {
+      if (action === "start") {
         await startObservable(id);
       } else if (action === "stop") {
         await stopObservable(id);
@@ -214,7 +211,7 @@ function ObservableRow({
   busy: boolean;
   onAction: (
     id: string,
-    action: "run" | "start" | "stop" | "delete",
+    action: "start" | "stop" | "delete",
   ) => Promise<void>;
 }) {
   const last = item.last_observation?.id ? item.last_observation : null;
@@ -299,11 +296,6 @@ function ObservableRow({
           <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
             Type: {item.source_type || "command"} · {sourceSummary(item)}
           </div>
-          {item.source_type === "schedule" ? (
-            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-              next {formatDateTime(item.schedule?.next_occurrence)}
-            </div>
-          ) : null}
         </div>
       </div>
       <div className="pointer-events-none relative z-10 min-w-0 px-3 py-2" role="cell">
@@ -325,19 +317,6 @@ function ObservableRow({
         role="cell"
       >
         <div className="flex justify-end gap-1">
-          {item.source_type === "schedule" ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              title="Run"
-              aria-label="Run schedule now"
-              disabled={busy}
-              onClick={() => void onAction(item.id, "run")}
-            >
-              <Zap className="size-3.5" />
-            </Button>
-          ) : null}
           {item.state === "running" ? (
             <Button
               type="button"
@@ -417,17 +396,7 @@ function scrollTooltipContent(
 }
 
 function sourceSummary(item: ObservableStatus): string {
-  if (item.source_type === "schedule") {
-    return item.schedule?.summary || "schedule";
-  }
   return [item.command, ...(item.args ?? [])].filter(Boolean).join(" ") || "command";
-}
-
-function formatDateTime(iso?: string): string {
-  if (!iso) return "-";
-  const date = new Date(iso);
-  if (!Number.isFinite(date.getTime())) return iso;
-  return date.toLocaleString();
 }
 
 export function StateBadge({ state }: { state: string }) {

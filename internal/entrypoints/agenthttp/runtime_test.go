@@ -85,7 +85,7 @@ body`)
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Type != "stdio" || got.MCP.Servers[0].URL != "" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
-	if got.Tools.Count != 38 || len(got.Tools.Groups) != 9 {
+	if got.Tools.Count != 37 || len(got.Tools.Groups) != 9 {
 		t.Fatalf("tools = %+v", got.Tools)
 	}
 	var observableToolNames []string
@@ -97,8 +97,8 @@ body`)
 			observableToolNames = append(observableToolNames, tool.Name)
 		}
 	}
-	if len(observableToolNames) != 7 || !slices.Contains(observableToolNames, "schedule_create") {
-		t.Fatalf("observable tools = %v, want seven including schedule_create", observableToolNames)
+	if len(observableToolNames) != 6 {
+		t.Fatalf("observable tools = %v, want six command Observable tools", observableToolNames)
 	}
 	mcpTools := got.MCP.Servers[0].Tools
 	if len(mcpTools) != 1 || mcpTools[0].Name != "echo" || mcpTools[0].Description != "Echo input" {

@@ -133,7 +133,7 @@ context 不携带其私有路径。工作文件跨 Generation 和模块关闭保
 操作移动整个 Thread 目录。Agent media 独立存储。
 
 `observables.json` 是 Agent 拥有、可编辑的定义文档；`observables/` 包含生成的
-run、delivery、idempotency 与 schedule 状态。Extension bundle 可以提供额外的
+run、delivery 与 idempotency 状态。Extension bundle 可以提供额外的
 只读定义。
 
 ## 持久 Input 与发布

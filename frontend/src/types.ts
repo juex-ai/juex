@@ -779,26 +779,16 @@ export interface ObservableBatchSpec {
   max_chars: number;
 }
 
-export interface ObservableScheduleStatus {
-  summary?: string;
-  timezone?: string;
-  catch_up_mode?: string;
-  next_occurrence?: string;
-  last_evaluated_at?: string;
-  last_emitted_scheduled_at?: string;
-}
 
 export interface ObservableStatus {
   id: string;
   name?: string;
   source: string;
-  source_type?: "command" | "schedule" | string;
+  source_type?: "command" | string;
   command: string;
   args?: string[];
   streams?: string[];
   batch: ObservableBatchSpec;
-  schedule_config?: ObservableScheduleConfig;
-  schedule?: ObservableScheduleStatus;
   state: ObservableRunState | string;
   run_id?: string;
   pid?: number;
@@ -1154,39 +1144,13 @@ export interface ObservableCommandConfig {
   };
 }
 
-export interface ObservableScheduleConfig {
-  timezone?: string;
-  once?: { at: string };
-  daily?: { times: string[]; weekdays?: string[] };
-  monthly?: { days: number[]; times: string[] };
-  interval?: { every_seconds: number };
-  catch_up?: {
-    mode?: "none" | "latest" | string;
-    max_lateness_minutes?: number;
-  };
-  observation: {
-    kind?: string;
-    severity?: string;
-    content: string;
-    attachments?: EventAttachmentRef[];
-  };
-}
 
-export type ObservableCreateRequest =
-  | {
-      id?: string;
-      name?: string;
-      type: "command";
-      command_config: ObservableCommandConfig;
-      schedule_config?: never;
-    }
-  | {
-      id?: string;
-      name?: string;
-      type: "schedule";
-      schedule_config: ObservableScheduleConfig;
-      command_config?: never;
-    };
+export interface ObservableCreateRequest {
+  id?: string;
+  name?: string;
+  type: "command";
+  command_config: ObservableCommandConfig;
+}
 
 
 export interface RuntimeHooksStatus {
