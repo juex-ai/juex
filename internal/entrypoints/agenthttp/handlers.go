@@ -160,6 +160,17 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	inputMessageIDs := r.URL.Query()["input_message_id"]
+	if len(inputMessageIDs) > 80 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "at most 80 input_message_id values are allowed")
+		return
+	}
+	for _, messageID := range inputMessageIDs {
+		if len(messageID) == 0 || len(messageID) > 256 {
+			writeErr(w, http.StatusBadRequest, "bad_request", "input_message_id must contain 1 to 256 bytes")
+			return
+		}
+	}
 	if value, ok := s.threads.Load(id); ok {
 		active := value.(*activeThread)
 		var response threadShowResponse
@@ -178,7 +189,7 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 			return nil
 		})
 		if err == nil {
-			s.annotateInputs(id, &response)
+			s.annotateInputs(id, &response, inputMessageIDs...)
 			writeJSON(w, http.StatusOK, response)
 			return
 		}
@@ -207,11 +218,11 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 		Info: info, Items: page.Items, HasMoreBefore: page.HasMoreBefore,
 		PreviousCursor: page.PreviousCursor,
 	}
-	s.annotateInputs(id, &response)
+	s.annotateInputs(id, &response, inputMessageIDs...)
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (s *Server) annotateInputs(id string, response *threadShowResponse) {
+func (s *Server) annotateInputs(id string, response *threadShowResponse, retainedMessageIDs ...string) {
 	if !s.opts.Cfg.ModuleEnabled("input-tracking") {
 		return
 	}
@@ -221,7 +232,7 @@ func (s *Server) annotateInputs(id string, response *threadShowResponse) {
 		response.InputTracking.Error = "Input status is unavailable"
 		return
 	}
-	var ids []string
+	ids := append([]string(nil), retainedMessageIDs...)
 	for _, item := range response.Items {
 		if item.Message != nil && item.Message.Role == llm.RoleUser {
 			ids = append(ids, item.Message.ID)

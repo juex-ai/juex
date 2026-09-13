@@ -180,6 +180,59 @@ test("getThread treats a null empty timeline as no messages", async () => {
   }
 });
 
+test("getThread refreshes every retained annotation in bounded Agent-scoped batches", async () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const originalFetch = globalThis.fetch;
+  const location = { pathname: "/agents/first/threads/0" };
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { location } });
+  const ids = Array.from({ length: 205 }, (_, index) => `msg-${index}-${"界".repeat(30)}`);
+  const received: string[] = [];
+  let requests = 0;
+  globalThis.fetch = (async input => {
+    const url = new URL(String(input), "http://localhost");
+    assert.equal(url.pathname, "/agents/first/api/threads/0");
+    assert.ok(url.search.length < 6100);
+    const batch = url.searchParams.getAll("input_message_id");
+    assert.ok(batch.length <= 80);
+    received.push(...batch);
+    location.pathname = "/agents/second/threads/0";
+    return new Response(JSON.stringify({ thread_id: "0", items: [], input_tracking: {
+      scope_id: `g${++requests}`, messages: Object.fromEntries(batch.map(message_id => [message_id, { message_id, input_id: message_id, scope_id: "g1" }])),
+    } }));
+  }) as typeof fetch;
+  try {
+    const result = await getThread("0", { inputMessageIDs: [...ids, ...ids] });
+    assert.deepEqual(received, ids);
+    assert.equal(Object.keys(result.input_tracking!.messages).length, ids.length);
+    assert.equal(result.input_tracking?.scope_id, `g${requests}`);
+    assert.ok(requests > 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else delete (globalThis as { window?: unknown }).window;
+  }
+});
+
+test("a disabled or failed annotation batch never publishes partial markers", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const mode of ["disabled", "error", "network"]) {
+      let requests = 0;
+      globalThis.fetch = (async () => {
+        if (++requests === 2 && mode === "network") throw new Error("disconnected");
+        const input_tracking = requests === 2
+          ? mode === "disabled" ? undefined : { scope_id: "g1", messages: {}, error: "Unreadable" }
+          : { scope_id: "g1", messages: { old: { message_id: "old", input_id: "input-old", scope_id: "g1" } } };
+        return new Response(JSON.stringify({ thread_id: "0", items: [], input_tracking }));
+      }) as typeof fetch;
+      const result = await getThread("0", { inputMessageIDs: Array.from({ length: 170 }, (_, i) => `msg-${i}`) });
+      assert.equal(requests, 2);
+      if (mode === "disabled") assert.equal(result.input_tracking, undefined);
+      else assert.ok(result.input_tracking?.error);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("startTurn includes uploaded attachments", async () => {
   const originalFetch = globalThis.fetch;
   const calls: Array<{ input: string; init?: RequestInit }> = [];

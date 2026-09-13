@@ -66,7 +66,6 @@ type ShellTitleContextValue = {
 type ShellHeaderState = {
   pathname: string;
   title: string | null;
-  updatedAt?: string | null;
   threadStatus?: "Idle" | "Working" | "Failed" | "Archived" | "Unknown";
 };
 
@@ -74,15 +73,14 @@ const ShellTitleContext = createContext<ShellTitleContextValue | null>(null);
 
 export function useShellTitle(
   title: string | null,
-  updatedAt: string | null = null,
   threadStatus?: ShellHeaderState["threadStatus"],
 ) {
   const context = useContext(ShellTitleContext);
   const { pathname } = useLocation();
 
   useEffect(() => {
-    context?.setShellHeader({ pathname, title, updatedAt, threadStatus });
-  }, [context, pathname, title, updatedAt, threadStatus]);
+    context?.setShellHeader({ pathname, title, threadStatus });
+  }, [context, pathname, title, threadStatus]);
 
   useEffect(() => {
     return () => context?.setShellHeader({ pathname, title: null });

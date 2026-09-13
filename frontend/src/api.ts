@@ -92,6 +92,7 @@ export async function createThread(alias?: string): Promise<CreateThreadResponse
 export interface ThreadMessagePageOptions {
   before?: string;
   limit?: number;
+  inputMessageIDs?: string[];
 }
 
 export async function getThread(
@@ -101,11 +102,34 @@ export async function getThread(
   const params = new URLSearchParams();
   if (opts.before) params.set("before", opts.before);
   if (opts.limit !== undefined) params.set("limit", String(opts.limit));
-  const query = params.size ? `?${params.toString()}` : "";
-  const raw = await jsonOrThrow<RawThreadShowResponse>(
-    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}${query}`)),
-  );
-  return normalizeThreadShow(raw);
+  // Capture the Agent route before any await, including later annotation batches.
+  const path = agentAPIPath(`/api/threads/${encodeURIComponent(id)}`);
+  const ids = [...new Set(opts.inputMessageIDs ?? [])];
+  let result: ThreadShowResponse | undefined;
+  do {
+    const batch = new URLSearchParams(params);
+    while (ids.length && batch.getAll("input_message_id").length < 80) {
+      const next = new URLSearchParams(batch);
+      next.append("input_message_id", ids[0]);
+      if (batch.has("input_message_id") && next.toString().length > 6000) break;
+      batch.append("input_message_id", ids.shift()!);
+    }
+    try {
+      const query = batch.size ? `?${batch}` : "";
+      const page = normalizeThreadShow(await jsonOrThrow<RawThreadShowResponse>(await fetch(`${path}${query}`)));
+      if (!result) result = page;
+      else result.input_tracking = page.input_tracking ? {
+        ...page.input_tracking,
+        messages: { ...result.input_tracking?.messages, ...page.input_tracking.messages },
+      } : undefined;
+    } catch (error) {
+      if (!result) throw error;
+      result.input_tracking = { scope_id: "", messages: {}, error: "Input status is unavailable" };
+    }
+    // A disabled or failed batch cannot leave a partially trusted annotation set.
+    if (!result.input_tracking || result.input_tracking.error) return result;
+  } while (ids.length);
+  return result;
 }
 
 export async function archiveThread(id: string): Promise<void> {

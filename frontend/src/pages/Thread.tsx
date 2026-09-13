@@ -157,7 +157,6 @@ export function Thread() {
 
   useShellTitle(
     data?.id === id ? threadTitle(data.alias, data.id) : null,
-    data?.id === id ? data.last_active_at : null,
     !data || data.id !== id ? undefined
       : data.retention_state === "archived" ? "Archived"
       : !agentRuntimeHealthy || !runtimeStatus || runtimeStatus.thread.id !== id ? "Unknown"
