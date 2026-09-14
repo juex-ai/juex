@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -312,6 +313,14 @@ func serveFileRaw(w http.ResponseWriter, r *http.Request, file resolvedFileReque
 		return
 	}
 	defer f.Close()
+
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(file.relPath)}))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, file.relPath, file.info.ModTime(), f)
+		return
+	}
 
 	sample := make([]byte, 512)
 	n, err := f.Read(sample)

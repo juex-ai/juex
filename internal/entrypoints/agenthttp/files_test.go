@@ -1036,3 +1036,55 @@ func TestDisabledScratchpadEndpointSkipsStoredResources(t *testing.T) {
 		t.Fatalf("retained file=%q %v", data, err)
 	}
 }
+
+func TestFileDownloadsReturnOriginalBytesAsAttachments(t *testing.T) {
+	srv := newTestServer(t)
+	seedScratchpadThread(t, srv.opts.Cfg.WorkDir, thread.MainID,
+		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
+	roots := []struct{ dir, route string }{
+		{srv.opts.Cfg.WorkDir, "/api/files/raw"},
+		{filepath.Join(srv.opts.Cfg.ThreadsDir(), thread.MainID, "scratchpad"), "/api/threads/0/modules/scratchpad/resources/files/raw"},
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	for _, root := range roots {
+		for name, content := range map[string][]byte{
+			"page.html":  []byte("<script>alert('source only')</script>"),
+			"large.txt":  bytes.Repeat([]byte("x"), maxFilePreviewBytes+17),
+			"binary.dat": {0, 1, 2, 255},
+			"报告.txt":     []byte("original"),
+		} {
+			mustWriteBytes(t, filepath.Join(root.dir, name), content)
+			resp, err := http.Get(ts.URL + root.route + "?download=1&path=" + url.QueryEscape(name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if resp.StatusCode != http.StatusOK || !bytes.Equal(body, content) {
+				t.Fatalf("%s %s: status=%d length=%d", root.route, name, resp.StatusCode, len(body))
+			}
+			if resp.Header.Get("Content-Type") != "application/octet-stream" || !strings.HasPrefix(resp.Header.Get("Content-Disposition"), "attachment;") || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+				t.Fatalf("unsafe download headers: %v", resp.Header)
+			}
+		}
+		outside := filepath.Join(t.TempDir(), "outside.txt")
+		mustWriteFile(t, outside, "outside")
+		if err := os.Symlink(outside, filepath.Join(root.dir, "outside-link")); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{"../outside.txt", outside, "outside-link"} {
+			resp, err := http.Get(ts.URL + root.route + "?download=1&path=" + url.QueryEscape(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("%s: escape %q status=%d", root.route, path, resp.StatusCode)
+			}
+		}
+	}
+}

@@ -46,12 +46,8 @@ test("loadWorkspaceSnapshot keeps tree refresh when open preview fails", async (
   });
 
   assert.equal(snapshot.tree, tree);
-  assert.deepEqual(snapshot.previewFile, {
-    path: "removed.txt",
-    content: "file not found",
-    size: 0,
-    truncated: false,
-  });
+  assert.equal(snapshot.previewFile, undefined);
+  assert.equal(snapshot.previewError, "file not found");
 });
 
 test("loadWorkspaceSnapshot rethrows aborted preview refreshes", async () => {

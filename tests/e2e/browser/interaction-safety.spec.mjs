@@ -38,7 +38,7 @@ async function fixture(page, options = {}) {
   });
   return calls;
 }
-const composer = (page) => page.getByRole("textbox", { name: "" });
+const composer = (page) => page.locator('textarea[name="message"]');
 async function main(page, name = "minima") { await page.getByRole("link", { name: `Chat with ${name}`, exact: true }).click(); }
 async function threads(page) { await page.getByRole("link", { name: "Thread Explorer", exact: true }).click(); }
 
