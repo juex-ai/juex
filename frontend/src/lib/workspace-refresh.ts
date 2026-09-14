@@ -9,6 +9,7 @@ export type LoadFileContent = (
 export type WorkspaceSnapshot = {
   tree: FileNode;
   previewFile?: FileContentResponse;
+  previewError?: string;
 };
 
 export async function loadWorkspaceSnapshot({
@@ -27,17 +28,12 @@ export async function loadWorkspaceSnapshot({
     return { tree: await treePromise };
   }
 
-  const previewPromise = loadContent(previewPath, signal).catch((error) => {
+  const previewPromise = loadContent(previewPath, signal).then(previewFile => ({ previewFile })).catch((error) => {
     if (isAbortError(error)) throw error;
-    return fileContentError(previewPath, error);
+    return { previewError: error instanceof Error ? error.message : "Failed to load file content." };
   });
-  const [tree, previewFile] = await Promise.all([treePromise, previewPromise]);
-  return { tree, previewFile };
-}
-
-function fileContentError(path: string, error: unknown): FileContentResponse {
-  const content = error instanceof Error ? error.message : "Failed to load file content.";
-  return { path, content, size: 0, truncated: false };
+  const [tree, preview] = await Promise.all([treePromise, previewPromise]);
+  return { tree, ...preview };
 }
 
 function isAbortError(error: unknown): boolean {

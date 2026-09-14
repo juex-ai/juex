@@ -5,8 +5,8 @@ import { moduleContributions } from "./registry";
 import { resolveContributions } from "./resolve";
 import type { FileContribution } from "./types";
 
-export function useModuleFilePanel({ agentID, threadID, snapshot, workspaceHealthy, workspaceRevision }: {
-  agentID: string; threadID: string; snapshot?: ThreadModulesSnapshot; workspaceHealthy: boolean; workspaceRevision: number;
+export function useModuleFilePanel({ agentID, threadID, snapshot, workspaceHealthy, workspaceRevision, workspacePath }: {
+  agentID: string; threadID: string; snapshot?: ThreadModulesSnapshot; workspaceHealthy: boolean; workspaceRevision: number; workspacePath?: string;
 }) {
   const { files } = useMemo(() => resolveContributions(snapshot, moduleContributions), [snapshot]);
   // Root changes remount the file panel; return menu focus to its new trigger.
@@ -22,6 +22,7 @@ export function useModuleFilePanel({ agentID, threadID, snapshot, workspaceHealt
   const title = selected?.label ?? "Workspace";
   return {
     title,
+    rootDescription: selected ? `Thread ${threadID} / ${title}` : workspacePath,
     rootKey: `${scopeKey}:${selected?.id ?? "workspace"}:${selected ? "module" : workspaceHealthy}`,
     emptyLabel: selected?.emptyLabel ?? "This directory is empty.",
     unavailableReason: !selected && !workspaceHealthy ? "Workspace unavailable while the agent is stopped." : undefined,

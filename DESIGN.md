@@ -150,6 +150,17 @@ Files and Runtime use the same lightweight current-view selector with checked
 options and keyboard navigation. The Files selector replaces a repeated root
 heading; a single available root appears as plain text.
 
+File browsing shows the Workspace path or module Thread scope even when empty.
+Filename/path search covers the loaded tree, including collapsed folders, and
+reports incomplete results. Dotfiles are hidden by default with an explicit
+toggle. Clearing search preserves directory expansion. File previews are
+read-only source or images, with copy, original download, and a wrap control;
+code has highlighting and line numbers, with a plain-text fallback for large
+previews. Truncation and read errors are explicit. Original downloads preserve
+bytes and use attachment delivery; HTML is never executed in the preview.
+Closing a preview returns focus to its file, or to search if that file vanished.
+Closing or switching roots invalidates outstanding preview requests.
+
 Recitation shows the latest recorded normal request preparation with its time and
 ordered fragments. It is historical evidence, not a current preview or proof of
 provider delivery. Inspection reads journals without collecting module context.

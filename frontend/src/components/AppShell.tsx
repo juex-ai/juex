@@ -310,6 +310,7 @@ export function AppShell() {
     agentID: agentId, threadID, snapshot: moduleState.snapshot,
     workspaceHealthy: currentAgent?.runtime_health === "healthy",
     workspaceRevision: resourceRevision.workspace,
+    workspacePath: currentAgent?.workspace,
   });
   const workspaceAvailable = Boolean(currentAgent) && activeTab === "chat" && !settings;
   const workspaceOpen = workspaceDocked
