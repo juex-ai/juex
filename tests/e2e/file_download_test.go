@@ -22,12 +22,20 @@ func TestWeb_FileDownloadPreservesThreadScopeAndArchivedResources(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() {
+		if err := main.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	worker, err := store.CreateWorker("0", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer worker.Close()
+	defer func() {
+		if err := worker.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	expected := map[string][]byte{}
 	for _, item := range []*thread.Thread{main, worker} {
 		dir := filepath.Join(item.Dir, "scratchpad")
