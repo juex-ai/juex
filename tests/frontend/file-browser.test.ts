@@ -24,6 +24,11 @@ test('find files matches full paths case insensitively, including collapsed desc
   assert.equal(findFiles(tree,'missing').truncated,true);
   assert.deepEqual(findFiles(tree,'missing').files,[]);
 });
+test('find files matches ASCII I in filenames and queries regardless of the host locale', () => {
+  const root: FileNode = {name:'root',path:'/',is_dir:true,children:[file('src/INDEX.HTML'),file('src/index.ts')]};
+  assert.deepEqual(findFiles(root,'index.html').files.map(n=>n.path),['src/INDEX.HTML']);
+  assert.deepEqual(findFiles(root,'INDEX.TS').files.map(n=>n.path),['src/index.ts']);
+});
 test('preview language follows filename and keeps unknown content as plain text', () => {
   assert.equal(fileLanguage('nested/INDEX.HTML'),'html');
   assert.equal(fileLanguage('cmd/main.go'),'go');

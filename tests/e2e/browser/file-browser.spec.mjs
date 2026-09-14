@@ -60,6 +60,17 @@ test('finds collapsed paths, hides dotfiles and retains expanded folders after c
   await page.getByRole('checkbox',{name:'Show hidden files'}).check();
   await expect(page.getByRole('button',{name:'.cache/hidden.txt',exact:true})).toBeVisible();
 });
+test.describe('file search in a Turkish browser locale', () => {
+  test.use({locale:'tr-TR'});
+  test('matches ASCII filenames in either case', async ({page}) => {
+    await fixture(page,{tree:{...baseline,children:[file('INDEX.HTML'),file('index.ts')]}});
+    expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().locale)).toBe('tr-TR');
+    await search(page,'index.html');
+    await expect(page.getByRole('button',{name:'INDEX.HTML',exact:true})).toBeVisible();
+    await search(page,'INDEX.TS');
+    await expect(page.getByRole('button',{name:'index.ts',exact:true})).toBeVisible();
+  });
+});
 for (const mobile of [false,true]) test(`source preview copies, wraps, downloads and returns focus (${mobile?'phone':'desktop'})`, async ({page}) => {
   await fixture(page,{mobile});
   await search(page,'index.html');

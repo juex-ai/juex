@@ -10,12 +10,12 @@ export function filterFileTree(node: FileNode, showHidden: boolean): FileNode {
 }
 
 export function findFiles(tree: FileNode, query: string): { files: FileNode[]; truncated: boolean } {
-  const needle = query.trim().toLocaleLowerCase();
+  const needle = query.trim().toLowerCase();
   const files: FileNode[] = [];
   let truncated = false;
   function visit(node: FileNode) {
     if (node.children_truncated) truncated = true;
-    if (!node.is_dir && node.path.toLocaleLowerCase().includes(needle)) files.push(node);
+    if (!node.is_dir && node.path.toLowerCase().includes(needle)) files.push(node);
     node.children?.forEach(visit);
   }
   visit(tree);
