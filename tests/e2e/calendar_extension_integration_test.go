@@ -62,7 +62,7 @@ func TestCalendarExtensionIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	_, err = a.Engine.Tools.Call(ctx, "mcp__calendar__calendar_create", map[string]any{"id": "integration", "content": "calendar integration reminder", "once": map[string]any{"at": time.Now().Add(2 * time.Second).UTC().Format(time.RFC3339Nano)}})
+	_, err = a.Engine.Tools.Call(ctx, "mcp__calendar__calendar_create", map[string]any{"id": "integration", "content": "calendar integration reminder", "frequency": "once", "at": time.Now().Add(2 * time.Second).UTC().Format(time.RFC3339Nano)})
 	if err != nil {
 		t.Fatal(err)
 	}
