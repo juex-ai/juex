@@ -47,19 +47,7 @@ func NewOpenAICodexResponses(profile llm.ProviderProfile, client any) llm.Provid
 	opts := []option.RequestOption{
 		option.WithBaseURL(openAICodexResponsesBaseURL(profile.BaseURL)),
 		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
-	}
-	for k, v := range profile.Headers {
-		opts = append(opts, option.WithHeader(k, v))
-	}
-	opts = append(opts,
 		option.WithAPIKey(profile.APIKey),
-		option.WithHeader("originator", "juex"),
-		option.WithHeader("User-Agent", fmt.Sprintf("juex (%s; %s)", runtime.GOOS, runtime.GOARCH)),
-		option.WithHeader("OpenAI-Beta", "responses=experimental"),
-		option.WithHeader("Accept", "text/event-stream"),
-	)
-	if accountID := codexAccountID(profile); accountID != "" {
-		opts = append(opts, option.WithHeader("chatgpt-account-id", accountID))
 	}
 	for k, v := range profile.Query {
 		opts = append(opts, option.WithQuery(k, v))
@@ -87,6 +75,17 @@ func (p *openAICodexResponsesProvider) Complete(ctx context.Context, sys string,
 
 func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
 	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	headers, err := providerprofile.RenderHeaders(p.profile, opts.Identity)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	requestProfile := p.profile
+	requestProfile.Headers = headers
+	httpHeaders := codexResponsesHeaders(requestProfile, false)
+	requestOptions := make([]option.RequestOption, 0, len(httpHeaders))
+	for name := range httpHeaders {
+		requestOptions = append(requestOptions, option.WithHeader(name, httpHeaders.Get(name)))
+	}
 	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{OmitReasoning: true})
 	if err != nil {
 		return llm.Response{}, err
@@ -96,14 +95,14 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 
 	switch p.transport {
 	case providerprofile.CodexTransportAuto:
-		resp, err = p.ws.Complete(ctx, params, opts)
+		resp, err = p.ws.Complete(ctx, params, opts, codexResponsesHeaders(requestProfile, true))
 		if err != nil {
-			resp, err = p.completeSSE(ctx, params, opts)
+			resp, err = p.completeSSE(ctx, params, opts, requestOptions...)
 		}
 	case providerprofile.CodexTransportWebSocket, providerprofile.CodexTransportWebSocketCached:
-		resp, err = p.ws.Complete(ctx, params, opts)
+		resp, err = p.ws.Complete(ctx, params, opts, codexResponsesHeaders(requestProfile, true))
 	case providerprofile.CodexTransportSSE:
-		resp, err = p.completeSSE(ctx, params, opts)
+		resp, err = p.completeSSE(ctx, params, opts, requestOptions...)
 	default:
 		return llm.Response{}, fmt.Errorf("openai codex responses: unsupported codex transport %q", p.transport)
 	}
@@ -113,13 +112,13 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 	return p.responseFromCodexResponses(resp), nil
 }
 
-func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions) (*responses.Response, error) {
+func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions, requestOptions ...option.RequestOption) (*responses.Response, error) {
 	maxAttempts := protocolsupport.ProviderMaxRetries + 1
 	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
 	idleAttempts := 0
 	for attempt := 0; ; attempt++ {
 		streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
-		stream := p.client.Responses.NewStreaming(streamCtx, params)
+		stream := p.client.Responses.NewStreaming(streamCtx, params, requestOptions...)
 		resp, err := readCodexResponsesStream(stream, codexResponsesStreamOptions{
 			OnDelta:   opts.OnDelta,
 			ResetIdle: resetIdle,
@@ -429,4 +428,26 @@ func codexAccountIDFromAccessToken(token string) string {
 		return strings.TrimSpace(accountID)
 	}
 	return ""
+}
+
+func codexResponsesHeaders(profile llm.ProviderProfile, websocket bool) http.Header {
+	headers := http.Header{}
+	for k, v := range profile.Headers {
+		headers.Set(k, v)
+	}
+	if profile.APIKey != "" || !websocket {
+		headers.Set("Authorization", "Bearer "+profile.APIKey)
+	}
+	headers.Set("originator", "juex")
+	headers.Set("User-Agent", fmt.Sprintf("juex (%s; %s)", runtime.GOOS, runtime.GOARCH))
+	if websocket {
+		headers.Set("OpenAI-Beta", codexResponsesWebsocketBeta)
+	} else {
+		headers.Set("OpenAI-Beta", "responses=experimental")
+		headers.Set("Accept", "text/event-stream")
+	}
+	if accountID := codexAccountID(profile); accountID != "" {
+		headers.Set("chatgpt-account-id", accountID)
+	}
+	return headers
 }

@@ -1099,6 +1099,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		}
 
 		resp, err := llm.CompleteWithOptions(ctx, candidate.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
+			Identity:          e.requestIdentityLocked(),
 			Purpose:           "turn",
 			MaxOutputTokens:   candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
 			CachePolicy:       cachePolicy,

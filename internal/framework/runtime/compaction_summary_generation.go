@@ -385,6 +385,7 @@ func (e *Engine) completeCompactionSummary(
 		return llm.Response{}, epoch, &compactionSummaryJournalError{err: fmt.Errorf("commit compaction provider request: %w", err)}
 	}
 	resp, requestErr := llm.CompleteWithOptions(ctx, provider, system, history, nil, llm.CompleteOptions{
+		Identity:          e.requestIdentityLocked(),
 		Purpose:           "compaction",
 		MaxOutputTokens:   maxOutputTokens,
 		ThinkingEffort:    compactionSummaryThinkingEffort,

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -26,6 +25,7 @@ type codexResponsesWebsocketTransport struct {
 
 	mu             sync.Mutex
 	conn           *websocket.Conn
+	headers        http.Header
 	lastRequest    map[string]any
 	lastBaseline   []any
 	lastResponseID string
@@ -35,7 +35,7 @@ func newCodexResponsesWebsocketTransport(profile llm.ProviderProfile, httpClient
 	return &codexResponsesWebsocketTransport{profile: profile, httpClient: httpClient}
 }
 
-func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions) (*responses.Response, error) {
+func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions, headers http.Header) (*responses.Response, error) {
 	payload, err := codexResponsesWebsocketPayload(params)
 	if err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	conn, err := t.ensureConnLocked(ctx)
+	conn, err := t.ensureConnLocked(ctx, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,10 @@ func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params 
 	return resp, nil
 }
 
-func (t *codexResponsesWebsocketTransport) ensureConnLocked(ctx context.Context) (*websocket.Conn, error) {
+func (t *codexResponsesWebsocketTransport) ensureConnLocked(ctx context.Context, headers http.Header) (*websocket.Conn, error) {
+	if t.conn != nil && !reflect.DeepEqual(t.headers, headers) {
+		t.closeLocked()
+	}
 	if t.conn != nil {
 		return t.conn, nil
 	}
@@ -93,7 +96,7 @@ func (t *codexResponsesWebsocketTransport) ensureConnLocked(ctx context.Context)
 	}
 	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPClient:      t.httpClient,
-		HTTPHeader:      codexResponsesWebsocketHeaders(t.profile),
+		HTTPHeader:      headers,
 		CompressionMode: websocket.CompressionContextTakeover,
 	})
 	if err != nil {
@@ -103,6 +106,7 @@ func (t *codexResponsesWebsocketTransport) ensureConnLocked(ctx context.Context)
 		return nil, fmt.Errorf("codex websocket connect: %w", err)
 	}
 	t.conn = conn
+	t.headers = headers.Clone()
 	return conn, nil
 }
 
@@ -123,6 +127,7 @@ func (t *codexResponsesWebsocketTransport) closeLocked() {
 		_ = t.conn.Close(websocket.StatusNormalClosure, "")
 		t.conn = nil
 	}
+	t.headers = nil
 	t.lastRequest = nil
 	t.lastBaseline = nil
 	t.lastResponseID = ""
@@ -231,23 +236,6 @@ func codexResponsesWebsocketURL(profile llm.ProviderProfile) (string, error) {
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
-}
-
-func codexResponsesWebsocketHeaders(profile llm.ProviderProfile) http.Header {
-	headers := http.Header{}
-	for k, v := range profile.Headers {
-		headers.Set(k, v)
-	}
-	if profile.APIKey != "" {
-		headers.Set("Authorization", "Bearer "+profile.APIKey)
-	}
-	headers.Set("originator", "juex")
-	headers.Set("User-Agent", fmt.Sprintf("juex (%s; %s)", runtime.GOOS, runtime.GOARCH))
-	headers.Set("OpenAI-Beta", codexResponsesWebsocketBeta)
-	if accountID := codexAccountID(profile); accountID != "" {
-		headers.Set("chatgpt-account-id", accountID)
-	}
-	return headers
 }
 
 func readCodexResponsesWebsocket(ctx context.Context, conn *websocket.Conn, opts codexResponsesStreamOptions) (*responses.Response, error) {

@@ -2,6 +2,8 @@ package providerreadiness
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -52,7 +54,7 @@ func (f ProbeFunc) Probe(ctx context.Context, profile llm.ProviderProfile) error
 	return f(ctx, profile)
 }
 
-type LLMProbe struct{}
+type LLMProbe struct{ AgentID string }
 
 type ProviderConstructionError struct {
 	Err error
@@ -72,14 +74,25 @@ func (e *ProviderConstructionError) Unwrap() error {
 	return e.Err
 }
 
-func (LLMProbe) Probe(ctx context.Context, profile llm.ProviderProfile) error {
+func (p LLMProbe) Probe(ctx context.Context, profile llm.ProviderProfile) error {
 	provider, err := modelproviders.NewProvider(profile)
 	if err != nil {
 		return &ProviderConstructionError{Err: err}
 	}
-	_, err = provider.Complete(ctx, "Reply with a short hello.", []llm.Message{
+	var nonce [12]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return fmt.Errorf("create probe identity: %w", err)
+	}
+	probeID := "probe-" + hex.EncodeToString(nonce[:])
+	agentID := p.AgentID
+	if agentID == "" {
+		agentID = probeID
+	}
+	_, err = llm.CompleteWithOptions(ctx, provider, "Reply with a short hello.", []llm.Message{
 		llm.TextMessage(llm.RoleUser, "hello"),
-	}, nil)
+	}, nil, llm.CompleteOptions{Identity: llm.RequestIdentity{
+		AgentID: agentID, ThreadID: probeID, GenerationID: probeID, ContextScopeID: probeID,
+	}})
 	return err
 }
 
@@ -201,7 +214,7 @@ func CheckConnectivity(ctx context.Context, cfg config.Config, opts Connectivity
 	}
 	probe := opts.Probe
 	if probe == nil {
-		probe = LLMProbe{}
+		probe = LLMProbe{AgentID: cfg.AgentID}
 	}
 	timeout := opts.Timeout
 	if timeout <= 0 {

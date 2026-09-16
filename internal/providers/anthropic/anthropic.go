@@ -34,9 +34,6 @@ func NewAnthropic(profile llm.ProviderProfile, _ any) llm.Provider {
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
 	}
-	for k, v := range profile.Headers {
-		opts = append(opts, option.WithHeader(k, v))
-	}
 	for k, v := range profile.Query {
 		opts = append(opts, option.WithQuery(k, v))
 	}
@@ -54,6 +51,14 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 
 func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
 	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	headers, err := providerprofile.RenderHeaders(p.profile, opts.Identity)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	requestOptions := make([]option.RequestOption, 0, len(headers))
+	for name, value := range headers {
+		requestOptions = append(requestOptions, option.WithHeader(name, value))
+	}
 	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{})
 	if err != nil {
 		return llm.Response{}, err
@@ -93,7 +98,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	}
 
 	if !p.profile.Capabilities.Streaming {
-		msg, err := p.client.Messages.New(ctx, params)
+		msg, err := p.client.Messages.New(ctx, params, requestOptions...)
 		if err != nil {
 			return llm.Response{}, fmt.Errorf("anthropic: %w", err)
 		}
@@ -106,7 +111,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
 	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 	defer stopIdle()
-	stream := p.client.Messages.NewStreaming(streamCtx, params, option.WithMiddleware(streamDiagnostics.middleware))
+	stream := p.client.Messages.NewStreaming(streamCtx, params, append(requestOptions, option.WithMiddleware(streamDiagnostics.middleware))...)
 	for stream.Next() {
 		resetIdle()
 		event := stream.Current()

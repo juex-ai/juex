@@ -698,6 +698,9 @@ func redactConfiguredEnvironmentError(snapshot environment.Snapshot, err error) 
 }
 
 func finalizeLoadedConfig(cfg *Config, resolveAuth bool, publishImportCache bool) error {
+	if err := validateHeaderTemplates(cfg); err != nil {
+		return err
+	}
 	if err := resolveModuleDeclarations(cfg); err != nil {
 		return err
 	}
@@ -716,6 +719,22 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth bool, publishImportCache bool
 	}
 	cfg.agentStateLoaded = true
 	return nil
+}
+
+func validateHeaderTemplates(cfg *Config) error {
+	for _, provider := range cfg.providerConfigs {
+		if len(provider.Models) == 0 {
+			if err := providerprofile.ValidateHeaders(llm.ProviderProfile{ID: provider.ID, Headers: provider.Headers}); err != nil {
+				return err
+			}
+		}
+		for _, model := range provider.Models {
+			if err := providerprofile.ValidateHeaders(llm.ProviderProfile{ID: provider.ID, Model: model.ID, Headers: mergeStringMap(provider.Headers, model.Headers)}); err != nil {
+				return err
+			}
+		}
+	}
+	return providerprofile.ValidateHeaders(llm.ProviderProfile{ID: cfg.ProviderID, Model: cfg.Model, Headers: cfg.ProviderHeaders})
 }
 
 func bindAgentState(cfg *Config, resolution agentstate.Resolution) {

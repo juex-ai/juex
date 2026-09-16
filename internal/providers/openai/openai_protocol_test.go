@@ -329,6 +329,9 @@ func TestOpenAICodexResponses_RetriesStreamIdleAfterEmittingDelta(t *testing.T) 
 	attempts := 0
 	client := &http.Client{Transport: openaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		attempts++
+		if got := r.Header.Get("X-Identity"); got != "generation" {
+			t.Errorf("retry identity = %q", got)
+		}
 		if attempts == 1 {
 			partial := `data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"partial plan"}` + "\n\n"
 			return &http.Response{
@@ -341,11 +344,12 @@ func TestOpenAICodexResponses_RetriesStreamIdleAfterEmittingDelta(t *testing.T) 
 		}
 		return openaiCodexCompletedTextResponse(r, "recovered"), nil
 	})}
-	p := NewOpenAICodexResponses(openaiTestProfile(t, providerprofile.Config{ID: "openai-codex", Protocol: string(llm.ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
+	p := NewOpenAICodexResponses(openaiTestProfile(t, providerprofile.Config{ID: "openai-codex", Protocol: string(llm.ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m", Headers: map[string]string{"X-Identity": "${juex_generation_id}"}}), client)
 	var diagnostics []llm.ProviderRetryDiagnostic
 	var deltas []llm.StreamDelta
 
 	resp, err := llm.CompleteWithOptions(context.Background(), p, "", []llm.Message{llm.TextMessage(llm.RoleUser, "hi")}, nil, llm.CompleteOptions{
+		Identity:          llm.RequestIdentity{GenerationID: "generation"},
 		StreamIdleTimeout: 20 * time.Millisecond,
 		OnDelta:           func(delta llm.StreamDelta) { deltas = append(deltas, delta) },
 		RetryObserver:     func(d llm.ProviderRetryDiagnostic) { diagnostics = append(diagnostics, d) },
@@ -1396,6 +1400,9 @@ func TestOpenAIResponses_StreamIdleTimeout(t *testing.T) {
 func TestOpenAIResponses_RetriesStreamIdleTimeout(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Identity"); got != "generation" {
+			t.Errorf("retry identity = %q", got)
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		if requests.Add(1) == 1 {
 			w.WriteHeader(http.StatusOK)
@@ -1407,12 +1414,13 @@ func TestOpenAIResponses_RetriesStreamIdleTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := newTestProvider(providerprofile.Config{ID: "openai", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	p, err := newTestProvider(providerprofile.Config{ID: "openai", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test", Headers: map[string]string{"X-Identity": "${juex_generation_id}"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var diagnostics []llm.ProviderRetryDiagnostic
 	resp, err := llm.CompleteWithOptions(context.Background(), p, "", []llm.Message{llm.TextMessage(llm.RoleUser, "hi")}, nil, llm.CompleteOptions{
+		Identity:          llm.RequestIdentity{GenerationID: "generation"},
 		StreamIdleTimeout: 20 * time.Millisecond,
 		RetryObserver:     func(d llm.ProviderRetryDiagnostic) { diagnostics = append(diagnostics, d) },
 	})

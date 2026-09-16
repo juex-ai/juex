@@ -3955,6 +3955,7 @@ func TestCompactRetainsProviderUsageWhenSummaryOutcomeCommitFails(t *testing.T) 
 	configureCompactionRetryTest(t, eng, 30, 2000)
 	want := errors.New("summary outcome sync failed")
 	bus.SetCommitter(selectiveThreadCommitter{thread: eng.Thread, eventType: "context.compact.summary_responded", err: want})
+	identity := eng.requestIdentityLocked()
 
 	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); !errors.Is(err, want) {
 		t.Fatalf("Compact() error = %v, want %v", err, want)
@@ -3964,6 +3965,9 @@ func TestCompactRetainsProviderUsageWhenSummaryOutcomeCommitFails(t *testing.T) 
 	}
 	if usage := eng.Thread.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 13, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want dispatched provider usage", usage)
+	}
+	if provider.options[0].Identity != identity || eng.requestIdentityLocked() != identity {
+		t.Fatal("failed summary commit changed request identity")
 	}
 }
 

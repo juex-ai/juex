@@ -65,3 +65,31 @@ Extension's manifest and shared environment defaults remain Extension-owned,
 even when its hosts are disabled; evaluating defaults does not prepare private
 data directories. Enabled resources keep their existing validation, provenance,
 conflict and child-process isolation rules.
+
+## Request Header Variables
+
+Existing provider and model `headers` values can reference `${juex_agent_id}`,
+`${juex_thread_id}`, `${juex_generation_id}` and `${juex_context_scope_id}`.
+Provider/model inheritance and imports remain unchanged: templates merge first,
+then expand for each request. Configuration reads and saves retain the original
+template text. For example:
+
+```yaml
+headers:
+  x-session: "${juex_agent_id}-${juex_thread_id}-${juex_generation_id}"
+```
+
+These are persistent IDs, shared by a request and its retries. Workers use their
+own Thread identity. Compaction summaries use the old Generation; subsequent
+requests use the new one after its commit. Context scope survives compaction
+and changes on `/new`, so use `${juex_context_scope_id}` instead of the Generation
+variable when a header should stay stable across compaction. Restoring a Thread
+retains its current identity. Connectivity probes use separate temporary probe
+IDs, with the real Agent ID when available. WebSocket connections reconnect when
+their expanded handshake headers change.
+
+Only header values expand. `$${juex_agent_id}` emits literal `${juex_agent_id}`;
+other placeholders such as `${HOME}` remain literal and do not read environment
+variables. Unknown or unclosed JueX placeholders fail configuration validation.
+A referenced identity missing from a request fails before network I/O, naming
+the provider/model, header and variable without printing the header value.

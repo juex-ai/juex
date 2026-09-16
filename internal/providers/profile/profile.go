@@ -18,6 +18,9 @@ func ResolveProfile(cfg Config) (llm.ProviderProfile, error) {
 	profile.Model = firstProfileValue(cfg.Model, profile.Model)
 	profile.ThinkingEffort = firstProfileValue(cfg.ThinkingEffort, profile.ThinkingEffort)
 	profile.Headers = mergeStringMap(profile.Headers, cfg.Headers)
+	if err := ValidateHeaders(profile); err != nil {
+		return llm.ProviderProfile{}, err
+	}
 	profile.Query = mergeStringMap(profile.Query, cfg.Query)
 	profile.MediaDir = cfg.MediaDir
 	profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
