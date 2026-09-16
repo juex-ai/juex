@@ -60,18 +60,20 @@ function normalizeProse(markdown: string, start: number, end: number): string {
       if (!match.startsWith("\\(") && !match.startsWith("\\[")) return match;
       if (match.length === 2) return match;
       const body = match.slice(2, -2);
-      if (!body.trim() || /\r?\n\s*\r?\n/.test(body)) return match;
       const absoluteStart = start + offset;
       const absoluteEnd = absoluteStart + match.length;
       const lineStart = markdown.lastIndexOf("\n", absoluteStart - 1) + 1;
       const prefix = markdown.slice(lineStart, absoluteStart);
+      const containers = prefix.match(/^(?:[\t ]*(?:>|[-+*]|\d+[.)])[\t ]*)*/)?.[0] ?? "";
+      const depth = containers.split(">").length - 1;
+      const continuation = new RegExp(`\\r?\\n(?:[\\t ]*>[\\t ]?){0,${depth}}`, "g");
+      const proseBody = body.replace(continuation, "\n");
+      // A quote-only blank line still separates Markdown paragraphs.
+      if (!proseBody.trim() || /\n\s*\n/.test(proseBody)) return match;
       // Double dollars also delimit inline math in the existing math plugin;
       // keeping single-dollar parsing disabled avoids interpreting prices as math.
       if (match.startsWith("\\(")) {
-        const containers = prefix.match(/^(?:[\t ]*(?:>|[-+*]|\d+[.)])[\t ]*)*/)?.[0] ?? "";
-        const depth = containers.split(">").length - 1;
-        const continuation = new RegExp(`\\r?\\n(?:[\\t ]*>[\\t ]?){0,${depth}}`, "g");
-        return `$$${body.replace(continuation, " ")}$$`;
+        return `$$${proseBody.replace(/\n/g, " ")}$$`;
       }
       // Keep existing newlines and their Markdown container prefixes verbatim.
       if (/\r?\n/.test(body)) return `$$${body}$$`;

@@ -136,3 +136,14 @@ test("math keeps GFM URLs intact and drops quote continuation markers", async ({
   await bareLink.click();
   await expect(page.locator('[data-streamdown="link-safety-modal"]')).toContainText("https://example.com/?expr=%5C(x%5C)");
 });
+
+test("unclosed quoted formulas preserve separate paragraphs", async ({ page }) => {
+  await openThread(page, String.raw`> \(open
+>
+> close\)`);
+  const markdown = page.locator(".juex-markdown");
+  await expect(markdown.locator("blockquote p")).toHaveCount(2);
+  await expect(markdown.locator("blockquote p").first()).toContainText("open");
+  await expect(markdown.locator("blockquote p").last()).toContainText("close");
+  await expect(markdown.locator(".katex")).toHaveCount(0);
+});

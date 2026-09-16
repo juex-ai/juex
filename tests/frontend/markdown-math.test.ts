@@ -103,3 +103,12 @@ test("multiline inline math strips only the quote's continuation markers", () =>
   assert.equal(normalizeMathDelimiters(String.raw`> \(a +
 b\)`), "> $$a + b$$");
 });
+
+test("does not join formulas across blank paragraphs inside containers", () => {
+  for (const [lead, continuation] of [["> ", ">"], ["> > ", "> >"], ["- > ", "  >"]]) {
+    for (const [open, close] of [["\\(", "\\)"], ["\\[", "\\]"]]) {
+      const source = `${lead}${open}open\n${continuation}\n${continuation} close${close}`;
+      assert.equal(normalizeMathDelimiters(source), source);
+    }
+  }
+});
