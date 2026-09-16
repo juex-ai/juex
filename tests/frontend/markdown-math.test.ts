@@ -54,3 +54,27 @@ test("does not match a formula across literal code or separate paragraphs", () =
   const markdown = "\\(unclosed\n\n`literal`\n\nclosing\\)";
   assert.equal(normalizeMathDelimiters(markdown), markdown);
 });
+
+test("preserves blockquote and list prefixes around display math", () => {
+  for (const prefix of ["> ", "> > ", "  "]) {
+    const lead = prefix === "  " ? "- " : prefix;
+    const source = `${lead}\\[\n${prefix}x_1 + x_2\n${prefix}\\]`;
+    assert.equal(normalizeMathDelimiters(source), `${lead}$$\n${prefix}x_1 + x_2\n${prefix}$$`);
+    assert.equal(normalizeMathDelimiters(`${lead}\\[x_1 + x_2\\]`), `${lead}$$\n${prefix}x_1 + x_2\n${prefix}$$`);
+  }
+});
+
+test("keeps display math inside a table cell or prose on one line", () => {
+  assert.equal(normalizeMathDelimiters(String.raw`| 值 | \[\frac f3\] |`), String.raw`| 值 | $$\displaystyle \frac f3$$ |`);
+  assert.equal(normalizeMathDelimiters(String.raw`前文 \[x\] 后文`), String.raw`前文 $$\displaystyle x$$ 后文`);
+});
+
+test("normalizes link labels while preserving destinations, titles, and references", () => {
+  assert.equal(normalizeMathDelimiters(String.raw`[value \(x\)](https://example.com/\(path\) "\(title\)")`), String.raw`[value $$x$$](https://example.com/\(path\) "\(title\)")`);
+  assert.equal(normalizeMathDelimiters(String.raw`[\[x\]](https://example.com)`), String.raw`[$$\displaystyle x$$](https://example.com)`);
+  assert.equal(normalizeMathDelimiters(String.raw`[\(x\)][ref]
+
+[ref]: https://example.com/\(path\)`), String.raw`[$$x$$][ref]
+
+[ref]: https://example.com/\(path\)`);
+});

@@ -93,3 +93,33 @@ test("streamed LaTeX becomes a formula when the closing delimiter arrives", asyn
   await expect(page.locator(".juex-markdown .katex")).toHaveCount(1);
   expect(errors).toEqual([]);
 });
+
+test("display formulas preserve quote, list, table, and link containers", async ({ page }) => {
+  await openThread(page, String.raw`> \[
+> \frac{a}{b}
+> \]
+
+- \[
+  x_1+x_2
+  \]
+- Second item
+
+| Type | Value |
+|---|---|
+| display | \[\frac f3\] |
+
+[value \(x\)](https://example.com/target)
+
+[\[y\]](https://example.com/display)`);
+  const markdown = page.locator(".juex-markdown");
+  await expect(markdown.locator(".katex")).toHaveCount(5);
+  await expect(markdown.locator(".katex-error")).toHaveCount(0);
+  await expect(markdown.locator("blockquote .katex-display")).toHaveCount(1);
+  await expect(markdown.locator("li .katex-display")).toHaveCount(1);
+  await expect(markdown.locator("li")).toHaveCount(2);
+  await expect(markdown.locator("tbody tr")).toHaveCount(1);
+  await expect(markdown.locator("td .katex")).toHaveCount(1);
+  await expect(markdown.locator('[data-streamdown="link"] .katex')).toHaveCount(2);
+  await markdown.locator('[data-streamdown="link"]').filter({ hasText: "value" }).click();
+  await expect(page.locator('[data-streamdown="link-safety-modal"]')).toContainText("https://example.com/target");
+});
