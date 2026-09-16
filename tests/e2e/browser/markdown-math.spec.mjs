@@ -123,3 +123,16 @@ test("display formulas preserve quote, list, table, and link containers", async 
   await markdown.locator('[data-streamdown="link"]').filter({ hasText: "value" }).click();
   await expect(page.locator('[data-streamdown="link-safety-modal"]')).toContainText("https://example.com/target");
 });
+
+test("math keeps GFM URLs intact and drops quote continuation markers", async ({ page }) => {
+  await openThread(page, String.raw`https://example.com/?expr=\(x\)
+
+> \(a +
+> b\)`);
+  const markdown = page.locator(".juex-markdown");
+  await expect(markdown.locator('blockquote annotation')).toHaveText("a + b");
+  await expect(markdown.locator('[data-streamdown="link"] .katex')).toHaveCount(0);
+  const bareLink = markdown.locator('[data-streamdown="link"]').filter({ hasText: "https://example.com/?expr=" });
+  await bareLink.click();
+  await expect(page.locator('[data-streamdown="link-safety-modal"]')).toContainText("https://example.com/?expr=%5C(x%5C)");
+});

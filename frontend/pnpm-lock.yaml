@@ -56,6 +56,9 @@ importers:
       react-router-dom:
         specifier: ^7.15.0
         version: 7.15.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
       remark-parse:
         specifier: ^11.0.0
         version: 11.0.0

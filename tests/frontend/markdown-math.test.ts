@@ -78,3 +78,28 @@ test("normalizes link labels while preserving destinations, titles, and referenc
 
 [ref]: https://example.com/\(path\)`);
 });
+
+test("protects bare GFM URLs and reference images", () => {
+  const source = String.raw`https://example.com/?expr=\(x\)
+
+![\(x\)]
+
+[\(x\)]: /plot.png`;
+  assert.equal(normalizeMathDelimiters(source), source);
+});
+
+test("shortcut and collapsed links retain the original reference key", () => {
+  for (const suffix of ["", "[]"]) {
+    const definition = String.raw`[\(x\)]: https://example.com/target`;
+    assert.equal(normalizeMathDelimiters(`[\\(x\\)]${suffix}\n\n${definition}`), `[$$x$$][\\(x\\)]\n\n${definition}`);
+  }
+});
+
+test("multiline inline math strips only the quote's continuation markers", () => {
+  assert.equal(normalizeMathDelimiters(String.raw`> \(a +
+> b\)`), "> $$a + b$$");
+  assert.equal(normalizeMathDelimiters(String.raw`> > \(a
+> > > b\)`), "> > $$a > b$$");
+  assert.equal(normalizeMathDelimiters(String.raw`> \(a +
+b\)`), "> $$a + b$$");
+});
