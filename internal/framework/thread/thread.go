@@ -290,6 +290,13 @@ func (t *Thread) ContextScopeID() string {
 	return t.state.ContextScopeID
 }
 
+// ContextIdentity reads the Generation and work scope at the same commit boundary.
+func (t *Thread) ContextIdentity() (generationID, scopeID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.state.Projection.CurrentGeneration.ID, t.state.ContextScopeID
+}
+
 func (t *Thread) BeginCompactedGeneration(summary llm.Message, automatic bool, contextUsage *llm.ContextUsage) (Commit, error) {
 	summary = prepareMessage(summary)
 	return t.beginGeneration(true, summary, automatic, contextUsage)

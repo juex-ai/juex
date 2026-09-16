@@ -59,6 +59,9 @@ func TestTurnMultiLevelFallbackUsesRealTransitionsAndFinalServingNotice(t *testi
 	if got := strings.Join(sequence, ","); got != wantSequence {
 		t.Fatalf("sequence = %q, want %q", got, wantSequence)
 	}
+	if first := primary.opts[0].Identity; first.GenerationID == "" || middle.opts[0].Identity != first || last.opts[0].Identity != first {
+		t.Fatalf("fallback changed request identity: primary=%+v middle=%+v last=%+v", primary.opts, middle.opts, last.opts)
+	}
 	history := eng.Thread.History
 	notices := 0
 	for _, message := range history {
@@ -482,6 +485,9 @@ func TestTurnFallbackAfterToolResultDoesNotRerunTool(t *testing.T) {
 	if toolCalls != 1 {
 		t.Fatalf("tool calls = %d, want 1", toolCalls)
 	}
+	if len(primary.opts) != 2 || primary.opts[0].Identity.GenerationID == "" || primary.opts[0].Identity != primary.opts[1].Identity || primary.opts[0].Identity != backup.opts[0].Identity {
+		t.Fatalf("tool loop changed identity: primary=%+v backup=%+v", primary.opts, backup.opts)
+	}
 	if len(backup.histories) != 1 {
 		t.Fatalf("backup histories = %d", len(backup.histories))
 	}
@@ -531,6 +537,10 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	}
 	if primary.calls != 1 || backup.calls != 2 {
 		t.Fatalf("calls primary=%d backup=%d", primary.calls, backup.calls)
+	}
+	before, summary, after := primary.opts[0].Identity, backup.opts[0].Identity, backup.opts[1].Identity
+	if before.GenerationID == "" || summary != before || after.GenerationID == before.GenerationID || after.ContextScopeID != before.ContextScopeID || after.ThreadID != before.ThreadID {
+		t.Fatalf("fallback compaction identities: before=%+v summary=%+v after=%+v", before, summary, after)
 	}
 	if len(backup.opts) != 2 || backup.opts[0].Purpose != "compaction" || backup.opts[0].MaxOutputTokens <= 0 || backup.opts[0].MaxOutputTokens > 1000 {
 		t.Fatalf("backup compaction options = %+v, want a positive output budget within the <100k hard cap", backup.opts)

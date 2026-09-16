@@ -39,9 +39,6 @@ func NewOpenAIResponses(profile llm.ProviderProfile, _ any) llm.Provider {
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
 	}
-	for k, v := range profile.Headers {
-		opts = append(opts, option.WithHeader(k, v))
-	}
 	for k, v := range profile.Query {
 		opts = append(opts, option.WithQuery(k, v))
 	}
@@ -59,6 +56,14 @@ func (p *openAIResponsesProvider) Complete(ctx context.Context, sys string, hist
 
 func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
 	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	headers, err := providerprofile.RenderHeaders(p.profile, opts.Identity)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	requestOptions := make([]option.RequestOption, 0, len(headers))
+	for name, value := range headers {
+		requestOptions = append(requestOptions, option.WithHeader(name, value))
+	}
 	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{})
 	if err != nil {
 		return llm.Response{}, err
@@ -95,20 +100,20 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 		params.PromptCacheKey = param.NewOpt(opts.CachePolicy.StablePrefixKey)
 	}
 	if p.profile.Capabilities.Streaming {
-		return p.completeStreaming(ctx, params, opts)
+		return p.completeStreaming(ctx, params, opts, requestOptions...)
 	}
 
-	resp, err := p.client.Responses.New(ctx, params)
+	resp, err := p.client.Responses.New(ctx, params, requestOptions...)
 	if err != nil {
 		return llm.Response{}, fmt.Errorf("openai responses: %w", err)
 	}
 	return p.responseFromResponses(resp), nil
 }
 
-func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions) (llm.Response, error) {
+func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions, requestOptions ...option.RequestOption) (llm.Response, error) {
 	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
 	for attempt := 1; ; attempt++ {
-		resp, err, idleExpired := p.completeStreamingAttempt(ctx, params, opts, idleTimeout)
+		resp, err, idleExpired := p.completeStreamingAttempt(ctx, params, opts, idleTimeout, requestOptions...)
 		if err == nil {
 			return resp, nil
 		}
@@ -135,10 +140,10 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 	}
 }
 
-func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions, idleTimeout time.Duration) (llm.Response, error, bool) {
+func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, params responses.ResponseNewParams, opts llm.CompleteOptions, idleTimeout time.Duration, requestOptions ...option.RequestOption) (llm.Response, error, bool) {
 	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 	defer stopIdle()
-	stream := p.client.Responses.NewStreaming(streamCtx, params)
+	stream := p.client.Responses.NewStreaming(streamCtx, params, requestOptions...)
 	defer func() { _ = stream.Close() }()
 
 	var items []responses.ResponseOutputItemUnion

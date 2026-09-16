@@ -16,6 +16,7 @@ type Provider interface {
 }
 
 type CompleteOptions struct {
+	Identity          RequestIdentity
 	Purpose           string
 	MaxOutputTokens   int
 	ThinkingEffort    string
@@ -23,6 +24,15 @@ type CompleteOptions struct {
 	RetryObserver     func(ProviderRetryDiagnostic)
 	OnDelta           func(StreamDelta)
 	StreamIdleTimeout time.Duration
+}
+
+// RequestIdentity is a value snapshot of the durable context sending a request.
+// Retries reuse it; providers must not infer identity from shared client state.
+type RequestIdentity struct {
+	AgentID        string
+	ThreadID       string
+	GenerationID   string
+	ContextScopeID string
 }
 
 type StreamDelta struct {

@@ -47,3 +47,27 @@ Extensions 后，工作区 MCP、Skills 和 Hooks 仍可使用。这些开关控
 Hooks，与内置模块生命周期回调相互独立。已选中 Extension 的 manifest 和
 公共环境默认值仍归 Extension 所有，即使承载模块都关闭也会校验；求值默认值
 不会创建私有数据目录。启用资源保留既有校验、来源、冲突和子进程隔离规则。
+
+## 请求 Header 变量
+
+现有 Provider 和 Model 的 `headers` 值支持 `${juex_agent_id}`、
+`${juex_thread_id}`、`${juex_generation_id}` 和 `${juex_context_scope_id}`。
+Provider/Model 继承和 imports 规则保持不变：先合并模板，再按每次请求展开。
+读取和保存配置保留原始模板文本。例如：
+
+```yaml
+headers:
+  x-session: "${juex_agent_id}-${juex_thread_id}-${juex_generation_id}"
+```
+
+这些值来自持久身份，同一次请求及其重试使用相同值。Worker 使用自己的 Thread
+身份。压缩摘要使用旧 Generation；新 Generation 提交后，后续请求才切换。
+ContextScope 在压缩后不变，在 `/new` 后更换；若 Header 需要跨压缩稳定，
+可用 `${juex_context_scope_id}` 替代 Generation 变量。恢复 Thread 保持当前身份。
+连通性探测使用独立的临时 probe ID，可获取真实 Agent ID 时使用真实值。
+WebSocket 展开后的握手 Header 变化时会重新连接。
+
+仅 Header 值展开。`$${juex_agent_id}` 输出字面量 `${juex_agent_id}`；
+`${HOME}` 等其他占位符保持字面值，不读取环境变量。未知或未闭合的 JueX
+占位符会在配置校验时报错。请求缺少被引用的身份时，在网络发送前报错，
+指出 Provider/Model、Header 和变量名，不输出 Header 的值。

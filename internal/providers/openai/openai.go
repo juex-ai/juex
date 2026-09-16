@@ -33,9 +33,6 @@ func NewOpenAI(profile llm.ProviderProfile, _ any) llm.Provider {
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
 	}
-	for k, v := range profile.Headers {
-		opts = append(opts, option.WithHeader(k, v))
-	}
 	for k, v := range profile.Query {
 		opts = append(opts, option.WithQuery(k, v))
 	}
@@ -53,6 +50,14 @@ func (p *openAIProvider) Complete(ctx context.Context, sys string, history []llm
 
 func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (result llm.Response, err error) {
 	defer func() { err = protocolsupport.WrapProviderError(err) }()
+	headers, err := providerprofile.RenderHeaders(p.profile, opts.Identity)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	requestOptions := make([]option.RequestOption, 0, len(headers))
+	for name, value := range headers {
+		requestOptions = append(requestOptions, option.WithHeader(name, value))
+	}
 	providerContext, err := llm.BuildProviderContext(history, p.profile, llm.ProviderContextOptions{})
 	if err != nil {
 		return llm.Response{}, err
@@ -80,22 +85,22 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 		params.PromptCacheKey = openai.String(opts.CachePolicy.StablePrefixKey)
 	}
 	if p.profile.Capabilities.Streaming {
-		return p.completeStreaming(ctx, params, opts)
+		return p.completeStreaming(ctx, params, opts, requestOptions...)
 	}
 
-	completion, err := p.client.Chat.Completions.New(ctx, params)
+	completion, err := p.client.Chat.Completions.New(ctx, params, requestOptions...)
 	if err != nil {
 		return llm.Response{}, fmt.Errorf("openai: %w", err)
 	}
 	return p.responseFromChatCompletion(completion, "")
 }
 
-func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.ChatCompletionNewParams, opts llm.CompleteOptions) (llm.Response, error) {
+func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.ChatCompletionNewParams, opts llm.CompleteOptions, requestOptions ...option.RequestOption) (llm.Response, error) {
 	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{IncludeUsage: openai.Bool(true)}
 	idleTimeout := protocolsupport.StreamIdleTimeout(opts)
 	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 	defer stopIdle()
-	stream := p.client.Chat.Completions.NewStreaming(streamCtx, params)
+	stream := p.client.Chat.Completions.NewStreaming(streamCtx, params, requestOptions...)
 	defer func() { _ = stream.Close() }()
 
 	acc := openai.ChatCompletionAccumulator{}
