@@ -12,6 +12,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { juexCodeThemes } from "@/lib/code-theme";
+import { normalizeMathDelimiters } from "@/lib/markdown-math";
 import {
   messageContentBaseClassName,
   messageContentUserClassName,
@@ -330,13 +331,15 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 const streamdownPlugins = { cjk, math, mermaid };
 
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
+  ({ className, children, ...props }: MessageResponseProps) => (
     <Streamdown
       className={messageResponseClassName(className)}
       plugins={streamdownPlugins}
       shikiTheme={juexCodeThemes}
       {...props}
-    />
+    >
+      {typeof children === "string" ? normalizeMathDelimiters(children) : children}
+    </Streamdown>
   ),
   (prevProps, nextProps) =>
     prevProps.children === nextProps.children &&
