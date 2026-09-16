@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "katex/dist/katex.min.css";
 
 /* Tailwind v4 doesn't scan node_modules by default. streamdown ships JSX
    with utility classes (sticky, -mt-10, pointer-events-auto, etc.) that
@@ -419,6 +420,13 @@
   .dark .juex-markdown [data-streamdown="code-block"] span {
     background-color: transparent !important;
     color: var(--shiki-dark, var(--juex-code-fg)) !important;
+  }
+
+  .juex-markdown .katex-display {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-block: 0.25rem;
   }
 
   .juex-markdown :not(pre) > code {

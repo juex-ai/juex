@@ -7,6 +7,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { juexCodeThemes } from "@/lib/code-theme";
+import { normalizeMathDelimiters } from "@/lib/markdown-math";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { math } from "@streamdown/math";
@@ -224,7 +225,7 @@ export const ReasoningContent = memo(
         plugins={streamdownPlugins}
         shikiTheme={juexCodeThemes}
       >
-        {children}
+        {normalizeMathDelimiters(children)}
       </Streamdown>
     </CollapsibleContent>
   )
