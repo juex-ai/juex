@@ -225,7 +225,16 @@ func finishContextRenewalFile(threadDir string, entry contextRenewalFile, restor
 		if restore {
 			err = os.Remove(backup)
 		} else {
-			err = os.Rename(backup, path)
+			data, readErr := os.ReadFile(backup)
+			if readErr != nil {
+				return readErr
+			}
+			// Keep the staged bytes until portable, durable publication succeeds,
+			// including Windows sharing retries and post-replacement sync errors.
+			if err := homestore.WriteFileAtomicExisting(path, data, info.Mode().Perm()); err != nil {
+				return err
+			}
+			err = os.Remove(backup)
 		}
 		if err != nil {
 			return err

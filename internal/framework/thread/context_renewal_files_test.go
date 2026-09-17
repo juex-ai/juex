@@ -58,6 +58,51 @@ func TestContextReplacementCrashRecovery(t *testing.T) {
 	}
 }
 
+func TestContextReplacementRetainsStagedDataAfterPublicationFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state")
+	if err := os.WriteFile(path, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	change, err := StageContextRenewalFileReplace(dir, path, InitialGeneration, []byte("new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A conflicting destination deterministically rejects publication on every
+	// platform; recovery must retain the staged source and transaction metadata.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := change.Finalize(); err == nil {
+		t.Fatal("replacement unexpectedly overwrote a directory")
+	}
+	backup := contextRenewalBackupPath(path, InitialGeneration)
+	if data, err := os.ReadFile(backup); err != nil || string(data) != "new" {
+		t.Fatalf("staged data = %q, %v", data, err)
+	}
+	if present, err := contextRenewalFilesPresent(dir); err != nil || !present {
+		t.Fatalf("lost transaction after failure: %v, %v", present, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverContextRenewalFiles(dir, "g000002"); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "new" {
+		t.Fatalf("recovered data = %q, %v", data, err)
+	}
+	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staged data remains after recovery: %v", err)
+	}
+	if present, err := contextRenewalFilesPresent(dir); err != nil || present {
+		t.Fatalf("transaction remains after recovery: %v, %v", present, err)
+	}
+}
+
 func TestStoreOpenRecoversContextRenewalFilesFromJournalGeneration(t *testing.T) {
 	for _, test := range []struct {
 		name         string
