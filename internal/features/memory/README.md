@@ -85,7 +85,9 @@ recall or extraction. Advanced adds bounded automatic work using the same data:
   injected recall, compaction summaries and tool output are not source facts.
 - One Worker runs per Fleet. Each attempt permits 180 seconds, eight Provider
   requests, a 16K context and 4096 output tokens per request. Infrastructure
-  failures retry at most twice with backoff. Only applied/no-change outcomes
+  failures retry at most twice with backoff. An exhausted or rejected batch is
+  not automatically recreated; manual maintenance can explicitly retry it.
+  Only applied/no-change outcomes
   advance the covered history cursor. Thread completion alone proves nothing.
 - Workers have only scoped Memory search/read/history/decision tools, including
   after restoration. They do not share Main's management or general tools.

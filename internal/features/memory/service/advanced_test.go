@@ -94,6 +94,60 @@ func TestAdvancedMaximumWaitFailureAndOptOut(t *testing.T) {
 	}
 }
 
+func TestAdvancedExhaustedBatchRequiresExplicitRetry(t *testing.T) {
+	s, a, super, _ := fixture(t)
+	ctx := context.Background()
+	s, err := Open(s.dir, a.FleetID, mc.Advanced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := s.now()
+	s.now = func() time.Time { return now }
+	contribute(t, s, a, []string{"g1", "g2", "g3", "g4", "g5"})
+	var requestID string
+	for attempt := 1; attempt <= 3; attempt++ {
+		job, err := s.Claim(ctx, super)
+		if err != nil || job == nil {
+			t.Fatalf("attempt %d: %+v %v", attempt, job, err)
+		}
+		if requestID != "" && requestID != job.ID {
+			t.Fatal("retry replaced the durable request")
+		}
+		requestID = job.ID
+		worker := super
+		worker.AssignmentID, worker.Token = job.ID, job.Token
+		if _, err := s.Fail(ctx, worker, mc.Failure{Reason: "provider unavailable"}); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Duration(attempt*5) * time.Second)
+		if _, err := s.Participation(ctx, a, mc.Boundary{ThreadID: "0", Epoch: "on-1", Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Exhaustion survives service restart and repeated coordinator polls.
+	s, err = Open(s.dir, a.FleetID, mc.Advanced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return now }
+	for i := 0; i < 2; i++ {
+		if job, err := s.Claim(ctx, super); err != nil || job != nil {
+			t.Fatalf("exhausted range scheduled again: %+v %v", job, err)
+		}
+	}
+	state, err := s.Participation(ctx, a, mc.Boundary{ThreadID: "0", Epoch: "on-1", Enabled: true})
+	if err != nil || state.ProcessedThrough != 0 {
+		t.Fatalf("failure advanced source: %+v %v", state, err)
+	}
+	manual, err := s.Maintain(ctx, a, "0")
+	if err != nil || manual.ID == requestID {
+		t.Fatalf("explicit retry: %+v %v", manual, err)
+	}
+	if job, err := s.Claim(ctx, super); err != nil || job == nil || job.ID != manual.ID {
+		t.Fatalf("manual retry was not claimable: %+v %v", job, err)
+	}
+}
+
 func TestStructuredTemporalKnowledgeAndStrategySwitch(t *testing.T) {
 	s, a, super, user := fixture(t)
 	ctx := context.Background()

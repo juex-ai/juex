@@ -109,10 +109,17 @@ func (s *Store) schedule(manual bool, only string) *work {
 			continue
 		}
 		p := mc.Proposal{Key: fmt.Sprintf("maintenance/%s/%s/%d/%d", key, src.Epoch, src.ProcessedThrough, src.AcceptedThrough), Text: "Review bounded original dialogue for stable, useful knowledge. Compare existing scoped knowledge, preserve direct provenance and temporal uncertainty; commit a bounded change or no_change.", Reason: "bounded history maintenance", Evidence: clone(src.Evidence)}
+		// A terminal failure or rejection must not reset its budget by creating
+		// another automatic request for the same frozen range. Manual work is an
+		// explicit retry; new source progress or participation gets a new key.
+		if !manual && s.state.Keys[p.Key] != "" {
+			continue
+		}
 		for _, e := range p.Evidence {
 			p.Sources = append(p.Sources, e.Source)
 		}
 		w := s.newWork(src.Caller, p, true)
+		s.state.Keys[p.Key] = w.Receipt.ID
 		w.SourceKey = key
 		w.Through = src.AcceptedThrough
 		src.Job = w.Receipt.ID
