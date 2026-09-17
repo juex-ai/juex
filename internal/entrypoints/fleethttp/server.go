@@ -104,7 +104,6 @@ func newServer(manager backend, opts Options) *Server {
 		processMetricProvider = processmetrics.New()
 	}
 	server := &Server{
-		services:        opts.Services,
 		manager:         manager,
 		addr:            addr,
 		allowAnyBind:    opts.AllowAnyBind,
@@ -114,6 +113,9 @@ func newServer(manager backend, opts Options) *Server {
 		activityClients: activityClients,
 		processMetrics:  processMetricProvider,
 		readOnlyAgents:  make(map[string]cachedReadOnlyAgentHandler),
+	}
+	if opts.Services != nil {
+		server.services = opts.Services
 	}
 	server.fleetStatus = newFleetStatusHub(manager, activityClients, processMetricProvider)
 	return server
