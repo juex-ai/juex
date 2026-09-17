@@ -41,7 +41,7 @@
 
 Extension 资源需要同时满足来源与承载能力条件：插件被 `extensions.allow` 选中，extensions 模块开启，相应的 skills/hooks/mcp/observables 模块也开启。关闭 extensions 不关闭工作区自身配置的 Skills、Hooks 或 MCP；关闭 hooks 后，启用的 Extension 也不能读取、解析或执行其 Hook 资源。具体资源只由开启的承载模块处理。
 
-Memory 的 Agent 本地基线现由其 [实现 README](../../internal/features/memory/README.zh.md) 描述。内置工具、指导和生命周期不依赖 extensions、mcp、skills 或外置 hooks。[Fleet Memory 提案](fleet-memory.zh.md) 替代本清单中未来 Memory 所有权、写入权限和维护方式的假设：独立 Memory Service 持有 Fleet 共享知识，内置 Agent Module 经同一客户端按 profile 提供查询/提案或 Supervisor 评审/提交，并提供 Basic、Advanced 策略。Fleet 负责服务管理与发现。该目标尚未实现，交付前当前 Agent 预设默认值和保留行为仍有效。
+Memory 的共享服务契约由其 [实现 README](../../internal/features/memory/README.zh.md) 描述。内置工具和指导不依赖 extensions、mcp、skills 或外置 hooks。服务持有 Fleet 共享知识和提交权限；Agent Module 提供受范围约束的客户端、参与状态和有界召回。Supervisor Worker 经同一类型化 API 评审分配的工作。Fleet 负责服务管理与发现。Basic 为默认策略，Advanced 需要显式启用。
 
 高级工具建议取决于最终可用能力，而不是 preset 名称。例如 standard 关闭分块写后，write 不建议分块写；minimal 开启分块写后可以恢复建议。Skills 关闭时，其他功能仍能使用自身基本说明，不建议不存在的 skill_load。
 

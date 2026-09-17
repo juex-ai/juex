@@ -701,11 +701,11 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 		path   string
 		text   string
 	}{
-		{label: "Memory", source: "memory", path: "", text: "memory_search"},
 		{label: "Shell", source: "runtime", path: "", text: "exec_command"},
 		{label: "Global AGENTS.md", source: "user", path: filepath.Join(homeAgents, "AGENTS.md"), text: "global runtime rule"},
 		{label: "Workspace AGENTS.md", source: "project", path: filepath.Join(work, "AGENTS.md"), text: "workspace root rule"},
 		{label: ".agents/AGENTS.md", source: "project", path: filepath.Join(work, ".agents", "AGENTS.md"), text: "workspace agents rule"},
+		{label: "Memory", source: "memory", path: "", text: "memory_search"},
 		{label: "input-checklist", source: "runtime", path: "", text: "Input checklist"},
 		{label: "Context Window", source: "runtime", path: "", text: "Context window"},
 		{label: "Operating Context", source: "runtime", path: "", text: "Operating Context"},
@@ -885,7 +885,7 @@ body`)
 	if len(got.SystemPrompt.Items) != 8 {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
-	if got.SystemPrompt.Items[2].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[2].Text, "global runtime rule") {
+	if got.SystemPrompt.Items[1].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[1].Text, "global runtime rule") {
 		t.Fatalf("system prompt should skip global AGENTS.md and keep project entry: %+v", got.SystemPrompt.Items)
 	}
 	for _, item := range got.SystemPrompt.Items {
