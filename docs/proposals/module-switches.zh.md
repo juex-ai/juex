@@ -2,7 +2,7 @@
 
 > [English](module-switches.md) | 中文
 
-状态：预设与关闭行为已落地，包括 [PR #535](https://github.com/juex-ai/juex/pull/535) 和 [PR #536](https://github.com/juex-ai/juex/pull/536)。更新：2026-09-08。下方 18 项清单记录原始讨论；实际支持情况以 [当前配置契约](../../internal/app/config/README.zh.md) 为准，其中也包含后来增加的 input-tracking 模块。
+状态：预设与关闭行为已落地，包括 [PR #535](https://github.com/juex-ai/juex/pull/535) 和 [PR #536](https://github.com/juex-ai/juex/pull/536)。更新：2026-09-17。下方 18 项清单记录原始讨论；实际支持情况以 [当前配置契约](../../internal/app/config/README.zh.md) 为准，其中也包含后来增加的 input-tracking 模块。
 
 根据 2026-09-06 的极简模式讨论，建议本轮收敛为 18 个模块开关，统一使用 `modules.<id>.enabled`。`preset` 支持 `minimal` 和建议命名 `standard`，显式开关覆盖预设。同名显式开关仍按现有配置层级合并。
 
@@ -23,7 +23,7 @@
 | `scratchpad` | 无专用工具，复用文件工具/Shell | Scratchpad 路径和使用建议；不自动注入文件正文 | Thread 工作目录准备和路径贡献；跨 Generation 保留；关闭不创建、不宣传，已有文件不删除 | 开 | 关 |
 | `goal` | `get_goal`、`create_goal`、`update_goal` | Goal 合同运行时消息、必要的继续提示、压缩状态贡献 | Goal 存储、完成/继续策略、上下文重置时清理；模块关闭或移除时删除 goal_state.json | 开 | 关 |
 | `notes` | `update_notes` | Notes 运行时消息、压缩状态贡献 | Notes 存储、内容预算、上下文重置时清理；模块关闭或移除时删除 notes.md | 开 | 关 |
-| `memory` | `memory_search`、`memory_write`、`memory_delete`（拟议内置名称） | 模块自带必要使用指导；正文按需通过工具返回，不自动注入全部记忆 | Agent 级持久知识、Markdown 条目与可重建索引；通过 ThreadStart/PostCompact 生命周期维护索引；关闭停止工具、指导和维护，保留知识 | 开 | 关 |
+| `memory` | 原始清单：`memory_search`、`memory_write`、`memory_delete`；未来权限遵循 [Fleet Memory 提案](fleet-memory.zh.md) | 模块自带必要使用指导；正文按需通过工具返回 | 原始 Agent 级存储与生命周期；Fleet 提案区分共享所有权和 Agent 参与。关闭保留持久知识 | 开 | 关 |
 | `context-control` | `context_new`、`context_compact` | 容量提醒和模型操作上下文的建议 | 接受模型的 Generation 切换/压缩请求；不拥有底层 Generation 持久化机制 | 开 | 关 |
 | `worker-threads` | `thread_create`、`thread_list`、`thread_status`、`thread_send`、`thread_subscribe`、`thread_stop`、`thread_archive` | 订阅后的 Worker 结果/通知；无需额外固定系统提示段 | Worker 执行管理、订阅、结果交付、停止和资源关闭；不是磁盘上全部 Thread 的存储开关 | 开 | 关 |
 | `observables` | `observable_list`、`observable_create`、`observable_start`、`observable_stop`、`observable_delete`、`observable_observations` | Observation 输入与按需指南；不是固定常驻提示段 | 命令生产者、定义、状态、记录和 Main 投递 | 开 | 关 |
@@ -41,7 +41,7 @@
 
 Extension 资源需要同时满足来源与承载能力条件：插件被 `extensions.allow` 选中，extensions 模块开启，相应的 skills/hooks/mcp/observables 模块也开启。关闭 extensions 不关闭工作区自身配置的 Skills、Hooks 或 MCP；关闭 hooks 后，启用的 Extension 也不能读取、解析或执行其 Hook 资源。具体资源只由开启的承载模块处理。
 
-Memory 根据后续决定从 `juex-extensions/extensions/memory` 回归为独立 Go 模块。`memory` 开关同时控制工具、必要指导、索引维护和资源生命周期，不依赖 extensions、mcp、skills、hooks 开关；内置生命周期回调不属于外部命令 hooks。保持当前按需检索/显式写入与删除的能力，不恢复旧 MemorySlot 或新增向量库、自动提炼、Dream 流程。standard 默认开启、minimal 默认关闭是本轮建议。关闭模块保留持久知识，重新启用后可以使用；旧 Extension 退出分发及现有知识的手动切换说明单独交付，不做自动数据迁移。
+Memory 的 Agent 本地基线现由其 [实现 README](../../internal/features/memory/README.zh.md) 描述。内置工具、指导和生命周期不依赖 extensions、mcp、skills 或外置 hooks。[Fleet Memory 提案](fleet-memory.zh.md) 替代本清单中未来 Memory 所有权、写入权限和维护方式的假设：独立 Memory Service 持有 Fleet 共享知识，内置 Agent Module 经同一客户端按 profile 提供查询/提案或 Supervisor 评审/提交，并提供 Basic、Advanced 策略。Fleet 负责服务管理与发现。该目标尚未实现，交付前当前 Agent 预设默认值和保留行为仍有效。
 
 高级工具建议取决于最终可用能力，而不是 preset 名称。例如 standard 关闭分块写后，write 不建议分块写；minimal 开启分块写后可以恢复建议。Skills 关闭时，其他功能仍能使用自身基本说明，不建议不存在的 skill_load。
 
