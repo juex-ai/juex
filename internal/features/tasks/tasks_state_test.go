@@ -100,7 +100,7 @@ func TestGenerationPruningRollbackAndCommit(t *testing.T) {
 		createTask(t, store, string(status), status, P1)
 	}
 	before, _ := store.Snapshot()
-	finalize, rollback, err := store.StagePruneDone("g000001")
+	_, rollback, err := store.StagePruneDone("g000001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestGenerationPruningRollbackAndCommit(t *testing.T) {
 	if !reflect.DeepEqual(before, restored) {
 		t.Fatal("rollback did not restore exact tasks")
 	}
-	finalize, _, err = store.StagePruneDone("g000001")
+	finalize, _, err := store.StagePruneDone("g000001")
 	if err != nil {
 		t.Fatal(err)
 	}
