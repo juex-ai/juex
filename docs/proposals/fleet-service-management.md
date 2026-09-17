@@ -2,7 +2,11 @@
 
 > English | [中文](fleet-service-management.zh.md)
 
-Status: review draft, not implemented as described. Updated: 2026-09-17.
+Status: lifecycle/discovery foundation implemented; Memory/Supervisor business integration remains proposed. Updated: 2026-09-17.
+
+The implemented configuration, commands, locks and restart budget are defined by
+[Independent Fleet Services](../../internal/fleet/services/README.md), code and
+tests. Illustrative configuration below describes future business integration.
 
 This proposal defines process management, discovery, and client access for independent services. [Supervisor](supervisor-agent.md) and [Memory](fleet-memory.md) build on it and own their execution-role and memory-business designs respectively.
 
@@ -131,4 +135,4 @@ The first delivery chain is Fleet starting Memory Service, two Agents discoverin
 
 Acceptance covers two Fleets without cross-routing, duplicate startup and stale-record recovery, respecting explicit stop across manager restart, service survival across Fleet restart, offline Agent startup, isolated service failures, reconnecting to a new instance, rejection of ordinary-profile commits, reconciliation after response loss, and external services never being stopped. Follow the repository [verification workflow](../../.agents/skills/juex-localtest/SKILL.md).
 
-Review still needs exact configuration/commands, runtime-record format, short socket path rules, and restart budgets. Supervisor and Memory business rules belong to their own proposals. Full authentication, remote orchestration, and additional protocol adapters are separate demand-driven deliveries.
+The service management implementation now defines configuration/commands, runtime records, short socket paths and restart budgets. Supervisor and Memory business rules belong to their own proposals. Full authentication, remote orchestration, and additional protocol adapters are separate demand-driven deliveries.

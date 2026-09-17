@@ -2,7 +2,10 @@
 
 > [English](fleet-service-management.md) | 中文
 
-状态：评审草案，尚未按本文实现。更新：2026-09-17。
+状态：生命周期与发现基础已实现，Memory/Supervisor 业务接入仍为提案。更新：2026-09-17。
+
+已实现的配置、命令、锁与重启预算以 [Fleet 独立服务](../../internal/fleet/services/README.zh.md)、
+代码和测试为准。下文示意配置描述后续业务接入。
 
 本文定义独立服务的进程管理、发现和客户端接入边界。[Supervisor](supervisor-agent.zh.md) 与 [Memory](fleet-memory.zh.md) 基于本文实现，分别拥有执行角色和记忆业务设计。
 
@@ -131,4 +134,4 @@ Fleet 扩展现有进程管理和运行描述能力；服务入口/协议适配�
 
 验收覆盖两个 Fleet 同机不串联、重复启动和旧记录恢复、显式停止后管理重启不误拉起、Fleet 重启不终止服务、Agent 离线启动、单服务失败、重连到新实例、普通 profile 提交被拒绝、响应丢失后的业务核对，以及 external 服务不被停止。遵循仓库 [验证流程](../../.agents/skills/juex-localtest/SKILL.md)。
 
-待评审的是具体配置/命令、运行记录格式、短 socket 路径规则和重启预算。Supervisor 与 Memory 的业务规则由各自提案定义；完整认证、远端编排和额外协议适配按实际需求另行交付。
+服务管理实现现已定义配置/命令、运行记录、短 socket 路径规则和重启预算。Supervisor 与 Memory 的业务规则由各自提案定义；完整认证、远端编排和额外协议适配按实际需求另行交付。

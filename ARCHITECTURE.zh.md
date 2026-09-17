@@ -26,6 +26,10 @@ CLI 与 Fleet Web 都是常驻 Agent JSON/SSE 服务的 client。CLI selector �
 命令先要求 Fleet 确保该 Runtime 健康，再使用与 Web 相同的 admission 和
 subscription 接口。只有 Fleet 会调用隐藏的单 Agent Runtime 入口。
 
+Fleet 也通过 [`fleet/services`](internal/fleet/services/README.zh.md) 管理独立服务进程。
+App 从所属 Home 加载定义，共享 endpoint 和类型化控制辅助位于 Foundation。
+服务业务 API 直接连接服务，Module 保持进程内作用域。
+
 ## 所有权与依赖方向
 
 仓库保持单个 Go module。可执行入口位于 `cmd`；`internal` 下的每个生产包
@@ -35,7 +39,7 @@ subscription 接口。只有 Fleet 会调用隐藏的单 Agent Runtime 入口。
 | --- | --- |
 | `internal/app` | 产品装配、显式 Module 清单与预设、分层配置、资源选择、进程共享服务、Provider 工厂与 API/status 投影。 |
 | `internal/entrypoints` | CLI、Agent/Fleet HTTP 适配、请求/SSE 生命周期、wire DTO 与唯一共享 Web 资源 handler。 |
-| `internal/fleet` | 已注册 Agent 的进程生命周期、验证后的 endpoint 选择、生命周期锁、重启续接与平台服务集成。 |
+| `internal/fleet` | 已注册 Agent 与独立服务的进程生命周期、验证后的 endpoint 选择、生命周期锁、重启续接与平台服务集成。 |
 | `internal/framework` | Agent 执行与 Worker 编排、Thread/Generation 存储、Module 契约、输入接纳、恢复、Provider 循环、上下文控制与被动生命周期操作。 |
 | `internal/features` | 具体 Module 的 Tool、context、policy、Observation producer、作用域状态与资源实现。 |
 | `internal/providers` | Provider 构造、厂商协议/SDK、传输适配与 Provider profile 默认值。 |
