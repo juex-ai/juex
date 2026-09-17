@@ -3,9 +3,9 @@ package eventcatalog
 import (
 	"sync"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
 	"github.com/juex-ai/juex/internal/framework/provenance"
@@ -49,7 +49,7 @@ func builtinDefinitions() []events.Definition {
 	appendRuntimeThrough("llm.fallback")
 	definitions = append(definitions, toolevents.EventDefinitions()...)
 	appendRuntimeThrough("pending_input.rejected")
-	definitions = append(definitions, goalmodule.EventDefinitions()...)
+	definitions = append(definitions, tasksmodule.EventDefinitions()...)
 	definitions = append(definitions, notesmodule.EventDefinitions()...)
 	definitions = append(definitions, observable.EventDefinitions()...)
 	definitions = append(definitions, runtimeDefinitions...)

@@ -17,7 +17,7 @@ A nullable `checked_at` is sufficient: null means unchecked, and Framework write
 
 Reuse existing input IDs, original content, provenance, attempts, and errors. Tracking eligibility is Framework metadata established at acceptance; untracked must remain distinct from unchecked.
 
-Do not add open/blocked/resolved or completed/incorporated/superseded/cancelled state sets, progress fields, evidence fields, or relationship graphs. Conversation, Goal, Notes, and existing Tool results continue to express progress.
+Do not add open/blocked/resolved or completed/incorporated/superseded/cancelled state sets, progress fields, evidence fields, or relationship graphs. Conversation, Tasks, Notes, and existing Tool results continue to express progress.
 
 ## 2. Relationship To pending_input And Modules
 
@@ -27,7 +27,7 @@ Existing `pending_input` owns durable acceptance, queueing, injection, execution
 | --- | --- |
 | Runtime / Framework | Automatic registration, input storage, check commits, current-set retention, execution recovery, and lifecycle boundaries. |
 | `input-tracking` module | One check tool, per-request recitation, and lightweight check-state presentation. |
-| Goal / Notes | Long-term objectives and working notes respectively, without responsibility for registering every input. |
+| Tasks / Notes | Long-term objectives and working notes respectively, without responsibility for registering every input. |
 
 Retain the proposed independently switchable module: standard enabled and minimal disabled by default, still subject to review. Disabling it leaves delivery intact, removes its tool and recitation, and stops tracking new inputs. Existing unchecked records remain. Re-enabling presents them on the next normal execution, without backfilling disabled-period history or starting old work automatically.
 
@@ -113,7 +113,7 @@ Storage changes follow the project's clean-break policy: no legacy aliases, dual
 
 A binary checklist cannot automatically distinguish forgotten tasks, work waiting for the user, and still-effective constraints. Unchecked items therefore neither unconditionally prevent a Turn from ending nor trigger unlimited continuations.
 
-Recitation reminds the model during every request. Existing Goal continuation retains its own rules. Remove the earlier independent FinishPolicy, three-attempt no-progress detector, and Goal/input continuation arbitration design.
+Recitation reminds the model during every request. Existing Tasks continuation retains its own rules. Remove the earlier independent FinishPolicy, three-attempt no-progress detector, and Tasks/input continuation arbitration design.
 
 This ensures unchecked information does not silently disappear after dequeuing or compaction, but does not guarantee immediate completion of every input. If evaluation still shows frequent termination with runnable work outstanding, discuss finish checks separately rather than preemptively adding blocked states and more tools.
 

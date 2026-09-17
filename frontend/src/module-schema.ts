@@ -6,15 +6,6 @@ export interface EventCursor {
   offset: number;
 }
 
-export interface GoalStatusSnapshot {
-  description?: string;
-  acceptance?: string;
-  continuation_count?: number;
-  status?: string;
-  status_reason?: string;
-  updated_at?: string;
-}
-
 export interface ModuleState {
   module_id: string;
   version: number;
@@ -29,6 +20,22 @@ export interface ModuleState {
 export interface NotesSnapshot {
   content: string;
   updated_at?: string;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  description: string;
+  acceptance: string;
+  status: string;
+  status_reason: string;
+  priority: string;
+  continuation_count: number;
+  updated_at: string;
+}
+
+export interface TasksSnapshot {
+  tasks: Array<Task>;
 }
 
 export interface ThreadModulesSnapshot {
@@ -49,6 +56,6 @@ export interface UIContribution {
 }
 
 export interface ModulePayloads {
-  "goal": GoalStatusSnapshot;
   "notes": NotesSnapshot;
+  "tasks": TasksSnapshot;
 }

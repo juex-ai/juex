@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	observable "github.com/juex-ai/juex/internal/features/observables"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
@@ -17,14 +17,14 @@ import (
 
 const (
 	SlashCompact = "/compact"
-	SlashGoal    = "/goal"
+	SlashTasks   = "/tasks"
 	SlashNew     = "/new"
 	SlashStatus  = "/status"
 )
 
 const newThreadGreetingPrompt = "Please greet me briefly, introduce what you can help with in one concise sentence, and ask what I want to do next. You may suggest a concrete place to start."
 
-var slashCommandNames = []string{SlashCompact, SlashGoal, SlashNew, SlashStatus}
+var slashCommandNames = []string{SlashCompact, SlashTasks, SlashNew, SlashStatus}
 
 type UnknownSlashCommandError struct {
 	Input string
@@ -71,7 +71,7 @@ func ParseSlashCommand(input string) (agent.Command, bool, error) {
 	if !isSlashCommandName(commandName) {
 		return agent.Command{}, false, nil
 	}
-	if commandName == SlashCompact || commandName == SlashGoal {
+	if commandName == SlashCompact || commandName == SlashTasks {
 		args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
 		return parsedSlashCommand(commandName, args), true, nil
 	}
@@ -101,25 +101,25 @@ func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (agent.Comm
 }
 
 type StatusSnapshot struct {
-	ThreadID     string                         `json:"thread_id"`
-	ThreadDir    string                         `json:"thread_dir,omitempty"`
-	ThreadAlias  string                         `json:"thread_alias,omitempty"`
-	GenerationID string                         `json:"generation_id"`
-	State        string                         `json:"state"`
-	WorkDir      string                         `json:"work_dir"`
-	Turns        int                            `json:"turns"`
-	StartedAt    time.Time                      `json:"started_at"`
-	LastActiveAt time.Time                      `json:"last_active_at"`
-	Provider     ProviderStatusSnapshot         `json:"provider"`
-	MCP          MCPStatus                      `json:"mcp"`
-	Observables  StatusObservablesSnapshot      `json:"observables"`
-	SkillCount   int                            `json:"skill_count"`
-	TokenUsage   llm.Usage                      `json:"token_usage"`
-	TokenTotal   int                            `json:"token_total"`
-	ContextUsage *llm.ContextUsage              `json:"context_usage,omitempty"`
-	Compaction   StatusCompactionSnapshot       `json:"compaction"`
-	PendingInput runtime.PendingInputStatus     `json:"pending_input"`
-	Goal         *goalmodule.GoalStatusSnapshot `json:"goal,omitempty"`
+	ThreadID     string                     `json:"thread_id"`
+	ThreadDir    string                     `json:"thread_dir,omitempty"`
+	ThreadAlias  string                     `json:"thread_alias,omitempty"`
+	GenerationID string                     `json:"generation_id"`
+	State        string                     `json:"state"`
+	WorkDir      string                     `json:"work_dir"`
+	Turns        int                        `json:"turns"`
+	StartedAt    time.Time                  `json:"started_at"`
+	LastActiveAt time.Time                  `json:"last_active_at"`
+	Provider     ProviderStatusSnapshot     `json:"provider"`
+	MCP          MCPStatus                  `json:"mcp"`
+	Observables  StatusObservablesSnapshot  `json:"observables"`
+	SkillCount   int                        `json:"skill_count"`
+	TokenUsage   llm.Usage                  `json:"token_usage"`
+	TokenTotal   int                        `json:"token_total"`
+	ContextUsage *llm.ContextUsage          `json:"context_usage,omitempty"`
+	Compaction   StatusCompactionSnapshot   `json:"compaction"`
+	PendingInput runtime.PendingInputStatus `json:"pending_input"`
+	Tasks        *tasksmodule.TasksSnapshot `json:"tasks,omitempty"`
 }
 
 type ProviderStatusSnapshot struct {
@@ -161,7 +161,7 @@ const (
 	statusIconSuccess     = "\U0001F4C8"
 	statusIconTurn        = "\u2699\ufe0f"
 	statusIconQueuedInput = "\U0001F4E5"
-	statusIconGoal        = "\U0001F3AF"
+	statusIconTasks       = "\U0001F3AF"
 )
 
 func (a *App) StatusSnapshot() StatusSnapshot {
@@ -204,10 +204,10 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 		}
 		observables := observablesStatusFromManager(a.obsv)
 		pending := runtime.PendingInputStatus{}
-		var goal *goalmodule.GoalStatusSnapshot
+		var tasks *tasksmodule.TasksSnapshot
 		if a.Engine != nil {
 			pending = a.Engine.PendingInputStatus()
-			goal, _ = goalmodule.StatusFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
+			tasks, _ = tasksmodule.StatusFromModules(a.Engine.ThreadRuntimeSnapshot().Modules)
 		}
 		result = StatusSnapshot{
 			ThreadID:     threadID,
@@ -228,7 +228,7 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 			ContextUsage: contextUsage,
 			Compaction:   compaction,
 			PendingInput: pending,
-			Goal:         goal,
+			Tasks:        tasks,
 		}
 		return nil
 	})
@@ -270,8 +270,8 @@ func (s StatusSnapshot) Text() string {
 		lines = append(lines, statusLabel(statusIconContext, "context: not measured yet"))
 	}
 	lines = append(lines, statusLabel(statusIconCompact, formatCompactionStatus(s.Compaction)))
-	if s.Goal != nil {
-		lines = append(lines, statusLabel(statusIconGoal, formatGoalStatus(s.Goal)))
+	if s.Tasks != nil {
+		lines = append(lines, statusLabel(statusIconTasks, formatTasksStatus(s.Tasks)))
 	}
 	turnState := "idle"
 	if s.PendingInput.TurnID != "" {
@@ -286,19 +286,15 @@ func (s StatusSnapshot) Text() string {
 	return strings.Join(lines, "\n")
 }
 
-func formatGoalStatus(goal *goalmodule.GoalStatusSnapshot) string {
-	if goal == nil {
-		return "goal: none"
+func formatTasksStatus(snapshot *tasksmodule.TasksSnapshot) string {
+	if snapshot == nil || len(snapshot.Tasks) == 0 {
+		return "tasks: none"
 	}
-	status := string(goal.Status)
-	if status == "" {
-		status = "unknown"
+	lines := []string{fmt.Sprintf("tasks: %d", len(snapshot.Tasks))}
+	for _, task := range snapshot.Tasks {
+		lines = append(lines, fmt.Sprintf("  %s %s %s - %s", task.ID, task.Priority, task.Status, task.Title))
 	}
-	description := strings.TrimSpace(goal.Description)
-	if description == "" {
-		return "goal: " + status
-	}
-	return fmt.Sprintf("goal: %s - %s", status, description)
+	return strings.Join(lines, "\n")
 }
 
 func statusLabel(icon, text string) string {
@@ -436,9 +432,9 @@ func parsedSlashCommand(name, args string) agent.Command {
 		cmd.Kind = agent.CommandKindNew
 	case SlashCompact:
 		cmd.Kind = agent.CommandKindCompact
-	case SlashGoal:
+	case SlashTasks:
 		cmd.Kind = agent.CommandKindPrompt
-		cmd.Prompt = goalmodule.InstructionPrompt(args)
+		cmd.Prompt = tasksmodule.InstructionPrompt(args)
 	}
 	return cmd
 }

@@ -105,7 +105,7 @@ internal/
     workerthreads/
     extensions/
     operatingcontext/
-    goal/
+    tasks/
     notes/
     scratchpad/
     agentsmd/
@@ -168,10 +168,10 @@ Provider 是模型服务适配，不等同于通过 Module 启用的 Feature。�
 | `provenance` | Provider 请求选择身份、脱敏摘要和事件 | `app`, `eventcatalog`, `runtime`, `runtime/module` | `framework/provenance` |
 | `runtime` | Input/Turn、Provider 循环、恢复、压缩与工具执行 | `app`, `eventcatalog`, `statusapi`, `web` | `framework/runtime`, `features/contextcontrol` |
 | `runtime/contextbudget` | 上下文预算、历史选择与预览 | `runtime` | `framework/runtime/contextbudget` |
-| `runtime/module` | 能力契约、注册、启动、激活与关闭 | `app`, `eventcatalog`, `hooks`, `mcp`, `modules/agentsmd`, `modules/builtintools`, `modules/chunkedwrite`, `modules/goal`, `modules/notes`, `modules/operatingcontext`, `modules/scratchpad`, `modules/shelltools`, `modules/skills`, `observable`, `prompt`, `runtime`, `runtime/contextbudget` | `framework/module` |
+| `runtime/module` | 能力契约、注册、启动、激活与关闭 | `app`, `eventcatalog`, `hooks`, `mcp`, `modules/agentsmd`, `modules/builtintools`, `modules/chunkedwrite`, `modules/tasks`, `modules/notes`, `modules/operatingcontext`, `modules/scratchpad`, `modules/shelltools`, `modules/skills`, `observable`, `prompt`, `runtime`, `runtime/contextbudget` | `framework/module` |
 | `runtime/module/state` | Module 资源所有权、租约和退役 | `app`, `runtime/module`, `runtime/workmem` | `framework/module/state` |
 | `runtime/policy` | 压缩和工具输出策略配置值 | `config`, `runtime`, `runtime/contextbudget` | `framework/runtime/policy` |
-| `runtime/workmem` | Goal/Notes 状态存储、事件与辅助文件操作 | `app`, `eventcatalog`, `modules/goal`, `modules/notes`, `runtime`, `web` | `features/goal`, `features/notes`, `framework/module/state` |
+| `runtime/workmem` | Tasks/Notes 状态存储、事件与辅助文件操作 | `app`, `eventcatalog`, `modules/tasks`, `modules/notes`, `runtime`, `web` | `features/tasks`, `features/notes`, `framework/module/state` |
 | `statusapi` | 运行状态 DTO、状态转换与活动快照 | `fleet`, `fleetweb`, `web` | `framework/status` |
 | `thread` | Thread 元数据、Generation 历史、索引与归档 | `app`, `bundle`, `cli`, `eventcatalog`, `fleetweb`, `runtime`, `runtime/workmem`, `web` | `framework/thread` |
 | `usermedia` | 用户图片输入验证、Thread 作用域与存储 | `app`, `web` | `framework/inputmedia` |
@@ -185,11 +185,11 @@ Provider 是模型服务适配，不等同于通过 Module 启用的 Feature。�
 | `frontmatter` | Skill frontmatter 解析 | `skills` | `features/skills/internal/frontmatter` |
 | `hooks` | 命令 Hook 配置、执行及 Module 生命周期适配 | `app`, `config` | `features/hooks` |
 | `mcp` | MCP 配置、连接、工具目录、通知与就绪探测 | `app`, `cli`, `web` | `features/mcp` |
-| `modulecatalog` | 具体能力 ID、预设默认值与能力清单 | `app`, `config`, `hooks`, `mcp`, `modules/agentsmd`, `modules/builtintools`, `modules/chunkedwrite`, `modules/goal`, `modules/notes`, `modules/operatingcontext`, `modules/scratchpad`, `modules/shelltools`, `modules/skills`, `observable`, `runtime`, `web` | `app/modulecatalog`, `各 Feature` |
+| `modulecatalog` | 具体能力 ID、预设默认值与能力清单 | `app`, `config`, `hooks`, `mcp`, `modules/agentsmd`, `modules/builtintools`, `modules/chunkedwrite`, `modules/tasks`, `modules/notes`, `modules/operatingcontext`, `modules/scratchpad`, `modules/shelltools`, `modules/skills`, `observable`, `runtime`, `web` | `app/modulecatalog`, `各 Feature` |
 | `modules/agentsmd` | 自动读取 AGENTS.md 并提供上下文 | `app` | `features/agentsmd` |
 | `modules/builtintools` | 基本文件、Patch 与搜索的 Module 包装 | `app` | `features/filetools`, `features/applypatch`, `features/filesearch` |
 | `modules/chunkedwrite` | 分块写入工具、恢复及历史折叠 | `app` | `features/chunkedwrite` |
-| `modules/goal` | Goal 工具、完成策略与压缩贡献 | `app` | `features/goal` |
+| `modules/tasks` | Tasks 工具、完成策略与压缩贡献 | `app` | `features/tasks` |
 | `modules/notes` | Notes 工具、上下文与压缩贡献 | `app` | `features/notes` |
 | `modules/operatingcontext` | 工作目录、系统和时间上下文 | `app` | `features/operatingcontext` |
 | `modules/scratchpad` | Thread 工作文件资源与使用指导 | `app`, `web` | `features/scratchpad` |
@@ -206,7 +206,7 @@ Provider 是模型服务适配，不等同于通过 Module 启用的 Feature。�
 | `cancellation` | 取消原因和操作系统信号分类 | `app`, `cli`, `errorclass`, `runtime`, `runtime/module`, `tools`, `web` | `foundation/cancellation` |
 | `environment` | 不可变环境快照、dotenv 与子进程环境解析 | `app`, `bundle`, `cli`, `config`, `extensions`, `hooks`, `mcp`, `observable`, `tools`, `web` | `foundation/environment` |
 | `errorclass` | 错误分类及稳定错误种类 | `app`, `cli`, `mcp`, `runtime`, `tools` | `foundation/errorclass` |
-| `events` | 事件信封、Bus、模式接口与提交后发布机制 | `app`, `eventcatalog`, `modules/goal`, `modules/notes`, `observability`, `observable`, `provenance`, `runtime`, `thread`, `toolevents`, `web` | `foundation/events` |
+| `events` | 事件信封、Bus、模式接口与提交后发布机制 | `app`, `eventcatalog`, `modules/tasks`, `modules/notes`, `observability`, `observable`, `provenance`, `runtime`, `thread`, `toolevents`, `web` | `foundation/events` |
 | `homestore` | 原子文件发布、目录同步与文件锁 | `agentstate`, `config`, `endpoint`, `fleet`, `fleetservice`, `jsonl`, `runtime`, `runtime/module/state`, `thread` | `foundation/homestore` |
 | `jsonl` | JSONL 持久追加、尾部修复与有界读取 | `thread` | `foundation/jsonl` |
 | `llm` | 中立消息、Provider 契约、供应商协议、模型健康与展示 | `app`, `cli`, `config`, `eventcatalog`, `fleet`, `hooks`, `modules/chunkedwrite`, `provenance`, `providerreadiness`, `runtime`, `runtime/contextbudget`, `runtime/module`, `statusapi`, `thread`, `toolevents`, `tools`, `usermedia`, `web` | `foundation/llm`, `providers`, `providers/openai`, `providers/anthropic`, `framework/modelhealth`, `entrypoints/cli` |
@@ -216,7 +216,7 @@ Provider 是模型服务适配，不等同于通过 Module 启用的 Feature。�
 | `sandbox` | 文件访问约束、命令隔离与平台执行后端 | `app`, `cli`, `cmd/juex`, `config`, `eventmedia`, `modules/chunkedwrite`, `modules/skills`, `observable`, `tools`, `web` | `foundation/sandbox` |
 | `statusstream` | 可替换快照、订阅与有限重放 | `runtime`, `statusapi` | `foundation/statusstream` |
 | `toolevents` | Tool 调用事实契约与输出增量信封 | `app`, `eventcatalog`, `observability`, `runtime`, `thread`, `tools`, `web` | `foundation/toolevents` |
-| `tools` | Tool 契约、注册和调用机制，文件、搜索、Shell 等实现 | `app`, `cli`, `mcp`, `modules/builtintools`, `modules/chunkedwrite`, `modules/goal`, `modules/notes`, `modules/shelltools`, `modules/skills`, `observable`, `runtime`, `runtime/module` | `foundation/tools`, `features/filetools`, `features/applypatch`, `features/filesearch`, `features/shell`, `features/chunkedwrite`, `foundation/command` |
+| `tools` | Tool 契约、注册和调用机制，文件、搜索、Shell 等实现 | `app`, `cli`, `mcp`, `modules/builtintools`, `modules/chunkedwrite`, `modules/tasks`, `modules/notes`, `modules/shelltools`, `modules/skills`, `observable`, `runtime`, `runtime/module` | `foundation/tools`, `features/filetools`, `features/applypatch`, `features/filesearch`, `features/shell`, `features/chunkedwrite`, `foundation/command` |
 | `version` | 构建版本元数据 | `bundle`, `cli`, `tools`, `web` | `foundation/version` |
 
 ### 测试包与非 Go 资源
@@ -238,9 +238,9 @@ Provider 是模型服务适配，不等同于通过 Module 启用的 Feature。�
 
 以下是清单中多目标归属的具体含义，也是机械搬目录前必须解决的依赖。所有调整保持已有 Module ID、JSON 字段、状态文件和 CLI/API 行为。
 
-1. **App 与运行编排。** `app.go`、`agent_runtime.go` 中的 Provider/Module 工厂与启用选择留在 App；输入准入、恢复、Thread 租约、Main/Worker 管理和订阅机制归 `framework/agent`。`worker_threads.go` 中管理器归 Framework，模型工具及 Module 包装归 `features/workerthreads`。Framework 接收已解析参数和构造回调，不反向 import App。`slash.go` 的公共命令路由归 Agent 操作层，Goal 专用指导归 Goal，由 App 显式连接。
+1. **App 与运行编排。** `app.go`、`agent_runtime.go` 中的 Provider/Module 工厂与启用选择留在 App；输入准入、恢复、Thread 租约、Main/Worker 管理和订阅机制归 `framework/agent`。`worker_threads.go` 中管理器归 Framework，模型工具及 Module 包装归 `features/workerthreads`。Framework 接收已解析参数和构造回调，不反向 import App。`slash.go` 的公共命令路由归 Agent 操作层，Tasks 专用指导归 Tasks，由 App 显式连接。
 2. **配置与预设。** `config` 归 `app/config`，它是应用配置边界，不是 Foundation。Hooks 配置可使用 `features/hooks/config` 的纯声明子包，执行器留在父包；配置验证不能构造 Feature 资源。`observable/manager.go` 当前使用 `config.ShellProfile`，应改成注入 `foundation/command` 的已解析执行参数，去掉 Feature 对 App 配置的依赖。`modulecatalog` 的预设清单归 `app/modulecatalog`，各 Feature 声明自己的稳定 ID，清单引用这些声明；配置包通过参数接收清单，不依赖工厂或形成环。只有 ID 声明而无实现的条目（如当前 Memory）不据此新增功能。
-3. **Goal/Notes 状态。** `runtime/workmem` 的 Store、状态值及事件分别归 `features/goal`、`features/notes`。`runtime/thread_state_modules.go` 当前直接返回具体 Store，不能迁移后继续让 Runtime 引用 Feature：状态读取由 App 连接 Feature 读取接口并投影给入口；Runtime 只保留执行所需的 Module 能力。通用资源写入与退役机制归 `framework/module/state`，可复用的原子文件机制使用 `foundation/homestore`；保留当前持久化语义。不要为两个 Feature 再建立一个泛化 workmem 层。
+3. **Tasks/Notes 状态。** `runtime/workmem` 的 Store、状态值及事件分别归 `features/tasks`、`features/notes`。`runtime/thread_state_modules.go` 当前直接返回具体 Store，不能迁移后继续让 Runtime 引用 Feature：状态读取由 App 连接 Feature 读取接口并投影给入口；Runtime 只保留执行所需的 Module 能力。通用资源写入与退役机制归 `framework/module/state`，可复用的原子文件机制使用 `foundation/homestore`；保留当前持久化语义。不要为两个 Feature 再建立一个泛化 workmem 层。
 4. **Context Control。** `runtime/context_control.go` 内的模型工具、能力 ID 和提醒贡献归 `features/contextcontrol`，通过窄接口请求上下文切换。实际切换、自动压缩、提交和恢复继续归 Runtime。移动的是工具贡献，不改变 `/new`、`/compact` 或开关语义。
 5. **LLM。** `types.go` 和 Provider 调用接口归 `foundation/llm`；`provider.go` 同时含 SDK 依赖、构造与错误分类，需要按符号拆开。供应商文件归各自 Provider 包；统一构造选择放 `providers`，中立层不能 import SDK 或供应商包。Profile 值契约留在中立层，供应商默认值解析归 Providers。`model_health.go` 归 `framework/modelhealth`；终端展示归 CLI；Provider 共享的媒体编码等辅助实现放 `providers/internal`。中立转录校验和消息投影留在 LLM 契约附近。
 6. **Tools 与功能实现。** `registry.go`、`schema.go`、`capabilities.go` 及通用调用结果/输出契约归 `foundation/tools`，Provider 顺序和 Turn 调度仍归 Runtime。基本文件、Patch、搜索、Shell 会话、chunked-write 的实现分别并入对应 Feature；删除统一内置工厂对这些实现的依赖，改由 App 逐项组装。Shell 与 Observables 确实共用的执行参数和机制归 `foundation/command`；TTY 会话仍由 Shell 拥有。跨文件功能的路径机制优先归现有 Sandbox；结果清洗和媒体契约只在实际共享时留在基础层。

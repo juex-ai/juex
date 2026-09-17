@@ -1,5 +1,5 @@
-import type { GoalStatusSnapshot, NotesSnapshot } from "./module-schema";
-export type { GoalStatusSnapshot, NotesSnapshot } from "./module-schema";
+import type { TasksSnapshot, NotesSnapshot } from "./module-schema";
+export type { TasksSnapshot, NotesSnapshot } from "./module-schema";
 // Mirror of Go API/thread DTOs and the internal/entrypoints/agenthttp browser event contract.
 // When the Go side changes, update this file in the same PR.
 
@@ -398,7 +398,7 @@ export const BROWSER_EVENT_TYPES = [
   "pending_input.drained",
   "pending_input.dropped",
   "pending_input.rejected",
-  "goal.updated",
+  "tasks.updated",
   "notes.updated",
   "notes.errored",
   "observable.started",
@@ -912,7 +912,7 @@ export interface ContextProjectionAppliedPayload {
   reasoning_content_bytes_stripped?: number;
 }
 
-export type GoalUpdatedPayload = GoalStatusSnapshot;
+export type TasksUpdatedPayload = TasksSnapshot;
 export type NotesUpdatedPayload = NotesSnapshot;
 
 export interface NotesErroredPayload {
@@ -954,7 +954,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
   | (BrowserEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
   | (BrowserEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
-  | (BrowserEventBase<"goal.updated"> & { payload: GoalUpdatedPayload })
+  | (BrowserEventBase<"tasks.updated"> & { payload: TasksUpdatedPayload })
   | (BrowserEventBase<"notes.updated"> & { payload: NotesUpdatedPayload })
   | (BrowserEventBase<"notes.errored"> & { payload: NotesErroredPayload })
   | (BrowserEventBase<"observable.started"> & { payload: ObservableEventPayload })

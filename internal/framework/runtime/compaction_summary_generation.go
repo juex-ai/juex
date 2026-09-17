@@ -430,7 +430,7 @@ func completeCompactionSummaryText(resp llm.Response) (string, bool) {
 }
 
 var compactionSummaryHeadings = []string{
-	"Goal",
+	"Tasks",
 	"Critical Context",
 	"Constraints & Preferences",
 	"Progress",

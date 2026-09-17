@@ -39,7 +39,7 @@ type Request struct {
 	UserInput             string               `json:"user_input,omitempty"`
 	CompactReason         string               `json:"compact_reason,omitempty"`
 	CompactAuto           bool                 `json:"compact_auto,omitempty"`
-	GoalState             json.RawMessage      `json:"goal_state,omitempty"`
+	TasksState            json.RawMessage      `json:"tasks_state,omitempty"`
 	Observer              Observer             `json:"-"`
 }
 

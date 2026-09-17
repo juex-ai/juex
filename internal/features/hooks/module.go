@@ -19,7 +19,7 @@ type PolicyRunner interface {
 type ModuleOptions struct {
 	BaseRequest           Request
 	GenerationJournalPath func() string
-	GoalState             func() []byte
+	TasksState            func() []byte
 }
 
 // Module adapts trusted command Hooks to Framework-owned typed policy seams.
@@ -27,17 +27,17 @@ type ModuleOptions struct {
 type Module struct {
 	runner                PolicyRunner
 	base                  Request
-	goalState             func() []byte
+	tasksState            func() []byte
 	generationJournalPath func() string
 }
 
 func NewModule(runner PolicyRunner, opts ModuleOptions) *Module {
 	base := opts.BaseRequest
 	base.WorkspaceRoots = append([]string(nil), base.WorkspaceRoots...)
-	base.GoalState = append([]byte(nil), base.GoalState...)
+	base.TasksState = append([]byte(nil), base.TasksState...)
 	base.Observer = nil
 	return &Module{
-		runner: runner, base: base, goalState: opts.GoalState,
+		runner: runner, base: base, tasksState: opts.TasksState,
 		generationJournalPath: opts.GenerationJournalPath,
 	}
 }
@@ -195,10 +195,10 @@ func (m *Module) request(event hookconfig.EventName) Request {
 	req := m.base
 	req.EventName = event
 	req.WorkspaceRoots = append([]string(nil), m.base.WorkspaceRoots...)
-	req.GoalState = append([]byte(nil), m.base.GoalState...)
+	req.TasksState = append([]byte(nil), m.base.TasksState...)
 	req.Observer = nil
-	if m.goalState != nil {
-		req.GoalState = append([]byte(nil), m.goalState()...)
+	if m.tasksState != nil {
+		req.TasksState = append([]byte(nil), m.tasksState()...)
 	}
 	if m.generationJournalPath != nil {
 		req.GenerationJournalPath = m.generationJournalPath()

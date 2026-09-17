@@ -45,18 +45,18 @@ func capabilityApp(t *testing.T, cfg config.Config, id string, provider *capabil
 	return a
 }
 
-func TestDisabledGoalRejectsDirectAndAdmittedSlash(t *testing.T) {
+func TestDisabledTasksRejectsDirectAndAdmittedSlash(t *testing.T) {
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), Preset: config.PresetMinimal}
 	provider := &capabilityProvider{}
 	a := capabilityApp(t, cfg, thread.MainID, provider)
-	if result := a.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: "/goal finish this"}); result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
-		t.Errorf("disabled goal admission = %+v", result)
+	if result := a.AdmitTurn(t.Context(), agent.TurnAdmissionRequest{Prompt: "/tasks finish this"}); result.Kind != agent.TurnAdmissionRejected || result.Error.Kind != "module_disabled" {
+		t.Errorf("disabled tasks admission = %+v", result)
 	}
-	if _, err := a.Run(t.Context(), "/goal finish this"); err == nil || !strings.Contains(err.Error(), "goal module is disabled") {
-		t.Errorf("disabled goal Run = %v", err)
+	if _, err := a.Run(t.Context(), "/tasks finish this"); err == nil || !strings.Contains(err.Error(), "tasks module is disabled") {
+		t.Errorf("disabled tasks Run = %v", err)
 	}
 	if provider.calls.Load() != 0 {
-		t.Fatal("disabled goal reached Provider")
+		t.Fatal("disabled tasks reached Provider")
 	}
 }
 

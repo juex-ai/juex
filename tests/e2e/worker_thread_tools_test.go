@@ -12,7 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -31,13 +31,13 @@ func (p *workerThreadToolProvider) Name() string { return "worker-thread-tool-e2
 
 func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, history []llm.Message, specs []llm.ToolSpec) (llm.Response, error) {
 	if historyHasKind(history, llm.MessageKindWorkerThread) {
-		if !historyHasToolResult(history, "finish-goal") {
+		if !historyHasToolResult(history, "finish-tasks") {
 			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 				Type:      llm.BlockToolUse,
-				ToolUseID: "finish-goal",
-				ToolName:  goalmodule.ToolUpdate,
+				ToolUseID: "finish-tasks",
+				ToolName:  tasksmodule.ToolUpdate,
 				Input: map[string]any{
-					"status":        string(goalmodule.GoalStatusSuccess),
+					"status":        string(tasksmodule.Done),
 					"status_reason": "subscribed worker result received",
 				},
 			}}}, StopReason: llm.StopToolUse}, nil
@@ -62,14 +62,14 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 	if last != "delegate through a Worker Thread" {
 		return llm.Response{}, fmt.Errorf("unexpected provider history: %+v", history)
 	}
-	if !historyHasToolResult(history, "create-goal") {
-		if !toolSpecExists(specs, goalmodule.ToolCreate) {
-			return llm.Response{}, fmt.Errorf("primary tool catalog missing %s", goalmodule.ToolCreate)
+	if !historyHasToolResult(history, "create-tasks") {
+		if !toolSpecExists(specs, tasksmodule.ToolCreate) {
+			return llm.Response{}, fmt.Errorf("primary tool catalog missing %s", tasksmodule.ToolCreate)
 		}
 		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 			Type:      llm.BlockToolUse,
-			ToolUseID: "create-goal",
-			ToolName:  goalmodule.ToolCreate,
+			ToolUseID: "create-tasks",
+			ToolName:  tasksmodule.ToolCreate,
 			Input: map[string]any{
 				"description": "finish delegated work",
 				"acceptance":  "the subscribed worker result is incorporated",
@@ -134,16 +134,16 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 	case <-time.After(workerThreadE2ETimeout):
 		t.Fatal("Worker Thread did not start")
 	}
-	goalState, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
-	if goalState == nil {
-		t.Fatal("active Goal Module did not provide a store")
+	tasksState, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
+	if tasksState == nil {
+		t.Fatal("active Tasks Module did not provide a store")
 	}
-	goal, err := goalState.Snapshot()
+	tasks, err := tasksState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != goalmodule.GoalStatusInProgress || goal.ContinuationCount != 0 {
-		t.Fatalf("waiting Goal = %+v", goal)
+	if tasks.Tasks[0].Status != tasksmodule.Todo || tasks.Tasks[0].ContinuationCount != 0 {
+		t.Fatalf("waiting Tasks = %+v", tasks)
 	}
 	close(provider.releaseChild)
 	deadline := time.Now().Add(workerThreadE2ETimeout)
@@ -152,15 +152,15 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 		if ok && historyHasKind(history, llm.MessageKindWorkerThread) && historyHasAssistantText(history, "PRIMARY_SAW_SIDE_OK") {
 			for _, message := range history {
 				if message.Kind == llm.MessageKindContinuation {
-					t.Fatalf("unexpected Goal continuation in history: %+v", message)
+					t.Fatalf("unexpected Tasks continuation in history: %+v", message)
 				}
 			}
-			goal, err := goalState.Snapshot()
+			tasks, err := tasksState.Snapshot()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if goal.Status != goalmodule.GoalStatusSuccess || goal.ContinuationCount != 0 {
-				t.Fatalf("completed Goal = %+v", goal)
+			if tasks.Tasks[0].Status != tasksmodule.Done || tasks.Tasks[0].ContinuationCount != 0 {
+				t.Fatalf("completed Tasks = %+v", tasks)
 			}
 			infos, err := thread.NewStore(stateDir).List()
 			if err != nil {

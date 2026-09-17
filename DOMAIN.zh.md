@@ -14,7 +14,7 @@
 | Workspace | 用户维护的项目文件、Workspace 配置、Skill 和 Hook。 |
 | Agent | 长期身份、Workspace 所有权、配置覆盖、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、持久 Memory、Observable 定义与状态，以及 Extension 状态。 |
 | Thread | 身份、拓扑、lifecycle、Context Generation registry、pending Input、Turn、消息、Event、Usage 和 spool。 |
-| Thread Module | 可选的 Thread scope 状态，例如 Goal、Notes 与 Scratchpad，以及其资源、context 和 Generation lifecycle 行为。 |
+| Thread Module | 可选的 Thread scope 状态，例如 Tasks、Notes 与 Scratchpad，以及其资源、context 和 Generation lifecycle 行为。 |
 | Agent Runtime | 可替换的进程资源：Provider、MCP client、Tool、Observable、scheduler 和实时订阅。 |
 
 Agent 绑定一个 Workspace。替换 Runtime 不会替换持久 Agent 或 Thread 状态。
@@ -70,21 +70,27 @@ Assistant 消息与 Input 配对。
 Generation，也使用一条连续的 Thread Event sequence。它不天然绑定 Input、Turn
 或 client 类型。更高层 waiter 可以从 `input_id` 跟随到消费它的 Turn。
 
-可选的输入跟踪将投递与模型“已处理”的判断分开。启用期间接收的直接用户输入保持未勾选，直到模型主动勾选。Turn 结束不代表输入已勾选，已结束但未勾选的输入也不属于待投递队列。失败和 compaction 保留未勾选输入。关闭开关保留已有记录，但停止新登记和提醒；这些核心输入记录不是 Goal/Notes 的可退休资源。用户 `/new` 开始新的工作范围，compaction 保持原范围。勾选不能取消执行，也不证明结果正确。
+可选的输入跟踪将投递与模型“已处理”的判断分开。启用期间接收的直接用户输入保持未勾选，直到模型主动勾选。Turn 结束不代表输入已勾选，已结束但未勾选的输入也不属于待投递队列。失败和 compaction 保留未勾选输入。关闭开关保留已有记录，但停止新登记和提醒；这些核心输入记录不是 Tasks/Notes 的可退休资源。用户 `/new` 开始新的工作范围，compaction 保持原范围。勾选不能取消执行，也不证明结果正确。
 
 ## Context Generation 与 Thread 工作状态
 
 Context Generation 是 Thread 内的一代 Provider 可见上下文。
 
-- `/new` 创建空 Generation，要求已启用的 Goal 与 Notes Module 清除自己的状态，
+- `/new` 创建空 Generation，删除 done 任务，并要求已启用的 Notes Module 清除自己的状态，
   并记录 `context.renewed`。
-- `/compact` 从 compact summary 创建新 Generation，保留 Goal 与 Notes，
+- `/compact` 从 compact summary 创建新 Generation，删除 done 任务并保留未完成任务与 Notes，
   并记录 `context.compacted`。
 - 两者都保留按时间顺序排列的 Generation 历史与 Scratchpad 文件。Disabled
   Module 不加载、注入或发布状态；配置退休独立于 Generation 切换。
 - Generation 边界是用户可见的系统活动，不是普通 Provider 对话。
 
-Goal 与 Notes 是由 Module 拥有、可以跨 Generation 的可丢弃当前工作状态。应用
+Tasks 是模型维护的工作项，具有稳定 ID、标题、描述、验收条件、状态原因、
+p0/p1/p2 优先级和各自的续跑次数。结束 Turn 时先选 doing，再选 todo，同状态内
+按优先级、创建顺序选择。pending 和 failed 保留可查看，但不强制续跑。new 和
+compact 都只清理 done，保留其余任务。模型把输入要求完整记录到持久化任务后，
+可以勾选输入；勾选输入并不代表任务完成。
+
+Tasks 与 Notes 是由 Module 拥有、可以跨 Generation 的可丢弃当前工作状态。应用
 禁用或移除 owner 的配置时，会清理 active 与 archived Thread 中已登记的资源；
 重新启用从空状态开始，不从保留的历史恢复已退休状态。owner 仍启用时，正常退出
 保留状态。预览和被拒绝的配置不清理资源；中断的退休必须在新组合发布前完成。

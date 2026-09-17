@@ -60,8 +60,8 @@ func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest
 	}}, nil
 }
 
-func (m *Module) ClearContextForRenewal(_ context.Context, generationID string) (runtimemodule.ContextRenewalClear, error) {
-	if m == nil || m.store == nil {
+func (m *Module) StageContextTransition(_ context.Context, kind runtimemodule.ContextTransitionKind, generationID string) (runtimemodule.ContextRenewalClear, error) {
+	if m == nil || m.store == nil || kind != runtimemodule.ContextTransitionNew {
 		return runtimemodule.ContextRenewalClear{
 			Finalize: func() error { return nil },
 			Rollback: func() error { return nil },

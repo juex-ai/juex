@@ -16,9 +16,9 @@ import (
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -73,11 +73,11 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(scratchpad.Dir(before.Thread.Dir), "durable.txt"), []byte("retained"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	goal, notes := modulestate.Stores(before.Modules)
-	if goal == nil || notes == nil {
-		t.Fatal("Goal and Notes Modules did not expose their stores")
+	tasks, notes := modulestate.Stores(before.Modules)
+	if tasks == nil || notes == nil {
+		t.Fatal("Tasks and Notes Modules did not expose their stores")
 	}
-	if _, err := goal.Create("finish the current context", "new Generation is empty"); err != nil {
+	if _, err := tasks.Create(tasksmodule.Create{Status: tasksmodule.Done, Title: "Tracked work", Description: "finish the current context", Acceptance: "new Generation is empty"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notes.Update("- [x] preserve Scratchpad\n- [ ] start fresh"); err != nil {
@@ -96,13 +96,13 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(scratchpad.Dir(after.Thread.Dir), "durable.txt")); err != nil || string(data) != "retained" {
 		t.Fatalf("scratchpad after /new = %q, %v", data, err)
 	}
-	if snapshot, err := goal.StatusSnapshot(); err != nil || snapshot != nil {
-		t.Fatalf("Goal after /new = %+v, %v", snapshot, err)
+	if snapshot, err := tasks.StatusSnapshot(); err != nil || snapshot != nil {
+		t.Fatalf("Tasks after /new = %+v, %v", snapshot, err)
 	}
 	if snapshot, err := notes.StatusSnapshot(); err != nil || snapshot != nil {
 		t.Fatalf("Notes after /new = %+v, %v", snapshot, err)
 	}
-	for _, path := range []string{goal.Path, notes.Path} {
+	for _, path := range []string{notes.Path} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("module state file survived /new: %s: %v", path, err)
 		}
@@ -126,7 +126,7 @@ func TestModuleLifecycle_NewGenerationKeepsThreadScopedSet(t *testing.T) {
 	}
 }
 
-func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) {
+func TestModuleLifecycle_DisabledTasksAndNotesRetireBeforeReenable(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), WorkDir: work, AgentStateDir: filepath.Join(work, "state")}
 	first, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, DisableMCP: true})
@@ -134,7 +134,7 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 		t.Fatal(err)
 	}
 	for name, input := range map[string]map[string]any{
-		"create_goal":  {"description": "retire current work", "acceptance": "re-enable empty"},
+		"create_task":  {"title": "Retire work", "description": "retire current work", "acceptance": "re-enable empty"},
 		"update_notes": {"content": "retire these notes"},
 	} {
 		tool, ok := first.Engine.Tools.Get(name)
@@ -145,7 +145,7 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	goal, notes := modulestate.Stores(first.Engine.ThreadRuntimeSnapshot().Modules)
+	tasks, notes := modulestate.Stores(first.Engine.ThreadRuntimeSnapshot().Modules)
 	if err := first.Thread.Append(llm.TextMessage(llm.RoleUser, "retain history")); err != nil {
 		t.Fatal(err)
 	}
@@ -165,14 +165,14 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 		t.Fatal(err)
 	}
 	disabled := cfg
-	disabled.Modules = config.ModulePolicy{"goal": {Enabled: false}, "notes": {Enabled: false}}
+	disabled.Modules = config.ModulePolicy{"tasks": {Enabled: false}, "notes": {Enabled: false}}
 	response := httptest.NewRecorder()
 	web.NewReadOnlyAPIHandler(disabled).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/threads/"+thread.MainID, nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("read-only request: %d %s", response.Code, response.Body.String())
 	}
-	if g, err := goal.StatusSnapshot(); err != nil || g == nil {
-		t.Fatalf("read-only request retired Goal: %v %v", g, err)
+	if g, err := tasks.StatusSnapshot(); err != nil || g == nil {
+		t.Fatalf("read-only request retired Tasks: %v %v", g, err)
 	}
 	if n, err := notes.StatusSnapshot(); err != nil || n == nil {
 		t.Fatalf("read-only request retired Notes: %v %v", n, err)
@@ -184,8 +184,8 @@ func TestModuleLifecycle_DisabledGoalAndNotesRetireBeforeReenable(t *testing.T) 
 	if err := second.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := goal.StatusSnapshot(); err != nil || got != nil {
-		t.Fatalf("retired Goal = %+v, %v", got, err)
+	if got, err := tasks.StatusSnapshot(); err != nil || got != nil {
+		t.Fatalf("retired Tasks = %+v, %v", got, err)
 	}
 	if got, err := notes.StatusSnapshot(); err != nil || got != nil {
 		t.Fatalf("retired Notes = %+v, %v", got, err)
@@ -223,16 +223,16 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	workerID := worker.ID
-	goal := goalmodule.NewGoalStateStore(worker.Dir, goalmodule.GoalStateOptions{})
+	tasks := tasksmodule.NewStore(worker.Dir, tasksmodule.Options{})
 	notes := notesmodule.NewNotesStore(worker.Dir)
-	if _, err := goal.Create("preserve interrupted state", "archive after recovery"); err != nil {
+	if _, err := tasks.Create(tasksmodule.Create{Status: tasksmodule.Done, Title: "Tracked work", Description: "preserve interrupted state", Acceptance: "archive after recovery"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notes.Update("- [ ] preserve before archive"); err != nil {
 		t.Fatal(err)
 	}
 	generationID := worker.Projection().CurrentGeneration.ID
-	stageModuleRenewalCrash(t, worker.Dir, generationID, goal.Path, notes.Path)
+	stageModuleRenewalCrash(t, worker.Dir, generationID, tasks.Path, notes.Path)
 	if err := worker.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -249,10 +249,10 @@ func TestModuleLifecycle_InterruptedRenewalRecoversBeforeArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = archived.Close() }()
-	goalSnapshot, goalErr := goalmodule.NewGoalStateStore(archived.Dir, goalmodule.GoalStateOptions{}).StatusSnapshot()
+	taskSnapshot, taskErr := tasksmodule.NewStore(archived.Dir, tasksmodule.Options{}).StatusSnapshot()
 	notesSnapshot, notesErr := notesmodule.NewNotesStore(archived.Dir).StatusSnapshot()
-	if goalErr != nil || goalSnapshot == nil || goalSnapshot.Description != "preserve interrupted state" {
-		t.Fatalf("archived Goal = %+v, %v", goalSnapshot, goalErr)
+	if taskErr != nil || taskSnapshot == nil || taskSnapshot.Tasks[0].Description != "preserve interrupted state" {
+		t.Fatalf("archived Tasks = %+v, %v", taskSnapshot, taskErr)
 	}
 	if notesErr != nil || notesSnapshot == nil || notesSnapshot.Content != "- [ ] preserve before archive" {
 		t.Fatalf("archived Notes = %+v, %v", notesSnapshot, notesErr)

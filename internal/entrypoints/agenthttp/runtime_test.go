@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
@@ -75,7 +76,7 @@ body`)
 		{ID: "context-control", Scope: "thread"},
 		{ID: "operating-context", Scope: "thread"},
 		{ID: "scratchpad", Scope: "thread"},
-		{ID: "goal", Scope: "thread"},
+		{ID: "tasks", Scope: "thread"},
 		{ID: "notes", Scope: "thread"},
 		{ID: "hooks", Scope: "thread"},
 	}
@@ -464,11 +465,11 @@ func TestRuntimeStatusOmitsActiveThreadState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goalState, notes := modulestate.Stores(as.agent.Engine.ThreadRuntimeSnapshot().Modules)
-	if goalState == nil || notes == nil {
-		t.Fatal("active Thread Modules did not provide Goal and Notes stores")
+	tasksState, notes := modulestate.Stores(as.agent.Engine.ThreadRuntimeSnapshot().Modules)
+	if tasksState == nil || notes == nil {
+		t.Fatal("active Thread Modules did not provide Tasks and Notes stores")
 	}
-	if _, err := goalState.Create("ship runtime goal status", "waiting on e2e"); err != nil {
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Runtime status", Description: "ship runtime tasks status", Acceptance: "waiting on e2e"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notes.Update("- [ ] show runtime state in the UI"); err != nil {
@@ -487,8 +488,8 @@ func TestRuntimeStatusOmitsActiveThreadState(t *testing.T) {
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := fields["goal"]; ok {
-		t.Fatalf("runtime status leaked Thread goal: %s", encoded)
+	if _, ok := fields["tasks"]; ok {
+		t.Fatalf("runtime status leaked Thread tasks: %s", encoded)
 	}
 	if _, ok := fields["notes"]; ok {
 		t.Fatalf("runtime status leaked Thread notes: %s", encoded)

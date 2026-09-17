@@ -75,7 +75,7 @@ status facts. Generic event transport/catalog machinery lives in
 `foundation/events`. Runtime, Thread, provenance, Tool facts and each Feature
 own their schemas; `app/eventcatalog` statically assembles them independently of
 Module enablement. Feature Tools use the neutral registry directly; there is no
-production aggregate builtin factory. Goal/Notes stores, Context Control
+production aggregate builtin factory. Tasks/Notes stores, Context Control
 contributions and Extension private directories stay with their Feature owners.
 
 `frontend` contains the Fleet shell, Thread Explorer, transcript, composer and
@@ -97,7 +97,7 @@ threads/<thread-id>/
     g000001.jsonl
     g000002.jsonl
   modules/
-    goal/goal_state.json
+    tasks/tasks.json
     notes/notes.md
   scratchpad/
   spool/
@@ -150,9 +150,12 @@ state write. Settled unchecked records do not count as pending or enter recovery
 execution. Context Generation seeds preserve a scope ID across compaction and
 replace it on `/new`. `features/inputtracking` contributes only the tool,
 recitation and compaction guidance through a narrow Framework interface.
-Goal and Notes own their current-state files in Framework-assigned
+Tasks and Notes own their current-state files in Framework-assigned
 `modules/<owner>/` directories inside the Thread. Core Thread storage does not
-interpret their schemas. Before the first state write, the resource owner
+interpret their schemas. Tasks stages removal of done items as an opaque file
+replacement alongside new/compact Generation commits; failure or recovery uses
+the committed Generation to install or discard that replacement. Notes clears
+only on new. Before the first state write, the resource owner
 durably records its identity, scope, relative directory and retention policy.
 Files and ownership need not exist until that owner has durable state. The Scratchpad ThreadResource prepares
 model-managed working storage from the generic Thread directory only when
@@ -277,7 +280,7 @@ summary budgets before final context projection; journals remain unchanged.
 The Thread [chunked-write Module](internal/features/chunkedwrite/README.md) owns
 its buffered sessions, current-Generation recovery and folding algorithm.
 
-Goal and Notes policies live in `internal/features/goal` and
+Tasks and Notes policies live in `internal/features/tasks` and
 `internal/features/notes`. Enabled Modules contribute one frozen JSON state,
 guidance, and an owned summary section per compaction operation. A Module may
 reconcile only its declared section using that snapshot. Framework checks the

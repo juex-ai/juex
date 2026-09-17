@@ -109,7 +109,7 @@ type contextRenewalCleanerModule struct {
 
 func (m *contextRenewalCleanerModule) ID() ID { return m.id }
 
-func (m *contextRenewalCleanerModule) ClearContextForRenewal(context.Context, string) (ContextRenewalClear, error) {
+func (m *contextRenewalCleanerModule) StageContextTransition(context.Context, ContextTransitionKind, string) (ContextRenewalClear, error) {
 	*m.log = append(*m.log, "clear:"+string(m.id))
 	if m.err != nil {
 		return ContextRenewalClear{}, m.err
@@ -461,16 +461,16 @@ func TestClearContextForRenewalStopsOnOwnerError(t *testing.T) {
 	var log []string
 	clearErr := errors.New("clear failed")
 	set := buildRuntimeLifecycleSet(t,
-		&contextRenewalCleanerModule{id: "goal", log: &log},
+		&contextRenewalCleanerModule{id: "tasks", log: &log},
 		&contextRenewalCleanerModule{id: "notes", log: &log, err: clearErr},
 		&contextRenewalCleanerModule{id: "later", log: &log},
 	)
 
-	_, err := ClearContextForRenewal(context.Background(), set, "g000001")
+	_, err := StageContextTransition(context.Background(), set, ContextTransitionNew, "g000001")
 	if !errors.Is(err, clearErr) || !strings.Contains(err.Error(), `module "notes"`) {
 		t.Fatalf("ClearContextForRenewal() error = %v", err)
 	}
-	want := []string{"clear:goal", "clear:notes", "restore:goal"}
+	want := []string{"clear:tasks", "clear:notes", "restore:tasks"}
 	if !reflect.DeepEqual(log, want) {
 		t.Fatalf("clear order = %#v, want %#v", log, want)
 	}
@@ -480,18 +480,18 @@ func TestClearContextForRenewalFinalizesEveryOwner(t *testing.T) {
 	var log []string
 	finalizeErr := errors.New("finalize failed")
 	set := buildRuntimeLifecycleSet(t,
-		&contextRenewalCleanerModule{id: "goal", log: &log, finalizeErr: finalizeErr},
+		&contextRenewalCleanerModule{id: "tasks", log: &log, finalizeErr: finalizeErr},
 		&contextRenewalCleanerModule{id: "notes", log: &log},
 	)
 
-	clear, err := ClearContextForRenewal(context.Background(), set, "g000001")
+	clear, err := StageContextTransition(context.Background(), set, ContextTransitionNew, "g000001")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := clear.Finalize(); !errors.Is(err, finalizeErr) {
 		t.Fatalf("Finalize() error = %v", err)
 	}
-	want := []string{"clear:goal", "clear:notes", "finalize:goal", "finalize:notes"}
+	want := []string{"clear:tasks", "clear:notes", "finalize:tasks", "finalize:notes"}
 	if !reflect.DeepEqual(log, want) {
 		t.Fatalf("clear order = %#v, want %#v", log, want)
 	}

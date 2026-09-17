@@ -14,11 +14,11 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/scratchpad"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/modelhealth"
@@ -343,16 +343,16 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			goal := goalmodule.NewGoalStateStore(first.Thread.Dir, goalmodule.GoalStateOptions{})
+			tasks := tasksmodule.NewStore(first.Thread.Dir, tasksmodule.Options{})
 			notes := notesmodule.NewNotesStore(first.Thread.Dir)
-			if _, err := goal.Create("recover staged state", "respect the Generation boundary"); err != nil {
+			if _, err := tasks.Create(tasksmodule.Create{Status: tasksmodule.Done, Title: "Tracked work", Description: "recover staged state", Acceptance: "respect the Generation boundary"}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := notes.Update("- [ ] recover staged Notes"); err != nil {
 				t.Fatal(err)
 			}
 			generationID := first.Thread.Projection().CurrentGeneration.ID
-			stageAppRenewalCrash(t, first.Thread.Dir, generationID, goal.Path, notes.Path)
+			stageAppRenewalCrash(t, first.Thread.Dir, generationID, tasks.Path, notes.Path)
 			if test.committed {
 				if _, err := first.Thread.BeginNewGeneration(); err != nil {
 					t.Fatal(err)
@@ -368,16 +368,16 @@ func TestAppRecoversInterruptedContextRenewalBeforeBuildingModules(t *testing.T)
 			}
 			t.Cleanup(func() { _ = restarted.Close() })
 
-			goalSnapshot, goalErr := goalmodule.NewGoalStateStore(restarted.Thread.Dir, goalmodule.GoalStateOptions{}).StatusSnapshot()
+			taskSnapshot, taskErr := tasksmodule.NewStore(restarted.Thread.Dir, tasksmodule.Options{}).StatusSnapshot()
 			notesSnapshot, notesErr := notesmodule.NewNotesStore(restarted.Thread.Dir).StatusSnapshot()
 			if test.committed {
-				if goalErr != nil || goalSnapshot != nil || notesErr != nil || notesSnapshot != nil {
-					t.Fatalf("committed clear recovered old state: Goal=%+v/%v Notes=%+v/%v", goalSnapshot, goalErr, notesSnapshot, notesErr)
+				if taskErr != nil || taskSnapshot != nil || notesErr != nil || notesSnapshot != nil {
+					t.Fatalf("committed clear recovered old state: Tasks=%+v/%v Notes=%+v/%v", taskSnapshot, taskErr, notesSnapshot, notesErr)
 				}
 				return
 			}
-			if goalErr != nil || goalSnapshot == nil || notesErr != nil || notesSnapshot == nil {
-				t.Fatalf("pre-commit clear did not restore state: Goal=%+v/%v Notes=%+v/%v", goalSnapshot, goalErr, notesSnapshot, notesErr)
+			if taskErr != nil || taskSnapshot == nil || notesErr != nil || notesSnapshot == nil {
+				t.Fatalf("pre-commit clear did not restore state: Tasks=%+v/%v Notes=%+v/%v", taskSnapshot, taskErr, notesSnapshot, notesErr)
 			}
 		})
 	}

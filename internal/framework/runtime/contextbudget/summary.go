@@ -69,7 +69,7 @@ func buildCompactionSummarySystem(base, instructions string, state SummaryState)
 
 Return only a structured summary with these exact headings:
 
-Goal
+Tasks
 Critical Context
 Constraints & Preferences
 Progress

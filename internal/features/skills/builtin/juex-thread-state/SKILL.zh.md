@@ -1,33 +1,41 @@
 ---
 name: juex-thread-state
-description: JueX Thread goal 与工作笔记指南。
+description: JueX Thread 任务与工作笔记指南。
 type: builtin-guide
 ---
 # JueX Thread 状态
 
 > [English](SKILL.md) | 中文
 
-当你需要 goal 或工作笔记的详细工作流、约束或示例时加载此指南。正确的工具调用不要求事先加载指南。
+需要任务或工作笔记的详细流程时加载本指南。正确调用工具不要求预先加载。
 
-## Goals
+## 任务
 
-- 在判断一个 Thread 是否已有 goal 前使用 `get_goal`。
-- 仅当用户明确要求跟踪 goal，或调用你的运行时策略明确要求时，才使用 `create_goal`。它会创建或替换当前 Thread 的 goal，并把状态设为 `in_progress`。
-- `description` 说明具体目标。`acceptance` 记录完成标准、必需 artifact、约束和验证方式。使用 `status_reason` 提供当前状态的简洁证据。
-- 使用 `update_goal` 修改契约字段或状态。允许的状态是 `in_progress`、`wait_for_user`、`success` 和 `failure`。
-- 仅当未完成的 goal 在收到新的外部输入前无法取得有用进展时，才使用 `wait_for_user`。加入简洁的 `status_reason` 说明所需输入。该状态允许当前 Turn 结束而不触发强制继续。新输入到达后，评估它并显式把状态改为 `in_progress`、`success` 或 `failure`；如果仍缺所需输入，则保持 `wait_for_user`。
-- 只有验证全部 acceptance 条件后才能标记 `success`。只有 goal 确实无法完成时才能标记 `failure`，并提供有证据支持的 `status_reason`。困难、延迟或工作尚未完成本身不代表成功或失败。
+使用 `list_tasks` 查看当前 Thread 的工作，用 `create_task` 将请求记录为独立的
+持久化任务，填写标题、描述和验收条件。默认状态为 `todo`、优先级为 `p1`；
+优先级从高到低为 `p0`、`p1`、`p2`。使用 `update_task` 按 ID 修改字段或状态，
+用 `delete_task` 删除不再属于此清单的任务。
 
-示例：
+工作中使用 `doing`；只有需要新的外部输入才能继续时使用 `pending`；验证全部
+验收条件后标记 `done`；确实无法完成时标记 `failed`。在 `status_reason` 中
+记录证据或缺少的输入。新输入到来后重新评估 pending 任务。困难或耗时本身不
+代表完成或失败。
 
-```json
-{"description":"Ship the runtime fix","acceptance":"Focused and full tests pass; PR is merged","status_reason":"Implementation in progress"}
-```
+结束 Turn 时 Runtime 先从 `doing`、再从 `todo` 中选择一个任务续跑，同状态内
+按优先级和创建顺序选择。每个任务独立记录续跑次数。new 和 compact 都删除
+已完成任务，保留其余任务。Main 和 Worker Thread 各自持有独立任务列表。
 
 ## 工作笔记
 
-`update_notes` 会替换完整的模型自有 Thread 笔记，而不是追加。内容保持在 2048 个字符以内，并使用简洁 Markdown 记录当前计划、已验证进展和未解决问题。复选框条目（`- [ ]` 和 `- [x]`）适合表示状态会变化的工作。长期或大体量材料应放在 scratchpad 文件中，而不是 notes。
+`update_notes` 替换完整笔记，不是追加。内容控制在 2048 字符以内，用简洁
+Markdown 记录当前计划、已验证进展和未解决问题。复选框适合状态变化的工作。
+长期或较大的材料放到 Scratchpad 文件中。
 
 ## 输入清单
 
-启用 `input-tracking` 后，每次请求都会提供已投递但尚未勾选的输入。处理完成后用 `input_ids` 调用 `check_inputs`；问题应先回答再勾选。部分完成、失败、等待中的请求和仍有效的约束保持未勾选。新问题不代表替换原任务。勾选幂等且不会取消 Turn。Compaction 保留清单；仍有未完成工作时使用 `context_compact`。
+启用 `input-tracking` 后，每次请求都会提供尚未勾选的已投递输入。处理输入后
+使用 `check_inputs` 的 `input_ids` 勾选；问题应先回答。请求完整记录到持久化
+任务后，等任务工具成功再勾选输入，后续由任务跟踪完成情况。尚未完整记录的
+部分工作、失败、等待请求和仍有效的约束保持未勾选。新问题不替代先前工作。
+勾选幂等且不取消 Turn。compaction 保留清单；仍有未完成工作时使用
+`context_compact`。

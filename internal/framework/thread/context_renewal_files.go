@@ -31,6 +31,7 @@ var (
 type contextRenewalFile struct {
 	Path         string `json:"path"`
 	GenerationID string `json:"generation_id"`
+	Replace      bool   `json:"replace,omitempty"`
 }
 type contextRenewalManifest struct {
 	Version int                  `json:"version"`
@@ -49,12 +50,25 @@ type ContextRenewalFileClear struct {
 // renaming its authority file. The actual Thread root is independent of the
 // file's parent directory, so nested module files survive interrupted renewal.
 func StageContextRenewalFileClear(threadDir, path, generationID string) (ContextRenewalFileClear, error) {
+	return stageContextRenewalFile(threadDir, path, generationID, nil)
+}
+
+// StageContextRenewalFileReplace stages opaque module state for installation
+// after the Generation commits. Until then the original authority stays intact.
+func StageContextRenewalFileReplace(threadDir, path, generationID string, data []byte) (ContextRenewalFileClear, error) {
+	if data == nil {
+		return ContextRenewalFileClear{}, errors.New("thread: replacement data is required")
+	}
+	return stageContextRenewalFile(threadDir, path, generationID, data)
+}
+
+func stageContextRenewalFile(threadDir, path, generationID string, replacement []byte) (ContextRenewalFileClear, error) {
 	threadDir = filepath.Clean(threadDir)
 	relative, err := filepath.Rel(threadDir, path)
 	if err != nil {
 		return ContextRenewalFileClear{}, err
 	}
-	entry := contextRenewalFile{Path: filepath.ToSlash(relative), GenerationID: generationID}
+	entry := contextRenewalFile{Path: filepath.ToSlash(relative), GenerationID: generationID, Replace: replacement != nil}
 	if err := validateContextRenewalFile(threadDir, entry); err != nil {
 		return ContextRenewalFileClear{}, err
 	}
@@ -100,15 +114,21 @@ func StageContextRenewalFileClear(threadDir, path, generationID string) (Context
 	if err := writeContextRenewalManifest(threadDir, manifest); err != nil {
 		return ContextRenewalFileClear{}, err
 	}
-	if err := os.Rename(path, backup); err != nil {
-		return ContextRenewalFileClear{}, err
-	}
-	if err := homestore.SyncDir(filepath.Dir(path)); err != nil {
-		rollbackErr := os.Rename(backup, path)
-		if rollbackErr == nil {
-			rollbackErr = homestore.SyncDir(filepath.Dir(path))
+	if replacement != nil {
+		if err := homestore.WriteFileAtomicExisting(backup, replacement, 0600); err != nil {
+			return ContextRenewalFileClear{}, err
 		}
-		return ContextRenewalFileClear{}, errors.Join(err, rollbackErr)
+	} else {
+		if err := os.Rename(path, backup); err != nil {
+			return ContextRenewalFileClear{}, err
+		}
+		if err := homestore.SyncDir(filepath.Dir(path)); err != nil {
+			rollbackErr := os.Rename(backup, path)
+			if rollbackErr == nil {
+				rollbackErr = homestore.SyncDir(filepath.Dir(path))
+			}
+			return ContextRenewalFileClear{}, errors.Join(err, rollbackErr)
+		}
 	}
 	contextRenewalTransactions.active[threadDir]++
 	contextRenewalTransactions.files[key] = true
@@ -200,6 +220,17 @@ func finishContextRenewalFile(threadDir string, entry contextRenewalFile, restor
 	}
 	if !info.Mode().IsRegular() {
 		return errors.New("thread: Context renewal backup is not a regular file")
+	}
+	if entry.Replace {
+		if restore {
+			err = os.Remove(backup)
+		} else {
+			err = os.Rename(backup, path)
+		}
+		if err != nil {
+			return err
+		}
+		return syncContextRenewalParent(threadDir, path)
 	}
 	if restore {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {

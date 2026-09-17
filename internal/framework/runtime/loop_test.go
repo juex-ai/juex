@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/command"
@@ -86,7 +87,7 @@ func (m *mockProvider) Complete(ctx context.Context, sys string, history []llm.M
 	m.histories = append(m.histories, historyCopy)
 	r := m.script[m.called]
 	m.called++
-	return r, nil
+	return modulestate.ResolveTaskFixture(history, r)
 }
 
 type queuedFailureProvider struct {
@@ -305,8 +306,8 @@ func TestRuntimeHookHelperProcess(t *testing.T) {
 		_, _ = os.Stdout.WriteString("compaction cannot be blocked")
 		_, _ = os.Stderr.WriteString("compact guard diagnostic")
 		os.Exit(2)
-	case "goal-output":
-		_, _ = os.Stdout.WriteString(`{"goal_state":{"description":"hook should not write","status":"success"}}`)
+	case "tasks-output":
+		_, _ = os.Stdout.WriteString(`{"tasks_state":{"description":"hook should not write","status":"success"}}`)
 		os.Exit(0)
 	}
 	os.Exit(0)
@@ -2993,10 +2994,10 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	eng.Compaction.Instructions = "Preserve configured release criteria."
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
-	if _, err := goalState.CreateWithContract(goalmodule.GoalStateCreate{
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work",
 		Description: "Ship authoritative compaction state",
-		Acceptance:  "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two",
+		Acceptance:  "The persisted tasks remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -3004,7 +3005,7 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	if _, err := notesStore.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStores(t, eng, goalState, notesStore)
+	installThreadStateModulesWithStores(t, eng, tasksState, notesStore)
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
 		hookconfig.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
 	}})
@@ -3051,18 +3052,18 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	if err := json.Unmarshal([]byte(body[start+len(stateOpen):end]), &parts); err != nil {
 		t.Fatal(err)
 	}
-	var goal struct{ Description, Acceptance, Status string }
+	var tasks tasksmodule.TasksSnapshot
 	for _, part := range parts {
-		if part.Owner == "goal" {
-			if err := json.Unmarshal(part.State, &goal); err != nil {
+		if part.Owner == "tasks" {
+			if err := json.Unmarshal(part.State, &tasks); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if goal.Description != "Ship authoritative compaction state" ||
-		goal.Acceptance != "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two" ||
-		goal.Status != string(goalmodule.GoalStatusInProgress) {
-		t.Fatalf("summary goal contract = %+v", goal)
+	if tasks.Tasks[0].Description != "Ship authoritative compaction state" ||
+		tasks.Tasks[0].Acceptance != "The persisted tasks remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two" ||
+		tasks.Tasks[0].Status != tasksmodule.Todo {
+		t.Fatalf("summary tasks contract = %+v", tasks)
 	}
 }
 
@@ -3977,7 +3978,7 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 		attempts: []scriptedCompactionAttempt{
 			{
 				response: llm.Response{
-					Message:    llm.TextMessage(llm.RoleAssistant, "Goal\n- partial summary"),
+					Message:    llm.TextMessage(llm.RoleAssistant, "Tasks\n- partial summary"),
 					StopReason: llm.StopMaxTokens,
 					Usage:      llm.Usage{InputTokens: 10, OutputTokens: 1000},
 				},
@@ -4021,7 +4022,7 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 
 func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	var eng *Engine
-	var goalState *goalmodule.GoalStateStore
+	var tasksState *tasksmodule.Store
 	var notesStore *notesmodule.NotesStore
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
@@ -4030,7 +4031,7 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 				response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant}},
 				beforeReturn: func() {
 					updated := "Mutated after the first summary request"
-					if _, err := goalState.Update(goalmodule.GoalStateUpdate{Description: &updated}); err != nil {
+					if _, err := tasksState.Update(modulestate.First(t, tasksState).ID, tasksmodule.Update{Description: &updated}); err != nil {
 						t.Fatal(err)
 					}
 					if _, err := notesStore.Update("- [ ] mutated after first request"); err != nil {
@@ -4047,15 +4048,15 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	eng.ContextWindow = 5000
 	eng.Compaction.ReserveTokens = 1000
 	eng.Compaction.SummaryMaxTokens = 1000
-	goalState = goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
-	if _, err := goalState.Create("Original compact goal", "Original acceptance"); err != nil {
+	tasksState = tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "Original compact tasks", Acceptance: "Original acceptance"}); err != nil {
 		t.Fatal(err)
 	}
 	notesStore = notesmodule.NewNotesStore(eng.Thread.Dir)
 	if _, err := notesStore.Update("- [ ] original compact note"); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStores(t, eng, goalState, notesStore)
+	installThreadStateModulesWithStores(t, eng, tasksState, notesStore)
 	var epochs []provenance.RequestEpoch
 	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
 		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
@@ -4072,7 +4073,7 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	}
 	for i, history := range provider.histories {
 		body := history[0].FirstText()
-		for _, want := range []string{"Original compact goal", "Original acceptance", "original compact note"} {
+		for _, want := range []string{"Original compact tasks", "Original acceptance", "original compact note"} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("request %d missing snapshot value %q:\n%s", i+1, want, body)
 			}
@@ -5182,27 +5183,27 @@ func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testin
 	}
 }
 
-func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
+func TestTurn_TasksCompletionGateContinuesThenCompletes(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "goal_create_1", ToolName: goalmodule.ToolCreate, Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "task_create_1", ToolName: tasksmodule.ToolCreate, Input: map[string]any{"title": "Tracked work",
 				"description": "ship this",
 				"acceptance":  "artifact.txt exists and go test ./... passes",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "goal_update_1", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-				"status":        string(goalmodule.GoalStatusSuccess),
+			{Type: llm.BlockToolUse, ToolUseID: "task_update_1", ToolName: tasksmodule.ToolUpdate, Input: map[string]any{"id": "$first_task",
+				"status":        string(tasksmodule.Done),
 				"status_reason": "tests passed",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	goalState, _ := installThreadStateModules(t, eng)
+	tasksState, _ := installThreadStateModules(t, eng)
 	var continued int32
-	bus.Subscribe("goal.continued", func(e events.Event) { atomic.AddInt32(&continued, 1) })
+	bus.Subscribe("tasks.continued", func(e events.Event) { atomic.AddInt32(&continued, 1) })
 
 	out, err := eng.Turn(context.Background(), "ship this")
 	if err != nil {
@@ -5218,77 +5219,77 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if len(continuationHistory) < 2 {
 		t.Fatalf("continuation history = %+v", continuationHistory)
 	}
-	if got := continuationHistory[len(continuationHistory)-2].FirstText(); !strings.Contains(got, "current thread goal is still in progress") {
-		t.Fatalf("goal continuation = %q", got)
+	if got := continuationHistory[len(continuationHistory)-2].FirstText(); !strings.Contains(got, "Continue the selected unfinished task") {
+		t.Fatalf("tasks continuation = %q", got)
 	}
-	goalContext := continuationHistory[len(continuationHistory)-1]
-	if goalContext.Kind != llm.MessageKindRuntimeContext ||
-		!strings.Contains(goalContext.FirstText(), "Current goal contract") ||
-		!strings.Contains(goalContext.FirstText(), "artifact.txt") {
-		t.Fatalf("goal runtime context = %+v", goalContext)
+	taskContext := continuationHistory[len(continuationHistory)-1]
+	if taskContext.Kind != llm.MessageKindRuntimeContext ||
+		!strings.Contains(taskContext.FirstText(), "Current thread tasks") ||
+		!strings.Contains(taskContext.FirstText(), "artifact.txt") {
+		t.Fatalf("tasks runtime context = %+v", taskContext)
 	}
 	if atomic.LoadInt32(&continued) != 1 {
-		t.Fatalf("goal.continued events = %d", continued)
+		t.Fatalf("tasks.continued events = %d", continued)
 	}
-	state, err := goalState.Snapshot()
+	state, err := tasksState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != goalmodule.GoalStatusSuccess || state.StatusReason != "tests passed" || state.ContinuationCount != 1 || !strings.Contains(state.Acceptance, "artifact.txt") {
-		t.Fatalf("goal state = %+v", state)
+	if state.Tasks[0].Status != tasksmodule.Done || state.Tasks[0].StatusReason != "tests passed" || state.Tasks[0].ContinuationCount != 1 || !strings.Contains(state.Tasks[0].Acceptance, "artifact.txt") {
+		t.Fatalf("tasks state = %+v", state)
 	}
 }
 
-func TestTurn_ExhaustedProviderFailureDoesNotBecomeGoalContinuation(t *testing.T) {
+func TestTurn_ExhaustedProviderFailureDoesNotBecomeTasksContinuation(t *testing.T) {
 	providerErr := fmt.Errorf("openai responses stream retry exhausted after 2 attempts: %w", context.DeadlineExceeded)
 	prov := &mockProviderWithErrors{errs: []error{providerErr}}
 	eng, bus := newEngine(t, prov, false)
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
-	if _, err := goalState.Create("finish the release", "all release checks pass"); err != nil {
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "finish the release", Acceptance: "all release checks pass"}); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStores(t, eng, goalState, nil)
+	installThreadStateModulesWithStores(t, eng, tasksState, nil)
 	var continued int32
-	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
+	bus.Subscribe("tasks.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
 
 	if _, err := eng.Turn(context.Background(), "continue the release"); err == nil || !strings.Contains(err.Error(), "retry exhausted") {
 		t.Fatalf("Turn error = %v, want exhausted provider failure", err)
 	}
 	if got := atomic.LoadInt32(&continued); got != 0 {
-		t.Fatalf("goal.continued events = %d, want 0", got)
+		t.Fatalf("tasks.continued events = %d, want 0", got)
 	}
-	state, err := goalState.Snapshot()
+	state, err := tasksState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != goalmodule.GoalStatusInProgress || state.ContinuationCount != 0 {
-		t.Fatalf("goal state = %+v, want unchanged in-progress goal", state)
+	if state.Tasks[0].Status != tasksmodule.Todo || state.Tasks[0].ContinuationCount != 0 {
+		t.Fatalf("tasks state = %+v, want unchanged in-progress tasks", state)
 	}
 	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
-		t.Fatalf("pending count = %d, want no synthetic Goal continuation", status.PendingCount)
+		t.Fatalf("pending count = %d, want no synthetic Tasks continuation", status.PendingCount)
 	}
 }
 
-func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
+func TestTurn_TasksCompletionGateAcceptsMaximumTasksContract(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "goal_update_max", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-				"status":        string(goalmodule.GoalStatusSuccess),
+			{Type: llm.BlockToolUse, ToolUseID: "task_update_max", ToolName: tasksmodule.ToolUpdate, Input: map[string]any{"id": "$first_task",
+				"status":        string(tasksmodule.Done),
 				"status_reason": "maximum contract preserved",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
 	acceptance := strings.Repeat("a", 32*1024)
-	if _, err := goalState.Create("ship the maximum contract", acceptance); err != nil {
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "ship the maximum contract", Acceptance: acceptance}); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStores(t, eng, goalState, nil)
+	installThreadStateModulesWithStores(t, eng, tasksState, nil)
 
-	out, err := eng.Turn(context.Background(), "finish the goal")
+	out, err := eng.Turn(context.Background(), "finish the tasks")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5300,21 +5301,21 @@ func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
 	}
 }
 
-func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
+func TestTurn_TasksCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "waiting for delegated work"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
-	if _, err := goalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "finish delegated work", Acceptance: "all delegated results are incorporated"}); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, goalmodule.Options{
+	installThreadStateModulesWithStoresAndTasksOptions(t, eng, tasksState, nil, tasksmodule.ModuleOptions{
 		EnableContinuation:   true,
-		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
+		ContinuationDeferrer: fixedTasksContinuationDeferrer(true),
 	})
 	var continued int32
-	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
+	bus.Subscribe("tasks.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
 
 	out, err := eng.Turn(context.Background(), "delegate the work")
 	if err != nil {
@@ -5324,30 +5325,30 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 		t.Fatalf("out = %q, provider calls = %d", out, len(prov.histories))
 	}
 	if atomic.LoadInt32(&continued) != 0 {
-		t.Fatalf("goal.continued events = %d", continued)
+		t.Fatalf("tasks.continued events = %d", continued)
 	}
-	state, err := goalState.Snapshot()
+	state, err := tasksState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != goalmodule.GoalStatusInProgress || state.ContinuationCount != 0 {
-		t.Fatalf("goal state = %+v", state)
+	if state.Tasks[0].Status != tasksmodule.Todo || state.Tasks[0].ContinuationCount != 0 {
+		t.Fatalf("tasks state = %+v", state)
 	}
 }
 
-func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
+func TestTurn_DeferredTasksStillHonorsStopHookContinuation(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
-	if _, err := goalState.Create("finish delegated work", "all checks pass"); err != nil {
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "finish delegated work", Acceptance: "all checks pass"}); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, goalmodule.Options{
+	installThreadStateModulesWithStoresAndTasksOptions(t, eng, tasksState, nil, tasksmodule.ModuleOptions{
 		EnableContinuation:   true,
-		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
+		ContinuationDeferrer: fixedTasksContinuationDeferrer(true),
 	})
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hookconfig.EventName][]fakeHookResponse{
 		hookconfig.EventStop: {
@@ -5368,27 +5369,27 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 	}
 }
 
-func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
+func TestTurn_TasksWaitForUserAllowsFinish(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "goal_wait_1", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-				"status":        string(goalmodule.GoalStatusWaitForUser),
+			{Type: llm.BlockToolUse, ToolUseID: "task_pending_1", ToolName: tasksmodule.ToolUpdate, Input: map[string]any{"id": "$first_task",
+				"status":        string(tasksmodule.Pending),
 				"status_reason": "waiting for the deployment choice",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "Which deployment should I use?"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
-	if _, err := goalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "deploy the service", Acceptance: "the chosen deployment is healthy"}); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, goalmodule.Options{
+	installThreadStateModulesWithStoresAndTasksOptions(t, eng, tasksState, nil, tasksmodule.ModuleOptions{
 		EnableContinuation:   true,
-		ContinuationDeferrer: panicGoalContinuationDeferrer{t: t},
+		ContinuationDeferrer: panicTasksContinuationDeferrer{t: t},
 	})
 	var continued int32
-	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
+	bus.Subscribe("tasks.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
 
 	out, err := eng.Turn(context.Background(), "deploy it")
 	if err != nil {
@@ -5398,52 +5399,52 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 		t.Fatalf("out = %q, provider calls = %d", out, len(prov.histories))
 	}
 	if atomic.LoadInt32(&continued) != 0 {
-		t.Fatalf("goal.continued events = %d", continued)
+		t.Fatalf("tasks.continued events = %d", continued)
 	}
-	state, err := goalState.Snapshot()
+	state, err := tasksState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != goalmodule.GoalStatusWaitForUser || state.ContinuationCount != 0 {
-		t.Fatalf("goal state = %+v", state)
+	if state.Tasks[0].Status != tasksmodule.Pending || state.Tasks[0].ContinuationCount != 0 {
+		t.Fatalf("tasks state = %+v", state)
 	}
 }
 
-func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
+func TestTurn_UserMessageDoesNotCreateTasksState(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
-	installThreadStateModulesWithStores(t, eng, goalState, nil)
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
+	installThreadStateModulesWithStores(t, eng, tasksState, nil)
 
-	out, err := eng.Turn(context.Background(), "this is normal context, not a goal")
+	out, err := eng.Turn(context.Background(), "this is normal context, not a tasks")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out != "ok" {
 		t.Fatalf("out = %q", out)
 	}
-	snapshot, err := goalState.StatusSnapshot()
+	snapshot, err := tasksState.StatusSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if snapshot != nil {
-		t.Fatalf("ordinary turn created goal: %+v", snapshot)
+		t.Fatalf("ordinary turn created tasks: %+v", snapshot)
 	}
 }
 
-func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
+func TestTurn_HookTasksStateOutputDoesNotModifyTasks(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
-	installThreadStateModulesWithStores(t, eng, goalState, nil)
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
+	installThreadStateModulesWithStores(t, eng, tasksState, nil)
 	runner, err := hooks.NewRunner(hookconfig.Config{Commands: []hookconfig.CommandHook{{
-		Name:    "ignored-goal-output",
+		Name:    "ignored-tasks-output",
 		Events:  []hookconfig.EventName{hookconfig.EventStop},
-		Command: runtimeHookCommand("goal-output"),
+		Command: runtimeHookCommand("tasks-output"),
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -5457,12 +5458,12 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("out = %q", out)
 	}
-	snapshot, err := goalState.StatusSnapshot()
+	snapshot, err := tasksState.StatusSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if snapshot != nil {
-		t.Fatalf("hook goal_state output mutated goal: %+v", snapshot)
+		t.Fatalf("hook tasks_state output mutated tasks: %+v", snapshot)
 	}
 }
 
@@ -7310,10 +7311,10 @@ func TestNormalizeGuidedToolFailureResults(t *testing.T) {
 		"skill_load": toolcore.ToolGroupSkill,
 		"observe":    toolcore.ToolGroupObservable,
 		"chunk":      toolcore.ToolGroupChunkedWrite,
-		"goal":       toolcore.ToolGroupThreadState,
+		"tasks":      toolcore.ToolGroupThreadState,
 		"read":       toolcore.ToolGroupFile,
 	} {
-		guides := map[string]string{"observe": "juex-observables", "chunk": "juex-chunked-write", "goal": "juex-thread-state"}
+		guides := map[string]string{"observe": "juex-observables", "chunk": "juex-chunked-write", "tasks": "juex-thread-state"}
 		reg.MustRegister(toolcore.Tool{
 			Guide:   toolcore.ToolGuide{Loader: "skill_load", Name: guides[name]},
 			Name:    name,
@@ -7348,7 +7349,7 @@ func TestNormalizeGuidedToolFailureResults(t *testing.T) {
 		},
 		{
 			name:        "thread state error",
-			toolName:    "goal",
+			toolName:    "tasks",
 			isError:     true,
 			content:     "boom",
 			wantContent: "boom\n\n" + hint("juex-thread-state"),
@@ -7540,11 +7541,11 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 	}
 }
 
-func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
+func TestRunToolCalls_SerializesTasksCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	goalState, _ := installThreadStateModules(t, eng)
+	tasksState, _ := installThreadStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
-		if req.EventName == hookconfig.EventPreToolUse && req.ToolName == goalmodule.ToolCreate {
+		if req.EventName == hookconfig.EventPreToolUse && req.ToolName == tasksmodule.ToolCreate {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():
@@ -7554,22 +7555,22 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 		return nil, nil
 	}))
 
-	results := eng.runToolCalls(context.Background(), "turn-goal-order", testToolExecutions([]llm.Block{
+	results := eng.runToolCalls(context.Background(), "turn-tasks-order", testToolExecutions([]llm.Block{
 		{
 			Type:      llm.BlockToolUse,
-			ToolUseID: "goal-create",
-			ToolName:  goalmodule.ToolCreate,
+			ToolUseID: "tasks-create",
+			ToolName:  tasksmodule.ToolCreate,
 			Input: map[string]any{
-				"description": "ship ordered goal state",
-				"acceptance":  "goal updates observe provider order",
+				"description": "ship ordered tasks state",
+				"acceptance":  "tasks updates observe provider order",
 			},
 		},
 		{
 			Type:      llm.BlockToolUse,
-			ToolUseID: "goal-update",
-			ToolName:  goalmodule.ToolUpdate,
+			ToolUseID: "tasks-update",
+			ToolName:  tasksmodule.ToolUpdate,
 			Input: map[string]any{
-				"status":        string(goalmodule.GoalStatusSuccess),
+				"status":        string(tasksmodule.Done),
 				"status_reason": "ordered update applied",
 			},
 		},
@@ -7582,12 +7583,12 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 			t.Fatalf("result %d unexpectedly failed: %s", i, result.Block.Content)
 		}
 	}
-	snapshot, err := goalState.Snapshot()
+	snapshot, err := tasksState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Status != goalmodule.GoalStatusSuccess || snapshot.StatusReason != "ordered update applied" {
-		t.Fatalf("goal state = %+v, want provider-ordered success update", snapshot)
+	if snapshot.Tasks[0].Status != tasksmodule.Done || snapshot.Tasks[0].StatusReason != "ordered update applied" {
+		t.Fatalf("tasks state = %+v, want provider-ordered success update", snapshot)
 	}
 }
 
@@ -8560,8 +8561,8 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	}
 	want := []string{
 		"finish.attempted",
-		"start:goal-completion-gate",
-		"done:goal-completion-gate",
+		"start:tasks-completion-gate",
+		"done:tasks-completion-gate",
 		"start:Stop/stop-ok",
 		"done:Stop/stop-ok",
 	}

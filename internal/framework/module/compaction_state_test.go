@@ -27,7 +27,7 @@ func TestCompactionContributionsAreOwnedFrozenAndBounded(t *testing.T) {
 				mod.part.State = "broken"
 			}
 			if name == "invalid-section" {
-				mod.part.Section = "Goal\nNext Steps"
+				mod.part.Section = "Tasks\nNext Steps"
 			}
 			if name == "over-budget" {
 				mod.part.Guidance = strings.Repeat("large", 100)

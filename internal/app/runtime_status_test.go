@@ -16,7 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
@@ -345,7 +345,7 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 	for tool, wantOwner := range map[string]runtimemodule.ID{
 		"read":            filetoolsmodule.ModuleID,
 		"skill_search":    skills.ModuleID,
-		"get_goal":        goalmodule.ModuleID,
+		"list_tasks":      tasksmodule.ModuleID,
 		"update_notes":    notesmodule.ModuleID,
 		"thread_create":   workerthreadsmodule.ModuleID,
 		"observable_list": observable.ModuleID,

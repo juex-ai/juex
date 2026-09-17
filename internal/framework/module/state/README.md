@@ -18,6 +18,6 @@ read-only inspection do not retire resources. Retained resources are untouched.
 
 Ownership introduced here is a clean deployment boundary. Before upgrading an
 existing Agent, stop it and manually archive or remove its old Thread-root
-`goal_state.json` and `notes.md` files and any staged renewal backups, in both
+`tasks.json` and `notes.md` files and any staged renewal backups, in both
 active and archived Thread locations. No migration, adoption, filename scan or
 historical replay brings those unowned files into the new lifecycle.

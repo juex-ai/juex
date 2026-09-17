@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -13,7 +14,7 @@ import (
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -30,7 +31,7 @@ func TestNotesLiteralExamplesSurviveCompaction(t *testing.T) {
 	cfg.Compaction.KeepRecentTokens = 1
 	const literal = "    - [x] deploy\n\nExample:\n```markdown\n- [x] deploy\n- [x] pending\n```\n\n    - [x] deploy\n\t- [x] pending"
 	const nestedLiteral = "- Examples\n    - Nested\n      ~~~markdown\n      - [ ] example-only\n      ~~~"
-	provider := &moduleSummaryProvider{summary: "## Goal\nPreserve examples\n## Next Steps\n" + literal + "\n\ndeploy\n- [ ] deploy\n- [x] pending\n- Parent\n    - [ ] completed child\n" + nestedLiteral}
+	provider := &moduleSummaryProvider{summary: "## Tasks\nPreserve examples\n## Next Steps\n" + literal + "\n\ndeploy\n- [ ] deploy\n- [x] pending\n- Parent\n    - [ ] completed child\n" + nestedLiteral}
 	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: provider, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
@@ -68,9 +69,9 @@ func TestNotesLiteralExamplesSurviveCompaction(t *testing.T) {
 	}
 }
 
-func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
+func TestTasksContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: true}}}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{tasksmodule.ModuleID: {Enabled: true}}}
 	cfg.Compaction = config.DefaultCompactionConfig()
 	cfg.Compaction.KeepRecentTokens = 1
 	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: &moduleSummaryProvider{}, DisableMCP: true})
@@ -84,7 +85,7 @@ func TestGoalContractThatCannotFitSummaryDoesNotCommitOrTruncate(t *testing.T) {
 	})
 	goals, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 	acceptance := strings.Repeat("preserve exact acceptance line\n", 600)
-	if _, err := goals.Create("Long contract", acceptance); err != nil {
+	if _, err := goals.Create(tasksmodule.Create{Title: "Tracked work", Description: "Long contract", Acceptance: acceptance}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(goals.Path)
@@ -115,18 +116,18 @@ func (p *moduleSummaryProvider) Complete(_ context.Context, system string, histo
 	if p.summary != "" {
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, p.summary), StopReason: llm.StopEndTurn}, nil
 	}
-	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Goal\nA paraphrased objective\nCritical Context\nKeep branch high/module-state\nNext Steps\n3. [ ] Completed fixture\n- Unrelated next action\nRelevant Files\nREADME.md"), StopReason: llm.StopEndTurn}, nil
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Tasks\nA paraphrased objective\nCritical Context\nKeep branch high/module-state\nNext Steps\n3. [ ] Completed fixture\n- Unrelated next action\nRelevant Files\nREADME.md"), StopReason: llm.StopEndTurn}, nil
 }
 
-func TestGoalLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
+func TestTasksLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: true}}}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{tasksmodule.ModuleID: {Enabled: true}}}
 	cfg.Compaction = config.DefaultCompactionConfig()
 	cfg.Compaction.KeepRecentTokens = 1
 	const description = "Preserve literal fields\n## Next Steps\n```\n    Critical Context"
-	const acceptance = "Keep all lines\n\tGoal"
-	const literal = "````text\ndescription: " + description + "\nacceptance: " + acceptance + "\nstatus: in_progress\n````"
-	provider := &moduleSummaryProvider{summary: "## Goal\n" + literal + "\n## Critical Context\nPreserve real facts\n## Next Steps\nKeep real actions"}
+	const acceptance = "Keep all lines\n\tTasks"
+	literal := "````json\n{}\n````"
+	provider := &moduleSummaryProvider{summary: "## Tasks\n" + literal + "\n## Critical Context\nPreserve real facts\n## Next Steps\nKeep real actions"}
 	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: provider, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +138,15 @@ func TestGoalLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
 		}
 	})
 	goals, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
-	if _, err := goals.Create(description, acceptance); err != nil {
+	if _, err := goals.Create(tasksmodule.Create{Title: "Tracked work", Description: description, Acceptance: acceptance}); err != nil {
+		t.Fatal(err)
+	}
+	part, err := tasksmodule.New(goals).CompactionContribution(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	literal, err = part.Reconcile(t.Context(), "")
+	if err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(goals.Path)
@@ -169,10 +178,10 @@ func TestGoalLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
 	}
 	after, err := os.ReadFile(goals.Path)
 	if err != nil || string(after) != string(before) {
-		t.Fatalf("compaction changed authoritative Goal state: %v", err)
+		t.Fatalf("compaction changed authoritative Tasks state: %v", err)
 	}
 	generation := a.Thread.CurrentGenerationJournalPath()
-	provider.summary = "Goal\n````text\n" + description
+	provider.summary = "Tasks\n````text\n" + description
 	if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, "Additional work.")); err != nil {
 		t.Fatal(err)
 	}
@@ -187,14 +196,14 @@ func TestGoalLiteralContractSurvivesRepeatedCompaction(t *testing.T) {
 	}
 }
 
-func TestEmptyGoalNotesStateKeepsOrdinarySummaryText(t *testing.T) {
+func TestEmptyTasksNotesStateKeepsOrdinarySummaryText(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
 			isolateModuleConfig(t)
-			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: enabled}, notesmodule.ModuleID: {Enabled: enabled}}}
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{tasksmodule.ModuleID: {Enabled: enabled}, notesmodule.ModuleID: {Enabled: enabled}}}
 			cfg.Compaction = config.DefaultCompactionConfig()
 			cfg.Compaction.KeepRecentTokens = 1
-			const summary = "Goal\nContinue the conversation\nNext Steps\nKeep this copied fragment:\n```text\npartial example"
+			const summary = "Tasks\nContinue the conversation\nNext Steps\nKeep this copied fragment:\n```text\npartial example"
 			a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: &moduleSummaryProvider{summary: summary}, DisableMCP: true})
 			if err != nil {
 				t.Fatal(err)
@@ -224,14 +233,14 @@ func TestEmptyGoalNotesStateKeepsOrdinarySummaryText(t *testing.T) {
 	}
 }
 
-func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
-	for _, goalEnabled := range []bool{false, true} {
+func TestTasksNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
+	for _, tasksEnabled := range []bool{false, true} {
 		for _, notesEnabled := range []bool{false, true} {
 			for _, auto := range []bool{false, true} {
-				t.Run(fmt.Sprintf("goal=%v/notes=%v/auto=%v", goalEnabled, notesEnabled, auto), func(t *testing.T) {
+				t.Run(fmt.Sprintf("tasks=%v/notes=%v/auto=%v", tasksEnabled, notesEnabled, auto), func(t *testing.T) {
 					isolateModuleConfig(t)
 					cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{
-						goalmodule.ModuleID: {Enabled: goalEnabled}, notesmodule.ModuleID: {Enabled: notesEnabled},
+						tasksmodule.ModuleID: {Enabled: tasksEnabled}, notesmodule.ModuleID: {Enabled: notesEnabled},
 					}}
 					cfg.Compaction = config.DefaultCompactionConfig()
 					cfg.Compaction.KeepRecentTokens = 1
@@ -252,13 +261,13 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 					goals, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
 					const description = "Exact objective\nNext Steps\n</authoritative-thread-state>"
 					const acceptance = "Keep every field\n  including indentation"
-					if goalEnabled {
-						if _, err := goals.CreateWithContract(goalmodule.GoalStateCreate{Description: description, Acceptance: acceptance, StatusReason: "Await verification"}); err != nil {
+					if tasksEnabled {
+						if _, err := goals.Create(tasksmodule.Create{Title: "Tracked work", Description: description, Acceptance: acceptance, StatusReason: "Await verification"}); err != nil {
 							t.Fatal(err)
 						}
 					}
-					if goalEnabled {
-						if _, err := goals.Update(goalmodule.GoalStateUpdate{Status: goalmodule.GoalStatusSuccess}); err != nil {
+					if tasksEnabled {
+						if _, err := goals.Update(modulestate.First(t, goals).ID, tasksmodule.Update{Status: tasksmodule.Pending}); err != nil {
 							t.Fatal(err)
 						}
 					}
@@ -286,7 +295,7 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 					if len(ordinary.history) != 1 {
 						t.Fatalf("ordinary requests = %d", len(ordinary.history))
 					}
-					for id, enabled := range map[string]bool{"runtime-goal-contract": goalEnabled, "runtime-notes": notesEnabled} {
+					for id, enabled := range map[string]bool{"runtime-tasks-contract": tasksEnabled, "runtime-notes": notesEnabled} {
 						found := false
 						for _, message := range ordinary.history[0] {
 							if message.ID == id {
@@ -297,8 +306,8 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 							t.Errorf("runtime message %s enabled=%v present=%v", id, enabled, found)
 						}
 					}
-					if strings.Contains(provider.system, "provided contract") != goalEnabled {
-						t.Errorf("Goal guidance does not follow switch: %s", provider.system)
+					if strings.Contains(provider.system, "authoritative Tasks JSON") != tasksEnabled {
+						t.Errorf("Tasks guidance does not follow switch: %s", provider.system)
 					}
 					if strings.Contains(provider.system, "unfinished Notes") != notesEnabled {
 						t.Errorf("Notes guidance does not follow switch: %s", provider.system)
@@ -309,10 +318,10 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 							summary = message.FirstText()
 						}
 					}
-					if goalEnabled {
-						for _, value := range []string{"description: " + description, "acceptance: " + acceptance, "status: success", "status_reason: Await verification"} {
+					if tasksEnabled {
+						for _, value := range []string{`"description":` + jsonString(description), `"acceptance":` + jsonString(acceptance), `"status":"pending"`, `"status_reason":"Await verification"`} {
 							if !strings.Contains(summary, value) {
-								t.Errorf("protected Goal field missing %q: %s", value, summary)
+								t.Errorf("protected Tasks field missing %q: %s", value, summary)
 							}
 						}
 					}
@@ -328,9 +337,9 @@ func TestGoalNotesCompactionContributionsFollowModuleSwitches(t *testing.T) {
 	}
 }
 
-func TestGoalNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
+func TestTasksNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{goalmodule.ModuleID: {Enabled: true}, notesmodule.ModuleID: {Enabled: true}}}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{tasksmodule.ModuleID: {Enabled: true}, notesmodule.ModuleID: {Enabled: true}}}
 	cfg.Compaction = config.DefaultCompactionConfig()
 	cfg.Compaction.KeepRecentTokens = 1
 	cfg.Compaction.ReserveTokens = 22000
@@ -346,16 +355,16 @@ func TestGoalNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
 		}
 	})
 	goals, notes := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
-	if _, err := goals.Create("Protect this contract", "Keep exact state"); err != nil {
+	if _, err := goals.Create(tasksmodule.Create{Title: "Tracked work", Description: "Protect this contract", Acceptance: "Keep exact state"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := goals.Update(goalmodule.GoalStateUpdate{Status: goalmodule.GoalStatusSuccess}); err != nil {
+	if _, err := goals.Update(modulestate.First(t, goals).ID, tasksmodule.Update{Status: tasksmodule.Pending}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notes.Update("- [ ] Pending fixture"); err != nil {
 		t.Fatal(err)
 	}
-	beforeGoal, err := os.ReadFile(goals.Path)
+	beforeTasks, err := os.ReadFile(goals.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,10 +390,12 @@ func TestGoalNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
 	if a.Thread.CurrentGenerationJournalPath() != generation || len(provider.history) != 0 || len(summary.history) == 0 {
 		t.Fatal("oversized input committed or reached the ordinary provider")
 	}
-	for path, before := range map[string][]byte{goals.Path: beforeGoal, notes.Path: beforeNotes} {
+	for path, before := range map[string][]byte{goals.Path: beforeTasks, notes.Path: beforeNotes} {
 		after, err := os.ReadFile(path)
 		if err != nil || string(after) != string(before) {
 			t.Fatalf("failed compaction changed %s: %v", path, err)
 		}
 	}
 }
+
+func jsonString(value string) string { data, _ := json.Marshal(value); return string(data) }

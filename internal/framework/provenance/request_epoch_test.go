@@ -271,13 +271,13 @@ func TestSystemPromptSnapshotsDeduplicateStableSections(t *testing.T) {
 }
 
 func TestBuildRequestEpochPersistsDerivedRuntimeContextBodies(t *testing.T) {
-	goal := message("runtime-goal-contract", llm.MessageKindRuntimeContext, "Goal: preserve this exact state")
+	tasks := message("runtime-tasks-contract", llm.MessageKindRuntimeContext, "Tasks: preserve this exact state")
 	modelChange := message("runtime-model-change", llm.MessageKindModelChange, "The serving model changed")
 	epoch, err := BuildRequestEpoch(RequestInput{
 		Provider: SafeProvider{ID: "test", Model: "model"},
 		History: []llm.Message{
 			message("user-1", llm.MessageKindDirect, "hello"),
-			goal,
+			tasks,
 			modelChange,
 		},
 	})
@@ -295,7 +295,7 @@ func TestBuildRequestEpochPersistsDerivedRuntimeContextBodies(t *testing.T) {
 	if err := json.Unmarshal(derived.Snapshot.Content, &recovered); err != nil {
 		t.Fatal(err)
 	}
-	if recovered.ID != goal.ID || recovered.FirstText() != goal.FirstText() {
+	if recovered.ID != tasks.ID || recovered.FirstText() != tasks.FirstText() {
 		t.Fatalf("recovered runtime context = %+v", recovered)
 	}
 	if epoch.Messages[2].Source != "model_change" || epoch.Messages[2].Snapshot == nil || epoch.Messages[2].Snapshot.Digest != epoch.Messages[2].ContentDigest {
@@ -307,7 +307,7 @@ func TestBuildRequestEpochPersistsDerivedRuntimeContextBodies(t *testing.T) {
 	tracker.CommitEpoch(epoch)
 	repeated, err := BuildRequestEpoch(RequestInput{
 		Provider: SafeProvider{ID: "test", Model: "model"},
-		History:  []llm.Message{message("user-1", llm.MessageKindDirect, "hello"), goal, modelChange},
+		History:  []llm.Message{message("user-1", llm.MessageKindDirect, "hello"), tasks, modelChange},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -316,10 +316,10 @@ func TestBuildRequestEpochPersistsDerivedRuntimeContextBodies(t *testing.T) {
 	if repeated.Messages[1].Snapshot == nil || !repeated.Messages[1].Snapshot.Reused || len(repeated.Messages[1].Snapshot.Content) != 0 {
 		t.Fatalf("repeated runtime context snapshot = %+v", repeated.Messages[1].Snapshot)
 	}
-	changedGoal := message("runtime-goal-contract", llm.MessageKindRuntimeContext, "Goal: changed authoritative state")
+	changedTasks := message("runtime-tasks-contract", llm.MessageKindRuntimeContext, "Tasks: changed authoritative state")
 	changed, err := BuildRequestEpoch(RequestInput{
 		Provider: SafeProvider{ID: "test", Model: "model"},
-		History:  []llm.Message{message("user-1", llm.MessageKindDirect, "hello"), changedGoal},
+		History:  []llm.Message{message("user-1", llm.MessageKindDirect, "hello"), changedTasks},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +329,7 @@ func TestBuildRequestEpochPersistsDerivedRuntimeContextBodies(t *testing.T) {
 		t.Fatalf("changed runtime context snapshot = %+v", changed.Messages[1].Snapshot)
 	}
 	tampered := epoch
-	tampered.Messages[1].Snapshot.Content = json.RawMessage(`{"id":"runtime-goal-contract"}`)
+	tampered.Messages[1].Snapshot.Content = json.RawMessage(`{"id":"runtime-tasks-contract"}`)
 	if err := VerifyRequestEpoch(tampered); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
 		t.Fatalf("VerifyRequestEpoch() tampered runtime context error = %v", err)
 	}

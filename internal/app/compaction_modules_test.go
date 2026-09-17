@@ -58,7 +58,7 @@ func TestCompactionModuleProtectsOnlyItsSectionBeforeGenerationCommit(t *testing
 			if name == "over-context-budget" {
 				mod.runtimeText = strings.Repeat("large runtime context ", 3000)
 			}
-			summary := "Goal\nConversation objective\nCritical Context\nUnrelated fact\nCheckpoint\nmodel checkpoint"
+			summary := "Tasks\nConversation objective\nCritical Context\nUnrelated fact\nCheckpoint\nmodel checkpoint"
 			if name == "duplicate-section" {
 				summary += "\nCheckpoint\nduplicate"
 			}

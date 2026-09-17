@@ -41,16 +41,16 @@ type ContextRenewalClear struct {
 	Rollback func() error
 }
 
-// ContextRenewalCleaner owns module state that must be cleared around a new
+// ContextRenewalCleaner stages module state changes around a new or compact
 // Context Generation commit. Configuration retirement is a separate operation
 // over persisted resource ownership, independent of the enabled Set.
 type ContextRenewalCleaner interface {
-	ClearContextForRenewal(context.Context, string) (ContextRenewalClear, error)
+	StageContextTransition(context.Context, ContextTransitionKind, string) (ContextRenewalClear, error)
 }
 
-// ClearContextForRenewal invokes enabled Thread modules in registration order
+// StageContextTransition invokes enabled Thread modules in registration order
 // and stops before the Generation boundary if any owner cannot stage its clear.
-func ClearContextForRenewal(ctx context.Context, set *Set, generationID string) (ContextRenewalClear, error) {
+func StageContextTransition(ctx context.Context, set *Set, kind ContextTransitionKind, generationID string) (ContextRenewalClear, error) {
 	if set == nil {
 		return noOpContextRenewalClear(), nil
 	}
@@ -62,7 +62,7 @@ func ClearContextForRenewal(ctx context.Context, set *Set, generationID string) 
 		if !ok {
 			continue
 		}
-		clear, err := cleaner.ClearContextForRenewal(ctx, generationID)
+		clear, err := cleaner.StageContextTransition(ctx, kind, generationID)
 		if err != nil {
 			return ContextRenewalClear{}, errors.Join(
 				fmt.Errorf("runtime module %q clear context state: %w", mod.ID(), err),

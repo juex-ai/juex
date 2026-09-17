@@ -17,7 +17,7 @@
 
 原有输入 ID、原文、来源、执行尝试和错误记录继续使用。跟踪资格是框架接收输入时的元数据；未启用跟踪与“未勾选”不能混淆。
 
-不新增 open/blocked/resolved、completed/incorporated/superseded/cancelled 等状态集合，不新增进展字段、证据字段或输入之间的关系图。进展继续通过对话、Goal、Notes 和现有工具结果表达。
+不新增 open/blocked/resolved、completed/incorporated/superseded/cancelled 等状态集合，不新增进展字段、证据字段或输入之间的关系图。进展继续通过对话、Tasks、Notes 和现有工具结果表达。
 
 ## 2. 和 pending_input、模块的关系
 
@@ -27,7 +27,7 @@
 | --- | --- |
 | Runtime / Framework | 自动登记、输入存储、勾选提交、当前集合保留、执行恢复与生命周期边界。 |
 | `input-tracking` 模块 | 一个勾选工具、每次请求的 recitation，以及轻量的勾选状态展示。 |
-| Goal / Notes | 继续分别表达长期目标和工作笔记，不承担逐条输入登记。 |
+| Tasks / Notes | 继续分别表达长期目标和工作笔记，不承担逐条输入登记。 |
 
 保持此前的模块建议：standard 默认开启、minimal 默认关闭，仍待评审。关闭模块不影响原有消息投递；不注册勾选工具、不注入清单、不跟踪新输入。旧未勾选记录保留，重新开启后在下一次正常执行时恢复展示，不自动回填关闭期间的历史或启动旧工作。
 
@@ -113,7 +113,7 @@ Framework 的接收、排队顺序、step 边界注入和恢复语义保持原�
 
 二态清单无法自动区分“被遗漏的任务”“等待用户的任务”和“仍然适用的约束”。因此，未勾选项存在时不无条件阻止 Turn 结束，也不以此启动无限 continuation。
 
-每次请求通过 recitation 提醒模型处理；已有 Goal continuation 继续按自己的规则工作。移除前版独立 FinishPolicy、三次无进展检测及 Goal/输入续跑仲裁的设计。
+每次请求通过 recitation 提醒模型处理；已有 Tasks continuation 继续按自己的规则工作。移除前版独立 FinishPolicy、三次无进展检测及 Tasks/输入续跑仲裁的设计。
 
 这个取舍意味着：首版确保未处理信息不会随出队或 compact 静默消失，但不保证模型会立即完成所有输入。如果评估显示模型仍频繁带着可执行事项结束，再单独讨论结束检查，不为此提前增加 blocked 等状态和工具。
 

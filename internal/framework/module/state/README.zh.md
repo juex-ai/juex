@@ -13,6 +13,6 @@ Thread。资源已不存在视为已清理；失败保留意图并阻止发布�
 不触发退休，声明保留的资源不受影响。
 
 这次引入所有权是一次明确的部署切换。升级已有 Agent 前，先停止 Agent，再手动
-归档或移除 active 和 archived Thread 根目录中的旧 `goal_state.json`、`notes.md`
+归档或移除 active 和 archived Thread 根目录中的旧 `tasks.json`、`notes.md`
 及其暂存的 Generation 清理备份。不通过迁移、接管、文件名扫描或历史重放将这些
 无所有权文件纳入新生命周期。

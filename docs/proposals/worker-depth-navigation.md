@@ -6,7 +6,7 @@ Status: implemented. Updated: 2026-09-09.
 Implementation task: Taskline `bfb66d37-fc99-425b-b389-6836515b7af7`.
 Recommendation: Strong.
 
-## Problem and Goal
+## Problem and Tasks
 
 Before this change, Workers could create more Workers without a nesting limit. A CLI Proxy
 API investigation started by debaga on 2026-09-08 produced 310 Workers, reached

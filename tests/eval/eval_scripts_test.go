@@ -3460,7 +3460,7 @@ func TestEvalHelpersResolveAgentHomeThreads(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
-func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
+func TestCompactionEvalScoresAuthoritativeTasksAndNotes(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
@@ -3484,14 +3484,14 @@ func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 		"    generations = thread / 'generations'",
 		"    generations.mkdir()",
 		"    compaction.seed_module_ownership(thread)",
-		"    (thread / 'modules/goal/goal_state.json').write_text(json.dumps(compaction.AUTHORITATIVE_GOAL), encoding='utf-8')",
+		"    (thread / 'modules/tasks/tasks.json').write_text(json.dumps(compaction.AUTHORITATIVE_TASKS), encoding='utf-8')",
 		"    (thread / 'modules/notes/notes.md').write_text(compaction.AUTHORITATIVE_NOTES, encoding='utf-8')",
-		"    goal = compaction.AUTHORITATIVE_GOAL",
+		"    tasks = compaction.AUTHORITATIVE_TASKS['tasks'][0]",
 		"    summary = '\\n'.join([",
-		"        'Goal',",
-		"        f\"description: {goal['description']}\",",
-		"        f\"acceptance: {goal['acceptance']}\",",
-		"        f\"status: {goal['status']}\",",
+		"        'Tasks',",
+		"        f\"description: {tasks['description']}\",",
+		"        f\"acceptance: {tasks['acceptance']}\",",
+		"        f\"status: {tasks['status']}\",",
 		"        'Critical Context', 'facts', 'Constraints & Preferences', 'none',",
 		"        'Progress', 'mapped', 'Key Decisions', 'preserve state', 'Next Steps',",
 		"        compaction.AUTHORITATIVE_OPEN_NOTE.rstrip('.'), 'Relevant Files', 'notes.md', 'Tool Failures', 'none',",
@@ -3545,7 +3545,7 @@ func TestCompactionEvalSeedsModuleOwnedFilesWithoutChangingThreadStores(t *testi
 		"    compaction.seed_authoritative_state(work)",
 		"    assert journal.read_bytes() == before_journal",
 		"    assert metadata_path.read_bytes() == before_metadata",
-		"    assert json.loads((thread / 'modules/goal/goal_state.json').read_text(encoding='utf-8')) == compaction.AUTHORITATIVE_GOAL",
+		"    assert json.loads((thread / 'modules/tasks/tasks.json').read_text(encoding='utf-8')) == compaction.AUTHORITATIVE_TASKS",
 		"    assert (thread / 'modules/notes/notes.md').read_text(encoding='utf-8') == compaction.AUTHORITATIVE_NOTES",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)

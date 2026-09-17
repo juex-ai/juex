@@ -65,7 +65,7 @@ Provider-neutral 消息与确定性的纯文本投影位于 `foundation/llm`；�
 机制位于 `foundation/events`。Runtime、Thread、provenance、Tool fact 和各
 Feature 分别拥有 schema；`app/eventcatalog` 不受 Module 开关影响，静态组装
 全部 schema。Feature Tool 直接使用中立 registry，生产代码没有统一 builtin
-工厂。Goal/Notes store、Context Control contribution 与 Extension 私有目录均
+工厂。Tasks/Notes store、Context Control contribution 与 Extension 私有目录均
 属于各自 Feature。
 
 `frontend` 包含 Fleet shell、Thread Explorer、transcript、composer 与 runtime
@@ -90,7 +90,7 @@ threads/<thread-id>/
     g000001.jsonl
     g000002.jsonl
   modules/
-    goal/goal_state.json
+    tasks/tasks.json
     notes/notes.md
   scratchpad/
   spool/
@@ -126,9 +126,11 @@ registry 的权威。它还物化有界 counter、context status、Pending Input
 与诊断 reader 通过 EventStore snapshot 分页或捕获已注册 Generation，不自行拼接
 存储路径。Torn final write 可以修复，完整但非法的 commit 属于 corruption。
 
-`inputs.json` 是 Runtime 拥有的原子当前状态文档，保留执行恢复所需输入和有界的未勾选输入清单。Framework 先提交 Generation 勾选事实，再更新当前集并发布；加载时根据事实修复“勾选已提交而文件写入中断”的窗口。已结束但未勾选的记录不计入 pending，也不进入恢复执行。Context Generation seed 保存工作范围 ID：compaction 继承，`/new` 替换。`features/inputtracking` 只通过窄 Framework 接口贡献工具、recitation 和 compaction 指引。Goal 与 Notes
+`inputs.json` 是 Runtime 拥有的原子当前状态文档，保留执行恢复所需输入和有界的未勾选输入清单。Framework 先提交 Generation 勾选事实，再更新当前集并发布；加载时根据事实修复“勾选已提交而文件写入中断”的窗口。已结束但未勾选的记录不计入 pending，也不进入恢复执行。Context Generation seed 保存工作范围 ID：compaction 继承，`/new` 替换。`features/inputtracking` 只通过窄 Framework 接口贡献工具、recitation 和 compaction 指引。Tasks 与 Notes
 Module 在 Thread 内 Framework 分配的 `modules/<owner>/` 目录中拥有当前状态
-文件，core Thread storage 不解释其 schema。首次写状态前，资源 owner 持久登记
+文件，core Thread storage 不解释其 schema。Tasks 在 new/compact 的 Generation
+提交旁暂存删除 done 项后的文件替换；失败或恢复根据已提交 Generation 安装或丢弃
+替换内容。Notes 仅在 new 时清理。首次写状态前，资源 owner 持久登记
 身份、scope、相对目录和保留策略；没有持久状态时，文件与登记都可以不存在。Scratchpad ThreadResource
 只在启用时基于通用 Thread 目录准备模型管理的工作存储；core Thread 和 runtime
 context 不携带其私有路径。工作文件跨 Generation 和模块关闭保留；spool 是系统
@@ -227,7 +229,7 @@ Agent scope 的 [Memory Module](internal/features/memory/README.zh.md) 拥有持
 和摘要预算，Journal 保持不变。Thread 级的[分块写 Module](internal/features/chunkedwrite/README.zh.md)
 拥有缓冲会话、当前 Generation 恢复和折叠算法。
 
-Goal 与 Notes 策略分别位于 `internal/features/goal` 和
+Tasks 与 Notes 策略分别位于 `internal/features/tasks` 和
 `internal/features/notes`。每次压缩中，启用的 Module 贡献一份冻结的 JSON 状态、
 指导和自有摘要段落，只能依据该快照修正自己声明的段落。Framework 在提交
 Generation 前，检查修正后的摘要是否满足成功请求的输出预算，以及包含已准备

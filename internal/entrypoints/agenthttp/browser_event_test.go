@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/toolevents"
@@ -709,17 +709,17 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
-			ID:        "evt-goal-updated",
-			Type:      "goal.updated",
+			ID:        "evt-tasks-updated",
+			Type:      "tasks.updated",
 			Timestamp: ts.Add(7200 * time.Millisecond),
 			TurnID:    "turn-1",
-			Payload: goalmodule.GoalUpdatedPayload{
+			Payload: tasksmodule.TasksUpdatedPayload{Tasks: []tasksmodule.Task{{ID: "task-1", Title: "Ship fix", Priority: tasksmodule.P1,
 				Description:       "ship the fix",
 				Acceptance:        "tests pass",
 				ContinuationCount: 2,
-				Status:            goalmodule.GoalStatusInProgress,
+				Status:            tasksmodule.Todo,
 				UpdatedAt:         ts.Add(7200 * time.Millisecond),
-			},
+			}}},
 		},
 		{
 			ID:        "evt-notes-updated",

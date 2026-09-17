@@ -23,16 +23,16 @@ func TestModuleInspectionConfigUsesLayeredSelectionWithoutRuntimeSetup(t *testin
 			t.Fatal(err)
 		}
 	}
-	write(filepath.Join(userHome, ".juex", "juex.yaml"), "preset: minimal\nmodules:\n  goal:\n    enabled: true\n")
+	write(filepath.Join(userHome, ".juex", "juex.yaml"), "preset: minimal\nmodules:\n  tasks:\n    enabled: true\n")
 	write(filepath.Join(home, "juex.yaml"), "modules:\n  notes:\n    enabled: true\n")
 	write(filepath.Join(work, ".juex", "juex.yaml"), "imports:\n  - source: ./shared.yaml\nmodules:\n  notes:\n    enabled: false\n")
 	write(filepath.Join(work, ".juex", "shared.yaml"), "modules:\n  scratchpad:\n    enabled: true\n")
-	write(agent, "modules:\n  goal:\n    enabled: false\n")
+	write(agent, "modules:\n  tasks:\n    enabled: false\n")
 	cfg, err := ReadModuleInspectionConfig(testModuleInventory(), work, home, agent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.EffectivePreset() != PresetMinimal || cfg.ModuleEnabled("goal") || cfg.ModuleEnabled("notes") || !cfg.ModuleEnabled("scratchpad") {
+	if cfg.EffectivePreset() != PresetMinimal || cfg.ModuleEnabled("tasks") || cfg.ModuleEnabled("notes") || !cfg.ModuleEnabled("scratchpad") {
 		t.Fatalf("composition=%+v", cfg.Modules)
 	}
 	if _, err := os.Stat(filepath.Join(home, "cache")); !os.IsNotExist(err) {
@@ -71,7 +71,7 @@ func TestModuleInspectionConfigReadsValidatedRemoteContentWithoutFetchingOrRecov
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ModuleEnabled("goal") || !cfg.ModuleEnabled("notes") {
+	if cfg.ModuleEnabled("tasks") || !cfg.ModuleEnabled("notes") {
 		t.Fatalf("composition=%+v", cfg.Modules)
 	}
 	if after, err := os.ReadFile(path); err != nil || string(after) != string(data) {

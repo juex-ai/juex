@@ -38,7 +38,7 @@ func inputTrackingConfig(t *testing.T, enabled bool) config.Config {
 
 func inputTrackingApp(t *testing.T, cfg config.Config, provider llm.Provider) *app.App {
 	t.Helper()
-	a, err := app.New(app.Options{Config: cfg, Provider: provider, SummaryProvider: &moduleSummaryProvider{summary: "## Goal\nContinue active work.\n## Critical Context\nHistorical actions need not repeat.\n## Next Steps\nFollow remaining requirements."}, DisableMCP: true})
+	a, err := app.New(app.Options{Config: cfg, Provider: provider, SummaryProvider: &moduleSummaryProvider{summary: "## Tasks\nContinue active work.\n## Critical Context\nHistorical actions need not repeat.\n## Next Steps\nFollow remaining requirements."}, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}

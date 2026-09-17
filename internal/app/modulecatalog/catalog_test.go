@@ -10,7 +10,7 @@ func TestProductPresetMembership(t *testing.T) {
 	expected := map[string]bool{
 		"basic-file-tools": true, "shell": true, "operating-context": true,
 		"apply-patch": false, "chunked-write": false, "file-search": false,
-		"agents-md": false, "skills": false, "scratchpad": false, "goal": false,
+		"agents-md": false, "skills": false, "scratchpad": false, "tasks": false,
 		"notes": false, "memory": false, "context-control": false, "worker-threads": false,
 		"input-tracking": false, "fleet-management": false,
 		"observables": false, "mcp": false, "hooks": false, "extensions": false,

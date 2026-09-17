@@ -6,7 +6,7 @@ Status: implemented in [PR #537](https://github.com/juex-ai/juex/pull/537). Upda
 
 This document proposes ownership, package boundaries, and directory organization for discussion. It does not replace the current [architecture contract](../../ARCHITECTURE.md) or [ADR-0001](../adr/0001-lifecycle-driven-module-architecture.md). The production-consumer inventory has been completed from current source; package destinations and split boundaries are ready for pre-migration review.
 
-## Problem and Goals
+## Problem and Taskss
 
 A thin `cmd/juex` entry point with implementation under `internal` follows [official Go guidance](https://go.dev/doc/modules/layout). The problem is that organization within `internal` does not sufficiently express the existing Foundation, Framework, and Feature architecture.
 
@@ -105,7 +105,7 @@ internal/
     workerthreads/
     extensions/
     operatingcontext/
-    goal/
+    tasks/
     notes/
     scratchpad/
     agentsmd/
@@ -168,10 +168,10 @@ This is a pre-migration architectural snapshot, not a permanent package inventor
 | `provenance` | Provider request selection identity, safe digests, and events | `app`, `eventcatalog`, `runtime`, `runtime/module` | `framework/provenance` |
 | `runtime` | Input/Turn lifecycle, Provider loop, recovery, compaction, and tool execution | `app`, `eventcatalog`, `statusapi`, `web` | `framework/runtime`, `features/contextcontrol` |
 | `runtime/contextbudget` | Context budgets, history selection, and previews | `runtime` | `framework/runtime/contextbudget` |
-| `runtime/module` | Capability contracts, registration, startup, activation, and shutdown | `app`, `eventcatalog`, `hooks`, `mcp`, `modules/agentsmd`, `modules/builtintools`, `modules/chunkedwrite`, `modules/goal`, `modules/notes`, `modules/operatingcontext`, `modules/scratchpad`, `modules/shelltools`, `modules/skills`, `observable`, `prompt`, `runtime`, `runtime/contextbudget` | `framework/module` |
+| `runtime/module` | Capability contracts, registration, startup, activation, and shutdown | `app`, `eventcatalog`, `hooks`, `mcp`, `modules/agentsmd`, `modules/builtintools`, `modules/chunkedwrite`, `modules/tasks`, `modules/notes`, `modules/operatingcontext`, `modules/scratchpad`, `modules/shelltools`, `modules/skills`, `observable`, `prompt`, `runtime`, `runtime/contextbudget` | `framework/module` |
 | `runtime/module/state` | Module resource ownership, leases, and retirement | `app`, `runtime/module`, `runtime/workmem` | `framework/module/state` |
 | `runtime/policy` | Compaction and tool-output policy values | `config`, `runtime`, `runtime/contextbudget` | `framework/runtime/policy` |
-| `runtime/workmem` | Goal/Notes stores, events, and file helpers | `app`, `eventcatalog`, `modules/goal`, `modules/notes`, `runtime`, `web` | `features/goal`, `features/notes`, `framework/module/state` |
+| `runtime/workmem` | Tasks/Notes stores, events, and file helpers | `app`, `eventcatalog`, `modules/tasks`, `modules/notes`, `runtime`, `web` | `features/tasks`, `features/notes`, `framework/module/state` |
 | `statusapi` | Runtime status DTOs, conversion, and activity snapshots | `fleet`, `fleetweb`, `web` | `framework/status` |
 | `thread` | Thread metadata, Generation history, indexes, and archive | `app`, `bundle`, `cli`, `eventcatalog`, `fleetweb`, `runtime`, `runtime/workmem`, `web` | `framework/thread` |
 | `usermedia` | User image input validation, Thread scoping, and storage | `app`, `web` | `framework/inputmedia` |
@@ -185,11 +185,11 @@ This is a pre-migration architectural snapshot, not a permanent package inventor
 | `frontmatter` | Skill frontmatter parsing | `skills` | `features/skills/internal/frontmatter` |
 | `hooks` | Command Hook configuration, execution, and Module lifecycle adaptation | `app`, `config` | `features/hooks` |
 | `mcp` | MCP configuration, connections, tool catalogs, notifications, and readiness | `app`, `cli`, `web` | `features/mcp` |
-| `modulecatalog` | Concrete capability IDs, preset defaults, and capability inventory | `app`, `config`, `hooks`, `mcp`, `modules/agentsmd`, `modules/builtintools`, `modules/chunkedwrite`, `modules/goal`, `modules/notes`, `modules/operatingcontext`, `modules/scratchpad`, `modules/shelltools`, `modules/skills`, `observable`, `runtime`, `web` | `app/modulecatalog`, `respective Features` |
+| `modulecatalog` | Concrete capability IDs, preset defaults, and capability inventory | `app`, `config`, `hooks`, `mcp`, `modules/agentsmd`, `modules/builtintools`, `modules/chunkedwrite`, `modules/tasks`, `modules/notes`, `modules/operatingcontext`, `modules/scratchpad`, `modules/shelltools`, `modules/skills`, `observable`, `runtime`, `web` | `app/modulecatalog`, `respective Features` |
 | `modules/agentsmd` | Automatic AGENTS.md loading and context contribution | `app` | `features/agentsmd` |
 | `modules/builtintools` | Module wrappers for basic files, Patch, and search | `app` | `features/filetools`, `features/applypatch`, `features/filesearch` |
 | `modules/chunkedwrite` | Chunked-write tools, recovery, and history folding | `app` | `features/chunkedwrite` |
-| `modules/goal` | Goal tools, finish policy, and compaction contributions | `app` | `features/goal` |
+| `modules/tasks` | Tasks tools, finish policy, and compaction contributions | `app` | `features/tasks` |
 | `modules/notes` | Notes tools, context, and compaction contributions | `app` | `features/notes` |
 | `modules/operatingcontext` | Working directory, OS, and time context | `app` | `features/operatingcontext` |
 | `modules/scratchpad` | Thread working-file resources and guidance | `app`, `web` | `features/scratchpad` |
@@ -206,7 +206,7 @@ This is a pre-migration architectural snapshot, not a permanent package inventor
 | `cancellation` | Cancellation causes and OS signal classification | `app`, `cli`, `errorclass`, `runtime`, `runtime/module`, `tools`, `web` | `foundation/cancellation` |
 | `environment` | Immutable environment snapshots, dotenv, and child environment resolution | `app`, `bundle`, `cli`, `config`, `extensions`, `hooks`, `mcp`, `observable`, `tools`, `web` | `foundation/environment` |
 | `errorclass` | Error classification and stable error kinds | `app`, `cli`, `mcp`, `runtime`, `tools` | `foundation/errorclass` |
-| `events` | Event envelopes, Bus, schema interfaces, and commit-before-publish mechanics | `app`, `eventcatalog`, `modules/goal`, `modules/notes`, `observability`, `observable`, `provenance`, `runtime`, `thread`, `toolevents`, `web` | `foundation/events` |
+| `events` | Event envelopes, Bus, schema interfaces, and commit-before-publish mechanics | `app`, `eventcatalog`, `modules/tasks`, `modules/notes`, `observability`, `observable`, `provenance`, `runtime`, `thread`, `toolevents`, `web` | `foundation/events` |
 | `homestore` | Atomic file publication, directory sync, and file locks | `agentstate`, `config`, `endpoint`, `fleet`, `fleetservice`, `jsonl`, `runtime`, `runtime/module/state`, `thread` | `foundation/homestore` |
 | `jsonl` | Durable JSONL append, tail repair, and bounded reads | `thread` | `foundation/jsonl` |
 | `llm` | Neutral messages, Provider contracts, vendor protocols, model health, and display | `app`, `cli`, `config`, `eventcatalog`, `fleet`, `hooks`, `modules/chunkedwrite`, `provenance`, `providerreadiness`, `runtime`, `runtime/contextbudget`, `runtime/module`, `statusapi`, `thread`, `toolevents`, `tools`, `usermedia`, `web` | `foundation/llm`, `providers`, `providers/openai`, `providers/anthropic`, `framework/modelhealth`, `entrypoints/cli` |
@@ -216,7 +216,7 @@ This is a pre-migration architectural snapshot, not a permanent package inventor
 | `sandbox` | File access constraints, command isolation, and platform execution backends | `app`, `cli`, `cmd/juex`, `config`, `eventmedia`, `modules/chunkedwrite`, `modules/skills`, `observable`, `tools`, `web` | `foundation/sandbox` |
 | `statusstream` | Replaceable snapshots, subscriptions, and bounded replay | `runtime`, `statusapi` | `foundation/statusstream` |
 | `toolevents` | Tool call fact contracts and output-delta envelopes | `app`, `eventcatalog`, `observability`, `runtime`, `thread`, `tools`, `web` | `foundation/toolevents` |
-| `tools` | Tool contracts, registration and call mechanics, plus file, search, and Shell implementations | `app`, `cli`, `mcp`, `modules/builtintools`, `modules/chunkedwrite`, `modules/goal`, `modules/notes`, `modules/shelltools`, `modules/skills`, `observable`, `runtime`, `runtime/module` | `foundation/tools`, `features/filetools`, `features/applypatch`, `features/filesearch`, `features/shell`, `features/chunkedwrite`, `foundation/command` |
+| `tools` | Tool contracts, registration and call mechanics, plus file, search, and Shell implementations | `app`, `cli`, `mcp`, `modules/builtintools`, `modules/chunkedwrite`, `modules/tasks`, `modules/notes`, `modules/shelltools`, `modules/skills`, `observable`, `runtime`, `runtime/module` | `foundation/tools`, `features/filetools`, `features/applypatch`, `features/filesearch`, `features/shell`, `features/chunkedwrite`, `foundation/command` |
 | `version` | Build version metadata | `bundle`, `cli`, `tools`, `web` | `foundation/version` |
 
 ### Test Packages and Non-Go Resources
@@ -238,9 +238,9 @@ Scripts, release resources, and root documents retain their directories, with af
 
 These details explain the inventory's multiple destinations and the dependencies to resolve before mechanical relocation. Preserve existing Module IDs, JSON fields, state files, and CLI/API behavior throughout.
 
-1. **App and execution orchestration.** Provider/Module factories and enablement selection in `app.go` and `agent_runtime.go` stay in App. Admission, recovery, Thread leases, Main/Worker management, and subscription mechanisms move to `framework/agent`. Split the manager in `worker_threads.go` from its model tools and Module wrapper, which belong to `features/workerthreads`. Framework receives resolved parameters and construction callbacks without importing App. Shared routing in `slash.go` belongs to Agent operations; Goal-specific guidance belongs to Goal, explicitly connected by App.
+1. **App and execution orchestration.** Provider/Module factories and enablement selection in `app.go` and `agent_runtime.go` stay in App. Admission, recovery, Thread leases, Main/Worker management, and subscription mechanisms move to `framework/agent`. Split the manager in `worker_threads.go` from its model tools and Module wrapper, which belong to `features/workerthreads`. Framework receives resolved parameters and construction callbacks without importing App. Shared routing in `slash.go` belongs to Agent operations; Tasks-specific guidance belongs to Tasks, explicitly connected by App.
 2. **Configuration and presets.** Move `config` to `app/config`, an application configuration boundary rather than Foundation. Hook configuration may use a declaration-only `features/hooks/config` subpackage while execution stays in its parent; validation must not construct Feature resources. Replace the `config.ShellProfile` dependency in `observable/manager.go` with injected resolved execution parameters from `foundation/command`, removing the Feature-to-App configuration dependency. Put preset inventory in `app/modulecatalog`; each Feature declares its stable ID, referenced by that inventory. Pass inventory into configuration rather than depending on factories or creating a cycle. An ID without an implementation, such as current Memory, does not authorize adding a feature.
-3. **Goal/Notes state.** Move Stores, state values, and events from `runtime/workmem` into `features/goal` and `features/notes`. `runtime/thread_state_modules.go` currently returns concrete Stores; moving them must not leave Runtime importing Features. App connects Feature read interfaces and projects state to entry points, while Runtime retains only execution-required Module capabilities. Generic resource writing and retirement belong to `framework/module/state`; reuse `foundation/homestore` for general atomic file mechanics while preserving persistence semantics. Do not create another generic workmem layer for these two Features.
+3. **Tasks/Notes state.** Move Stores, state values, and events from `runtime/workmem` into `features/tasks` and `features/notes`. `runtime/thread_state_modules.go` currently returns concrete Stores; moving them must not leave Runtime importing Features. App connects Feature read interfaces and projects state to entry points, while Runtime retains only execution-required Module capabilities. Generic resource writing and retirement belong to `framework/module/state`; reuse `foundation/homestore` for general atomic file mechanics while preserving persistence semantics. Do not create another generic workmem layer for these two Features.
 4. **Context Control.** Move model tools, capability identity, and reminder contributions from `runtime/context_control.go` into `features/contextcontrol`, requesting transitions through a narrow interface. Runtime retains transitions, automatic compaction, commits, and recovery. This moves tool contributions without changing `/new`, `/compact`, or enablement semantics.
 5. **LLM.** Put `types.go` and Provider call interfaces in `foundation/llm`. `provider.go` also contains SDK dependencies, construction, and error classification and must split by symbol. Vendor files go to their respective Provider packages; shared construction selection goes to `providers`. The neutral layer must not import SDKs or vendors. Profile value contracts remain neutral; vendor default resolution belongs to Providers. Move `model_health.go` to `framework/modelhealth`, terminal formatting to CLI, and Provider-shared media encoding helpers to `providers/internal`. Keep neutral transcript validation and message projection near LLM contracts.
 6. **Tools and implementations.** Put `registry.go`, `schema.go`, `capabilities.go`, and generic call-result/output contracts in `foundation/tools`; Runtime retains Provider ordering and Turn scheduling. Merge file, Patch, search, Shell session, and chunked-write implementations into their respective Features. Remove the universal builtin factory's implementation dependencies and compose each Feature in App. Execution parameters and mechanisms actually shared by Shell and Observables belong to `foundation/command`; Shell retains TTY sessions. Prefer existing Sandbox for shared file-path mechanisms. Retain result sanitation and media contracts at the foundation only where actually shared.

@@ -12,13 +12,13 @@ import (
 )
 
 func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult(t *testing.T) {
-	prev := testMsg("compact-1", llm.RoleUser, "Summary of earlier conversation:\nGoal\nold")
+	prev := testMsg("compact-1", llm.RoleUser, "Summary of earlier conversation:\nTasks\nold")
 	prev.Kind = llm.MessageKindCompact
 	input := []llm.Message{
 		{ID: "tool-result", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "tu1", Content: strings.Repeat("x", 50)}}},
 	}
 	sys, hist := BuildCompactionSummaryRequest("base", prev, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
-	if !strings.Contains(sys, "Goal") || !strings.Contains(sys, "Tool Failures") {
+	if !strings.Contains(sys, "Tasks") || !strings.Contains(sys, "Tool Failures") {
 		t.Fatalf("system prompt missing required headings: %s", sys)
 	}
 	body := hist[0].FirstText()
@@ -172,8 +172,8 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 	if !strings.Contains(sys, "copy the actual values of labeled facts") {
 		t.Fatalf("system prompt does not require concrete facts:\n%s", sys)
 	}
-	if strings.Index(sys, "Critical Context") <= strings.Index(sys, "Goal") {
-		t.Fatalf("system prompt should place Critical Context immediately after Goal:\n%s", sys)
+	if strings.Index(sys, "Critical Context") <= strings.Index(sys, "Tasks") {
+		t.Fatalf("system prompt should place Critical Context immediately after Tasks:\n%s", sys)
 	}
 	if strings.Index(sys, "Critical Context") >= strings.Index(sys, "Constraints & Preferences") {
 		t.Fatalf("system prompt should place Critical Context before lower-priority headings:\n%s", sys)
