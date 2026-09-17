@@ -24,6 +24,10 @@ Agent 的 `modules.memory.enabled` 控制是否参与；`service` 选择 Fleet �
 `profile` 为 `agent` 或 `supervisor`，Supervisor 角色默认使用对应 profile。
 这些是可信启动配置提供的能力，不是完整身份认证，模型工具参数不能修改它们。
 
+CLI 命令通过 `--service <identity>` 选择 Fleet 服务，默认 `memory`。Agent 使用
+其他服务时，将此参数设为该 Agent 的 `modules.memory.service` 值；CLI 管理操作
+不会推断 Agent 上下文。
+
 `juex fleet services status memory` 查看生命周期，`juex memory status` 查看业务
 就绪状态。Agent 可搜索预览、读取条目、提交显式提案、查询回执、读取允许的保留
 证据。接纳仅表示已提交；只有 committed 回执表示知识已改变。必要指引内置，关闭

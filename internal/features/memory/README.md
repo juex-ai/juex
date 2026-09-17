@@ -27,6 +27,10 @@ Fleet service identity; `profile` is `agent` or `supervisor`. The Supervisor rol
 defaults to its matching profile. These are trusted startup capabilities, not
 full authentication. They cannot be changed by model tool arguments.
 
+CLI commands select the Fleet service with `--service <identity>` (default
+`memory`). Set it to the Agent's `modules.memory.service` value when that Agent
+uses a different service; CLI administration does not infer an Agent context.
+
 Use `juex fleet services status memory` for lifecycle and `juex memory status`
 for business readiness. Agents search previews, read entries, submit explicit
 proposals, inspect receipts and read permitted retained evidence. Acceptance

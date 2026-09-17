@@ -20,7 +20,9 @@ func newMemoryCmd() *cobra.Command {
 	for _, operation := range []string{"status", "search", "read", "result", "admin"} {
 		op := operation
 		file := ""
+		service := ""
 		cmd := &cobra.Command{Use: op, Args: usageArgs(cobra.NoArgs)}
+		cmd.Flags().StringVar(&service, "service", "memory", "Fleet Memory service identity")
 		switch op {
 		case "status":
 			cmd.Short = "Inspect shared Memory readiness and work counts"
@@ -38,6 +40,9 @@ func newMemoryCmd() *cobra.Command {
 			_ = cmd.MarkFlagRequired("file")
 		}
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
+			if err := serviceendpoint.ValidateID(service); err != nil {
+				return &usageError{msg: err.Error()}
+			}
 			home, err := config.EffectiveHomeDir()
 			if err != nil {
 				return err
@@ -47,7 +52,7 @@ func newMemoryCmd() *cobra.Command {
 				return err
 			}
 			caller := memoryclient.Caller{FleetID: fleet, AgentID: "user", ThreadID: "0", Profile: memoryclient.ProfileUser}
-			client := memoryclient.New(serviceendpoint.FileResolver{Home: home, Fleet: fleet}, "memory", caller)
+			client := memoryclient.New(serviceendpoint.FileResolver{Home: home, Fleet: fleet}, service, caller)
 			var result any
 			switch op {
 			case "status":

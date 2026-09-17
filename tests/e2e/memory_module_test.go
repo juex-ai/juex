@@ -29,11 +29,16 @@ func memoryCall(id, name string, input map[string]any) llm.Block {
 
 func startMemoryFixture(t *testing.T, home, strategy string) (mc.API, mc.Caller) {
 	t.Helper()
+	return startNamedMemoryFixture(t, home, "memory", strategy)
+}
+
+func startNamedMemoryFixture(t *testing.T, home, service, strategy string) (mc.API, mc.Caller) {
+	t.Helper()
 	fleet, err := serviceendpoint.FleetID(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := memoryservice.Open(serviceendpoint.StateDir(home, "memory"), fleet, strategy)
+	store, err := memoryservice.Open(serviceendpoint.StateDir(home, service), fleet, strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +46,7 @@ func startMemoryFixture(t *testing.T, home, strategy string) (mc.API, mc.Caller)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := serviceendpoint.Identity{FleetID: fleet, ServiceID: "memory", InstanceID: serviceendpoint.NewID()}
+	identity := serviceendpoint.Identity{FleetID: fleet, ServiceID: service, InstanceID: serviceendpoint.NewID()}
 	server := serviceendpoint.ControlServer(listener, identity, func() {})
 	if err := mc.Register(server, identity, store); err != nil {
 		t.Fatal(err)
@@ -54,7 +59,7 @@ func startMemoryFixture(t *testing.T, home, strategy string) (mc.API, mc.Caller)
 		t.Fatal(err)
 	}
 	user := mc.Caller{FleetID: fleet, AgentID: "operator", ThreadID: "0", Profile: mc.ProfileUser}
-	return mc.New(serviceendpoint.FileResolver{Home: home, Fleet: fleet}, "memory", user), user
+	return mc.New(serviceendpoint.FileResolver{Home: home, Fleet: fleet}, service, user), user
 }
 func memoryAgentConfig(t *testing.T, home, id string) config.Config {
 	t.Helper()

@@ -70,3 +70,55 @@ func TestFleetMemoryDefaultProcessRetainsKnowledgeAndIsolatesHomes(t *testing.T)
 		t.Fatal(body)
 	}
 }
+
+func TestMemoryCLISelectsServiceWithoutChangingDefaultStore(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled Memory CLI")
+	}
+	binary := buildJuex(t)
+	home := t.TempDir()
+	defaultClient, user := startMemoryFixture(t, home, mc.Basic)
+	_, _ = startNamedMemoryFixture(t, home, "project-memory", mc.Advanced)
+	request := mc.AdminRequest{Key: "seed", Action: "correct", Changes: []mc.Change{{Entry: mc.Entry{ID: "shared-id", Name: "Preference", Summary: "service selection", Body: "default knowledge", Type: "reference"}}}}
+	if _, err := defaultClient.Admin(context.Background(), user, request); err != nil {
+		t.Fatal(err)
+	}
+	request.Changes[0].Entry.Body = "custom knowledge"
+	data, _ := json.Marshal(request)
+	path := filepath.Join(home, "request.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	call := func(args ...string) string {
+		t.Helper()
+		stdout, stderr, err := runJuexHomeCommand(binary, home, append([]string{"memory"}, args...)...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s\n%s", args, err, stdout, stderr)
+		}
+		return stdout
+	}
+	var receipt mc.Receipt
+	if err := json.Unmarshal([]byte(call("admin", "--service", "project-memory", "--file", path)), &receipt); err != nil || !receipt.Committed {
+		t.Fatalf("custom admin: %+v, %v", receipt, err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"status"}, `"strategy": "advanced"`},
+		{[]string{"search", "service selection"}, "shared-id"},
+		{[]string{"read", "shared-id"}, "custom knowledge"},
+		{[]string{"result", receipt.ID}, `"committed": true`},
+	} {
+		if output := call(append(tc.args, "--service", "project-memory")...); !strings.Contains(output, tc.want) {
+			t.Fatalf("%v: %s", tc.args, output)
+		}
+	}
+	if output := call("read", "shared-id"); !strings.Contains(output, "default knowledge") {
+		t.Fatalf("default store changed: %s", output)
+	}
+	_, stderr, err := runJuexHomeCommand(binary, home, "memory", "status", "--service", "../invalid")
+	if processExitCode(err) != 2 || !strings.Contains(stderr, "invalid service identity") {
+		t.Fatalf("invalid selector: %v, %s", err, stderr)
+	}
+}
