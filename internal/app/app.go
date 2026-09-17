@@ -27,6 +27,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/inputtracking"
 	"github.com/juex-ai/juex/internal/features/mcp"
+	"github.com/juex-ai/juex/internal/features/memory"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/skills"
@@ -35,6 +36,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"github.com/juex-ai/juex/internal/framework/agent"
@@ -94,6 +96,7 @@ type Options struct {
 	threadModuleFactories  []runtimemodule.ThreadFactorySpec
 	runtimeModuleFactories []runtimemodule.RuntimeFactorySpec
 	startupContext         context.Context
+	memoryAssignment       *memoryclient.Assignment
 }
 
 type App struct {
@@ -167,12 +170,33 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	runtimePaths := cfg.RuntimePaths()
+	if opts.memoryAssignment == nil {
+		assignment, err := memory.LoadWorkerAssignment(runtimePaths.StateDir, opts.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		opts.memoryAssignment = assignment
+	}
+	if opts.memoryAssignment != nil {
+		if !cfg.ModuleEnabled(memory.ModuleID) || cfg.EffectiveMemoryProfile() != memoryclient.ProfileSupervisor {
+			return nil, errors.New("memory Worker execution requires enabled Supervisor profile")
+		}
+		opts.DisableMCP = true
+		opts.disableObservables = true
+		opts.ModelHealth = nil
+	}
 	if opts.parentThreadID != "" {
 		if err := thread.NewStore(runtimePaths.StateDir).CheckWorkerDepth(opts.parentThreadID, cfg.WorkerMaxDepth()); err != nil {
 			return nil, err
 		}
 	}
 	runtimeLimits := cfg.RuntimeLimits()
+	if opts.memoryAssignment != nil {
+		runtimeLimits.ContextWindow = 16384
+		runtimeLimits.MaxOutputTokens = 4096
+		runtimeLimits.Compaction.Enabled = false
+		runtimeLimits.Compaction.SummaryModel = ""
+	}
 	var agentRuntime AgentRuntimeResolution
 	if opts.AgentRuntime != nil {
 		agentRuntime = *opts.AgentRuntime
@@ -223,6 +247,15 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			})
 		}
 		provider = modelCandidates[0].Provider
+	}
+	if opts.memoryAssignment != nil {
+		budget := &memory.WorkerBudget{Deadline: opts.memoryAssignment.ExpiresAt.Add(-15 * time.Second)}
+		provider = memory.LimitProvider(provider, budget)
+		for i := range modelCandidates {
+			modelCandidates[i].Provider = memory.LimitProvider(modelCandidates[i].Provider, budget)
+			modelCandidates[i].ContextWindow = 16384
+			modelCandidates[i].MaxOutputTokens = 4096
+		}
 	}
 	modelHealth := opts.ModelHealth
 	if modelHealth == nil {
@@ -316,6 +349,12 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	threadState := attachment.Thread
+	if opts.memoryAssignment != nil {
+		if err := memory.SaveWorkerAssignment(runtimePaths.StateDir, threadState.ID, *opts.memoryAssignment); err != nil {
+			_ = threadState.Close()
+			return nil, err
+		}
+	}
 	var threadModules *runtimemodule.Set
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
@@ -381,7 +420,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		},
 	}
 	var hookRunner hooks.PolicyRunner
-	if cfg.ModuleEnabled(string(hooks.ModuleID)) {
+	if cfg.ModuleEnabled(string(hooks.ModuleID)) && opts.memoryAssignment == nil {
 		hookRunner, err = hooks.NewRunnerWithOptions(resourceGraph.HooksConfig(), hooks.RunnerOptions{
 			Environment:     runtimeEnvironment,
 			RuntimeContexts: resourceGraph.HookRuntimeContexts(),
@@ -512,6 +551,28 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		},
 	}
 	extraRuntimeSpecs = append(extraRuntimeSpecs, opts.runtimeModuleFactories...)
+	if opts.memoryAssignment != nil {
+		for i := range runtimeModules.specs {
+			runtimeModules.specs[i].Enabled = false
+		}
+		for i := range extraRuntimeSpecs {
+			extraRuntimeSpecs[i].Enabled = false
+		}
+	} else if threadState.ID == thread.MainID && cfg.ModuleEnabled(memory.ModuleID) {
+		extraRuntimeSpecs = append(extraRuntimeSpecs, runtimemodule.RuntimeFactorySpec{ID: memory.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			report := func(err error) { fmt.Fprintf(stderr, "juex: Memory: %v\n", err) }
+			feed := &memory.SourceFeed{AgentDir: runtimePaths.StateDir, Client: func(id string) (memoryclient.API, memoryclient.Caller) {
+				client, caller := memoryClient(cfg, id, nil)
+				return client, caller
+			}}
+			var executor *memory.Executor
+			if cfg.EffectiveMemoryProfile() == memoryclient.ProfileSupervisor && cfg.ModuleEnabled(workerthreadsmodule.ModuleID) {
+				client, caller := memoryClient(cfg, thread.MainID, nil)
+				executor = memory.NewExecutor(client, caller, a.runMemoryAssignment, report)
+			}
+			return memory.NewRuntime(feed, executor, report), nil
+		}})
+	}
 	if err := runtimeModules.sealAndStart(startupCtx, extraRuntimeSpecs...); err != nil {
 		_ = a.Close()
 		return nil, err
@@ -549,6 +610,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 			notes:                    opts.sharedNotes,
 			goalContinuation:         opts.sharedGoalState == nil,
 			goalContinuationDeferrer: a.Workers(),
+			memoryAssignment:         opts.memoryAssignment,
 		},
 	)
 	if err != nil {

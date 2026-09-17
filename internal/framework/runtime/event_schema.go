@@ -210,6 +210,7 @@ func validatePolicyIdentity(moduleID runtimemodule.ID, point runtimemodule.Polic
 	switch point {
 	case runtimemodule.PolicyPointThreadStart,
 		runtimemodule.PolicyPointTurnInput,
+		runtimemodule.PolicyPointInputPreparation,
 		runtimemodule.PolicyPointToolBefore,
 		runtimemodule.PolicyPointToolAfter,
 		runtimemodule.PolicyPointFinish,

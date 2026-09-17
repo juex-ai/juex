@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/juex-ai/juex/internal/foundation/serviceendpoint"
 	"sort"
 
 	"gopkg.in/yaml.v3"
@@ -20,9 +21,23 @@ type ModuleSettings struct {
 	Enabled bool
 }
 
+// A role-configured Supervisor defaults to its matching Memory capability;
+// an explicit Memory profile remains a startup-only override.
+func (c Config) EffectiveMemoryProfile() string {
+	if c.MemoryProfile != "" {
+		return c.MemoryProfile
+	}
+	if c.FleetClientProfile == "supervisor" {
+		return "supervisor"
+	}
+	return "agent"
+}
+
 type moduleConfig struct {
 	Enabled  optionalBool `yaml:"enabled"`
 	MaxDepth yaml.Node    `yaml:"max_depth"`
+	Service  *string      `yaml:"service"`
+	Profile  *string      `yaml:"profile"`
 }
 
 // WorkerMaxDepth is independent of preset and module enablement. Zero is the
@@ -62,6 +77,14 @@ func (c Config) ModuleEnabled(id string) bool {
 }
 
 func (c Config) ValidateModules() error {
+	if c.MemoryProfile != "" && c.MemoryProfile != "agent" && c.MemoryProfile != "supervisor" {
+		return fmt.Errorf("config: modules.memory.profile must be agent or supervisor")
+	}
+	if c.MemoryService != "" {
+		if err := serviceendpoint.ValidateID(c.MemoryService); err != nil {
+			return err
+		}
+	}
 	if depth := c.WorkerMaxDepth(); depth != 1 && depth != 2 {
 		return fmt.Errorf("config: modules.worker-threads.max_depth must be 1 or 2")
 	}
@@ -105,6 +128,23 @@ func applyModulesConfig(cfg *Config, modules map[string]moduleConfig) error {
 			return fmt.Errorf("unsupported module %q", id)
 		}
 		fileSettings := modules[id]
+		if fileSettings.Service != nil || fileSettings.Profile != nil {
+			if id != "memory" {
+				return fmt.Errorf("module %q does not support service/profile", id)
+			}
+			if fileSettings.Service != nil {
+				if err := serviceendpoint.ValidateID(*fileSettings.Service); err != nil {
+					return err
+				}
+				cfg.MemoryService = *fileSettings.Service
+			}
+			if fileSettings.Profile != nil {
+				if *fileSettings.Profile != "agent" && *fileSettings.Profile != "supervisor" {
+					return fmt.Errorf("modules.memory.profile must be agent or supervisor")
+				}
+				cfg.MemoryProfile = *fileSettings.Profile
+			}
+		}
 		if node := fileSettings.MaxDepth; node.Kind != 0 {
 			if id != "worker-threads" {
 				return fmt.Errorf("module %q does not support max_depth", id)

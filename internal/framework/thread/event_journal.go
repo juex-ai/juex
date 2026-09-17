@@ -1,6 +1,7 @@
 package thread
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -122,6 +123,10 @@ func (s *EventStoreSnapshot) Events() ([]events.Event, error) {
 // VisitAfter incrementally reads committed facts without opening a mutable
 // Thread. The returned cursor belongs to this snapshot, including rollovers.
 func (s *EventStoreSnapshot) VisitAfter(after EventCursor, visit func(Commit) error) (EventCursor, error) {
+	return s.visitAfterRecords(after, func(commit Commit, _ EventCursor, _ int) error { return visit(commit) })
+}
+
+func (s *EventStoreSnapshot) visitAfterRecords(after EventCursor, visit func(Commit, EventCursor, int) error) (EventCursor, error) {
 	if s == nil || s.closed {
 		return EventCursor{}, fmt.Errorf("thread: EventStore snapshot closed")
 	}
@@ -156,7 +161,8 @@ func (s *EventStoreSnapshot) VisitAfter(after EventCursor, visit func(Commit) er
 			if err := validateCommit(s.threadID, commit.Commit); err != nil {
 				return err
 			}
-			if err := visit(commit.Commit); err != nil {
+			cursor := EventCursor{GenerationID: generation.ID, Seq: commit.Seq, Offset: record.End}
+			if err := visit(commit.Commit, cursor, len(record.Data)); err != nil {
 				return err
 			}
 			wantSeq++
@@ -174,6 +180,52 @@ func (s *EventStoreSnapshot) VisitAfter(after EventCursor, visit func(Commit) er
 	}
 	last := s.generations[len(s.generations)-1]
 	return EventCursor{GenerationID: last.ID, Seq: s.lastSeq, Offset: last.End}, nil
+}
+
+// CommitBatch contains only whole commits from a frozen snapshot. A too-large
+// first commit is explicitly unavailable and never silently advances progress.
+type CommitBatch struct {
+	Commits []Commit
+	Cursor  EventCursor
+	More    bool
+}
+
+type OversizedCommitError struct {
+	Seq   uint64
+	Bytes int
+}
+
+func (e *OversizedCommitError) Error() string {
+	return fmt.Sprintf("thread commit %d requires %d bytes; bounded source unavailable", e.Seq, e.Bytes)
+}
+
+func (s *EventStoreSnapshot) ReadRange(ctx context.Context, after EventCursor, maxCommits, maxBytes int) (CommitBatch, error) {
+	result := CommitBatch{Cursor: after}
+	if maxCommits < 1 || maxCommits > 1000 || maxBytes < 1 || maxBytes > 4*1024*1024 {
+		return result, errors.New("thread: invalid commit range budget")
+	}
+	bounded := errors.New("range budget reached")
+	bytes := 0
+	_, err := s.visitAfterRecords(after, func(commit Commit, cursor EventCursor, size int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(result.Commits) >= maxCommits || bytes+size > maxBytes {
+			if len(result.Commits) == 0 {
+				return &OversizedCommitError{Seq: commit.Seq, Bytes: size}
+			}
+			result.More = true
+			return bounded
+		}
+		result.Commits = append(result.Commits, commit)
+		result.Cursor = cursor
+		bytes += size
+		return nil
+	})
+	if errors.Is(err, bounded) {
+		err = nil
+	}
+	return result, err
 }
 
 func (s *EventStoreSnapshot) Close() error {

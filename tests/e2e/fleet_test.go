@@ -702,11 +702,12 @@ func startFleetSupervisor(t *testing.T, binary string, environment []string) *fl
 
 func startFleetSupervisorWithArgs(t *testing.T, binary string, environment []string, args ...string) *fleetSupervisor {
 	t.Helper()
-	// Fleet shutdown intentionally leaves Agents resident. Test Homes must stop
-	// their newly default Supervisor before their temporary directories disappear.
+	// Fleet shutdown intentionally leaves Agents and services resident. Test
+	// Homes stop their processes before the temporary directories disappear.
 	for _, value := range environment {
 		if home, ok := strings.CutPrefix(value, "JUEX_HOME="); ok {
 			t.Cleanup(func() {
+				_, _, _ = runJuexHomeCommand(binary, home, "fleet", "services", "stop", "memory")
 				manager, err := fleet.New(fleet.Options{HomeDir: home})
 				if err != nil {
 					return

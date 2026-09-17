@@ -2,11 +2,11 @@
 
 > English | [中文](fleet-service-management.zh.md)
 
-Status: lifecycle/discovery foundation implemented; Memory/Supervisor business integration remains proposed. Updated: 2026-09-17.
+Status: lifecycle/discovery foundation and Memory/Supervisor integration implemented. Updated: 2026-09-18.
 
 The implemented configuration, commands, locks and restart budget are defined by
 [Independent Fleet Services](../../internal/fleet/services/README.md), code and
-tests. Illustrative configuration below describes future business integration.
+tests. Configuration below illustrates the independent-service boundary.
 
 This proposal defines process management, discovery, and client access for independent services. [Supervisor](supervisor-agent.md) and [Memory](fleet-memory.md) build on it and own their execution-role and memory-business designs respectively.
 
@@ -100,7 +100,7 @@ Runtime records share only discovery metadata, not business files for Agents to 
 
 Use Go + CloudWeGo Kitex for internal typed RPC: Unix Domain Sockets on the same machine or TCP across machines, with the same business interfaces. Each service owns its IDL and client, such as `MemoryClient`; Fleet management operations use a separate management client. [Kitex direct connection documentation](https://www.cloudwego.io/zh/docs/kitex/tutorials/basic-feature/visit_directly/) covers addresses and Unix socket access.
 
-Juex Memory defaults to a built-in Agent Module plus typed client for tools, guidance, and future Turn recall. Add a Streamable HTTP MCP adapter when external Agents need access. A stdio MCP process can be a thin per-Agent bridge to the same business service. The first version need not implement every adapter.
+Juex Memory defaults to a built-in Agent Module plus typed client for tools, guidance, and bounded Turn recall. Add a Streamable HTTP MCP adapter when external Agents need access. A stdio MCP process can be a thin per-Agent bridge to the same business service. The first version need not implement every adapter.
 
 External plugins may directly offer independent HTTP MCP services to multiple Agents without implementing Juex's Go Module API. Keep protocol connection/session state separate from shared business state. MCP does not automatically provide Fleet isolation, shared storage, or job recovery. The [MCP transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports) defines stdio and Streamable HTTP connections.
 

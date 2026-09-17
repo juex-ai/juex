@@ -21,7 +21,7 @@ import (
 func TestManagedCLIExposesResourceScopedCommandTree(t *testing.T) {
 	root := newRootCmd()
 	assertVisibleCommands(t, root, []string{
-		"agent", "completion", "config", "diagnose", "fleet", "help", "thread", "version",
+		"agent", "completion", "config", "diagnose", "fleet", "help", "memory", "thread", "version",
 	})
 
 	agent, _, err := root.Find([]string{"agent"})

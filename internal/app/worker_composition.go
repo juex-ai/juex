@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 )
@@ -17,6 +18,7 @@ type workerThreadChildOptions struct {
 	Alias             string
 	Model             string
 	UseParentProvider bool
+	MemoryAssignment  *memoryclient.Assignment
 }
 
 type workerThreadFactory func(workerThreadChildOptions) (*App, error)
@@ -43,6 +45,7 @@ func (parent *App) newWorkerChild(child workerThreadChildOptions) (*App, error) 
 		AgentRuntime:         &parent.agentRuntime,
 		disableObservables:   true,
 		startupContext:       child.Context,
+		memoryAssignment:     child.MemoryAssignment,
 	}
 	if child.UseParentProvider {
 		opts.Provider = parent.Engine.Provider

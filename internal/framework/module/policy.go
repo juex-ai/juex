@@ -27,6 +27,7 @@ type PolicyPoint string
 const (
 	PolicyPointThreadStart      PolicyPoint = "thread_start"
 	PolicyPointTurnInput        PolicyPoint = "turn_input"
+	PolicyPointInputPreparation PolicyPoint = "input_preparation"
 	PolicyPointToolBefore       PolicyPoint = "tool_before"
 	PolicyPointToolAfter        PolicyPoint = "tool_after"
 	PolicyPointFinish           PolicyPoint = "finish"

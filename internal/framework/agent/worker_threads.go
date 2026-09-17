@@ -94,6 +94,19 @@ func newWorkerThreadManager(parent *Agent, prepare func(string) (PreparedChild, 
 }
 
 func (m *WorkerManager) Create(ctx context.Context, query, alias, model string, subscribe bool) (WorkerThreadStatus, error) {
+	return m.create(ctx, query, alias, subscribe, func() (PreparedChild, error) { return m.prepare(model) })
+}
+
+// CreatePrepared lets trusted composition supply a scoped child while retaining
+// normal identity reservation, durable admission, tracking and shutdown.
+func (m *WorkerManager) CreatePrepared(ctx context.Context, query, alias string, subscribe bool, prepared PreparedChild) (WorkerThreadStatus, error) {
+	if prepared.Open == nil {
+		return WorkerThreadStatus{}, errors.New("worker child factory is required")
+	}
+	return m.create(ctx, query, alias, subscribe, func() (PreparedChild, error) { return prepared, nil })
+}
+
+func (m *WorkerManager) create(ctx context.Context, query, alias string, subscribe bool, prepare func() (PreparedChild, error)) (WorkerThreadStatus, error) {
 	createCtx, cancelCreate := workerThreadCreateContext(ctx, m.parent.ctx)
 	defer cancelCreate()
 	m.lifecycleMu.RLock()
@@ -111,11 +124,11 @@ func (m *WorkerManager) Create(ctx context.Context, query, alias, model string, 
 	if err := m.parent.ThreadStore.CheckWorkerDepth(m.parent.Thread.ID, m.maxDepth); err != nil {
 		return WorkerThreadStatus{}, err
 	}
-	prepared, err := m.prepare(model)
+	prepared, err := prepare()
 	if err != nil {
 		return WorkerThreadStatus{}, err
 	}
-	model = prepared.Model
+	model := prepared.Model
 	identity, err := m.reserveWorkerThread(strings.TrimSpace(alias))
 	if err != nil {
 		return WorkerThreadStatus{}, fmt.Errorf("create Worker Thread identity: %w", err)

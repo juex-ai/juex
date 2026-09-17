@@ -263,11 +263,15 @@ Thread tool-use batch and may overlap parallel tools. Cancellation uses normal
 tool dispatch and results remain ordered, including errors. Modules retain
 responsibility for synchronizing Agent resources across Threads.
 
-The Agent-scoped [Memory Module](internal/features/memory/README.md) owns durable
-knowledge and a rebuildable index. App supplies the Agent directory; Main and
-Worker Module instances coordinate file transactions through the same lock.
-Thread-start and post-compaction policies maintain the index without injecting
-knowledge bodies or blocking progress on ordinary maintenance failures.
+[Fleet Memory](internal/features/memory/README.md) is an independent service,
+composed by App over Fleet service leases and a direct typed Kitex client. Memory
+owns knowledge, requests, commit recovery and source progress. Agent Modules own
+tools, participation/cursor state and frozen recall; generic input preparation
+runs after admission, while passive context inspection performs no RPC. The
+Supervisor polls assignments and runs restricted ordinary Workers. App filters
+actual Module factories while preserving the Agent resource lease, and persists
+Worker purpose so restoration cannot expand its capabilities. Fleet owns process
+lifecycle and discovery, never the Memory queue or model loop.
 
 Tool execution may emit explicit JSON facts. Framework assigns their owner from
 the sealed tool catalog and persists them independently of result presentation.

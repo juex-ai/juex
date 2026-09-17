@@ -13,16 +13,27 @@ import (
 )
 
 type supervisorBinding struct {
-	State    string           `json:"state"`
-	Agent    agentstate.Agent `json:"agent"`
-	Retained []string         `json:"retained_agent_ids,omitempty"`
+	State      string              `json:"state"`
+	Agent      agentstate.Agent    `json:"agent"`
+	Retained   []string            `json:"retained_agent_ids,omitempty"`
+	Settlement *ExecutorSettlement `json:"executor_settlement,omitempty"`
+}
+
+// ExecutorSettlement reports the business service's acknowledgement separately
+// from the process lifecycle result. Fleet owns neither its queue nor its data.
+type ExecutorSettlement struct {
+	AgentID   string `json:"agent_id"`
+	Confirmed bool   `json:"confirmed"`
+	Released  int    `json:"released"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type SupervisorStatus struct {
-	State              string      `json:"state"`
-	Agent              AgentStatus `json:"agent"`
-	Retained           []string    `json:"retained_agent_ids,omitempty"`
-	HistoryDisposition string      `json:"history_disposition"`
+	State              string              `json:"state"`
+	Agent              AgentStatus         `json:"agent"`
+	Retained           []string            `json:"retained_agent_ids,omitempty"`
+	HistoryDisposition string              `json:"history_disposition"`
+	Settlement         *ExecutorSettlement `json:"executor_settlement,omitempty"`
 }
 
 func (m *Manager) supervisorPath() string {
@@ -68,7 +79,7 @@ func (m *Manager) Supervisor(ctx context.Context) (SupervisorStatus, error) {
 }
 
 func (m *Manager) supervisorStatus(ctx context.Context, binding supervisorBinding) (SupervisorStatus, error) {
-	status := SupervisorStatus{State: binding.State, Retained: binding.Retained, HistoryDisposition: "preserved"}
+	status := SupervisorStatus{State: binding.State, Retained: binding.Retained, HistoryDisposition: "preserved", Settlement: binding.Settlement}
 	if binding.State == "removed" {
 		return status, nil
 	}
@@ -114,6 +125,9 @@ func (m *Manager) EnsureSupervisor(ctx context.Context, enabled bool) (Superviso
 	}
 	if !enabled && binding.State == "ready" {
 		if _, err := m.SetEnabled(ctx, binding.Agent.ID, false); err != nil {
+			return SupervisorStatus{}, err
+		}
+		if err := m.settleSupervisorWork(ctx, &binding); err != nil {
 			return SupervisorStatus{}, err
 		}
 	}
@@ -231,6 +245,9 @@ func (m *Manager) retireSupervisor(ctx context.Context, reset bool) (SupervisorS
 		if _, err := m.SetEnabled(ctx, binding.Agent.ID, false); err != nil {
 			return SupervisorStatus{}, err
 		}
+		if err := m.settleSupervisorWork(ctx, &binding); err != nil {
+			return SupervisorStatus{}, err
+		}
 		binding.Retained = append(binding.Retained, binding.Agent.ID)
 		binding.State = "removed"
 		if err := m.writeSupervisor(binding); err != nil {
@@ -238,10 +255,12 @@ func (m *Manager) retireSupervisor(ctx context.Context, reset bool) (SupervisorS
 		}
 	}
 	if reset {
+		settlement := binding.Settlement
 		binding, err = m.planSupervisor(binding.Retained)
 		if err != nil {
 			return SupervisorStatus{}, err
 		}
+		binding.Settlement = settlement
 		if err := m.finishSupervisorInitialization(&binding); err != nil {
 			return SupervisorStatus{}, err
 		}
@@ -309,5 +328,24 @@ func (m *Manager) SupervisorAction(ctx context.Context, action string) (Supervis
 	if err != nil {
 		return SupervisorStatus{}, err
 	}
+	if action == "stop" || action == "disable" {
+		if err := m.settleSupervisorWork(ctx, &binding); err != nil {
+			return SupervisorStatus{}, err
+		}
+	}
 	return m.supervisorStatus(ctx, binding)
+}
+
+func (m *Manager) settleSupervisorWork(ctx context.Context, binding *supervisorBinding) error {
+	if m.settleSupervisor == nil {
+		return nil
+	}
+	result, err := m.settleSupervisor(ctx, m.homeDir, binding.Agent.ID)
+	result.AgentID = binding.Agent.ID
+	if err != nil {
+		result.Confirmed = false
+		result.Reason = err.Error()
+	}
+	binding.Settlement = &result
+	return m.writeSupervisor(*binding)
 }

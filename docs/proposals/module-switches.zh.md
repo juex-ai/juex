@@ -23,7 +23,7 @@
 | `scratchpad` | 无专用工具，复用文件工具/Shell | Scratchpad 路径和使用建议；不自动注入文件正文 | Thread 工作目录准备和路径贡献；跨 Generation 保留；关闭不创建、不宣传，已有文件不删除 | 开 | 关 |
 | `goal` | `get_goal`、`create_goal`、`update_goal` | Goal 合同运行时消息、必要的继续提示、压缩状态贡献 | Goal 存储、完成/继续策略、上下文重置时清理；模块关闭或移除时删除 goal_state.json | 开 | 关 |
 | `notes` | `update_notes` | Notes 运行时消息、压缩状态贡献 | Notes 存储、内容预算、上下文重置时清理；模块关闭或移除时删除 notes.md | 开 | 关 |
-| `memory` | 原始清单：`memory_search`、`memory_write`、`memory_delete`；未来权限遵循 [Fleet Memory 提案](fleet-memory.zh.md) | 模块自带必要使用指导；正文按需通过工具返回 | 原始 Agent 级存储与生命周期；Fleet 提案区分共享所有权和 Agent 参与。关闭保留持久知识 | 开 | 关 |
+| `memory` | 按范围搜索/读取、提案、回执与历史；权限见 [Memory](../../internal/features/memory/README.zh.md) | 模块自带必要使用指导；正文按需通过工具返回 | Fleet 服务拥有知识，Agent 拥有参与和游标。关闭参与保留共享知识 | 开 | 关 |
 | `context-control` | `context_new`、`context_compact` | 容量提醒和模型操作上下文的建议 | 接受模型的 Generation 切换/压缩请求；不拥有底层 Generation 持久化机制 | 开 | 关 |
 | `worker-threads` | `thread_create`、`thread_list`、`thread_status`、`thread_send`、`thread_subscribe`、`thread_stop`、`thread_archive` | 订阅后的 Worker 结果/通知；无需额外固定系统提示段 | Worker 执行管理、订阅、结果交付、停止和资源关闭；不是磁盘上全部 Thread 的存储开关 | 开 | 关 |
 | `observables` | `observable_list`、`observable_create`、`observable_start`、`observable_stop`、`observable_delete`、`observable_observations` | Observation 输入与按需指南；不是固定常驻提示段 | 命令生产者、定义、状态、记录和 Main 投递 | 开 | 关 |
