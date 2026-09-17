@@ -58,6 +58,41 @@ func TestStoreCRUDAndDurability(t *testing.T) {
 	}
 }
 
+func TestTaskCapacityRejectsGrowthWithoutChangingState(t *testing.T) {
+	store := NewStore(t.TempDir(), Options{})
+	first := createTask(t, store, "first", Todo, P1)
+	before, _ := store.Snapshot()
+	huge := strings.Repeat("acceptance ", 4000)
+	if _, err := store.Create(Create{Title: "too large", Description: "bounded work", Acceptance: huge}); err == nil {
+		t.Fatal("created a task exceeding aggregate capacity")
+	}
+	if _, err := store.Update(first.ID, Update{Acceptance: &huge}); err == nil {
+		t.Fatal("updated a task beyond aggregate capacity")
+	}
+	after, _ := store.Snapshot()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected capacity change modified authority")
+	}
+	for i := 1; i < 64; i++ {
+		createTask(t, store, "small", Todo, P1)
+	}
+	if _, err := store.Create(Create{Title: "overflow", Description: "too many tasks"}); err == nil {
+		t.Fatal("created more than 64 tasks")
+	}
+	if err := store.Delete(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	createTask(t, store, "replacement", Todo, P1)
+	aggregate := NewStore(t.TempDir(), Options{})
+	large := Create{Title: "large", Description: "individually fits", Acceptance: strings.Repeat("a", 18*1024)}
+	if _, err := aggregate.Create(large); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := aggregate.Create(large); err == nil {
+		t.Fatal("accepted two individually valid tasks beyond the aggregate budget")
+	}
+}
+
 func TestContinuationSelectionAndStaleCommit(t *testing.T) {
 	store := NewStore(t.TempDir(), Options{})
 	createTask(t, store, "todo p0", Todo, P0)

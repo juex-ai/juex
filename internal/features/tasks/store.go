@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,11 @@ const (
 	P0      Priority = "p0"
 	P1      Priority = "p1"
 	P2      Priority = "p2"
+)
+
+const (
+	maxTaskCount        = 64
+	maxTaskContextBytes = 32 * 1024
 )
 
 var owner = modstate.Owner{Module: ModuleID, Scope: modstate.ScopeThread}
@@ -137,6 +143,9 @@ func (s *Store) Create(in Create) (Task, error) {
 		return Task{}, err
 	}
 	state.Tasks = append(state.Tasks, task)
+	if err := validateCapacity(state); err != nil {
+		return Task{}, err
+	}
 	if err := s.saveLocked(state); err != nil {
 		return Task{}, err
 	}
@@ -183,6 +192,9 @@ func (s *Store) Update(id string, in Update) (Task, error) {
 			return Task{}, err
 		}
 		state.Tasks[i] = task
+		if err := validateCapacity(state); err != nil {
+			return Task{}, err
+		}
 		if err := s.saveLocked(state); err != nil {
 			return Task{}, err
 		}
@@ -358,6 +370,25 @@ func encode(state State) ([]byte, error) {
 	data, err := json.MarshalIndent(state, "", "  ")
 	return append(data, '\n'), err
 }
+
+func validateCapacity(state State) error {
+	if len(state.Tasks) > maxTaskCount {
+		return fmt.Errorf("tasks capacity is %d entries; consolidate or delete existing tasks first", maxTaskCount)
+	}
+	bounded := State{Version: state.Version, Tasks: append([]Task(nil), state.Tasks...)}
+	for i := range bounded.Tasks {
+		// Reserve runtime-owned metadata so subsequent continuations cannot
+		// consume the room accepted by a model-owned task mutation.
+		bounded.Tasks[i].ContinuationCount = math.MaxInt
+		bounded.Tasks[i].UpdatedAt = time.Date(9999, 12, 31, 23, 59, 59, 999000000, time.UTC)
+	}
+	text, _ := bounded.RenderProviderContext()
+	if len(text) > maxTaskContextBytes {
+		return fmt.Errorf("tasks context exceeds %d bytes; shorten or delete existing tasks first", maxTaskContextBytes)
+	}
+	return nil
+}
+
 func (s *Store) saveLocked(state State) error {
 	data, err := encode(state)
 	if err != nil {

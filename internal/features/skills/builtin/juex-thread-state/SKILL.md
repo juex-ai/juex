@@ -18,6 +18,11 @@ criteria. Creation defaults to `todo` and priority `p1`; priorities are `p0`,
 `p1`, and `p2` in descending order. Use `update_task` with an ID to edit fields
 or status, and `delete_task` when an item no longer belongs in the list.
 
+Keep the list concise: it allows at most 64 tasks and 32 KiB of serialized task
+context, with space reserved for continuation metadata. Oversized creates and
+updates fail without changing existing tasks; shorten, consolidate, or delete
+entries, or compact to remove completed work before adding more.
+
 Use `doing` while working, `pending` only when useful progress requires new
 external input, `done` after verifying acceptance, and `failed` when completion
 is impossible. Explain the evidence or missing input in `status_reason`.
