@@ -134,7 +134,7 @@ func (m *Manager) ManagedConfigure(ctx context.Context, caller fleetclient.Calle
 	}
 	content, err := mergeRedactedEnvironmentValues([]byte(request.Content), current)
 	if err != nil {
-		return fleetclient.Result{}, err
+		return fleetclient.Result{}, &ConfigValidationError{Err: err}
 	}
 	if m.configUpdater == nil {
 		return fleetclient.Result{}, errors.New("fleet: revision-aware config publisher is unavailable")
@@ -148,7 +148,9 @@ func (m *Manager) ManagedConfigure(ctx context.Context, caller fleetclient.Calle
 	}
 	hadRuntime := result.Agent.RuntimeHealth == string(RuntimeHealthy)
 	status, err := m.applyManagedLifecycle(ctx, entry, "restart", request.Interrupt)
-	result.Agent = managementAgent(status)
+	if status.ID != "" {
+		result.Agent = managementAgent(status)
+	}
 	if errors.Is(err, endpoint.ErrRuntimeBusy) {
 		result.Deferred = true
 		return result, nil

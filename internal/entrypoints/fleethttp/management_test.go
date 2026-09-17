@@ -50,9 +50,19 @@ func TestTypedManagementChecksCallerIdentityAndConfigRevision(t *testing.T) {
 	if _, err := client.Configure(context.Background(), created.Agent.ID, fleetclient.ConfigRequest{Content: "preset: missing\n", ExpectedRevision: before.Revision}); err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("invalid config: %v", err)
 	}
+	if _, err := client.Configure(context.Background(), created.Agent.ID, fleetclient.ConfigRequest{Content: "preset: [", ExpectedRevision: before.Revision}); err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "yaml") {
+		t.Errorf("malformed config must expose a validation error: %v", err)
+	}
 	result, err := client.Configure(context.Background(), created.Agent.ID, fleetclient.ConfigRequest{Content: "preset: minimal\n", ExpectedRevision: before.Revision})
 	if err != nil || !result.Saved || !result.RestartRequired || result.Applied {
 		t.Fatalf("save=%+v %v", result, err)
+	}
+	if _, err := manager.SetEnabled(context.Background(), created.Agent.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	failedApply, err := client.Configure(context.Background(), created.Agent.ID, fleetclient.ConfigRequest{Content: "preset: minimal\n", ExpectedRevision: result.Revision, Apply: true})
+	if err != nil || !failedApply.Saved || !failedApply.Published || failedApply.Applied || !failedApply.RestartRequired || failedApply.Error == "" || failedApply.Agent.ID != created.Agent.ID || failedApply.Agent.Enabled {
+		t.Fatalf("failed application must preserve published target status: %+v %v", failedApply, err)
 	}
 	if _, err := client.Configure(context.Background(), created.Agent.ID, fleetclient.ConfigRequest{Content: "preset: standard\n", ExpectedRevision: before.Revision}); err == nil || !strings.Contains(err.Error(), "409") {
 		t.Fatalf("stale config: %v", err)
