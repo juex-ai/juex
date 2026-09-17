@@ -16,6 +16,7 @@ import (
 
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
@@ -157,11 +158,8 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if _, err := notes.Update("old writer"); err != nil {
 		t.Fatal(err)
 	}
-	memoryWrite, ok := running.Engine.Tools.Get("memory_write")
-	if !ok {
-		t.Fatal("enabled Memory tool unavailable")
-	}
-	if _, err := memoryWrite.Handler(t.Context(), memoryWriteInput("retained", "Durable acceptance knowledge")); err != nil {
+	api, user := startMemoryFixture(t, home, mc.Basic)
+	if _, err := api.Admin(t.Context(), user, mc.AdminRequest{Key: "retained", Action: "correct", Changes: []mc.Change{{Entry: mc.Entry{ID: "retained", Name: "retained", Summary: "Durable acceptance knowledge", Type: "project", Body: "Durable acceptance knowledge"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	draft := filepath.Join(running.Thread.Dir, "scratchpad", "retained.txt")
@@ -238,7 +236,7 @@ func TestModuleRetirementWaitsForAppliedAgentConfiguration(t *testing.T) {
 	if !ok {
 		t.Fatal("re-enabled Memory tool unavailable")
 	}
-	if result, err := search.Handler(t.Context(), map[string]any{"query": "Durable acceptance knowledge"}); err != nil || !strings.Contains(result, "Durable acceptance knowledge") {
+	if result, err := search.Handler(t.Context(), map[string]any{"text": "Durable acceptance knowledge"}); err != nil || !strings.Contains(result, "Durable acceptance knowledge") {
 		t.Fatalf("retained Memory=%q, %v", result, err)
 	}
 	for path, marker := range map[string]string{draft: "durable working file", journal: "durable acceptance history"} {

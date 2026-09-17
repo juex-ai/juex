@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
-	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/features/agentsmd"
@@ -25,6 +23,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/fleetclient"
+	"github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -53,6 +52,7 @@ type threadModuleOptions struct {
 	notes                     *notesmodule.NotesStore
 	tasksContinuation         bool
 	tasksContinuationDeferrer tasksmodule.ContinuationDeferrer
+	memoryAssignment          *memoryclient.Assignment
 }
 
 func prepareRuntimeModules(
@@ -73,20 +73,6 @@ func prepareRuntimeModules(
 	composition := runtimeModuleComposition{runtimeContext: runtimeContext, constructed: constructed}
 	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: cfg.SandboxPolicy(), WorkDir: runtimePaths.WorkDir, AgentStateDir: runtimePaths.StateDir, ReadOnlyPaths: []string{runtimePaths.MediaDir}})
 	composition.specs = []runtimemodule.RuntimeFactorySpec{
-		{
-			ID:      memory.ModuleID,
-			Enabled: cfg.ModuleEnabled(memory.ModuleID),
-			New: func(_ context.Context, ctx runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				if ctx.AgentStateDir == "" {
-					return nil, fmt.Errorf("memory module requires an Agent state directory")
-				}
-				agentDir, err := filepath.Abs(ctx.AgentStateDir)
-				if err != nil {
-					return nil, fmt.Errorf("resolve memory Agent state directory: %w", err)
-				}
-				return memory.New(agentDir), nil
-			},
-		},
 		{
 			ID:      filetools.ModuleID,
 			Enabled: cfg.ModuleEnabled(filetools.ModuleID),
@@ -198,6 +184,18 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		return engine.PendingInputStatus().TurnID
 	}
 	builtinSpecs := []runtimemodule.ThreadFactorySpec{
+		{ID: memory.ModuleID, Enabled: cfg.ModuleEnabled(memory.ModuleID), New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+			client, caller := memoryClient(cfg, threadState.ID, opts.memoryAssignment)
+			var markActive func(context.Context) error
+			if opts.memoryAssignment == nil {
+				feed := &memory.SourceFeed{AgentDir: cfg.RuntimePaths().StateDir, Client: func(id string) (memoryclient.API, memoryclient.Caller) {
+					client, caller := memoryClient(cfg, id, nil)
+					return client, caller
+				}}
+				markActive = func(ctx context.Context) error { return feed.MarkActive(ctx, threadState.ID) }
+			}
+			return memory.New(memory.Options{API: client, Caller: caller, Thread: threadState, MarkActive: markActive}), nil
+		}},
 		{ID: fleetmanagement.ModuleID,
 			Enabled: cfg.ModuleEnabled(fleetmanagement.ModuleID) && cfg.FleetClientProfile == fleetclient.ProfileSupervisor && threadState != nil && threadState.ID == thread.MainID,
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
@@ -291,7 +289,13 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 			},
 		})
 	}
-	return append(builtinSpecs, extra...)
+	combined := append(builtinSpecs, extra...)
+	if opts.memoryAssignment != nil {
+		for i := range combined {
+			combined[i].Enabled = combined[i].Enabled && combined[i].ID == memory.ModuleID
+		}
+	}
+	return combined
 }
 
 func validateThreadModuleContext(

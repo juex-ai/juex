@@ -78,3 +78,8 @@ WebSocket 展开后的握手 Header 变化时会重新连接。
 `fleet_client.profile` 在 Agent 启动时固定，接受 `agent`（默认）或 `supervisor`。
 `fleet-management` Module 还要求 Supervisor Main 作用域。Profile 不是工具参数，
 也不是认证凭据。角色与应用策略见 [Fleet](../../fleet/README.zh.md)。
+
+`modules.memory.service` 选择所属 Fleet 服务，默认 `memory`。
+`modules.memory.profile` 接受 `agent` 或 `supervisor`；省略时跟随 Supervisor
+角色，否则默认 `agent`。参与由 preset 与 `enabled` 控制，服务策略属于 Home
+配置。共享数据契约见 [Memory](../../features/memory/README.zh.md)。

@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,6 +10,46 @@ import (
 
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
+
+func TestSupervisorSettlementIsSeparateAndDurable(t *testing.T) {
+	ctx := context.Background()
+	var calls []string
+	fail := true
+	m, err := New(Options{HomeDir: t.TempDir(), SettleSupervisor: func(ctx context.Context, home, id string) (ExecutorSettlement, error) {
+		calls = append(calls, id)
+		resolved, err := agentstate.ResolveByID(agentstate.Options{HomeDir: home}, id)
+		if err != nil {
+			return ExecutorSettlement{}, err
+		}
+		if resolved.Agent.Enabled {
+			t.Error("settlement preceded disable")
+		}
+		if fail {
+			return ExecutorSettlement{}, errors.New("Memory unavailable")
+		}
+		return ExecutorSettlement{Confirmed: true, Released: 1}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := m.EnsureSupervisor(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset, err := m.ResetSupervisor(ctx)
+	if err != nil || reset.Agent.ID == initial.Agent.ID || reset.Settlement == nil || reset.Settlement.Confirmed || reset.Settlement.Reason != "Memory unavailable" {
+		t.Fatalf("reset=%+v %v", reset, err)
+	}
+	status, err := m.Supervisor(ctx)
+	if err != nil || status.Settlement == nil || status.Settlement.AgentID != initial.Agent.ID {
+		t.Fatalf("durable receipt %+v %v", status, err)
+	}
+	fail = false
+	removed, err := m.RemoveSupervisor(ctx)
+	if err != nil || removed.Settlement == nil || !removed.Settlement.Confirmed || removed.Settlement.Released != 1 || len(calls) != 2 {
+		t.Fatalf("remove %+v %v", removed, err)
+	}
+}
 
 func TestSupervisorInitializationKeepsIdentityAndCustomization(t *testing.T) {
 	m, err := New(Options{HomeDir: t.TempDir(), SupervisorTemplate: func() ([]byte, []byte) {

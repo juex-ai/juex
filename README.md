@@ -96,12 +96,15 @@ Generated Agent state lives under `$JUEX_HOME/agents/<agent-id>/`. `agent.json`
 is authoritative for Agent identity, Workspace ownership, and lifecycle
 metadata. The Agent also owns its configuration overlay, the rebuildable
 Thread index, active and archived Threads,
-media, logs, [durable Memory](internal/features/memory/README.md), Observables, and
+media, logs, Memory participation state, Observables, and
 Extension state. Each Thread has authoritative
 metadata, Generation-segmented chronological Event history, bounded pending
 Input state, module-owned Tasks and Notes state, Scratchpad, and system-managed
 spool. Current Provider context is reconstructed from the current Generation;
 Thread Explorer lists come from the Agent index.
+
+[Shared Fleet Memory](internal/features/memory/README.md) runs in an independent
+service; participating Agents query it and Supervisor reviews proposed updates.
 
 The exact ownership, storage authority, and runtime data flow are documented
 in [ARCHITECTURE.md](ARCHITECTURE.md). File schemas and CLI/API details remain

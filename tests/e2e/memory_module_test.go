@@ -4,42 +4,70 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
+	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
-	extensionsmodule "github.com/juex-ai/juex/internal/features/extensions"
-	hooksmodule "github.com/juex-ai/juex/internal/features/hooks"
-	mcpmodule "github.com/juex-ai/juex/internal/features/mcp"
 	"github.com/juex-ai/juex/internal/features/memory"
-	skillsmodule "github.com/juex-ai/juex/internal/features/skills"
-	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
-	"github.com/juex-ai/juex/internal/foundation/events"
-	"github.com/juex-ai/juex/internal/foundation/homestore"
+	memoryservice "github.com/juex-ai/juex/internal/features/memory/service"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/framework/agent"
-	"github.com/juex-ai/juex/internal/framework/agentstate"
-	"github.com/juex-ai/juex/internal/framework/runtime"
+	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
+	"github.com/juex-ai/juex/internal/foundation/serviceendpoint"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
-func memoryConfig(t *testing.T) config.Config {
-	t.Helper()
-	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "openai", Model: "test", Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000,
-		Modules: config.ModulePolicy{memory.ModuleID: {Enabled: true}, extensionsmodule.ModuleID: {Enabled: false}, mcpmodule.ModuleID: {Enabled: false}, skillsmodule.ModuleID: {Enabled: false}, hooksmodule.ModuleID: {Enabled: false}},
-	}
-	cfg.Compaction = config.DefaultCompactionConfig()
-	cfg.Compaction.KeepRecentTokens = 1
-	return cfg
+func memoryCall(id, name string, input map[string]any) llm.Block {
+	return llm.Block{Type: llm.BlockToolUse, ToolUseID: id, ToolName: name, Input: input}
 }
 
+func startMemoryFixture(t *testing.T, home, strategy string) (mc.API, mc.Caller) {
+	t.Helper()
+	return startNamedMemoryFixture(t, home, "memory", strategy)
+}
+
+func startNamedMemoryFixture(t *testing.T, home, service, strategy string) (mc.API, mc.Caller) {
+	t.Helper()
+	fleet, err := serviceendpoint.FleetID(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := memoryservice.Open(serviceendpoint.StateDir(home, service), fleet, strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := serviceendpoint.Identity{FleetID: fleet, ServiceID: service, InstanceID: serviceendpoint.NewID()}
+	server := serviceendpoint.ControlServer(listener, identity, func() {})
+	if err := mc.Register(server, identity, store); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.Run() }()
+	t.Cleanup(func() { _ = server.Stop(); <-done })
+	record := serviceendpoint.Record{Identity: identity, Network: "tcp", Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))}
+	if err := serviceendpoint.Publish(home, record); err != nil {
+		t.Fatal(err)
+	}
+	user := mc.Caller{FleetID: fleet, AgentID: "operator", ThreadID: "0", Profile: mc.ProfileUser}
+	return mc.New(serviceendpoint.FileResolver{Home: home, Fleet: fleet}, service, user), user
+}
+func memoryAgentConfig(t *testing.T, home, id string) config.Config {
+	t.Helper()
+	return config.Config{ModuleInventory: modulecatalog.Inventory(), ProviderID: "test", Model: "model", HomeJuexDir: home, AgentID: id, WorkDir: t.TempDir(), AgentStateDir: filepath.Join(home, "agents", id), Preset: config.PresetMinimal, ContextWindow: 32000, Modules: config.ModulePolicy{memory.ModuleID: {Enabled: true}}}
+}
 func memoryApp(t *testing.T, cfg config.Config, provider llm.Provider) *app.App {
 	t.Helper()
-	a, err := app.New(app.Options{Config: cfg, Provider: provider, SummaryProvider: &moduleSummaryProvider{summary: "## Tasks\nRemember stable knowledge\n## Critical Context\nNo transient state\n## Next Steps\nContinue"}})
+	a, err := app.New(app.Options{Config: cfg, Provider: provider, DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,436 +79,184 @@ func memoryApp(t *testing.T, cfg config.Config, provider llm.Provider) *app.App 
 	return a
 }
 
-func memoryCall(id, name string, input map[string]any) llm.Block {
-	return llm.Block{Type: llm.BlockToolUse, ToolUseID: id, ToolName: name, Input: input}
-}
-
-func memoryWriteInput(name, body string) map[string]any {
-	return map[string]any{"name": name, "description": "Stable project fact", "type": "project", "body": body}
-}
-
-func TestMemoryToolsRejectCaseCollisions(t *testing.T) {
-	isolateModuleConfig(t)
-	provider := &bareScriptProvider{steps: []llm.Response{
-		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			memoryCall("original", memory.ToolWrite, memoryWriteInput("Project", "Keep original knowledge")),
-			memoryCall("collision-write", memory.ToolWrite, memoryWriteInput("project", "Wrong replacement")),
-			memoryCall("collision-delete", memory.ToolDelete, map[string]any{"name": "PROJECT"}),
-			memoryCall("search-original", memory.ToolSearch, map[string]any{"query": ""}),
-		}}, StopReason: llm.StopToolUse},
-		{Message: llm.TextMessage(llm.RoleAssistant, "Knowledge preserved"), StopReason: llm.StopEndTurn},
-	}}
-	a := memoryApp(t, memoryConfig(t), provider)
-	if _, err := a.Run(t.Context(), "Save Project and verify case variants cannot replace or delete it."); err != nil {
-		t.Fatal(err)
-	}
-	results := map[string]llm.Block{}
-	for _, message := range provider.history[len(provider.history)-1] {
-		for _, block := range message.Blocks {
-			if block.Type == llm.BlockToolResult {
-				results[block.ToolUseID] = block
-			}
-		}
-	}
-	for _, id := range []string{"collision-write", "collision-delete"} {
-		if result, ok := results[id]; !ok || !result.IsError || !strings.Contains(result.Content, "conflicts with existing") {
-			t.Fatalf("collision %s not reported as an error: %+v", id, result)
-		}
-	}
-	assertSuccessfulProviderToolResults(t, provider.history[len(provider.history)-1], map[string]string{"original": "Keep original knowledge", "search-original": "Keep original knowledge"})
-	var found struct {
-		Memories []memory.Entry `json:"memories"`
-	}
-	if err := json.Unmarshal([]byte(results["search-original"].Content), &found); err != nil || len(found.Memories) != 1 || found.Memories[0].Name != "Project" {
-		t.Fatalf("case collision changed entry identity: %+v, %v", found, err)
-	}
-}
-
-func TestEndToEnd_ManuallyCopiedMemoryKeepsExtensionDataAndOtherProviders(t *testing.T) {
-	isolateModuleConfig(t)
-	cfg := memoryConfig(t)
-	cfg.HomeJuexDir = t.TempDir()
-	address, err := agentstate.NewAgentAddress(cfg.HomeJuexDir, "abcdef")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.AgentAddress, cfg.AgentStateDir = address, address.StateDir()
-	for _, id := range []string{extensionsmodule.ModuleID, mcpmodule.ModuleID, skillsmodule.ModuleID, hooksmodule.ModuleID} {
-		cfg.Modules[id] = config.ModuleSettings{Enabled: true}
-	}
-	cfg.Extensions = config.ExtensionPolicy{Allow: []string{"catalog"}, Configured: true}
-	installCatalogExtensionFixture(t, filepath.Join(cfg.HomeJuexDir, "extensions", "catalog"))
-	oldInstall := filepath.Join(cfg.HomeJuexDir, "extensions", "memory")
-	oldData := filepath.Join(cfg.AgentStateDir, "extensions", "memory")
-	newData := filepath.Join(cfg.AgentStateDir, "modules", "memory")
-	for _, dir := range []string{oldInstall, oldData, newData} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	document := "---\nname: durable\ndescription: \"Compatible transferred knowledge\"\ntype: project\ncreated_at: 2026-07-01T00:00:00+00:00\nupdated_at: 2026-07-02T00:00:00+00:00\n---\nKeep the original knowledge.\n"
-	retained := map[string]string{
-		filepath.Join(oldInstall, "juex.extension.json"):                            `{"manifest_version":1,"name":"memory","version":"1.0.0"}`,
-		filepath.Join(oldInstall, "mcp.json"):                                       "invalid obsolete definition",
-		filepath.Join(oldData, "durable.md"):                                        document,
-		filepath.Join(oldData, "MEMORY.md"):                                         "old derived index",
-		filepath.Join(cfg.AgentStateDir, "extensions", "private-addon", "keep.txt"): "unrelated private data",
-	}
-	for path, data := range retained {
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The operator copies selected compatible entries while the Agent is stopped.
-	if err := os.WriteFile(filepath.Join(newData, "durable.md"), []byte(document), 0600); err != nil {
-		t.Fatal(err)
-	}
-	provider := &bareScriptProvider{steps: []llm.Response{
-		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			memoryCall("read-transferred", memory.ToolSearch, map[string]any{"query": "original knowledge"}),
-			memoryCall("other-provider", "mcp__catalog__catalog_write", map[string]any{"body": "Other extension still works"}),
-		}}, StopReason: llm.StopToolUse},
-		{Message: llm.TextMessage(llm.RoleAssistant, "Cutover complete"), StopReason: llm.StopEndTurn},
-	}}
-	a := memoryApp(t, cfg, provider)
-	if out, err := a.Run(t.Context(), "Read the transferred knowledge and exercise the other provider."); err != nil || out != "Cutover complete" {
-		t.Fatalf("cutover turn=%q, %v", out, err)
-	}
-	assertSuccessfulProviderToolResults(t, provider.history[len(provider.history)-1], map[string]string{"read-transferred": "Keep the original knowledge.", "other-provider": "saved catalog"})
-	if data, err := os.ReadFile(filepath.Join(cfg.AgentStateDir, "extensions", "catalog", "catalog-entry")); err != nil || string(data) != "Other extension still works" {
-		t.Fatalf("other Extension private output=%q, %v", data, err)
-	}
-	owned := 0
-	for _, entry := range a.Engine.RuntimeModules.ToolCatalog().Entries() {
-		if entry.ModuleID == memory.ModuleID {
-			owned++
-		}
-	}
-	if owned != 3 {
-		t.Fatalf("builtin Memory tool count=%d", owned)
-	}
-	for path, want := range retained {
-		if data, err := os.ReadFile(path); err != nil || string(data) != want {
-			t.Errorf("cutover altered %s: %q, %v", path, data, err)
-		}
-	}
-	if data, err := os.ReadFile(filepath.Join(newData, "durable.md")); err != nil || string(data) != document {
-		t.Fatalf("copied authority changed: %q, %v", data, err)
-	}
-	if data, err := os.ReadFile(filepath.Join(newData, "MEMORY.md")); err != nil || !strings.Contains(string(data), "[durable](durable.md)") {
-		t.Fatalf("startup rebuilt index=%q, %v", data, err)
-	}
-}
-
-func TestEndToEnd_MemoryResolvesRelativeEmbeddingStateScope(t *testing.T) {
-	isolateModuleConfig(t)
-	for _, explicitState := range []bool{false, true} {
-		t.Run(map[bool]string{false: "relative-workdir", true: "relative-agent-state"}[explicitState], func(t *testing.T) {
-			root := t.TempDir()
-			t.Chdir(root)
-			if err := os.Mkdir("work", 0700); err != nil {
-				t.Fatal(err)
-			}
-			cfg := memoryConfig(t)
-			cfg.Preset = config.PresetStandard
-			delete(cfg.Modules, memory.ModuleID)
-			cfg.WorkDir, cfg.AgentStateDir = "work", ""
-			if explicitState {
-				cfg.WorkDir, cfg.AgentStateDir = filepath.Join(root, "work"), "agent-state"
-			}
-			a := memoryApp(t, cfg, &bareScriptProvider{})
-			index := filepath.Join(cfg.RuntimePaths().StateDir, "modules", "memory", "MEMORY.md")
-			if data, err := os.ReadFile(index); err != nil || !strings.Contains(string(data), "# Memory Index") {
-				t.Fatalf("relative scope startup index=%q, %v", data, err)
-			}
-			write, _ := a.Engine.Tools.Get(memory.ToolWrite)
-			search, _ := a.Engine.Tools.Get(memory.ToolSearch)
-			remove, _ := a.Engine.Tools.Get(memory.ToolDelete)
-			if _, err := write.Handler(t.Context(), memoryWriteInput("embedded", "Embedding scope")); err != nil {
-				t.Fatal(err)
-			}
-			if result, err := search.Handler(t.Context(), map[string]any{"query": "Embedding scope"}); err != nil || !strings.Contains(result, "Embedding scope") {
-				t.Fatalf("relative scope search=%q, %v", result, err)
-			}
-			if err := a.Engine.RunThreadStartPolicies(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := remove.Handler(t.Context(), map[string]any{"name": "embedded"}); err != nil {
-				t.Fatal(err)
-			}
-			if result, err := search.Handler(t.Context(), map[string]any{"query": ""}); err != nil || result != `{"memories":[]}` {
-				t.Fatalf("relative scope delete=%q, %v", result, err)
-			}
-		})
-	}
-}
-
-func TestEndToEnd_MemoryIndependentToolsAndRetainedKnowledge(t *testing.T) {
-	isolateModuleConfig(t)
-	cfg := memoryConfig(t)
-	provider := &bareScriptProvider{steps: []llm.Response{
-		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			memoryCall("write", memory.ToolWrite, memoryWriteInput("stable", "Original knowledge")),
-			memoryCall("search", memory.ToolSearch, map[string]any{"query": "ORIGINAL"}),
-			memoryCall("replace", memory.ToolWrite, memoryWriteInput("stable", "Durable unique fixture content")),
-			memoryCall("search-replaced", memory.ToolSearch, map[string]any{"query": "durable unique"}),
-			memoryCall("temporary", memory.ToolWrite, memoryWriteInput("delete-me", "Delete only explicitly")),
-			memoryCall("delete", memory.ToolDelete, map[string]any{"name": "delete-me"}),
-			memoryCall("search-deleted", memory.ToolSearch, map[string]any{"query": "delete-me"}),
-		}}, StopReason: llm.StopToolUse},
-		{Message: llm.TextMessage(llm.RoleAssistant, "Memory tools complete"), StopReason: llm.StopEndTurn},
-	}}
-	a := memoryApp(t, cfg, provider)
-	if out, err := a.Run(t.Context(), "Explicitly save and update the stable facts, then delete the requested entry."); err != nil || out != "Memory tools complete" {
-		t.Fatalf("turn=%q, %v", out, err)
-	}
-	results := map[string]llm.Block{}
-	for _, message := range a.Thread.History {
-		for _, block := range message.Blocks {
-			if block.Type == llm.BlockToolResult {
-				results[block.ToolUseID] = block
-			}
-		}
-	}
-	for id, want := range map[string]string{"write": "Original knowledge", "search": "Original knowledge", "replace": "Durable unique fixture content", "search-replaced": "Durable unique fixture content", "temporary": "Delete only explicitly", "delete": "delete-me", "search-deleted": `"memories":[]`} {
-		result, ok := results[id]
-		if !ok || result.IsError || !strings.Contains(result.Content, want) || result.ResultFact == nil || result.ResultFact.Owner != memory.ModuleID {
-			t.Errorf("%s outcome=%+v", id, result)
-		}
-	}
-	for _, entry := range a.Engine.RuntimeModules.ToolCatalog().Entries() {
-		if strings.HasPrefix(entry.Tool.Name, "memory_") && entry.ModuleID != memory.ModuleID {
-			t.Errorf("tool owner=%+v", entry)
-		}
-	}
-	prompt, err := a.Engine.SystemPromptWithError()
-	if err != nil || !strings.Contains(prompt, "memory_search") || strings.Contains(prompt, "Durable unique fixture content") {
-		t.Fatalf("guidance/body projection: %q, %v", prompt, err)
-	}
-	file := filepath.Join(cfg.AgentStateDir, "modules", "memory", "stable.md")
-	before, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	index := filepath.Join(filepath.Dir(file), "MEMORY.md")
-	if err := os.WriteFile(index, []byte("broken derived index"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := os.ReadFile(index); err != nil || !strings.Contains(string(data), "[stable](stable.md)") {
-		t.Fatalf("post-compaction index=%q, %v", data, err)
-	}
-	if err := a.NewContext(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.CloseAndWait(); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg.Modules[memory.ModuleID] = config.ModuleSettings{Enabled: false}
-	disabled := memoryApp(t, cfg, &bareScriptProvider{})
-	if _, ok := disabled.Engine.Tools.Get(memory.ToolSearch); ok {
-		t.Fatal("disabled tool exposed")
-	}
-	disabledPrompt, err := disabled.Engine.SystemPromptWithError()
-	if err != nil || strings.Contains(disabledPrompt, "## Memory") {
-		t.Fatalf("disabled guidance=%q, %v", disabledPrompt, err)
-	}
-	if err := disabled.NewContext(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if err := disabled.CloseAndWait(); err != nil {
-		t.Fatal(err)
-	}
-	cfg.Modules[memory.ModuleID] = config.ModuleSettings{Enabled: true}
-	restarted := memoryApp(t, cfg, &bareScriptProvider{})
-	search, ok := restarted.Engine.Tools.Get(memory.ToolSearch)
-	if !ok {
-		t.Fatal("missing restarted search")
-	}
-	result, err := search.Handler(t.Context(), map[string]any{"query": "durable unique"})
-	if err != nil || !strings.Contains(result, "Durable unique fixture content") {
-		t.Fatalf("restart=%s, %v", result, err)
-	}
-	after, err := os.ReadFile(file)
-	if err != nil || string(after) != string(before) {
-		t.Fatalf("lifecycle altered authority: %v", err)
-	}
-	other := memoryApp(t, memoryConfig(t), &bareScriptProvider{})
-	otherSearch, _ := other.Engine.Tools.Get(memory.ToolSearch)
-	if result, err := otherSearch.Handler(t.Context(), map[string]any{"query": ""}); err != nil || result != `{"memories":[]}` {
-		t.Fatalf("Agent knowledge leaked: %s, %v", result, err)
-	}
-}
-
-func TestEndToEnd_MemoryPostCompactionCancellationPreservesCommittedGeneration(t *testing.T) {
-	isolateModuleConfig(t)
-	cfg := memoryConfig(t)
-	a := memoryApp(t, cfg, &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "Stable fact saved"), StopReason: llm.StopEndTurn}}})
-	write, _ := a.Engine.Tools.Get(memory.ToolWrite)
-	if _, err := write.Handler(t.Context(), memoryWriteInput("retained", "Stable knowledge")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.Run(t.Context(), "Discuss the stable project fact before compaction."); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(cfg.AgentStateDir, "modules", "memory", "retained.md")
-	before, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lock, err := homestore.AcquireLock(filepath.Join(filepath.Dir(file), ".lock"), homestore.LockTry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = lock.Close() }()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	started := false
-	unsubscribe := a.Bus.Subscribe("policy.started", func(event events.Event) {
-		payload, ok := event.Payload.(runtime.PolicyStartedPayload)
-		if ok && payload.ModuleID == memory.ModuleID && payload.PolicyPoint == "compaction_after" {
-			started = true
-			cancel()
-		}
-	})
-	defer unsubscribe()
-	generation := a.Thread.Info().GenerationID
-	if _, err := a.CompactWithInstructions(ctx, "manual", false, ""); !errors.Is(err, context.Canceled) {
-		t.Fatalf("post-compaction cancellation=%v, want context.Canceled", err)
-	}
-	if !started || a.Thread.Info().GenerationID == generation {
-		t.Fatalf("maintenance started=%t, Generation=%s; expected committed compaction", started, a.Thread.Info().GenerationID)
-	}
-	if after, err := os.ReadFile(file); err != nil || string(after) != string(before) {
-		t.Fatalf("cancellation changed knowledge: %v", err)
-	}
-}
-
-func TestEndToEnd_MemoryMaintenanceFailureDoesNotBlockAndDisabledDoesNoFileWork(t *testing.T) {
-	isolateModuleConfig(t)
-	for _, enabled := range []bool{true, false} {
-		t.Run(map[bool]string{true: "enabled", false: "disabled"}[enabled], func(t *testing.T) {
-			cfg := memoryConfig(t)
-			cfg.Modules[memory.ModuleID] = config.ModuleSettings{Enabled: enabled}
-			index := filepath.Join(cfg.AgentStateDir, "modules", "memory", "MEMORY.md")
-			if enabled {
-				if err := os.MkdirAll(index, 0700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			a := memoryApp(t, cfg, &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "continued"), StopReason: llm.StopEndTurn}}})
-			startJournal := a.Thread.CurrentGenerationJournalPath()
-			if _, err := a.Run(t.Context(), "Continue despite optional index failure."); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err != nil {
-				t.Fatal(err)
-			}
-			data, err := os.ReadFile(startJournal)
-			if err != nil {
-				t.Fatal(err)
-			}
-			current, err := os.ReadFile(a.Thread.CurrentGenerationJournalPath())
-			if err != nil {
-				t.Fatal(err)
-			}
-			all := string(data) + string(current)
-			if enabled {
-				for _, point := range []string{"thread_start", "compaction_after"} {
-					found := false
-					for _, line := range strings.Split(all, "\n") {
-						if strings.Contains(line, `"policy.errored"`) && strings.Contains(line, `"module_id":"memory"`) && strings.Contains(line, point) {
-							found = true
-						}
-					}
-					if !found {
-						t.Errorf("missing durable maintenance failure for %s", point)
-					}
-				}
-			} else {
-				if _, err := os.Stat(filepath.Dir(index)); !os.IsNotExist(err) {
-					t.Fatalf("disabled initialized memory: %v", err)
-				}
-				if strings.Contains(all, `"module_id":"memory"`) {
-					t.Fatal("disabled maintenance ran")
-				}
-			}
-		})
-	}
-}
-
-type memoryWorkerProvider struct {
-	ready   chan string
+type memoryReviewProvider struct {
+	t       *testing.T
+	started chan struct{}
 	release chan struct{}
+	once    sync.Once
 }
 
-func (*memoryWorkerProvider) Name() string { return "memory-workers" }
-
-func (p *memoryWorkerProvider) Complete(ctx context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
-	query := lastDirectUserText(history)
-	if !historyHasToolResult(history, "shared-write") {
-		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{memoryCall("shared-write", memory.ToolWrite, memoryWriteInput(query, "Shared durable "+query))}}, StopReason: llm.StopToolUse}, nil
+func (*memoryReviewProvider) Name() string { return "memory-review-fixture" }
+func (p *memoryReviewProvider) Complete(ctx context.Context, _ string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	var proposal mc.Proposal
+	var scope mc.Scope
+	assigned := false
+	for _, m := range history {
+		if _, payload, ok := strings.Cut(m.FirstText(), "Proposal JSON:\n"); ok {
+			if err := json.Unmarshal([]byte(payload), &proposal); err != nil {
+				return llm.Response{}, err
+			}
+			_, scopeText, ok := strings.Cut(m.FirstText(), "Assignment scope JSON:\n")
+			if !ok {
+				return llm.Response{}, errors.New("assignment scope missing")
+			}
+			scopeText, _, _ = strings.Cut(scopeText, "\n\nProposal JSON:")
+			if err := json.Unmarshal([]byte(scopeText), &scope); err != nil {
+				return llm.Response{}, err
+			}
+			assigned = true
+			break
+		}
 	}
-	p.ready <- query
+	if !assigned {
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Main remains available"), StopReason: llm.StopEndTurn}, nil
+	}
+	for _, spec := range tools {
+		if spec.Name != memory.ToolSearch && spec.Name != memory.ToolRead && spec.Name != memory.ToolHistory && spec.Name != memory.ToolDecide {
+			p.t.Errorf("maintenance capability escaped: %s", spec.Name)
+		}
+	}
+	if len(tools) != 4 {
+		p.t.Errorf("maintenance tools=%d", len(tools))
+	}
+	for _, m := range history {
+		for _, b := range m.Blocks {
+			if b.Type == llm.BlockToolResult && b.ToolUseID == "decision" {
+				if b.IsError {
+					return llm.Response{}, errors.New(b.Content)
+				}
+				return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Committed"), StopReason: llm.StopEndTurn}, nil
+			}
+		}
+	}
+	p.once.Do(func() { close(p.started) })
 	select {
 	case <-p.release:
 	case <-ctx.Done():
 		return llm.Response{}, ctx.Err()
 	}
-	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Worker saved memory"), StopReason: llm.StopEndTurn}, nil
+	decision := mc.Decision{Outcome: "applied", Reason: "Explicit stable user preference", Changes: []mc.Change{{Entry: mc.Entry{ID: "release-convention", Name: "Release convention", Summary: "Release on Tuesday", Type: "user", Body: proposal.Text, Sources: proposal.Sources, Scope: scope}}}}
+	data, _ := json.Marshal(decision)
+	var input map[string]any
+	_ = json.Unmarshal(data, &input)
+	return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{memoryCall("decision", memory.ToolDecide, input)}}, StopReason: llm.StopToolUse}, nil
 }
 
-func TestEndToEnd_MemoryMainAndConcurrentWorkersShareAgentStore(t *testing.T) {
+func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
 	isolateModuleConfig(t)
-	cfg := memoryConfig(t)
-	cfg.Modules[workerthreadsmodule.ModuleID] = config.ModuleSettings{Enabled: true}
-	provider := &memoryWorkerProvider{ready: make(chan string, 2), release: make(chan struct{})}
-	a := memoryApp(t, cfg, provider)
-	defer close(provider.release)
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	home := t.TempDir()
+	api, user := startMemoryFixture(t, home, mc.Basic)
+	cfgA := memoryAgentConfig(t, home, "agent-a")
+	source := &bareScriptProvider{steps: []llm.Response{{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{memoryCall("proposal", memory.ToolPropose, map[string]any{"key": "remember-release", "text": "We release on Tuesday", "reason": "explicit user request"})}}, StopReason: llm.StopToolUse}, {Message: llm.TextMessage(llm.RoleAssistant, "Submitted for review"), StopReason: llm.StopEndTurn}}}
+	a := memoryApp(t, cfgA, source)
+	if _, err := a.Run(t.Context(), "Remember that we release on Tuesday."); err != nil {
+		t.Fatal(err)
+	}
+	var receipt mc.Receipt
+	for _, m := range a.Thread.History {
+		for _, b := range m.Blocks {
+			if b.Type == llm.BlockToolResult && b.ToolUseID == "proposal" {
+				if b.IsError {
+					t.Fatal(b.Content)
+				}
+				if err := json.Unmarshal([]byte(b.Content), &receipt); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	if receipt.ID == "" || receipt.Committed {
+		t.Fatalf("premature success %+v", receipt)
+	}
+	cfgS := memoryAgentConfig(t, home, "supervisor")
+	cfgS.MemoryProfile = mc.ProfileSupervisor
+	cfgS.Modules["worker-threads"] = config.ModuleSettings{Enabled: true}
+	reviewer := &memoryReviewProvider{t: t, started: make(chan struct{}), release: make(chan struct{})}
+	supervisor := memoryApp(t, cfgS, reviewer)
+	select {
+	case <-reviewer.started:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Supervisor did not claim request")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	create, _ := a.Engine.Tools.Get(workerthreadsmodule.ToolCreate)
-	var workers []*agent.Agent
-	for _, name := range []string{"worker-one", "worker-two"} {
-		result, err := create.Handler(ctx, map[string]any{"query": name})
+	if out, err := supervisor.Run(ctx, "Status while maintenance is running"); err != nil || out != "Main remains available" {
+		t.Fatalf("Main blocked: %q %v", out, err)
+	}
+	close(reviewer.release)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		var err error
+		receipt, err = api.Result(t.Context(), user, receipt.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var status agent.WorkerThreadStatus
-		if err := json.Unmarshal([]byte(result), &status); err != nil {
-			t.Fatal(err)
+		if receipt.Committed {
+			break
 		}
-		worker, ok := a.ManagedWorkerAgent(status.ThreadID)
-		if !ok {
-			t.Fatal("missing Worker")
+		if time.Now().After(deadline) {
+			t.Fatalf("no committed receipt %+v", receipt)
 		}
-		workers = append(workers, worker)
+		time.Sleep(25 * time.Millisecond)
 	}
-	for range 2 {
-		select {
-		case <-provider.ready:
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
+	cfgB := memoryAgentConfig(t, home, "agent-b")
+	cfgB.WorkDir = cfgA.WorkDir
+	b := memoryApp(t, cfgB, &bareScriptProvider{})
+	read, ok := b.Engine.Tools.Get(memory.ToolRead)
+	if !ok {
+		t.Fatal("Memory read unavailable")
+	}
+	result, err := read.Handler(t.Context(), map[string]any{"id": "release-convention"})
+	if err != nil || !strings.Contains(result, "We release on Tuesday") {
+		t.Fatalf("cross-Agent read %q %v", result, err)
+	}
+	unrelated := memoryApp(t, memoryAgentConfig(t, home, "unrelated"), &bareScriptProvider{})
+	unrelatedRead, _ := unrelated.Engine.Tools.Get(memory.ToolRead)
+	if _, err := unrelatedRead.Handler(t.Context(), map[string]any{"id": "release-convention"}); err == nil {
+		t.Fatal("unrelated workspace read assignment knowledge")
+	}
+	// Reopening a Worker retains the actual execution capability boundary.
+	workers, err := supervisor.ThreadStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workerID string
+	for _, w := range workers {
+		if w.ThreadID != thread.MainID {
+			workerID = w.ThreadID
+			break
 		}
 	}
-	for _, reader := range append(workers, a.Agent) {
-		search, ok := reader.Engine.Tools.Get(memory.ToolSearch)
-		if !ok {
-			t.Fatal("missing shared Memory")
-		}
-		result, err := search.Handler(ctx, map[string]any{"query": "Shared durable"})
-		if err != nil || !strings.Contains(result, "worker-one") || !strings.Contains(result, "worker-two") {
-			t.Fatalf("shared search=%q, %v", result, err)
-		}
+	if workerID == "" {
+		t.Fatal("no durable Worker")
 	}
-	index, err := os.ReadFile(filepath.Join(cfg.AgentStateDir, "modules", "memory", "MEMORY.md"))
-	if err != nil || strings.Count(string(index), "](") != 2 {
-		t.Fatalf("shared index=%q, %v", index, err)
+	if err := supervisor.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := app.New(app.Options{Config: cfgS, Provider: &bareScriptProvider{}, ThreadID: workerID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = restored.CloseAndWait() }()
+	if len(restored.Engine.Tools.List()) != 4 {
+		t.Fatalf("restored tools %+v", restored.Engine.Tools.List())
+	}
+	if _, ok := restored.Engine.Tools.Get("exec_command"); ok {
+		t.Fatal("restored assignment gained shell execution")
+	}
+	if _, err := api.Admin(t.Context(), user, mc.AdminRequest{Key: "delete", Action: "delete", EntryIDs: []string{"release-convention"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read.Handler(t.Context(), map[string]any{"id": "release-convention"}); err == nil {
+		t.Fatal("deleted knowledge remained visible")
+	}
+}
+
+func TestEndToEnd_MemoryOfflineDoesNotBlockOrdinaryTurn(t *testing.T) {
+	isolateModuleConfig(t)
+	cfg := memoryAgentConfig(t, t.TempDir(), "ordinary")
+	a := memoryApp(t, cfg, &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "ordinary response"), StopReason: llm.StopEndTurn}}})
+	if out, err := a.Run(t.Context(), "Continue while Memory is unavailable"); err != nil || out != "ordinary response" {
+		t.Fatalf("offline turn %q %v", out, err)
 	}
 }

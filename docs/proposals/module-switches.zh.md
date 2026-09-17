@@ -22,8 +22,8 @@
 | `skills` | `skill_search`、`skill_load` | 可用 Skills 索引；显式加载时返回完整正文 | Skills 发现、目录索引、筛选、提示预算和加载 | 开 | 关 |
 | `scratchpad` | 无专用工具，复用文件工具/Shell | Scratchpad 路径和使用建议；不自动注入文件正文 | Thread 工作目录准备和路径贡献；跨 Generation 保留；关闭不创建、不宣传，已有文件不删除 | 开 | 关 |
 | `tasks` | `list_tasks`、`create_task`、`update_task`、`delete_task` | Tasks 合同运行时消息、必要的继续提示、压缩状态贡献 | Tasks 存储、完成/继续策略、new/compact 时仅清理 done 任务；模块关闭或移除时删除 tasks.json | 开 | 关 |
-| `notes` | `update_notes` | Notes 运行时消息、压缩状态贡献 | Notes 存储、内容预算、new/compact 时仅清理 done 任务；模块关闭或移除时删除 notes.md | 开 | 关 |
-| `memory` | 原始清单：`memory_search`、`memory_write`、`memory_delete`；未来权限遵循 [Fleet Memory 提案](fleet-memory.zh.md) | 模块自带必要使用指导；正文按需通过工具返回 | 原始 Agent 级存储与生命周期；Fleet 提案区分共享所有权和 Agent 参与。关闭保留持久知识 | 开 | 关 |
+| `notes` | `update_notes` | Notes 运行时消息、压缩状态贡献 | Notes 存储、内容预算、上下文重置时清理；模块关闭或移除时删除 notes.md | 开 | 关 |
+| `memory` | 按范围搜索/读取、提案、回执与历史；权限见 [Memory](../../internal/features/memory/README.zh.md) | 模块自带必要使用指导；正文按需通过工具返回 | Fleet 服务拥有知识，Agent 拥有参与和游标。关闭参与保留共享知识 | 开 | 关 |
 | `context-control` | `context_new`、`context_compact` | 容量提醒和模型操作上下文的建议 | 接受模型的 Generation 切换/压缩请求；不拥有底层 Generation 持久化机制 | 开 | 关 |
 | `worker-threads` | `thread_create`、`thread_list`、`thread_status`、`thread_send`、`thread_subscribe`、`thread_stop`、`thread_archive` | 订阅后的 Worker 结果/通知；无需额外固定系统提示段 | Worker 执行管理、订阅、结果交付、停止和资源关闭；不是磁盘上全部 Thread 的存储开关 | 开 | 关 |
 | `observables` | `observable_list`、`observable_create`、`observable_start`、`observable_stop`、`observable_delete`、`observable_observations` | Observation 输入与按需指南；不是固定常驻提示段 | 命令生产者、定义、状态、记录和 Main 投递 | 开 | 关 |
@@ -41,7 +41,7 @@
 
 Extension 资源需要同时满足来源与承载能力条件：插件被 `extensions.allow` 选中，extensions 模块开启，相应的 skills/hooks/mcp/observables 模块也开启。关闭 extensions 不关闭工作区自身配置的 Skills、Hooks 或 MCP；关闭 hooks 后，启用的 Extension 也不能读取、解析或执行其 Hook 资源。具体资源只由开启的承载模块处理。
 
-Memory 的 Agent 本地基线现由其 [实现 README](../../internal/features/memory/README.zh.md) 描述。内置工具、指导和生命周期不依赖 extensions、mcp、skills 或外置 hooks。[Fleet Memory 提案](fleet-memory.zh.md) 替代本清单中未来 Memory 所有权、写入权限和维护方式的假设：独立 Memory Service 持有 Fleet 共享知识，内置 Agent Module 经同一客户端按 profile 提供查询/提案或 Supervisor 评审/提交，并提供 Basic、Advanced 策略。Fleet 负责服务管理与发现。该目标尚未实现，交付前当前 Agent 预设默认值和保留行为仍有效。
+Memory 的共享服务契约由其 [实现 README](../../internal/features/memory/README.zh.md) 描述。内置工具和指导不依赖 extensions、mcp、skills 或外置 hooks。服务持有 Fleet 共享知识和提交权限；Agent Module 提供受范围约束的客户端、参与状态和有界召回。Supervisor Worker 经同一类型化 API 评审分配的工作。Fleet 负责服务管理与发现。Basic 为默认策略，Advanced 需要显式启用。
 
 高级工具建议取决于最终可用能力，而不是 preset 名称。例如 standard 关闭分块写后，write 不建议分块写；minimal 开启分块写后可以恢复建议。Skills 关闭时，其他功能仍能使用自身基本说明，不建议不存在的 skill_load。
 

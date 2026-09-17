@@ -2,10 +2,10 @@
 
 > [English](fleet-service-management.md) | 中文
 
-状态：生命周期与发现基础已实现，Memory/Supervisor 业务接入仍为提案。更新：2026-09-17。
+状态：生命周期、发现基础与 Memory/Supervisor 接入已实现。更新：2026-09-18。
 
 已实现的配置、命令、锁与重启预算以 [Fleet 独立服务](../../internal/fleet/services/README.zh.md)、
-代码和测试为准。下文示意配置描述后续业务接入。
+代码和测试为准。下文配置示意独立服务边界。
 
 本文定义独立服务的进程管理、发现和客户端接入边界。[Supervisor](supervisor-agent.zh.md) 与 [Memory](fleet-memory.zh.md) 基于本文实现，分别拥有执行角色和记忆业务设计。
 
@@ -99,7 +99,7 @@ Fleet 串行化同一服务的启动，待服务完成存储恢复和就绪握�
 
 内部类型化 RPC 采用 Go + CloudWeGo Kitex；同机可通过 Unix Domain Socket，跨机器使用 TCP，业务接口保持一致。具体服务拥有自己的 IDL 和客户端，例如 `MemoryClient`；Fleet 管理操作使用单独的管理客户端。[Kitex 直连文档](https://www.cloudwego.io/zh/docs/kitex/tutorials/basic-feature/visit_directly/)说明了地址和 Unix socket 接入。
 
-Juex Memory 默认采用内置 Agent Module 加类型化客户端，以支持工具、指导及后续 Turn 召回。需要外部 Agent 接入时，再添加 Streamable HTTP MCP 适配；stdio MCP 可以作为每个 Agent 的轻量桥接进程，业务仍由同一个服务处理。不要求首版同时实现全部适配。
+Juex Memory 默认采用内置 Agent Module 加类型化客户端，以支持工具、指导及有界 Turn 召回。需要外部 Agent 接入时，再添加 Streamable HTTP MCP 适配；stdio MCP 可以作为每个 Agent 的轻量桥接进程，业务仍由同一个服务处理。不要求首版同时实现全部适配。
 
 外部插件也可直接提供独立的 HTTP MCP 服务供多个 Agent 使用，无需实现 Juex 的 Go Module 接口。协议连接/会话状态与共享业务状态分开；使用 MCP 不会自动提供 Fleet 隔离、共享存储或任务恢复。[MCP 传输规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)定义 stdio 和 Streamable HTTP 的连接形式。
 

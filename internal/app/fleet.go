@@ -1,12 +1,16 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/fleet/services"
+	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
+	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
 
 // NewFleet installs application configuration policy without moving lifecycle
@@ -26,7 +30,26 @@ func NewFleet(opts fleet.Options) (*fleet.Manager, error) {
 		return err
 	}
 	opts.SupervisorTemplate = supervisorTemplate
+	opts.SettleSupervisor = settleSupervisorMemory
 	return fleet.New(opts)
+}
+
+func settleSupervisorMemory(ctx context.Context, home, id string) (fleet.ExecutorSettlement, error) {
+	resolved, err := agentstate.ResolveByID(agentstate.Options{HomeDir: home}, id)
+	if err != nil {
+		return fleet.ExecutorSettlement{}, err
+	}
+	cfg, err := config.ReadModuleInspectionConfig(modulecatalog.Inventory(), resolved.Agent.Workspace, home, resolved.Address.ConfigPath())
+	if err != nil {
+		return fleet.ExecutorSettlement{}, err
+	}
+	cfg.HomeJuexDir, cfg.AgentID = home, id
+	cfg.MemoryProfile = mc.ProfileUser
+	client, caller := memoryClient(cfg, "0", nil)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	result, err := client.Revoke(ctx, caller, id)
+	return fleet.ExecutorSettlement{Confirmed: result.Confirmed, Released: result.Released}, err
 }
 
 func writeFleetAgentConfig(homeDir, agentID string, content []byte) error {
@@ -56,7 +79,7 @@ func NewFleetServices(home string) (*services.Manager, error) {
 }
 
 func supervisorTemplate() ([]byte, []byte) {
-	return []byte("preset: standard\nfleet_client:\n  profile: supervisor\n"), []byte(`# Supervisor
+	return []byte("preset: standard\nfleet_client:\n  profile: supervisor\nmodules:\n  memory:\n    profile: supervisor\n"), []byte(`# Supervisor
 
 Help the user understand JueX and manage this Fleet's Agents. Use the typed Fleet tools for management. Your profile and identity are fixed at startup. Only your Main Thread owns management tools; Workers may research but cannot administer Agents.
 

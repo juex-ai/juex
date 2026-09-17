@@ -218,10 +218,13 @@ schema。解析不能改变工具身份或执行策略。Provider 请求与活�
 取消沿用正常工具分发，包含错误在内的结果保持有序。跨 Thread 的 Agent
 共享资源同步仍由所属 Module 负责。
 
-Agent scope 的 [Memory Module](internal/features/memory/README.zh.md) 拥有持久知识
-及可重建索引。App 注入 Agent 目录，Main 与 Worker 的 Module 实例通过同一把锁
-协调文件事务。Thread 启动与压缩完成后的策略负责维护索引，不注入知识正文，普通
-维护失败不会阻断流程。
+[Fleet Memory](internal/features/memory/README.zh.md) 是独立服务，由 App 基于
+Fleet 服务租约和直连类型化 Kitex 客户端组装。Memory 拥有知识、请求、提交恢复和
+源进度。Agent Module 拥有工具、参与/游标状态及冻结 recall；通用输入准备发生在
+接纳之后，被动上下文检查不执行 RPC。Supervisor 轮询任务并在受限普通 Worker
+中执行。App 限制实际 Module factory，同时保持 Agent 资源租约，并持久化 Worker
+用途，使恢复不会扩大能力。Fleet 拥有进程生命周期和发现，不拥有 Memory 队列或
+模型循环。
 
 工具执行可以输出显式 JSON fact。Framework 根据封存的工具 catalog 赋予所有者，
 并独立于结果展示文本持久化。启用的 Module 可以通过声明式 Provider 历史计划

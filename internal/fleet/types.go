@@ -182,6 +182,7 @@ type Options struct {
 	ConfigWriter       ConfigWriter
 	ConfigUpdater      ConfigUpdater
 	SupervisorTemplate func() (config, guidance []byte)
+	SettleSupervisor   func(context.Context, string, string) (ExecutorSettlement, error)
 	HomeDir            string
 	Executable         string
 	StartTimeout       time.Duration
@@ -324,6 +325,7 @@ type Manager struct {
 	configWriter       ConfigWriter
 	configUpdater      ConfigUpdater
 	supervisorTemplate func() ([]byte, []byte)
+	settleSupervisor   func(context.Context, string, string) (ExecutorSettlement, error)
 	homeDir            string
 	homeStore          *homestore.Store
 	executable         string
@@ -371,6 +373,7 @@ func New(opts Options) (*Manager, error) {
 		configWriter:       opts.ConfigWriter,
 		configUpdater:      opts.ConfigUpdater,
 		supervisorTemplate: opts.SupervisorTemplate,
+		settleSupervisor:   opts.SettleSupervisor,
 		homeDir:            homeDir,
 		homeStore:          &store,
 		executable:         executable,

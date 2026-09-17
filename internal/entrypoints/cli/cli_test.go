@@ -157,6 +157,7 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 		"fleet":      "administration",
 		"help":       "cli",
 		"listen":     "administration",
+		"memory":     "administration",
 		"thread":     "resources",
 		"version":    "cli",
 	}

@@ -61,6 +61,8 @@ type Config struct {
 	WorkerThreadMaxDepth      int
 	Extensions                ExtensionPolicy
 	FleetClientProfile        string
+	MemoryService             string
+	MemoryProfile             string
 	AgentConfigRevision       string
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool

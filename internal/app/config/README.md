@@ -102,3 +102,9 @@ not a default Home inherited by a custom instance. See
 (default) or `supervisor`. The `fleet-management` Module additionally requires
 Supervisor Main scope. Its profile is not a tool argument or an authentication
 credential. See [Fleet](../../fleet/README.md) for role and application policy.
+
+`modules.memory.service` selects the owning Fleet service (default `memory`).
+`modules.memory.profile` accepts `agent` or `supervisor`; if omitted it follows
+the Supervisor role or defaults to `agent`. Participation follows presets and
+`enabled`; service strategy belongs to Home configuration. See
+[Memory](../../features/memory/README.md) for the shared-data contract.

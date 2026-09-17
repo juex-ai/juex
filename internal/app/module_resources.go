@@ -1,9 +1,15 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/features/memory"
+	"github.com/juex-ai/juex/internal/foundation/memoryclient"
+	"github.com/juex-ai/juex/internal/foundation/serviceendpoint"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/module/state"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -35,5 +41,32 @@ func acquireModuleResources(cfg config.Config, extra []runtimemodule.ThreadFacto
 		}
 	}
 	dir := cfg.RuntimePaths().StateDir
-	return state.Acquire(dir, owners, thread.NewStore(dir).ResourceDirectories)
+	lease, err := state.Acquire(dir, owners, thread.NewStore(dir).ResourceDirectories)
+	if err != nil {
+		return nil, err
+	}
+	// Fix the owning Fleet identity even when this Agent starts before the
+	// service. A later service launch can then satisfy its existing clients.
+	if cfg.ModuleEnabled(memory.ModuleID) && cfg.HomeJuexDir != "" {
+		if _, err := serviceendpoint.FleetID(cfg.HomeJuexDir); err != nil {
+			_ = lease.Close()
+			return nil, err
+		}
+	}
+	if err := memory.ConfigureParticipation(dir, cfg.ModuleEnabled(memory.ModuleID)); err != nil {
+		_ = lease.Close()
+		return nil, err
+	}
+	if !cfg.ModuleEnabled(memory.ModuleID) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := memory.SyncDisabled(ctx, dir, func(id string) (memoryclient.API, memoryclient.Caller) {
+			client, caller := memoryClient(cfg, id, nil)
+			return client, caller
+		})
+		cancel()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "juex: %v\n", err)
+		}
+	}
+	return lease, nil
 }

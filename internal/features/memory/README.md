@@ -1,70 +1,113 @@
-# Memory
+# Fleet Memory
 
 > English | [中文](README.zh.md)
 
-Memory owns durable Agent knowledge in `modules/memory/` under the Agent state
-directory. Main and Worker Threads share that directory; different Agents do
-not. `standard` enables Memory and `minimal` disables it. Set
-`modules.memory.enabled` explicitly to override the preset. Memory works with
-Extensions, MCP, Skills, and Hooks disabled and provides its own brief guidance.
-App resolves relative embedding paths before supplying the absolute Agent scope.
+Memory is an independent Fleet-owned service. Agent Modules connect directly
+through a typed Kitex client. The service owns knowledge, work receipts and
+commit recovery; Supervisor executes model review in an ordinary scoped Worker.
+Fleet only manages the service process and discovery. Reads remain available
+without Supervisor, and an existing connection does not depend on Fleet's Web
+process. Standard enables Agent participation; minimal disables it.
 
-Entry Markdown files are authoritative. Their YAML frontmatter contains name,
-single-line description, type (`user`, `feedback`, `project`, or `reference`),
-creation time, and update time. Exact-name writes preserve creation time.
-Writes and deletes reject a different spelling of an existing name under
-case-insensitive comparison on every platform; they never rename or merge entries.
-Names exclude `MEMORY` and Windows device basenames on every platform, including
-device names followed by a dot and suffix. Search uses literal substrings with
-Unicode simple case folding across metadata and
-body; it does not expand characters such as `ß` into `ss`. Malformed or unreadable
-individual entries are skipped; a directory read failure is an operation error.
-Physical directory and regular-entry boundaries reject symlinked storage.
+## Configuration and use
 
-Every operation coordinates through one stable filesystem transaction lock.
-Separate Module instances read the shared files without a cache. Lock waiting
-honors cancellation, and the lock file remains in place after use. Entries are
-atomically published before rebuilding the derived `MEMORY.md` index. A later
-index or durability failure reports that the entry was already saved or deleted;
-it cannot roll back authoritative knowledge. Thread start and successful
-compaction rebuild the index through ordinary Module policies. Maintenance
-failures are observable but nonfatal; cancellation and policy checkpoint failures
-still propagate.
+Fleet starts managed Basic Memory by default. Advanced is explicitly selected in
+the owning Home's `juex.yaml`:
 
-Construction, tool catalogs, and guidance perform no Memory file work. Disabled
-Memory contributes no tools, guidance, or maintenance. Knowledge survives `/new`,
-shutdown, disabling, and removal of the Module; only explicit `memory_delete`
-removes entries. Prompt guidance never injects the index or all entry bodies.
-Memory has no automatic extraction, legacy tool aliases, or data migration.
+```yaml
+fleet:
+  services:
+    memory:
+      config:
+        strategy: advanced
+```
 
-## Switch from the retired Memory Extension
+Agent `modules.memory.enabled` controls participation. `service` selects the
+Fleet service identity; `profile` is `agent` or `supervisor`. The Supervisor role
+defaults to its matching profile. These are trusted startup capabilities, not
+full authentication. They cannot be changed by model tool arguments.
 
-The `juex-extensions` repository no longer distributes the Memory bundle. Its
-installer leaves an existing installation and Agent-private data untouched.
-Switch one Agent at a time; keep the old installation and knowledge as a backup.
+CLI commands select the Fleet service with `--service <identity>` (default
+`memory`). Set it to the Agent's `modules.memory.service` value when that Agent
+uses a different service; CLI administration does not infer an Agent context.
 
-1. Resolve the registered Agent with `juex agent list`. Stop it with
-   `juex agent stop --agent <agent-id>`. Run
-   `juex agent config --agent <agent-id>` to locate its sparse configuration.
-2. Edit that configuration so the effective `extensions.allow` list excludes
-   `memory` and retains every other desired Extension. Set
-   `modules.memory.enabled: true`. Remove any separately configured copies of
-   the old Memory MCP, Skill, or Hooks too. Keep the Agent stopped until the
-   configuration and file copy are complete, avoiding two Memory providers.
-3. Copy only selected compatible UTF-8 Markdown entries from
-   `$JUEX_HOME/agents/<agent-id>/extensions/memory/` into
-   `$JUEX_HOME/agents/<agent-id>/modules/memory/`, creating the destination if
-   needed. Preserve each entry's frontmatter and body; its filename stem must
-   equal `name`, and its metadata and name must satisfy the current tool schema.
-   Do not copy `MEMORY.md`, locks, temporary files, or symlinks. Check existing
-   destination names, including case variants, and reconcile conflicts manually
-   without overwriting knowledge. Leave the original files in place.
-4. Run `juex agent start --agent <agent-id>`, then open Main or send a request to
-   activate its Thread. Thread startup rebuilds the new index from the copied
-   entries. Ask the Agent to use `memory_search` to retrieve a known fact and
-   confirm the Runtime shows the three built-in Memory tools and the intended
-   other Extensions. Index maintenance errors are observable and require
-   inspection; a running Agent alone does not prove the copy succeeded.
+Use `juex fleet services status memory` for lifecycle and `juex memory status`
+for business readiness. Agents search previews, read entries, submit explicit
+proposals, inspect receipts and read permitted retained evidence. Acceptance
+means submitted; only a committed receipt means knowledge changed. Necessary
+guidance is built in and works with Skills, Hooks, MCP and Extensions disabled.
+Search previews omit full provenance; read the entry for its sources. Maintenance
+assignments may change or delete only entries in their exact workspace/project
+scope. Broader visible knowledge is read-only context for that assignment;
+trusted user administration can explicitly change broader knowledge.
 
-`JUEX_HOME` defaults to `~/.juex`. This is an operator procedure; installing or
-upgrading Juex does not copy, convert, or delete the old knowledge automatically.
+Trusted user corrections, deletions, no-store intervals and explicit relearning
+use `juex memory admin --file request.json`. For example:
+
+```json
+{"key":"forget-release-v1","action":"delete","entry_ids":["release-convention"]}
+```
+
+The request/response types and tool schemas define exact fields. Administration
+fences older work. Deletion removes Memory-owned knowledge and projections,
+scrubs matching retained proposal/evidence payloads and suppresses re-extraction
+from those sources. No-store also removes entries containing that source;
+unrelated entries remain. Neither operation erases original Thread history,
+Supervisor transcripts, previously delivered context or external copies.
+
+## Authority and recovery
+
+`$JUEX_HOME/services/memory/memory/<id>.md` holds authoritative entries with JSON
+frontmatter (a YAML subset). Stable IDs, content, scope, source/time and structured
+facts belong to knowledge revisions. `state/` holds durable requests, leases,
+receipts, source progress, suppression constraints and commit intents. Generated
+`MEMORY.md` contains at most 200 hot entries. Search/entity projections rebuild
+from Markdown in memory; no database is required.
+
+One service holds the writer lease. A commit intent precedes all entry changes
+and the receipt; recovery completes it before any reader sees the result.
+Expected revisions and assignment capabilities reject stale writes. Index
+failure is reported separately from committed knowledge. Search still covers
+cold entries. Only successful explicit body reads heat the index; previews,
+maintenance, recall and rebuild do not. Recall use has separate bookkeeping.
+
+Stopping/restarting the service preserves data and accepted work. Disabling one
+Agent preserves Fleet knowledge. Existing Agent-private files are untouched;
+there is no import or data migration. Supervisor stop, disable, reset and remove
+report service-confirmed assignment settlement separately from process state.
+An offline service leaves an explicit, durable unconfirmed settlement receipt.
+
+## Basic and Advanced
+
+Basic has explicit search/proposals and Supervisor review, without automatic
+recall or extraction. Advanced adds bounded automatic work using the same data:
+
+- Eligible history has five ended, unprocessed Generations, 60 seconds idle and
+  no pending Input. Low-volume work becomes eligible after 24 hours; explicit
+  manual maintenance bypasses the volume/wait threshold. It accepts requests
+  during active conversation, but dispatch still waits for the idle window and
+  participation checks. Explicit proposals have priority.
+- Source Agents persist opt-in/out boundaries and offered/accepted cursors.
+  Re-enabling starts at the new boundary. Frozen batches contain at most 100
+  events and 32 KiB of direct dialogue evidence. Unavailable or oversized source
+  commits report errors without advancing progress. Maintenance Threads,
+  injected recall, compaction summaries and tool output are not source facts.
+- One Worker runs per Fleet. Each attempt permits 180 seconds, eight Provider
+  requests, a 16K context and 4096 output tokens per request. Infrastructure
+  failures retry at most twice with backoff. An exhausted or rejected batch is
+  not automatically recreated; manual maintenance can explicitly retry it.
+  Only applied/no-change outcomes
+  advance the covered history cursor. Thread completion alone proves nothing.
+- Workers have only scoped Memory search/read/history/decision tools, including
+  after restoration. They do not share Main's management or general tools.
+- Recall runs once per admitted-input preparation, including mid-Turn inputs,
+  before Provider execution: at most 500 ms, eight entries and 4096 bytes.
+  Passive context inspection and tool iterations reuse the frozen snapshot.
+  New preparation clears stale recall; service failures remain observable and
+  do not fail ordinary conversation. Explicit tools still report errors.
+
+Structured facts use explicit entity IDs, typed values/relations, direct sources,
+recorded/effective times and valid/superseded/disputed status. Current queries
+exclude superseded/disputed facts; time queries preserve supported history.
+Names do not establish identity. MBTI requires dated self-report; birthday-derived
+labels are marked derived. Basic retains structured data across strategy changes.

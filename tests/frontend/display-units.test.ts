@@ -41,13 +41,13 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
         {
           type: "tool_use",
           tool_use_id: "tool-1",
-          tool_name: "memory_write",
+          tool_name: "memory_propose",
           input: { key: "a" },
         },
         {
           type: "tool_use",
           tool_use_id: "tool-2",
-          tool_name: "memory_write",
+          tool_name: "memory_propose",
           input: { key: "b" },
         },
         {
@@ -72,7 +72,7 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
   const groups = messagesToGroups(messages, [
     {
       tool_use_id: "tool-1",
-      name: "memory_write",
+      name: "memory_propose",
       state: "errored",
       started_at: "",
       updated_at: "",
@@ -92,8 +92,8 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
       tool.state,
     ]),
     [
-      ["tool-1", "memory_write", "first", "errored"],
-      ["tool-2", "memory_write", "second", undefined],
+      ["tool-1", "memory_propose", "first", "errored"],
+      ["tool-2", "memory_propose", "second", undefined],
       ["tool-3", "update_task", "third", undefined],
     ],
   );

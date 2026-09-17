@@ -70,6 +70,15 @@ func LoadHomeFleetConfigForHome(inventory ModuleInventory, home string) (cfg Fle
 			return cfg, err
 		}
 	}
+	if cfg.Services == nil {
+		cfg.Services = map[string]services.Definition{}
+	}
+	if _, ok := cfg.Services["memory"]; !ok {
+		cfg.Services["memory"] = services.Definition{Mode: services.Managed, Enabled: true}
+	}
+	if err := validateServiceDefinitions(cfg.Services); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -431,6 +440,24 @@ func writeFleetConfigDocument(path string, doc *yaml.Node) error {
 
 func validateServiceDefinitions(definitions map[string]services.Definition) error {
 	for id, definition := range definitions {
+		if id == "memory" && definition.Mode != services.External {
+			if definition.Mode == "" {
+				definition.Mode = services.Managed
+			}
+			if len(definition.Command) == 0 {
+				executable, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				definition.Command = []string{executable, "memory", "serve"}
+			}
+			for key, value := range definition.Config {
+				if key != "strategy" || (value != "basic" && value != "advanced") {
+					return fmt.Errorf("fleet.services.memory: expected strategy basic or advanced")
+				}
+			}
+			definitions[id] = definition
+		}
 		if err := serviceendpoint.ValidateID(id); err != nil {
 			return err
 		}

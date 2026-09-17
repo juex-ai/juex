@@ -47,6 +47,7 @@ const (
 	ToolGroupMemory       ToolGroup = "memory"
 	ToolGroupWorkerThread ToolGroup = "worker_thread"
 	ToolGroupObservable   ToolGroup = "observable"
+	ToolGroupFleet        ToolGroup = "fleet"
 	ToolGroupMCP          ToolGroup = "mcp"
 )
 

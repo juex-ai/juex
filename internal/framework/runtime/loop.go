@@ -915,6 +915,9 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 		return preparedTurnContext{}, err
 	}
 	userMsg = policyMessage
+	if err := e.prepareAdmittedInput(ctx, turnID, "", original); err != nil {
+		return preparedTurnContext{}, e.persistAcceptedInputAfterPreparationFailureLocked(turnID, userMsg, err)
+	}
 
 	prepared := preparedTurnContext{
 		tools:  e.Tools.Specs(),
@@ -2136,6 +2139,9 @@ func (e *Engine) prependPendingInput(pending []queuedPendingInput) {
 
 func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID string, record PendingInputRecord) error {
 	original := record.Message
+	if err := e.prepareAdmittedInput(ctx, turnID, record.ID, original); err != nil {
+		return err
+	}
 	policyMessage, err := runtimemodule.ApplyTurnInputPolicies(ctx, runtimemodule.TurnInputRequest{
 		Runtime:  e.policyRuntimeContext(),
 		Thread:   e.policyThreadContext(),
@@ -2306,6 +2312,9 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 		msg = projected
 		if err := e.emitProjectionApplied(turnID, projection); err != nil {
 			return fmt.Errorf("commit pending input projection: %w", err)
+		}
+		if err := e.prepareAdmittedInput(ctx, turnID, item.RecordID, item.Message); err != nil {
+			return err
 		}
 		if _, err := e.appendInputMessage(msg); err != nil {
 			return fmt.Errorf("thread append pending input: %w", err)

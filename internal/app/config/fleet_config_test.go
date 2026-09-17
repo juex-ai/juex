@@ -435,8 +435,8 @@ func TestFleetServicesBelongOnlyToOwningHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Services) != 0 {
-		t.Fatalf("default Home services leaked: %+v", got.Services)
+	if len(got.Services) != 1 || !got.Services["memory"].Enabled || got.Services["memory"].Mode != "managed" {
+		t.Fatalf("owning Home should receive only its built-in Memory: %+v", got.Services)
 	}
 	writeTextFile(t, filepath.Join(home, "juex.yaml"), "fleet:\n  services:\n    memory:\n      mode: managed\n      enabled: true\n      command: [memory-service]\n")
 	got, err = LoadHomeFleetConfig(testModuleInventory())

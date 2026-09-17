@@ -205,7 +205,7 @@ workspace Agents. Thread commands operate through the selected Agent Runtime.`,
 		cmd.AddCommand(commands...)
 	}
 	addGrouped(resourceCommandGroupID, newAgentCmd(), newThreadCmd())
-	addGrouped(adminCommandGroupID, newFleetCmd(nil), newConfigCmd(), newDiagnoseCmd(), newListenCmd(&persistentFlags{}))
+	addGrouped(adminCommandGroupID, newFleetCmd(nil), newMemoryCmd(), newConfigCmd(), newDiagnoseCmd(), newListenCmd(&persistentFlags{}))
 	addGrouped(cliCommandGroupID, newVersionCmd(nil))
 	cmd.InitDefaultHelpCmd()
 	cmd.InitDefaultCompletionCmd()

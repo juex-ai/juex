@@ -440,6 +440,7 @@ func runtimeToolsStatusFromDefinitions(definitions []toolcore.ToolDefinition, de
 		toolcore.ToolGroupMemory,
 		toolcore.ToolGroupWorkerThread,
 		toolcore.ToolGroupObservable,
+		toolcore.ToolGroupFleet,
 	}
 	groups := make([]RuntimeToolGroupStatus, len(groupOrder))
 	groupIndexes := make(map[toolcore.ToolGroup]int, len(groupOrder))

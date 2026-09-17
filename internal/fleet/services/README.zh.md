@@ -8,7 +8,8 @@ Fleet 管理服务进程与发现，Feature 拥有业务 API 和存储，App 负
 只有所属 `JUEX_HOME/juex.yaml` 及其 imports 定义 `fleet.services`。
 自定义 Home 不继承默认 Home 的服务定义，Workspace 和 Agent 层不能定义
 Fleet 设置。重启 Fleet 管理以加载定义，再重启受影响服务以应用 command
-或不透明 `config`。不隐式启用任何实现。
+或不透明 `config`。App 默认提供 managed Basic Memory，可显式设置
+`fleet.services.memory.enabled: false` 关闭；其他服务需要显式定义。
 
 ```yaml
 fleet:
@@ -24,7 +25,7 @@ fleet:
 调用 `services.Acquire`，持有至优雅结算结束；恢复存储、打开监听器，
 将业务 RPC 与 `serviceendpoint.ControlServer` 一起注册，再通过
 `Lease.Ready` 写入候选记录。Fleet 在启动环境中传递 Home/Fleet/服务/实例。
-Memory 业务组装单独交付。
+[Memory](../../features/memory/README.zh.md) 基于此契约组装独立业务服务。
 
 使用 `juex fleet services list`、`status`、`start`、`stop`、`restart`、`logs`。
 除日志外输出 JSON；HTTP 在 `/api/services` 提供对应操作。管理启动不等待

@@ -61,7 +61,6 @@ body`)
 		t.Fatalf("mcp = %+v", got.MCP)
 	}
 	wantModules := []runtimeModuleInfo{
-		{ID: "memory", Scope: "runtime"},
 		{ID: "basic-file-tools", Scope: "runtime"},
 		{ID: "apply-patch", Scope: "runtime"},
 		{ID: "file-search", Scope: "runtime"},
@@ -71,6 +70,8 @@ body`)
 		{ID: "mcp", Scope: "runtime"},
 		{ID: "observables", Scope: "runtime"},
 		{ID: "worker-threads", Scope: "runtime"},
+		{ID: "memory", Scope: "runtime"},
+		{ID: "memory", Scope: "thread"},
 		{ID: "input-tracking", Scope: "thread"},
 		{ID: "chunked-write", Scope: "thread"},
 		{ID: "context-control", Scope: "thread"},
@@ -86,7 +87,7 @@ body`)
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Type != "stdio" || got.MCP.Servers[0].URL != "" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
-	if got.Tools.Count != 38 || len(got.Tools.Groups) != 9 {
+	if got.Tools.Count != 41 || len(got.Tools.Groups) != 10 {
 		t.Fatalf("tools = %+v", got.Tools)
 	}
 	var observableToolNames []string
@@ -701,11 +702,11 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 		path   string
 		text   string
 	}{
-		{label: "Memory", source: "memory", path: "", text: "memory_search"},
 		{label: "Shell", source: "runtime", path: "", text: "exec_command"},
 		{label: "Global AGENTS.md", source: "user", path: filepath.Join(homeAgents, "AGENTS.md"), text: "global runtime rule"},
 		{label: "Workspace AGENTS.md", source: "project", path: filepath.Join(work, "AGENTS.md"), text: "workspace root rule"},
 		{label: ".agents/AGENTS.md", source: "project", path: filepath.Join(work, ".agents", "AGENTS.md"), text: "workspace agents rule"},
+		{label: "Memory", source: "memory", path: "", text: "memory_search"},
 		{label: "input-checklist", source: "runtime", path: "", text: "Input checklist"},
 		{label: "Context Window", source: "runtime", path: "", text: "Context window"},
 		{label: "Operating Context", source: "runtime", path: "", text: "Operating Context"},
@@ -885,7 +886,7 @@ body`)
 	if len(got.SystemPrompt.Items) != 8 {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
-	if got.SystemPrompt.Items[2].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[2].Text, "global runtime rule") {
+	if got.SystemPrompt.Items[1].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[1].Text, "global runtime rule") {
 		t.Fatalf("system prompt should skip global AGENTS.md and keep project entry: %+v", got.SystemPrompt.Items)
 	}
 	for _, item := range got.SystemPrompt.Items {

@@ -10,7 +10,9 @@ Only the owning `JUEX_HOME/juex.yaml` and its imports define `fleet.services`.
 A custom Home never inherits default-Home service definitions. Workspace and
 Agent layers cannot define Fleet settings. Restart Fleet management to reload
 definitions, then restart an affected service to apply its command or opaque
-`config`. No implementation is implicitly enabled.
+`config`. App provides managed Basic Memory by default; an explicit
+`fleet.services.memory.enabled: false` disables it. Other services require explicit
+definitions.
 
 ```yaml
 fleet:
@@ -27,7 +29,8 @@ App acquires `services.Acquire` before opening business storage and holds it
 through graceful drain. It recovers storage, opens the listener, registers
 business RPC alongside `serviceendpoint.ControlServer`, then writes the
 candidate through `Lease.Ready`. Fleet passes Home/Fleet/service/instance in
-the launch environment. Memory business composition is delivered separately.
+the launch environment. [Memory](../../features/memory/README.md) composes its independent business service
+on this contract.
 
 Use `juex fleet services list`, `status`, `start`, `stop`, `restart` and `logs`.
 Commands emit JSON except logs; HTTP exposes the same operations under

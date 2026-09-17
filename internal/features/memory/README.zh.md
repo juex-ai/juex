@@ -1,54 +1,92 @@
-# Memory
+# Fleet Memory
 
 > [English](README.md) | 中文
 
-Memory 拥有 Agent 状态目录下 `modules/memory/` 中的持久知识。Main 与 Worker
-Thread 共享该目录，不同 Agent 相互隔离。`standard` 启用 Memory，`minimal`
-关闭它；可用 `modules.memory.enabled` 显式覆盖预设。关闭 Extensions、MCP、
-Skills 与 Hooks 后，Memory 仍可运行，并提供自身的简短使用指导。
-App 会先解析嵌入式调用的相对路径，再注入绝对的 Agent 存储作用域。
+Memory 是 Fleet 拥有的独立服务。Agent Module 通过类型化 Kitex 客户端直连。
+服务拥有知识、任务回执和提交恢复；Supervisor 在普通的受限 Worker 中执行模型
+审阅。Fleet 只管理服务进程和发现。Supervisor 离线时仍可读取，已有连接也不依赖
+Fleet Web 进程。standard 默认启用 Agent 参与，minimal 默认关闭。
 
-条目 Markdown 文件是权威数据。YAML frontmatter 包含名称、单行描述、类型
-（`user`、`feedback`、`project` 或 `reference`）、创建时间和更新时间。名称拼写完全一致的写入
-保留创建时间。所有平台的写入和删除都会拒绝与已有名称仅大小写不同的拼写，不会自动重命名或合并条目。
-所有平台均禁止名称为 `MEMORY` 或 Windows 设备保留名，包括设备名
-后接点号与后缀的情况。检索在元数据和正文中进行字面子串匹配，使用 Unicode 简单大小写
-折叠，不将 `ß` 等字符展开为 `ss`。格式错误或不可读的单个条目会被跳过；目录
-读取失败则作为操作错误返回。存储边界要求真实目录和普通条目文件，拒绝符号链接。
+## 配置与使用
 
-所有操作通过同一个稳定的文件系统事务锁协调。不同 Module 实例直接读取共享文件，
-不维护缓存。锁等待响应取消，使用后保留锁文件。条目先原子发布，再重建派生的
-`MEMORY.md` 索引。后续索引或持久化维护失败会明确报告条目已保存或已删除，不会
-回滚权威知识。Thread 启动和成功压缩后，通过普通 Module 策略重建索引。维护失败
-可观察但不阻断流程；取消和策略检查点失败仍向上传递。
+Fleet 默认启动 managed Basic Memory。在所属 Home 的 `juex.yaml` 中显式选择
+Advanced：
 
-构造、工具目录和指导文本不进行 Memory 文件操作。关闭后不提供工具、指导或维护。
-知识在 `/new`、关闭进程、关闭和移除 Module 后保留；仅显式 `memory_delete`
-删除条目。提示指导不会注入索引或全部条目正文。Memory 不自动提炼知识，不提供
-旧工具别名或数据迁移。
+```yaml
+fleet:
+  services:
+    memory:
+      config:
+        strategy: advanced
+```
 
-## 从已退役的 Memory Extension 切换
+Agent 的 `modules.memory.enabled` 控制是否参与；`service` 选择 Fleet 服务身份；
+`profile` 为 `agent` 或 `supervisor`，Supervisor 角色默认使用对应 profile。
+这些是可信启动配置提供的能力，不是完整身份认证，模型工具参数不能修改它们。
 
-`juex-extensions` 仓库不再分发 Memory bundle。安装器保留已有安装和 Agent 私有
-数据。逐个 Agent 切换，并保留旧安装和知识作为备份。
+CLI 命令通过 `--service <identity>` 选择 Fleet 服务，默认 `memory`。Agent 使用
+其他服务时，将此参数设为该 Agent 的 `modules.memory.service` 值；CLI 管理操作
+不会推断 Agent 上下文。
 
-1. 用 `juex agent list` 确认已注册的 Agent，再执行
-   `juex agent stop --agent <agent-id>` 停止它。运行
-   `juex agent config --agent <agent-id>` 定位其稀疏配置文件。
-2. 编辑该配置，使最终生效的 `extensions.allow` 列表移除 `memory`，同时保留所有
-   需要的其他 Extension。设置 `modules.memory.enabled: true`。若另行配置过旧
-   Memory MCP、Skill 或 Hooks 的副本，也一并移除。配置和文件复制完成前保持
-   Agent 停止，避免两个 Memory 提供者同时运行。
-3. 只把需要保留且兼容的 UTF-8 Markdown 条目从
-   `$JUEX_HOME/agents/<agent-id>/extensions/memory/` 复制到
-   `$JUEX_HOME/agents/<agent-id>/modules/memory/`，必要时先创建目标目录。保留条目
-   的 frontmatter 与正文；文件名主体必须等于 `name`，元数据和名称须满足当前工具
-   schema。不要复制 `MEMORY.md`、锁、临时文件或符号链接。检查目标已有名称及其
-   大小写变体，冲突时人工合并知识，不直接覆盖；原文件保持不动。
-4. 执行 `juex agent start --agent <agent-id>`，再打开 Main 或发送一次请求激活
-   Thread。Thread 启动会从已复制条目重建新索引。让 Agent 使用 `memory_search`
-   查询一条已知事实，并在 Runtime 中确认三个内置 Memory 工具和预期的其他
-   Extension。索引维护错误可观察，需要检查；Agent 正在运行不代表复制已成功。
+`juex fleet services status memory` 查看生命周期，`juex memory status` 查看业务
+就绪状态。Agent 可搜索预览、读取条目、提交显式提案、查询回执、读取允许的保留
+证据。接纳仅表示已提交；只有 committed 回执表示知识已改变。必要指引内置，关闭
+Skills、Hooks、MCP 和 Extensions 后仍可使用。
+搜索预览不携带完整来源，读取条目可获取来源。维护任务只能修改或删除与其
+Workspace/Project 范围完全一致的条目。可见但范围更广的知识仅作为该任务的只读
+上下文；可信用户可通过管理操作明确修改更广范围的知识。
 
-`JUEX_HOME` 默认为 `~/.juex`。这是操作者执行的流程；安装或升级 Juex 不会自动复制、
-转换或删除旧知识。
+可信用户修正、删除、禁止存储区间与显式重新学习使用
+`juex memory admin --file request.json`。例如：
+
+```json
+{"key":"forget-release-v1","action":"delete","entry_ids":["release-convention"]}
+```
+
+精确字段以请求/响应类型和工具 schema 为准。管理操作隔离旧任务。删除移除 Memory
+拥有的知识及投影，清除匹配的保留提案/证据正文，并禁止从这些来源重新提取。
+no-store 同时移除包含该来源的条目，保留无关条目。两种操作均不擦除原始 Thread
+历史、Supervisor 历史、已投递上下文或外部副本。
+
+## 权威与恢复
+
+`$JUEX_HOME/services/memory/memory/<id>.md` 是权威条目，使用 JSON frontmatter
+（YAML 的子集）。稳定 ID、正文、scope、来源/时间及结构化事实属于知识版本。
+`state/` 保存持久请求、租约、回执、源进度、禁止学习约束和提交 intent。
+生成的 `MEMORY.md` 最多包含 200 个热条目。搜索/实体投影从 Markdown 在内存中
+重建，无需数据库。
+
+一个服务持有写入租约。提交 intent 先于条目更改与回执持久化；恢复完成后读者
+才能看到结果。预期版本和任务凭据拒绝过期写入。索引失败与知识提交分别报告。
+搜索仍覆盖冷条目；只有成功的显式正文读取提高热度，预览、维护、recall 和重建
+均不提高热度。recall 使用情况单独记录。
+
+停止/重启服务保留数据和已接纳任务。关闭单个 Agent 保留 Fleet 知识。已有 Agent
+私有文件保持原样，不导入、不迁移。Supervisor 的 stop、disable、reset、remove
+分别报告进程结果与服务确认的任务回收。服务离线时明确持久记录“回收未确认”。
+
+## Basic 与 Advanced
+
+Basic 支持显式搜索/提案及 Supervisor 审阅，不自动 recall 或提取。Advanced
+使用相同数据并增加有界自动工作：
+
+- 历史需有五个已结束且未处理的 Generation，空闲 60 秒且没有 pending Input。
+  少量历史等待 24 小时后可处理；显式手动维护跳过数量/等待门槛，可以在对话运行时
+  接收请求，但派发仍等待空闲窗口并检查参与状态。显式提案优先。
+- 源 Agent 持久记录参与/退出边界以及拟提交/已接纳游标。重新启用从新边界开始。
+  冻结批次最多 100 个事件、32 KiB 原始对话证据。不可用或超限的源提交报错且
+  不推进进度。维护 Thread、注入 recall、压缩摘要和工具输出不作为独立事实。
+- 每个 Fleet 同时运行一个 Worker。每次 attempt 最多 180 秒、八次 Provider
+  请求、16K 上下文、每次请求 4096 输出 token。基础设施失败最多退避重试两次。
+  耗尽重试或被拒绝的批次不会自动重建；手动维护可以显式重试。
+  只有 applied/no_change 推进已覆盖历史游标，Thread 完成不能证明业务完成。
+- Worker 只有受限 Memory 搜索/读取/历史/决策工具，恢复后也保持此边界，不获得
+  Main 的管理或通用工具。
+- recall 在每个已接纳输入的准备边界运行一次，包括 Turn 中途输入，先于 Provider
+  执行；最多 500 毫秒、八个条目、4096 字节。被动上下文检查及工具迭代复用冻结
+  快照。新准备清除旧 recall；服务失败可观察且不使普通对话失败，显式工具仍报错。
+
+结构化事实使用显式实体 ID、类型化值/关系、直接来源、记录/生效时间和
+valid/superseded/disputed 状态。当前查询排除被取代和争议事实；时间查询保留有
+证据支持的历史。姓名不能确定身份。MBTI 必须是带时间的自述，生日派生标签标为
+derived。策略切换后 Basic 仍保留结构化数据。
