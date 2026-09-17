@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"testing"
@@ -59,6 +60,25 @@ func TestTypedMemoryRPCIdentityProfilesAndReceipts(t *testing.T) {
 	got, err := client.Result(ctx, a, r.ID)
 	if err != nil || !got.Committed {
 		t.Fatalf("receipt %+v %v", got, err)
+	}
+	for i := 0; i < 50; i++ {
+		e := entry(fmt.Sprintf("provenance-%02d", i))
+		e.Sources = make([]mc.Source, 100)
+		for j := range e.Sources {
+			e.Sources[j] = testSource()
+			e.Sources[j].From, e.Sources[j].Through = uint64(j+1), uint64(j+1)
+		}
+		if _, err := s.Admin(ctx, user, mc.AdminRequest{Key: e.ID, Action: "correct", Changes: []mc.Change{{Entry: e}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := client.Search(ctx, a, mc.Query{Text: "provenance", Limit: 50})
+	if err != nil || len(page.Entries) != 50 || page.Next != -1 {
+		t.Fatalf("large provenance search: entries=%d next=%d err=%v", len(page.Entries), page.Next, err)
+	}
+	full, err := client.Read(ctx, a, mc.ReadRequest{ID: page.Entries[0].ID})
+	if err != nil || len(full.Sources) != 100 {
+		t.Fatalf("full provenance read: sources=%d err=%v", len(full.Sources), err)
 	}
 	resolver.record.InstanceID = "stale"
 	stale := mc.New(resolver, "memory", a)

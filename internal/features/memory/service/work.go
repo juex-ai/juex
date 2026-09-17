@@ -358,8 +358,13 @@ func (s *Store) changes(c mc.Caller, changes []mc.Change, allowed []mc.Source) (
 		if old.Revision != ch.ExpectedRevision {
 			return nil, nil, fmt.Errorf("memory revision conflict: %s", e.ID)
 		}
-		if c.Profile != mc.ProfileUser && ((exists && !visible(old.Scope, s.effectiveScope(c))) || !visible(e.Scope, s.effectiveScope(c))) {
-			return nil, nil, errors.New("change outside assignment scope")
+		if c.Profile != mc.ProfileUser {
+			// Read visibility includes broader knowledge; an assignment may only
+			// change knowledge in its own scope, including when deleting by ID.
+			scope := s.effectiveScope(c)
+			if (exists && old.Scope != scope) || (!ch.Delete && e.Scope != scope) {
+				return nil, nil, errors.New("change outside assignment scope")
+			}
 		}
 		if ch.Delete {
 			if !exists {

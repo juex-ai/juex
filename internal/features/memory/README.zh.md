@@ -32,6 +32,9 @@ CLI 命令通过 `--service <identity>` 选择 Fleet 服务，默认 `memory`。
 就绪状态。Agent 可搜索预览、读取条目、提交显式提案、查询回执、读取允许的保留
 证据。接纳仅表示已提交；只有 committed 回执表示知识已改变。必要指引内置，关闭
 Skills、Hooks、MCP 和 Extensions 后仍可使用。
+搜索预览不携带完整来源，读取条目可获取来源。维护任务只能修改或删除与其
+Workspace/Project 范围完全一致的条目。可见但范围更广的知识仅作为该任务的只读
+上下文；可信用户可通过管理操作明确修改更广范围的知识。
 
 可信用户修正、删除、禁止存储区间与显式重新学习使用
 `juex memory admin --file request.json`。例如：

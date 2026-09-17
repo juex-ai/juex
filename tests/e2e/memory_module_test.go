@@ -89,10 +89,19 @@ type memoryReviewProvider struct {
 func (*memoryReviewProvider) Name() string { return "memory-review-fixture" }
 func (p *memoryReviewProvider) Complete(ctx context.Context, _ string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
 	var proposal mc.Proposal
+	var scope mc.Scope
 	assigned := false
 	for _, m := range history {
 		if _, payload, ok := strings.Cut(m.FirstText(), "Proposal JSON:\n"); ok {
 			if err := json.Unmarshal([]byte(payload), &proposal); err != nil {
+				return llm.Response{}, err
+			}
+			_, scopeText, ok := strings.Cut(m.FirstText(), "Assignment scope JSON:\n")
+			if !ok {
+				return llm.Response{}, errors.New("assignment scope missing")
+			}
+			scopeText, _, _ = strings.Cut(scopeText, "\n\nProposal JSON:")
+			if err := json.Unmarshal([]byte(scopeText), &scope); err != nil {
 				return llm.Response{}, err
 			}
 			assigned = true
@@ -126,7 +135,7 @@ func (p *memoryReviewProvider) Complete(ctx context.Context, _ string, history [
 	case <-ctx.Done():
 		return llm.Response{}, ctx.Err()
 	}
-	decision := mc.Decision{Outcome: "applied", Reason: "Explicit stable user preference", Changes: []mc.Change{{Entry: mc.Entry{ID: "release-convention", Name: "Release convention", Summary: "Release on Tuesday", Type: "user", Body: proposal.Text, Sources: proposal.Sources}}}}
+	decision := mc.Decision{Outcome: "applied", Reason: "Explicit stable user preference", Changes: []mc.Change{{Entry: mc.Entry{ID: "release-convention", Name: "Release convention", Summary: "Release on Tuesday", Type: "user", Body: proposal.Text, Sources: proposal.Sources, Scope: scope}}}}
 	data, _ := json.Marshal(decision)
 	var input map[string]any
 	_ = json.Unmarshal(data, &input)
@@ -190,7 +199,9 @@ func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	b := memoryApp(t, memoryAgentConfig(t, home, "agent-b"), &bareScriptProvider{})
+	cfgB := memoryAgentConfig(t, home, "agent-b")
+	cfgB.WorkDir = cfgA.WorkDir
+	b := memoryApp(t, cfgB, &bareScriptProvider{})
 	read, ok := b.Engine.Tools.Get(memory.ToolRead)
 	if !ok {
 		t.Fatal("Memory read unavailable")
@@ -198,6 +209,11 @@ func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
 	result, err := read.Handler(t.Context(), map[string]any{"id": "release-convention"})
 	if err != nil || !strings.Contains(result, "We release on Tuesday") {
 		t.Fatalf("cross-Agent read %q %v", result, err)
+	}
+	unrelated := memoryApp(t, memoryAgentConfig(t, home, "unrelated"), &bareScriptProvider{})
+	unrelatedRead, _ := unrelated.Engine.Tools.Get(memory.ToolRead)
+	if _, err := unrelatedRead.Handler(t.Context(), map[string]any{"id": "release-convention"}); err == nil {
+		t.Fatal("unrelated workspace read assignment knowledge")
 	}
 	// Reopening a Worker retains the actual execution capability boundary.
 	workers, err := supervisor.ThreadStore.List()

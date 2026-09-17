@@ -440,6 +440,7 @@ func (s *Store) search(c mc.Caller, q mc.Query, body bool) (mc.Page, error) {
 		e := clone(matches[i].e)
 		if !body {
 			e.Body = ""
+			e.Sources = nil
 			e.Entities = nil
 			e.Facts = nil
 		}

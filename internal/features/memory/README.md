@@ -36,6 +36,10 @@ for business readiness. Agents search previews, read entries, submit explicit
 proposals, inspect receipts and read permitted retained evidence. Acceptance
 means submitted; only a committed receipt means knowledge changed. Necessary
 guidance is built in and works with Skills, Hooks, MCP and Extensions disabled.
+Search previews omit full provenance; read the entry for its sources. Maintenance
+assignments may change or delete only entries in their exact workspace/project
+scope. Broader visible knowledge is read-only context for that assignment;
+trusted user administration can explicitly change broader knowledge.
 
 Trusted user corrections, deletions, no-store intervals and explicit relearning
 use `juex memory admin --file request.json`. For example:
