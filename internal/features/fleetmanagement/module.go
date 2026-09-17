@@ -37,7 +37,7 @@ func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.T
 	id := text("Target Agent ID. Self mutation is prohibited.")
 	interrupt := boolean("Only true when the user explicitly requests interrupting active work. Default false defers busy operations.")
 	definition := func(name, description string, properties map[string]any, required []string, run func(context.Context, map[string]any) (any, error)) toolcore.Tool {
-		return (toolcore.ToolDefinition{Name: name, Description: description, ExecutionPolicy: toolcore.ToolExecutionSerial, Schema: map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}}).Bind(func(ctx context.Context, input map[string]any) (string, error) {
+		return (toolcore.ToolDefinition{Name: name, Group: toolcore.ToolGroupFleet, Description: description, ExecutionPolicy: toolcore.ToolExecutionSerial, Schema: map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}}).Bind(func(ctx context.Context, input map[string]any) (string, error) {
 			if m.client == nil {
 				return "", fmt.Errorf("fleet client unavailable")
 			}

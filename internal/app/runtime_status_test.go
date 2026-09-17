@@ -131,6 +131,7 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		toolcore.ToolGroupMemory,
 		toolcore.ToolGroupWorkerThread,
 		toolcore.ToolGroupObservable,
+		toolcore.ToolGroupFleet,
 	}
 	if len(status.Tools.Groups) != len(wantGroups) {
 		t.Fatalf("tool groups = %#v, want %v", status.Tools.Groups, wantGroups)

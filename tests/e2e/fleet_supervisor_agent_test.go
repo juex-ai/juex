@@ -189,6 +189,27 @@ func TestSupervisorSupportUsesMainToolsWithOrdinaryRuntime(t *testing.T) {
 	address, _ := agentstate.NewAgentAddress(home, supervisor.Agent.ID)
 	defer shutdownFleetAgent(t, address)
 	runtimeState := waitFleetRuntime(t, address)
+	var catalog struct {
+		Tools struct {
+			Groups []struct {
+				Group string `json:"group"`
+				Tools []struct {
+					Name string `json:"name"`
+				} `json:"tools"`
+			} `json:"groups"`
+		} `json:"tools"`
+	}
+	fleetWebJSON(t, &http.Client{Timeout: 10 * time.Second}, http.MethodGet, baseURL+"/agents/"+supervisor.Agent.ID+"/api/runtime", "", 200, &catalog)
+	foundFleet, foundMemory := false, false
+	for _, group := range catalog.Tools.Groups {
+		for _, tool := range group.Tools {
+			foundFleet = foundFleet || (group.Group == "fleet" && tool.Name == "fleet_agents")
+			foundMemory = foundMemory || (group.Group == "memory" && tool.Name == "memory_propose")
+		}
+	}
+	if !foundFleet || !foundMemory {
+		t.Fatalf("Supervisor catalog missing Fleet or Memory tools: %+v", catalog)
+	}
 	startFleetBlockingTurn(t, runtimeState)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
