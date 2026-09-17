@@ -422,3 +422,37 @@ func TestValidateStableFleetAddr(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFleetServicesBelongOnlyToOwningHome(t *testing.T) {
+	user := t.TempDir()
+	t.Setenv("HOME", user)
+	t.Setenv("USERPROFILE", user)
+	shared := filepath.Join(user, ".juex")
+	writeTextFile(t, filepath.Join(shared, "juex.yaml"), "fleet:\n  services:\n    other:\n      mode: managed\n      enabled: true\n      command: [other-service]\n")
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	got, err := LoadHomeFleetConfig(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 0 {
+		t.Fatalf("default Home services leaked: %+v", got.Services)
+	}
+	writeTextFile(t, filepath.Join(home, "juex.yaml"), "fleet:\n  services:\n    memory:\n      mode: managed\n      enabled: true\n      command: [memory-service]\n")
+	got, err = LoadHomeFleetConfig(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 1 || !got.Services["memory"].Enabled {
+		t.Fatalf("services: %+v", got.Services)
+	}
+	cfg := Config{ModuleInventory: testModuleInventory(), HomeJuexDir: home}
+	err = applyYAMLData(&cfg, []byte("fleet:\n  services: {}\n"), yamlConfigSource{Path: "workspace", Scope: configScopeWorkspace})
+	if err == nil {
+		t.Fatal("Workspace services accepted")
+	}
+	err = applyYAMLData(&cfg, []byte("fleet:\n  services: {}\n"), yamlConfigSource{Path: "agent", Scope: configScopeAgent})
+	if err == nil {
+		t.Fatal("Agent services accepted")
+	}
+}

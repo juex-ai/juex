@@ -9,6 +9,8 @@ storage implementation belong in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Owner | Responsibility |
 | --- | --- |
+| Fleet | One Home-scoped owner of Agents and independent services; management process lifetime is separate from managed process lifetime. |
+| Independent Service | Its business state, storage recovery, typed API and writer lease; Fleet owns process intent and verified discovery. |
 | Workspace | User-authored project files, workspace configuration, Skills, and Hooks. |
 | Agent | Long-lived identity, Workspace ownership, configuration overlay, rebuildable Thread list index, active and archived Threads, media, logs, durable Memory, Observable definitions and state, and Extension state. |
 | Thread | Identity, topology, lifecycle, Context Generation registry, pending Inputs, Turns, messages, Events, Usage, and spool. |

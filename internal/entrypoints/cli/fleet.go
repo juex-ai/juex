@@ -42,6 +42,7 @@ func newFleetCmd(flags *persistentFlags) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newFleetServeCmd(flags))
+	cmd.AddCommand(newFleetServicesCmd())
 	cmd.AddCommand(newFleetStatusCmd(flags))
 	cmd.AddCommand(newFleetGCCmd(flags))
 	cmd.AddCommand(newFleetInstallCmd(flags))
@@ -116,8 +117,20 @@ func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
 				return mapFleetError(<-supervisorErr)
 			}
 
+			home, err := config.EffectiveHomeDir()
+			if err != nil {
+				return err
+			}
+			services, err := app.NewFleetServices(home)
+			if err != nil {
+				return err
+			}
+			servicesDone := make(chan struct{})
+			go func() { defer close(servicesDone); services.Serve(ctx) }()
+			defer func() { cancel(); <-servicesDone }()
 			server, err := fleetweb.New(fleetweb.Options{
 				Manager:      manager,
+				Services:     services,
 				Addr:         addr,
 				AllowAnyBind: unsafeBindAny,
 				OnReady: func(actual string) {

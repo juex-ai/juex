@@ -1052,6 +1052,9 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 		if !source.allowsFleet() {
 			return fmt.Errorf("config: parse %s: fleet is only supported in default or instance JueX Home config", source.Path)
 		}
+		if err := validateServiceDefinitions(fc.Fleet.Services); err != nil {
+			return err
+		}
 		addr := strings.TrimSpace(fc.Fleet.Addr)
 		if addr != "" {
 			if err := ValidateStableFleetAddr(addr); err != nil {

@@ -29,6 +29,11 @@ Workspace. Agent and Thread commands ask Fleet to ensure that Runtime is
 healthy, then use the same admission and subscription interfaces as Web.
 Only Fleet invokes the hidden single-Agent Runtime entrypoint.
 
+Fleet also manages independent service processes through
+[`fleet/services`](internal/fleet/services/README.md). App loads definitions from
+the owning Home; shared endpoint and typed control helpers live in Foundation.
+Service business APIs bypass Fleet, and Modules retain their process-local scope.
+
 ## Ownership And Dependency Direction
 
 The repository is one Go module. Executable entry points stay in `cmd`; every
@@ -38,7 +43,7 @@ production package under `internal` belongs to one of these seven groups:
 | --- | --- |
 | `internal/app` | Product composition, explicit Module inventory/presets, layered configuration, resource selection, process-shared services, Provider factories, and API/status projections. |
 | `internal/entrypoints` | CLI and Agent/Fleet HTTP adapters, request/SSE lifetimes, wire DTOs, and one shared Web asset handler. |
-| `internal/fleet` | Registered Agent process lifecycle, verified endpoint selection, lifecycle locks, restart continuation, and platform service integration. |
+| `internal/fleet` | Registered Agent and independent service process lifecycles, verified endpoint selection, lifecycle locks, restart continuation, and platform service integration. |
 | `internal/framework` | Agent execution and Worker orchestration, Thread/Generation storage, Module contracts, input admission, recovery, Provider loops, context control, and passive lifecycle operations. |
 | `internal/features` | Concrete Module Tools, context, policy, observation producers, scoped state, and resource implementations. |
 | `internal/providers` | Provider construction, vendor protocols/SDKs, transport adaptation, and Provider profile defaults. |

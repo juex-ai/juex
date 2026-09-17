@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -9,28 +10,36 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/fleet/services"
+	"github.com/juex-ai/juex/internal/foundation/serviceendpoint"
 	"gopkg.in/yaml.v3"
 )
 
 const DefaultFleetAddr = "127.0.0.1:5839"
 
 type FleetConfig struct {
+	Services       map[string]services.Definition
 	Addr           string
 	AddrConfigured bool
 	UnsafeBindAny  bool
 }
 
 type fleetFileConfig struct {
-	Addr          string       `yaml:"addr"`
-	UnsafeBindAny optionalBool `yaml:"unsafe_bind_any"`
+	Services      map[string]services.Definition `yaml:"services"`
+	Addr          string                         `yaml:"addr"`
+	UnsafeBindAny optionalBool                   `yaml:"unsafe_bind_any"`
 }
 
-func LoadHomeFleetConfig(inventory ModuleInventory) (cfg FleetConfig, returnErr error) {
+func LoadHomeFleetConfig(inventory ModuleInventory) (FleetConfig, error) {
+	return LoadHomeFleetConfigForHome(inventory, "")
+}
+
+func LoadHomeFleetConfigForHome(inventory ModuleInventory, home string) (cfg FleetConfig, returnErr error) {
 	if err := inventory.validate(); err != nil {
 		return cfg, err
 	}
 	cfg = FleetConfig{Addr: DefaultFleetAddr}
-	resolution, err := resolveHomeConfigSources("")
+	resolution, err := resolveHomeConfigSources(home)
 	if err != nil {
 		return cfg, err
 	}
@@ -51,7 +60,7 @@ func LoadHomeFleetConfig(inventory ModuleInventory) (cfg FleetConfig, returnErr 
 	}
 	loader.contextDigest = contextDigest
 	for _, source := range resolution.Sources {
-		if err := applyHomeFleetConfig(inventory, &cfg, source, loader); err != nil {
+		if err := applyHomeFleetConfig(inventory, &cfg, source, loader, filepath.Dir(source.Path) == resolution.EffectiveHomeDir); err != nil {
 			return cfg, err
 		}
 	}
@@ -82,7 +91,7 @@ func fleetConfigImportCacheReferences(sources []yamlConfigSource) ([]configImpor
 	return references, nil
 }
 
-func applyHomeFleetConfig(inventory ModuleInventory, cfg *FleetConfig, source yamlConfigSource, loader *configImportLoader) error {
+func applyHomeFleetConfig(inventory ModuleInventory, cfg *FleetConfig, source yamlConfigSource, loader *configImportLoader, owningHome bool) error {
 	_, root, _, err := readFleetConfigDocument(source.Path)
 	if err != nil {
 		return err
@@ -120,11 +129,11 @@ func applyHomeFleetConfig(inventory ModuleInventory, cfg *FleetConfig, source ya
 		if parseErr != nil {
 			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, parseErr)
 		}
-		if err := applyFleetConfigNode(&staged, importedRoot, document.source.Path); err != nil {
+		if err := applyFleetConfigNode(&staged, importedRoot, document.source.Path, owningHome); err != nil {
 			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, err)
 		}
 	}
-	if err := applyFleetConfigNode(&staged, root, source.Path); err != nil {
+	if err := applyFleetConfigNode(&staged, root, source.Path, owningHome); err != nil {
 		return err
 	}
 	// Fleet-only loading may consume an existing runtime LKG, but it cannot
@@ -133,7 +142,7 @@ func applyHomeFleetConfig(inventory ModuleInventory, cfg *FleetConfig, source ya
 	return nil
 }
 
-func applyFleetConfigNode(cfg *FleetConfig, root *yaml.Node, path string) error {
+func applyFleetConfigNode(cfg *FleetConfig, root *yaml.Node, path string, owningHome bool) error {
 	fleetNode := yamlMappingValue(root, "fleet")
 	if fleetNode == nil || fleetNode.Tag == "!!null" {
 		return nil
@@ -150,6 +159,23 @@ func applyFleetConfigNode(cfg *FleetConfig, root *yaml.Node, path string) error 
 		seen[key] = struct{}{}
 		value := fleetNode.Content[i+1]
 		switch key {
+		case "services":
+			var definitions map[string]services.Definition
+			data, err := yaml.Marshal(value)
+			if err != nil {
+				return err
+			}
+			decoder := yaml.NewDecoder(bytes.NewReader(data))
+			decoder.KnownFields(true)
+			if err := decoder.Decode(&definitions); err != nil {
+				return fmt.Errorf("config: %s fleet.services: %w", path, err)
+			}
+			if err := validateServiceDefinitions(definitions); err != nil {
+				return err
+			}
+			if owningHome {
+				cfg.Services = definitions
+			}
 		case "addr":
 			if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
 				return fmt.Errorf("config: parse %s: fleet.addr must be a host:port string", path)
@@ -379,6 +405,18 @@ func writeFleetConfigDocument(path string, doc *yaml.Node) error {
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		return fmt.Errorf("config: chmod home config %s: %w", path, err)
+	}
+	return nil
+}
+
+func validateServiceDefinitions(definitions map[string]services.Definition) error {
+	for id, definition := range definitions {
+		if err := serviceendpoint.ValidateID(id); err != nil {
+			return err
+		}
+		if err := definition.Validate(); err != nil {
+			return fmt.Errorf("fleet.services.%s: %w", id, err)
+		}
 	}
 	return nil
 }

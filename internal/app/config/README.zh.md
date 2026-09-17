@@ -71,3 +71,6 @@ WebSocket 展开后的握手 Header 变化时会重新连接。
 `${HOME}` 等其他占位符保持字面值，不读取环境变量。未知或未闭合的 JueX
 占位符会在配置校验时报错。请求缺少被引用的身份时，在网络发送前报错，
 指出 Provider/Model、Header 和变量名，不输出 Header 的值。
+
+独立服务定义只属于所属 Home 及其 imports，不从默认 Home 继承到自定义实例。
+生命周期契约见 [Fleet 服务](../../fleet/services/README.zh.md)。

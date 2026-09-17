@@ -93,3 +93,7 @@ other placeholders such as `${HOME}` remain literal and do not read environment
 variables. Unknown or unclosed JueX placeholders fail configuration validation.
 A referenced identity missing from a request fails before network I/O, naming
 the provider/model, header and variable without printing the header value.
+
+Independent service definitions belong only to the owning Home and its imports,
+not a default Home inherited by a custom instance. See
+[Fleet services](../../fleet/services/README.md) for their lifecycle contract.

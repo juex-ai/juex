@@ -25,6 +25,7 @@ import (
 
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/fleet/services"
 	"github.com/juex-ai/juex/internal/foundation/processmetrics"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -36,6 +37,7 @@ const (
 )
 
 type Options struct {
+	Services       *services.Manager
 	Manager        *fleet.Manager
 	Addr           string
 	AllowAnyBind   bool
@@ -70,6 +72,7 @@ type cachedReadOnlyAgentHandler struct {
 }
 
 type Server struct {
+	services        serviceBackend
 	manager         backend
 	addr            string
 	allowAnyBind    bool
@@ -111,6 +114,9 @@ func newServer(manager backend, opts Options) *Server {
 		processMetrics:  processMetricProvider,
 		readOnlyAgents:  make(map[string]cachedReadOnlyAgentHandler),
 	}
+	if opts.Services != nil {
+		server.services = opts.Services
+	}
 	server.fleetStatus = newFleetStatusHub(manager, activityClients, processMetricProvider)
 	return server
 }
@@ -119,6 +125,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/api/agents", s.handleAgents)
+	mux.HandleFunc("/api/services", s.handleServices)
+	mux.HandleFunc("/api/services/", s.handleServices)
 	mux.HandleFunc("/api/agents/", s.dispatchAgentAPI)
 	mux.HandleFunc("/api/fleet/status", s.handleFleetStatus)
 	mux.HandleFunc("/api/fleet/events", s.handleFleetEvents)

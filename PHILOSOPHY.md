@@ -58,8 +58,9 @@ to test and explain.
 
 ## Trade-Offs
 
-- Single binary over multi-service architecture: easier install and easier
-  mental model, at the cost of fewer deployment knobs.
+- Keep ordinary Agent capabilities in-process. Independent services serve
+  shared ownership and lifecycle needs through explicit typed clients and
+  Fleet management.
 - Standard library first in Go: less dependency drift, at the cost of writing
   small protocol adapters ourselves.
 - Registry-owned Agent identity and configuration: Workspace files stay
