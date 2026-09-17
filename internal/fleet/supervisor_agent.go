@@ -75,10 +75,15 @@ func (m *Manager) supervisorStatus(ctx context.Context, binding supervisorBindin
 	entry, err := m.reload(binding.Agent.ID)
 	if err != nil {
 		status.State = "repair_required"
-		return status, fmt.Errorf("fleet: bound Supervisor %s requires explicit repair: %w", binding.Agent.ID, err)
+		return status, &ConflictError{AgentID: binding.Agent.ID, Reason: fmt.Sprintf("bound Supervisor requires explicit repair: %v", err)}
+	}
+	if inspected := agentstate.InspectBinding(entry); inspected.Kind != agentstate.WorkspaceBound {
+		status.State = "repair_required"
+		return status, &ConflictError{AgentID: binding.Agent.ID, Reason: "bound Supervisor requires explicit repair: " + inspected.Reason}
 	}
 	if entry.Agent.Workspace != binding.Agent.Workspace {
-		return status, errors.New("fleet: Supervisor workspace differs from its role binding")
+		status.State = "repair_required"
+		return status, &ConflictError{AgentID: binding.Agent.ID, Reason: "Supervisor workspace differs from its role binding; requires explicit repair"}
 	}
 	status.Agent = m.inspectStatus(ctx, entry)
 	return status, nil

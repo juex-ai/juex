@@ -68,12 +68,20 @@ func TestSupervisorAgentCompiledLifecycleAndBusyConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFleetProviderConfig(t, workspace, provider.URL)
-	created, err := client.Create(context.Background(), fleetclient.CreateRequest{Workspace: workspace, Name: "managed target", Start: true})
-	if err != nil || !created.Applied {
+	created, err := client.Create(context.Background(), fleetclient.CreateRequest{Workspace: workspace, Name: "managed target"})
+	if err != nil || !created.Published || created.Applied {
 		t.Fatalf("create/start=%+v %v", created, err)
 	}
 	address, _ := agentstate.NewAgentAddress(home, created.Agent.ID)
 	defer shutdownFleetAgent(t, address)
+	initialConfig, err := client.Config(context.Background(), created.Agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstApply, err := client.Configure(context.Background(), created.Agent.ID, fleetclient.ConfigRequest{Content: "preset: standard\n", ExpectedRevision: initialConfig.Revision, Apply: true})
+	if err != nil || !firstApply.Applied || firstApply.Restarted {
+		t.Fatalf("initial application=%+v %v", firstApply, err)
+	}
 	original := waitFleetRuntime(t, address)
 	startFleetBlockingTurn(t, original)
 	select {

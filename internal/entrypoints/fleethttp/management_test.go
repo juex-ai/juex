@@ -5,7 +5,10 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/foundation/fleetclient"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,5 +66,29 @@ func TestTypedManagementChecksCallerIdentityAndConfigRevision(t *testing.T) {
 	}
 	if _, err := client.Agents(context.Background()); err == nil || !strings.Contains(err.Error(), "identity") {
 		t.Fatalf("stale instance: %v", err)
+	}
+}
+
+func TestSupervisorStatusReportsRepairRequired(t *testing.T) {
+	home := t.TempDir()
+	manager, err := app.NewFleet(fleet.Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := manager.EnsureSupervisor(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(home, "agents", supervisor.Agent.ID, "agent.json")); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Options{Manager: manager})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/supervisor", nil))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "requires explicit repair") {
+		t.Fatalf("missing binding response=%d %s", response.Code, response.Body.String())
 	}
 }

@@ -67,7 +67,9 @@ func (m *Manager) ManagedCreate(ctx context.Context, caller fleetclient.Caller, 
 	result := fleetclient.Result{Agent: managementAgent(added.Agent), Saved: true, Published: true}
 	if request.Start {
 		status, startErr := m.Start(ctx, added.Agent.ID)
-		result.Agent = managementAgent(status)
+		if status.ID != "" {
+			result.Agent = managementAgent(status)
+		}
 		result.Applied = startErr == nil
 		if startErr != nil {
 			result.Error = startErr.Error()
@@ -144,6 +146,7 @@ func (m *Manager) ManagedConfigure(ctx context.Context, caller fleetclient.Calle
 	if !request.Apply {
 		return result, nil
 	}
+	hadRuntime := result.Agent.RuntimeHealth == string(RuntimeHealthy)
 	status, err := m.applyManagedLifecycle(ctx, entry, "restart", request.Interrupt)
 	result.Agent = managementAgent(status)
 	if errors.Is(err, endpoint.ErrRuntimeBusy) {
@@ -154,7 +157,7 @@ func (m *Manager) ManagedConfigure(ctx context.Context, caller fleetclient.Calle
 		result.Error = err.Error()
 		return result, nil
 	}
-	result.Restarted = true
+	result.Restarted = hadRuntime
 	runtimeState, err := m.deps.readRuntime(entry.Address)
 	if err == nil {
 		var actual endpoint.Runtime
@@ -198,8 +201,9 @@ func (m *Manager) ManagedLifecycle(ctx context.Context, caller fleetclient.Calle
 	if err != nil {
 		return fleetclient.Result{}, err
 	}
+	hadRuntime := m.inspectStatus(ctx, entry).RuntimeHealth == RuntimeHealthy
 	status, err := m.applyManagedLifecycle(ctx, entry, request.Action, request.Interrupt)
-	result := fleetclient.Result{Agent: managementAgent(status), Applied: err == nil, Restarted: err == nil && request.Action == "restart"}
+	result := fleetclient.Result{Agent: managementAgent(status), Applied: err == nil, Restarted: err == nil && hadRuntime && request.Action == "restart"}
 	if errors.Is(err, endpoint.ErrRuntimeBusy) {
 		result.Deferred = true
 		return result, nil
