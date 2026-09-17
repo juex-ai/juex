@@ -94,6 +94,41 @@ func TestAdvancedMaximumWaitFailureAndOptOut(t *testing.T) {
 	}
 }
 
+func TestManualMaintenanceWaitsForSourceToBecomeIdle(t *testing.T) {
+	s, a, super, _ := fixture(t)
+	ctx := context.Background()
+	s, err := Open(s.dir, a.FleetID, mc.Advanced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := s.now()
+	s.now = func() time.Time { return now }
+	contribute(t, s, a, nil)
+	if _, err := s.Contribute(ctx, a, mc.SourceBatch{ThreadID: "0", Epoch: "on-1", After: 2, Through: 2, Pending: 1, IdleSince: now}); err != nil {
+		t.Fatal(err)
+	}
+	request, err := s.Maintain(ctx, a, "0")
+	if err != nil || request.State != "pending" {
+		t.Fatalf("manual request from an active Turn: %+v %v", request, err)
+	}
+	if job, err := s.Claim(ctx, super); err != nil || job != nil {
+		t.Fatalf("busy source was dispatched: %+v %v", job, err)
+	}
+	if _, err := s.Contribute(ctx, a, mc.SourceBatch{ThreadID: "0", Epoch: "on-1", After: 2, Through: 2, IdleSince: now}); err != nil {
+		t.Fatal(err)
+	}
+	if job, err := s.Claim(ctx, super); err != nil || job != nil {
+		t.Fatalf("source dispatched before its idle window: %+v %v", job, err)
+	}
+	now = now.Add(time.Minute)
+	if _, err := s.Participation(ctx, a, mc.Boundary{ThreadID: "0", Epoch: "on-1", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if job, err := s.Claim(ctx, super); err != nil || job == nil || job.ID != request.ID {
+		t.Fatalf("idle manual request was not dispatched: %+v %v", job, err)
+	}
+}
+
 func TestAdvancedExhaustedBatchRequiresExplicitRetry(t *testing.T) {
 	s, a, super, _ := fixture(t)
 	ctx := context.Background()

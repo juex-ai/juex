@@ -84,7 +84,7 @@ func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.T
 		definitions = append(definitions,
 			toolcore.ToolDefinition{Name: ToolPropose, Description: "Submit explicitly requested stable knowledge for Supervisor review, with bounded evidence from the current admitted input. Acceptance means submitted, not remembered. Reuse the same key only for identical content.", Schema: objectSchema(map[string]any{"key": field(), "text": field(), "reason": field()}, "key", "text", "reason")},
 			toolcore.ToolDefinition{Name: ToolResult, Description: "Inspect a submitted Memory request. Report remembered/updated only when its receipt says committed.", Schema: objectSchema(map[string]any{"id": field()}, "id")},
-			toolcore.ToolDefinition{Name: ToolMaintain, Description: "Request bounded maintenance for this idle Thread in Advanced strategy. Basic explicit proposals do not need this operation.", Schema: objectSchema(map[string]any{})})
+			toolcore.ToolDefinition{Name: ToolMaintain, Description: "Queue bounded maintenance of this Thread's retained evidence in Advanced strategy. Execution waits until the Thread has no pending input and has been idle for one minute. Basic explicit proposals do not need this operation.", Schema: objectSchema(map[string]any{})})
 		handlers = append(handlers, m.propose, m.requestResult, m.maintain)
 	}
 	tools := make([]toolcore.Tool, len(definitions))

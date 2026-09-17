@@ -152,7 +152,7 @@ func (s *Store) Claim(ctx context.Context, c mc.Caller) (*mc.Assignment, error) 
 		if w.Receipt.State == "pending" && !now.Before(w.RetryAt) {
 			if w.Automatic {
 				src := s.state.Sources[w.SourceKey]
-				if src == nil || !src.Enabled || !now.Before(src.LiveUntil) || src.Pending != 0 {
+				if src == nil || !src.Enabled || !now.Before(src.LiveUntil) || src.Pending != 0 || src.IdleSince.IsZero() || now.Sub(src.IdleSince) < 60*time.Second {
 					continue
 				}
 			}

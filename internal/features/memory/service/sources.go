@@ -102,7 +102,10 @@ func (s *Store) schedule(manual bool, only string) *work {
 		return nil
 	}
 	for key, src := range s.state.Sources {
-		if (only != "" && key != only) || !src.Enabled || !s.now().Before(src.LiveUntil) || src.Job != "" || src.AcceptedThrough <= src.ProcessedThrough || src.Pending != 0 || src.IdleSince.IsZero() || s.now().Sub(src.IdleSince) < 60*time.Second {
+		if (only != "" && key != only) || !src.Enabled || !s.now().Before(src.LiveUntil) || src.Job != "" || src.AcceptedThrough <= src.ProcessedThrough {
+			continue
+		}
+		if !manual && (src.Pending != 0 || src.IdleSince.IsZero() || s.now().Sub(src.IdleSince) < 60*time.Second) {
 			continue
 		}
 		if !manual && len(src.EndedGenerations) < 5 && (src.FirstPending.IsZero() || s.now().Sub(src.FirstPending) < 24*time.Hour) {
@@ -145,7 +148,7 @@ func (s *Store) Maintain(ctx context.Context, c mc.Caller, thread string) (mc.Re
 	before := clone(s.state)
 	w := s.schedule(true, key)
 	if w == nil {
-		return mc.Receipt{}, errors.New("manual maintenance requires Advanced, an idle participating Thread and unprocessed evidence")
+		return mc.Receipt{}, errors.New("manual maintenance requires Advanced, a live participating Thread and unprocessed evidence")
 	}
 	if err := s.persist(); err != nil {
 		s.state = before

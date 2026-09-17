@@ -76,8 +76,9 @@ recall or extraction. Advanced adds bounded automatic work using the same data:
 
 - Eligible history has five ended, unprocessed Generations, 60 seconds idle and
   no pending Input. Low-volume work becomes eligible after 24 hours; explicit
-  manual maintenance bypasses the volume/wait threshold while retaining idle
-  and participation checks. Explicit proposals have priority.
+  manual maintenance bypasses the volume/wait threshold. It accepts requests
+  during active conversation, but dispatch still waits for the idle window and
+  participation checks. Explicit proposals have priority.
 - Source Agents persist opt-in/out boundaries and offered/accepted cursors.
   Re-enabling starts at the new boundary. Frozen batches contain at most 100
   events and 32 KiB of direct dialogue evidence. Unavailable or oversized source
