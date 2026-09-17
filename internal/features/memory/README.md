@@ -52,7 +52,8 @@ The request/response types and tool schemas define exact fields. Administration
 fences older work. Deletion removes Memory-owned knowledge and projections,
 scrubs matching retained proposal/evidence payloads and suppresses re-extraction
 from those sources. No-store also removes entries containing that source;
-unrelated entries remain. Neither operation erases original Thread history,
+unrelated entries remain. Only the selected no-store ranges are suppressed, even
+when a removed entry also cites other sources. Neither operation erases original Thread history,
 Supervisor transcripts, previously delivered context or external copies.
 
 ## Authority and recovery

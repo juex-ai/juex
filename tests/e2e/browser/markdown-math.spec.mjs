@@ -147,3 +147,29 @@ test("unclosed quoted formulas preserve separate paragraphs", async ({ page }) =
   await expect(markdown.locator("blockquote p").last()).toContainText("close");
   await expect(markdown.locator(".katex")).toHaveCount(0);
 });
+
+for (const width of [1440, 390]) {
+  test(`math preserves adjacent blocks and nested display containers at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openThread(page, String.raw`- \(open
+- close\)
+
+\(heading open
+### heading close\)
+
+- > \[` + "a + ".repeat(50) + String.raw`z\]
+
+> - > \[y\]`);
+    const markdown = page.locator(".juex-markdown");
+    await expect(markdown.locator(".katex")).toHaveCount(2);
+    await expect(markdown.locator("li blockquote .katex-display")).toHaveCount(2);
+    await expect(markdown.locator("li")).toHaveCount(4);
+    await expect(markdown.locator("h3")).toContainText("heading close");
+    await expect(markdown.locator(".katex-error")).toHaveCount(0);
+    const layout = await markdown.evaluate(element => ({
+      width: document.documentElement.scrollWidth,
+      wide: element.querySelector(".katex-display").scrollWidth > element.querySelector(".katex-display").clientWidth,
+    }));
+    expect(layout).toEqual({ width, wide: true });
+  });
+}

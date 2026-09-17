@@ -288,7 +288,9 @@ its buffered sessions, current-Generation recovery and folding algorithm.
 Tasks and Notes policies live in `internal/features/tasks` and
 `internal/features/notes`. Enabled Modules contribute one frozen JSON state,
 guidance, and an owned summary section per compaction operation. A Module may
-reconcile only its declared section using that snapshot. Framework checks the
+reconcile only its declared section using that snapshot. It may also replace its
+owned runtime-context fragments with frozen post-compaction text, so the budget
+reflects staged state without changing authority before commit. Framework checks the
 corrected summary against the successful request's output budget and the full
 Provider-visible context, including prepared incoming input, against the
 compaction trigger budget before committing a Generation. Protected state is

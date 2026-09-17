@@ -361,6 +361,9 @@ func TestTasksNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
 	if _, err := goals.Update(modulestate.First(t, goals).ID, tasksmodule.Update{Status: tasksmodule.Pending}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := goals.Create(tasksmodule.Create{Title: "Completed", Description: "Prunable work", Acceptance: strings.Repeat("done ", 4000), Status: tasksmodule.Done}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := notes.Update("- [ ] Pending fixture"); err != nil {
 		t.Fatal(err)
 	}
@@ -399,3 +402,76 @@ func TestTasksNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
 }
 
 func jsonString(value string) string { data, _ := json.Marshal(value); return string(data) }
+
+func TestTasksCompactionBudgetsOnlyRetainedState(t *testing.T) {
+	for _, mode := range []string{"manual", "auto", "done-only"} {
+		t.Run(mode, func(t *testing.T) {
+			isolateModuleConfig(t)
+			cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 32000, Modules: config.ModulePolicy{tasksmodule.ModuleID: {Enabled: true}}}
+			cfg.Compaction = config.DefaultCompactionConfig()
+			cfg.Compaction.KeepRecentTokens = 1
+			cfg.Compaction.ReserveTokens = 27000
+			provider := &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "continued"), StopReason: llm.StopEndTurn}}}
+			a, err := app.New(app.Options{Config: cfg, Provider: provider, SummaryProvider: &moduleSummaryProvider{}, DisableMCP: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = a.CloseAndWait() })
+			tasks, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
+			done, err := tasks.Create(tasksmodule.Create{Title: "Completed contract", Description: "Old completed work", Acceptance: strings.Repeat("completed evidence ", 1400)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tasks.Update(done.ID, tasksmodule.Update{Status: tasksmodule.Done}); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "done-only" {
+				pending, err := tasks.Create(tasksmodule.Create{Title: "Retained contract", Description: "Waiting for input", Acceptance: "must remain exact"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tasks.Update(pending.ID, tasksmodule.Update{Status: tasksmodule.Pending}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := a.Thread.Append(llm.TextMessage(llm.RoleUser, "Previous request")); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.Thread.Append(llm.TextMessage(llm.RoleAssistant, "Previous response")); err != nil {
+				t.Fatal(err)
+			}
+			generation := a.Thread.CurrentGenerationJournalPath()
+			if mode == "auto" {
+				_, err = a.Run(t.Context(), "Continue with the retained work")
+			} else {
+				_, err = a.CompactWithInstructions(t.Context(), "manual", false, "")
+			}
+			if err != nil {
+				t.Fatalf("prunable tasks blocked compaction: %v", err)
+			}
+			if a.Thread.CurrentGenerationJournalPath() == generation {
+				t.Fatal("compaction did not commit")
+			}
+			state, err := tasks.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if mode == "done-only" {
+				want = 0
+			}
+			if len(state.Tasks) != want || (want == 1 && state.Tasks[0].Acceptance != "must remain exact") {
+				t.Fatalf("retained tasks: %+v", state)
+			}
+			active, err := a.Engine.ActiveContextWithError(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, message := range active.Messages {
+				if strings.Contains(message.FirstText(), "completed evidence") {
+					t.Fatal("pruned task remained in context")
+				}
+			}
+		})
+	}
+}

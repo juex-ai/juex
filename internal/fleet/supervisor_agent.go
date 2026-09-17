@@ -113,7 +113,7 @@ func (m *Manager) EnsureSupervisor(ctx context.Context, enabled bool) (Superviso
 		if !enabled {
 			return SupervisorStatus{State: "disabled", HistoryDisposition: "preserved"}, nil
 		}
-		binding, err = m.planSupervisor(nil)
+		binding, err = m.planSupervisor(nil, nil)
 	}
 	if err != nil {
 		return SupervisorStatus{}, err
@@ -134,7 +134,7 @@ func (m *Manager) EnsureSupervisor(ctx context.Context, enabled bool) (Superviso
 	return m.supervisorStatus(ctx, binding)
 }
 
-func (m *Manager) planSupervisor(retained []string) (supervisorBinding, error) {
+func (m *Manager) planSupervisor(retained []string, settlement *ExecutorSettlement) (supervisorBinding, error) {
 	root := filepath.Join(m.homeDir, "workspaces")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return supervisorBinding{}, err
@@ -148,7 +148,7 @@ func (m *Manager) planSupervisor(retained []string) (supervisorBinding, error) {
 		return supervisorBinding{}, err
 	}
 	identity.Name, identity.Autostart = "Supervisor", true
-	binding := supervisorBinding{State: "initializing", Agent: identity, Retained: retained}
+	binding := supervisorBinding{State: "initializing", Agent: identity, Retained: retained, Settlement: settlement}
 	return binding, m.writeSupervisor(binding)
 }
 
@@ -255,12 +255,10 @@ func (m *Manager) retireSupervisor(ctx context.Context, reset bool) (SupervisorS
 		}
 	}
 	if reset {
-		settlement := binding.Settlement
-		binding, err = m.planSupervisor(binding.Retained)
+		binding, err = m.planSupervisor(binding.Retained, binding.Settlement)
 		if err != nil {
 			return SupervisorStatus{}, err
 		}
-		binding.Settlement = settlement
 		if err := m.finishSupervisorInitialization(&binding); err != nil {
 			return SupervisorStatus{}, err
 		}

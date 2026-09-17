@@ -207,7 +207,10 @@ func TestFleetServiceAPIAndCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	// JSON is a YAML subset and preserves Windows command path escaping.
-	body, err := json.Marshal(map[string]any{"fleet": map[string]any{"services": map[string]services.Definition{"memory": {Mode: services.Managed, Enabled: true, Network: "tcp", Command: []string{executable, "-test.run=^TestFleetServiceProcess$"}}}}})
+	if err := os.WriteFile(filepath.Join(home, "services.yaml"), []byte("fleet:\n  services:\n    imported: {mode: external, enabled: false, network: tcp, address: '127.0.0.1:9'}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{"imports": []map[string]string{{"source": "services.yaml"}}, "fleet": map[string]any{"services": map[string]services.Definition{"memory": {Mode: services.Managed, Enabled: true, Network: "tcp", Command: []string{executable, "-test.run=^TestFleetServiceProcess$"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +218,11 @@ func TestFleetServiceAPIAndCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	binary := buildJuex(t)
+	stdout, stderr, listErr := runJuexHomeCommand(binary, home, "fleet", "services", "list")
+	var listed []services.Status
+	if listErr != nil || json.Unmarshal([]byte(stdout), &listed) != nil || len(listed) != 2 || listed[0].ID != "imported" || listed[1].ID != "memory" {
+		t.Fatalf("CLI lost imported service: %s %s %v", stdout, stderr, listErr)
+	}
 	for _, operation := range []string{"start", "status", "restart", "logs", "stop"} {
 		stdout, stderr, err := runJuexHomeCommand(binary, home, "fleet", "services", operation, "memory")
 		if err != nil {
@@ -236,6 +244,12 @@ func TestFleetServiceAPIAndCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	var visible services.Status
+	listed = nil
+	fleetWebJSON(t, &http.Client{Timeout: 5 * time.Second}, http.MethodGet,
+		"http://127.0.0.1:"+port+"/api/services", "", http.StatusOK, &listed)
+	if len(listed) != 2 || listed[0].ID != "imported" || listed[1].ID != "memory" {
+		t.Fatalf("HTTP lost imported service: %+v", listed)
+	}
 	fleetWebJSON(t, &http.Client{Timeout: 5 * time.Second}, http.MethodGet,
 		"http://127.0.0.1:"+port+"/api/services/memory", "", http.StatusOK, &visible)
 	if visible.Runtime == nil || visible.Runtime.Identity != active.Runtime.Identity {

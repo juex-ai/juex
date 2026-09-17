@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -139,6 +140,7 @@ func applyHomeFleetConfig(inventory ModuleInventory, cfg *FleetConfig, source ya
 	}
 
 	staged := *cfg
+	staged.Services = maps.Clone(cfg.Services)
 	for i, document := range documents {
 		_, importedRoot, parseErr := parseFleetConfigDocument(document.data, document.source.Path)
 		if parseErr != nil {
@@ -203,7 +205,10 @@ func applyFleetConfigNode(cfg *FleetConfig, root *yaml.Node, path string, owning
 				return err
 			}
 			if owningHome {
-				cfg.Services = definitions
+				if cfg.Services == nil {
+					cfg.Services = make(map[string]services.Definition)
+				}
+				maps.Copy(cfg.Services, definitions)
 			}
 		case "addr":
 			if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
