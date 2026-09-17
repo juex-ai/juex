@@ -209,9 +209,31 @@ async function publishModules(page, change = {}) {
       next.modules.notes.value = { content: change.notes };
       next.modules.notes.revision = `notes-${next.revision}`;
     }
+    if (change.tasks) {
+      next.modules.tasks.value = { tasks: change.tasks };
+      next.modules.tasks.revision = `tasks-${next.revision}`;
+    }
     window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).send(next);
   }, change);
 }
+
+test("task collection updates and deleting the last task clear the inspector", async ({ page }) => {
+  await openModuleThread(page);
+  const task = { id: "export", title: "Export data", description: "Write JSON output", acceptance: "Output parses", status: "doing", status_reason: "Writing", priority: "p0", continuation_count: 2, updated_at: "2026-09-17T10:00:00Z" };
+  await publishModules(page, { tasks: [task, { ...task, id: "tests", title: "Test export", status: "done", priority: "p2" }] });
+  const badge = page.getByRole("button", { name: "Open tasks: tasks 1/2", exact: true });
+  await expect(badge).toBeVisible();
+  await badge.click();
+  await expect(page.getByText("Export data", { exact: true })).toBeVisible();
+  await expect(page.getByText("Test export", { exact: true })).toBeVisible();
+  await expect(page.getByText("doing · p0", { exact: true })).toBeVisible();
+  await expect(page.getByText("done · p2", { exact: true })).toBeVisible();
+  await publishModules(page, { tasks: [] });
+  await expect(page.getByText("No tasks for this thread.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Export data", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Test export", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open tasks: tasks empty", exact: true })).toBeVisible();
+});
 
 test("Tasks and Notes independently follow the server contribution list", async ({ page }) => {
   const reads = await openModuleThread(page);

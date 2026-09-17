@@ -283,7 +283,7 @@ func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T)
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.ReserveTokens = 1400
+	eng.Compaction.ReserveTokens = 1200
 	installThreadStateModules(t, eng)
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)

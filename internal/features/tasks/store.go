@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"crypto/rand"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 	modstate "github.com/juex-ai/juex/internal/framework/module/state"
 	"github.com/juex-ai/juex/internal/framework/thread"

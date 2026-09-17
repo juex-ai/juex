@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 	"strings"
+
+	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
 )
 
 func ToolDefinitions() []toolcore.ToolDefinition {
@@ -13,8 +14,7 @@ func ToolDefinitions() []toolcore.ToolDefinition {
 	fields := func() map[string]any {
 		return map[string]any{
 			"title": text(), "description": text(), "acceptance": text(), "status_reason": text(),
-			"status":   map[string]any{"type": "string", "enum": []string{"todo", "doing", "done", "pending", "failed"}},
-			"priority": map[string]any{"type": "string", "enum": []string{"p0", "p1", "p2"}},
+			"status": text(), "priority": text(),
 		}
 	}
 	definition := func(name, description string, properties map[string]any, required ...string) toolcore.ToolDefinition {

@@ -7544,8 +7544,12 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 func TestRunToolCalls_SerializesTasksCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	tasksState, _ := installThreadStateModules(t, eng)
+	task, err := tasksState.Create(tasksmodule.Create{Title: "Ordered work", Description: "ship ordered tasks state"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
-		if req.EventName == hookconfig.EventPreToolUse && req.ToolName == tasksmodule.ToolCreate {
+		if req.EventName == hookconfig.EventPreToolUse && req.ToolName == tasksmodule.ToolUpdate && req.ToolInput["status"] == string(tasksmodule.Doing) {
 			select {
 			case <-time.After(100 * time.Millisecond):
 			case <-ctx.Done():
@@ -7558,11 +7562,11 @@ func TestRunToolCalls_SerializesTasksCallsInProviderOrder(t *testing.T) {
 	results := eng.runToolCalls(context.Background(), "turn-tasks-order", testToolExecutions([]llm.Block{
 		{
 			Type:      llm.BlockToolUse,
-			ToolUseID: "tasks-create",
-			ToolName:  tasksmodule.ToolCreate,
+			ToolUseID: "tasks-start",
+			ToolName:  tasksmodule.ToolUpdate,
 			Input: map[string]any{
-				"description": "ship ordered tasks state",
-				"acceptance":  "tasks updates observe provider order",
+				"id":     task.ID,
+				"status": string(tasksmodule.Doing),
 			},
 		},
 		{
@@ -7570,6 +7574,7 @@ func TestRunToolCalls_SerializesTasksCallsInProviderOrder(t *testing.T) {
 			ToolUseID: "tasks-update",
 			ToolName:  tasksmodule.ToolUpdate,
 			Input: map[string]any{
+				"id":            task.ID,
 				"status":        string(tasksmodule.Done),
 				"status_reason": "ordered update applied",
 			},

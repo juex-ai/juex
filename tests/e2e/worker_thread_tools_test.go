@@ -32,15 +32,16 @@ func (p *workerThreadToolProvider) Name() string { return "worker-thread-tool-e2
 func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, history []llm.Message, specs []llm.ToolSpec) (llm.Response, error) {
 	if historyHasKind(history, llm.MessageKindWorkerThread) {
 		if !historyHasToolResult(history, "finish-tasks") {
-			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			return modulestate.ResolveTaskFixture(history, llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 				Type:      llm.BlockToolUse,
 				ToolUseID: "finish-tasks",
 				ToolName:  tasksmodule.ToolUpdate,
 				Input: map[string]any{
+					"id":            "$first_task",
 					"status":        string(tasksmodule.Done),
 					"status_reason": "subscribed worker result received",
 				},
-			}}}, StopReason: llm.StopToolUse}, nil
+			}}}, StopReason: llm.StopToolUse})
 		}
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "PRIMARY_SAW_SIDE_OK"), StopReason: llm.StopEndTurn}, nil
 	}
@@ -71,6 +72,7 @@ func (p *workerThreadToolProvider) Complete(ctx context.Context, _ string, histo
 			ToolUseID: "create-tasks",
 			ToolName:  tasksmodule.ToolCreate,
 			Input: map[string]any{
+				"title":       "Delegated work",
 				"description": "finish delegated work",
 				"acceptance":  "the subscribed worker result is incorporated",
 			},
@@ -142,7 +144,7 @@ func TestEndToEnd_WorkerThreadToolDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tasks.Tasks[0].Status != tasksmodule.Todo || tasks.Tasks[0].ContinuationCount != 0 {
+	if len(tasks.Tasks) != 1 || tasks.Tasks[0].Status != tasksmodule.Todo || tasks.Tasks[0].ContinuationCount != 0 {
 		t.Fatalf("waiting Tasks = %+v", tasks)
 	}
 	close(provider.releaseChild)
