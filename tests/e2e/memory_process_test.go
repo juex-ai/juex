@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,7 +79,7 @@ func TestMemoryCLISelectsServiceWithoutChangingDefaultStore(t *testing.T) {
 	binary := buildJuex(t)
 	home := t.TempDir()
 	defaultClient, user := startMemoryFixture(t, home, mc.Basic)
-	_, _ = startNamedMemoryFixture(t, home, "project-memory", mc.Advanced)
+	custom, _ := startNamedMemoryFixture(t, home, "project-memory", mc.Advanced)
 	request := mc.AdminRequest{Key: "seed", Action: "correct", Changes: []mc.Change{{Entry: mc.Entry{ID: "shared-id", Name: "Preference", Summary: "service selection", Body: "default knowledge", Type: "reference"}}}}
 	if _, err := defaultClient.Admin(context.Background(), user, request); err != nil {
 		t.Fatal(err)
@@ -120,5 +121,38 @@ func TestMemoryCLISelectsServiceWithoutChangingDefaultStore(t *testing.T) {
 	_, stderr, err := runJuexHomeCommand(binary, home, "memory", "status", "--service", "../invalid")
 	if processExitCode(err) != 2 || !strings.Contains(stderr, "invalid service identity") {
 		t.Fatalf("invalid selector: %v, %s", err, stderr)
+	}
+	for i := 0; i < 25; i++ {
+		e := mc.Entry{ID: fmt.Sprintf("page-%02d", i), Name: "Paged knowledge", Summary: "pagination", Body: "test", Type: "reference"}
+		if _, err := custom.Admin(t.Context(), user, mc.AdminRequest{Key: e.ID, Action: "correct", Changes: []mc.Change{{Entry: e}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	for offset := 0; offset >= 0; {
+		var page mc.Page
+		output := call("search", "pagination", "--service", "project-memory", "--offset", fmt.Sprint(offset), "--limit", "7")
+		if err := json.Unmarshal([]byte(output), &page); err != nil || len(page.Entries) > 7 || len(page.Entries) == 0 {
+			t.Fatalf("page at %d: %s, %v", offset, output, err)
+		}
+		for _, e := range page.Entries {
+			if seen[e.ID] {
+				t.Fatalf("repeated entry %s", e.ID)
+			}
+			seen[e.ID] = true
+		}
+		if page.Next != -1 && page.Next != offset+len(page.Entries) {
+			t.Fatalf("invalid next offset: %+v", page)
+		}
+		offset = page.Next
+	}
+	if len(seen) != 25 {
+		t.Fatalf("paginated entries=%d", len(seen))
+	}
+	for _, flags := range [][]string{{"--offset", "-1"}, {"--limit", "0"}, {"--limit", "51"}} {
+		_, stderr, err := runJuexHomeCommand(binary, home, append([]string{"memory", "search"}, flags...)...)
+		if processExitCode(err) != 2 || !strings.Contains(stderr, "memory search requires") {
+			t.Fatalf("invalid page %v: %v, %s", flags, err, stderr)
+		}
 	}
 }

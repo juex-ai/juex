@@ -21,6 +21,7 @@ func newMemoryCmd() *cobra.Command {
 		op := operation
 		file := ""
 		service := ""
+		var offset, limit int
 		cmd := &cobra.Command{Use: op, Args: usageArgs(cobra.NoArgs)}
 		cmd.Flags().StringVar(&service, "service", "memory", "Fleet Memory service identity")
 		switch op {
@@ -30,6 +31,8 @@ func newMemoryCmd() *cobra.Command {
 			cmd.Use = "search [query]"
 			cmd.Short = "Search all user-visible shared Memory"
 			cmd.Args = usageArgs(cobra.MaximumNArgs(1))
+			cmd.Flags().IntVar(&offset, "offset", 0, "Result offset from the previous page's next field")
+			cmd.Flags().IntVar(&limit, "limit", 20, "Maximum results per page (1-50)")
 		case "read", "result":
 			cmd.Use = op + " <id>"
 			cmd.Short = "Read Memory " + op
@@ -42,6 +45,9 @@ func newMemoryCmd() *cobra.Command {
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
 			if err := serviceendpoint.ValidateID(service); err != nil {
 				return &usageError{msg: err.Error()}
+			}
+			if op == "search" && (offset < 0 || limit < 1 || limit > 50) {
+				return &usageError{msg: "memory search requires --offset >= 0 and --limit between 1 and 50"}
 			}
 			home, err := config.EffectiveHomeDir()
 			if err != nil {
@@ -62,7 +68,7 @@ func newMemoryCmd() *cobra.Command {
 				if len(args) > 0 {
 					query = args[0]
 				}
-				result, err = client.Search(cmd.Context(), caller, memoryclient.Query{Text: query})
+				result, err = client.Search(cmd.Context(), caller, memoryclient.Query{Text: query, Offset: offset, Limit: limit})
 			case "read":
 				result, err = client.Read(cmd.Context(), caller, memoryclient.ReadRequest{ID: args[0]})
 			case "result":

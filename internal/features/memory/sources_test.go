@@ -6,11 +6,76 @@ import (
 	"testing"
 
 	memoryservice "github.com/juex-ai/juex/internal/features/memory/service"
+	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
+
+type capturedContribution struct {
+	mc.API
+	batches chan mc.SourceBatch
+}
+
+func (a *capturedContribution) Contribute(ctx context.Context, c mc.Caller, b mc.SourceBatch) (mc.SourceState, error) {
+	a.batches <- b
+	return a.API.Contribute(ctx, c, b)
+}
+
+func TestSourcePollCannotOverwriteNewerActiveState(t *testing.T) {
+	agentDir := t.TempDir()
+	th, err := thread.NewStore(agentDir).EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = th.Close() }()
+	if err := ConfigureParticipation(agentDir, true); err != nil {
+		t.Fatal(err)
+	}
+	s, err := memoryservice.Open(t.TempDir(), "fleet", mc.Advanced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &capturedContribution{API: s, batches: make(chan mc.SourceBatch, 8)}
+	caller := mc.Caller{FleetID: "fleet", AgentID: "agent", ThreadID: th.ID, Profile: mc.ProfileAgent}
+	paused, resume := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-resume:
+		default:
+			close(resume)
+		}
+	}()
+	poll := &SourceFeed{AgentDir: agentDir, Client: func(string) (mc.API, mc.Caller) {
+		close(paused)
+		<-resume
+		return api, caller
+	}}
+	done := make(chan error, 1)
+	go func() { done <- poll.Poll(t.Context()) }()
+	<-paused
+	if err := th.AppendEvent(events.Event{Type: "turn.started", TurnID: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	active := &SourceFeed{AgentDir: agentDir, Client: func(string) (mc.API, mc.Caller) { return api, caller }}
+	err = active.MarkActive(t.Context(), th.ID)
+	close(resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	close(api.batches)
+	var last mc.SourceBatch
+	for batch := range api.batches {
+		last = batch
+	}
+	if last.Pending == 0 {
+		t.Fatal("poll replaced active source state with its stale idle inspection")
+	}
+}
 
 func TestProposalRetryKeepsAdmittedEvidenceStable(t *testing.T) {
 	th, err := thread.NewStore(t.TempDir()).EnsureMain()

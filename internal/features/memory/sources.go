@@ -103,13 +103,8 @@ func (f *SourceFeed) Poll(ctx context.Context) error {
 		if assignment != nil {
 			continue
 		}
-		inspection, err := store.Inspect(id)
-		if err != nil {
-			problems = append(problems, err)
-			continue
-		}
 		api, caller := f.Client(id)
-		if err := f.sync(ctx, api, caller, ledger, inspection); err != nil {
+		if err := f.sync(ctx, api, caller, ledger, false); err != nil {
 			problems = append(problems, fmt.Errorf("thread %s source: %w", id, err))
 		}
 	}
@@ -117,7 +112,7 @@ func (f *SourceFeed) Poll(ctx context.Context) error {
 	return errors.Join(problems...)
 }
 
-func (f *SourceFeed) sync(ctx context.Context, api mc.API, caller mc.Caller, ledger participationLedger, inspection thread.Inspection) error {
+func (f *SourceFeed) sync(ctx context.Context, api mc.API, caller mc.Caller, ledger participationLedger, active bool) error {
 	id := caller.ThreadID
 	value, _ := sourceSyncLocks.LoadOrStore(filepath.Join(f.AgentDir, id), make(chan struct{}, 1))
 	guard := value.(chan struct{})
@@ -126,6 +121,15 @@ func (f *SourceFeed) sync(ctx context.Context, api mc.API, caller mc.Caller, led
 		defer func() { <-guard }()
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	// Inspect under the same guard as publication so a delayed poll cannot
+	// overwrite an admitted input's newer active state with an idle snapshot.
+	inspection, err := thread.NewStore(f.AgentDir).Inspect(id)
+	if err != nil {
+		return err
+	}
+	if active {
+		inspection.Projection.ExecutionState = thread.ExecutionWorking
 	}
 	base := ledger.Baselines[id]
 	path := filepath.Join(f.AgentDir, "modules", "memory-client", "sources", id+".json")
@@ -233,13 +237,8 @@ func (f *SourceFeed) MarkActive(ctx context.Context, id string) error {
 	if !ledger.Enabled {
 		return nil
 	}
-	inspection, err := thread.NewStore(f.AgentDir).Inspect(id)
-	if err != nil {
-		return err
-	}
-	inspection.Projection.ExecutionState = thread.ExecutionWorking
 	api, caller := f.Client(id)
-	return f.sync(ctx, api, caller, ledger, inspection)
+	return f.sync(ctx, api, caller, ledger, true)
 }
 
 // Runtime owns source polling and optional Supervisor execution. Input is
