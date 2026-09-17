@@ -2,12 +2,66 @@ package fleet
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/foundation/fleetclient"
 )
+
+func TestManagedCreateConcurrentWorkspaceDoesNotRenameWinner(t *testing.T) {
+	m, err := New(Options{HomeDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := m.EnsureSupervisor(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := fleetclient.Caller{Profile: fleetclient.ProfileSupervisor, AgentID: supervisor.Agent.ID}
+	workspace := t.TempDir()
+	type outcome struct {
+		name   string
+		result fleetclient.Result
+		err    error
+	}
+	outcomes := make(chan outcome, 6)
+	var wg sync.WaitGroup
+	for i := range 6 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			name := fmt.Sprintf("creator-%d", i)
+			result, err := m.ManagedCreate(context.Background(), caller, fleetclient.CreateRequest{Workspace: workspace, Name: name})
+			outcomes <- outcome{name, result, err}
+		}()
+	}
+	wg.Wait()
+	close(outcomes)
+	var winner outcome
+	successes := 0
+	for result := range outcomes {
+		if result.err == nil {
+			winner = result
+			successes++
+		} else {
+			var conflict *ConflictError
+			if !errors.As(result.err, &conflict) {
+				t.Errorf("unexpected creation error: %v", result.err)
+			}
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful creations = %d, want 1", successes)
+	}
+	entry, err := m.reload(winner.result.Agent.ID)
+	if err != nil || entry.Agent.Name != winner.name {
+		t.Fatalf("winner renamed: %+v %v", entry, err)
+	}
+}
 
 func TestManagementRejectsOrdinaryProfileAndSelfMutation(t *testing.T) {
 	m, _ := New(Options{HomeDir: t.TempDir()})

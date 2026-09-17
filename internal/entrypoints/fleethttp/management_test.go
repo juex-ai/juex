@@ -43,6 +43,20 @@ func TestTypedManagementChecksCallerIdentityAndConfigRevision(t *testing.T) {
 	if err != nil || !created.Published || created.Applied {
 		t.Fatalf("create=%+v %v", created, err)
 	}
+	for _, existing := range []fleetclient.Agent{{ID: supervisor.Agent.ID, Name: supervisor.Agent.Name, Workspace: supervisor.Agent.Workspace}, created.Agent} {
+		if _, err := client.Create(context.Background(), fleetclient.CreateRequest{Workspace: existing.Workspace, Name: "unexpected rename"}); err == nil || !strings.Contains(err.Error(), "409") {
+			t.Errorf("existing workspace creation must conflict: %v", err)
+		}
+		statuses, err := client.Agents(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, status := range statuses {
+			if status.ID == existing.ID && status.Name != existing.Name {
+				t.Errorf("creation renamed existing Agent: %+v", status)
+			}
+		}
+	}
 	before, err := client.Config(context.Background(), created.Agent.ID)
 	if err != nil {
 		t.Fatal(err)

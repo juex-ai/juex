@@ -72,6 +72,9 @@ func TestSupervisorAgentCompiledLifecycleAndBusyConfiguration(t *testing.T) {
 	if err != nil || !created.Published || created.Applied {
 		t.Fatalf("create/start=%+v %v", created, err)
 	}
+	if _, err := client.Create(context.Background(), fleetclient.CreateRequest{Workspace: workspace, Name: "duplicate"}); err == nil {
+		t.Fatal("managed creation accepted an already registered workspace")
+	}
 	address, _ := agentstate.NewAgentAddress(home, created.Agent.ID)
 	defer shutdownFleetAgent(t, address)
 	initialConfig, err := client.Config(context.Background(), created.Agent.ID)

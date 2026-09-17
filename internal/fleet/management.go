@@ -60,7 +60,7 @@ func (m *Manager) ManagedCreate(ctx context.Context, caller fleetclient.Caller, 
 	if request.Name != "" {
 		opts.Name = &request.Name
 	}
-	added, err := m.Add(ctx, opts)
+	added, err := m.add(ctx, opts, true)
 	if err != nil {
 		return fleetclient.Result{}, err
 	}
