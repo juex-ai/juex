@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -275,9 +275,9 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 	var created thread.Info
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{}`, http.StatusCreated, &created)
 	activeDir := filepath.Join(server.opts.Cfg.RuntimePaths().StateDir, "threads", created.ID)
-	goalStore := goalmodule.NewGoalStateStore(activeDir, goalmodule.GoalStateOptions{})
+	tasksStore := tasksmodule.NewStore(activeDir, tasksmodule.Options{})
 	notesStore := notesmodule.NewNotesStore(activeDir)
-	if _, err := goalStore.Create("preserve worker state", "archive round trip succeeds"); err != nil {
+	if _, err := tasksStore.Create(tasksmodule.Create{Title: "Tracked work", Description: "preserve worker state", Acceptance: "archive round trip succeeds"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notesStore.Update("- [ ] verify archived state"); err != nil {
@@ -285,7 +285,7 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 	}
 	var activeDetail ThreadModulesSnapshot
 	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID+"/modules", "", http.StatusOK, &activeDetail)
-	if !strings.Contains(string(activeDetail.Modules["goal"].Value), "preserve worker state") || !strings.Contains(string(activeDetail.Modules["notes"].Value), "verify archived state") {
+	if !strings.Contains(string(activeDetail.Modules["tasks"].Value), "preserve worker state") || !strings.Contains(string(activeDetail.Modules["notes"].Value), "verify archived state") {
 		t.Fatalf("module state = %+v", activeDetail)
 	}
 	var renamed thread.Info
@@ -303,22 +303,22 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 	}
 	var archivedDetail ThreadModulesSnapshot
 	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID+"/modules", "", http.StatusOK, &archivedDetail)
-	if !strings.Contains(string(archivedDetail.Modules["goal"].Value), "preserve worker state") || !strings.Contains(string(archivedDetail.Modules["notes"].Value), "verify archived state") {
+	if !strings.Contains(string(archivedDetail.Modules["tasks"].Value), "preserve worker state") || !strings.Contains(string(archivedDetail.Modules["notes"].Value), "verify archived state") {
 		t.Fatalf("module state = %+v", archivedDetail)
 	}
 	archivedDir := filepath.Join(server.opts.Cfg.RuntimePaths().StateDir, "archive", "threads", created.ID)
-	for _, name := range []string{"modules/goal/goal_state.json", "modules/notes/notes.md"} {
+	for _, name := range []string{"modules/tasks/tasks.json", "modules/notes/notes.md"} {
 		if _, err := os.Stat(filepath.Join(archivedDir, name)); err != nil {
 			t.Fatalf("archived module file %s: %v", name, err)
 		}
 	}
 	server.opts.Cfg.Modules = config.ModulePolicy{
-		"goal":  {Enabled: false},
+		"tasks": {Enabled: false},
 		"notes": {Enabled: false},
 	}
 	var disabledDetail ThreadModulesSnapshot
 	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/"+created.ID+"/modules", "", http.StatusOK, &disabledDetail)
-	if _, ok := disabledDetail.Modules["goal"]; ok {
+	if _, ok := disabledDetail.Modules["tasks"]; ok {
 		t.Fatalf("disabled module state leaked: %+v", disabledDetail)
 	}
 	if _, ok := disabledDetail.Modules["notes"]; ok {
@@ -342,7 +342,7 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 		restored.RetentionState != thread.RetentionActive || restored.ExecutionState != thread.ExecutionIdle {
 		t.Fatalf("unarchived Thread changed generation = %+v", restored)
 	}
-	for _, name := range []string{"modules/goal/goal_state.json", "modules/notes/notes.md"} {
+	for _, name := range []string{"modules/tasks/tasks.json", "modules/notes/notes.md"} {
 		if _, err := os.Stat(filepath.Join(activeDir, name)); err != nil {
 			t.Fatalf("unarchived module file %s: %v", name, err)
 		}

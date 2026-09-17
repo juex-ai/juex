@@ -50,8 +50,8 @@ juex agent send --wait "implement the next task"
 - Worker 使用相同执行模型，但拥有独立的历史、上下文、状态和订阅。它记录
   parent，但不记录固定的结果目的地。
 - `/new` 与 `/compact` 都会开始新的 Context Generation。两者都保留
-  Thread 历史和 Scratchpad；compact 携带 summary 并保留 Goal 与 Notes，
-  new 则要求已启用的 Goal 与 Notes Module 清除自己的状态。
+  Thread 历史、Scratchpad 和未完成任务；两者都删除 done 任务。compact 携带
+  summary 并保留 Notes，new 则要求已启用的 Notes Module 清除自己的状态。
 - Active 与 archived Thread 分开存储。Archived Worker 只读，可以恢复或永久删除。
 - Token Usage 按每次 Provider 调用记录，并使用规范的 `provider:model` 按模型聚合，
   供 Thread 检查。
@@ -90,7 +90,7 @@ Workspace 中。
 身份、Workspace 所有权与 lifecycle metadata 的权威来源。Agent 还拥有配置
 覆盖、可重建的 Thread index、active 与 archived Thread、media、日志、Observable、
 Memory 参与状态与 Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event
-历史、有界 pending Input 状态、由 Module 拥有的 Goal 与 Notes 状态、Scratchpad
+历史、有界 pending Input 状态、由 Module 拥有的 Tasks 与 Notes 状态、Scratchpad
 和系统管理的 spool。当前 Provider context 只从当前 Generation 重建；Thread
 Explorer 列表来自 Agent index。
 

@@ -66,8 +66,8 @@ test("aggregateToolProcessStatus prioritizes running over failed over done", () 
 
 test("formatToolBatchTitle groups names in first-seen order", () => {
   assert.equal(
-    formatToolBatchTitle(["memory_propose", "memory_propose", "update_goal"]),
-    "2 memory_propose, 1 update_goal",
+    formatToolBatchTitle(["memory_propose", "memory_propose", "update_task"]),
+    "2 memory_propose, 1 update_task",
   );
 });
 

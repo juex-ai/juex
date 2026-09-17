@@ -11,7 +11,6 @@ import (
 	"github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/features/filetools"
 	"github.com/juex-ai/juex/internal/features/fleetmanagement"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/inputtracking"
 	"github.com/juex-ai/juex/internal/features/memory"
@@ -20,6 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/scratchpad"
 	shelltools "github.com/juex-ai/juex/internal/features/shell"
 	"github.com/juex-ai/juex/internal/features/skills"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/fleetclient"
@@ -46,13 +46,13 @@ type constructedRuntimeModules struct {
 }
 
 type threadModuleOptions struct {
-	hookRunner               hooks.PolicyRunner
-	hookBaseRequest          hooks.Request
-	goalState                *goalmodule.GoalStateStore
-	notes                    *notesmodule.NotesStore
-	goalContinuation         bool
-	goalContinuationDeferrer goalmodule.ContinuationDeferrer
-	memoryAssignment         *memoryclient.Assignment
+	hookRunner                hooks.PolicyRunner
+	hookBaseRequest           hooks.Request
+	tasksState                *tasksmodule.Store
+	notes                     *notesmodule.NotesStore
+	tasksContinuation         bool
+	tasksContinuationDeferrer tasksmodule.ContinuationDeferrer
+	memoryAssignment          *memoryclient.Assignment
 }
 
 func prepareRuntimeModules(
@@ -163,14 +163,14 @@ func buildThreadModules(
 	opts threadModuleOptions,
 ) (*runtimemodule.Set, error) {
 	var set *runtimemodule.Set
-	specs = threadFactorySpecs(cfg, specs, threadState, engine, workDir, opts, func() []byte { return goalmodule.HookStateFromModules(set) })
+	specs = threadFactorySpecs(cfg, specs, threadState, engine, workDir, opts, func() []byte { return tasksmodule.HookStateFromModules(set) })
 	threadContext := threadModuleContext(threadState)
 	var err error
 	set, err = runtimemodule.BuildAndStartThreadSet(ctx, specs, threadContext, runtimemodule.ToolContext{Runtime: runtimeContext, Thread: &threadContext})
 	return set, err
 }
 
-func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySpec, threadState *thread.Thread, engine *juexruntime.Engine, workDir string, opts threadModuleOptions, goalState func() []byte) []runtimemodule.ThreadFactorySpec {
+func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySpec, threadState *thread.Thread, engine *juexruntime.Engine, workDir string, opts threadModuleOptions, tasksState func() []byte) []runtimemodule.ThreadFactorySpec {
 	eventSink := func(event events.Event) error {
 		if engine == nil || engine.Bus == nil {
 			return nil
@@ -240,18 +240,18 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 			},
 		},
 		{
-			ID:            goalmodule.ModuleID,
-			Inspection:    goalmodule.Inspection(),
+			ID:            tasksmodule.ModuleID,
+			Inspection:    tasksmodule.Inspection(),
 			OwnsResources: true,
-			Enabled:       cfg.ModuleEnabled(string(goalmodule.ModuleID)),
+			Enabled:       cfg.ModuleEnabled(string(tasksmodule.ModuleID)),
 			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-				goalState := opts.goalState
-				if goalState == nil {
-					goalState = goalStateStore(threadState)
+				tasksState := opts.tasksState
+				if tasksState == nil {
+					tasksState = tasksStateStore(threadState)
 				}
-				return goalmodule.NewWithOptions(goalState, goalmodule.Options{
-					EnableContinuation:   opts.goalContinuation,
-					ContinuationDeferrer: opts.goalContinuationDeferrer,
+				return tasksmodule.NewWithOptions(tasksState, tasksmodule.ModuleOptions{
+					EnableContinuation:   opts.tasksContinuation,
+					ContinuationDeferrer: opts.tasksContinuationDeferrer,
 					EventSink:            eventSink,
 					CurrentTurnID:        currentTurnID,
 				}), nil
@@ -284,7 +284,7 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 				return hooks.NewModule(opts.hookRunner, hooks.ModuleOptions{
 					BaseRequest:           base,
 					GenerationJournalPath: threadState.CurrentGenerationJournalPath,
-					GoalState:             goalState,
+					TasksState:            tasksState,
 				}), nil
 			},
 		})

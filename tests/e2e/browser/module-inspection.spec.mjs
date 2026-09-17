@@ -14,10 +14,10 @@ async function openModuleThread(page, mode = "ready", options = {}) {
     resources: [], operations: [], ...(mode === "error" ? { error: "unreadable state" } : {}) });
   const snapshot = { agent_id: "test-agent", thread_id: "0", composition_revision: mode, revision: mode, read_only: Boolean(options.readOnly || options.stopped),
     observed_cursor: { generation_id: "g1", seq: 1, offset: 1 },
-    modules: enabled ? { goal: state("goal", mode === "empty" ? null : { description: "Verify module views", status: "in_progress" }),
+    modules: enabled ? { tasks: state("tasks", mode === "empty" ? null : { tasks: [{ id: "task-1", title: "Verify module views", description: "Inspect task details", acceptance: "Views pass", status: "doing", status_reason: "Browser verification", priority: "p0", continuation_count: 2, updated_at: "2026-09-17T10:00:00Z" }] }),
       notes: state("notes", mode === "empty" ? null : { content: "Check scoped resources" }),
       scratchpad: { ...state("scratchpad", null), resources: ["files"] } } : {},
-    ui: enabled ? ["goal.status", "notes.status", "scratchpad.files"].map((id) => ({ id, module_id: id.split(".")[0], version: 1 })) : [],
+    ui: enabled ? ["tasks.status", "notes.status", "scratchpad.files"].map((id) => ({ id, module_id: id.split(".")[0], version: 1 })) : [],
   };
   if (options.only) {
     snapshot.ui = snapshot.ui.filter((item) => options.only.includes(item.module_id));
@@ -94,7 +94,7 @@ async function openModuleThread(page, mode = "ready", options = {}) {
 
 test("module state loads through the shared snapshot and file resources stay lazy", async ({ page }) => {
   const reads = await openModuleThread(page);
-  const badge = page.getByRole("button", { name: /^Open goal:/ });
+  const badge = page.getByRole("button", { name: /^Open tasks:/ });
   await expect(badge).toBeVisible();
   await badge.click();
   await expect(page.getByText("Verify module views", { exact: true })).toBeVisible();
@@ -113,17 +113,17 @@ test("module state loads through the shared snapshot and file resources stay laz
 test("disabled composition hides module controls and does not read resource bodies", async ({ page }) => {
   const reads = await openModuleThread(page, "disabled");
   await expect(page.getByRole("group", { name: "Thread status", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Open goal:/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Open tasks:/ })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "File root" })).toHaveCount(0);
   expect(reads()).toBe(0);
 });
 
 test("empty state and unreadable state have distinct presentation", async ({ page }) => {
   await openModuleThread(page, "empty");
-  await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Open tasks:/ })).toBeVisible();
   await page.unrouteAll();
   await openModuleThread(page, "error");
-  await expect(page.getByText("Goal unavailable: unreadable state", { exact: true })).toBeVisible();
+  await expect(page.getByText("Tasks unavailable: unreadable state", { exact: true })).toBeVisible();
 });
 
 test("a directory refresh preserves an in-flight module file preview", async ({ page }) => {
@@ -152,7 +152,7 @@ test("a directory refresh preserves an in-flight module file preview", async ({ 
 
 test("module controls share one Thread subscription", async ({ page }) => {
   await openModuleThread(page);
-  await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Open tasks:/ })).toBeVisible();
   await page.getByRole("tab", { name: "Files", exact: true }).click();
   await selectScratchpad(page);
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
@@ -161,7 +161,7 @@ test("module controls share one Thread subscription", async ({ page }) => {
 
 test("stream failure marks retained module state unavailable and the same baseline recovers", async ({ page }) => {
   await openModuleThread(page);
-  const badge = page.getByRole("button", { name: /^Open goal:/ });
+  const badge = page.getByRole("button", { name: /^Open tasks:/ });
   await expect(badge).toBeVisible();
   await page.evaluate(() => window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).fail());
   await expect(page.getByText("Module state unavailable", { exact: true })).toBeVisible();
@@ -176,7 +176,7 @@ test("stream failure marks retained module state unavailable and the same baseli
 
 test("a deliberate baseline close stays available but a failed reconnect surfaces the error", async ({ page }) => {
   await openModuleThread(page);
-  const badge = page.getByRole("button", { name: /^Open goal:/ });
+  const badge = page.getByRole("button", { name: /^Open tasks:/ });
   await expect(badge).toBeVisible();
   await page.evaluate(() => {
     const source = window.moduleSources.find((item) => item.readyState !== EventSource.CLOSED);
@@ -200,7 +200,7 @@ async function publishModules(page, change = {}) {
       next.modules = Object.fromEntries(Object.entries(next.modules).filter(([id]) => change.only.includes(id)));
     }
     if (change.unknown) next.ui.push({ id: "future.status", module_id: "future", version: 1 });
-    if (change.version) next.ui.find((item) => item.id === "goal.status").version = 2;
+    if (change.version) next.ui.find((item) => item.id === "tasks.status").version = 2;
     if (change.broken) {
       next.modules.notes.value = { content: {} };
       next.modules.notes.revision = `broken-${next.revision}`;
@@ -209,21 +209,43 @@ async function publishModules(page, change = {}) {
       next.modules.notes.value = { content: change.notes };
       next.modules.notes.revision = `notes-${next.revision}`;
     }
+    if (change.tasks) {
+      next.modules.tasks.value = { tasks: change.tasks };
+      next.modules.tasks.revision = `tasks-${next.revision}`;
+    }
     window.moduleSources.find((source) => source.readyState !== EventSource.CLOSED).send(next);
   }, change);
 }
 
-test("Goal and Notes independently follow the server contribution list", async ({ page }) => {
+test("task collection updates and deleting the last task clear the inspector", async ({ page }) => {
+  await openModuleThread(page);
+  const task = { id: "export", title: "Export data", description: "Write JSON output", acceptance: "Output parses", status: "doing", status_reason: "Writing", priority: "p0", continuation_count: 2, updated_at: "2026-09-17T10:00:00Z" };
+  await publishModules(page, { tasks: [task, { ...task, id: "tests", title: "Test export", status: "done", priority: "p2" }] });
+  const badge = page.getByRole("button", { name: "Open tasks: tasks 1/2", exact: true });
+  await expect(badge).toBeVisible();
+  await badge.click();
+  await expect(page.getByText("Export data", { exact: true })).toBeVisible();
+  await expect(page.getByText("Test export", { exact: true })).toBeVisible();
+  await expect(page.getByText("doing · p0", { exact: true })).toBeVisible();
+  await expect(page.getByText("done · p2", { exact: true })).toBeVisible();
+  await publishModules(page, { tasks: [] });
+  await expect(page.getByText("No tasks for this thread.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Export data", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Test export", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open tasks: tasks empty", exact: true })).toBeVisible();
+});
+
+test("Tasks and Notes independently follow the server contribution list", async ({ page }) => {
   const reads = await openModuleThread(page);
-  await publishModules(page, { only: ["goal"] });
-  await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+  await publishModules(page, { only: ["tasks"] });
+  await expect(page.getByRole("button", { name: /^Open tasks:/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toHaveCount(0);
   await publishModules(page, { only: ["notes"] });
-  await expect(page.getByRole("button", { name: /^Open goal:/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Open tasks:/ })).toHaveCount(0);
   await page.getByRole("tab", { name: "Status", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
   await publishModules(page, { only: [] });
-  await expect(page.getByRole("button", { name: /^Open (goal|notes):/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Open (tasks|notes):/ })).toHaveCount(0);
   expect(reads()).toBe(0);
 });
 
@@ -242,7 +264,7 @@ test("disabling a selected root cancels preview and subscription and forgets the
   await selectScratchpad(page);
   await page.getByRole("button", { name: "draft.md", exact: true }).click();
   await started;
-  await publishModules(page, { only: ["goal", "notes"] });
+  await publishModules(page, { only: ["tasks", "notes"] });
   await expect(page.getByRole("combobox", { name: "File root" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh workspace", exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.fileSources.every((source) => source.readyState === EventSource.CLOSED))).toBe(true);
@@ -280,12 +302,12 @@ test("unsupported and broken renderers leave other contributions usable", async 
   await openModuleThread(page);
   await publishModules(page, { unknown: true, version: true });
   await expect(page.getByText("future.status v1 unavailable: unsupported contribution")).toBeVisible();
-  await expect(page.getByText("goal.status v2 unavailable: unsupported contribution")).toBeVisible();
+  await expect(page.getByText("tasks.status v2 unavailable: unsupported contribution")).toBeVisible();
   await page.getByRole("tab", { name: "Status", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
   await publishModules(page, { broken: true });
   await expect(page.getByText("Notes unavailable: display error")).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Open tasks:/ })).toBeVisible();
   await page.getByRole("tab", { name: "Files", exact: true }).click();
   await selectScratchpad(page);
   await expect(page.getByRole("button", { name: "draft.md", exact: true })).toBeVisible();
@@ -300,7 +322,7 @@ test("unsupported and broken renderers leave other contributions usable", async 
 for (const mode of ["readOnly", "stopped"]) {
   test(`${mode} Threads retain readable module slots`, async ({ page }) => {
     await openModuleThread(page, "ready", { [mode]: true });
-    await page.getByRole("button", { name: /^Open goal:/ }).click();
+    await page.getByRole("button", { name: /^Open tasks:/ }).click();
     await expect(page.locator("details[open]").getByText("Read only", { exact: true })).toBeVisible();
     await expect(page.getByText("Verify module views", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
@@ -320,8 +342,8 @@ test("initial snapshot loading is distinct from disabled and empty modules", asy
   await openModuleThread(page, "empty", { defer });
   await expect(page.getByText("Loading modules…", { exact: true })).toBeVisible();
   release();
-  await page.getByRole("button", { name: "Open goal: goal none", exact: true }).click();
-  await expect(page.getByText("No goal state for this thread.")).toBeVisible();
+  await page.getByRole("button", { name: "Open tasks: tasks empty", exact: true }).click();
+  await expect(page.getByText("No tasks for this thread.")).toBeVisible();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Open notes: notes empty", exact: true }).click();
   await expect(page.getByText("No working notes for this thread.")).toBeVisible();
@@ -347,7 +369,7 @@ for (const route of ["/agents/test-agent/threads/1", "/agents/other-agent/thread
       window.moduleSources.filter((source) => source.readyState === EventSource.CLOSED).forEach((source) => source.send({ ...window.moduleBaseline, revision: "late", ui: [], modules: {} }));
     });
     await page.getByRole("tab", { name: "Status", exact: true }).click();
-    await expect(page.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Open tasks:/ })).toBeVisible();
     const treeResponse = page.waitForResponse((response) => response.url().includes(`${route.replace("/threads/", "/api/threads/")}/modules/scratchpad/resources/files/tree`));
     await page.getByRole("tab", { name: "Files", exact: true }).click();
   await selectScratchpad(page);
@@ -370,7 +392,7 @@ test("mobile file sheet follows module removal without retaining its preview", a
   await expect(page.getByRole("button", { name: "Refresh workspace", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Status", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Open notes:/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Open goal:/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Open tasks:/ })).toHaveCount(0);
 });
 
 test("read-only transitions stop file subscriptions while manual refresh remains available", async ({ page }) => {
@@ -394,7 +416,7 @@ test("read-only transitions stop file subscriptions while manual refresh remains
 test("Thread state stays in the sidebar and the Agent title opens Chat", async ({ page }) => {
   await openModuleThread(page);
   const sidebar = page.getByRole("complementary", { name: "Thread sidebar" });
-  await expect(sidebar.getByRole("button", { name: /^Open goal:/ })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: /^Open tasks:/ })).toBeVisible();
   await expect(page.locator("header").getByRole("link", { name: "Chat with test-agent" })).toHaveAttribute("href", "/agents/test-agent");
   await expect(page.locator("header").getByRole("link", { name: "Runtime", exact: true })).toHaveAttribute("href", "/agents/test-agent/runtime");
   await expect(page.getByRole("tab", { name: "Status", exact: true })).toHaveAttribute("aria-selected", "true");

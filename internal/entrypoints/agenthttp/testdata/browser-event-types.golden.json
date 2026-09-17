@@ -30,7 +30,7 @@
   "pending_input.drained",
   "pending_input.dropped",
   "pending_input.rejected",
-  "goal.updated",
+  "tasks.updated",
   "notes.updated",
   "notes.errored",
   "observable.started",

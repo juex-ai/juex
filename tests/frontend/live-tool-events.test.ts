@@ -469,7 +469,7 @@ test("applyToolResultToMessages inserts after the matching later tool_use", () =
         {
           type: "tool_use",
           tool_use_id: "new-tool",
-          tool_name: "create_goal",
+          tool_name: "create_task",
         },
       ],
     },
@@ -478,7 +478,7 @@ test("applyToolResultToMessages inserts after the matching later tool_use", () =
   const next = applyToolResultToMessages(messages, {
     turnID: "t1",
     toolUseID: "new-tool",
-    toolName: "create_goal",
+    toolName: "create_task",
     content: "new result",
   });
 

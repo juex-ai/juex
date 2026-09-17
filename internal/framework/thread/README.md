@@ -16,7 +16,7 @@ project-wide storage layout is defined in
   JSONL durability and bounded reads to `internal/foundation/jsonl`.
 - Timeline and diagnostic consumers use Thread methods or an
   `EventStoreSnapshot`; they do not construct or open Generation paths.
-- Runtime owns bounded Pending Input state. Goal and Notes Modules own their
+- Runtime owns bounded Pending Input state. Tasks and Notes Modules own their
   Thread-scoped files. This package may coordinate lifecycle file operations
   without interpreting those module schemas. Scratchpad preparation and path
   publication belong to its Module; creating or opening a Thread does not

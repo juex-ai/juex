@@ -6,7 +6,7 @@
 
 建议采用 **Go 决定有效能力和 UI 贡献，Web 通过固定插槽装配功能组件**。配置只在 Go 解析一次；Web 消费装配结果，不重复实现 preset、默认值和开关优先级。功能仍分别有 Go 和 TypeScript 实现，但业务状态、权限和启用决策只有一个权威来源。
 
-这比各页面读取配置更集中，也比运行时加载任意前端插件或用 Go 描述整棵 UI 树更适合当前三个内置功能。先完成 Goal、Notes、Scratchpad 的纵向模块化，后续再决定第三方 Extension 是否需要自带 UI。
+这比各页面读取配置更集中，也比运行时加载任意前端插件或用 Go 描述整棵 UI 树更适合当前三个内置功能。先完成 Tasks、Notes、Scratchpad 的纵向模块化，后续再决定第三方 Extension 是否需要自带 UI。
 
 **评论处理**
 
@@ -20,16 +20,16 @@
 
 | 项目 | 本地源码提交 | 本次重点 |
 | --- | --- | --- |
-| JueX | `2b0c1bbdc2e55741d680e858e79c635899bf9cf1` | Thread API、前端状态投影、Goal/Notes 状态入口、Scratchpad 面板 |
+| JueX | `2b0c1bbdc2e55741d680e858e79c635899bf9cf1` | Thread API、前端状态投影、Tasks/Notes 状态入口、Scratchpad 面板 |
 | Codex | `d1d51f6315f84a1737c655cb4d78104d030d5102` | app-server 的 MCP UI 能力声明、工具关联 UI 资源、来源绑定 |
-| DeepSeek Harness | `0a53fb55bea101816fa226bb964ae2bed71c343b` | Host/Client 插件装配、Slots、Session projection、Goal UI |
+| DeepSeek Harness | `0a53fb55bea101816fa226bb964ae2bed71c343b` | Host/Client 插件装配、Slots、Session projection、Tasks UI |
 | Pi | `05558a79280a2f1356bd390a573aeb28726d26b5` | TUI 扩展、工具结果渲染、RPC UI 协议及限制 |
 
 **三种实现的区别**
 
 | 项目 | UI 由谁实现 | 宿主提供的扩展面 | 状态与通信 | 对 JueX 的意义 |
 | --- | --- | --- | --- | --- |
-| Codex / MCP UI 路径 | 插件提供 HTML/JS 资源，支持该协议的客户端负责展示 | 工具关联的 UI 资源及 MCP Apps 能力协商；不是已证实的任意主界面插槽 | 工具结果、资源读取和 UI bridge；资源与调用来源关联 | 适合未来第三方交互卡片，不能直接替代常驻 Goal/Notes/Scratchpad 面板 |
+| Codex / MCP UI 路径 | 插件提供 HTML/JS 资源，支持该协议的客户端负责展示 | 工具关联的 UI 资源及 MCP Apps 能力协商；不是已证实的任意主界面插槽 | 工具结果、资源读取和 UI bridge；资源与调用来源关联 | 适合未来第三方交互卡片，不能直接替代常驻 Tasks/Notes/Scratchpad 面板 |
 | DeepSeek Harness | 浏览器插件中的 React 组件 | 有类型、作用域和释放语义的 Slot 注册；Host 输出实际 Client 装配图 | Host 权威状态 → 通用 projection/Remote → Client 模型 → UI | 最接近当前需求，值得借鉴状态贡献和插槽，完整动态加载器成本较高 |
 | Pi | TypeScript 扩展中的终端组件；RPC 客户端自行实现支持的展示 | 工具/消息渲染器、widget、footer/header、custom TUI；RPC 只覆盖其中一部分 | Session 扩展状态、工具 details，以及 UI 请求/响应 | 适合借鉴轻量 UI 命令；完整 TUI 组件不能直接送到浏览器执行 |
 
@@ -66,14 +66,14 @@ RPC 模式暴露的是另一条边界：select/confirm/input/editor 等转换成
 
 | 位置 | 当前耦合 | 建议归属 |
 | --- | --- | --- |
-| [Thread 响应及读取](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/handlers.go#L129) | 顶层 Goal/Notes 字段；非活动 Thread 路径直接按开关构造具体 Store | 通用 Thread 状态容器；具体读取交给模块的只读贡献者 |
-| [前端事件投影](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/lib/thread-read-state.ts#L390) | 核心 reducer 识别 goal.updated / notes.updated 并更新专用字段 | 通用模块快照替换；具体业务状态由 Go 模块提供 |
-| [ThreadStatusPanel](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/thread/ThreadStatusPanel.tsx#L35) | 总会挂载 Goal/Notes 合并入口；缺少值时仍能显示 goal idle | 固定状态区插槽；Goal/Notes 分别贡献，壳只管理布局 |
+| [Thread 响应及读取](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/handlers.go#L129) | 顶层 Tasks/Notes 字段；非活动 Thread 路径直接按开关构造具体 Store | 通用 Thread 状态容器；具体读取交给模块的只读贡献者 |
+| [前端事件投影](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/lib/thread-read-state.ts#L390) | 核心 reducer 识别 tasks.updated / notes.updated 并更新专用字段 | 通用模块快照替换；具体业务状态由 Go 模块提供 |
+| [ThreadStatusPanel](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/thread/ThreadStatusPanel.tsx#L35) | 总会挂载 Tasks/Notes 合并入口；缺少值时仍能显示 tasks idle | 固定状态区插槽；Tasks/Notes 分别贡献，壳只管理布局 |
 | [AppShell 文件面板](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/AppShell.tsx#L334) | Scratchpad 模式、切换按钮、请求及刷新 revision 写在总壳 | 文件区域注册点；Scratchpad 提供自己的根和加载器 |
 | [Web 路由](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/server.go#L214) / [文件读取](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/files.go#L119) | 核心分派 scratchpad 子路径并理解具体根 | 模块拥有资源适配，Web 只提供作用域、鉴权和传输 |
 | [Module 接口](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/runtime/module/registry.go#L20) | 已有工具/上下文/策略生命周期，没有完整的 Web 贡献契约 | 新增窄的状态/资源与展示贡献边界，保持 Engine 不依赖 HTTP 或 React |
 
-只把 Go 原始配置传给每个页面，无法消除上面的具体 Store、事件名和布局接线。只把这些状态改名放入 `map[string]any`，但仍在 Web 核心里 switch goal/notes，也没有完成解耦。
+只把 Go 原始配置传给每个页面，无法消除上面的具体 Store、事件名和布局接线。只把这些状态改名放入 `map[string]any`，但仍在 Web 核心里 switch tasks/notes，也没有完成解耦。
 
 **建议的最小结构**
 
@@ -94,9 +94,9 @@ flowchart LR
 
 Go 侧由 App 根据同一有效 Module 集合装配运行能力和展示适配器。模块提供可展示状态、资源或操作；展示适配器提供稳定的 UI ID。Web adapter 负责 HTTP/SSE，Engine 无需知道具体 UI 或浏览器连接。配置不再经过前端二次决策，UI 数据也不自动进入 ContextProvider。
 
-Web 侧先使用随 JueX 一起构建的功能包，例如 `frontend/src/modules/goal`、`notes`、`scratchpad`。只有统一装配层根据服务端贡献选择加载和注册；页面只渲染固定插槽，不包含 `if (config.modules.goal.enabled)`。组件可判断自身的加载、空值和错误状态，这与判断模块开关是两件事。
+Web 侧先使用随 JueX 一起构建的功能包，例如 `frontend/src/modules/tasks`、`notes`、`scratchpad`。只有统一装配层根据服务端贡献选择加载和注册；页面只渲染固定插槽，不包含 `if (config.modules.tasks.enabled)`。组件可判断自身的加载、空值和错误状态，这与判断模块开关是两件事。
 
-首版两个插入区域足够：Thread 状态区、文件面板的可选文件根。Goal/Notes 各自注册状态内容，可共享同一个容器而不互相导入；Scratchpad 提供文件根及加载器，复用已有文件树。暂不建设通用布局 DSL、任意脚本加载、热更新或第三方 React 依赖管理。
+首版两个插入区域足够：Thread 状态区、文件面板的可选文件根。Tasks/Notes 各自注册状态内容，可共享同一个容器而不互相导入；Scratchpad 提供文件根及加载器，复用已有文件树。暂不建设通用布局 DSL、任意脚本加载、热更新或第三方 React 依赖管理。
 
 Go 只发布稳定贡献 ID 和协议版本；具体 slot、组件选择及排序由 Web 注册器拥有，避免两端重复维护布局映射。
 
@@ -107,38 +107,38 @@ Go 只发布稳定贡献 ID 和协议版本；具体 slot、组件选择及排�
   "thread_id": "0",
   "composition_revision": "opaque-runtime-revision",
   "ui": [
-    {"id": "goal.status", "module": "goal", "version": 1}
+    {"id": "tasks.status", "module": "tasks", "version": 1}
   ],
   "module_state": {
-    "goal": {"version": 1, "revision": 12, "status": "ready", "value": null}
+    "tasks": {"version": 1, "revision": 12, "status": "ready", "value": null}
   }
 }
 ```
 
-- 缺少 UI 贡献表示不挂载；`ready + null` 表示模块可用但尚无 Goal；读取失败单独表示 error。不能以“字段为 null”同时表达关闭、空值和故障。
-- Goal/Notes 状态以 `module_id + version + revision + value` 命名；宿主只校验信封和分发，具体 schema 由模块拥有。Go/TS 的传输类型通过同源 schema 或生成声明保持一致，而不由核心维护每个业务类型。
+- 缺少 UI 贡献表示不挂载；`ready + null` 表示模块可用但尚无 Tasks；读取失败单独表示 error。不能以“字段为 null”同时表达关闭、空值和故障。
+- Tasks/Notes 状态以 `module_id + version + revision + value` 命名；宿主只校验信封和分发，具体 schema 由模块拥有。Go/TS 的传输类型通过同源 schema 或生成声明保持一致，而不由核心维护每个业务类型。
 - 初始快照与实时更新必须解决订阅竞争：捕获一致的 snapshot/cursor，或先订阅缓冲再读快照并按 revision 去重。重连替换完整基线，旧请求不能覆盖较新状态；不能仅增加事件监听器而遗漏初始状态与恢复。
 - 当前 Thread、尚未启动的 Thread、归档 Thread 都应通过同一只读状态贡献查询；读取历史不能为了展示而启动 Engine、加载模型或创建 Scratchpad。归档只读限制由宿主执行。
 - Scratchpad 文件树按需读取，不能把整棵树塞进每个 Thread 响应。模块关闭时不提供该文件根，也不注册它的专用读取/观察资源。
 - 配置变更暂沿用重启 Agent；重连按新的 composition revision 清理失效组件、订阅和缓存。Fleet 切换 Agent/Thread 时以对应身份隔离状态，避免沿用上一个 Agent 的 UI 能力。
-- 服务端每次操作仍检查当前模块注册、Thread 作用域和权限。隐藏按钮不能替代后端能力约束。Goal/Notes 的当前工作状态随模块关闭或移除删除，重新启用从空状态开始；Scratchpad 文件、配置和历史保留。旧工具结果可用通用历史视图展示，不重建已删除的当前状态。
+- 服务端每次操作仍检查当前模块注册、Thread 作用域和权限。隐藏按钮不能替代后端能力约束。Tasks/Notes 的当前工作状态随模块关闭或移除删除，重新启用从空状态开始；Scratchpad 文件、配置和历史保留。旧工具结果可用通用历史视图展示，不重建已删除的当前状态。
 
 ## 工作状态的删除与保留
 
-Goal/Notes 是有时效性的当前工作状态。模块被禁用或从有效组合移除时，删除其 `goal_state.json` / `notes.md`，重新开启从空状态开始。删除当前状态不改写已经持久化的对话和事件历史，也不从旧事件自动恢复这份状态。
+Tasks/Notes 是有时效性的当前工作状态。模块被禁用或从有效组合移除时，删除其 `tasks.json` / `notes.md`，重新开启从空状态开始。删除当前状态不改写已经持久化的对话和事件历史，也不从旧事件自动恢复这份状态。
 
-| 生命周期事件 | Goal/Notes 当前状态 | Scratchpad、Memory 持久知识、用户配置和历史 |
+| 生命周期事件 | Tasks/Notes 当前状态 | Scratchpad、Memory 持久知识、用户配置和历史 |
 | --- | --- | --- |
 | 正常退出、重启，模块仍启用 | 保留，支持继续工作 | 保留 |
 | 启用模块执行上下文重置 `/new` | 按该模块的重置语义清理 | 保留 |
 | 模块禁用或移除的配置生效 | 删除；下次启用为空 | 保留 |
 | 配置预览、校验失败、只读查询 | 不触发清理 | 保留 |
 
-清理属于框架的资源生命周期。模块声明哪些私有状态可在移除时丢弃；资源建立时，框架记录 owner、Thread 内相对位置及保留策略。禁用模块不构造运行实例，框架仅根据这些通用归属记录清理文件，不解析 Goal/Notes 正文。归属信息独立于模块实例存在，因此实现代码不再参与装配时仍能清理，也不需要在核心维护模块名称分支。
+清理属于框架的资源生命周期。模块声明哪些私有状态可在移除时丢弃；资源建立时，框架记录 owner、Thread 内相对位置及保留策略。禁用模块不构造运行实例，框架仅根据这些通用归属记录清理文件，不解析 Tasks/Notes 正文。归属信息独立于模块实例存在，因此实现代码不再参与装配时仍能清理，也不需要在核心维护模块名称分支。
 
 配置通过校验并被确认应用后，先停止旧组合的相关写入，再执行移除清理，完成后发布新组合。没有运行实例的 Thread 也在清理范围内。清理是幂等操作：文件不存在即成功；失败保留待清理记录并报告，成功前不能认为移除完成，重新启用前也必须完成待清理工作。普通 Close、进程退出和失败的候选配置不代表功能移除。
 
-这直接解决“创建 Goal → 禁用并生效 → /new → 再启用”的过期状态问题，无需为这条路径额外设计旧 Goal 的自动恢复规则。这里约定的是设计语义；本轮只更新文档。
+这直接解决“创建 Tasks → 禁用并生效 → /new → 再启用”的过期状态问题，无需为这条路径额外设计旧 Tasks 的自动恢复规则。这里约定的是设计语义；本轮只更新文档。
 
 **关于“全部由 Go 收敛”**
 
@@ -148,7 +148,7 @@ Goal/Notes 是有时效性的当前工作状态。模块被禁用或从有效组
 
 **实现后的验收重点**
 
-1. Goal、Notes 独立关闭或同时关闭时，对应工具、上下文、状态读取、UI 入口和订阅均消失，另一模块正常工作；无残留 goal idle 占位；使禁用配置生效后，Goal/Notes 当前状态文件被清理，再开启不会复活旧状态。
+1. Tasks、Notes 独立关闭或同时关闭时，对应工具、上下文、状态读取、UI 入口和订阅均消失，另一模块正常工作；无残留 tasks idle 占位；使禁用配置生效后，Tasks/Notes 当前状态文件被清理，再开启不会复活旧状态。
 2. Scratchpad 关闭后没有切换入口、文件树请求或专用 watcher，已打开面板回到 Workspace，磁盘旧文件保持不动。
 3. 空状态、错误状态、初次加载、重连、切换 Agent/Thread 和归档只读都有明确行为，迟到响应不会恢复已禁用功能。
 4. 新增一个测试用状态贡献不需要修改核心 Thread 业务字段、Go Web handler 或前端业务 reducer，只在装配根接入实现。核心仍负责信封、作用域和传输。

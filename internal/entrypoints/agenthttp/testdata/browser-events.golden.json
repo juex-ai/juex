@@ -787,20 +787,28 @@
     }
   },
   {
-    "id": "evt-goal-updated",
-    "type": "goal.updated",
+    "id": "evt-tasks-updated",
+    "type": "tasks.updated",
     "schema_version": 1,
     "ts": "2026-06-15T00:00:07.2Z",
     "turn_id": "turn-1",
     "payload": {
-      "description": "ship the fix",
-      "acceptance": "tests pass",
-      "continuation_count": 2,
-      "status": "in_progress",
-      "updated_at": "2026-06-15T00:00:07.2Z"
+      "tasks": [
+        {
+          "id": "task-1",
+          "title": "Ship fix",
+          "description": "ship the fix",
+          "acceptance": "tests pass",
+          "status": "todo",
+          "status_reason": "",
+          "priority": "p1",
+          "continuation_count": 2,
+          "updated_at": "2026-06-15T00:00:07.2Z"
+        }
+      ]
     },
     "status": {
-      "cursor": "evt-goal-updated",
+      "cursor": "evt-tasks-updated",
       "updated_at": "2026-06-15T00:00:07.2Z",
       "thread": {
         "id": "123456",

@@ -55,7 +55,7 @@ func (e *Engine) newContextLocked(ctx context.Context, allowActive bool) error {
 		}
 	}
 	generationID := current.Thread.Projection().CurrentGeneration.ID
-	clear, err := runtimemodule.ClearContextForRenewal(ctx, current.Modules, generationID)
+	clear, err := runtimemodule.StageContextTransition(ctx, current.Modules, runtimemodule.ContextTransitionNew, generationID)
 	if err != nil {
 		return err
 	}

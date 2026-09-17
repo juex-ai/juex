@@ -20,7 +20,7 @@ func TestModulePresets(t *testing.T) {
 		{name: "absent"},
 		{name: "standard", yaml: "preset: standard\n"},
 		{name: "minimal", yaml: "preset: minimal\n", minimal: true},
-		{name: "minimal overrides", yaml: "preset: minimal\nmodules:\n  goal:\n    enabled: true\n  shell:\n    enabled: false\n", minimal: true, overrides: map[string]bool{"goal": true, "shell": false}},
+		{name: "minimal overrides", yaml: "preset: minimal\nmodules:\n  tasks:\n    enabled: true\n  shell:\n    enabled: false\n", minimal: true, overrides: map[string]bool{"tasks": true, "shell": false}},
 		{name: "standard override", yaml: "preset: standard\nmodules:\n  notes:\n    enabled: false\n", overrides: map[string]bool{"notes": false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,14 +52,14 @@ func TestModulePresetLayeringPreservesExplicitSwitches(t *testing.T) {
 	layers := []string{
 		"preset: standard\nmodules:\n  skills:\n    enabled: true\n  shell:\n    enabled: false\n",
 		"preset: minimal\n",
-		"modules:\n  goal:\n    enabled: true\n  skills: {}\n",
+		"modules:\n  tasks:\n    enabled: true\n  skills: {}\n",
 	}
 	for _, layer := range layers {
 		if err := applyYAMLData(&cfg, []byte(layer), workspaceYAMLSource("layer.yaml")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if !cfg.ModuleEnabled("skills") || cfg.ModuleEnabled("shell") || !cfg.ModuleEnabled("goal") || cfg.ModuleEnabled("mcp") {
+	if !cfg.ModuleEnabled("skills") || cfg.ModuleEnabled("shell") || !cfg.ModuleEnabled("tasks") || cfg.ModuleEnabled("mcp") {
 		t.Fatalf("effective modules = %+v", cfg)
 	}
 	if err := applyYAMLData(&cfg, []byte("preset: standard\nmodules:\n  skills:\n    enabled: false\n"), workspaceYAMLSource("last.yaml")); err != nil {
@@ -77,7 +77,7 @@ func TestModulePresetValidation(t *testing.T) {
 		{"unknown module", "modules:\n  typo:\n    enabled: true\n", "unsupported module"},
 		{"unknown empty module", "modules:\n  typo: {}\n", "unsupported module"},
 		{"unknown null module", "modules:\n  typo: null\n", "unsupported module"},
-		{"unknown setting", "modules:\n  goal:\n    active: true\n", "active"},
+		{"unknown setting", "modules:\n  tasks:\n    active: true\n", "active"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Config{ModuleInventory: testModuleInventory()}
@@ -101,7 +101,7 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTextFile(t, filepath.Join(resolved.Address.StateDir(), "switches.yaml"), "modules:\n  notes:\n    enabled: false\n")
-	content := []byte("imports:\n  - source: switches.yaml\npreset: minimal\nmodules:\n  goal:\n    enabled: true\n  worker-threads:\n    enabled: true\n")
+	content := []byte("imports:\n  - source: switches.yaml\npreset: minimal\nmodules:\n  tasks:\n    enabled: true\n  worker-threads:\n    enabled: true\n")
 	validated, err := ValidateAgentConfig(testModuleInventory(), content, home, resolved.Agent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestModulePresetsAgentImportsAndSparseRoundTrip(t *testing.T) {
 	if validated.WorkerMaxDepth() != 2 || loaded.WorkerMaxDepth() != 2 || !loaded.ModuleEnabled("worker-threads") {
 		t.Fatal("imported depth was lost during sparse overlay save/reload")
 	}
-	if !loaded.ModuleEnabled("goal") || !loaded.ModuleEnabled("skills") || loaded.ModuleEnabled("shell") || loaded.ModuleEnabled("notes") || loaded.ModuleEnabled("mcp") {
+	if !loaded.ModuleEnabled("tasks") || !loaded.ModuleEnabled("skills") || loaded.ModuleEnabled("shell") || loaded.ModuleEnabled("notes") || loaded.ModuleEnabled("mcp") {
 		t.Fatalf("wrong effective policy: %+v", loaded.Modules)
 	}
 	for _, invalid := range []string{"preset: typo\n", "modules:\n  typo: {}\n", "modules:\n  worker-threads:\n    max_depth: null\n"} {

@@ -56,7 +56,7 @@ func TestModulePresetsSharePolicyAcrossReadOnlyMainAndWorker(t *testing.T) {
 		t.Fatalf("Worker not managed: %s", result)
 	}
 	for name, application := range map[string]*agent.Agent{"Main": main.Agent, "Worker": worker} {
-		for module, tool := range map[string]string{"goal": "get_goal", "notes": "update_notes", "context-control": "context_new", "skills": "skill_search", "basic-file-tools": "read", "worker-threads": "thread_create"} {
+		for module, tool := range map[string]string{"tasks": "list_tasks", "notes": "update_notes", "context-control": "context_new", "skills": "skill_search", "basic-file-tools": "read", "worker-threads": "thread_create"} {
 			_, available := application.Engine.Tools.Get(tool)
 			want := cfg.ModuleEnabled(module) && (name == "Main" || module != "worker-threads")
 			if available != want {

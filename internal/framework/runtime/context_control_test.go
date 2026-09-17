@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/features/contextcontrol"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -25,15 +25,15 @@ func TestNewContextDoesNotRestoreStateAfterJournalCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = threadState.Close() })
 	engine.Thread = threadState
-	goal := goalmodule.NewGoalStateStore(engine.Thread.Dir, goalmodule.GoalStateOptions{})
+	tasks := tasksmodule.NewStore(engine.Thread.Dir, tasksmodule.Options{})
 	notes := notesmodule.NewNotesStore(engine.Thread.Dir)
-	if _, err := goal.Create("finish the committed renewal", "do not restore old state"); err != nil {
+	if _, err := tasks.Create(tasksmodule.Create{Status: tasksmodule.Done, Title: "Tracked work", Description: "finish the committed renewal", Acceptance: "do not restore old state"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notes.Update("- [ ] clear after the boundary"); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStores(t, engine, goal, notes)
+	installThreadStateModulesWithStores(t, engine, tasks, notes)
 
 	indexPath := store.IndexPath()
 	if err := os.Remove(indexPath); err != nil {
@@ -54,8 +54,8 @@ func TestNewContextDoesNotRestoreStateAfterJournalCommit(t *testing.T) {
 	if got := engine.Thread.Projection().CurrentGeneration.ID; got != "g000002" {
 		t.Fatalf("committed Generation = %q, want g000002", got)
 	}
-	if snapshot, snapshotErr := goal.StatusSnapshot(); snapshotErr != nil || snapshot != nil {
-		t.Fatalf("Goal restored after committed boundary: %+v, %v", snapshot, snapshotErr)
+	if snapshot, snapshotErr := tasks.StatusSnapshot(); snapshotErr != nil || snapshot != nil {
+		t.Fatalf("Tasks restored after committed boundary: %+v, %v", snapshot, snapshotErr)
 	}
 	if snapshot, snapshotErr := notes.StatusSnapshot(); snapshotErr != nil || snapshot != nil {
 		t.Fatalf("Notes restored after committed boundary: %+v, %v", snapshot, snapshotErr)
@@ -64,11 +64,11 @@ func TestNewContextDoesNotRestoreStateAfterJournalCommit(t *testing.T) {
 
 func TestNewContextStopsBeforeGenerationWhenModuleStateCannotClear(t *testing.T) {
 	engine, _ := newEngine(t, &mockProvider{}, false)
-	goal := goalmodule.NewGoalStateStore(engine.Thread.Dir, goalmodule.GoalStateOptions{})
-	if _, err := goal.Create("finish the migration", "module files remain authoritative"); err != nil {
+	tasks := tasksmodule.NewStore(engine.Thread.Dir, tasksmodule.Options{})
+	if _, err := tasks.Create(tasksmodule.Create{Status: tasksmodule.Done, Title: "Tracked work", Description: "finish the migration", Acceptance: "module files remain authoritative"}); err != nil {
 		t.Fatal(err)
 	}
-	goalBefore, err := os.ReadFile(goal.Path)
+	tasksBefore, err := os.ReadFile(tasks.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,18 +82,18 @@ func TestNewContextStopsBeforeGenerationWhenModuleStateCannotClear(t *testing.T)
 	if err := os.WriteFile(filepath.Join(notesPath, "block"), []byte("keep directory non-empty"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStores(t, engine, goal, notesmodule.NewNotesStore(engine.Thread.Dir))
+	installThreadStateModulesWithStores(t, engine, tasks, notesmodule.NewNotesStore(engine.Thread.Dir))
 
 	err = engine.NewContext(context.Background())
 	if err == nil || !strings.Contains(err.Error(), `module "notes" clear context state`) {
 		t.Fatalf("NewContext() error = %v", err)
 	}
-	goalAfter, err := os.ReadFile(goal.Path)
+	tasksAfter, err := os.ReadFile(tasks.Path)
 	if err != nil {
-		t.Fatalf("read restored Goal state: %v", err)
+		t.Fatalf("read restored Tasks state: %v", err)
 	}
-	if string(goalAfter) != string(goalBefore) {
-		t.Fatalf("restored Goal state = %q, want %q", goalAfter, goalBefore)
+	if string(tasksAfter) != string(tasksBefore) {
+		t.Fatalf("restored Tasks state = %q, want %q", tasksAfter, tasksBefore)
 	}
 	projection := engine.Thread.Projection()
 	if projection.CurrentGeneration.ID != thread.InitialGeneration || projection.Counts.GenerationCount != 1 {

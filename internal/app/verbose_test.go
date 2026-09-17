@@ -454,14 +454,14 @@ func TestVerbose_ToolBatchAggregatesSuccessfulTools(t *testing.T) {
 			ToolCalls: []toolevents.ToolCallPayload{
 				{ToolUseID: "call_1", Name: "memory_propose"},
 				{ToolUseID: "call_2", Name: "memory_propose"},
-				{ToolUseID: "call_3", Name: "update_goal"},
+				{ToolUseID: "call_3", Name: "update_task"},
 			},
 		}},
 		{Type: toolevents.CompletedType, Payload: toolevents.CompletedPayload{Name: "memory_propose", ToolUseID: "call_2"}},
-		{Type: toolevents.CompletedType, Payload: toolevents.CompletedPayload{Name: "update_goal", ToolUseID: "call_3"}},
+		{Type: toolevents.CompletedType, Payload: toolevents.CompletedPayload{Name: "update_task", ToolUseID: "call_3"}},
 		{Type: toolevents.CompletedType, Payload: toolevents.CompletedPayload{Name: "memory_propose", ToolUseID: "call_1"}},
 	})
-	for _, want := range []string{"… 2 memory_propose, 1 update_goal", "● 2 memory_propose, 1 update_goal"} {
+	for _, want := range []string{"… 2 memory_propose, 1 update_task", "● 2 memory_propose, 1 update_task"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}

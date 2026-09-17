@@ -24,12 +24,19 @@ DEFAULT_COMPACTION = {
     "user_input_inline_max_bytes": 524288,
 }
 
-AUTHORITATIVE_GOAL = {
+AUTHORITATIVE_TASKS = {
     "version": 1,
-    "description": "Ship authoritative compaction state fidelity for task CMP-2417.",
-    "acceptance": "The compact Goal matches goal_state and Notes survive unchanged.",
-    "status": "success",
-    "updated_at": "2026-09-01T00:00:00Z",
+    "tasks": [{
+        "id": "compaction-fidelity",
+        "title": "Compaction fidelity",
+        "description": "Ship authoritative compaction state fidelity for task CMP-2417.",
+        "acceptance": "The compact Tasks matches persisted tasks and Notes survive unchanged.",
+        "status": "pending",
+        "status_reason": "Waiting for evaluation results",
+        "priority": "p1",
+        "continuation_count": 0,
+        "updated_at": "2026-09-01T00:00:00.000Z",
+    }],
 }
 AUTHORITATIVE_COMPLETED_NOTE = "Map the compaction runtime."
 AUTHORITATIVE_OPEN_NOTE = "Run the live compaction evaluation and inspect its scorecard."
@@ -486,9 +493,9 @@ GF6:
 Tools:
 CompactionSource:
 NoInventedMerge:
-GoalDescription:
-GoalAcceptance:
-GoalStatus:
+TasksDescription:
+TasksAcceptance:
+TasksStatus:
 NotesCompleted:
 NotesOpen:
 """,
@@ -569,7 +576,7 @@ def seed_authoritative_state(work: pathlib.Path) -> None:
         raise ValueError(f"expected one active Thread after turn1, found {len(journals)}")
     thread_dir = journals[0].parent.parent
     seed_module_ownership(thread_dir)
-    write_json_atomic(thread_dir / "modules/goal/goal_state.json", AUTHORITATIVE_GOAL)
+    write_json_atomic(thread_dir / "modules/tasks/tasks.json", AUTHORITATIVE_TASKS)
     write_text_atomic(thread_dir / "modules/notes/notes.md", AUTHORITATIVE_NOTES)
 
 
@@ -577,7 +584,7 @@ def seed_module_ownership(thread_dir: pathlib.Path) -> None:
     """Establish the real resource ownership fixture before seeding state."""
     path = thread_dir / "module-resources.json"
     ledger = json.loads(path.read_text()) if path.exists() else {"version": 1, "resources": []}
-    for owner in ["goal", "notes"]:
+    for owner in ["tasks", "notes"]:
         record = {"module": owner, "scope": "thread", "path": f"modules/{owner}", "retention": "discard-on-removal"}
         matches = [r for r in ledger["resources"] if r["module"] == owner]
         if matches and matches != [record]:
@@ -585,7 +592,7 @@ def seed_module_ownership(thread_dir: pathlib.Path) -> None:
         if not matches:
             ledger["resources"].append(record)
     write_json_atomic(path, ledger)
-    for owner in ["goal", "notes"]:
+    for owner in ["tasks", "notes"]:
         (thread_dir / "modules" / owner).mkdir(parents=True, exist_ok=True)
 
 
@@ -621,22 +628,23 @@ def write_text_atomic(path: pathlib.Path, value: str) -> None:
 
 
 def score_authoritative_state(work: pathlib.Path, answer: str) -> dict:
-    goal = read_latest_json(work, "goal_state.json")
+    state = read_latest_json(work, "tasks.json")
+    tasks = state.get("tasks", [])
     notes = read_latest_text(work, "notes.md")
     summary = latest_compact_summary(work)
-    goal_section = summary_section(summary, "Goal", "Critical Context")
+    tasks_section = summary_section(summary, "Tasks", "Critical Context")
     next_steps = summary_section(summary, "Next Steps", "Relevant Files")
     checks = {
-        "goal_description": bool(goal.get("description")) and goal["description"] in goal_section,
-        "goal_acceptance": bool(goal.get("acceptance")) and goal["acceptance"] in goal_section,
-        "goal_status": bool(goal.get("status")) and goal["status"] in goal_section,
+        "task_description": bool(tasks) and all(task.get("description") and task["description"] in tasks_section for task in tasks),
+        "task_acceptance": bool(tasks) and all(task.get("acceptance") and task["acceptance"] in tasks_section for task in tasks),
+        "task_status": bool(tasks) and all(task.get("status") and task["status"] in tasks_section for task in tasks),
         "notes_unchanged": notes == AUTHORITATIVE_NOTES,
         "notes_in_next_steps": contains_note_text(next_steps, AUTHORITATIVE_OPEN_NOTE),
         "notes_recited_after_compaction": contains_note_text(answer, AUTHORITATIVE_COMPLETED_NOTE) and contains_note_text(answer, AUTHORITATIVE_OPEN_NOTE),
     }
-    goal_score = sum(6 for name in ["goal_description", "goal_acceptance", "goal_status"] if checks[name])
+    task_score = sum(6 for name in ["task_description", "task_acceptance", "task_status"] if checks[name])
     notes_score = sum(4 for name in ["notes_unchanged", "notes_in_next_steps", "notes_recited_after_compaction"] if checks[name])
-    return {"score": goal_score + notes_score, "checks": checks}
+    return {"score": task_score + notes_score, "checks": checks}
 
 
 def contains_note_text(haystack: str, note: str) -> bool:
@@ -746,7 +754,7 @@ def match_int(text: str, pattern: str) -> int:
 
 
 def copy_runtime_artifacts(work: pathlib.Path, out_dir: pathlib.Path) -> None:
-    for name in ["thread.json", "goal_state.json", "notes.md"]:
+    for name in ["thread.json", "tasks.json", "notes.md"]:
         for path in thread_files(work, name):
             shutil.copy2(path, out_dir / name)
     for path in generation_journal_files(work):
@@ -820,9 +828,9 @@ def write_scorecard_common(
             "",
         ]
         labels = {
-            "goal_description": "Goal description in compact Goal",
-            "goal_acceptance": "Goal acceptance in compact Goal",
-            "goal_status": "Goal status in compact Goal",
+            "task_description": "Tasks description in compact Tasks",
+            "task_acceptance": "Tasks acceptance in compact Tasks",
+            "task_status": "Tasks status in compact Tasks",
             "notes_unchanged": "Notes unchanged on disk",
             "notes_in_next_steps": "Unfinished Notes item in compact Next Steps",
             "notes_recited_after_compaction": "Notes recited after compaction",

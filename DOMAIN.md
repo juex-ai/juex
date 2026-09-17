@@ -15,7 +15,7 @@ storage implementation belong in [ARCHITECTURE.md](ARCHITECTURE.md).
 | Fleet Memory | Shared durable knowledge, requests, receipts, source progress and deletion constraints in an independent service; Supervisor executes model review. |
 | Agent | Long-lived identity, Workspace ownership, configuration overlay, rebuildable Thread list index, active and archived Threads, media, logs, Memory participation/cursor state, Observable definitions and state, and Extension state. |
 | Thread | Identity, topology, lifecycle, Context Generation registry, pending Inputs, Turns, messages, Events, Usage, and spool. |
-| Thread Module | Optional Thread-scoped state such as Goal, Notes, and Scratchpad, including its resources, context, and Generation lifecycle behavior. |
+| Thread Module | Optional Thread-scoped state such as Tasks, Notes, and Scratchpad, including its resources, context, and Generation lifecycle behavior. |
 | Agent Runtime | Replaceable process resources: Providers, MCP clients, Tools, Observables, schedulers, and live subscriptions. |
 
 An Agent is bound to one Workspace. Replacing its Runtime does not replace its
@@ -86,24 +86,31 @@ remain unchecked until the model checks them. A settled Turn does not imply
 a checked input, and an unchecked settled input is not a queued execution.
 Failures and compaction preserve unchecked inputs. Disablement retains existing
 records while stopping new registration and reminders; these core input records
-are not disposable Goal/Notes resources. Host `/new` starts a new work scope,
+are not disposable Tasks/Notes resources. Host `/new` starts a new work scope,
 while compaction retains it. Checking cannot cancel execution or prove correctness.
 
 ## Context Generations And Thread Work State
 
 A Context Generation is one Provider-visible context epoch inside a Thread.
 
-- `/new` starts an empty Generation, asks enabled Goal and Notes Modules to
-  clear their state, and records `context.renewed`.
-- `/compact` starts a Generation from a compact summary, retains Goal and
-  Notes, and records `context.compacted`.
+- `/new` starts an empty Generation, removes done tasks, asks the enabled Notes
+  Module to clear its state, and records `context.renewed`.
+- `/compact` starts a Generation from a compact summary, removes done tasks and retains unfinished tasks and Notes, and records `context.compacted`.
 - Both retain chronological Generation history and Scratchpad files. Disabled
   Modules do not load, inject, or publish state; configuration retirement is
   independent of Generation changes.
 - Generation boundary records are user-visible system activity, not ordinary
   Provider dialogue.
 
-Goal and Notes are disposable Module-owned current state that can cross
+Tasks are model-owned work items with stable IDs, titles, descriptions,
+acceptance criteria, status reasons, priorities p0/p1/p2, and per-task continuation
+counts. At a finish boundary, doing precedes todo, then higher priority, then
+creation order. Pending and failed tasks remain inspectable without forcing
+continuation. Only done tasks are pruned on new and compact; unfinished tasks
+survive both. The model may check an input after fully recording its request in
+durable tasks; checking an input does not complete those tasks.
+
+Tasks and Notes are disposable Module-owned current state that can cross
 Generation boundaries. Applying a configuration that disables or removes their
 owner retires recorded resources across active and archived Threads. Re-enabling
 starts empty; retained history never restores retired work state. Ordinary

@@ -49,7 +49,7 @@ func TestModuleInspectionReadOnlyStateAndLazyResources(t *testing.T) {
 	if err := json.Unmarshal(request.Body.Bytes(), &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Modules["goal"].Status != "ready" || string(snapshot.Modules["goal"].Value) != "null" {
+	if snapshot.Modules["tasks"].Status != "ready" || string(snapshot.Modules["tasks"].Value) != "null" {
 		t.Fatalf("snapshot=%+v", snapshot)
 	}
 	request = httptest.NewRecorder()

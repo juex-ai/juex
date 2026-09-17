@@ -13,7 +13,7 @@ import (
 )
 
 func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) {
-	generated := "Goal\n保留当前状态"
+	generated := "Tasks\n保留当前状态"
 	msg := llm.TextMessage(llm.RoleUser, compactMessageText(generated+"\n\nRetained Input References\npath: stale"))
 	msg.Kind = llm.MessageKindCompact
 	msg.Compaction = &llm.CompactionMetadata{SummaryChars: len(generated)}
@@ -33,13 +33,13 @@ func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) 
 func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T) {
 	response := llm.Response{
 		Message: llm.TextMessage(llm.RoleAssistant, strings.Join([]string{
-			"**Goal**",
+			"**Tasks**",
 			"description: keep exact state",
 			"## Critical Context:",
 			"GF1: value",
 			"### **Next Steps**:",
 			"- [ ] finish the work",
-			"**Goal** is mentioned in prose and must not change.",
+			"**Tasks** is mentioned in prose and must not change.",
 		}, "\n")),
 		StopReason: llm.StopEndTurn,
 	}
@@ -48,25 +48,25 @@ func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T
 	if !ok {
 		t.Fatal("complete summary was rejected")
 	}
-	for _, heading := range []string{"Goal\n", "Critical Context\n", "Next Steps\n"} {
+	for _, heading := range []string{"Tasks\n", "Critical Context\n", "Next Steps\n"} {
 		if !strings.Contains(got, heading) {
 			t.Fatalf("normalized summary missing %q:\n%s", heading, got)
 		}
 	}
-	if !strings.Contains(got, "**Goal** is mentioned in prose and must not change.") {
+	if !strings.Contains(got, "**Tasks** is mentioned in prose and must not change.") {
 		t.Fatalf("normalization changed prose:\n%s", got)
 	}
 }
 
 func TestCompactionSummaryKeepsLiteralHeadingsInsideProtectedSections(t *testing.T) {
 	const literal = "````text\ndescription: Preserve literal fields\n## Next Steps\n```\n~~~\n```` not a closing fence\n    Critical Context\n````"
-	response := llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "## Goal\n"+literal+"\n## Critical Context\nKeep real facts\n## Next Steps\nKeep real actions"), StopReason: llm.StopEndTurn}
+	response := llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "## Tasks\n"+literal+"\n## Critical Context\nKeep real facts\n## Next Steps\nKeep real actions"), StopReason: llm.StopEndTurn}
 	summary, ok := completeCompactionSummaryText(response)
 	if !ok || !strings.Contains(summary, literal) {
 		t.Fatalf("normalization rewrote literal data: %s", summary)
 	}
 	state := compactionSummaryState{Contributions: []runtimemodule.OwnedCompactionContribution{{ModuleID: "literal-fixture", CompactionContribution: runtimemodule.CompactionContribution{
-		State: `"frozen"`, Section: "Goal", Reconcile: func(_ context.Context, candidate string) (string, error) {
+		State: `"frozen"`, Section: "Tasks", Reconcile: func(_ context.Context, candidate string) (string, error) {
 			if candidate != literal {
 				t.Errorf("literal section split at embedded heading: %q", candidate)
 			}
@@ -85,9 +85,9 @@ func TestCompactionSummaryKeepsLiteralHeadingsInsideProtectedSections(t *testing
 func TestCompactionSummaryLiteralSyntax(t *testing.T) {
 	for _, literal := range []string{
 		"   ~~~text\nNext Steps\n```\n~~~ trailing text\n    ~~~\n~~~",
-		"    Next Steps\n\tCritical Context\n  \tGoal",
+		"    Next Steps\n\tCritical Context\n  \tTasks",
 	} {
-		summary := "## Goal\nLiteral examples:\n" + literal + "\n## Next Steps\nReal action"
+		summary := "## Tasks\nLiteral examples:\n" + literal + "\n## Next Steps\nReal action"
 		got := normalizeCompactionSummaryHeadings(summary)
 		if !strings.Contains(got, literal) || !strings.HasSuffix(got, "Next Steps\nReal action") {
 			t.Fatalf("literal or structural headings changed: %s", got)
@@ -97,7 +97,7 @@ func TestCompactionSummaryLiteralSyntax(t *testing.T) {
 		}
 	}
 	for _, opening := range []string{"```text", "~~~text"} {
-		summary := "Goal\n" + opening + "\nNext Steps"
+		summary := "Tasks\n" + opening + "\nNext Steps"
 		if got, err := reconcileCompactionSummary(t.Context(), summary, compactionSummaryState{}, 1000); err != nil || got != summary {
 			t.Fatalf("summary without module reconciliation changed: %q, %v", got, err)
 		}
@@ -105,13 +105,13 @@ func TestCompactionSummaryLiteralSyntax(t *testing.T) {
 }
 
 func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult(t *testing.T) {
-	prev := testMsg("compact-1", llm.RoleUser, "Summary of earlier conversation:\nGoal\nold")
+	prev := testMsg("compact-1", llm.RoleUser, "Summary of earlier conversation:\nTasks\nold")
 	prev.Kind = llm.MessageKindCompact
 	input := []llm.Message{
 		{ID: "tool-result", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "tu1", Content: strings.Repeat("x", 50)}}},
 	}
 	sys, hist := buildCompactionSummaryRequest("base", prev, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 10}, "")
-	if !strings.Contains(sys, "Goal") || !strings.Contains(sys, "Tool Failures") {
+	if !strings.Contains(sys, "Tasks") || !strings.Contains(sys, "Tool Failures") {
 		t.Fatalf("system prompt missing required headings: %s", sys)
 	}
 	body := hist[0].FirstText()
@@ -200,8 +200,8 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 	if !strings.Contains(sys, "copy the actual values of labeled facts") {
 		t.Fatalf("system prompt does not require concrete facts:\n%s", sys)
 	}
-	if strings.Index(sys, "Critical Context") <= strings.Index(sys, "Goal") {
-		t.Fatalf("system prompt should place Critical Context immediately after Goal:\n%s", sys)
+	if strings.Index(sys, "Critical Context") <= strings.Index(sys, "Tasks") {
+		t.Fatalf("system prompt should place Critical Context immediately after Tasks:\n%s", sys)
 	}
 	if strings.Index(sys, "Critical Context") >= strings.Index(sys, "Constraints & Preferences") {
 		t.Fatalf("system prompt should place Critical Context before lower-priority headings:\n%s", sys)

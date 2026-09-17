@@ -17,7 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	"github.com/juex-ai/juex/tests/testsupport/modulestate"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/providers"
@@ -26,11 +26,10 @@ import (
 )
 
 func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithinHardLimit(t *testing.T) {
-	const goal = "Preserve task CMP-2417."
+	const tasks = "Preserve task CMP-2417."
 	const acceptance = "Keep the exact branch and pending check."
 	const note = "Run the live compaction evaluation."
-	const summary = "Goal\n" + goal + "\n" + acceptance + "\nStatus: success\nCritical Context\nhigh/context-projection\nNext Steps\n" + note
-	const committedSummary = "Goal\n```text\ndescription: " + goal + "\nacceptance: " + acceptance + "\nstatus: success\n```\nCritical Context\nhigh/context-projection\nConstraints & Preferences\nProgress\nKey Decisions\nNext Steps\n- [ ] " + note + "\nRelevant Files\nTool Failures"
+	const summary = "Tasks\n" + tasks + "\n" + acceptance + "\nStatus: success\nCritical Context\nhigh/context-projection\nNext Steps\n" + note
 	var mu sync.Mutex
 	var budgets []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +54,7 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 			budgets = append(budgets, request.MaxTokens)
 			summaryAttempt := len(budgets)
 			mu.Unlock()
-			for _, want := range []string{goal, acceptance, note, "high/context-projection"} {
+			for _, want := range []string{tasks, acceptance, note, "high/context-projection"} {
 				if !strings.Contains(string(request.Messages), want) {
 					t.Errorf("summary request missing authoritative value %q", want)
 				}
@@ -121,16 +120,25 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 	if goals == nil || notes == nil {
 		t.Fatal("missing authoritative Thread state stores")
 	}
-	if _, err := goals.Create(goal, acceptance); err != nil {
+	if _, err := goals.Create(tasksmodule.Create{Title: "Tracked work", Description: tasks, Acceptance: acceptance}); err != nil {
 		t.Fatal(err)
 	}
-	// Keep the Goal contract without asking the scripted model to finish work.
-	if _, err := goals.Update(goalmodule.GoalStateUpdate{Status: goalmodule.GoalStatusSuccess}); err != nil {
+	// Keep the Tasks contract without asking the scripted model to finish work.
+	if _, err := goals.Update(modulestate.First(t, goals).ID, tasksmodule.Update{Status: tasksmodule.Pending}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notes.Update("- [ ] " + note); err != nil {
 		t.Fatal(err)
 	}
+	part, err := tasksmodule.New(goals).CompactionContribution(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := part.Reconcile(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	committedSummary := "Tasks\n" + canonical + "\nCritical Context\nhigh/context-projection\nConstraints & Preferences\nProgress\nKey Decisions\nNext Steps\n- [ ] " + note + "\nRelevant Files\nTool Failures"
 	for i := 0; i < 8; i++ {
 		for _, message := range []llm.Message{
 			llm.TextMessage(llm.RoleUser, "Branch: high/context-projection. "+strings.Repeat("old context ", 50)),

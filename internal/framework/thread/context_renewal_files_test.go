@@ -8,6 +8,101 @@ import (
 	"testing"
 )
 
+func TestContextReplacementCrashRecovery(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before", true: "after"}[committed], func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			target, err := store.EnsureMain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(target.Dir, "tasks.json")
+			if err := os.WriteFile(path, []byte("all tasks"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			generation := target.Projection().CurrentGeneration.ID
+			// Persist the same staged transaction as an interrupted process, without
+			// retaining its in-process active transaction registration.
+			manifest := contextRenewalManifest{Version: 1, Files: []contextRenewalFile{{Path: "tasks.json", GenerationID: generation, Replace: true}}}
+			if err := writeContextRenewalManifest(target.Dir, manifest); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(contextRenewalBackupPath(path, generation), []byte("unfinished tasks"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if committed {
+				if _, err := target.BeginNewGeneration(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := target.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := store.OpenActive(MainID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			want := "all tasks"
+			if committed {
+				want = "unfinished tasks"
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || string(data) != want {
+				t.Fatalf("recovered %q %v, want %q", data, err, want)
+			}
+			if _, err := os.Stat(contextRenewalBackupPath(path, generation)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("staged file retained: %v", err)
+			}
+		})
+	}
+}
+
+func TestContextReplacementRetainsStagedDataAfterPublicationFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state")
+	if err := os.WriteFile(path, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	change, err := StageContextRenewalFileReplace(dir, path, InitialGeneration, []byte("new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A conflicting destination deterministically rejects publication on every
+	// platform; recovery must retain the staged source and transaction metadata.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := change.Finalize(); err == nil {
+		t.Fatal("replacement unexpectedly overwrote a directory")
+	}
+	backup := contextRenewalBackupPath(path, InitialGeneration)
+	if data, err := os.ReadFile(backup); err != nil || string(data) != "new" {
+		t.Fatalf("staged data = %q, %v", data, err)
+	}
+	if present, err := contextRenewalFilesPresent(dir); err != nil || !present {
+		t.Fatalf("lost transaction after failure: %v, %v", present, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverContextRenewalFiles(dir, "g000002"); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "new" {
+		t.Fatalf("recovered data = %q, %v", data, err)
+	}
+	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staged data remains after recovery: %v", err)
+	}
+	if present, err := contextRenewalFilesPresent(dir); err != nil || present {
+		t.Fatalf("transaction remains after recovery: %v, %v", present, err)
+	}
+}
+
 func TestStoreOpenRecoversContextRenewalFilesFromJournalGeneration(t *testing.T) {
 	for _, test := range []struct {
 		name         string

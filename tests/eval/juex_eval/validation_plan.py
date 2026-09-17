@@ -19,7 +19,7 @@ CONSERVATIVE_FINAL_FLAGS = FINAL_FLAGS
 COMPACTION_PREFIXES = (
     "internal/app/",
     "internal/features/hooks/",
-    "internal/features/goal/",
+    "internal/features/tasks/",
     "internal/features/notes/",
     "internal/features/contextcontrol/",
     "internal/features/chunkedwrite/",

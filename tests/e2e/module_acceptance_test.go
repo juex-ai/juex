@@ -179,7 +179,7 @@ func TestModuleAcceptanceLayeredMainWorkerRequests(t *testing.T) {
 							t.Fatalf("minimal tools=%v", names)
 						}
 					}
-					for _, name := range []string{"memory_search", "memory_read", "memory_propose", "memory_result", "memory_history", "memory_maintain", "get_goal", "update_notes", "context_new"} {
+					for _, name := range []string{"memory_search", "memory_read", "memory_propose", "memory_result", "memory_history", "memory_maintain", "list_tasks", "update_notes", "context_new"} {
 						if slices.Contains(names, name) != (tc.preset == config.PresetStandard) {
 							t.Errorf("%s capability does not follow preset: %v", name, names)
 						}

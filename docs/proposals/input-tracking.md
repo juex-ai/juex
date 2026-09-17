@@ -17,7 +17,7 @@ A nullable `checked_at` is sufficient: null means unchecked, and Framework write
 
 Reuse existing input IDs, original content, provenance, attempts, and errors. Tracking eligibility is Framework metadata established at acceptance; untracked must remain distinct from unchecked.
 
-Do not add open/blocked/resolved or completed/incorporated/superseded/cancelled state sets, progress fields, evidence fields, or relationship graphs. Conversation, Goal, Notes, and existing Tool results continue to express progress.
+Do not add open/blocked/resolved or completed/incorporated/superseded/cancelled state sets, progress fields, evidence fields, or relationship graphs. Conversation, Tasks, Notes, and existing Tool results continue to express progress.
 
 ## 2. Relationship To pending_input And Modules
 
@@ -27,7 +27,7 @@ Existing `pending_input` owns durable acceptance, queueing, injection, execution
 | --- | --- |
 | Runtime / Framework | Automatic registration, input storage, check commits, current-set retention, execution recovery, and lifecycle boundaries. |
 | `input-tracking` module | One check tool, per-request recitation, and lightweight check-state presentation. |
-| Goal / Notes | Long-term objectives and working notes respectively, without responsibility for registering every input. |
+| Tasks / Notes | Long-term objectives and working notes respectively, without responsibility for registering every input. |
 
 Retain the proposed independently switchable module: standard enabled and minimal disabled by default, still subject to review. Disabling it leaves delivery intact, removes its tool and recitation, and stops tracking new inputs. Existing unchecked records remain. Re-enabling presents them on the next normal execution, without backfilling disabled-period history or starting old work automatically.
 
@@ -59,13 +59,15 @@ Initially omit an uncheck tool. If the user identifies an error or omission, tha
 
 Checked means appropriately handled, rather than merely seen. It does not require treating every message as an independent task.
 
+When Tasks is enabled, the model may also check an input after successful task tools have durably captured its entire requirement and acceptance criteria. Tasks then owns completion tracking. An acknowledgment or an incomplete task record is insufficient; ongoing constraints must remain visible in the input or the task contract.
+
 | Situation | Rule |
 | --- | --- |
-| “Implement export and write tests” | Check only after both implementation and tests are complete, not halfway through. |
-| “What is the current progress?” | Check after answering this question; leave the original implementation input unchecked. |
-| “Change the format to JSON” | Work against the amended requirement and check after applying it, not merely acknowledging receipt. |
-| “Do not merge the PR this time” | Keep unchecked until the applicable work ends so the constraint remains in recitation. |
-| Failure or waiting for the user | Keep unchecked and explain the obstacle through existing conversation. |
+| “Implement export and write tests” | Check after both are complete, or after both requirements are fully recorded in durable tasks. |
+| “What is the current progress?” | Check after answering this question; the original work remains tracked by its unchecked input or tasks. |
+| “Change the format to JSON” | Check after applying the change or updating the durable task contract, not merely acknowledging receipt. |
+| “Do not merge the PR this time” | Keep the constraint in recitation until work ends or it is durably captured in the relevant task contract. |
+| Failure or waiting for the user | Explain the obstacle; keep the input unchecked unless durable tasks fully track the remaining work. |
 | User explicitly cancels or fully replaces an earlier requirement | After handling that instruction, the model may check the old input that no longer requires execution; no cancellation or supersession subtype. |
 
 Keep originals unchanged and present them chronologically. Guidance makes later user amendments authoritative rather than mechanically executing withdrawn wording. The model must not cancel work merely to empty the list. A partial amendment does not finish the entire original task.
@@ -113,7 +115,7 @@ Storage changes follow the project's clean-break policy: no legacy aliases, dual
 
 A binary checklist cannot automatically distinguish forgotten tasks, work waiting for the user, and still-effective constraints. Unchecked items therefore neither unconditionally prevent a Turn from ending nor trigger unlimited continuations.
 
-Recitation reminds the model during every request. Existing Goal continuation retains its own rules. Remove the earlier independent FinishPolicy, three-attempt no-progress detector, and Goal/input continuation arbitration design.
+Recitation reminds the model during every request. Existing Tasks continuation retains its own rules. Remove the earlier independent FinishPolicy, three-attempt no-progress detector, and Tasks/input continuation arbitration design.
 
 This ensures unchecked information does not silently disappear after dequeuing or compaction, but does not guarantee immediate completion of every input. If evaluation still shows frequent termination with runnable work outstanding, discuss finish checks separately rather than preemptively adding blocked states and more tools.
 

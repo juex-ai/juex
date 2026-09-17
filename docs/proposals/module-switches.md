@@ -6,7 +6,7 @@ Status: the preset and disablement design has shipped, including [PR #535](https
 
 Following the minimal-mode discussion on 2026-09-06, this proposal defines 18 Module switches using `modules.<id>.enabled`. `preset` supports `minimal` and the proposed name `standard`. Explicit switches override the preset; repeated explicit switches retain the existing configuration-layer precedence.
 
-A Module owns its feature's tools, automatic context, execution policies, and resource lifecycle. Disabling it prevents tool registration, new feature context, feature policy execution, and construction or recovery of private resources. Retention follows resource meaning: delete current Goal/Notes working state when their Modules are disabled or removed; retain Scratchpad files, durable Memory knowledge, user configuration, and history. Framework cleanup uses resource ownership without starting disabled Modules or parsing their state payloads. A feature switch is not a file-access permission.
+A Module owns its feature's tools, automatic context, execution policies, and resource lifecycle. Disabling it prevents tool registration, new feature context, feature policy execution, and construction or recovery of private resources. Retention follows resource meaning: delete current Tasks/Notes working state when their Modules are disabled or removed; retain Scratchpad files, durable Memory knowledge, user configuration, and history. Framework cleanup uses resource ownership without starting disabled Modules or parsing their state payloads. A feature switch is not a file-access permission.
 
 The table shows preset defaults, not unconditional resource startup. Extension allowlists, MCP server definitions, and Hook configuration still constrain what is loaded.
 
@@ -21,7 +21,7 @@ The table shows preset defaults, not unconditional resource startup. Extension a
 | `agents-md` | None | Automatically load global and project AGENTS.md into the system prompt | Locate and read guidance files; disabling this does not prevent explicit reads through `read` | On | Off |
 | `skills` | `skill_search`, `skill_load` | Available Skills index; full body returned on explicit load | Skill discovery, indexing, filtering, prompt budgets, and loading | On | Off |
 | `scratchpad` | No dedicated tools; reuse file tools or Shell | Scratchpad path and usage guidance; no automatic file-body injection | Prepare the Thread working directory and contribute its path; retain it across Generations; when disabled, do not create or advertise it, and do not delete existing files | On | Off |
-| `goal` | `get_goal`, `create_goal`, `update_goal` | Runtime Goal contract, necessary continuation prompts, and compaction state | Goal storage, completion/continuation policy, clearing on context reset, and deletion of goal_state.json on Module disablement or removal | On | Off |
+| `tasks` | `list_tasks`, `create_task`, `update_task`, `delete_task` | Runtime Tasks contract, necessary continuation prompts, and compaction state | Tasks storage, completion/continuation policy, pruning done tasks on new/compact, and deletion of tasks.json on Module disablement or removal | On | Off |
 | `notes` | `update_notes` | Runtime Notes and compaction state | Notes storage, content budget, clearing on context reset, and deletion of notes.md on Module disablement or removal | On | Off |
 | `memory` | Scoped search/read, proposals, receipts and history; [Memory](../../internal/features/memory/README.md) defines capabilities | Necessary Module-owned guidance; bodies returned on demand through tools | Fleet-owned service knowledge; Agent participation and cursors. Disablement retains shared knowledge | On | Off |
 | `context-control` | `context_new`, `context_compact` | Capacity reminders and guidance for model-controlled context changes | Accept model requests for Generation transitions and compaction; does not own underlying Generation persistence | On | Off |
@@ -37,7 +37,7 @@ Naming recommendation: use `kebab-case` for Module IDs, following existing `buil
 
 `operating-context` is extracted from the current `thread-context`. Scratchpad and active-Shell guidance move to their respective Modules. File-tool workflows can then retain working-directory information without enabling Shell.
 
-`hooks` controls external command Hooks from configuration and Extensions, not Framework lifecycle interfaces. Goal's FinishPolicy follows the `goal` switch, and chunked-write history projection follows `chunked-write`. Disabling `hooks` must not disable every builtin Module's lifecycle behavior.
+`hooks` controls external command Hooks from configuration and Extensions, not Framework lifecycle interfaces. Tasks's FinishPolicy follows the `tasks` switch, and chunked-write history projection follows `chunked-write`. Disabling `hooks` must not disable every builtin Module's lifecycle behavior.
 
 Extension resources require both their source and consumer to be enabled: the plugin is selected by `extensions.allow`, the `extensions` Module is enabled, and the relevant `skills`, `hooks`, `mcp`, or `observables` Module is enabled. Disabling `extensions` does not disable workspace-native Skills, Hooks, or MCP. When `hooks` is disabled, even an enabled Extension must not read, parse, or execute its Hook resources. Only enabled consumers process their specific resources.
 
@@ -47,7 +47,7 @@ Advanced-tool suggestions depend on effective capabilities rather than preset na
 
 This iteration does not add Module switches for the following:
 
-- Automatic compaction, summary generation, and tool-output budgets retain Runtime configuration and generic mechanisms. Disabling `context-control` removes model-facing tools and capacity reminders; host `/new`, `/compact`, and configuration-enabled automatic compaction remain available. Goal/Notes-specific summary contributions follow their own Module switches.
+- Automatic compaction, summary generation, and tool-output budgets retain Runtime configuration and generic mechanisms. Disabling `context-control` removes model-facing tools and capacity reminders; host `/new`, `/compact`, and configuration-enabled automatic compaction remain available. Tasks/Notes-specific summary contributions follow their own Module switches.
 - Thread, Input, Turn, Generation, Journal, Usage, durable events, cancellation, and recovery remain core lifecycle responsibilities.
 - Sandbox, basic process environment, model selection/fallback, and Provider adapters retain their existing configuration and are not implicitly changed by presets.
 - Separate media, failure-ledger, and generic status-presentation Modules are not among these 18 items. Existing foundations remain; the audit's later boundary recommendations are not commitments to add those configuration options.
@@ -68,4 +68,4 @@ modules:
 
 This document is a proposal inventory. It does not change runtime configuration or product code. See the [minimal-mode audit](minimal-mode-audit.md) for current implementation evidence.
 
-Web UI belongs to complete Module disablement too: Goal/Notes status entries and live subscriptions, plus Scratchpad panel entries and file-tree requests, must disappear with their Modules. Delete current Goal/Notes state files on Module disablement or removal; retain Scratchpad files and history. See [Module UI extension research](module-ui-research.md) for proposed slots, state projections, and composition; these remain design suggestions.
+Web UI belongs to complete Module disablement too: Tasks/Notes status entries and live subscriptions, plus Scratchpad panel entries and file-tree requests, must disappear with their Modules. Delete current Tasks/Notes state files on Module disablement or removal; retain Scratchpad files and history. See [Module UI extension research](module-ui-research.md) for proposed slots, state projections, and composition; these remain design suggestions.

@@ -53,8 +53,8 @@ with `juex fleet serve`.
   state, and subscriptions. A Worker records its parent but not a fixed result
   destination.
 - `/new` and `/compact` begin new Context Generations. Both retain Thread
-  history and Scratchpad; compact carries a summary and retains Goal and Notes,
-  while new asks enabled Goal and Notes Modules to clear their state.
+  history, Scratchpad, and unfinished tasks. Both remove done tasks; compact
+  carries a summary and retains Notes, while new clears enabled Notes state.
 - Active and archived Thread storage are separate. Archived Workers are
   read-only and can be restored or permanently deleted.
 - Token Usage is recorded per Provider call and aggregated per canonical
@@ -99,7 +99,7 @@ Thread index, active and archived Threads,
 media, logs, Memory participation state, Observables, and
 Extension state. Each Thread has authoritative
 metadata, Generation-segmented chronological Event history, bounded pending
-Input state, module-owned Goal and Notes state, Scratchpad, and system-managed
+Input state, module-owned Tasks and Notes state, Scratchpad, and system-managed
 spool. Current Provider context is reconstructed from the current Generation;
 Thread Explorer lists come from the Agent index.
 

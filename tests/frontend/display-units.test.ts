@@ -53,7 +53,7 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
         {
           type: "tool_use",
           tool_use_id: "tool-3",
-          tool_name: "update_goal",
+          tool_name: "update_task",
           input: { status: "complete" },
         },
       ],
@@ -94,7 +94,7 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
     [
       ["tool-1", "memory_propose", "first", "errored"],
       ["tool-2", "memory_propose", "second", undefined],
-      ["tool-3", "update_goal", "third", undefined],
+      ["tool-3", "update_task", "third", undefined],
     ],
   );
 });

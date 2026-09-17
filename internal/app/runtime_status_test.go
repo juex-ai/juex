@@ -16,7 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
@@ -156,8 +156,8 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		}
 		count += len(group.Tools)
 	}
-	if status.Tools.Count != count || count != 40 {
-		t.Fatalf("tool count = %d, grouped=%d, want 40", status.Tools.Count, count)
+	if status.Tools.Count != count || count != 41 {
+		t.Fatalf("tool count = %d, grouped=%d, want 41", status.Tools.Count, count)
 	}
 }
 
@@ -194,8 +194,8 @@ func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 			specs = append(specs, llm.ToolSpec{Name: tool.Name, Description: tool.Description, Schema: tool.Schema})
 		}
 	}
-	if len(specs) != 17 {
-		t.Fatalf("Tier 2 tool count = %d, want 17", len(specs))
+	if len(specs) != 18 {
+		t.Fatalf("Tier 2 tool count = %d, want 18", len(specs))
 	}
 	if got := contextbudget.EstimateToolTokens(specs); got > 2100 {
 		t.Fatalf("Tier 2 tool estimate = %d tokens, want <= 2100 for eighteen tools", got)
@@ -346,7 +346,7 @@ func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
 	for tool, wantOwner := range map[string]runtimemodule.ID{
 		"read":            filetoolsmodule.ModuleID,
 		"skill_search":    skills.ModuleID,
-		"get_goal":        goalmodule.ModuleID,
+		"list_tasks":      tasksmodule.ModuleID,
 		"update_notes":    notesmodule.ModuleID,
 		"thread_create":   workerthreadsmodule.ModuleID,
 		"observable_list": observable.ModuleID,

@@ -87,7 +87,7 @@ func contextToolDefinitions() []toolcore.ToolDefinition {
 			Group:           toolcore.ToolGroupThreadState,
 			Guide:           toolcore.ToolGuide{Loader: "skill_load", Name: "juex-thread-state"},
 			ExecutionPolicy: toolcore.ToolExecutionSerial,
-			Description:     "End the current task context and start an empty Context Generation. Goal and Notes are cleared; Thread working files and journal are retained. ",
+			Description:     "End the current task context and start an empty Context Generation. Done tasks and Notes are cleared; unfinished tasks, Thread working files and journal are retained. ",
 			Schema:          map[string]any{"type": "object", "properties": map[string]any{}},
 			TimeoutPolicy:   toolcore.ToolTimeoutDisabled,
 		},
@@ -96,7 +96,7 @@ func contextToolDefinitions() []toolcore.ToolDefinition {
 			Group:           toolcore.ToolGroupThreadState,
 			Guide:           toolcore.ToolGuide{Loader: "skill_load", Name: "juex-thread-state"},
 			ExecutionPolicy: toolcore.ToolExecutionSerial,
-			Description:     "Summarize the current task context into a new Context Generation while retaining Goal, Notes, and Thread working files. ",
+			Description:     "Summarize the current task context into a new Context Generation while removing done tasks and retaining unfinished tasks, Notes, and Thread working files. ",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

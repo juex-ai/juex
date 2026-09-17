@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -66,9 +66,9 @@ func TestPolicyTraceMessageIsUIOnly(t *testing.T) {
 
 func TestBuiltinPolicyTraceTextRequiresPolicy(t *testing.T) {
 	payload := PolicyCompletedPayload{
-		ModuleID:    goalmodule.ModuleID,
+		ModuleID:    tasksmodule.ModuleID,
 		PolicyPoint: runtimemodule.PolicyPointFinish,
-		Name:        "goal-completion-gate",
+		Name:        "tasks-completion-gate",
 		Source:      "builtin",
 		DurationMS:  3,
 		ExitCode:    0,
@@ -77,16 +77,16 @@ func TestBuiltinPolicyTraceTextRequiresPolicy(t *testing.T) {
 		t.Fatalf("builtin trace without policy = %q", got)
 	}
 	got := policyCompletedTraceText(payload, true)
-	if !strings.Contains(got, "policy goal/goal-completion-gate allow finish in 3ms") {
+	if !strings.Contains(got, "policy tasks/tasks-completion-gate allow finish in 3ms") {
 		t.Fatalf("builtin trace with policy = %q", got)
 	}
 }
 
 func TestBuiltinPolicyTraceMessageRequiresPolicy(t *testing.T) {
 	payload := PolicyCompletedPayload{
-		ModuleID:    goalmodule.ModuleID,
+		ModuleID:    tasksmodule.ModuleID,
 		PolicyPoint: runtimemodule.PolicyPointFinish,
-		Name:        "goal-completion-gate",
+		Name:        "tasks-completion-gate",
 		Source:      "builtin",
 		DurationMS:  3,
 		ExitCode:    0,
@@ -110,7 +110,7 @@ func TestBuiltinPolicyTraceMessageRequiresPolicy(t *testing.T) {
 
 	eng.ShowBuiltinPolicyTraces = true
 	eng.emitPolicyCompleted("turn-2", payload)
-	if len(traces) != 1 || !strings.Contains(traces[0].Text, "policy goal/goal-completion-gate allow finish in 3ms") {
+	if len(traces) != 1 || !strings.Contains(traces[0].Text, "policy tasks/tasks-completion-gate allow finish in 3ms") {
 		t.Fatalf("builtin trace event with policy = %+v", traces)
 	}
 	var policyEvents int
