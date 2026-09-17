@@ -130,7 +130,7 @@ registry 的权威。它还物化有界 counter、context status、Pending Input
 Module 在 Thread 内 Framework 分配的 `modules/<owner>/` 目录中拥有当前状态
 文件，core Thread storage 不解释其 schema。Tasks 在 new/compact 的 Generation
 提交旁暂存删除 done 项后的文件替换；失败或恢复根据已提交 Generation 安装或丢弃
-替换内容。Notes 仅在 new 时清理。首次写状态前，资源 owner 持久登记
+替换内容。暂存替换完成或恢复前，Tasks 拒绝后续修改。Notes 仅在 new 时清理。首次写状态前，资源 owner 持久登记
 身份、scope、相对目录和保留策略；没有持久状态时，文件与登记都可以不存在。Scratchpad ThreadResource
 只在启用时基于通用 Thread 目录准备模型管理的工作存储；core Thread 和 runtime
 context 不携带其私有路径。工作文件跨 Generation 和模块关闭保留；spool 是系统

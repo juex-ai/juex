@@ -133,6 +133,71 @@ func TestGenerationPruningRollbackAndCommit(t *testing.T) {
 	}
 }
 
+func TestFailedGenerationPublicationFencesMutationsUntilRecovery(t *testing.T) {
+	store := NewStore(t.TempDir(), Options{})
+	active := createTask(t, store, "unfinished", Todo, P1)
+	createTask(t, store, "finished", Done, P1)
+	before, _ := store.Snapshot()
+	decision, err := store.CompletionGateDecision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalize, _, err := store.StagePruneDone("g000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := store.Path + ".saved"
+	if err := os.Rename(store.Path, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store.Path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalize(); err == nil {
+		t.Fatal("publication unexpectedly succeeded")
+	}
+	if err := os.Remove(store.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(saved, store.Path); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh Store must honor the durable transaction after the in-process
+	// registration was released by the failed finalizer.
+	writer := NewStore(store.ThreadDir, Options{})
+	mutations := []struct {
+		name string
+		call func() error
+	}{
+		{"create", func() error {
+			_, err := writer.Create(Create{Title: "new", Description: "must not be lost"})
+			return err
+		}},
+		{"update", func() error { _, err := writer.Update(active.ID, Update{Status: Doing}); return err }},
+		{"delete", func() error { return writer.Delete(active.ID) }},
+		{"continue", func() error { _, err := writer.RecordContinuation(decision); return err }},
+		{"clear", writer.Clear},
+		{"prune", func() error { _, _, err := writer.StagePruneDone("g000002"); return err }},
+	}
+	for _, mutation := range mutations {
+		if err := mutation.call(); err == nil || !strings.Contains(err.Error(), "Context renewal") {
+			t.Fatalf("%s accepted a mutation before recovery: %v", mutation.name, err)
+		}
+	}
+	current, _ := writer.Snapshot()
+	if !reflect.DeepEqual(current, before) {
+		t.Fatalf("pending recovery changed canonical tasks: %+v", current)
+	}
+	if err := finalize(); err != nil {
+		t.Fatal(err)
+	}
+	createTask(t, writer, "after recovery", Todo, P2)
+	current, _ = writer.Snapshot()
+	if len(current.Tasks) != 2 || current.Tasks[0] != active || current.Tasks[1].Title != "after recovery" {
+		t.Fatalf("recovery or subsequent write lost work: %+v", current)
+	}
+}
+
 func TestStoreRejectsMalformedAuthority(t *testing.T) {
 	for _, invalid := range []string{
 		`{"version":2,"tasks":[]}`,

@@ -46,6 +46,33 @@ type ContextRenewalFileClear struct {
 	Rollback func() error
 }
 
+// CheckContextRenewalFileReady prevents a resource owner from overwriting state
+// that a staged transaction may later replace. Callers hold the same owner lock
+// used for staging, so this check and their mutation cannot race with staging.
+func CheckContextRenewalFileReady(threadDir, path string) error {
+	threadDir = filepath.Clean(threadDir)
+	relative, err := filepath.Rel(threadDir, path)
+	if err != nil {
+		return err
+	}
+	relative = filepath.ToSlash(relative)
+	contextRenewalTransactions.Lock()
+	defer contextRenewalTransactions.Unlock()
+	if contextRenewalTransactions.files[threadDir+"\x00"+relative] {
+		return errContextRenewalInProgress
+	}
+	manifest, err := readContextRenewalManifest(threadDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range manifest.Files {
+		if entry.Path == relative {
+			return errContextRenewalInProgress
+		}
+	}
+	return nil
+}
+
 // StageContextRenewalFileClear records a Thread-relative file transaction before
 // renaming its authority file. The actual Thread root is independent of the
 // file's parent directory, so nested module files survive interrupted renewal.

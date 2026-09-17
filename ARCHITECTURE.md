@@ -154,7 +154,8 @@ Tasks and Notes own their current-state files in Framework-assigned
 `modules/<owner>/` directories inside the Thread. Core Thread storage does not
 interpret their schemas. Tasks stages removal of done items as an opaque file
 replacement alongside new/compact Generation commits; failure or recovery uses
-the committed Generation to install or discard that replacement. Notes clears
+the committed Generation to install or discard that replacement. Tasks rejects
+further mutations until any staged replacement finishes or recovers. Notes clears
 only on new. Before the first state write, the resource owner
 durably records its identity, scope, relative directory and retention policy.
 Files and ownership need not exist until that owner has durable state. The Scratchpad ThreadResource prepares

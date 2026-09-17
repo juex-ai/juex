@@ -119,6 +119,9 @@ func (s *Store) Create(in Create) (Task, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := thread.CheckContextRenewalFileReady(s.ThreadDir, s.Path); err != nil {
+		return Task{}, err
+	}
 	state, err := s.loadLocked()
 	if err != nil {
 		return Task{}, err
@@ -145,6 +148,9 @@ func (s *Store) Update(id string, in Update) (Task, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := thread.CheckContextRenewalFileReady(s.ThreadDir, s.Path); err != nil {
+		return Task{}, err
+	}
 	state, err := s.loadLocked()
 	if err != nil {
 		return Task{}, err
@@ -190,6 +196,9 @@ func (s *Store) Delete(id string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := thread.CheckContextRenewalFileReady(s.ThreadDir, s.Path); err != nil {
+		return err
+	}
 	state, err := s.loadLocked()
 	if err != nil {
 		return err
@@ -208,6 +217,9 @@ func (s *Store) Clear() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := thread.CheckContextRenewalFileReady(s.ThreadDir, s.Path); err != nil {
+		return err
+	}
 	return modstate.RemoveFile(s.Path)
 }
 
@@ -242,6 +254,9 @@ func (s *Store) RecordContinuation(decision GateDecision) (bool, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := thread.CheckContextRenewalFileReady(s.ThreadDir, s.Path); err != nil {
+		return false, err
+	}
 	state, err := s.loadLocked()
 	if err != nil {
 		return false, err
@@ -271,6 +286,9 @@ func (s *Store) StagePruneDone(generationID string) (finalize, rollback func() e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := thread.CheckContextRenewalFileReady(s.ThreadDir, s.Path); err != nil {
+		return nil, nil, err
+	}
 	state, err := s.loadLocked()
 	if err != nil {
 		return nil, nil, err
