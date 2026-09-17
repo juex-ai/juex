@@ -2,7 +2,9 @@ package agenthttp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -13,6 +15,57 @@ import (
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
+
+type cancelShutdownResponse struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (w cancelShutdownResponse) Write([]byte) (int, error) {
+	w.cancel()
+	return 0, context.Canceled
+}
+
+func TestConditionalShutdownRollsBackCanceledRequest(t *testing.T) {
+	for _, when := range []string{"before-reservation", "after-reservation"} {
+		t.Run(when, func(t *testing.T) {
+			srv := newTestServer(t)
+			active, err := srv.openThread(context.Background(), thread.MainID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := endpoint.Runtime{AgentID: "abcdef", InstanceID: "cancel-instance", PID: 42, Endpoint: "tcp://127.0.0.1:12345", StartedAt: time.Now().UTC()}
+			shutdown := srv.setEndpointControl(expected)
+			defer srv.clearEndpointControl(expected)
+			body, err := json.Marshal(endpoint.ShutdownRequest{Runtime: expected})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			request := httptest.NewRequest(http.MethodPost, "/api/control/shutdown-idle", strings.NewReader(string(body))).WithContext(ctx)
+			var response http.ResponseWriter = httptest.NewRecorder()
+			if when == "before-reservation" {
+				cancel()
+			} else {
+				response = cancelShutdownResponse{httptest.NewRecorder(), cancel}
+			}
+			srv.APIHandler().ServeHTTP(response, request)
+			select {
+			case <-shutdown:
+				t.Error("canceled request stopped the Agent")
+			default:
+			}
+			if srv.isClosed() {
+				t.Error("canceled request left the server draining")
+			}
+			_, err = active.agent.Engine.ReceivePendingInput(context.Background(), runtime.PendingInputRequest{Message: llm.TextMessage(llm.RoleUser, "still available"), DeferDelivery: true})
+			if err != nil {
+				t.Fatalf("canceled request left admission reserved: %v", err)
+			}
+		})
+	}
+}
 
 func TestConditionalShutdownFencesIdleIngress(t *testing.T) {
 	srv := newTestServer(t)
@@ -71,7 +124,8 @@ func TestConditionalShutdownRejectsDurablePendingInput(t *testing.T) {
 func TestConditionalShutdownRequiresMainAndChecksDormantInputs(t *testing.T) {
 	t.Run("before-main-warmup", func(t *testing.T) {
 		srv := newTestServer(t)
-		if srv.reserveIdleShutdown() {
+		if release, reserved := srv.reserveIdleShutdown(context.Background()); reserved {
+			release()
 			t.Fatal("startup was considered idle before Main recovery")
 		}
 	})
@@ -93,7 +147,8 @@ func TestConditionalShutdownRequiresMainAndChecksDormantInputs(t *testing.T) {
 		if _, err := queue.Enqueue(llm.TextMessage(llm.RoleUser, "retained dormant work"), runtime.PendingInputOptions{ID: "dormant", TTL: time.Hour}, ""); err != nil {
 			t.Fatal(err)
 		}
-		if srv.reserveIdleShutdown() {
+		if release, reserved := srv.reserveIdleShutdown(context.Background()); reserved {
+			release()
 			t.Fatal("dormant input ignored")
 		}
 		if records, err := queue.Records(); err != nil || len(records) != 1 {

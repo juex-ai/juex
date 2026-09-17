@@ -1,12 +1,14 @@
 package agenthttp
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/juex-ai/juex/internal/framework/runtime"
 	"github.com/juex-ai/juex/internal/framework/thread"
 	"io"
 	"net/http"
 	"path/filepath"
+	"sync"
 
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
@@ -77,9 +79,22 @@ func (s *Server) handleEndpointShutdown(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	response := endpoint.ShutdownResponse{Status: "stopping"}
+	var rollback func()
 	if r.URL.Path == "/api/control/shutdown-idle" {
-		if !s.reserveIdleShutdown() {
-			writeErr(w, http.StatusConflict, "runtime_busy", "Agent has active or pending work; retry when idle")
+		var reserved bool
+		rollback, reserved = s.reserveIdleShutdown(r.Context())
+		if !reserved {
+			if r.Context().Err() == nil {
+				writeErr(w, http.StatusConflict, "runtime_busy", "Agent has active or pending work; retry when idle")
+			}
+			return
+		}
+		defer func() {
+			if rollback != nil {
+				rollback()
+			}
+		}()
+		if r.Context().Err() != nil {
 			return
 		}
 		response.IdleReserved = true
@@ -95,26 +110,45 @@ func (s *Server) handleEndpointShutdown(w http.ResponseWriter, r *http.Request) 
 		response.RestartIntent = endpoint.ShutdownReasonRuntimeRestart
 	}
 	writeJSON(w, http.StatusAccepted, response)
+	if rollback != nil && r.Context().Err() != nil {
+		return
+	}
 	select {
 	case shutdown <- struct{}{}:
 	default:
 	}
+	rollback = nil
 }
 
-func (s *Server) reserveIdleShutdown() bool {
+func (s *Server) reserveIdleShutdown(ctx context.Context) (func(), bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
 	if !s.createMu.TryLock() {
-		return false
+		return nil, false
 	}
 	defer s.createMu.Unlock()
 	if s.isClosed() {
-		return false
+		return nil, false
 	}
 	if _, ok := s.threads.Load(thread.MainID); !ok {
-		return false
+		return nil, false
 	}
 	var releases []func()
+	release := func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+		s.closeMu.Lock()
+		s.draining = false
+		s.closeMu.Unlock()
+	}
 	idle := true
 	s.threads.Range(func(_, value any) bool {
+		if ctx.Err() != nil {
+			idle = false
+			return false
+		}
 		active, _ := value.(*activeThread)
 		// Managed Worker entries borrow their parent's Agent tree and are
 		// reserved recursively by the owning root.
@@ -138,7 +172,7 @@ func (s *Server) reserveIdleShutdown() bool {
 			idle = false
 		}
 		for _, entry := range entries {
-			if !idle {
+			if !idle || ctx.Err() != nil {
 				break
 			}
 			if entry.RetentionState != thread.RetentionActive {
@@ -156,14 +190,19 @@ func (s *Server) reserveIdleShutdown() bool {
 			}
 		}
 	}
-	if !idle {
-		for i := len(releases) - 1; i >= 0; i-- {
-			releases[i]()
-		}
-		return false
+	if !idle || ctx.Err() != nil {
+		release()
+		return nil, false
 	}
 	s.closeMu.Lock()
 	s.draining = true
 	s.closeMu.Unlock()
-	return true
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.createMu.Lock()
+			defer s.createMu.Unlock()
+			release()
+		})
+	}, true
 }
