@@ -63,6 +63,7 @@ type Server struct {
 	createMu        sync.Mutex
 	closeMu         sync.Mutex
 	closed          bool
+	draining        bool
 	deferredCloseWG sync.WaitGroup
 
 	servicesOnce    sync.Once
@@ -194,6 +195,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/api/identity", s.handleEndpointIdentity)
 	mux.HandleFunc("/api/control/shutdown", s.handleEndpointShutdown)
+	mux.HandleFunc("/api/control/shutdown-idle", s.handleEndpointShutdown)
 	mux.HandleFunc("/api/threads", s.handleListThreads)
 	mux.HandleFunc("/api/threads/", s.dispatchThread)
 	mux.HandleFunc("/api/files/tree", s.handleFilesTree)
@@ -712,7 +714,7 @@ func (s *Server) hasThreadProvider() bool {
 func (s *Server) isClosed() bool {
 	s.closeMu.Lock()
 	defer s.closeMu.Unlock()
-	return s.closed
+	return s.closed || s.draining
 }
 
 func (s *Server) withMain(ctx context.Context, use func(context.Context, *app.App) error) error {

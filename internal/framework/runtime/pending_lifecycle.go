@@ -94,6 +94,9 @@ func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRe
 	if err := ctx.Err(); err != nil {
 		return PendingInputResult{RecordID: request.RecordID}, err
 	}
+	if e.maintenanceReserved {
+		return PendingInputResult{RecordID: request.RecordID}, ErrMaintenance
+	}
 	if request.RetryTurnID != "" {
 		if request.Message.Kind != llm.MessageKindSystemNotice {
 			return PendingInputResult{}, errors.New("runtime: retry turn id requires a system notice")

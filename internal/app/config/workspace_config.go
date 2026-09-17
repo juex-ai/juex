@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -59,7 +60,13 @@ func writeWorkspaceConfig(inventory ModuleInventory, content []byte, workDir str
 	if err != nil {
 		return "", err
 	}
-	return writeValidatedConfig(content, &cfg, cfg.WorkspaceConfigPath(), "workspace", 0o755, commitImportCache)
+	return writeValidatedConfig(content, &cfg, cfg.WorkspaceConfigPath(), "workspace", 0o755, nil, commitImportCache)
+}
+
+type ConfigRevisionConflict struct{ Expected, Actual string }
+
+func (e *ConfigRevisionConflict) Error() string {
+	return "config: configuration changed since it was read; reload before applying"
 }
 
 func writeValidatedConfig(
@@ -68,6 +75,7 @@ func writeValidatedConfig(
 	path string,
 	kind string,
 	dirPerm os.FileMode,
+	expectedRevision *string,
 	commitImportCache func(*Config) error,
 ) (writtenPath string, returnErr error) {
 	if cfg.importLoader == nil {
@@ -108,6 +116,12 @@ func writeValidatedConfig(
 	snapshot, err := snapshotConfigFile(path)
 	if err != nil {
 		return "", err
+	}
+	if expectedRevision != nil {
+		actual := fmt.Sprintf("%x", sha256.Sum256(snapshot.data))
+		if actual != *expectedRevision {
+			return "", &ConfigRevisionConflict{Expected: *expectedRevision, Actual: actual}
+		}
 	}
 	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
 	commits, err := prepareConfigImportCacheCommits(writes)

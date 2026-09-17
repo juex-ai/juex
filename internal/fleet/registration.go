@@ -136,6 +136,11 @@ func (m *Manager) Remove(
 		return RemovedAgent{}, err
 	}
 	confirmationTarget := entry.Agent.Name
+	if bound, err := m.isSupervisor(entry.ID); err != nil {
+		return RemovedAgent{}, err
+	} else if bound {
+		return RemovedAgent{}, &ConflictError{AgentID: entry.ID, Reason: "bound Supervisor requires explicit Supervisor reset or removal; history is preserved"}
+	}
 	if strings.TrimSpace(confirmationTarget) == "" {
 		confirmationTarget = entry.ID
 	}

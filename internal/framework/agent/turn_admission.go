@@ -14,9 +14,10 @@ import (
 type turnAdmissionPhase string
 
 const (
-	turnAdmissionIdle       turnAdmissionPhase = ""
-	turnAdmissionCompacting turnAdmissionPhase = "compacting"
-	turnAdmissionCommand    turnAdmissionPhase = "command"
+	turnAdmissionIdle        turnAdmissionPhase = ""
+	turnAdmissionCompacting  turnAdmissionPhase = "compacting"
+	turnAdmissionCommand     turnAdmissionPhase = "command"
+	turnAdmissionMaintenance turnAdmissionPhase = "maintenance"
 )
 
 type turnAdmission struct {

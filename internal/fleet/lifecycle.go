@@ -32,6 +32,13 @@ func (m *Manager) Start(ctx context.Context, selector string) (AgentStatus, erro
 	if err != nil {
 		return AgentStatus{}, err
 	}
+	if err := m.supervisorAutostart(entry.ID, true); err != nil {
+		return AgentStatus{}, err
+	}
+	entry, err = m.reload(entry.ID)
+	if err != nil {
+		return AgentStatus{}, err
+	}
 	return m.startEntry(ctx, entry)
 }
 
@@ -129,6 +136,13 @@ func (m *Manager) Stop(ctx context.Context, selector string) (AgentStatus, error
 	if err != nil {
 		return AgentStatus{}, err
 	}
+	if err := m.supervisorAutostart(entry.ID, false); err != nil {
+		return AgentStatus{}, err
+	}
+	entry, err = m.reload(entry.ID)
+	if err != nil {
+		return AgentStatus{}, err
+	}
 	return m.stopEntry(ctx, entry)
 }
 
@@ -149,6 +163,10 @@ func (m *Manager) stopEntryMode(
 	entry agentstate.RegistryEntry,
 	restarting bool,
 ) (AgentStatus, bool, error) {
+	return m.stopEntryPolicy(ctx, entry, restarting, false)
+}
+
+func (m *Manager) stopEntryPolicy(ctx context.Context, entry agentstate.RegistryEntry, restarting, onlyIdle bool) (AgentStatus, bool, error) {
 	status := m.inspectStatus(ctx, entry)
 	switch status.RuntimeHealth {
 	case RuntimeStopped:
@@ -173,12 +191,17 @@ func (m *Manager) stopEntryMode(
 	}
 	shutdownCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 	restartAcknowledged := false
-	if restarting {
+	if onlyIdle {
+		err = m.deps.requestIdleShutdown(shutdownCtx, runtimeState)
+	} else if restarting {
 		restartAcknowledged, err = m.deps.requestRestart(shutdownCtx, runtimeState)
 	} else {
 		err = m.deps.requestShutdown(shutdownCtx, runtimeState)
 	}
 	cancel()
+	if errors.Is(err, endpoint.ErrRuntimeBusy) {
+		return status, false, err
+	}
 	if err != nil {
 		return status, false, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("verified shutdown request failed: %v", err)}
 	}

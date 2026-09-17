@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -59,6 +60,8 @@ type Config struct {
 	Modules                   ModulePolicy
 	WorkerThreadMaxDepth      int
 	Extensions                ExtensionPolicy
+	FleetClientProfile        string
+	AgentConfigRevision       string
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool
 
@@ -131,8 +134,13 @@ type fileConfig struct {
 	Preset                    *string                 `yaml:"preset"`
 	Modules                   map[string]moduleConfig `yaml:"modules"`
 	Extensions                extensionsConfig        `yaml:"extensions"`
+	FleetClient               *fleetClientFileConfig  `yaml:"fleet_client"`
 	Fleet                     *fleetFileConfig        `yaml:"fleet"`
 	Environment               environmentConfig       `yaml:"environment"`
+}
+
+type fleetClientFileConfig struct {
+	Profile string `yaml:"profile"`
 }
 
 type environmentConfig struct {
@@ -538,7 +546,9 @@ func loadUserConfigForWorkDir(inventory ModuleInventory, workDir, homeDir string
 		ExternalEventTTL:          DefaultExternalEventTTL,
 		ToolTimeout:               DefaultToolTimeout,
 		Skills:                    DefaultSkillsConfig(),
-		Fleet:                     FleetConfig{Addr: DefaultFleetAddr},
+		Fleet:                     FleetConfig{Addr: DefaultFleetAddr, SupervisorEnabled: true},
+		FleetClientProfile:        "agent",
+		AgentConfigRevision:       fmt.Sprintf("%x", sha256.Sum256(nil)),
 		EnableUserAgentsResources: true,
 		providerConfigs:           map[string]providerConfig{},
 		loadDotenv:                true,
@@ -1047,6 +1057,14 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	}
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
+	}
+	if fc.FleetClient != nil {
+		switch fc.FleetClient.Profile {
+		case "agent", "supervisor":
+			cfg.FleetClientProfile = fc.FleetClient.Profile
+		default:
+			return fmt.Errorf("config: %s fleet_client.profile must be agent or supervisor", source.Path)
+		}
 	}
 	if fc.Fleet != nil {
 		if !source.allowsFleet() {

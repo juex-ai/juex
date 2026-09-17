@@ -292,9 +292,13 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	}
 	var roster []fleet.AgentStatus
 	fleetWebJSON(t, client, http.MethodGet, baseURL+"/api/agents", "", http.StatusOK, &roster)
-	if len(roster) != 1 ||
-		roster[0].ID == added.Agent.ID ||
-		roster[0].Name != "cli-managed" {
+	var recreatedID string
+	for _, entry := range roster {
+		if entry.Name == "cli-managed" {
+			recreatedID = entry.ID
+		}
+	}
+	if len(roster) != 2 || recreatedID == "" || recreatedID == added.Agent.ID {
 		t.Fatalf("CLI-created roster = %+v, removed = %+v", roster, added)
 	}
 	stdout, stderr, err = runFleetE2E(
@@ -302,7 +306,7 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 		environment,
 		"",
 		"remove",
-		roster[0].ID,
+		recreatedID,
 		"--yes",
 	)
 	if err != nil {
@@ -425,7 +429,7 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 
 	var roster []fleet.AgentStatus
 	fleetWebJSON(t, client, http.MethodGet, baseURL+"/api/agents", "", http.StatusOK, &roster)
-	if len(roster) != 2 {
+	if len(roster) != 3 {
 		t.Fatalf("fleet roster = %+v", roster)
 	}
 	health := make(map[string]fleet.RuntimeHealth, len(roster))
@@ -440,6 +444,9 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	fleetWebJSON(t, client, http.MethodGet, baseURL+"/api/agents", "", http.StatusOK, &roster)
 	for _, agent := range roster {
+		if agent.ID != agentID && agent.ID != secondAgentID {
+			continue
+		}
 		assertProcessMetrics(t, "Agent "+agent.ID, agent.Process, true)
 	}
 

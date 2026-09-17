@@ -456,3 +456,19 @@ func TestFleetServicesBelongOnlyToOwningHome(t *testing.T) {
 		t.Fatal("Agent services accepted")
 	}
 }
+
+func TestSupervisorDefaultsAndOwningHomeDisable(t *testing.T) {
+	userHome, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "fleet:\n  supervisor:\n    enabled: false\n")
+	cfg, err := LoadHomeFleetConfigForHome(testModuleInventory(), home)
+	if err != nil || !cfg.SupervisorEnabled {
+		t.Fatalf("custom Home default=%+v %v", cfg, err)
+	}
+	writeTextFile(t, filepath.Join(home, "juex.yaml"), "fleet:\n  supervisor:\n    enabled: false\n")
+	cfg, err = LoadHomeFleetConfigForHome(testModuleInventory(), home)
+	if err != nil || cfg.SupervisorEnabled {
+		t.Fatalf("owning Home disable=%+v %v", cfg, err)
+	}
+}

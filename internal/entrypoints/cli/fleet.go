@@ -43,6 +43,7 @@ func newFleetCmd(flags *persistentFlags) *cobra.Command {
 	}
 	cmd.AddCommand(newFleetServeCmd(flags))
 	cmd.AddCommand(newFleetServicesCmd())
+	cmd.AddCommand(newFleetSupervisorCmd())
 	cmd.AddCommand(newFleetStatusCmd(flags))
 	cmd.AddCommand(newFleetGCCmd(flags))
 	cmd.AddCommand(newFleetInstallCmd(flags))
@@ -96,6 +97,14 @@ func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
 			defer stopSignals()
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
+
+			homeSettings, err := config.LoadHomeFleetConfigForHome(modulecatalog.Inventory(), manager.HomeDir())
+			if err != nil {
+				return err
+			}
+			if _, err := manager.EnsureSupervisor(ctx, homeSettings.SupervisorEnabled); err != nil {
+				reportFleetAction(cmd, fleet.Action{Kind: "failed", Detail: "Supervisor initialization requires attention", Err: err})
+			}
 
 			ready := make(chan struct{})
 			supervisorErr := make(chan error, 1)
