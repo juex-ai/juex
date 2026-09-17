@@ -23,7 +23,7 @@ func TestParseSlashCommand(t *testing.T) {
 	}{
 		{input: "/new", name: SlashNew, handled: true},
 		{input: "/compact keep decisions", name: SlashCompact, args: "keep decisions", handled: true},
-		{input: "/goal ship it", name: SlashGoal, args: "ship it", handled: true},
+		{input: "/tasks ship it", name: SlashTasks, args: "ship it", handled: true},
 		{input: "/status", name: SlashStatus, handled: true},
 		{input: "/new extra", handled: true, err: true},
 		{input: "/unknown"},

@@ -1242,10 +1242,10 @@ func TestStoppedAgentModuleInspectionUsesEffectiveComposition(t *testing.T) {
 	if err := main.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "modules", "goal"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "modules", "tasks"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "modules", "goal", "goal_state.json"), []byte("unreadable module body"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "modules", "tasks", "tasks.json"), []byte("unreadable module body"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	backend := &fakeBackend{endpointErr: errors.New("stopped"), readOnly: fleet.ReadOnlyAgentState{ID: "aaaaaa", Workspace: t.TempDir(), StateDir: stateDir, HomeDir: t.TempDir(), ConfigPath: filepath.Join(stateDir, "juex.yaml")}}
@@ -1263,10 +1263,10 @@ func TestStoppedAgentModuleInspectionUsesEffectiveComposition(t *testing.T) {
 		return response
 	}
 	response := request()
-	if response.Code != 200 || strings.Contains(response.Body.String(), `"goal"`) {
+	if response.Code != 200 || strings.Contains(response.Body.String(), `"tasks"`) {
 		t.Fatalf("disabled response=%d %s", response.Code, response.Body.String())
 	}
-	writeComposition("preset: minimal\nmodules:\n  goal:\n    enabled: true\n")
+	writeComposition("preset: minimal\nmodules:\n  tasks:\n    enabled: true\n")
 	response = request()
 	if response.Code != 200 || !strings.Contains(response.Body.String(), `"status": "error"`) {
 		t.Fatalf("enabled response=%d %s", response.Code, response.Body.String())

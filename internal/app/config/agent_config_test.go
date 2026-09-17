@@ -146,7 +146,7 @@ func TestAgentConfigRejectsFleetAndWriteLeavesWorkspaceUnchanged(t *testing.T) {
 
 func TestWriteAgentConfigRuntimeValidationPrecedesPublication(t *testing.T) {
 	home, workspace := t.TempDir(), t.TempDir()
-	writeTextFile(t, filepath.Join(workspace, ".juex", "juex.yaml"), "modules:\n  goal:\n    enabled: false\n")
+	writeTextFile(t, filepath.Join(workspace, ".juex", "juex.yaml"), "modules:\n  tasks:\n    enabled: false\n")
 	resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: workspace})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestWriteAgentConfigRuntimeValidationPrecedesPublication(t *testing.T) {
 	calls := 0
 	validate := func(cfg Config) error {
 		calls++
-		if cfg.EffectivePreset() != PresetMinimal || cfg.ModuleEnabled("goal") {
+		if cfg.EffectivePreset() != PresetMinimal || cfg.ModuleEnabled("tasks") {
 			t.Errorf("validator did not receive merged configuration: %+v", cfg.Modules)
 		}
 		return rejection

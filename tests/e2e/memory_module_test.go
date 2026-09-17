@@ -39,7 +39,7 @@ func memoryConfig(t *testing.T) config.Config {
 
 func memoryApp(t *testing.T, cfg config.Config, provider llm.Provider) *app.App {
 	t.Helper()
-	a, err := app.New(app.Options{Config: cfg, Provider: provider, SummaryProvider: &moduleSummaryProvider{summary: "## Goal\nRemember stable knowledge\n## Critical Context\nNo transient state\n## Next Steps\nContinue"}})
+	a, err := app.New(app.Options{Config: cfg, Provider: provider, SummaryProvider: &moduleSummaryProvider{summary: "## Tasks\nRemember stable knowledge\n## Critical Context\nNo transient state\n## Next Steps\nContinue"}})
 	if err != nil {
 		t.Fatal(err)
 	}

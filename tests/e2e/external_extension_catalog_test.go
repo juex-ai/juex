@@ -15,8 +15,8 @@ import (
 	"github.com/juex-ai/juex/internal/app/modulecatalog"
 	filetoolsmodule "github.com/juex-ai/juex/internal/features/filetools"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/mcp"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 
@@ -52,7 +52,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 				{Type: llm.BlockToolUse, ToolUseID: "builtin-read", ToolName: "read", Input: map[string]any{"path": probePath}},
 				{Type: llm.BlockToolUse, ToolUseID: "skill-search", ToolName: "skill_search", Input: map[string]any{"query": "catalog"}},
-				{Type: llm.BlockToolUse, ToolUseID: "goal-get", ToolName: goalmodule.ToolGet, Input: map[string]any{}},
+				{Type: llm.BlockToolUse, ToolUseID: "tasks-get", ToolName: tasksmodule.ToolList, Input: map[string]any{}},
 				{Type: llm.BlockToolUse, ToolUseID: "notes-update", ToolName: notesmodule.ToolUpdate, Input: map[string]any{"content": "- [x] exercise the Module catalog"}},
 				{Type: llm.BlockToolUse, ToolUseID: "observable-list", ToolName: "observable_list", Input: map[string]any{}},
 				{Type: llm.BlockToolUse, ToolUseID: "catalog-write", ToolName: "mcp__catalog__catalog_write", Input: map[string]any{
@@ -106,7 +106,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 	for name, wantOwner := range map[string]runtimemodule.ID{
 		"read":                         filetoolsmodule.ModuleID,
 		"skill_search":                 skills.ModuleID,
-		goalmodule.ToolGet:             goalmodule.ModuleID,
+		tasksmodule.ToolList:           tasksmodule.ModuleID,
 		notesmodule.ToolUpdate:         notesmodule.ModuleID,
 		"observable_list":              observable.ModuleID,
 		"mcp__catalog__catalog_write":  mcp.ModuleID,
@@ -121,7 +121,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 	wantOffered := []string{
 		"read",
 		"skill_search",
-		goalmodule.ToolGet,
+		tasksmodule.ToolList,
 		notesmodule.ToolUpdate,
 		"observable_list",
 		"mcp__catalog__catalog_write",
@@ -141,7 +141,7 @@ func TestExternalCatalogExtensionEnabledAndDisabled(t *testing.T) {
 	assertSuccessfulProviderToolResults(t, provider.history[len(provider.history)-1], map[string]string{
 		"builtin-read":    "module catalog",
 		"skill-search":    "catalog",
-		"goal-get":        "",
+		"tasks-get":       "",
 		"notes-update":    "",
 		"observable-list": "",
 		"catalog-write":   "saved catalog",

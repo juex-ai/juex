@@ -18,7 +18,7 @@ import (
 
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -45,8 +45,8 @@ func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	goals := goalmodule.NewGoalStateStore(worker.Dir, goalmodule.GoalStateOptions{})
-	if _, err := goals.Create("read without runtime", "preserve all files"); err != nil {
+	goals := tasksmodule.NewStore(worker.Dir, tasksmodule.Options{})
+	if _, err := goals.Create(tasksmodule.Create{Title: "Tracked work", Description: "read without runtime", Acceptance: "preserve all files"}); err != nil {
 		t.Fatal(err)
 	}
 	notes := notesmodule.NewNotesStore(worker.Dir)
@@ -60,7 +60,7 @@ func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
 			}
 		}
 		for _, enabled := range []bool{true, false} {
-			cfg.Modules = config.ModulePolicy{"goal": {Enabled: enabled}, "notes": {Enabled: enabled}, "scratchpad": {Enabled: enabled}}
+			cfg.Modules = config.ModulePolicy{"tasks": {Enabled: enabled}, "notes": {Enabled: enabled}, "scratchpad": {Enabled: enabled}}
 			before := moduleInspectionDisk(t, cfg.AgentStateDir)
 			// Fleet's stopped-Agent adapter must provide the same snapshot contract.
 			server := httptest.NewServer(web.NewReadOnlyAPIHandler(cfg))
@@ -83,7 +83,7 @@ func TestWeb_ModuleInspectionAcrossRetentionAndComposition(t *testing.T) {
 				t.Fatalf("scope=%+v", snapshot)
 			}
 			if enabled {
-				if !strings.Contains(string(snapshot.Modules["goal"].Value), "read without runtime") || !strings.Contains(string(snapshot.Modules["notes"].Value), "retained notes") || len(snapshot.UI) != 3 {
+				if !strings.Contains(string(snapshot.Modules["tasks"].Value), "read without runtime") || !strings.Contains(string(snapshot.Modules["notes"].Value), "retained notes") || len(snapshot.UI) != 3 {
 					t.Fatalf("enabled=%+v", snapshot)
 				}
 			} else if len(snapshot.Modules) != 0 || len(snapshot.UI) != 0 {

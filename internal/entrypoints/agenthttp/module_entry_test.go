@@ -59,7 +59,7 @@ func TestDisabledTurnEndpointsRejectBeforeOpeningThread(t *testing.T) {
 	srv := NewServer(Options{Cfg: cfg, Provider: stubProvider{}})
 	t.Cleanup(srv.Close)
 	for _, request := range []struct{ id, body string }{
-		{"0", `{"prompt":"/goal finish this"}`},
+		{"0", `{"prompt":"/tasks finish this"}`},
 		{"retained-worker", `{"prompt":"execute"}`},
 		{"retained-worker", `{"prompt":"retry","kind":"system_notice","retry_turn_id":"old"}`},
 	} {

@@ -95,7 +95,7 @@ func TestProviderHeadersFollowGenerationAndRestore(t *testing.T) {
 				<-r.Context().Done()
 				return
 			}
-			headerIdentityReply(w, "## Goal\nContinue the requested work.\n## Critical Context\nEarlier work is preserved.\n## Next Steps\nAnswer the next input.")
+			headerIdentityReply(w, "## Tasks\nContinue the requested work.\n## Critical Context\nEarlier work is preserved.\n## Next Steps\nAnswer the next input.")
 			return
 		}
 		headerIdentityReply(w, "ok")

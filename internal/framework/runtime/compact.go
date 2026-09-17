@@ -11,6 +11,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 	runtimepolicy "github.com/juex-ai/juex/internal/framework/runtime/policy"
+	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
 const DefaultContextWindowTokens = runtimepolicy.DefaultContextWindowTokens
@@ -266,10 +267,18 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 		},
 	}
 	if err := e.commitCompactionMarker(ctx, operationGeneration, func() error {
-		if _, err := threadState.BeginCompactedGeneration(msg, auto, &contextUsage); err != nil {
-			return fmt.Errorf("thread begin compacted generation: %w", err)
+		change, err := runtimemodule.StageContextTransition(ctx, e.ThreadRuntimeSnapshot().Modules, runtimemodule.ContextTransitionCompact, threadState.Projection().CurrentGeneration.ID)
+		if err != nil {
+			return err
 		}
-		return nil
+		if _, err := threadState.BeginCompactedGeneration(msg, auto, &contextUsage); err != nil {
+			var persistErr *thread.ProjectionPersistError
+			if errors.As(err, &persistErr) {
+				return errors.Join(err, change.Finalize())
+			}
+			return errors.Join(fmt.Errorf("thread begin compacted generation: %w", err), change.Rollback())
+		}
+		return change.Finalize()
 	}); err != nil {
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, err)
 	}

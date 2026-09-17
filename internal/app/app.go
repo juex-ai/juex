@@ -23,13 +23,13 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/config"
 	"github.com/juex-ai/juex/internal/app/eventcatalog"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/inputtracking"
 	"github.com/juex-ai/juex/internal/features/mcp"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	observable "github.com/juex-ai/juex/internal/features/observables"
 	"github.com/juex-ai/juex/internal/features/skills"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/environment"
@@ -87,7 +87,7 @@ type Options struct {
 
 	// Internal composition seams for managed Workers and lifecycle tests.
 	disableObservables     bool
-	sharedGoalState        *goalmodule.GoalStateStore
+	sharedTasksState       *tasksmodule.Store
 	sharedNotes            *notesmodule.NotesStore
 	sharedObservables      *observable.Manager
 	workerThreadFactory    workerThreadFactory
@@ -543,12 +543,12 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		eng,
 		runtimePaths.WorkDir,
 		threadModuleOptions{
-			hookRunner:               hookRunner,
-			hookBaseRequest:          hookBaseRequest,
-			goalState:                opts.sharedGoalState,
-			notes:                    opts.sharedNotes,
-			goalContinuation:         opts.sharedGoalState == nil,
-			goalContinuationDeferrer: a.Workers(),
+			hookRunner:                hookRunner,
+			hookBaseRequest:           hookBaseRequest,
+			tasksState:                opts.sharedTasksState,
+			notes:                     opts.sharedNotes,
+			tasksContinuation:         opts.sharedTasksState == nil,
+			tasksContinuationDeferrer: a.Workers(),
 		},
 	)
 	if err != nil {
@@ -579,11 +579,11 @@ func New(opts Options) (createdApp *App, resultErr error) {
 	return a, nil
 }
 
-func goalStateStore(threadState *thread.Thread) *goalmodule.GoalStateStore {
+func tasksStateStore(threadState *thread.Thread) *tasksmodule.Store {
 	if threadState == nil || threadState.Dir == "" {
 		return nil
 	}
-	return goalmodule.NewGoalStateStore(threadState.Dir, goalmodule.GoalStateOptions{})
+	return tasksmodule.NewStore(threadState.Dir, tasksmodule.Options{})
 }
 
 func notesStore(threadState *thread.Thread) *notesmodule.NotesStore {

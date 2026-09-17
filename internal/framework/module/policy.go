@@ -16,7 +16,7 @@ import (
 const (
 	maxPolicyContextChars      = 1 * 1024 * 1024
 	maxPolicyContextLabelChars = 4 * 1024
-	// Leave room for the largest valid first-party continuation: a Goal
+	// Leave room for the largest valid first-party continuation: a Tasks
 	// contract can contain a 32 KiB acceptance plus other bounded fields and
 	// the continuation template.
 	maxPolicyContinuationChars = 64 * 1024

@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
 	"github.com/juex-ai/juex/internal/features/operatingcontext"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
@@ -127,38 +127,38 @@ func installModuleTools(t *testing.T, registry *toolcore.Registry, providers ...
 	}
 }
 
-func installThreadStateModules(t *testing.T, engine *Engine) (*goalmodule.GoalStateStore, *notesmodule.NotesStore) {
-	return installThreadStateModulesWithGoalOptions(t, engine, goalmodule.Options{EnableContinuation: true})
+func installThreadStateModules(t *testing.T, engine *Engine) (*tasksmodule.Store, *notesmodule.NotesStore) {
+	return installThreadStateModulesWithTasksOptions(t, engine, tasksmodule.ModuleOptions{EnableContinuation: true})
 }
 
-func installThreadStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions goalmodule.Options) (*goalmodule.GoalStateStore, *notesmodule.NotesStore) {
+func installThreadStateModulesWithTasksOptions(t *testing.T, engine *Engine, tasksOptions tasksmodule.ModuleOptions) (*tasksmodule.Store, *notesmodule.NotesStore) {
 	t.Helper()
-	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, nil, nil, goalOptions)
+	return installThreadStateModulesWithStoresAndTasksOptions(t, engine, nil, nil, tasksOptions)
 }
 
 func installThreadStateModulesWithStores(
 	t *testing.T,
 	engine *Engine,
-	goalState *goalmodule.GoalStateStore,
+	tasksState *tasksmodule.Store,
 	notes *notesmodule.NotesStore,
-) (*goalmodule.GoalStateStore, *notesmodule.NotesStore) {
+) (*tasksmodule.Store, *notesmodule.NotesStore) {
 	t.Helper()
-	return installThreadStateModulesWithStoresAndGoalOptions(t, engine, goalState, notes, goalmodule.Options{EnableContinuation: true})
+	return installThreadStateModulesWithStoresAndTasksOptions(t, engine, tasksState, notes, tasksmodule.ModuleOptions{EnableContinuation: true})
 }
 
-func installThreadStateModulesWithStoresAndGoalOptions(
+func installThreadStateModulesWithStoresAndTasksOptions(
 	t *testing.T,
 	engine *Engine,
-	goalState *goalmodule.GoalStateStore,
+	tasksState *tasksmodule.Store,
 	notes *notesmodule.NotesStore,
-	goalOptions goalmodule.Options,
-) (*goalmodule.GoalStateStore, *notesmodule.NotesStore) {
+	tasksOptions tasksmodule.ModuleOptions,
+) (*tasksmodule.Store, *notesmodule.NotesStore) {
 	t.Helper()
 	if engine == nil || engine.Thread == nil {
 		t.Fatal("thread state modules require an attached thread")
 	}
-	if goalState == nil {
-		goalState = goalmodule.NewGoalStateStore(engine.Thread.Dir, goalmodule.GoalStateOptions{})
+	if tasksState == nil {
+		tasksState = tasksmodule.NewStore(engine.Thread.Dir, tasksmodule.Options{})
 	}
 	if notes == nil {
 		notes = notesmodule.NewNotesStore(engine.Thread.Dir)
@@ -170,15 +170,15 @@ func installThreadStateModulesWithStoresAndGoalOptions(
 		return engine.Bus.Emit(event)
 	}
 	currentTurnID := func() string { return engine.PendingInputStatus().TurnID }
-	goalOptions.EventSink = eventSink
-	goalOptions.CurrentTurnID = currentTurnID
+	tasksOptions.EventSink = eventSink
+	tasksOptions.CurrentTurnID = currentTurnID
 	threadContext := runtimemodule.ThreadContext{
 		ID:  engine.Thread.ID,
 		Dir: engine.Thread.Dir,
 	}
 	set, err := runtimemodule.BuildThreadSet(context.Background(), []runtimemodule.ThreadFactorySpec{
-		{ID: goalmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
-			return goalmodule.NewWithOptions(goalState, goalOptions), nil
+		{ID: tasksmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+			return tasksmodule.NewWithOptions(tasksState, tasksOptions), nil
 		}},
 		{ID: notesmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 			return notesmodule.NewWithOptions(notes, notesmodule.Options{EventSink: eventSink, CurrentTurnID: currentTurnID}), nil
@@ -196,21 +196,21 @@ func installThreadStateModulesWithStoresAndGoalOptions(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = set.CloseThread(context.Background()) })
-	return goalState, notes
+	return tasksState, notes
 }
 
-type fixedGoalContinuationDeferrer bool
+type fixedTasksContinuationDeferrer bool
 
-func (d fixedGoalContinuationDeferrer) ShouldDeferContinuation() bool {
+func (d fixedTasksContinuationDeferrer) ShouldDeferContinuation() bool {
 	return bool(d)
 }
 
-type panicGoalContinuationDeferrer struct {
+type panicTasksContinuationDeferrer struct {
 	t *testing.T
 }
 
-func (d panicGoalContinuationDeferrer) ShouldDeferContinuation() bool {
+func (d panicTasksContinuationDeferrer) ShouldDeferContinuation() bool {
 	d.t.Helper()
-	d.t.Fatal("wait-for-user Goal consulted the continuation deferrer")
+	d.t.Fatal("wait-for-user Tasks consulted the continuation deferrer")
 	return true
 }

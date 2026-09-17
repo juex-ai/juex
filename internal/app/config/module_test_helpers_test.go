@@ -5,7 +5,7 @@ package config
 func testModuleInventory() ModuleInventory {
 	return NewModuleInventory([]ModuleDefinition{
 		{ID: "base", Minimal: true}, {ID: "shell", Minimal: true},
-		{ID: "skills"}, {ID: "hooks"}, {ID: "goal"}, {ID: "notes"},
+		{ID: "skills"}, {ID: "hooks"}, {ID: "tasks"}, {ID: "notes"},
 		{ID: "mcp"}, {ID: "scratchpad"}, {ID: "extensions"}, {ID: "worker-threads"},
 	})
 }

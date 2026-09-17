@@ -270,10 +270,10 @@ func TestWorkerCreationPersistsParentAndIsolatesThreadState(t *testing.T) {
 	if managed == nil || managed.Thread.ParentThreadID != thread.MainID {
 		t.Fatalf("managed Worker = %+v", managed)
 	}
-	parentGoal, parentNotes := modulestate.Stores(main.Engine.ThreadRuntimeSnapshot().Modules)
-	childGoal, childNotes := modulestate.Stores(managed.Engine.ThreadRuntimeSnapshot().Modules)
-	if parentGoal == childGoal || parentNotes == childNotes {
-		t.Fatal("Worker unexpectedly shares Goal or Notes stores with Main")
+	parentTasks, parentNotes := modulestate.Stores(main.Engine.ThreadRuntimeSnapshot().Modules)
+	childTasks, childNotes := modulestate.Stores(managed.Engine.ThreadRuntimeSnapshot().Modules)
+	if parentTasks == childTasks || parentNotes == childNotes {
+		t.Fatal("Worker unexpectedly shares Tasks or Notes stores with Main")
 	}
 	entries, err := main.ThreadStore.List()
 	if err != nil {

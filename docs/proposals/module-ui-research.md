@@ -6,7 +6,7 @@ Research date: 2026-09-06. Status updated 2026-09-08: the fixed-slot composition
 
 Use **Go to determine effective capabilities and UI contributions, with Web composing feature components into fixed slots**. Parse configuration once in Go; Web consumes the composition result without repeating preset defaults or override precedence. Features still have Go and TypeScript implementations, while business state, permissions, and enablement have one authority.
 
-This centralizes composition more effectively than configuration checks across pages and fits the three builtin features better than arbitrary runtime frontend plugins or a Go-authored UI tree. First make Goal, Notes, and Scratchpad complete vertical Modules; decide later whether third-party Extensions need their own UI.
+This centralizes composition more effectively than configuration checks across pages and fits the three builtin features better than arbitrary runtime frontend plugins or a Go-authored UI tree. First make Tasks, Notes, and Scratchpad complete vertical Modules; decide later whether third-party Extensions need their own UI.
 
 **Comment resolution**
 
@@ -20,16 +20,16 @@ Local source was inspected and official online documentation opened to cross-che
 
 | Project | Local source commit | Focus |
 | --- | --- | --- |
-| JueX | `2b0c1bbdc2e55741d680e858e79c635899bf9cf1` | Thread API, frontend projection, Goal/Notes status, Scratchpad panel |
+| JueX | `2b0c1bbdc2e55741d680e858e79c635899bf9cf1` | Thread API, frontend projection, Tasks/Notes status, Scratchpad panel |
 | Codex | `d1d51f6315f84a1737c655cb4d78104d030d5102` | app-server MCP UI negotiation, tool-associated resources, origin binding |
-| DeepSeek Harness | `0a53fb55bea101816fa226bb964ae2bed71c343b` | Host/Client composition, Slots, Session projections, Goal UI |
+| DeepSeek Harness | `0a53fb55bea101816fa226bb964ae2bed71c343b` | Host/Client composition, Slots, Session projections, Tasks UI |
 | Pi | `05558a79280a2f1356bd390a573aeb28726d26b5` | TUI extensions, tool-result rendering, RPC UI protocol and limits |
 
 **Implementation comparison**
 
 | Project | UI implementation | Host extension surface | State and communication | Relevance to JueX |
 | --- | --- | --- | --- | --- |
-| Codex / MCP UI path | Plugin HTML/JS resources displayed by a supporting client | Tool-associated UI resources and MCP Apps capability negotiation; arbitrary application slots are not established | Tool results, resource reads, UI bridge, call-origin binding | Useful for future third-party interactive cards; not a direct replacement for persistent Goal/Notes/Scratchpad panels |
+| Codex / MCP UI path | Plugin HTML/JS resources displayed by a supporting client | Tool-associated UI resources and MCP Apps capability negotiation; arbitrary application slots are not established | Tool results, resource reads, UI bridge, call-origin binding | Useful for future third-party interactive cards; not a direct replacement for persistent Tasks/Notes/Scratchpad panels |
 | DeepSeek Harness | React components in browser plugins | Typed, scoped Slots with disposal; Host publishes the actual Client graph | Authoritative Host state → projection/Remote → Client model → UI | Closest fit; borrow contributions and slots without immediately copying the full dynamic loader |
 | Pi | Terminal components in TypeScript extensions; RPC clients implement supported displays | Tool/message renderers, widgets, footer/header, custom TUI; RPC covers only a subset | Session extension state, tool details, UI request/response | Useful lightweight UI commands; full TUI components cannot simply execute in a browser |
 
@@ -66,14 +66,14 @@ Arbitrary Pi TUI components therefore do not establish an equally flexible remot
 
 | Location | Current coupling | Proposed owner |
 | --- | --- | --- |
-| [Thread response and reads](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/handlers.go#L129) | Top-level Goal/Notes fields; inactive-Thread reads construct concrete Stores after checking switches | Generic Thread state envelope; Module-owned read-only contributors |
-| [Frontend event projection](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/lib/thread-read-state.ts#L390) | Core reducer recognizes goal.updated / notes.updated and updates dedicated fields | Generic snapshot replacement; Go Modules provide business state |
-| [ThreadStatusPanel](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/thread/ThreadStatusPanel.tsx#L35) | Always mounts a combined Goal/Notes entry; missing values can still render goal idle | Fixed status slot, separate Goal/Notes contributions, shell-owned layout |
+| [Thread response and reads](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/handlers.go#L129) | Top-level Tasks/Notes fields; inactive-Thread reads construct concrete Stores after checking switches | Generic Thread state envelope; Module-owned read-only contributors |
+| [Frontend event projection](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/lib/thread-read-state.ts#L390) | Core reducer recognizes tasks.updated / notes.updated and updates dedicated fields | Generic snapshot replacement; Go Modules provide business state |
+| [ThreadStatusPanel](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/thread/ThreadStatusPanel.tsx#L35) | Always mounts a combined Tasks/Notes entry; missing values can still render tasks idle | Fixed status slot, separate Tasks/Notes contributions, shell-owned layout |
 | [AppShell file panel](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/frontend/src/components/AppShell.tsx#L334) | Scratchpad mode, toggle, requests, and refresh revision live in the application shell | File-root registration point; Scratchpad owns its root and loader |
 | [Web routes](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/server.go#L214) / [file reads](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/web/files.go#L119) | Core dispatches scratchpad subpaths and interprets its root | Module resource adapter; Web owns scope, authorization, and transport |
 | [Module contracts](https://github.com/juex-ai/juex/blob/d962f4abc2d94993fd5846351357876c7ffbfe90/internal/runtime/module/registry.go#L20) | Tool/context/policy lifecycles exist, but no complete Web contribution contract | Narrow state/resource and presentation seams; Engine stays independent of HTTP and React |
 
-Passing raw Go configuration into every page leaves these concrete Store, event-name, and layout dependencies intact. Renaming the fields into `map[string]any` while keeping goal/notes switches in Web core would not complete the separation either.
+Passing raw Go configuration into every page leaves these concrete Store, event-name, and layout dependencies intact. Renaming the fields into `map[string]any` while keeping tasks/notes switches in Web core would not complete the separation either.
 
 **Recommended minimal structure**
 
@@ -94,9 +94,9 @@ flowchart LR
 
 App assembles runtime capabilities and presentation adapters from the same effective Module set. Modules supply displayable state, resources, or actions; presentation adapters supply stable UI IDs. The Web adapter owns HTTP/SSE. Engine knows neither concrete UI nor browser connections. Frontend composition does not reevaluate configuration, and UI data does not automatically enter ContextProvider.
 
-Initially use frontend feature packages built with JueX, such as `frontend/src/modules/goal`, `notes`, and `scratchpad`. Only the composition layer selects imports and registrations from server contributions. Pages render slots without `if (config.modules.goal.enabled)`. Components may handle their own loading, empty, and error states; those are distinct from Module enablement.
+Initially use frontend feature packages built with JueX, such as `frontend/src/modules/tasks`, `notes`, and `scratchpad`. Only the composition layer selects imports and registrations from server contributions. Pages render slots without `if (config.modules.tasks.enabled)`. Components may handle their own loading, empty, and error states; those are distinct from Module enablement.
 
-Two locations suffice initially: Thread status and optional roots in the file panel. Goal/Notes contribute independently and may share a container without importing each other. Scratchpad contributes a root and loader while reusing the existing file tree. Defer a general layout DSL, arbitrary script loading, hot updates, and third-party React dependency management.
+Two locations suffice initially: Thread status and optional roots in the file panel. Tasks/Notes contribute independently and may share a container without importing each other. Scratchpad contributes a root and loader while reusing the existing file tree. Defer a general layout DSL, arbitrary script loading, hot updates, and third-party React dependency management.
 
 Illustrative protocol follows; exact fields and routes remain implementation decisions. `ui` lists enabled contributions available for this Thread, not raw configuration. `module_state` is a read projection, not a new persistence authority.
 
@@ -107,38 +107,38 @@ Go publishes stable contribution IDs and protocol versions. The Web registry own
   "thread_id": "0",
   "composition_revision": "opaque-runtime-revision",
   "ui": [
-    {"id": "goal.status", "module": "goal", "version": 1}
+    {"id": "tasks.status", "module": "tasks", "version": 1}
   ],
   "module_state": {
-    "goal": {"version": 1, "revision": 12, "status": "ready", "value": null}
+    "tasks": {"version": 1, "revision": 12, "status": "ready", "value": null}
   }
 }
 ```
 
-- No contribution means no mount; `ready + null` means the Module is available with no Goal yet; read failures have a distinct error state. Null must not ambiguously mean disabled, empty, and failed.
+- No contribution means no mount; `ready + null` means the Module is available with no Tasks yet; read failures have a distinct error state. Null must not ambiguously mean disabled, empty, and failed.
 - Name state by `module_id + version + revision + value`. The host validates and routes the envelope; Modules own payload schemas. Keep Go/TS wire types aligned through a shared schema or generated declarations rather than a core catalog of business types.
 - Resolve snapshot/subscription races through an atomic snapshot/cursor or subscribe-buffer-snapshot with revision deduplication. Reconnection replaces the full baseline, and stale requests cannot overwrite newer values. An event listener alone does not provide initial state or recovery.
 - Active, inactive, and archived Threads use the same read-only contribution contract. Displaying history must not start Engine, load a model, or create Scratchpad. The host enforces archive read-only constraints.
 - Read Scratchpad trees on demand instead of embedding them in every Thread response. Disabled Modules contribute neither that file root nor its dedicated readers/watch resources.
 - Retain restart-based configuration changes. On reconnect, a new composition revision removes obsolete components, subscriptions, and caches. Fleet isolates capabilities and state by Agent/Thread identity.
-- Backend operations still check current registration, Thread scope, and permissions. Hiding UI is not an authorization boundary. Delete current Goal/Notes working state on Module disablement or removal; re-enable with empty state. Retain Scratchpad files, configuration, and history. Generic history rendering may show old tool results without reconstructing deleted current state.
+- Backend operations still check current registration, Thread scope, and permissions. Hiding UI is not an authorization boundary. Delete current Tasks/Notes working state on Module disablement or removal; re-enable with empty state. Retain Scratchpad files, configuration, and history. Generic history rendering may show old tool results without reconstructing deleted current state.
 
 ## Working-state deletion and retention
 
-Goal/Notes are time-sensitive current working state. Disabling or removing their Modules from the effective composition deletes `goal_state.json` / `notes.md`; re-enable with empty state. Deleting current state neither rewrites durable conversation/event history nor automatically reconstructs that state from old events.
+Tasks/Notes are time-sensitive current working state. Disabling or removing their Modules from the effective composition deletes `tasks.json` / `notes.md`; re-enable with empty state. Deleting current state neither rewrites durable conversation/event history nor automatically reconstructs that state from old events.
 
-| Lifecycle event | Current Goal/Notes state | Scratchpad, durable Memory knowledge, user configuration, and history |
+| Lifecycle event | Current Tasks/Notes state | Scratchpad, durable Memory knowledge, user configuration, and history |
 | --- | --- | --- |
 | Normal exit/restart with the Module still enabled | Retain for continuation | Retain |
 | Context reset through `/new` with the Module enabled | Clear under its reset semantics | Retain |
 | Module disablement/removal takes effect | Delete; next enablement starts empty | Retain |
 | Configuration preview, failed validation, or read-only query | No cleanup | Retain |
 
-Cleanup belongs to Framework resource lifecycle. Modules declare disposable private state; when resources are created, Framework records the owner, Thread-relative location, and retention policy. Disabled Modules need no runtime instance: Framework cleans from generic ownership records without parsing Goal/Notes payloads. Ownership survives the instance, so cleanup remains possible when implementation code no longer participates in composition, without Module-name cases in core.
+Cleanup belongs to Framework resource lifecycle. Modules declare disposable private state; when resources are created, Framework records the owner, Thread-relative location, and retention policy. Disabled Modules need no runtime instance: Framework cleans from generic ownership records without parsing Tasks/Notes payloads. Ownership survives the instance, so cleanup remains possible when implementation code no longer participates in composition, without Module-name cases in core.
 
 After configuration is validated and confirmed for application, stop relevant writers in the old composition, perform removal cleanup, and publish the new composition after completion. Include Threads without running instances. Cleanup is idempotent: an absent file succeeds; failures retain pending cleanup records and are reported. Removal is incomplete until cleanup succeeds, and re-enablement must finish pending cleanup first. Normal Close, process exit, and failed candidate configurations do not constitute feature removal.
 
-This resolves create Goal → apply disablement → /new → re-enable without adding automatic restoration rules for obsolete Goals. These are design semantics; this iteration changes documentation only.
+This resolves create Tasks → apply disablement → /new → re-enable without adding automatic restoration rules for obsolete Taskss. These are design semantics; this iteration changes documentation only.
 
 **What can be centralized in Go**
 
@@ -148,7 +148,7 @@ Keep Go and React responsibilities linked by one Module identity. If third-party
 
 **Acceptance after implementation**
 
-1. Disabling Goal or Notes independently, or both, removes their tools, context, state reads, UI entries, and subscriptions while preserving the other Module. No residual goal idle placeholder remains. Applying disablement cleans current Goal/Notes state files, and re-enabling does not revive them.
+1. Disabling Tasks or Notes independently, or both, removes their tools, context, state reads, UI entries, and subscriptions while preserving the other Module. No residual tasks idle placeholder remains. Applying disablement cleans current Tasks/Notes state files, and re-enabling does not revive them.
 2. Disabling Scratchpad removes its toggle, tree requests, and dedicated watchers, returns an open panel to Workspace, and preserves files.
 3. Empty, error, initial loading, reconnection, Agent/Thread switching, and archived read-only states remain explicit. Late responses cannot restore disabled functionality.
 4. Adding a test state contributor requires no core Thread business fields, Go Web handler cases, or frontend business reducer branches; implementation is connected only at the composition root. Core retains envelope, scope, and transport responsibilities.

@@ -2,7 +2,7 @@ package app
 
 import (
 	"github.com/juex-ai/juex/internal/app/config"
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/framework/agent"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -20,9 +20,9 @@ func CheckTurnCapability(cfg config.Config, threadID string, req agent.TurnAdmis
 			switch cmd.Name {
 			case SlashStatus, SlashNew, SlashCompact:
 				return nil
-			case SlashGoal:
-				if !cfg.ModuleEnabled(goalmodule.ModuleID) {
-					return &moduleUnavailableError{ModuleID: goalmodule.ModuleID}
+			case SlashTasks:
+				if !cfg.ModuleEnabled(tasksmodule.ModuleID) {
+					return &moduleUnavailableError{ModuleID: tasksmodule.ModuleID}
 				}
 			}
 		}

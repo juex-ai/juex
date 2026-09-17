@@ -10,7 +10,7 @@
 
 后续讨论已整理为 [预计 18 个模块开关清单](module-switches.zh.md)，其中包含建议采用的 basic-file-tools / file-search / agents-md 命名、保留现有三项工具的 shell 模块与 standard/minimal 默认组合。该清单是目标设计，本报告的现状表仍描述审计时的源码行为。
 
-这里的“关闭”分为两个验收层次：减少模型上下文，要求关闭工具 schema、系统提示词、运行时消息和错误建议；完整模块关闭，还要求不构造模块资源、不读取模块私有状态、不启动进程、不恢复功能状态、不发布功能状态。关闭或移除 Goal/Notes 还应清理其有时效性的当前状态文件；这属于框架按资源归属执行的清理，不需要启动禁用模块或读取其状态正文。必要的历史持久化、协议合法性、取消和恢复不应随着辅助功能关闭。
+这里的“关闭”分为两个验收层次：减少模型上下文，要求关闭工具 schema、系统提示词、运行时消息和错误建议；完整模块关闭，还要求不构造模块资源、不读取模块私有状态、不启动进程、不恢复功能状态、不发布功能状态。关闭或移除 Tasks/Notes 还应清理其有时效性的当前状态文件；这属于框架按资源归属执行的清理，不需要启动禁用模块或读取其状态正文。必要的历史持久化、协议合法性、取消和恢复不应随着辅助功能关闭。
 
 **现场验证得到的边界**
 
@@ -38,7 +38,7 @@
 | `skills` | `skill_search`、`skill_load` | 关闭 | 工具和自动 Skills 提示可关闭；其他工具对 `skill_load` 的引用不会自动消失 |
 | `worker-threads` | `thread_create`、`thread_list`、`thread_status`、`thread_send`、`thread_subscribe`、`thread_stop`、`thread_archive` | 关闭 | 已有模块开关，工具和 Worker 管理器不再构造 |
 | `observables` | `observable_list`、`observable_create`、`observable_start`、`observable_stop`、`observable_delete`、`observable_observations` | 关闭 | 已有模块开关，关闭 Manager 和命令生产者；MCP Notification 是另一条输入来源 |
-| `goal` | `get_goal`、`create_goal`、`update_goal` | 关闭 | 工具、实时 Goal 上下文和自动继续策略可关闭 |
+| `tasks` | `list_tasks`、`create_task`、`update_task` | 关闭 | 工具、实时 Tasks 上下文和自动继续策略可关闭 |
 | `notes` | `update_notes` | 关闭 | 工具、实时 Notes 上下文和模块状态操作可关闭 |
 | `context-control` | `context_new`、`context_compact` | 关闭模型主动操作和容量提醒 | 已有模块开关；它不控制宿主 `/new`、`/compact` 或自动压缩机制 |
 | `mcp` | 按连接的服务器动态增加 | 关闭 | 已有模块开关，App/Web 启动路径有关闭检查 |
@@ -55,7 +55,7 @@
 | Scratchpad 目录与路径 | Thread 存储和多个 RuntimeContext 字段 | 核心仍创建目录并传递专用路径；若按完整可插拔标准，需要移交模块。已有文件关闭时应保留不动 |
 | cwd、OS、时间、Shell 用法 | `thread-context` | 与 Scratchpad 耦合；基础 Shell 所需短上下文应归 Shell/操作环境贡献者 |
 | 活跃 Shell 会话提示 | `thread-context` | 应随 Shell 模块启停，避免单独关 Shell 后留下操作建议 |
-| Goal / Notes 每轮复述 | 各自 Module，投影为 `runtime_message` | 已经可关闭。不能只统计 system prompt 而漏掉这些消息 |
+| Tasks / Notes 每轮复述 | 各自 Module，投影为 `runtime_message` | 已经可关闭。不能只统计 system prompt 而漏掉这些消息 |
 | 上下文容量提醒 | `context-control`，投影为 `runtime_message` | 已可关闭；容量估计和超窗处理仍归 Runtime |
 | Hooks：ThreadStart、输入、工具前后、停止、压缩前后 | `hooks` | 执行策略已模块化；YAML/插件资源加载在关闭检查之外，存在启动依赖残留 |
 | Extension 发现、manifest、环境默认值、资源来源 | `extensions.allow`，App 前置解析 | `allow: []` 可以不选择 Extension；没有 `extensions` Module 总开关，关闭所有 Module 不会使已选择 Extension 失效 |
@@ -117,13 +117,13 @@ modules:
 | B2 | P1 / Strong | Runtime 识别 `chunkedwrite.Event` 写入 `llm.Block.ChunkedWrite`；Runtime 和 LLM provider 投影都直接调用分块写折叠。迁移为模块拥有的结果贡献/历史投影 | 工具消失后，旧功能的专门算法仍在核心路径运行；仅移动构造代码无法移除 |
 | B3 | P1 / Strong | Scratchpad 从 Thread 的无条件目录创建和专用上下文字段中解开；由 ThreadResource 创建/提供路径，保留已有文件 | 关闭提示词已经可行；关闭完整存储功能尚不可行。模块可使用现有通用 Thread Dir，不需新增 Scratchpad 专用生命周期 |
 | B4 | P1 / Strong | Hooks 的文件解析、语义校验延迟至有效模块组合确定之后，或在明确的未启用分支跳过功能资源处理；避免不同配置层的后置关闭被前置校验挡住 | 注册工厂的 enabled 检查发生得太晚；普通配置 YAML 的基础语法错误仍应正常报告 |
-| B5 | P1 / Strong | Goal/Notes 实现仍在 `internal/runtime` 包；`GoalCompactionStateProvider`、`NotesCompactionStateProvider`、专用状态 getter 继续固化于 Runtime。先使压缩提示按启用状态贡献，再迁出具体状态策略 | 当前实时状态关闭是有效的，但压缩模板仍无条件说明 Goal 合同和 Notes；新状态模块仍需修改核心 |
+| B5 | P1 / Strong | Tasks/Notes 实现仍在 `internal/runtime` 包；`TasksCompactionStateProvider`、`NotesCompactionStateProvider`、专用状态 getter 继续固化于 Runtime。先使压缩提示按启用状态贡献，再迁出具体状态策略 | 当前实时状态关闭是有效的，但压缩模板仍无条件说明 Tasks 合同和 Notes；新状态模块仍需修改核心 |
 | B6 | P1 / Worth exploring | 把 Main 恢复屏障建立后的外部输入激活归为统一框架阶段或明确的 admission gate；Observable 和 MCP 适配器接入同一契约 | `StartRuntime` 发生在 Thread 恢复之前，当前 App 仍专门调用 Observable.StartAll 和 MCP gate.Activate |
 | B7 | P1 / Strong | 工具执行串行性改为工具明确声明的执行约束，Framework 只执行约束；Feature 不应靠 UI 分组名获得串行语义 | `isSerializedToolCall` 硬编码 ThreadState / WorkerThread 两类 Group，新模块不能独立声明同样约束 |
 | B8 | P1 / Strong | 将只读检查、诊断、运行时状态统一建立在有效能力集合上；至少修复 diagnose 对关闭 Skills/MCP 仍加载/检查的路径 | 服务启动有开关，诊断可能仍失败甚至在非 offline 模式进行 MCP readiness 检查；不同入口语义不一致 |
-| B9 | P1 / Strong | 用模块状态贡献和 UI 插槽替代 Goal/Notes/Scratchpad 在 Thread API、事件投影和页面中的专用接线；Go 发布最终 UI 贡献，Web 统一装配 | 关闭功能必须同时关闭状态读取、API 能力、订阅和 UI；仅隐藏按钮或去掉模型工具不足以满足新的 Web 范围 |
+| B9 | P1 / Strong | 用模块状态贡献和 UI 插槽替代 Tasks/Notes/Scratchpad 在 Thread API、事件投影和页面中的专用接线；Go 发布最终 UI 贡献，Web 统一装配 | 关闭功能必须同时关闭状态读取、API 能力、订阅和 UI；仅隐藏按钮或去掉模型工具不足以满足新的 Web 范围 |
 | B10 | P2 / Worth exploring | 若错误分类、失败台账被定位为可选诊断策略，将工具名特判移入策略或观察者；保留核心错误结果与持久化 | 当前 failure ledger 在每 Turn 建立，策略带功能知识；没有必要为了极简模式首版把通用错误处理全部插件化 |
-| B11 | P1 / Strong | 模块声明私有资源的归属与保留策略，框架负责禁用/移除时清理 Goal/Notes 当前状态；与普通运行资源 Close 分开 | 冷启动、未运行 Thread 或模块实现移除后也不能遗留可复活的工作状态；清理不依赖实例构造、状态正文解析或核心对 goal/notes 名称的特判 |
+| B11 | P1 / Strong | 模块声明私有资源的归属与保留策略，框架负责禁用/移除时清理 Tasks/Notes 当前状态；与普通运行资源 Close 分开 | 冷启动、未运行 Thread 或模块实现移除后也不能遗留可复活的工作状态；清理不依赖实例构造、状态正文解析或核心对 tasks/notes 名称的特判 |
 
 证据定位：
 
@@ -141,12 +141,12 @@ modules:
 
 **生命周期接口的判断**
 
-已足够的部分：`ToolProvider`、`ContextProvider`、Runtime/ThreadResource、Quiesce/Close、TurnInputPolicy、ToolPolicy、FinishPolicy、ThreadStartPolicy、CompactionPolicy、ContextRenewalCleaner/Observer。它们已经能让 AGENTS.md、Skills、Goal、Notes 等能力独立贡献工具和上下文，并在构造前过滤禁用工厂。Scratchpad 提示、基础工具拆分、关闭插件发现，都不要求重写 Engine 生命周期。
+已足够的部分：`ToolProvider`、`ContextProvider`、Runtime/ThreadResource、Quiesce/Close、TurnInputPolicy、ToolPolicy、FinishPolicy、ThreadStartPolicy、CompactionPolicy、ContextRenewalCleaner/Observer。它们已经能让 AGENTS.md、Skills、Tasks、Notes 等能力独立贡献工具和上下文，并在构造前过滤禁用工厂。Scratchpad 提示、基础工具拆分、关闭插件发现，都不要求重写 Engine 生命周期。
 
 需要补齐或明确的接口边界：
 
 1. **Provider 历史投影。** 当前 ContextProvider 只能增加上下文片段，不能修改已有消息序列；ToolPolicy 的结果只有文本和 IsError，不能提供分块写的结构化生命周期事实。要移除 B2 的核心特判，需要模块可贡献结果中的通用结构化事实，并在 Provider 请求前对消息副本执行受约束的投影。持久化原始事实由 Framework 保证；投影不能改 Journal，且必须保留合法的 tool-use/result 配对，最终按投影后的请求重新计算预算。具体是否分成两个接口，可在实现时按最小需求确定。
-2. **压缩状态与摘要验证。** 已有 CompactionPolicy 可以提供附加指导，适合先移走无条件功能文案。但它没有通用结构化摘要状态，也没有让模块检验候选摘要的完整接口。若保留 Goal/Notes 的逐字段保真和未完成清单约束，应提供有归属、有预算的压缩贡献，以及提交前的受限验证，而不是再给核心新增某个 FeatureState 字段。
+2. **压缩状态与摘要验证。** 已有 CompactionPolicy 可以提供附加指导，适合先移走无条件功能文案。但它没有通用结构化摘要状态，也没有让模块检验候选摘要的完整接口。若保留 Tasks/Notes 的逐字段保真和未完成清单约束，应提供有归属、有预算的压缩贡献，以及提交前的受限验证，而不是再给核心新增某个 FeatureState 字段。
 3. **装配期的资源贡献。** Extension 需要先提供环境默认值、Skill 目录、MCP/Hook/Observable 资源，消费者才能构造。当前 RuntimeResource 只有启动/关闭，不能自然表达这种前置输入；也不能在集合封闭后再注册工具。建议由有效模块集合选择资源源工厂，先返回只读、带来源的资源声明，再由 App 显式验证、注入下游工厂。可先用一个窄的装配对象完成，不必增加全局服务定位器；但只在 `StartRuntime` 内加载插件不足以解决时序问题。
 4. **资源准备与输入激活的阶段区别。** 当前启动/关闭顺序成立，但“恢复屏障建立后才能接收外部输入”依赖 App 的具体功能接线。统一 Ready/activation 契约或显式注入 admission gate 即可，不需要通用事件总线回调或依赖 DAG。
 5. **执行约束的数据声明。** 串行工具执行属于 Framework，哪些工具要求串行应由 Tool/Module 声明，不应由 Group 名称隐式决定。指南建议也应由功能自己的 ToolPolicy/文案贡献负责；现有 ToolPolicy 足够承载错误提示，无需另造万能回调。
@@ -156,7 +156,7 @@ modules:
 
 **新增范围：Memory 回归**
 
-现有来源为 `juex-extensions/extensions/memory`：Python MCP 提供检索、写入、删除，Skill 提供使用指导，SessionStart/PostCompact 命令 Hook 重建索引。目标是将这些职责统一归属内置 Go memory 模块，复用通用生命周期，不依赖外部命令 hooks 或 MCP/Skills/Extension 加载。关闭后不读写或维护记忆、不注入指导，持久知识保留；Goal/Notes 的可丢弃状态规则不适用于 Memory。保留按需检索与显式写入，不增加自动记忆、向量检索或专用 MemorySlot。交付包括旧 Extension 退出分发、人工切换说明和回归验收；旧审计的 34 工具统计不代表新 standard 的工具数。
+现有来源为 `juex-extensions/extensions/memory`：Python MCP 提供检索、写入、删除，Skill 提供使用指导，SessionStart/PostCompact 命令 Hook 重建索引。目标是将这些职责统一归属内置 Go memory 模块，复用通用生命周期，不依赖外部命令 hooks 或 MCP/Skills/Extension 加载。关闭后不读写或维护记忆、不注入指导，持久知识保留；Tasks/Notes 的可丢弃状态规则不适用于 Memory。保留按需检索与显式写入，不增加自动记忆、向量检索或专用 MemorySlot。交付包括旧 Extension 退出分发、人工切换说明和回归验收；旧审计的 34 工具统计不代表新 standard 的工具数。
 
 **建议实施顺序与验收**
 
@@ -169,14 +169,14 @@ modules:
 - 通过真实 App/Engine + 捕获 Provider 请求，证明最终只有六个 schema；完整记录 system、runtime_message、工具描述与错误提示，而不是只检查 Registry 数量。
 - 执行 read → write → edit → exec_command 的正常任务，并通过 write_stdin / list_shell_sessions 完成会话操作；测试长文件、Shell 长运行、超时/取消、较大工具输出外置与 read 回取。
 - 对最小组合运行 `/new`、压缩、重启、Pending Input 恢复，验证核心持久化和顺序不受影响。
-- 在关闭模块时放入损坏的对应资源/状态，证明不解析状态正文、不构造或启动禁用模块。Goal/Notes 当前状态文件应按归属删除，Scratchpad、配置和历史保留；清理缺失文件应成功，失败应可观察并可重试。
-- 验证创建 Goal/Notes → 关闭模块并使配置生效 → /new → 重新开启模块后状态为空；正常退出、重启且模块仍启用时保留状态。覆盖没有运行中模块实例的 Thread。
+- 在关闭模块时放入损坏的对应资源/状态，证明不解析状态正文、不构造或启动禁用模块。Tasks/Notes 当前状态文件应按归属删除，Scratchpad、配置和历史保留；清理缺失文件应成功，失败应可观察并可重试。
+- 验证创建 Tasks/Notes → 关闭模块并使配置生效 → /new → 重新开启模块后状态为空；正常退出、重启且模块仍启用时保留状态。覆盖没有运行中模块实例的 Thread。
 - 从包含旧分块写记录、旧 Hooks 消息的 Thread 切换到极简配置，明确历史保留策略。保留历史不等于重新启用模块；不要为删上下文而破坏审计历史或 tool 配对。干净最小上下文可由新的 Context Generation 获得。
 - 分别关闭 Skills、Notes、Scratchpad、分块写、patch、MCP，检查其他开启功能没有悬空指南和操作建议。
 - 普通模式回归已有工具、MCP/Observable 恢复屏障和逆序关闭；Main/Worker 继承同一有效模块组合。
 - 在实际目标小模型上单独测首 token 延迟、任务成功率、错误恢复、工具调用合法率和上下文占用。本次未测模型表现，不能从工具数下降直接断言效果提升。
 
-已有架构测试会通过 B2 这类语义耦合，因为它主要检查 import，并把 `internal/chunkedwrite`、`internal/tools`、`internal/llm` 列为 Foundation，无法发现同包中的 Goal/Notes 实现和工具名分支。应增加跨包行为测试和合理的所有权规则，不添加只证明旧名称不存在的测试。见 [boundary_test.go](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/architecture/boundary_test.go#L36)。
+已有架构测试会通过 B2 这类语义耦合，因为它主要检查 import，并把 `internal/chunkedwrite`、`internal/tools`、`internal/llm` 列为 Foundation，无法发现同包中的 Tasks/Notes 实现和工具名分支。应增加跨包行为测试和合理的所有权规则，不添加只证明旧名称不存在的测试。见 [boundary_test.go](https://github.com/juex-ai/juex/blob/2b0c1bbdc2e55741d680e858e79c635899bf9cf1/internal/architecture/boundary_test.go#L36)。
 
 文档也存在范围偏差：[ARCHITECTURE.md](../../ARCHITECTURE.md) 描述关闭 Feature 会阻止构造、副作用和发布，但当前保证主要覆盖注册的工厂，尚未覆盖插件预处理、分块写管理器和 Scratchpad。改造时应同步更新架构边界和配置说明，并维护中英文对照；本次审计没有直接改写已接受的产品契约。
 

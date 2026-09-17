@@ -39,7 +39,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/features/filetools"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 
 	hookconfig "github.com/juex-ai/juex/internal/features/hooks/config"
 	"github.com/juex-ai/juex/internal/features/mcp"
@@ -111,7 +111,7 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 			}
 		}
 	}
-	return p.steps[idx], nil
+	return modulestate.ResolveTaskFixture(hist, p.steps[idx])
 }
 
 type bareScriptProvider struct {
@@ -152,7 +152,7 @@ func (p *bareScriptProvider) Complete(ctx context.Context, sys string, hist []ll
 	if idx >= len(p.steps) {
 		return llm.Response{}, fmt.Errorf("script exhausted at call %d", idx)
 	}
-	return p.steps[idx], nil
+	return modulestate.ResolveTaskFixture(hist, p.steps[idx])
 }
 
 type startupNotificationProvider struct {
@@ -1303,7 +1303,7 @@ func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {
 	if !strings.Contains(provider.system, "Operating Context") {
 		t.Fatalf("startup notification prompt missing Module context:\n%s", provider.system)
 	}
-	for _, want := range []string{"read", "get_goal", "update_notes", "mcp__local__echo"} {
+	for _, want := range []string{"read", "list_tasks", "update_notes", "mcp__local__echo"} {
 		if !slices.Contains(provider.toolNames, want) {
 			t.Fatalf("startup notification tools missing %q: %v", want, provider.toolNames)
 		}
@@ -1453,7 +1453,7 @@ func (p *recordingProvider) Complete(ctx context.Context, sys string, hist []llm
 	if idx >= len(p.steps) {
 		return llm.Response{}, fmt.Errorf("recordingProvider: exhausted at call %d", idx)
 	}
-	return p.steps[idx], nil
+	return modulestate.ResolveTaskFixture(hist, p.steps[idx])
 }
 
 func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
@@ -1956,16 +1956,16 @@ func TestEndToEnd_SandboxBlockedPathsStopBuiltinTools(t *testing.T) {
 	}
 }
 
-func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
+func TestEndToEnd_TasksToolsContinueThenSucceed(t *testing.T) {
 	isolateModuleConfig(t)
 	work := t.TempDir()
 	prov := &recordingProvider{
 		steps: []llm.Response{
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-create", ToolName: goalmodule.ToolCreate, Input: map[string]any{
-						"description": "ship goal state",
-						"acceptance":  "completion checks pass, goal_state.json exists, and events include goal.continued",
+					{Type: llm.BlockToolUse, ToolUseID: "tasks-create", ToolName: tasksmodule.ToolCreate, Input: map[string]any{"title": "Tracked work",
+						"description": "ship tasks state",
+						"acceptance":  "completion checks pass, tasks.json exists, and events include tasks.continued",
 					}},
 				}},
 				StopReason: llm.StopToolUse,
@@ -1976,8 +1976,8 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			},
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-success", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(goalmodule.GoalStatusSuccess),
+					{Type: llm.BlockToolUse, ToolUseID: "tasks-success", ToolName: tasksmodule.ToolUpdate, Input: map[string]any{"id": "$first_task",
+						"status":        string(tasksmodule.Done),
 						"status_reason": "continuation gate fired and final answer was verified",
 					}},
 				}},
@@ -2003,7 +2003,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	}
 	defer func() { _ = a.Close() }()
 
-	out, err := a.Run(context.Background(), "ship goal state")
+	out, err := a.Run(context.Background(), "ship tasks state")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2015,43 +2015,43 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	}
 	continuationHistory := prov.history[2]
 	if len(continuationHistory) < 2 {
-		t.Fatalf("goal continuation history = %+v", continuationHistory)
+		t.Fatalf("tasks continuation history = %+v", continuationHistory)
 	}
-	if got := findMessageText(continuationHistory, "current thread goal is still in progress"); got == "" {
-		t.Fatalf("goal continuation = %q", got)
+	if got := findMessageText(continuationHistory, "Continue the selected unfinished task"); got == "" {
+		t.Fatalf("tasks continuation = %q", got)
 	}
-	goalContext := findMessage(continuationHistory, "Current goal contract")
-	if goalContext == nil || goalContext.Kind != llm.MessageKindContinuation ||
-		!strings.Contains(goalContext.FirstText(), "ship goal state") {
-		t.Fatalf("goal runtime context = %+v", goalContext)
+	taskContext := findMessage(continuationHistory, "Current thread tasks")
+	if taskContext == nil || taskContext.Kind != llm.MessageKindRuntimeContext ||
+		!strings.Contains(taskContext.FirstText(), "ship tasks state") {
+		t.Fatalf("tasks runtime context = %+v", taskContext)
 	}
-	goalStore, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
-	if goalStore == nil {
-		t.Fatal("Goal Module store is unavailable")
+	tasksStore, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
+	if tasksStore == nil {
+		t.Fatal("Tasks Module store is unavailable")
 	}
-	goal, err := goalStore.Snapshot()
+	tasks, err := tasksStore.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Description != "ship goal state" || goal.ContinuationCount != 1 || goal.Status != goalmodule.GoalStatusSuccess ||
-		goal.StatusReason != "continuation gate fired and final answer was verified" || !strings.Contains(goal.Acceptance, "goal.continued") {
-		t.Fatalf("Thread goal = %+v", goal)
+	if tasks.Tasks[0].Description != "ship tasks state" || tasks.Tasks[0].ContinuationCount != 1 || tasks.Tasks[0].Status != tasksmodule.Done ||
+		tasks.Tasks[0].StatusReason != "continuation gate fired and final answer was verified" || !strings.Contains(tasks.Tasks[0].Acceptance, "tasks.continued") {
+		t.Fatalf("Thread tasks = %+v", tasks)
 	}
 	eventsData := []byte(threadJournalText(t, a.Thread.Dir))
-	for _, want := range []string{`"type":"goal.continued"`, `"type":"goal.updated"`, `"goal-completion-gate"`} {
+	for _, want := range []string{`"type":"tasks.continued"`, `"type":"tasks.updated"`, `"tasks-completion-gate"`} {
 		if !strings.Contains(string(eventsData), want) {
 			t.Fatalf("events missing %s:\n%s", want, eventsData)
 		}
 	}
 }
 
-func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
+func TestEndToEnd_TasksWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 	work := t.TempDir()
 	prov := &recordingProvider{
 		steps: []llm.Response{
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-create-wait", ToolName: goalmodule.ToolCreate, Input: map[string]any{
+					{Type: llm.BlockToolUse, ToolUseID: "tasks-create-wait", ToolName: tasksmodule.ToolCreate, Input: map[string]any{"title": "Tracked work",
 						"description": "deploy after user approval",
 						"acceptance":  "the approved deployment is healthy",
 					}},
@@ -2060,8 +2060,8 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			},
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-wait", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(goalmodule.GoalStatusWaitForUser),
+					{Type: llm.BlockToolUse, ToolUseID: "tasks-wait", ToolName: tasksmodule.ToolUpdate, Input: map[string]any{"id": "$first_task",
+						"status":        string(tasksmodule.Pending),
 						"status_reason": "waiting for deployment approval",
 					}},
 				}},
@@ -2073,8 +2073,8 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			},
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "goal-success-after-input", ToolName: goalmodule.ToolUpdate, Input: map[string]any{
-						"status":        string(goalmodule.GoalStatusSuccess),
+					{Type: llm.BlockToolUse, ToolUseID: "tasks-success-after-input", ToolName: tasksmodule.ToolUpdate, Input: map[string]any{"id": "$first_task",
+						"status":        string(tasksmodule.Done),
 						"status_reason": "user approved the healthy deployment",
 					}},
 				}},
@@ -2114,24 +2114,24 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 	if second != "Deployment approved and complete." || len(prov.history) != 5 {
 		t.Fatalf("second output = %q, provider calls = %d", second, len(prov.history))
 	}
-	if got := messagesText(prov.history[3]); !strings.Contains(got, "status: wait_for_user") || !strings.Contains(got, "waiting for deployment approval") {
-		t.Fatalf("new input should reach the model with unchanged waiting goal:\n%s", got)
+	if got := messagesText(prov.history[3]); !strings.Contains(got, "\"status\":\"pending\"") || !strings.Contains(got, "waiting for deployment approval") {
+		t.Fatalf("new input should reach the model with unchanged waiting tasks:\n%s", got)
 	}
 
-	goalStore, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
-	if goalStore == nil {
-		t.Fatal("Goal Module store is unavailable")
+	tasksStore, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
+	if tasksStore == nil {
+		t.Fatal("Tasks Module store is unavailable")
 	}
-	goal, err := goalStore.Snapshot()
+	tasks, err := tasksStore.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != goalmodule.GoalStatusSuccess || goal.StatusReason != "user approved the healthy deployment" {
-		t.Fatalf("Thread goal = %+v", goal)
+	if tasks.Tasks[0].Status != tasksmodule.Done || tasks.Tasks[0].StatusReason != "user approved the healthy deployment" {
+		t.Fatalf("Thread tasks = %+v", tasks)
 	}
 	eventsData := []byte(threadJournalText(t, a.Thread.Dir))
-	if strings.Contains(string(eventsData), `"type":"goal.continued"`) {
-		t.Fatalf("wait_for_user should not force a continuation:\n%s", eventsData)
+	if strings.Contains(string(eventsData), `"type":"tasks.continued"`) {
+		t.Fatalf("pending should not force a continuation:\n%s", eventsData)
 	}
 }
 

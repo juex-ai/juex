@@ -1,25 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { NotesSnapshot } from "../../frontend/src/module-schema.ts";
-import { runtimeGoalBadgeLabel, runtimeGoalIsActive, runtimeGoalContinuationLabel } from "../../frontend/src/modules/goal/display.ts";
+import type { NotesSnapshot, TasksSnapshot } from "../../frontend/src/module-schema.ts";
+import { runtimeTasksBadgeLabel, runtimeTasksIsActive } from "../../frontend/src/modules/tasks/display.ts";
 import { notesCheckboxProgress, notesBadgeLabel } from "../../frontend/src/modules/notes/display.ts";
 
-test("runtimeGoalBadgeLabel summarizes goal status", () => {
-  assert.equal(runtimeGoalBadgeLabel(undefined), "goal none");
-  assert.equal(runtimeGoalBadgeLabel({ status: "in_progress" }), "goal in_progress");
+const taskState = (...statuses: string[]): TasksSnapshot => ({ tasks: statuses.map((status, i) => ({ id: String(i), title: "work", description: "work", acceptance: "", status, status_reason: "", priority: "p1", continuation_count: 0, updated_at: "" })) });
+
+test("task badge reports completion across the whole list", () => {
+  assert.equal(runtimeTasksBadgeLabel(), "tasks empty");
+  assert.equal(runtimeTasksBadgeLabel(taskState("doing", "done", "pending")), "tasks 1/3");
 });
 
-test("runtimeGoalIsActive only highlights real goal statuses", () => {
-  assert.equal(runtimeGoalIsActive(undefined), false);
-  assert.equal(runtimeGoalIsActive({ status: "" }), false);
-  assert.equal(runtimeGoalIsActive({ status: "none" }), false);
-  assert.equal(runtimeGoalIsActive({ status: "in_progress" }), true);
-});
-
-test("runtimeGoalContinuationLabel reads simplified continuation count", () => {
-  assert.equal(runtimeGoalContinuationLabel(undefined), "-");
-  assert.equal(runtimeGoalContinuationLabel({ status: "in_progress" }), "0");
-  assert.equal(runtimeGoalContinuationLabel({ status: "in_progress", continuation_count: 2 }), "2");
+test("only todo and doing task lists are active", () => {
+  assert.equal(runtimeTasksIsActive(), false);
+  assert.equal(runtimeTasksIsActive(taskState("pending", "failed", "done")), false);
+  assert.equal(runtimeTasksIsActive(taskState("todo", "pending")), true);
+  assert.equal(runtimeTasksIsActive(taskState("doing")), true);
 });
 
 test("notesCheckboxProgress counts Markdown task items", () => {

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	notesmodule "github.com/juex-ai/juex/internal/features/notes"
+	tasksmodule "github.com/juex-ai/juex/internal/features/tasks"
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	toolcore "github.com/juex-ai/juex/internal/foundation/tools"
@@ -164,26 +164,26 @@ func TestNotesToolRecitesRewriteOnNextProviderRequest(t *testing.T) {
 	}
 }
 
-func TestActiveContextAppendsGoalThenNotes(t *testing.T) {
+func TestActiveContextAppendsTasksThenNotes(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	goalState := goalmodule.NewGoalStateStore(eng.Thread.Dir, goalmodule.GoalStateOptions{})
+	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
 	notesStore := notesmodule.NewNotesStore(eng.Thread.Dir)
-	if _, err := goalState.Create("ship notes", "tests pass"); err != nil {
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "ship notes", Acceptance: "tests pass"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := notesStore.Update("- [ ] run tests"); err != nil {
 		t.Fatal(err)
 	}
-	installThreadStateModulesWithStores(t, eng, goalState, notesStore)
+	installThreadStateModulesWithStores(t, eng, tasksState, notesStore)
 
 	snapshot := eng.ActiveContext(llm.TextMessage(llm.RoleUser, "continue"))
 	if len(snapshot.Messages) < 3 {
 		t.Fatalf("active context = %+v", snapshot.Messages)
 	}
-	goal := snapshot.Messages[len(snapshot.Messages)-2]
+	tasks := snapshot.Messages[len(snapshot.Messages)-2]
 	notes := snapshot.Messages[len(snapshot.Messages)-1]
-	if goal.ID != "runtime-goal-contract" || goal.Kind != llm.MessageKindRuntimeContext {
-		t.Fatalf("goal context = %+v", goal)
+	if tasks.ID != "runtime-tasks-contract" || tasks.Kind != llm.MessageKindRuntimeContext {
+		t.Fatalf("tasks context = %+v", tasks)
 	}
 	if notes.ID != "runtime-notes" || notes.Kind != llm.MessageKindRuntimeContext || !strings.Contains(notes.FirstText(), "run tests") {
 		t.Fatalf("notes context = %+v", notes)
@@ -283,7 +283,7 @@ func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T)
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.ReserveTokens = 1400
+	eng.Compaction.ReserveTokens = 1200
 	installThreadStateModules(t, eng)
 	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
