@@ -18,13 +18,19 @@ import (
 const DefaultFleetAddr = "127.0.0.1:5839"
 
 type FleetConfig struct {
-	Services       map[string]services.Definition
-	Addr           string
-	AddrConfigured bool
-	UnsafeBindAny  bool
+	SupervisorEnabled bool
+	Services          map[string]services.Definition
+	Addr              string
+	AddrConfigured    bool
+	UnsafeBindAny     bool
+}
+
+type supervisorFileConfig struct {
+	Enabled optionalBool `yaml:"enabled"`
 }
 
 type fleetFileConfig struct {
+	Supervisor    *supervisorFileConfig          `yaml:"supervisor"`
 	Services      map[string]services.Definition `yaml:"services"`
 	Addr          string                         `yaml:"addr"`
 	UnsafeBindAny optionalBool                   `yaml:"unsafe_bind_any"`
@@ -38,7 +44,7 @@ func LoadHomeFleetConfigForHome(inventory ModuleInventory, home string) (cfg Fle
 	if err := inventory.validate(); err != nil {
 		return cfg, err
 	}
-	cfg = FleetConfig{Addr: DefaultFleetAddr}
+	cfg = FleetConfig{Addr: DefaultFleetAddr, SupervisorEnabled: true}
 	resolution, err := resolveHomeConfigSources(home)
 	if err != nil {
 		return cfg, err
@@ -159,6 +165,20 @@ func applyFleetConfigNode(cfg *FleetConfig, root *yaml.Node, path string, owning
 		seen[key] = struct{}{}
 		value := fleetNode.Content[i+1]
 		switch key {
+		case "supervisor":
+			var supervisor supervisorFileConfig
+			data, err := yaml.Marshal(value)
+			if err != nil {
+				return err
+			}
+			decoder := yaml.NewDecoder(bytes.NewReader(data))
+			decoder.KnownFields(true)
+			if err := decoder.Decode(&supervisor); err != nil {
+				return fmt.Errorf("config: %s fleet.supervisor: %w", path, err)
+			}
+			if owningHome && supervisor.Enabled.Set {
+				cfg.SupervisorEnabled = supervisor.Enabled.Value
+			}
 		case "services":
 			var definitions map[string]services.Definition
 			data, err := yaml.Marshal(value)

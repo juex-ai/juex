@@ -702,6 +702,26 @@ func startFleetSupervisor(t *testing.T, binary string, environment []string) *fl
 
 func startFleetSupervisorWithArgs(t *testing.T, binary string, environment []string, args ...string) *fleetSupervisor {
 	t.Helper()
+	// Fleet shutdown intentionally leaves Agents resident. Test Homes must stop
+	// their newly default Supervisor before their temporary directories disappear.
+	for _, value := range environment {
+		if home, ok := strings.CutPrefix(value, "JUEX_HOME="); ok {
+			t.Cleanup(func() {
+				manager, err := fleet.New(fleet.Options{HomeDir: home})
+				if err != nil {
+					return
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				status, err := manager.Supervisor(ctx)
+				if err == nil && status.Agent.ID != "" {
+					_, _ = manager.Stop(ctx, status.Agent.ID)
+				}
+			})
+			break
+		}
+	}
+
 	commandArgs := append([]string{"fleet", "serve"}, args...)
 	command := exec.Command(binary, commandArgs...)
 	command.Env = environment
@@ -861,13 +881,14 @@ func waitFleetHealth(
 	for time.Now().Before(deadline) {
 		stdout, _, err := runFleetE2E(binary, environment, "", "status", "--format", "json")
 		if err == nil {
-			if decodeErr := json.Unmarshal([]byte(stdout), &last); decodeErr == nil &&
-				len(last) == 1 &&
-				last[0].ID == agentID &&
-				last[0].RuntimeHealth == want {
-				return last[0]
-			} else if decodeErr != nil {
+			if decodeErr := json.Unmarshal([]byte(stdout), &last); decodeErr != nil {
 				lastErr = decodeErr
+			} else {
+				for _, status := range last {
+					if status.ID == agentID && status.RuntimeHealth == want {
+						return status
+					}
+				}
 			}
 		} else {
 			lastErr = err

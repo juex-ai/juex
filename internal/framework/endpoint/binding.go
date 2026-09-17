@@ -38,6 +38,7 @@ type addressSnapshot struct {
 }
 
 type Runtime struct {
+	ConfigRevision  string    `json:"config_revision,omitempty"`
 	AgentID         string    `json:"agent_id"`
 	InstanceID      string    `json:"instance_id"`
 	PID             int       `json:"pid"`

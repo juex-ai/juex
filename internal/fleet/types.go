@@ -176,14 +176,17 @@ func (m *Manager) RegisteredWorkspaces() (map[string]struct{}, error) {
 
 // ConfigWriter validates and atomically publishes config and imported state under the lifecycle lock.
 type ConfigWriter func(homeDir, agentID string, content []byte) error
+type ConfigUpdater func(homeDir, agentID string, content []byte, expectedRevision string) error
 
 type Options struct {
-	ConfigWriter ConfigWriter
-	HomeDir      string
-	Executable   string
-	StartTimeout time.Duration
-	StopTimeout  time.Duration
-	ProbeTimeout time.Duration
+	ConfigWriter       ConfigWriter
+	ConfigUpdater      ConfigUpdater
+	SupervisorTemplate func() (config, guidance []byte)
+	HomeDir            string
+	Executable         string
+	StartTimeout       time.Duration
+	StopTimeout        time.Duration
+	ProbeTimeout       time.Duration
 }
 
 type ValidationError struct {
@@ -275,6 +278,7 @@ type dependencies struct {
 	processIdentity     func(int) (string, error)
 	probe               func(context.Context, endpoint.Runtime) error
 	requestShutdown     func(context.Context, endpoint.Runtime) error
+	requestIdleShutdown func(context.Context, endpoint.Runtime) error
 	requestRestart      func(context.Context, endpoint.Runtime) (bool, error)
 	readRestartActivity func(context.Context, endpoint.Runtime) (restartActivity, error)
 	postRestartResume   func(context.Context, endpoint.Runtime, string, string, string) (string, error)
@@ -308,6 +312,7 @@ func defaultDependencies() dependencies {
 		processIdentity:     processidentity.Fingerprint,
 		probe:               endpoint.Probe,
 		requestShutdown:     endpoint.RequestShutdown,
+		requestIdleShutdown: endpoint.RequestShutdownIfIdle,
 		requestRestart:      endpoint.RequestRestart,
 		readRestartActivity: readRestartActivity,
 		postRestartResume:   postRestartResume,
@@ -316,15 +321,17 @@ func defaultDependencies() dependencies {
 }
 
 type Manager struct {
-	configWriter   ConfigWriter
-	homeDir        string
-	homeStore      *homestore.Store
-	executable     string
-	startTimeout   time.Duration
-	stopTimeout    time.Duration
-	probeTimeout   time.Duration
-	processMetrics processMetricsSampler
-	deps           dependencies
+	configWriter       ConfigWriter
+	configUpdater      ConfigUpdater
+	supervisorTemplate func() ([]byte, []byte)
+	homeDir            string
+	homeStore          *homestore.Store
+	executable         string
+	startTimeout       time.Duration
+	stopTimeout        time.Duration
+	probeTimeout       time.Duration
+	processMetrics     processMetricsSampler
+	deps               dependencies
 }
 
 func New(opts Options) (*Manager, error) {
@@ -361,15 +368,17 @@ func New(opts Options) (*Manager, error) {
 	}
 	store := homestore.New(homeDir)
 	return &Manager{
-		configWriter:   opts.ConfigWriter,
-		homeDir:        homeDir,
-		homeStore:      &store,
-		executable:     executable,
-		startTimeout:   opts.StartTimeout,
-		stopTimeout:    opts.StopTimeout,
-		probeTimeout:   opts.ProbeTimeout,
-		processMetrics: processmetrics.New(),
-		deps:           defaultDependencies(),
+		configWriter:       opts.ConfigWriter,
+		configUpdater:      opts.ConfigUpdater,
+		supervisorTemplate: opts.SupervisorTemplate,
+		homeDir:            homeDir,
+		homeStore:          &store,
+		executable:         executable,
+		startTimeout:       opts.StartTimeout,
+		stopTimeout:        opts.StopTimeout,
+		probeTimeout:       opts.ProbeTimeout,
+		processMetrics:     processmetrics.New(),
+		deps:               defaultDependencies(),
 	}, nil
 }
 
@@ -406,3 +415,5 @@ func resolveSelector(entries []agentstate.RegistryEntry, selector string) (agent
 		return agentstate.RegistryEntry{}, &AmbiguousSelectorError{Selector: selector, IDs: ids}
 	}
 }
+
+func (m *Manager) HomeDir() string { return m.homeDir }

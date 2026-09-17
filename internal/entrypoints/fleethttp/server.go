@@ -26,6 +26,7 @@ import (
 	web "github.com/juex-ai/juex/internal/entrypoints/agenthttp"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/fleet/services"
+	"github.com/juex-ai/juex/internal/foundation/fleetclient"
 	"github.com/juex-ai/juex/internal/foundation/processmetrics"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -72,25 +73,31 @@ type cachedReadOnlyAgentHandler struct {
 }
 
 type Server struct {
-	services        serviceBackend
-	manager         backend
-	addr            string
-	allowAnyBind    bool
-	onReady         func(string)
-	spa             http.Handler
-	readActivity    func(context.Context, fleet.AgentStatus) (*agentActivity, error)
-	activityClients *activityClientPool
-	fleetStatus     *fleetStatusHub
-	processMetrics  processmetrics.Provider
-	readOnlyMu      sync.Mutex
-	readOnlyAgents  map[string]cachedReadOnlyAgentHandler
+	managementHome     string
+	managementIdentity fleetclient.Endpoint
+	services           serviceBackend
+	manager            backend
+	addr               string
+	allowAnyBind       bool
+	onReady            func(string)
+	spa                http.Handler
+	readActivity       func(context.Context, fleet.AgentStatus) (*agentActivity, error)
+	activityClients    *activityClientPool
+	fleetStatus        *fleetStatusHub
+	processMetrics     processmetrics.Provider
+	readOnlyMu         sync.Mutex
+	readOnlyAgents     map[string]cachedReadOnlyAgentHandler
 }
 
 func New(opts Options) (*Server, error) {
 	if opts.Manager == nil {
 		return nil, errors.New("fleet web: manager is required")
 	}
-	return newServer(opts.Manager, opts), nil
+	server := newServer(opts.Manager, opts)
+	if err := server.initManagement(opts.Manager); err != nil {
+		return nil, err
+	}
+	return server, nil
 }
 
 func newServer(manager backend, opts Options) *Server {
@@ -124,6 +131,9 @@ func newServer(manager backend, opts Options) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc(fleetclient.Path, s.handleManagement)
+	mux.HandleFunc(fleetclient.Path+"/", s.handleManagement)
+	mux.HandleFunc("/api/supervisor", s.handleSupervisor)
 	mux.HandleFunc("/api/agents", s.handleAgents)
 	mux.HandleFunc("/api/services", s.handleServices)
 	mux.HandleFunc("/api/services/", s.handleServices)
@@ -175,6 +185,10 @@ func (s *Server) Run(ctx context.Context) error {
 			s.addr,
 			err,
 		)
+	}
+	if err := s.publishManagement(listener.Addr().String()); err != nil {
+		_ = listener.Close()
+		return err
 	}
 	server := &http.Server{
 		Handler:           s.Handler(),
@@ -686,6 +700,7 @@ func decodeJSONBody(
 
 func writeFleetError(w http.ResponseWriter, err error) {
 	var (
+		denied         *fleet.ManagementDeniedError
 		notFound       *fleet.NotFoundError
 		logUnavailable *fleet.LogUnavailableError
 		ambiguous      *fleet.AmbiguousSelectorError
@@ -694,6 +709,8 @@ func writeFleetError(w http.ResponseWriter, err error) {
 		validation     *fleet.ValidationError
 	)
 	switch {
+	case errors.As(err, &denied):
+		writeError(w, http.StatusForbidden, "forbidden", err.Error())
 	case errors.As(err, &notFound), errors.As(err, &logUnavailable):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.As(err, &ambiguous), errors.As(err, &conflict):

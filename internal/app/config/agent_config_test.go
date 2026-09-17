@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,47 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 )
+
+func TestAgentBootProfileAndRevision(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "fleet_client:\n  profile: supervisor\n"
+	writeTextFile(t, resolved.Address.ConfigPath(), body)
+	cfg, err := LoadWithOptions(LoadOptions{ModuleInventory: testModuleInventory(), HomeDir: home, WorkDir: workspace, AgentState: AgentStateExisting})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FleetClientProfile != "supervisor" || cfg.AgentConfigRevision != fmt.Sprintf("%x", sha256.Sum256([]byte(body))) {
+		t.Fatalf("profile=%s revision=%s", cfg.FleetClientProfile, cfg.AgentConfigRevision)
+	}
+	if _, err := ValidateAgentConfig(testModuleInventory(), []byte("fleet_client:\n  profile: admin\n"), home, resolved.Agent.ID); err == nil {
+		t.Fatal("unknown profile accepted")
+	}
+}
+
+func TestAgentConfigCompareAndSwapPreservesConcurrentEdit(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	resolved, err := agentstate.Resolve(agentstate.Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := []byte("preset: standard\n")
+	writeTextFile(t, resolved.Address.ConfigPath(), string(old))
+	revision := fmt.Sprintf("%x", sha256.Sum256(old))
+	_, err = WriteAgentConfigIfRevision(testModuleInventory(), []byte("preset: minimal\n"), home, resolved.Agent.ID, revision, func(Config) error {
+		return os.WriteFile(resolved.Address.ConfigPath(), []byte("# concurrent edit\npreset: standard\n"), 0600)
+	})
+	var conflict *ConfigRevisionConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("write=%v", err)
+	}
+	if body, _ := os.ReadFile(resolved.Address.ConfigPath()); !strings.Contains(string(body), "concurrent edit") {
+		t.Fatalf("concurrent edit lost: %s", body)
+	}
+}
 
 func TestLoadAgentConfigAfterWorkspaceWithInheritedImportScope(t *testing.T) {
 	home := t.TempDir()

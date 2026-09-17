@@ -116,7 +116,7 @@ func (a *Agent) resumePersistedInputLockedWithStart(ctx context.Context, recordI
 	queue.state.mu.Lock()
 	phase := queue.state.phase
 	queue.state.mu.Unlock()
-	if phase == turnAdmissionCommand {
+	if phase == turnAdmissionCommand || phase == turnAdmissionMaintenance {
 		queue.state.transitionMu.Unlock()
 		return externalInputDelivery{RecordID: recordID, Queued: true, Retry: runtime.PendingInputRetryAfterTurn}, errTurnAdmissionBusy
 	}

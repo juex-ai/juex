@@ -117,9 +117,10 @@ type Engine struct {
 	threadRuntimeMu sync.RWMutex
 	threadRuntime   *threadRuntimeState
 
-	pendingLifecycleMu sync.Mutex
-	pendingMu          sync.Mutex
-	activeTurnID       string
+	pendingLifecycleMu  sync.Mutex
+	maintenanceReserved bool // guarded by pendingLifecycleMu
+	pendingMu           sync.Mutex
+	activeTurnID        string
 	// executingTurnID distinguishes an unexecuted start action from a Turn
 	// already claimed by TurnMessageWithID. It is protected by pendingMu.
 	executingTurnID string
@@ -231,6 +232,9 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 	if e == nil {
 		return PendingInputRecord{}, ErrNoActiveTurn
 	}
+	if e.maintenanceReserved {
+		return PendingInputRecord{}, ErrMaintenance
+	}
 	if turnID == "" {
 		return PendingInputRecord{}, errors.New("runtime: empty turn id")
 	}
@@ -318,6 +322,9 @@ func (e *Engine) ReserveCompactionTurnID(turnID string) error {
 func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error {
 	if e == nil {
 		return ErrNoActiveTurn
+	}
+	if e.maintenanceReserved {
+		return ErrMaintenance
 	}
 	if turnID == "" {
 		return fmt.Errorf("runtime: empty turn id")
@@ -494,6 +501,9 @@ func (e *Engine) enqueuePendingMessage(ctx context.Context, userMsg llm.Message,
 	}
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
+	if e.maintenanceReserved {
+		return e.PendingInputStatus(), ErrMaintenance
+	}
 	status, _, err := e.enqueuePendingMessageWithOptions(ctx, userMsg, opts, true)
 	return status, err
 }

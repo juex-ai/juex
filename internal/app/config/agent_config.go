@@ -68,6 +68,14 @@ func validateAgentConfig(inventory ModuleInventory, content []byte, homeDir, age
 // remote-import cache generation under one recovery journal. validateRuntime,
 // when provided, checks the merged configuration before either is published.
 func WriteAgentConfig(inventory ModuleInventory, content []byte, homeDir, agentID string, validateRuntime func(Config) error) (string, error) {
+	return writeAgentConfig(inventory, content, homeDir, agentID, nil, validateRuntime)
+}
+
+func WriteAgentConfigIfRevision(inventory ModuleInventory, content []byte, homeDir, agentID, revision string, validateRuntime func(Config) error) (string, error) {
+	return writeAgentConfig(inventory, content, homeDir, agentID, &revision, validateRuntime)
+}
+
+func writeAgentConfig(inventory ModuleInventory, content []byte, homeDir, agentID string, revision *string, validateRuntime func(Config) error) (string, error) {
 	cfg, err := validateAgentConfig(inventory, content, homeDir, agentID)
 	if err != nil {
 		return "", &AgentConfigValidationError{Err: err}
@@ -88,6 +96,7 @@ func WriteAgentConfig(inventory ModuleInventory, content []byte, homeDir, agentI
 		cfg.AgentConfigPath(),
 		"agent",
 		0o700,
+		revision,
 		func(cfg *Config) error {
 			return publishPendingConfigImportCachesWhileLocked(cfg, func(path string, data []byte) error {
 				return homestore.WriteFileAtomic(path, data, 0o600, 0o700)

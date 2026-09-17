@@ -44,7 +44,7 @@ func TestManagedCLIExposesResourceScopedCommandTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertVisibleCommands(t, fleet, []string{"gc", "install", "serve", "services", "status", "uninstall"})
+	assertVisibleCommands(t, fleet, []string{"gc", "install", "serve", "services", "status", "supervisor", "uninstall"})
 	services, _, err := root.Find([]string{"fleet", "services"})
 	if err != nil {
 		t.Fatal(err)

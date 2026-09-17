@@ -11,6 +11,10 @@ import (
 )
 
 func (m *Manager) Add(ctx context.Context, opts AddOptions) (AddResult, error) {
+	return m.add(ctx, opts, false)
+}
+
+func (m *Manager) add(ctx context.Context, opts AddOptions, requireNew bool) (AddResult, error) {
 	if strings.TrimSpace(opts.Workspace) == "" {
 		return AddResult{}, &ValidationError{Reason: "workspace is required"}
 	}
@@ -46,6 +50,11 @@ func (m *Manager) Add(ctx context.Context, opts AddOptions) (AddResult, error) {
 	})
 	if err != nil {
 		return AddResult{}, registrationError(err)
+	}
+	// Resolve serializes registration by canonical Workspace. Checking its
+	// result avoids a separate lookup racing another creator before mutation.
+	if requireNew && !resolved.Created {
+		return AddResult{}, &ConflictError{AgentID: resolved.Agent.ID, Reason: "workspace is already registered; creation cannot modify an existing Agent"}
 	}
 
 	guard, err := acquireLifecycleLock(m.store(), resolved.Agent.ID)
@@ -136,6 +145,11 @@ func (m *Manager) Remove(
 		return RemovedAgent{}, err
 	}
 	confirmationTarget := entry.Agent.Name
+	if bound, err := m.isSupervisor(entry.ID); err != nil {
+		return RemovedAgent{}, err
+	} else if bound {
+		return RemovedAgent{}, &ConflictError{AgentID: entry.ID, Reason: "bound Supervisor requires explicit Supervisor reset or removal; history is preserved"}
+	}
 	if strings.TrimSpace(confirmationTarget) == "" {
 		confirmationTarget = entry.ID
 	}

@@ -74,3 +74,7 @@ WebSocket 展开后的握手 Header 变化时会重新连接。
 
 独立服务定义只属于所属 Home 及其 imports，不从默认 Home 继承到自定义实例。
 生命周期契约见 [Fleet 服务](../../fleet/services/README.zh.md)。
+
+`fleet_client.profile` 在 Agent 启动时固定，接受 `agent`（默认）或 `supervisor`。
+`fleet-management` Module 还要求 Supervisor Main 作用域。Profile 不是工具参数，
+也不是认证凭据。角色与应用策略见 [Fleet](../../fleet/README.zh.md)。

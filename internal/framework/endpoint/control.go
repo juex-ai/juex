@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	identityPath = "/api/identity"
-	shutdownPath = "/api/control/shutdown"
+	identityPath     = "/api/identity"
+	shutdownPath     = "/api/control/shutdown"
+	idleShutdownPath = "/api/control/shutdown-idle"
 )
 
 type IdentityMismatchError struct {
@@ -49,6 +50,24 @@ type ShutdownRequest struct {
 type ShutdownResponse struct {
 	Status        string         `json:"status"`
 	RestartIntent ShutdownReason `json:"restart_intent,omitempty"`
+	IdleReserved  bool           `json:"idle_reserved,omitempty"`
+}
+
+var ErrRuntimeBusy = errors.New("endpoint: runtime is busy; retry when idle")
+
+func RequestShutdownIfIdle(ctx context.Context, expected Runtime) error {
+	response, err := requestShutdownAt(ctx, ShutdownRequest{Runtime: expected}, idleShutdownPath)
+	var status *HTTPStatusError
+	if errors.As(err, &status) && status.StatusCode == http.StatusConflict && bytes.Contains([]byte(status.Body), []byte(`"runtime_busy"`)) {
+		return ErrRuntimeBusy
+	}
+	if err != nil {
+		return err
+	}
+	if !response.IdleReserved {
+		return errors.New("endpoint: runtime did not acknowledge idle reservation")
+	}
+	return nil
 }
 
 func (e *HTTPStatusError) Error() string {
@@ -59,30 +78,35 @@ func (e *HTTPStatusError) Error() string {
 }
 
 func Probe(ctx context.Context, expected Runtime) error {
+	_, err := Inspect(ctx, expected)
+	return err
+}
+
+func Inspect(ctx context.Context, expected Runtime) (Runtime, error) {
 	target, err := Parse(expected.Endpoint)
 	if err != nil {
-		return fmt.Errorf("endpoint: parse runtime endpoint: %w", err)
+		return Runtime{}, fmt.Errorf("endpoint: parse runtime endpoint: %w", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.URL(identityPath), nil)
 	if err != nil {
-		return fmt.Errorf("endpoint: build identity request: %w", err)
+		return Runtime{}, fmt.Errorf("endpoint: build identity request: %w", err)
 	}
 	response, err := target.NewClient().Do(request)
 	if err != nil {
-		return fmt.Errorf("endpoint: probe runtime identity: %w", err)
+		return Runtime{}, fmt.Errorf("endpoint: probe runtime identity: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return responseStatusError(response, http.MethodGet, identityPath)
+		return Runtime{}, responseStatusError(response, http.MethodGet, identityPath)
 	}
 	var actual Runtime
 	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&actual); err != nil {
-		return fmt.Errorf("endpoint: decode runtime identity: %w", err)
+		return Runtime{}, fmt.Errorf("endpoint: decode runtime identity: %w", err)
 	}
 	if !actual.Matches(expected) {
-		return &IdentityMismatchError{Expected: expected, Actual: actual}
+		return Runtime{}, &IdentityMismatchError{Expected: expected, Actual: actual}
 	}
-	return nil
+	return actual, nil
 }
 
 func RequestShutdown(ctx context.Context, expected Runtime) error {
@@ -104,6 +128,10 @@ func RequestRestart(ctx context.Context, expected Runtime) (bool, error) {
 }
 
 func requestShutdown(ctx context.Context, shutdown ShutdownRequest) (ShutdownResponse, error) {
+	return requestShutdownAt(ctx, shutdown, shutdownPath)
+}
+
+func requestShutdownAt(ctx context.Context, shutdown ShutdownRequest, path string) (ShutdownResponse, error) {
 	expected := shutdown.Runtime
 	target, err := Parse(expected.Endpoint)
 	if err != nil {
@@ -116,7 +144,7 @@ func requestShutdown(ctx context.Context, shutdown ShutdownRequest) (ShutdownRes
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
-		target.URL(shutdownPath),
+		target.URL(path),
 		bytes.NewReader(body),
 	)
 	if err != nil {
@@ -129,7 +157,7 @@ func requestShutdown(ctx context.Context, shutdown ShutdownRequest) (ShutdownRes
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {
-		return ShutdownResponse{}, responseStatusError(response, http.MethodPost, shutdownPath)
+		return ShutdownResponse{}, responseStatusError(response, http.MethodPost, path)
 	}
 	var result ShutdownResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&result); err != nil &&

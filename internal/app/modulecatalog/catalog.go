@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/extensions"
 	"github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/features/filetools"
+	"github.com/juex-ai/juex/internal/features/fleetmanagement"
 	"github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/inputtracking"
@@ -37,6 +38,7 @@ var inventory = config.NewModuleInventory([]config.ModuleDefinition{
 	{ID: goal.ModuleID},
 	{ID: notes.ModuleID},
 	{ID: inputtracking.ModuleID},
+	{ID: fleetmanagement.ModuleID},
 	{ID: memory.ModuleID},
 	{ID: contextcontrol.ModuleID},
 	{ID: workerthreads.ModuleID},

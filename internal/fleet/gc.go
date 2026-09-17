@@ -62,6 +62,11 @@ func (m *Manager) deleteOrphan(ctx context.Context, id string) error {
 		return err
 	}
 	defer func() { _ = lifecycle.Close() }()
+	if bound, err := m.isSupervisor(entry.ID); err != nil {
+		return err
+	} else if bound {
+		return &ConflictError{AgentID: entry.ID, Reason: "bound Supervisor requires explicit repair or removal"}
+	}
 	entry, err = m.reload(entry.ID)
 	if err != nil {
 		return err

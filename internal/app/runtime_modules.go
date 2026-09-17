@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/contextcontrol"
 	"github.com/juex-ai/juex/internal/features/filesearch"
 	"github.com/juex-ai/juex/internal/features/filetools"
+	"github.com/juex-ai/juex/internal/features/fleetmanagement"
 	goalmodule "github.com/juex-ai/juex/internal/features/goal"
 	"github.com/juex-ai/juex/internal/features/hooks"
 	"github.com/juex-ai/juex/internal/features/inputtracking"
@@ -23,6 +24,7 @@ import (
 	"github.com/juex-ai/juex/internal/features/skills"
 	"github.com/juex-ai/juex/internal/foundation/environment"
 	"github.com/juex-ai/juex/internal/foundation/events"
+	"github.com/juex-ai/juex/internal/foundation/fleetclient"
 	"github.com/juex-ai/juex/internal/foundation/sandbox"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
@@ -196,6 +198,12 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		return engine.PendingInputStatus().TurnID
 	}
 	builtinSpecs := []runtimemodule.ThreadFactorySpec{
+		{ID: fleetmanagement.ModuleID,
+			Enabled: cfg.ModuleEnabled(fleetmanagement.ModuleID) && cfg.FleetClientProfile == fleetclient.ProfileSupervisor && threadState != nil && threadState.ID == thread.MainID,
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				return fleetmanagement.New(fleetclient.New(cfg.HomeJuexDir, cfg.FleetClientProfile, cfg.AgentID)), nil
+			},
+		},
 		{
 			ID:      inputtracking.ModuleID,
 			Enabled: cfg.ModuleEnabled(inputtracking.ModuleID),

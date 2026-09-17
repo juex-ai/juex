@@ -231,6 +231,9 @@ func applyYAMLContentWithImportLoader(cfg *Config, data []byte, source yamlConfi
 			}
 		}
 	}
+	if source.Scope == configScopeAgent && source.Path == cfg.AgentConfigPath() {
+		staged.AgentConfigRevision = fmt.Sprintf("%x", sha256.Sum256(data))
+	}
 	*cfg = staged
 	return nil
 }

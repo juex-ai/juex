@@ -46,6 +46,9 @@ func (e *Engine) newContextLocked(ctx context.Context, allowActive bool) error {
 			e.finishContextRenewal(ctx, current.Modules)
 		}
 	}()
+	if e.maintenanceReserved {
+		return ErrMaintenance
+	}
 	if allowActive {
 		if err := e.checkInputScopeRenewal(); err != nil {
 			return err

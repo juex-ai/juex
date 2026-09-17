@@ -19,7 +19,15 @@ func (m *Manager) Serve(ctx context.Context, report func(Action)) error {
 	if err != nil {
 		return err
 	}
+	var supervisorID string
 	for _, entry := range entries {
+		if bound, err := m.isSupervisor(entry.ID); err != nil {
+			report(Action{AgentID: entry.ID, Kind: "failed", Err: err})
+			continue
+		} else if bound {
+			supervisorID = entry.ID
+			continue
+		}
 		status := m.inspectStatus(ctx, entry)
 		switch status.RuntimeHealth {
 		case RuntimeHealthy:
@@ -67,6 +75,23 @@ func (m *Manager) Serve(ctx context.Context, report func(Action)) error {
 		report(Action{AgentID: entry.ID, Kind: "skipped", Detail: reconciliationSkipReason(status)})
 	}
 	report(Action{Kind: "ready", Detail: "startup reconciliation complete"})
+	// Supervisor readiness cannot hold the Fleet API hostage to model setup.
+	// Re-read under its lifecycle lock so an external stop wins a startup race.
+	if supervisorID != "" {
+		guard, err := acquireLifecycleLock(m.store(), supervisorID)
+		if err == nil {
+			entry, loadErr := m.reload(supervisorID)
+			if loadErr == nil && entry.Agent.Enabled && entry.Agent.Autostart {
+				_, err = m.startEntry(ctx, entry)
+			} else {
+				err = loadErr
+			}
+			_ = guard.Close()
+		}
+		if err != nil {
+			report(Action{AgentID: supervisorID, Kind: "failed", Err: err})
+		}
+	}
 	<-ctx.Done()
 	return nil
 }

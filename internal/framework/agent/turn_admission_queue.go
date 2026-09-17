@@ -42,7 +42,7 @@ func (q turnAdmissionQueue) admitUserWithRetry(ctx context.Context, message llm.
 	q.state.mu.Lock()
 	phase := q.state.phase
 	q.state.mu.Unlock()
-	if phase == turnAdmissionCommand {
+	if phase == turnAdmissionCommand || phase == turnAdmissionMaintenance {
 		return conflictResult("Thread busy", errTurnAdmissionBusy, q.engine.PendingInputStatus())
 	}
 	return admissionResultFromPendingInput(q.engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{
