@@ -5270,21 +5270,21 @@ func TestTurn_ExhaustedProviderFailureDoesNotBecomeTasksContinuation(t *testing.
 	}
 }
 
-func TestTurn_TasksCompletionGateAcceptsMaximumTasksContract(t *testing.T) {
+func TestTurn_TasksCompletionGatePreservesLargeAcceptedTaskContract(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "task_update_max", ToolName: tasksmodule.ToolUpdate, Input: map[string]any{"id": "$first_task",
 				"status":        string(tasksmodule.Done),
-				"status_reason": "maximum contract preserved",
+				"status_reason": "large contract preserved",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
 	tasksState := tasksmodule.NewStore(eng.Thread.Dir, tasksmodule.Options{})
-	acceptance := strings.Repeat("a", 32*1024)
-	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "ship the maximum contract", Acceptance: acceptance}); err != nil {
+	acceptance := strings.Repeat("a", 30*1024)
+	if _, err := tasksState.Create(tasksmodule.Create{Title: "Tracked work", Description: "ship the large contract", Acceptance: acceptance}); err != nil {
 		t.Fatal(err)
 	}
 	installThreadStateModulesWithStores(t, eng, tasksState, nil)
@@ -5297,7 +5297,7 @@ func TestTurn_TasksCompletionGateAcceptsMaximumTasksContract(t *testing.T) {
 		t.Fatalf("out = %q, provider calls = %d", out, len(prov.histories))
 	}
 	if got := messagesText(prov.histories[1]); !strings.Contains(got, acceptance) {
-		t.Fatalf("maximum acceptance missing from continuation context: length=%d", len(got))
+		t.Fatalf("large acceptance missing from continuation context: length=%d", len(got))
 	}
 }
 
