@@ -86,6 +86,14 @@ func TestSupervisorAgentCompiledLifecycleAndBusyConfiguration(t *testing.T) {
 		t.Fatalf("initial application=%+v %v", firstApply, err)
 	}
 	original := waitFleetRuntime(t, address)
+	same, err := client.Configure(context.Background(), created.Agent.ID, fleetclient.ConfigRequest{Content: "preset: standard\n", ExpectedRevision: firstApply.Revision})
+	if err != nil || !same.Published || same.RestartRequired || same.Restarted || same.BehaviorVerified {
+		t.Fatalf("identical loaded configuration should not require restart: %+v %v", same, err)
+	}
+	loaded, err := client.Config(context.Background(), created.Agent.ID)
+	if err != nil || loaded.RestartRequired != same.RestartRequired || loaded.Revision != same.Revision {
+		t.Fatalf("publication and inspection disagree: %+v %+v %v", same, loaded, err)
+	}
 	startFleetBlockingTurn(t, original)
 	select {
 	case <-started:

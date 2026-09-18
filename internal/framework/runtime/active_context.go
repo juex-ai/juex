@@ -77,6 +77,14 @@ func (e *Engine) activeContextLockedWithPolicyContextError(ctx context.Context, 
 }
 
 func (e *Engine) moduleRuntimeContextMessages(ctx context.Context, runtime ThreadRuntimeSnapshot) ([]llm.Message, error) {
+	sections, err := e.moduleRuntimeContextSections(ctx, runtime)
+	if err != nil {
+		return nil, err
+	}
+	return runtimeContextMessages(sections), nil
+}
+
+func (e *Engine) moduleRuntimeContextSections(ctx context.Context, runtime ThreadRuntimeSnapshot) ([]runtimemodule.ContextSection, error) {
 	if runtime.Thread == nil {
 		return nil, nil
 	}
@@ -95,7 +103,10 @@ func (e *Engine) moduleRuntimeContextMessages(ctx context.Context, runtime Threa
 	if err != nil {
 		return nil, err
 	}
-	sections = runtimemodule.SectionsForProjection(sections, runtimemodule.ContextProjectionRuntimeMessage)
+	return runtimemodule.SectionsForProjection(sections, runtimemodule.ContextProjectionRuntimeMessage), nil
+}
+
+func runtimeContextMessages(sections []runtimemodule.ContextSection) []llm.Message {
 	messages := make([]llm.Message, 0, len(sections))
 	for _, section := range sections {
 		message := llm.TextMessage(llm.RoleUser, section.Text)
@@ -103,7 +114,7 @@ func (e *Engine) moduleRuntimeContextMessages(ctx context.Context, runtime Threa
 		message.Kind = llm.MessageKindRuntimeContext
 		messages = append(messages, message)
 	}
-	return messages, nil
+	return messages
 }
 
 func appendRuntimeContextMessages(snap ActiveContextSnapshot, messages ...llm.Message) ActiveContextSnapshot {

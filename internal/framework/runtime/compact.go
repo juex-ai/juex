@@ -177,11 +177,14 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
-	active, err := e.activeContextLockedWithPolicyContextError(ctx, e.pendingPolicyRuntimeContextSnapshot(), incoming...)
+	sections, err := e.moduleRuntimeContextSections(ctx, e.ThreadRuntimeSnapshot())
 	if err != nil {
 		compactErr := newCompactionError(ctx, fmt.Errorf("runtime: build compaction context: %w", err))
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
+	policyContext := e.pendingPolicyRuntimeContextSnapshot()
+	active := appendRuntimeContextMessages(assembleActiveContext(threadHistory, incoming), runtimeContextMessages(sections)...)
+	active = appendRuntimeContextMessages(active, policyContext...)
 	tokensBefore := e.estimateContextTokens(systemPrompt, tools, active.Messages)
 	if err := e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: ContextCompactStartedPayload{
 		Reason:           reason,
@@ -238,13 +241,14 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 	simulated = append(simulated, threadHistory...)
 	simulated = append(simulated, msg)
 	compacted := assembleActiveContext(simulated, incoming)
-	// Reuse the context already collected for this operation; callbacks must
-	// not cause a second state read between protection and Generation commit.
-	for _, message := range active.Messages {
-		if message.Kind == llm.MessageKindRuntimeContext {
-			compacted.Messages = append(compacted.Messages, message)
-		}
+	// Apply each owner's frozen post-compaction projection without reading or
+	// changing its current authority before the Generation commit.
+	sections, err = runtimemodule.ProjectCompactionContext(sections, summaryState.Contributions)
+	if err != nil {
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
 	}
+	compacted.Messages = append(compacted.Messages, runtimeContextMessages(sections)...)
+	compacted.Messages = append(compacted.Messages, policyContext...)
 	// Provider projection expands retained artifact paths and applies owned tool
 	// projections. Include that representation in the precommit budget check.
 	projectedAfter, _, err := e.projectMessagesForProviderLocked(ctx, compacted.Messages, policy)

@@ -72,6 +72,30 @@ func TestFleetMemoryDefaultProcessRetainsKnowledgeAndIsolatesHomes(t *testing.T)
 	}
 }
 
+func TestMemoryNoStoreKeepsUnselectedSourcesThroughTypedAPI(t *testing.T) {
+	api, user := startMemoryFixture(t, t.TempDir(), mc.Basic)
+	selected := mc.Source{FleetID: user.FleetID, AgentID: user.AgentID, ThreadID: user.ThreadID, GenerationID: "g000001", From: 1, Through: 2}
+	other := selected
+	other.GenerationID, other.From, other.Through = "g000002", 10, 11
+	mixed := mc.Entry{ID: "mixed", Name: "Mixed knowledge", Summary: "two sources", Body: "knowledge from two sources", Type: "reference", Sources: []mc.Source{selected, other}}
+	if _, err := api.Admin(t.Context(), user, mc.AdminRequest{Key: "seed", Action: "correct", Changes: []mc.Change{{Entry: mixed}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Admin(t.Context(), user, mc.AdminRequest{Key: "exclude", Action: "no_store", Sources: []mc.Source{selected}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Read(t.Context(), user, mc.ReadRequest{ID: mixed.ID}); err == nil {
+		t.Fatal("excluded mixed entry is readable")
+	}
+	if _, err := api.Propose(t.Context(), user, mc.Proposal{Key: "selected", Text: "excluded", Sources: []mc.Source{selected}}); err == nil {
+		t.Fatal("selected source is learnable")
+	}
+	receipt, err := api.Propose(t.Context(), user, mc.Proposal{Key: "other", Text: "permitted", Sources: []mc.Source{other}})
+	if err != nil || receipt.State != "pending" {
+		t.Fatalf("unselected source rejected: %+v %v", receipt, err)
+	}
+}
+
 func TestMemoryCLISelectsServiceWithoutChangingDefaultStore(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compiled Memory CLI")

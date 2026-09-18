@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -20,6 +21,9 @@ type CompactionContribution struct {
 	Guidance  string
 	Section   string
 	Reconcile func(context.Context, string) (string, error)
+	// ContextReplacements projects owned runtime sections after compaction.
+	// Missing keys keep their captured text; empty values remove the section.
+	ContextReplacements map[string]string
 }
 
 type CompactionStateProvider interface {
@@ -29,6 +33,7 @@ type CompactionStateProvider interface {
 // OwnedCompactionContribution gets its owner from the sealed Module set.
 type OwnedCompactionContribution struct {
 	ModuleID ID
+	Scope    Scope
 	CompactionContribution
 }
 
@@ -55,7 +60,7 @@ func CollectCompactionContributions(ctx context.Context, budget CompactionBudget
 		}
 		for _, owned := range parts {
 			part := owned.CompactionContribution
-			if part.State == "" && part.Guidance == "" && part.Section == "" && part.Reconcile == nil {
+			if part.State == "" && part.Guidance == "" && part.Section == "" && part.Reconcile == nil && len(part.ContextReplacements) == 0 {
 				continue
 			}
 			if !json.Valid([]byte(part.State)) || !utf8.ValidString(part.State) || !utf8.ValidString(part.Guidance) {
@@ -108,9 +113,48 @@ func (s *Set) compactionContributions(ctx context.Context) ([]OwnedCompactionCon
 		if err := cancellation.ContextError(ctx); err != nil {
 			return nil, err
 		}
-		parts = append(parts, OwnedCompactionContribution{ModuleID: entry.id, CompactionContribution: part})
+		part.ContextReplacements = maps.Clone(part.ContextReplacements)
+		parts = append(parts, OwnedCompactionContribution{ModuleID: entry.id, Scope: s.scope, CompactionContribution: part})
 	}
 	return parts, nil
+}
+
+// ProjectCompactionContext uses only frozen values; it never rereads Module state.
+func ProjectCompactionContext(sections []ContextSection, contributions []OwnedCompactionContribution) ([]ContextSection, error) {
+	projected := append([]ContextSection(nil), sections...)
+	for _, owned := range contributions {
+		for key, text := range owned.ContextReplacements {
+			found := false
+			for index, section := range projected {
+				if section.Key != key {
+					continue
+				}
+				if section.ModuleID != owned.ModuleID || section.Scope != owned.Scope || section.Projection != ContextProjectionRuntimeMessage {
+					return nil, fmt.Errorf("runtime module %q cannot replace compaction context %q", owned.ModuleID, key)
+				}
+				section.Text = text
+				if !utf8.ValidString(text) {
+					return nil, fmt.Errorf("runtime module %q compaction context %q: invalid UTF-8", owned.ModuleID, key)
+				}
+				if err := validateContextBudget(section); err != nil {
+					return nil, fmt.Errorf("runtime module %q compaction context %q: %w", owned.ModuleID, key, err)
+				}
+				projected[index] = section
+				found = true
+				break
+			}
+			if !found {
+				return nil, fmt.Errorf("runtime module %q compaction context %q is unavailable", owned.ModuleID, key)
+			}
+		}
+	}
+	result := make([]ContextSection, 0, len(projected))
+	for _, section := range projected {
+		if section.Text != "" {
+			result = append(result, section)
+		}
+	}
+	return result, nil
 }
 
 func validCompactionSection(section string) bool {

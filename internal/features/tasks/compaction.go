@@ -21,7 +21,8 @@ func (m *Module) CompactionContribution(ctx context.Context) (runtimemodule.Comp
 	if len(state.Tasks) == 0 {
 		return runtimemodule.CompactionContribution{}, nil
 	}
-	data, err := json.Marshal(TasksSnapshot{Tasks: state.unfinished().Tasks})
+	unfinished := state.unfinished()
+	data, err := json.Marshal(TasksSnapshot{Tasks: unfinished.Tasks})
 	if err != nil {
 		return runtimemodule.CompactionContribution{}, err
 	}
@@ -37,7 +38,9 @@ func (m *Module) CompactionContribution(ctx context.Context) (runtimemodule.Comp
 	}
 	fence := strings.Repeat("`", max(3, longest+1))
 	canonical = fence + "json\n" + canonical + "\n" + fence
+	contextText, _ := unfinished.RenderProviderContext()
 	return runtimemodule.CompactionContribution{State: string(data), Section: "Tasks", Guidance: "Copy the authoritative Tasks JSON exactly into the Tasks section, preserving every unfinished task and all its fields. Enclose it in this fence: " + fence,
-		Reconcile: func(ctx context.Context, _ string) (string, error) { return canonical, ctx.Err() },
+		Reconcile:           func(ctx context.Context, _ string) (string, error) { return canonical, ctx.Err() },
+		ContextReplacements: map[string]string{"thread_tasks": contextText},
 	}, nil
 }

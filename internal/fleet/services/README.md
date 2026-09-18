@@ -7,6 +7,8 @@ storage; App composes them. Ordinary Agent Modules remain process-local.
 `../service` owns OS service registration and has a separate responsibility.
 
 Only the owning `JUEX_HOME/juex.yaml` and its imports define `fleet.services`.
+Definitions merge by service identity in import order, then the declaring file;
+a later definition replaces the whole entry for the same identity.
 A custom Home never inherits default-Home service definitions. Workspace and
 Agent layers cannot define Fleet settings. Restart Fleet management to reload
 definitions, then restart an affected service to apply its command or opaque

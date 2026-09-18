@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/homestore"
@@ -19,10 +20,14 @@ func (m *Manager) Status(ctx context.Context) []Status {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	ids := m.ids()
-	result := make([]Status, 0, len(ids))
-	for _, id := range ids {
-		result = append(result, m.status(ctx, id, m.definitions[id]))
+	result := make([]Status, len(ids))
+	var probes sync.WaitGroup
+	for index, id := range ids {
+		probes.Go(func() {
+			result[index] = m.status(ctx, id, m.definitions[id])
+		})
 	}
+	probes.Wait()
 	return result
 }
 func (m *Manager) Get(ctx context.Context, id string) (Status, error) {

@@ -450,14 +450,6 @@ func (s *Store) Decide(ctx context.Context, c mc.Caller, d mc.Decision) (mc.Rece
 	return s.receipt(s.state.Requests[c.AssignmentID]), nil
 }
 
-func (s *Store) suppressEntry(id string) {
-	e := s.entries[id]
-	s.state.Deleted[id] = true
-	delete(s.state.Access, id)
-	delete(s.state.Uses, id)
-	s.state.Suppressed = append(s.state.Suppressed, e.Sources...)
-	s.scrub(e.Sources)
-}
 func (s *Store) scrub(sources []mc.Source) {
 	for _, w := range s.state.Requests {
 		hit := false
@@ -589,7 +581,15 @@ func (s *Store) Admin(ctx context.Context, c mc.Caller, q mc.AdminRequest) (mc.R
 		}
 	}
 	for _, id := range deletes {
-		s.suppressEntry(id)
+		s.state.Deleted[id] = true
+		delete(s.state.Access, id)
+		delete(s.state.Uses, id)
+		// No-store removes mixed entries but only fences the selected ranges.
+		if q.Action != "no_store" {
+			sources := s.entries[id].Sources
+			s.state.Suppressed = append(s.state.Suppressed, sources...)
+			s.scrub(sources)
+		}
 	}
 	if q.Action == "no_store" {
 		s.state.Suppressed = append(s.state.Suppressed, q.Sources...)

@@ -159,7 +159,7 @@ func TestSupervisorStopRepairResetAndRemoval(t *testing.T) {
 
 func TestSupervisorRepairMissingDirectoryAndResumeInitialization(t *testing.T) {
 	m, _ := New(Options{HomeDir: t.TempDir()})
-	binding, err := m.planSupervisor(nil)
+	binding, err := m.planSupervisor(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,5 +191,58 @@ func TestBoundSupervisorCannotBeGarbageCollected(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(m.homeDir, "agents", status.Agent.ID, "agent.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSupervisorResetPreservesSettlementBeforeInitialization(t *testing.T) {
+	for _, confirmed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "confirmed", false: "unconfirmed"}[confirmed], func(t *testing.T) {
+			m, err := New(Options{HomeDir: t.TempDir(), SettleSupervisor: func(context.Context, string, string) (ExecutorSettlement, error) {
+				if !confirmed {
+					return ExecutorSettlement{}, errors.New("Memory unavailable")
+				}
+				return ExecutorSettlement{Confirmed: true, Released: 2}, nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial, err := m.EnsureSupervisor(t.Context(), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var blocked string
+			m.supervisorTemplate = func() ([]byte, []byte) {
+				binding, err := m.readSupervisor()
+				if err != nil {
+					t.Fatal(err)
+				}
+				blocked = filepath.Join(binding.Agent.Workspace, ".agents")
+				if err := os.WriteFile(blocked, []byte("block guidance publication"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				return []byte("{}\n"), []byte("guidance")
+			}
+			if _, err := m.ResetSupervisor(t.Context()); err == nil {
+				t.Fatal("expected initialization failure")
+			}
+			binding, err := m.readSupervisor()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if binding.State != "initializing" || binding.Settlement == nil || binding.Settlement.AgentID != initial.Agent.ID || binding.Settlement.Confirmed != confirmed {
+				t.Fatalf("settlement lost at replacement intent: %+v", binding)
+			}
+			if err := os.Remove(blocked); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := New(Options{HomeDir: m.homeDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := reopened.EnsureSupervisor(t.Context(), true)
+			if err != nil || resumed.Settlement == nil || *resumed.Settlement != *binding.Settlement {
+				t.Fatalf("restart lost settlement: %+v %v", resumed, err)
+			}
+		})
 	}
 }

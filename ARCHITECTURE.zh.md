@@ -234,7 +234,9 @@ Fleet 服务租约和直连类型化 Kitex 客户端组装。Memory 拥有知识
 
 Tasks 与 Notes 策略分别位于 `internal/features/tasks` 和
 `internal/features/notes`。每次压缩中，启用的 Module 贡献一份冻结的 JSON 状态、
-指导和自有摘要段落，只能依据该快照修正自己声明的段落。Framework 在提交
+指导和自有摘要段落，只能依据该快照修正自己声明的段落。Module 也可用冻结的
+压缩后文本替换自有运行时上下文片段，让预算反映暂存状态，而不在提交前修改
+权威状态。Framework 在提交
 Generation 前，检查修正后的摘要是否满足成功请求的输出预算，以及包含已准备
 待提交输入的完整 Provider 可见上下文是否满足压缩触发预算。
 压缩不会截断受保护状态或将其写回权威文件；

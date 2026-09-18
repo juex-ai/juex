@@ -6,6 +6,7 @@ Fleet 管理服务进程与发现，Feature 拥有业务 API 和存储，App 负
 普通 Agent Module 保持进程内作用域。`../service` 负责 OS 服务注册，职责独立。
 
 只有所属 `JUEX_HOME/juex.yaml` 及其 imports 定义 `fleet.services`。
+定义按导入顺序、再按声明文件以服务标识合并；后来的同名定义替换整个条目。
 自定义 Home 不继承默认 Home 的服务定义，Workspace 和 Agent 层不能定义
 Fleet 设置。重启 Fleet 管理以加载定义，再重启受影响服务以应用 command
 或不透明 `config`。App 默认提供 managed Basic Memory，可显式设置

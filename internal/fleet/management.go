@@ -96,14 +96,17 @@ func (m *Manager) ManagedConfig(ctx context.Context, caller fleetclient.Caller, 
 	if err != nil {
 		return fleetclient.Config{}, err
 	}
-	restartRequired := state.Exists
-	if runtimeState, err := m.Endpoint(ctx, entry.ID); err == nil {
+	return fleetclient.Config{Content: redacted.Content, Revision: currentRevision, Exists: state.Exists, RestartRequired: m.configRestartRequired(ctx, entry.ID, currentRevision, state.Exists)}, nil
+}
+
+func (m *Manager) configRestartRequired(ctx context.Context, id, currentRevision string, exists bool) bool {
+	if runtimeState, err := m.Endpoint(ctx, id); err == nil {
 		probeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 		actual, inspectErr := endpoint.Inspect(probeCtx, runtimeState)
 		cancel()
-		restartRequired = inspectErr != nil || actual.ConfigRevision != currentRevision
+		return inspectErr != nil || actual.ConfigRevision != currentRevision
 	}
-	return fleetclient.Config{Content: redacted.Content, Revision: currentRevision, Exists: state.Exists, RestartRequired: restartRequired}, nil
+	return exists
 }
 func (m *Manager) ManagedConfigure(ctx context.Context, caller fleetclient.Caller, id string, request fleetclient.ConfigRequest) (fleetclient.Result, error) {
 	if err := m.AuthorizeManagement(caller); err != nil {
@@ -142,7 +145,8 @@ func (m *Manager) ManagedConfigure(ctx context.Context, caller fleetclient.Calle
 	if err := m.configUpdater(m.homeDir, entry.ID, content, request.ExpectedRevision); err != nil {
 		return fleetclient.Result{}, err
 	}
-	result := fleetclient.Result{Saved: true, Published: true, RestartRequired: true, Revision: revision(string(content)), Agent: managementAgent(m.inspectStatus(ctx, entry))}
+	result := fleetclient.Result{Saved: true, Published: true, Revision: revision(string(content)), Agent: managementAgent(m.inspectStatus(ctx, entry))}
+	result.RestartRequired = m.configRestartRequired(ctx, entry.ID, result.Revision, true)
 	if !request.Apply {
 		return result, nil
 	}

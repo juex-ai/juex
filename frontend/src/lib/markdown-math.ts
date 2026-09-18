@@ -10,6 +10,7 @@ type MarkdownNode = {
   children?: MarkdownNode[];
 };
 const literalTypes = new Set(["code", "inlineCode", "html", "definition", "image", "imageReference"]);
+const proseTypes = new Set(["paragraph", "heading", "tableCell"]);
 
 // Normalize before Streamdown splits blocks or CommonMark consumes backslashes.
 // Parser offsets protect code (including nested fences), HTML, and link targets.
@@ -38,7 +39,11 @@ export function normalizeMathDelimiters(markdown: string): string {
       }
       return;
     }
+    // A closing delimiter in another block cannot finish this block's formula.
+    const prose = proseTypes.has(node.type) && start !== undefined && end !== undefined;
+    if (prose) ranges.push([start, start]);
     node.children?.forEach(collect);
+    if (prose) ranges.push([end, end]);
   }
   collect(parser.parse(markdown));
 
@@ -79,8 +84,8 @@ function normalizeProse(markdown: string, start: number, end: number): string {
       if (/\r?\n/.test(body)) return `$$${body}$$`;
       const nextLine = markdown.indexOf("\n", absoluteEnd);
       const suffix = markdown.slice(absoluteEnd, nextLine < 0 ? markdown.length : nextLine);
-      if (/^[\t >]*(?:(?:[-+*]|\d+[.)]) +)?$/.test(prefix) && !suffix.trim()) {
-        const continuation = prefix.replace(/(?:[-+*]|\d+[.)]) +$/, marker => " ".repeat(marker.length));
+      if (/^(?:[\t ]*(?:>[\t ]?|(?:[-+*]|\d+[.)])[\t ]+))*[\t ]*$/.test(prefix) && !suffix.trim()) {
+        const continuation = prefix.replace(/(?:[-+*]|\d+[.)])[\t ]+/g, marker => " ".repeat(marker.length));
         return `$$\n${continuation}${body}\n${continuation}$$`;
       }
       // Inline containers (such as table cells and links) cannot contain new rows.

@@ -308,3 +308,32 @@ func TestMergeRetainsEvidenceWithoutCreatingForgetConstraint(t *testing.T) {
 		t.Fatalf("merge incorrectly suppressed evidence: %v", err)
 	}
 }
+
+func TestNoStoreMixedEntryPreservesUnselectedSourcesAfterReopen(t *testing.T) {
+	s, a, _, user := fixture(t)
+	ctx := t.Context()
+	selected := testSource()
+	other := selected
+	other.GenerationID, other.From, other.Through = "g000002", 20, 21
+	mixed := entry("mixed")
+	mixed.Sources = []mc.Source{selected, other}
+	if _, err := s.Admin(ctx, user, mc.AdminRequest{Key: "mixed", Action: "correct", Changes: []mc.Change{{Entry: mixed}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Admin(ctx, user, mc.AdminRequest{Key: "exclude", Action: "no_store", Sources: []mc.Source{selected}}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(s.dir, a.FleetID, mc.Basic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Read(ctx, a, mc.ReadRequest{ID: mixed.ID}); err == nil {
+		t.Fatal("mixed entry survived no-store")
+	}
+	if _, err := s.Propose(ctx, a, mc.Proposal{Key: "selected", Text: "excluded", Reason: "test", Sources: []mc.Source{selected}}); err == nil {
+		t.Fatal("selected source was not suppressed")
+	}
+	if _, err := s.Propose(ctx, a, mc.Proposal{Key: "other", Text: "permitted", Reason: "test", Sources: []mc.Source{other}}); err != nil {
+		t.Fatalf("unselected source was suppressed: %v", err)
+	}
+}

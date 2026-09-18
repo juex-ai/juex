@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,4 +141,57 @@ func TestServiceListenerDoesNotReplaceAnotherFleetsSocket(t *testing.T) {
 		t.Fatalf("original listener lost: %v", err)
 	}
 	_ = conn.Close()
+}
+
+func TestStatusSlowServicesDoNotHideHealthyService(t *testing.T) {
+	slow, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var connections sync.WaitGroup
+	release := make(chan struct{})
+	accepted := make(chan struct{})
+	go func() {
+		defer close(accepted)
+		for {
+			conn, err := slow.Accept()
+			if err != nil {
+				return
+			}
+			connections.Go(func() { defer func() { _ = conn.Close() }(); <-release })
+		}
+	}()
+	defer func() { _ = slow.Close(); <-accepted; close(release); connections.Wait() }()
+	healthy, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := map[string]Definition{}
+	for _, id := range []string{"a-slow", "b-slow", "c-slow"} {
+		definitions[id] = Definition{Mode: External, Enabled: true, Network: "tcp", Address: slow.Addr().String()}
+	}
+	definitions["z-ready"] = Definition{Mode: External, Enabled: true, Network: "tcp", Address: healthy.Addr().String()}
+	m, err := New(Options{Home: t.TempDir(), Definitions: definitions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := serviceendpoint.Record{Identity: serviceendpoint.Identity{FleetID: m.fleet, ServiceID: "z-ready", InstanceID: "ready"}, Network: "tcp", Address: healthy.Addr().String()}
+	server := serviceendpoint.ControlServer(healthy, record.Identity, func() {})
+	done := make(chan error, 1)
+	go func() { done <- server.Run() }()
+	defer func() { _ = server.Stop(); <-done }()
+	readyCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if err := poll(readyCtx, func() (bool, error) { return serviceendpoint.Probe(readyCtx, record) == nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	statuses := m.Status(t.Context())
+	if len(statuses) != 4 || statuses[3].ID != "z-ready" || statuses[3].Phase != "ready" {
+		t.Fatalf("slow probes hid healthy service: %+v", statuses)
+	}
+	for _, status := range statuses[:3] {
+		if status.Phase != "degraded" {
+			t.Fatalf("unresponsive service appears ready: %+v", status)
+		}
+	}
 }

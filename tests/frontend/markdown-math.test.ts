@@ -98,8 +98,6 @@ test("shortcut and collapsed links retain the original reference key", () => {
 test("multiline inline math strips only the quote's continuation markers", () => {
   assert.equal(normalizeMathDelimiters(String.raw`> \(a +
 > b\)`), "> $$a + b$$");
-  assert.equal(normalizeMathDelimiters(String.raw`> > \(a
-> > > b\)`), "> > $$a > b$$");
   assert.equal(normalizeMathDelimiters(String.raw`> \(a +
 b\)`), "> $$a + b$$");
 });
@@ -110,5 +108,20 @@ test("does not join formulas across blank paragraphs inside containers", () => {
       const source = `${lead}${open}open\n${continuation}\n${continuation} close${close}`;
       assert.equal(normalizeMathDelimiters(source), source);
     }
+  }
+});
+
+test("does not join formulas across adjacent Markdown blocks", () => {
+  for (const source of [
+    "- \\(open\n- close\\)",
+    "\\(open\n# close\\)",
+    "> \\(open\n> > close\\)",
+    "| \\(open | close\\) |\n|---|---|",
+  ]) assert.equal(normalizeMathDelimiters(source), source);
+});
+
+test("display math preserves mixed nested quote and list containers", () => {
+  for (const [prefix, continuation] of [["- > ", "  > "], ["> - > ", ">   > "], ["1. > - ", "   >   "]]) {
+    assert.equal(normalizeMathDelimiters(`${prefix}\\[x\\]`), `${prefix}$$\n${continuation}x\n${continuation}$$`);
   }
 });

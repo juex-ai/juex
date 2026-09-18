@@ -472,3 +472,22 @@ func TestSupervisorDefaultsAndOwningHomeDisable(t *testing.T) {
 		t.Fatalf("owning Home disable=%+v %v", cfg, err)
 	}
 }
+
+func TestFleetServicesMergeOwningHomeImportsByIdentity(t *testing.T) {
+	user, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", user)
+	t.Setenv("USERPROFILE", user)
+	t.Setenv("JUEX_HOME", home)
+	writeTextFile(t, filepath.Join(home, "services.yaml"), "fleet:\n  services:\n    imported: {mode: managed, enabled: true, command: [imported-service]}\n    replaced: {mode: managed, enabled: true, command: [old-service]}\n")
+	writeTextFile(t, filepath.Join(home, "juex.yaml"), "imports:\n  - source: services.yaml\nfleet:\n  services:\n    replaced: {mode: managed, enabled: false, command: [new-service]}\n    local: {mode: managed, enabled: true, command: [local-service]}\n")
+	cfg, err := LoadHomeFleetConfig(testModuleInventory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Services) != 4 || !cfg.Services["imported"].Enabled || !cfg.Services["local"].Enabled {
+		t.Fatalf("imported and local services must coexist with Memory: %+v", cfg.Services)
+	}
+	if replacement := cfg.Services["replaced"]; replacement.Enabled || len(replacement.Command) != 1 || replacement.Command[0] != "new-service" {
+		t.Fatalf("declaring definition must replace matching imported identity: %+v", replacement)
+	}
+}
