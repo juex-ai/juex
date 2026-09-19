@@ -94,6 +94,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const agentMatch = useMatch("/agents/:agentId/*");
   const threadMatch = useMatch("/agents/:agentId/threads/:threadId");
+  const memoryRoute = useMatch("/memory/*") !== null;
   const agentId = agentMatch?.params.agentId ?? "";
   const threadID = threadMatch?.params.threadId ?? "";
   const settings = location.pathname === "/settings";
@@ -408,7 +409,7 @@ export function AppShell() {
                 </Button>
               </div>
             ) : null}
-            {(fleetError ?? rosterError) && agentsLoaded ? (
+            {(fleetError ?? rosterError) && (agentsLoaded || memoryRoute) ? (
               <div
                 className="shrink-0 border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-sm text-destructive"
                 role="alert"
@@ -419,7 +420,7 @@ export function AppShell() {
 
             <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                {(fleetError ?? rosterError) && !agentsLoaded ? (
+                {(fleetError ?? rosterError) && !agentsLoaded && !memoryRoute ? (
                   <div
                     className="flex min-h-0 flex-1 items-center justify-center px-4 py-8"
                     role="alert"

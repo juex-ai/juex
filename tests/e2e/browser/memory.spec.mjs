@@ -10,7 +10,7 @@ async function fixture(page, options = {}) {
   await page.route("**/api/**", async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
-    if (path === "/api/agents") return json([]);
+    if (path === "/api/agents") return options.rosterUnavailable ? json({ error: { message: "Agent registry unreadable" } }, 503) : json([]);
     if (options.offline) return json({ error: { message: "Memory service is offline" } }, 503);
     if (path === "/api/memory/status") return json({ strategy: "basic", entries: entry ? 1 : 0, pending: 0, running: 0, index_ready: true });
     if (path === "/api/memory/entries") {
@@ -64,6 +64,17 @@ test("Memory pagination follows the server and search returns to the first page"
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(page).toHaveURL(/\/memory\?q=concise$/);
   await expect(page.getByRole("link", { name: "Release notes", exact: true })).toBeVisible();
+});
+
+test("Memory remains usable when the initial Agent roster cannot be loaded", async ({ page }) => {
+  await fixture(page, { rosterUnavailable: true });
+  await page.goto("/memory");
+  await expect(page.getByText("Agent registry unreadable", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Release notes", exact: true }).click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Body", { exact: true }).fill("Roster-independent correction");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Roster-independent correction", { exact: true })).toBeVisible();
 });
 
 test("Memory conflicts keep drafts and deletion requires explicit confirmation", async ({ page }) => {
