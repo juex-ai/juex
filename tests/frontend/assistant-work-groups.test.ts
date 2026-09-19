@@ -427,6 +427,8 @@ test("known turn identities split adjacent work and do not revive an older tail"
   assert.deepEqual(items.map(item => item.kind === "assistant_work" && item.phase), ["completed", "running"]);
   const oldTail = assistantWorkItems(groups.slice(0, 1), { tailActive: true, activeTurnID: "new-turn" })[0];
   assert.equal(oldTail.kind === "assistant_work" && oldTail.phase, "completed");
+  const unknownTail = assistantWorkItems([assistant("untagged", [tool("unknown-call", "read")])], { tailActive: true, activeTurnID: "new-turn" })[0];
+  assert.equal(unknownTail.kind === "assistant_work" && unknownTail.phase, "completed");
 });
 
 test("a system boundary preserves completed work and stays outside its disclosure", () => {

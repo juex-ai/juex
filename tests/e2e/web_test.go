@@ -667,6 +667,22 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		}
 		return false
 	})
+	var history struct {
+		Items []struct {
+			TurnID  string       `json:"turn_id"`
+			Message *llm.Message `json:"message"`
+		} `json:"items"`
+	}
+	e2eThreadJSON(t, http.MethodGet, ts.URL+"/api/threads/"+c.ID, "", http.StatusOK, &history)
+	for _, item := range history.Items {
+		if item.Message != nil && item.Message.Role == llm.RoleAssistant {
+			if item.TurnID != turn.TurnID {
+				t.Fatalf("historical assistant Turn ID = %q, want %q", item.TurnID, turn.TurnID)
+			}
+			return
+		}
+	}
+	t.Fatal("timeline is missing the persisted assistant response")
 }
 
 func TestWeb_ModelAwareUsageSurvivesRestartAndReachesAPI(t *testing.T) {

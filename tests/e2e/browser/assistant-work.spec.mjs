@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 const require = createRequire(new URL("../../../frontend/package.json", import.meta.url));
 const { expect, test } = require("@playwright/test");
 
-async function fixture(page, { answer = false } = {}) {
+async function fixture(page, { answer = false, activeTurnID = "work-turn" } = {}) {
   let active = !answer;
   const message = (id, blocks, second) => ({ id, role: "assistant", turn_id: "work-turn", model: "test:model", created_at: `2026-09-19T00:00:0${second}Z`, blocks });
   const messages = [
@@ -26,11 +26,11 @@ async function fixture(page, { answer = false } = {}) {
     const path = new URL(route.request().url()).pathname;
     const json = body => route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
     if (path === "/api/agents") return json([{ id: "work", name: "Work test", enabled: true, workspace: "/tmp/work", runtime_health: "healthy" }]);
-    if (path.endsWith("/status")) return json({ cursor: "cursor-1", thread: { id: "0", state: active ? "turn_active" : "idle", working: active, pending_count: 0, can_accept_input: true }, turn: { id: "work-turn", state: active ? "active" : "completed" }, tools: [], token_usage: {} });
+    if (path.endsWith("/status")) return json({ cursor: "cursor-1", thread: { id: "0", state: active ? "turn_active" : "idle", working: active, pending_count: 0, can_accept_input: true }, turn: { id: activeTurnID, state: active ? "active" : "completed" }, tools: [], token_usage: {} });
     if (path.endsWith("/recitation")) return json(null);
     if (path.endsWith("/files/tree")) return json({ name: "workspace", path: "/", is_dir: true, children: [] });
     if (path.endsWith("/threads/0")) return json({ thread_id: "0", alias: "main", dir: "/tmp/work/0", retention_state: "active", execution_state: active ? "working" : "idle", revision: 1, generation_id: "g1", event_cursor: "cursor-1", has_more_before: false,
-      items: messages.map(message => ({ type: "message", message })) });
+      items: messages.map(({ turn_id, ...message }) => ({ type: "message", turn_id, message })) });
     return route.fulfill({ status: 404, body: "not found" });
   });
   await page.goto("/agents/work/threads/0");
@@ -71,4 +71,11 @@ test("visible content stays outside the completed tool-only work disclosure", as
   await expect(work.locator(":scope > summary")).toHaveText("Worked for 3s, called 2 tools");
   await expect(page.getByText("Visible final answer", { exact: true })).toBeVisible();
   await expect(work.getByText("Visible final answer", { exact: true })).toHaveCount(0);
+});
+
+test("a newer active Turn does not revive a persisted tool-only tail", async ({ page }) => {
+  await fixture(page, { activeTurnID: "compact-turn" });
+  await expect(page.locator("header").getByLabel("Current Thread status")).toHaveText("Working");
+  const work = page.locator("details.group\\/work-row");
+  await expect(work.locator(":scope > summary")).toHaveText("Worked for 2s, called 2 tools");
 });

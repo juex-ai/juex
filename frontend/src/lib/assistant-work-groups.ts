@@ -116,7 +116,7 @@ export function assistantWorkItems(
   if (buffer) {
     const running =
       tailActive &&
-      (!activeTurnID || !buffer.turnID || activeTurnID === buffer.turnID);
+      (!activeTurnID || activeTurnID === buffer.turnID);
     items.push(
       buildWorkItem(
         buffer.groups,

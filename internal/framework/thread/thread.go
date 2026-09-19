@@ -206,7 +206,7 @@ func (t *Thread) Append(message llm.Message) error {
 // Associated events share the message's durable commit, so readers never see
 // an input without its identity association after a crash.
 func (t *Thread) AppendAssigned(message llm.Message, associated ...events.Event) (llm.Message, error) {
-	messages, err := t.appendBatchAssigned([]llm.Message{message}, associated)
+	messages, err := t.appendBatchAssigned([]llm.Message{message}, "", associated)
 	if len(messages) == 0 {
 		return llm.Message{}, err
 	}
@@ -214,15 +214,15 @@ func (t *Thread) AppendAssigned(message llm.Message, associated ...events.Event)
 }
 
 func (t *Thread) AppendBatch(messages []llm.Message) error {
-	_, err := t.AppendBatchAssigned(messages)
+	_, err := t.AppendBatchAssigned(messages, "")
 	return err
 }
 
-func (t *Thread) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, error) {
-	return t.appendBatchAssigned(messages, nil)
+func (t *Thread) AppendBatchAssigned(messages []llm.Message, turnID string) ([]llm.Message, error) {
+	return t.appendBatchAssigned(messages, turnID, nil)
 }
 
-func (t *Thread) appendBatchAssigned(messages []llm.Message, associated []events.Event) ([]llm.Message, error) {
+func (t *Thread) appendBatchAssigned(messages []llm.Message, turnID string, associated []events.Event) ([]llm.Message, error) {
 	if len(messages) == 0 {
 		return nil, nil
 	}
@@ -237,7 +237,7 @@ func (t *Thread) appendBatchAssigned(messages []llm.Message, associated []events
 	facts := make([]Fact, len(messages))
 	for i, message := range messages {
 		prepared[i] = prepareMessage(message)
-		facts[i] = Fact{Type: FactMessageAppended, GenerationID: generationID, Message: &prepared[i]}
+		facts[i] = Fact{Type: FactMessageAppended, GenerationID: generationID, TurnID: turnID, Message: &prepared[i]}
 	}
 	for _, event := range associated {
 		if !event.Transient {

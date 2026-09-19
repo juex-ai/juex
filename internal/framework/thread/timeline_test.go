@@ -12,6 +12,38 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
+func TestTimelinePreservesMessageTurnAcrossReopenAndPagination(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, turnID := range []string{"first-turn", "second-turn"} {
+		if _, err := main.AppendBatchAssigned([]llm.Message{llm.TextMessage(llm.RoleAssistant, turnID)}, turnID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.OpenActive(MainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	cursor := ""
+	for _, want := range []string{"second-turn", "first-turn"} {
+		page, err := reopened.Timeline(cursor, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) != 1 || page.Items[0].TurnID != want {
+			t.Fatalf("message Turn identity = %+v, want %s", page.Items, want)
+		}
+		cursor = page.PreviousCursor
+	}
+}
+
 func TestTimelineLatestPageDoesNotScanHistoricalPrefix(t *testing.T) {
 	t.Parallel()
 	store := NewStore(t.TempDir())

@@ -1330,7 +1330,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, result providerTurn
 		messages = append(messages, *result.notice)
 	}
 	messages = append(messages, msg)
-	persisted, err := threadState.AppendBatchAssigned(messages)
+	persisted, err := threadState.AppendBatchAssigned(messages, turnID)
 	if err != nil {
 		return recordedProviderResponse{}, fmt.Errorf("thread append provider response: %w", err)
 	}
