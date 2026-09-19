@@ -33,8 +33,10 @@ uses a different service; CLI administration does not infer an Agent context.
 
 Use `juex fleet services status memory` for lifecycle and `juex memory status`
 for business readiness. Agents search previews, read entries, submit explicit
-proposals, inspect receipts and read permitted retained evidence. Acceptance
-means submitted; only a committed receipt means knowledge changed. Necessary
+proposals and read permitted retained evidence. Source Agents finish their part
+once the service accepts a proposal; they do not wait or poll for review.
+Acceptance means submitted, not remembered. Supervisor executes background work;
+users can inspect receipts on demand with `juex memory result <id>`. Necessary
 guidance is built in and works with Skills, Hooks, MCP and Extensions disabled.
 Search previews omit full provenance; read the entry for its sources. Maintenance
 assignments may change or delete only entries in their exact workspace/project

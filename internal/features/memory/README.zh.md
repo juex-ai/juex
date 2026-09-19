@@ -29,8 +29,10 @@ CLI 命令通过 `--service <identity>` 选择 Fleet 服务，默认 `memory`。
 不会推断 Agent 上下文。
 
 `juex fleet services status memory` 查看生命周期，`juex memory status` 查看业务
-就绪状态。Agent 可搜索预览、读取条目、提交显式提案、查询回执、读取允许的保留
-证据。接纳仅表示已提交；只有 committed 回执表示知识已改变。必要指引内置，关闭
+就绪状态。Agent 可搜索预览、读取条目、提交显式提案和读取允许的保留证据。
+服务接纳提案后，Source Agent 即完成提交，不等待或轮询审阅结果。接纳表示已提交，
+不表示已记住。Supervisor 负责后台工作；用户可用 `juex memory result <id>` 按需
+查询回执。必要指引内置，关闭
 Skills、Hooks、MCP 和 Extensions 后仍可使用。
 搜索预览不携带完整来源，读取条目可获取来源。维护任务只能修改或删除与其
 Workspace/Project 范围完全一致的条目。可见但范围更广的知识仅作为该任务的只读

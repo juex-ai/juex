@@ -142,6 +142,30 @@ func (p *memoryReviewProvider) Complete(ctx context.Context, _ string, history [
 	return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{memoryCall("decision", memory.ToolDecide, input)}}, StopReason: llm.StopToolUse}, nil
 }
 
+func TestEndToEnd_MemorySubmissionFailureRemainsVisible(t *testing.T) {
+	isolateModuleConfig(t)
+	cfg := memoryAgentConfig(t, t.TempDir(), "source")
+	provider := &bareScriptProvider{steps: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{memoryCall("proposal", memory.ToolPropose, map[string]any{"key": "release", "text": "Release on Tuesday", "reason": "explicit request"})}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "Submission failed"), StopReason: llm.StopEndTurn},
+	}}
+	a := memoryApp(t, cfg, provider)
+	if _, err := a.Run(t.Context(), "Remember our Tuesday release schedule"); err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range a.Thread.History {
+		for _, block := range message.Blocks {
+			if block.Type == llm.BlockToolResult && block.ToolUseID == "proposal" {
+				if !block.IsError || !strings.Contains(block.Content, "service memory unavailable") {
+					t.Fatalf("submission failure was hidden: %+v", block)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("missing submission result")
+}
+
 func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
 	isolateModuleConfig(t)
 	home := t.TempDir()
@@ -149,8 +173,10 @@ func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
 	cfgA := memoryAgentConfig(t, home, "agent-a")
 	source := &bareScriptProvider{steps: []llm.Response{{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{memoryCall("proposal", memory.ToolPropose, map[string]any{"key": "remember-release", "text": "We release on Tuesday", "reason": "explicit user request"})}}, StopReason: llm.StopToolUse}, {Message: llm.TextMessage(llm.RoleAssistant, "Submitted for review"), StopReason: llm.StopEndTurn}}}
 	a := memoryApp(t, cfgA, source)
-	if _, err := a.Run(t.Context(), "Remember that we release on Tuesday."); err != nil {
-		t.Fatal(err)
+	submitCtx, cancelSubmit := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelSubmit()
+	if out, err := a.Run(submitCtx, "Remember that we release on Tuesday."); err != nil || out != "Submitted for review" {
+		t.Fatalf("source did not finish its handoff before Supervisor startup: %q, %v", out, err)
 	}
 	var receipt mc.Receipt
 	for _, m := range a.Thread.History {
@@ -167,6 +193,10 @@ func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
 	}
 	if receipt.ID == "" || receipt.Committed {
 		t.Fatalf("premature success %+v", receipt)
+	}
+	persisted, err := api.Result(t.Context(), user, receipt.ID)
+	if err != nil || persisted.State != "pending" || persisted.Attempts != 0 {
+		t.Fatalf("submission did not leave durable pending work: %+v, %v", persisted, err)
 	}
 	cfgS := memoryAgentConfig(t, home, "supervisor")
 	cfgS.MemoryProfile = mc.ProfileSupervisor
