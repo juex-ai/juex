@@ -13,3 +13,8 @@ filesystem action。
 
 Registry 与 lifecycle policy 保留在 `internal/fleet`；单 Agent route 保留在
 `internal/entrypoints/agenthttp`。
+
+Memory 管理以固定用户 caller 直接连接所属 Home 的默认 `memory` 服务。浏览器
+提交冻结的条目快照与操作 key；适配器不能重新读取并合并，否则会在响应丢失后
+改变幂等指纹。编辑和删除均使用 Memory 带版本守卫的纠正事务，无需 Agent 或
+Supervisor 在线；适配器不读写 Memory 存储文件。

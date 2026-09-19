@@ -39,7 +39,7 @@ export function FleetStageHeader({
   onOpenMobileSidebar: () => void;
   mobileSidebarButtonRef?: Ref<HTMLButtonElement>;
 }) {
-  const agentTitle = settings ? "Fleet settings" : agent?.name || agent?.id || "Fleet";
+  const agentTitle = settings ? "Fleet settings" : agent?.name || agent?.id || contextTitle || "Fleet";
   const pageTitle = contextTitle || (threadID ? `Loading #${threadID}…` : activeTab === "runtime" ? "Runtime" : "Threads");
 
   return (

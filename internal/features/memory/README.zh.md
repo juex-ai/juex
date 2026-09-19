@@ -48,6 +48,10 @@ Worker 按搜索返回的 ID 读取条目，并从条目或任务证据复制来
 {"key":"forget-release-v1","action":"delete","entry_ids":["release-convention"]}
 ```
 
+Fleet Web 的 Memory 导航提供默认 `memory` 服务的搜索、查看、编辑和确认删除，
+无需 Agent 或 Supervisor 在线。编辑保留身份、作用域和来源；遇到并发修改需
+重新加载当前版本。用户编辑和删除会终止尚未完成的 Memory 审阅。
+
 精确字段以请求/响应类型和工具 schema 为准。管理操作隔离旧任务。删除移除 Memory
 拥有的知识及投影，清除匹配的保留提案/证据正文，并禁止从这些来源重新提取。
 no-store 同时移除包含该来源的条目，保留无关条目。即使被移除条目还引用其他

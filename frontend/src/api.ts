@@ -50,6 +50,48 @@ class APIError extends Error {
   }
 }
 
+export interface MemoryEntry {
+  id: string;
+  revision: number;
+  name: string;
+  summary: string;
+  type: "user" | "feedback" | "project" | "reference";
+  scope: { workspace?: string; project?: string };
+  body: string;
+  sources: { fleet_id: string; agent_id: string; thread_id: string; generation_id: string; from: number; through: number }[];
+  entities?: { id: string; name: string; kind: string }[];
+  facts?: Record<string, unknown>[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryReceipt {
+  id: string;
+  state: string;
+  committed: boolean;
+  index_ready: boolean;
+  reason?: string;
+}
+
+export interface MemoryPage { entries: MemoryEntry[] | null; next: number; fence: number }
+export interface MemoryStatus { strategy: string; entries: number; pending: number; running: number; index_ready: boolean }
+export interface MemoryMutation { key: string; expected_revision: number; entry?: MemoryEntry; confirm?: string }
+
+export async function searchMemories(query: string, offset: number): Promise<MemoryPage> {
+  return jsonOrThrow(await fetch(`/api/memory/entries?${new URLSearchParams({ q: query, offset: String(offset), limit: "20" })}`));
+}
+export async function getMemoryStatus(): Promise<MemoryStatus> {
+  return jsonOrThrow(await fetch("/api/memory/status"));
+}
+export async function readMemory(id: string): Promise<MemoryEntry> {
+  return jsonOrThrow(await fetch(`/api/memory/entries/${encodeURIComponent(id)}`));
+}
+export async function changeMemory(id: string, method: "PUT" | "DELETE", body: MemoryMutation): Promise<MemoryReceipt> {
+  return jsonOrThrow(await fetch(`/api/memory/entries/${encodeURIComponent(id)}`, {
+    method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }));
+}
+
 async function jsonOrThrow<T>(r: Response): Promise<T> {
   if (!r.ok) {
     let message = r.statusText || `HTTP ${r.status}`;

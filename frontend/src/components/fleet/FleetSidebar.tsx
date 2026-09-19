@@ -1,5 +1,6 @@
 import {
   Gauge,
+  BookOpen,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -164,6 +165,14 @@ export function FleetSidebar({
       </nav>
 
       <div className="shrink-0 border-t p-2">
+        <Button asChild variant={location.pathname.startsWith("/memory") ? "secondary" : "ghost"}
+          className={cn("w-full", compact ? "justify-center px-0" : "justify-start")}>
+          <Link to="/memory" onClick={onNavigate} aria-label="Memory" title="Memory"
+            aria-current={location.pathname.startsWith("/memory") ? "true" : undefined}>
+            <BookOpen className="size-4 shrink-0" aria-hidden="true" />
+            {!compact ? <span>Memory</span> : null}
+          </Link>
+        </Button>
         <TooltipProvider delayDuration={200}>
           <Tooltip>
             <TooltipTrigger asChild>
