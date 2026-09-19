@@ -10,6 +10,7 @@ import type {
   DisplayUnit,
   MessageGroup,
 } from "../../frontend/src/lib/display-units.ts";
+import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
 
 function reasoning(text: string): DisplayUnit {
   return {
@@ -169,7 +170,7 @@ test("a mixed reasoning text and tool starter completes one work item", () => {
 test("an image-only assistant response completes preceding work", () => {
   const items = assistantWorkItems(
     [
-      assistant("starter", [reasoning("draw"), tool("tu-image", "read")]),
+      assistant("starter", [tool("tu-image", "read")]),
       assistant("image", [
         {
           kind: "image",
@@ -228,7 +229,7 @@ test("running title follows the latest single or parallel tool-bearing group", (
   );
 });
 
-test("inactive incomplete tail flushes original messages", () => {
+test("a turn ending without visible content keeps a completed work group", () => {
   const starter = assistant("starter", [
     reasoning("x"),
     tool("tu-1", "read"),
@@ -237,7 +238,7 @@ test("inactive incomplete tail flushes original messages", () => {
     assistantWorkItems([starter], { tailActive: false }).map(
       (item) => item.kind,
     ),
-    ["message"],
+    ["assistant_work"],
   );
 });
 
@@ -330,11 +331,10 @@ test("tail activity follows only the canonical runtime turn", () => {
   );
 });
 
-test("only reasoning plus tool starts a group and whitespace is ignorable", () => {
+test("reasoning alone stays separate and whitespace is ignorable", () => {
   for (const units of [
     [reasoning("x"), text("answer")],
     [reasoning("x")],
-    [tool("tu-1", "read")],
   ]) {
     assert.equal(
       assistantWorkItems([assistant("candidate", units)], {
@@ -382,8 +382,58 @@ test("effective model spans unknown but splits when a different model appears", 
   });
   assert.deepEqual(
     splitItems.map((item) => item.kind),
-    ["message", "message", "assistant_work"],
+    ["assistant_work", "assistant_work"],
   );
+});
+
+test("tool-only work folds consecutive tools and reasoning through visible content", () => {
+  const items = assistantWorkItems([
+    assistant("first", [tool("first-call", "read")]),
+    assistant("second", [batch(["second-call", "read"], ["third-call", "write"])]),
+    assistant("thinking", [reasoning("checking"), text(" \n")]),
+    assistant("answer", [text("Visible answer")]),
+    assistant("next", [tool("next-call", "read")]),
+  ], { tailActive: false });
+  assert.deepEqual(items.map(item => item.kind), ["assistant_work", "assistant_work"]);
+  const [first, next] = items;
+  if (first.kind !== "assistant_work" || next.kind !== "assistant_work") return;
+  assert.equal(first.toolCount, 3);
+  assert.equal(first.processGroups.length, 3);
+  assert.deepEqual(first.contentGroup?.units, [text("Visible answer")]);
+  assert.equal(next.phase, "completed");
+  assert.equal(next.contentGroup, undefined);
+});
+
+test("tool-only work keeps its key when the turn ends without content", () => {
+  const groups = [assistant("live", [batch(["one", "read"], ["two", "write"])])];
+  const running = assistantWorkItems(groups, { tailActive: true })[0];
+  const completed = assistantWorkItems(groups, { tailActive: false })[0];
+  assert.equal(running.kind, "assistant_work");
+  assert.equal(completed.kind, "assistant_work");
+  if (running.kind !== "assistant_work" || completed.kind !== "assistant_work") return;
+  assert.equal(running.key, completed.key);
+  assert.equal(running.phase, "running");
+  assert.equal(completed.phase, "completed");
+  assert.equal(completed.toolCount, 2);
+});
+
+test("known turn identities split adjacent work and do not revive an older tail", () => {
+  const groups = messagesToGroups(["old-turn", "new-turn"].map((turn_id, index) => ({
+    id: `message-${index}`, role: "assistant" as const, turn_id,
+    blocks: [{ type: "tool_use" as const, tool_use_id: `call-${index}`, tool_name: "read", input: {} }],
+  })));
+  const items = assistantWorkItems(groups, { tailActive: true, activeTurnID: "new-turn" });
+  assert.deepEqual(items.map(item => item.kind), ["assistant_work", "assistant_work"]);
+  assert.deepEqual(items.map(item => item.kind === "assistant_work" && item.phase), ["completed", "running"]);
+  const oldTail = assistantWorkItems(groups.slice(0, 1), { tailActive: true, activeTurnID: "new-turn" })[0];
+  assert.equal(oldTail.kind === "assistant_work" && oldTail.phase, "completed");
+});
+
+test("a system boundary preserves completed work and stays outside its disclosure", () => {
+  const notice: MessageGroup = { key: "notice", role: "assistant", kind: "system_notice", pending: false, units: [text("Interrupted")] };
+  const items = assistantWorkItems([assistant("tool", [tool("call", "read")]), notice], { tailActive: false });
+  assert.deepEqual(items.map(item => item.kind), ["assistant_work", "message"]);
+  assert.equal(items[1].kind === "message" && items[1].group, notice);
 });
 
 test("stable tool identity survives running completion and live history keys", () => {

@@ -37,6 +37,7 @@ type UnbatchedDisplayUnit = Exclude<DisplayUnit, ToolBatchDisplayUnit>;
 export type MessageGroup = {
   key: string;
   id?: string;
+  turnID?: string;
   createdAt?: string;
   role: Role;
   kind?: string;
@@ -137,6 +138,7 @@ export function messagesToGroups(
     groups.push({
       key: msg.id ?? `${msg.turn_id ?? "msg"}-${i}`,
       id: msg.id,
+      turnID: msg.turn_id,
       createdAt: msg.created_at,
       role: msg.role,
       kind: msg.kind,
