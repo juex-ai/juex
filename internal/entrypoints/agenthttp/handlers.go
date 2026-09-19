@@ -661,7 +661,7 @@ func (s *Server) handleThreadStatusEvents(w http.ResponseWriter, r *http.Request
 func (s *Server) statusSnapshotForThread(id string) (runtime.StatusSnapshot, error) {
 	if value, ok := s.threads.Load(id); ok {
 		active := value.(*activeThread)
-		if active.agent.Context().Err() == nil && active.agent.Status != nil {
+		if (active.workCtx == nil || active.workCtx.Err() == nil) && active.agent.Status != nil {
 			return active.agent.Status.Snapshot(), nil
 		}
 	}
