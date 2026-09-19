@@ -64,6 +64,10 @@ Active 与 Archived 分开展示。每一行无需打开 Thread 就应说明身�
 Main 的视觉表现与普通 Thread 一致，但不能 rename、archive 或 delete。Idle
 Worker 可以 archive；Archived Worker 可以 restore，或在明确确认后永久删除。
 
+每个区域支持选择 Worker 和全选，Main 的复选框禁用。Active 选中项可批量
+归档；Archived 选中项可在列明 Thread 的确认后批量删除。部分失败时保留
+失败项的选择并逐项说明错误，已完成项移出选择。
+
 列表数据来自 Agent index，渲染列表不能打开 Thread metadata 或 Generation
 Journal。激活、hover 或 focus Token Usage label 时，显示总 input、cached input、
 output 和按 input 加 output 排序的 `provider:model` 行。Cached input 是 input 的

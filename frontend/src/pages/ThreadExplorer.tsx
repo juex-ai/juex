@@ -34,6 +34,9 @@ type ThreadNavigation = {
   locate: (id: string) => void;
 };
 
+type ThreadSelection = { active: Set<string>; archived: Set<string> };
+type BatchAction = "archive" | "delete";
+
 export function ThreadExplorer() {
   const { agentId } = useParams<{ agentId: string }>();
   return <AgentThreadExplorer key={agentId} />;
@@ -51,10 +54,14 @@ function AgentThreadExplorer() {
   const [createOpen, setCreateOpen] = useState(false);
   const [workerAlias, setWorkerAlias] = useState("");
   const [mutatingID, setMutatingID] = useState<string | null>(null);
+  const [batchAction, setBatchAction] = useState<BatchAction | null>(null);
+  const [selection, setSelection] = useState<ThreadSelection>(() => ({ active: new Set(), archived: new Set() }));
+  const [batchFailures, setBatchFailures] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [highlightedID, setHighlightedID] = useState<string | null>(null);
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());
+  const listRequest = useRef(0);
   const byID = useMemo(() => new Map([...active, ...archived].map((thread) => [thread.thread_id, thread])), [active, archived]);
   const totalUsage = useMemo(() => aggregateThreadUsage([...byID.values()].map((thread) => thread.token_usage)), [byID]);
   const registerRow = useCallback((id: string, element: HTMLDivElement | null) => {
@@ -78,22 +85,32 @@ function AgentThreadExplorer() {
   }, []);
   const threadNavigation = { byID, highlightedID, registerRow, locate };
   const mutationsEnabled = agentsLoaded && agent?.runtime_health === "healthy";
+  const mutationBusy = mutatingID !== null || batchAction !== null;
   useShellTitle("Threads");
 
   const refreshThreads = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    const request = ++listRequest.current;
     if (!quiet) setRefreshing(true);
     setError(null);
     try {
       const response = await listThreads();
+      if (request !== listRequest.current) return;
       setActive(response.active_threads);
       setArchived(response.archived_threads);
       setHasSnapshot(true);
+      setSelection((previous) => ({
+        active: new Set(response.active_threads.filter((thread) => thread.thread_id !== "0" && previous.active.has(thread.thread_id)).map((thread) => thread.thread_id)),
+        archived: new Set(response.archived_threads.filter((thread) => thread.thread_id !== "0" && previous.archived.has(thread.thread_id)).map((thread) => thread.thread_id)),
+      }));
     } catch (cause) {
+      if (request !== listRequest.current) return;
       console.error("listThreads failed", cause);
       setError(cause instanceof Error ? cause.message : "Failed to load threads.");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (request === listRequest.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -122,10 +139,11 @@ function AgentThreadExplorer() {
   }
 
   async function mutate(thread: ThreadListItem, action: "archive" | "unarchive" | "delete") {
-    if (!mutationsEnabled || thread.thread_id === "0") return;
+    if (!mutationsEnabled || mutationBusy || thread.thread_id === "0") return;
     if (action === "delete" && !window.confirm(`Permanently delete "${threadListTitle(thread)}"?`)) return;
     setMutatingID(thread.thread_id);
     setError(null);
+    setBatchFailures([]);
     try {
       if (action === "archive") await archiveThread(thread.thread_id);
       if (action === "unarchive") await unarchiveThread(thread.thread_id);
@@ -136,6 +154,40 @@ function AgentThreadExplorer() {
       setError(cause instanceof Error ? cause.message : `Failed to ${action} thread.`);
     } finally {
       setMutatingID(null);
+    }
+  }
+
+  function selectThreads(section: keyof ThreadSelection, ids: string[], checked: boolean) {
+    if (!mutationsEnabled || mutationBusy) return;
+    const eligible = new Set((section === "active" ? active : archived).filter((thread) => thread.thread_id !== "0").map((thread) => thread.thread_id));
+    setSelection((previous) => {
+      const next = new Set(previous[section]);
+      for (const id of ids) {
+        if (checked && eligible.has(id)) next.add(id);
+        else next.delete(id);
+      }
+      return { ...previous, [section]: next };
+    });
+  }
+
+  async function mutateSelected(action: BatchAction) {
+    if (!mutationsEnabled || mutationBusy) return;
+    const section = action === "archive" ? "active" : "archived";
+    const targets = (section === "active" ? active : archived).filter((thread) => thread.thread_id !== "0" && selection[section].has(thread.thread_id));
+    if (targets.length === 0) return;
+    if (action === "delete" && !window.confirm(`Permanently delete ${targets.length} Threads? This cannot be undone.\n\n${targets.map(threadListTitle).join("\n")}`)) return;
+    setBatchAction(action);
+    setError(null);
+    setBatchFailures([]);
+    try {
+      const results = await Promise.allSettled(targets.map((thread) => action === "archive" ? archiveThread(thread.thread_id) : deleteThread(thread.thread_id)));
+      const succeeded = new Set(targets.filter((_, index) => results[index].status === "fulfilled").map((thread) => thread.thread_id));
+      setSelection((previous) => ({ ...previous, [section]: new Set([...previous[section]].filter((id) => !succeeded.has(id))) }));
+      setBatchFailures(results.flatMap((result, index) => result.status === "rejected" ? [`${threadListTitle(targets[index])}: ${result.reason instanceof Error ? result.reason.message : `Failed to ${action} Thread.`}`] : []));
+      await refreshThreads({ quiet: true });
+      window.dispatchEvent(new Event("juex:threads-changed"));
+    } finally {
+      setBatchAction(null);
     }
   }
 
@@ -156,22 +208,28 @@ function AgentThreadExplorer() {
             <p className="mt-1 text-sm text-muted-foreground">Active and archived Agent work streams.</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => void refreshThreads()} disabled={refreshing}>
+            <Button variant="outline" size="sm" onClick={() => void refreshThreads()} disabled={refreshing || mutationBusy}>
               <RefreshCw className={cn("size-3.5 motion-reduce:animate-none", refreshing && "animate-spin")} /> Refresh
             </Button>
-            <Button size="sm" onClick={() => setCreateOpen(true)} disabled={creating || !mutationsEnabled}>
+            <Button size="sm" onClick={() => setCreateOpen(true)} disabled={creating || mutationBusy || !mutationsEnabled}>
               <Plus className="size-3.5" /> New Worker
             </Button>
           </div>
         </div>
         {agentsLoaded && agent && !mutationsEnabled ? <AgentRuntimeStateBar /> : null}
         {error ? <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div> : null}
+        {batchFailures.length > 0 ? (
+          <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <p>Some Threads could not be updated. Failed selections are kept for retry.</p>
+            <ul className="mt-1 list-inside list-disc break-words">{batchFailures.map((failure) => <li key={failure}>{failure}</li>)}</ul>
+          </div>
+        ) : null}
         {loading ? (
           <div className="rounded-md border bg-card px-4 py-8 text-sm text-muted-foreground">Loading threads...</div>
         ) : (
           <>
-            <ThreadSection navigation={threadNavigation} title="Active" empty="No active threads." threads={active} mutatingID={mutatingID} mutationsEnabled={mutationsEnabled} onAction={(thread) => void mutate(thread, "archive")} />
-            <ThreadSection navigation={threadNavigation} title="Archived" empty="No archived threads." threads={archived} archived mutatingID={mutatingID} mutationsEnabled={mutationsEnabled} onAction={(thread) => void mutate(thread, "unarchive")} onDelete={(thread) => void mutate(thread, "delete")} />
+            <ThreadSection navigation={threadNavigation} title="Active" empty="No active threads." threads={active} mutatingID={mutatingID} mutationsEnabled={mutationsEnabled && !mutationBusy} selection={selection.active} onSelection={(ids, checked) => selectThreads("active", ids, checked)} onBatch={() => void mutateSelected("archive")} batchBusy={batchAction === "archive"} onAction={(thread) => void mutate(thread, "archive")} />
+            <ThreadSection navigation={threadNavigation} title="Archived" empty="No archived threads." threads={archived} archived mutatingID={mutatingID} mutationsEnabled={mutationsEnabled && !mutationBusy} selection={selection.archived} onSelection={(ids, checked) => selectThreads("archived", ids, checked)} onBatch={() => void mutateSelected("delete")} batchBusy={batchAction === "delete"} onAction={(thread) => void mutate(thread, "unarchive")} onDelete={(thread) => void mutate(thread, "delete")} />
           </>
         )}
       </div>
@@ -213,7 +271,7 @@ function AgentThreadExplorer() {
   );
 }
 
-function ThreadSection({ navigation, title, empty, threads, archived = false, mutatingID, mutationsEnabled, onAction, onDelete }: {
+function ThreadSection({ navigation, title, empty, threads, archived = false, mutatingID, mutationsEnabled, selection, onSelection, onBatch, batchBusy, onAction, onDelete }: {
   navigation: ThreadNavigation;
   title: string;
   empty: string;
@@ -221,16 +279,34 @@ function ThreadSection({ navigation, title, empty, threads, archived = false, mu
   archived?: boolean;
   mutatingID: string | null;
   mutationsEnabled: boolean;
+  selection: Set<string>;
+  onSelection: (ids: string[], checked: boolean) => void;
+  onBatch: () => void;
+  batchBusy: boolean;
   onAction: (thread: ThreadListItem) => void;
   onDelete?: (thread: ThreadListItem) => void;
 }) {
+  const selectable = threads.filter((thread) => thread.thread_id !== "0").map((thread) => thread.thread_id);
+  const selectedCount = selectable.filter((id) => selection.has(id)).length;
   return (
-    <section className="flex flex-col gap-2">
-      <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">{title}</h2>
+    <section aria-label={`${title} threads`} className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <ThreadCheckbox label={`Select all ${title.toLowerCase()} Worker Threads`} checked={selectable.length > 0 && selectedCount === selectable.length} mixed={selectedCount > 0 && selectedCount < selectable.length} disabled={!mutationsEnabled || selectable.length === 0} onChange={(checked) => onSelection(selectable, checked)} />
+        <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">{title}</h2>
+        {selectedCount > 0 ? (
+          <>
+            <span className="text-xs text-muted-foreground">{selectedCount} selected</span>
+            <Button variant="outline" size="sm" onClick={onBatch} disabled={!mutationsEnabled}>
+              {batchBusy ? (archived ? "Deleting..." : "Archiving...") : (archived ? "Delete selected" : "Archive selected")}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => onSelection(selectable, false)} disabled={!mutationsEnabled}>Clear selection</Button>
+          </>
+        ) : null}
+      </div>
       <div className="overflow-hidden rounded-md border bg-card shadow-[var(--shadow-xs)]">
         {threads.length === 0 ? <div className="px-4 py-8 text-sm text-muted-foreground">{empty}</div> : (
           <div className="divide-y">
-            {threads.map((thread) => <ThreadRow navigation={navigation} key={thread.thread_id} thread={thread} archived={archived} busy={mutatingID === thread.thread_id} mutationsEnabled={mutationsEnabled} onAction={() => onAction(thread)} onDelete={onDelete ? () => onDelete(thread) : undefined} />)}
+            {threads.map((thread) => <ThreadRow navigation={navigation} key={thread.thread_id} thread={thread} archived={archived} busy={mutatingID === thread.thread_id} mutationsEnabled={mutationsEnabled} selected={selection.has(thread.thread_id)} onSelect={(checked) => onSelection([thread.thread_id], checked)} onAction={() => onAction(thread)} onDelete={onDelete ? () => onDelete(thread) : undefined} />)}
           </div>
         )}
       </div>
@@ -238,12 +314,14 @@ function ThreadSection({ navigation, title, empty, threads, archived = false, mu
   );
 }
 
-function ThreadRow({ navigation, thread, archived, busy, mutationsEnabled, onAction, onDelete }: {
+function ThreadRow({ navigation, thread, archived, busy, mutationsEnabled, selected, onSelect, onAction, onDelete }: {
   navigation: ThreadNavigation;
   thread: ThreadListItem;
   archived: boolean;
   busy: boolean;
   mutationsEnabled: boolean;
+  selected: boolean;
+  onSelect: (checked: boolean) => void;
   onAction: () => void;
   onDelete?: () => void;
 }) {
@@ -254,7 +332,8 @@ function ThreadRow({ navigation, thread, archived, busy, mutationsEnabled, onAct
   const highlighted = navigation.highlightedID === thread.thread_id;
   return (
     <div ref={(element) => navigation.registerRow(thread.thread_id, element)} tabIndex={-1} data-thread-id={thread.thread_id} data-highlighted={highlighted}
-      className={cn("group/thread-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 px-2 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35", highlighted ? "bg-[var(--juex-gold-400)]/20 ring-1 ring-inset ring-[var(--juex-gold-400)]/60" : "hover:bg-muted/60")}>
+      className={cn("group/thread-row grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 px-2 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35", highlighted ? "bg-[var(--juex-gold-400)]/20 ring-1 ring-inset ring-[var(--juex-gold-400)]/60" : "hover:bg-muted/60")}>
+      <ThreadCheckbox label={`Select ${threadListTitle(thread)}`} checked={!main && selected} disabled={main || busy || !mutationsEnabled} onChange={onSelect} />
       <div className="min-w-0">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           <Link to={threadHref(thread.thread_id)} title={threadListTitle(thread)} className="min-w-0 max-w-full truncate rounded-sm text-sm font-medium leading-5 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/35">
@@ -290,6 +369,16 @@ function ThreadRow({ navigation, thread, archived, busy, mutationsEnabled, onAct
       </div>
     </div>
   );
+}
+
+function ThreadCheckbox({ label, checked, mixed = false, disabled, onChange }: {
+  label: string;
+  checked: boolean;
+  mixed?: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return <input type="checkbox" aria-label={label} aria-checked={mixed ? "mixed" : checked} checked={checked} disabled={disabled} ref={(element) => { if (element) element.indeterminate = mixed; }} onChange={(event) => onChange(event.target.checked)} className="size-4 shrink-0 cursor-pointer accent-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-40" />;
 }
 
 function humanAgo(iso: string): string {
