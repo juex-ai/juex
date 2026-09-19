@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Archive, ArchiveRestore, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { archiveThread, createThread, deleteThread, listThreads, unarchiveThread } from "@/api";
@@ -35,6 +35,11 @@ type ThreadNavigation = {
 };
 
 export function ThreadExplorer() {
+  const { agentId } = useParams<{ agentId: string }>();
+  return <AgentThreadExplorer key={agentId} />;
+}
+
+function AgentThreadExplorer() {
   const navigate = useNavigate();
   const { agent, agentsLoaded } = useFleetAgent();
   const [active, setActive] = useState<ThreadListItem[]>([]);

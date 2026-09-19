@@ -29,7 +29,10 @@ async function fixture(page, options = {}) {
       binding: "bound", runtime_health: options.stopped ? "stopped" : "healthy", runtime_present: true,
       activity: { state: "working" },
     })));
-    if (path.endsWith("/threads")) return json({ active_threads: rows.filter((r) => r.retention_state === "active"), archived_threads: rows.filter((r) => r.retention_state === "archived") });
+    if (path.endsWith("/threads")) {
+      if (options.listForAgent) return json(await options.listForAgent(path.split("/")[2]));
+      return json({ active_threads: rows.filter((r) => r.retention_state === "active"), archived_threads: rows.filter((r) => r.retention_state === "archived") });
+    }
     if (path.endsWith("/files/tree")) return json({ name: "workspace", path: "/", is_dir: true, children: [] });
     if (path.endsWith("/context")) return json({ messages: [], estimated_tokens: 0 });
     const id = path.match(/\/threads\/([^/]+)/)?.[1];
@@ -41,6 +44,37 @@ async function fixture(page, options = {}) {
     return route.fulfill({ status: 404, body: "not found" });
   });
 }
+
+test("Explorer scopes usage and late list responses to the selected Agent", async ({ page }) => {
+  let releaseOld, releaseNew, requestsA = 0;
+  const oldResponse = new Promise((resolve) => { releaseOld = resolve; });
+  const newResponse = new Promise((resolve) => { releaseNew = resolve; });
+  await fixture(page, { listForAgent: async (agentID) => {
+    const isA = agentID === "agent-a";
+    if (isA && ++requestsA === 2) await oldResponse;
+    if (!isA) await newResponse;
+    const thread = item("0", isA ? "first main" : "second main");
+    thread.token_usage = { total: { input_tokens: isA ? 10 : 30, output_tokens: isA ? 5 : 20 }, by_model: {} };
+    return { active_threads: [thread], archived_threads: [] };
+  } });
+  await page.goto("/agents/agent-a/threads");
+  const total = page.getByRole("group", { name: "Total token usage" });
+  await expect(total).toContainText("15 tokens");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect.poll(() => requestsA).toBe(2);
+  await page.getByRole("link", { name: /^Open other,/ }).click();
+  await expect(page).toHaveURL(/\/agents\/agent-b\/threads$/);
+  await expect(total).toHaveCount(0);
+  await expect(page.getByText("Loading threads...", { exact: true })).toBeVisible();
+  releaseNew();
+  await expect(total).toContainText("50 tokens");
+  await expect(page.getByRole("link", { name: "second main · #0", exact: true })).toBeVisible();
+  const lateResponse = page.waitForResponse((response) => response.url().endsWith("/agents/agent-a/api/threads"));
+  releaseOld();
+  await (await lateResponse).finished();
+  await expect(total).toContainText("50 tokens");
+  await expect(page.getByRole("link", { name: "first main · #0", exact: true })).toHaveCount(0);
+});
 
 test("compact flat rows locate archived parents with focus and resettable highlight", async ({ page }) => {
   await fixture(page);
