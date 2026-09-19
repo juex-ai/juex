@@ -41,6 +41,13 @@ assignments may change or delete only entries in their exact workspace/project
 scope. Broader visible knowledge is read-only context for that assignment;
 trusted user administration can explicitly change broader knowledge.
 
+Proposal keys identify requests independently of entry IDs. The tool schema
+publishes entry ID constraints. Workers read IDs returned by search and copy
+source references from entries or assigned evidence. A decision validation
+error leaves the assignment open for correction within its existing budget;
+after an uncertain transport failure, retry the identical decision to recover
+its receipt. A successful decision receipt settles the assignment.
+
 Trusted user corrections, deletions, no-store intervals and explicit relearning
 use `juex memory admin --file request.json`. For example:
 

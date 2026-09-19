@@ -84,6 +84,29 @@ func TestProposalCommitReplayAndScope(t *testing.T) {
 	}
 }
 
+func TestDecisionEntryIDValidationCanBeCorrectedInSameAssignment(t *testing.T) {
+	s, a, super, _ := fixture(t)
+	r, worker := proposal(t, s, a, super, "birthday:example")
+	for _, id := range []string{"birthday:example", "../entry", "", "-entry", strings.Repeat("a", 65)} {
+		decision := mc.Decision{Outcome: "applied", Changes: []mc.Change{{Entry: entry(id)}}}
+		if _, err := s.Decide(t.Context(), worker, decision); err == nil || !strings.Contains(err.Error(), "memory entry ID") || !strings.Contains(err.Error(), "1-64") {
+			t.Errorf("invalid ID %q must explain the Memory contract: %v", id, err)
+		}
+		got, err := s.Result(t.Context(), a, r.ID)
+		if err != nil || got.Committed || got.State != "running" || got.Attempts != 1 {
+			t.Fatalf("validation settled assignment: %+v %v", got, err)
+		}
+	}
+	decision := mc.Decision{Outcome: "applied", Changes: []mc.Change{{Entry: entry("birthday-example")}}}
+	got, err := s.Decide(t.Context(), worker, decision)
+	if err != nil || !got.Committed || got.ID != r.ID || got.Attempts != 1 {
+		t.Fatalf("corrected assignment: %+v %v", got, err)
+	}
+	if e, err := s.Read(t.Context(), a, mc.ReadRequest{ID: "birthday-example"}); err != nil || e.Revision != 1 {
+		t.Fatalf("corrected knowledge unavailable: %+v %v", e, err)
+	}
+}
+
 func TestAssignmentCannotBroadenKnowledgeScope(t *testing.T) {
 	for _, scope := range []mc.Scope{{Workspace: "/project"}, {Project: "project"}, {Workspace: "/project", Project: "project"}} {
 		t.Run(fmt.Sprint(scope), func(t *testing.T) {

@@ -36,8 +36,8 @@ func (s *Store) suppressed(ref mc.Source) bool {
 	return false
 }
 func (s *Store) validateSource(ref mc.Source) error {
-	if ref.FleetID != s.fleet || ref.AgentID == "" || ref.ThreadID == "" || ref.GenerationID == "" || ref.From == 0 || ref.Through < ref.From {
-		return errors.New("invalid memory source range")
+	if err := mc.ValidateSource(ref, s.fleet); err != nil {
+		return err
 	}
 	if s.suppressed(ref) {
 		return errors.New("memory source is suppressed")
@@ -256,7 +256,7 @@ func (s *Store) Revoke(ctx context.Context, c mc.Caller, executor string) (mc.Se
 }
 
 func (s *Store) validateEntry(e mc.Entry, allowed []mc.Source, user bool) error {
-	if err := serviceendpoint.ValidateID(e.ID); err != nil {
+	if err := mc.ValidateEntryID(e.ID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(e.Name) == "" || len(e.Name) > 128 || strings.ContainsAny(e.Name, "\r\n") || strings.TrimSpace(e.Summary) == "" || len(e.Summary) > 512 || strings.ContainsAny(e.Summary, "\r\n") || len(e.Body) > mc.MaxBatchBytes || len(e.Sources) > 100 || len(e.Entities) > 50 || len(e.Facts) > 100 {
@@ -337,7 +337,7 @@ func (s *Store) changes(c mc.Caller, changes []mc.Change, allowed []mc.Source) (
 	budget := 0
 	for _, ch := range changes {
 		e := clone(ch.Entry)
-		if err := serviceendpoint.ValidateID(e.ID); err != nil {
+		if err := mc.ValidateEntryID(e.ID); err != nil {
 			return nil, nil, err
 		}
 		if seen[e.ID] {
@@ -525,7 +525,7 @@ func (s *Store) Admin(ctx context.Context, c mc.Caller, q mc.AdminRequest) (mc.R
 			break
 		}
 		for _, id := range q.EntryIDs {
-			if e := serviceendpoint.ValidateID(id); e != nil {
+			if e := mc.ValidateEntryID(id); e != nil {
 				err = e
 				break
 			}
