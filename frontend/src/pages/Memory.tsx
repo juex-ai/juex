@@ -44,7 +44,12 @@ function MemoryList() {
     }).catch(cause => { if (active) setError(message(cause)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [query, offset, refresh]);
-  function searchSubmit(event: FormEvent) { event.preventDefault(); setParams(search.trim() ? { q: search.trim() } : {}); }
+  function searchSubmit(event: FormEvent) {
+    event.preventDefault();
+    const text = search.trim(), bytes = new TextEncoder().encode(text).length;
+    if (bytes > 2048) { setError(`Search is too long (${bytes} bytes; maximum 2048). Shorten the query before searching.`); return; }
+    setError(null); setParams(text ? { q: text } : {});
+  }
   function pageTo(next: number) { setParams({ ...(query ? { q: query } : {}), ...(next ? { offset: String(next) } : {}) }); }
   const entries = data?.page.entries ?? [];
   return <div className="space-y-5">

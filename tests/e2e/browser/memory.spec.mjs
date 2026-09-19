@@ -5,7 +5,7 @@ const { expect, test } = require("@playwright/test");
 async function fixture(page, options = {}) {
   const original = { id: "release-notes", revision: 1, name: "Release notes", summary: "Concise releases", type: "reference", body: "Original text", scope: { workspace: "/project" }, sources: [{ fleet_id: "fleet", agent_id: "writer", thread_id: "0", generation_id: "g000001", from: 1, through: 1 }], created_at: "2026-09-19T00:00:00Z", updated_at: "2026-09-19T00:00:00Z" };
   let entry = structuredClone(original);
-  const calls = [], receipts = new Map();
+  const calls = [], searches = [], receipts = new Map();
   await page.addInitScript(() => { window.EventSource = class extends EventTarget { close() {} }; });
   await page.route("**/api/**", async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
@@ -14,6 +14,7 @@ async function fixture(page, options = {}) {
     if (options.offline) return json({ error: { message: "Memory service is offline" } }, 503);
     if (path === "/api/memory/status") return json({ strategy: "basic", entries: entry ? 1 : 0, pending: 0, running: 0, index_ready: true });
     if (path === "/api/memory/entries") {
+      searches.push(url.searchParams.get("q") || "");
       const nextPage = Number(url.searchParams.get("offset")) > 0;
       return json({ entries: !options.empty && entry && !url.searchParams.get("q")?.includes("missing") ? [nextPage ? { ...entry, name: "Second page entry" } : entry] : [], next: options.paginated && !nextPage ? 20 : -1, fence: 0 });
     }
@@ -31,7 +32,7 @@ async function fixture(page, options = {}) {
     }
     return json({}, 404);
   });
-  return { calls, original };
+  return { calls, searches, original };
 }
 
 test("Memory edit preserves provenance and retries a lost commit with the identical request", async ({ page }) => {
@@ -75,6 +76,23 @@ test("Memory remains usable when the initial Agent roster cannot be loaded", asy
   await page.getByLabel("Body", { exact: true }).fill("Roster-independent correction");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Roster-independent correction", { exact: true })).toBeVisible();
+});
+
+test("Memory keeps the current search when a multilingual query exceeds its budget", async ({ page }) => {
+  const { searches } = await fixture(page);
+  await page.goto("/memory?q=previous");
+  await expect(page.getByRole("link", { name: "Release notes", exact: true })).toBeVisible();
+  await page.getByLabel("Search memories", { exact: true }).fill("记".repeat(683));
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Search is too long (2049 bytes; maximum 2048)");
+  await expect(page).toHaveURL(/\/memory\?q=previous$/);
+  await expect(page.getByLabel("Search memories", { exact: true })).toHaveValue("记".repeat(683));
+  expect(searches).toEqual(["previous"]);
+  const valid = "记".repeat(682) + "ab";
+  await page.getByLabel("Search memories", { exact: true }).fill(valid);
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByRole("alert")).not.toBeVisible();
+  await expect.poll(() => searches).toEqual(["previous", valid]);
 });
 
 test("Memory validates multilingual edit budgets before submitting", async ({ page }) => {
