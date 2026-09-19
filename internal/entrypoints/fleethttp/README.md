@@ -14,3 +14,10 @@ explicit unsafe mode because it exposes local lifecycle and filesystem actions.
 
 Registry and lifecycle policy stay in `internal/fleet`. Single-Agent routes
 stay in `internal/entrypoints/agenthttp`.
+
+Memory administration connects directly to the owning Home's default `memory`
+service as a fixed user caller. The browser submits a frozen entry snapshot and
+operation key; the adapter must not reread and merge it, which would change the
+idempotency fingerprint after a lost response. Both edits and deletions use
+Memory's version-guarded correction transaction. No Agent or Supervisor is
+required, and this adapter never reads or writes Memory storage files.

@@ -28,7 +28,8 @@ subscription 接口。只有 Fleet 会调用隐藏的单 Agent Runtime 入口。
 
 Fleet 也通过 [`fleet/services`](internal/fleet/services/README.zh.md) 管理独立服务进程。
 App 从所属 Home 加载定义，共享 endpoint 和类型化控制辅助位于 Foundation。
-服务业务 API 直接连接服务，Module 保持进程内作用域。
+原生服务 client 直接连接服务，Module 保持进程内作用域。Fleet Web 的 Memory
+管理适配器同样是类型化服务 client；业务事务仍由独立 Memory 服务负责。
 
 ## 所有权与依赖方向
 

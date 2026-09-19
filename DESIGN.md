@@ -41,6 +41,15 @@ initial focus. Start and Enable remain direct actions.
 Route names and parameter syntax are implementation details owned by the
 router.
 
+## Fleet Memory
+
+Memory is a Fleet-level destination independent of Agent selection. Search and
+paged previews lead to readable knowledge and provenance. Editing preserves
+drafts on failure and rejects stale revisions. Confirmed commits are distinct
+from search-index readiness. Deletion names the memory, explains suppression of
+relearning and the retained original conversations, and initially focuses Cancel.
+The service owns these outcomes; the browser does not infer them from local state.
+
 ## Thread Explorer
 
 Active and Archived are separate sections. A row should make identity and

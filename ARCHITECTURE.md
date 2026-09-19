@@ -32,7 +32,9 @@ Only Fleet invokes the hidden single-Agent Runtime entrypoint.
 Fleet also manages independent service processes through
 [`fleet/services`](internal/fleet/services/README.md). App loads definitions from
 the owning Home; shared endpoint and typed control helpers live in Foundation.
-Service business APIs bypass Fleet, and Modules retain their process-local scope.
+Native service clients bypass Fleet, and Modules retain their process-local scope.
+Fleet Web's Memory administration adapter is another typed service client;
+business transactions remain in the independent Memory service.
 
 ## Ownership And Dependency Direction
 

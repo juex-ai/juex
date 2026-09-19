@@ -35,6 +35,13 @@ Agent 进程健康独立展示。Explorer 与 Runtime 显示页面上下文，�
 
 具体 route 名称和参数语法属于 router 实现细节。
 
+## Fleet Memory
+
+Memory 是独立于 Agent 选择的 Fleet 级入口。搜索和分页预览引导用户查看知识与
+来源。编辑失败时保留草稿，拒绝过时版本；已提交结果与搜索索引就绪状态分别
+呈现。删除确认明确记忆名称、阻止再次提取及保留原始对话的影响，默认聚焦
+Cancel。结果由服务决定，浏览器不从本地状态推断。
+
 ## Thread Explorer
 
 Active 与 Archived 分开展示。每一行无需打开 Thread 就应说明身份和可操作性：

@@ -27,6 +27,7 @@ import (
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/fleet/services"
 	"github.com/juex-ai/juex/internal/foundation/fleetclient"
+	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/foundation/processmetrics"
 	"github.com/juex-ai/juex/internal/framework/endpoint"
 	"github.com/juex-ai/juex/internal/framework/thread"
@@ -75,6 +76,8 @@ type cachedReadOnlyAgentHandler struct {
 type Server struct {
 	managementHome     string
 	managementIdentity fleetclient.Endpoint
+	memory             memoryBackend
+	memoryCaller       mc.Caller
 	services           serviceBackend
 	manager            backend
 	addr               string
@@ -97,6 +100,7 @@ func New(opts Options) (*Server, error) {
 	if err := server.initManagement(opts.Manager); err != nil {
 		return nil, err
 	}
+	server.initMemory()
 	return server, nil
 }
 
@@ -137,6 +141,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/agents", s.handleAgents)
 	mux.HandleFunc("/api/services", s.handleServices)
 	mux.HandleFunc("/api/services/", s.handleServices)
+	mux.HandleFunc("/api/memory/", s.handleMemory)
 	mux.HandleFunc("/api/agents/", s.dispatchAgentAPI)
 	mux.HandleFunc("/api/fleet/status", s.handleFleetStatus)
 	mux.HandleFunc("/api/fleet/events", s.handleFleetEvents)

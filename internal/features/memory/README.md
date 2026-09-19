@@ -55,6 +55,11 @@ use `juex memory admin --file request.json`. For example:
 {"key":"forget-release-v1","action":"delete","entry_ids":["release-convention"]}
 ```
 
+Fleet Web's Memory navigation provides search, inspection, editing and confirmed
+deletion for the default `memory` service. It works without an Agent or Supervisor.
+Edits retain identity, scope and provenance; concurrent changes require reloading
+the current revision. User edits and deletions supersede unfinished Memory reviews.
+
 The request/response types and tool schemas define exact fields. Administration
 fences older work. Deletion removes Memory-owned knowledge and projections,
 scrubs matching retained proposal/evidence payloads and suppresses re-extraction

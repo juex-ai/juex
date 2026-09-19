@@ -10,6 +10,7 @@ import { LoadingState } from "@/components/LoadingState";
 const Fleet = lazy(() =>
   import("@/pages/Fleet").then((module) => ({ default: module.Fleet }))
 );
+const Memory = lazy(() => import("@/pages/Memory").then((module) => ({ default: module.Memory })));
 const AgentLogs = lazy(() =>
   import("@/pages/AgentLogs").then((module) => ({
     default: module.AgentLogs,
@@ -76,6 +77,8 @@ const router = createBrowserRouter([
           </RouteSuspense>
         ),
       },
+      { path: "memory", element: <RouteSuspense><Memory /></RouteSuspense> },
+      { path: "memory/:entryId", element: <RouteSuspense><Memory /></RouteSuspense> },
       {
         path: "agents/:agentId",
         children: [
