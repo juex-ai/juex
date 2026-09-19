@@ -136,7 +136,7 @@ function MemoryDetail({ id }: { id: string }) {
   return <div className="space-y-5">
     <Button asChild variant="ghost" className="-ml-3"><Link to={`/memory${location.search}`}><ArrowLeft className="size-4" />All memories</Link></Button>
     {notice ? <p role="status" className="rounded-md border p-3 text-sm">{notice}</p> : null}
-    <ErrorMessage text={error} />
+    <ErrorMessage text={editing ? null : error} />
     {loading ? <p className="text-sm text-muted-foreground">Loading memory…</p> : null}
     {!editing ? <div className="flex flex-wrap items-start justify-between gap-3"><h1 className="min-w-0 break-words text-xl font-semibold">{entry?.name || "Memory entry"}</h1><div className="flex gap-2"><Button variant="outline" aria-label="Refresh memory" disabled={busy || loading} onClick={() => setRefresh(n => n + 1)}><RefreshCw className="size-4" /></Button>{entry ? <><Button variant="outline" disabled={busy || loading || Boolean(error)} onClick={startEditing}>Edit</Button><Button ref={deleteTrigger} variant="destructive" disabled={busy || loading || Boolean(error)} onClick={() => { setDeleteError(null); setDeleting(true); }}>Delete</Button></> : null}</div></div> : null}
     {entry && editing && draft ? <form className="space-y-4" onSubmit={event => { event.preventDefault(); void submit("PUT"); }}>
@@ -148,6 +148,7 @@ function MemoryDetail({ id }: { id: string }) {
         <div className={fieldClass}><label htmlFor="memory-body">Body</label><Textarea id="memory-body" className="min-h-56 font-mono text-sm" value={draft.body} onChange={e => setDraft({ ...draft, body: e.target.value })} /></div>
         {hasStructured ? <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Structured knowledge</summary><p className="my-2 text-xs text-muted-foreground">Update the facts alongside the text when their meaning changes. Keep explicit identities and source references.</p><div className={fieldClass}><label htmlFor="memory-structured">Entities and facts (JSON)</label><Textarea id="memory-structured" className="min-h-48 font-mono text-xs" value={structured} onChange={e => setStructured(e.target.value)} /></div></details> : null}
         <p className="text-xs text-muted-foreground">{userControlNotice}</p>
+        <ErrorMessage text={error} />
         <div className="flex gap-2"><Button type="submit">{busy ? "Saving…" : "Save changes"}</Button><Button type="button" variant="outline" onClick={() => { setEditing(false); setDraft(null); setError(null); }}>Cancel editing</Button></div>
       </fieldset>
     </form> : entry ? <>

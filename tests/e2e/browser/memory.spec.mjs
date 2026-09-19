@@ -124,6 +124,7 @@ test("Memory validates Body bytes while retaining oversized drafts and allowing 
     await body.fill(text);
     await page.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByRole("alert")).toContainText(`Body is too long (${bytes} bytes; maximum 32768)`);
+    await expect(page.getByRole("alert")).toBeInViewport();
     await expect(body).toHaveValue(text);
     expect(calls).toHaveLength(0);
   }
