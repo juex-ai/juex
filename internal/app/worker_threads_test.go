@@ -562,3 +562,58 @@ func TestWorkerModelValidationPrecedesIdentityReservationAndFactory(t *testing.T
 		t.Fatalf("valid model factory calls = %d", factoryCalls)
 	}
 }
+
+func TestWorkerReusePreservesBusyOwnerAndQueuedInput(t *testing.T) {
+	provider := &workerProvider{response: "done", started: make(chan struct{}), release: make(chan struct{})}
+	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, provider)
+	status, err := main.Workers().Create(t.Context(), "first", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-provider.started
+	defer close(provider.release)
+	if _, queued, err := main.Workers().Send(status.ThreadID, "second"); err != nil || !queued {
+		t.Fatalf("queue: %v %v", queued, err)
+	}
+	old, _ := main.ManagedWorkerAgent(status.ThreadID)
+	prepared := agent.PreparedChild{Open: func(agent.ChildRequest) (*agent.Agent, error) { t.Error("busy Worker factory ran"); return nil, nil }}
+	if _, err := main.Workers().ReusePrepared(t.Context(), status.ThreadID, "replacement", prepared); !errors.Is(err, agent.ErrWorkerThreadNotReusable) {
+		t.Fatalf("reuse busy: %v", err)
+	}
+	current, _ := main.ManagedWorkerAgent(status.ThreadID)
+	if current != old || old.Context().Err() != nil || old.PendingInputStatus().PendingCount != 1 {
+		t.Fatal("busy Worker or pending input was changed")
+	}
+}
+
+func TestWorkerReuseFactoryFailureRetainsDurableThread(t *testing.T) {
+	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, &workerProvider{response: "retained answer"})
+	status, err := main.Workers().Create(t.Context(), "retained question", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitWorkerState(t, main, status.ThreadID, agent.WorkerThreadStateIdle)
+	failure := errors.New("replacement factory failed")
+	prepared := agent.PreparedChild{Open: func(agent.ChildRequest) (*agent.Agent, error) { return nil, failure }}
+	if _, err := main.Workers().ReusePrepared(t.Context(), status.ThreadID, "replacement", prepared); !errors.Is(err, failure) {
+		t.Fatalf("reuse failure: %v", err)
+	}
+	target, err := main.ThreadStore.OpenActive(status.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = target.Close() }()
+	var history string
+	for _, msg := range target.History {
+		history += msg.FirstText()
+	}
+	if !strings.Contains(history, "retained question") || !strings.Contains(history, "retained answer") {
+		t.Fatalf("lost Thread history: %s", history)
+	}
+	if _, ok := main.ManagedWorkerAgent(status.ThreadID); ok {
+		t.Fatal("failed replacement remained managed")
+	}
+	if _, err := main.Workers().ReusePrepared(t.Context(), status.ThreadID, "replacement", prepared); !errors.Is(err, agent.ErrWorkerThreadNotReusable) {
+		t.Fatalf("unowned Thread was reused: %v", err)
+	}
+}

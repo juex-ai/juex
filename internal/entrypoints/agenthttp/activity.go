@@ -63,7 +63,7 @@ func (s *Server) agentActivity() agentActivityResponse {
 	var latestWorking *activeThread
 	s.threads.Range(func(_, value any) bool {
 		active, ok := value.(*activeThread)
-		if !ok || active == nil || active.agent == nil || active.agent.Status == nil {
+		if !ok || active == nil || active.agent == nil || active.agent.Status == nil || active.agent.Context().Err() != nil {
 			return true
 		}
 		snapshot := active.agent.Status.Snapshot()

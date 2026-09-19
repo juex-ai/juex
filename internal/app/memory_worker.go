@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/config"
+	"github.com/juex-ai/juex/internal/features/memory"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/foundation/serviceendpoint"
 	"github.com/juex-ai/juex/internal/framework/agent"
@@ -58,7 +59,7 @@ func (a *App) runMemoryAssignment(ctx context.Context, assignment mc.Assignment)
 		}
 		return child.Agent, err
 	}}
-	status, err := manager.CreatePrepared(ctx, query, "", false, prepared)
+	status, err := a.startMemoryWorker(ctx, query, prepared)
 	client, caller := memoryClient(a.cfg, status.ThreadID, &assignment)
 	defer func() {
 		settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -94,4 +95,30 @@ func (a *App) runMemoryAssignment(ctx context.Context, assignment mc.Assignment)
 		case <-timer.C:
 		}
 	}
+}
+
+func (a *App) startMemoryWorker(ctx context.Context, query string, prepared agent.PreparedChild) (agent.WorkerThreadStatus, error) {
+	manager := a.Workers()
+	workers, err := manager.List()
+	if err != nil {
+		return agent.WorkerThreadStatus{}, err
+	}
+	for _, worker := range workers {
+		if (worker.State != agent.WorkerThreadStateIdle && worker.State != agent.WorkerThreadStateFailed) || worker.PendingCount != 0 || worker.Subscribed {
+			continue
+		}
+		assignment, err := memory.LoadWorkerAssignment(a.cfg.RuntimePaths().StateDir, worker.ThreadID)
+		if err != nil {
+			return agent.WorkerThreadStatus{}, err
+		}
+		if assignment == nil {
+			continue
+		}
+		status, err := manager.ReusePrepared(ctx, worker.ThreadID, query, prepared)
+		if errors.Is(err, agent.ErrWorkerThreadNotReusable) {
+			continue
+		}
+		return status, err
+	}
+	return manager.CreatePrepared(ctx, query, "", false, prepared)
 }
