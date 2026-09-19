@@ -2,10 +2,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  threadBatchGroups,
   threadListBadges,
   threadHref,
   threadListTitle,
 } from "../../frontend/src/lib/thread-list.ts";
+
+test("threadBatchGroups settles descendants first across the complete index without reordering siblings", () => {
+  const root = { thread_id: "0" };
+  const parent = { thread_id: "parent", parent_thread_id: "0" };
+  const intermediate = { thread_id: "archived", parent_thread_id: "parent" };
+  const child = { thread_id: "child", parent_thread_id: "archived" };
+  const sibling = { thread_id: "sibling", parent_thread_id: "0" };
+  const targets = [parent, sibling, child];
+  const index = new Map([root, parent, intermediate, child, sibling].map((thread) => [thread.thread_id, thread]));
+  assert.deepEqual(threadBatchGroups(targets, index), [[child], [parent, sibling]]);
+  assert.deepEqual(targets, [parent, sibling, child]);
+  assert.deepEqual(threadBatchGroups([], index), []);
+});
 
 test("threadHref routes threads through the canonical thread view", () => {
   assert.equal(

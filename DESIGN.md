@@ -76,6 +76,12 @@ Main appears like a normal Thread but cannot be renamed, archived, or deleted.
 An idle Worker can be archived. An archived Worker can be restored or
 permanently deleted after explicit confirmation.
 
+Each section supports Worker selection and select-all, with Main's checkbox
+disabled. Active selection can be archived; archived selection can be deleted
+after a confirmation naming the Threads. Selected descendants finish before
+their ancestors. Partial failures retain the failed
+selection and explain each error, while completed items leave the selection.
+
 List data comes from the Agent index. Rendering the list must not open Thread
 metadata or Generation Journals. Activating, hovering, or focusing the Token
 Usage label reveals total input, cached input, output, and per-`provider:model`
