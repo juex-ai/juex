@@ -25,7 +25,7 @@ const usage = {
   },
 };
 
-async function openThreadExplorer(page, tokenUsage = usage) {
+async function openThreadExplorer(page, tokenUsage = usage, extraThreads = {}, listUnavailable = () => false) {
   await page.route("**/api/fleet/events", (route) => route.abort());
   await page.route("**/api/resource-events", (route) => route.abort());
   await page.route("**/api/agents", (route) =>
@@ -49,7 +49,7 @@ async function openThreadExplorer(page, tokenUsage = usage) {
     }),
   );
   await page.route("**/agents/test-agent/api/threads", (route) =>
-    route.fulfill({
+    listUnavailable() ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Agent unavailable" }) }) : route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         active_threads: [
@@ -70,20 +70,36 @@ async function openThreadExplorer(page, tokenUsage = usage) {
           },
         ],
         archived_threads: [],
+        ...extraThreads,
       }),
     }),
   );
 
   await page.goto("/agents/test-agent/threads");
-  await expect(page.getByText("Usage Thread")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Threads", exact: true })).toBeVisible();
 }
+
+test("total stays unknown after initial failure and retains its last snapshot on refresh failure", async ({ page }) => {
+  let unavailable = true;
+  await openThreadExplorer(page, usage, {}, () => unavailable);
+  await expect(page.getByRole("alert").filter({ hasText: "Service Unavailable" })).toBeVisible();
+  const total = page.getByRole("group", { name: "Total token usage" });
+  await expect(total).toHaveCount(0);
+  unavailable = false;
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(total).toContainText("1.8k tokens");
+  unavailable = true;
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Service Unavailable" })).toBeVisible();
+  await expect(total).toContainText("1.8k tokens");
+});
 
 test("Thread Explorer loads usage from the Agent index and reveals exact per-model values by keyboard", async ({
   page,
 }) => {
   await openThreadExplorer(page);
 
-  const trigger = page.getByRole("button", {
+  const trigger = page.locator('[data-thread-id="usage-thread"]').getByRole("button", {
     name: "1.8k tokens. Show token usage details",
   });
   await trigger.focus();
@@ -110,6 +126,7 @@ test("touch users can open a persistent usage disclosure", async ({ browser }) =
   await openThreadExplorer(page);
 
   await page
+    .locator('[data-thread-id="usage-thread"]')
     .getByRole("button", { name: "1.8k tokens. Show token usage details" })
     .tap();
   await expect(
@@ -129,7 +146,7 @@ test("long model breakdowns stay viewport-bounded and keyboard-scrollable", asyn
   );
   await openThreadExplorer(page, { ...usage, by_model: byModel });
 
-  const trigger = page.getByRole("button", {
+  const trigger = page.locator('[data-thread-id="usage-thread"]').getByRole("button", {
     name: "1.8k tokens. Show token usage details",
   });
   await trigger.focus();
@@ -154,3 +171,45 @@ test("long model breakdowns stay viewport-bounded and keyboard-scrollable", asyn
     .poll(() => details.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(0);
 });
+
+for (const width of [1280, 390]) {
+  test(`Threads total includes Main and archived usage, merges models and refreshes at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const makeThread = (id, retention) => ({
+      thread_id: id, alias: id === "0" ? "Usage Thread" : id,
+      retention_state: retention, execution_state: "idle", created_at: "2026-09-03T00:00:00Z",
+      last_activity_at: "2026-09-03T00:00:00Z", pending_input_count: 0, turn_count: 2,
+      generation_count: 1, current_generation_id: "g1", current_context_tokens: 123,
+      token_usage: usage, thread_revision: 1,
+    });
+    const threads = { active_threads: [makeThread("0", "active"), makeThread("worker", "active")], archived_threads: [makeThread("old", "archived")] };
+    await openThreadExplorer(page, usage, threads);
+    const total = page.getByRole("group", { name: "Total token usage" });
+    await expect(total).toContainText("5.4k tokens");
+    await total.getByRole("button").click();
+    const details = page.getByRole("dialog", { name: "Token usage details" });
+    await expect(details).toContainText("5,400 total tokens");
+    await expect(details).toContainText("4,500");
+    await expect(details).toContainText("1,800");
+    await expect(details.getByText("openai:gpt-5", { exact: true })).toHaveCount(1);
+    await expect(details.getByText("openai:gpt-5", { exact: true }).locator("..")).toContainText("3,000");
+    expect((await details.boundingBox()).width).toBeLessThanOrEqual(width - 32);
+    await page.keyboard.press("Escape");
+    await page.route("**/api/threads/worker/archive", async (route) => {
+      threads.archived_threads.push({ ...threads.active_threads.pop(), retention_state: "archived" });
+      await route.fulfill({ contentType: "application/json", body: "{}" });
+    });
+    await page.locator('[data-thread-id="worker"]').getByRole("button", { name: "Archive thread", exact: true }).click();
+    await expect(page.locator('[data-thread-id="worker"]').getByRole("button", { name: "Unarchive thread", exact: true })).toBeVisible();
+    await expect(total).toContainText("5.4k tokens");
+    await page.route("**/api/threads/old", async (route) => {
+      expect(route.request().method()).toBe("DELETE");
+      threads.archived_threads.splice(threads.archived_threads.findIndex((thread) => thread.thread_id === "old"), 1);
+      await route.fulfill({ contentType: "application/json", body: "{}" });
+    });
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator('[data-thread-id="old"]').getByRole("button", { name: "Delete thread permanently" }).click();
+    await expect(total).toContainText("3.6k tokens");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+  });
+}

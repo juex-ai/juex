@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Archive, ArchiveRestore, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { archiveThread, createThread, deleteThread, listThreads, unarchiveThread } from "@/api";
@@ -20,6 +20,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
 import { threadHref, threadListTitle } from "@/lib/thread-list";
+import { aggregateThreadUsage } from "@/lib/thread-usage";
 import { cn } from "@/lib/utils";
 import type { ThreadListItem } from "@/types";
 
@@ -34,11 +35,17 @@ type ThreadNavigation = {
 };
 
 export function ThreadExplorer() {
+  const { agentId } = useParams<{ agentId: string }>();
+  return <AgentThreadExplorer key={agentId} />;
+}
+
+function AgentThreadExplorer() {
   const navigate = useNavigate();
   const { agent, agentsLoaded } = useFleetAgent();
   const [active, setActive] = useState<ThreadListItem[]>([]);
   const [archived, setArchived] = useState<ThreadListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasSnapshot, setHasSnapshot] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -49,6 +56,7 @@ export function ThreadExplorer() {
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());
   const byID = useMemo(() => new Map([...active, ...archived].map((thread) => [thread.thread_id, thread])), [active, archived]);
+  const totalUsage = useMemo(() => aggregateThreadUsage([...byID.values()].map((thread) => thread.token_usage)), [byID]);
   const registerRow = useCallback((id: string, element: HTMLDivElement | null) => {
     if (element) rows.current.set(id, element);
     else rows.current.delete(id);
@@ -79,6 +87,7 @@ export function ThreadExplorer() {
       const response = await listThreads();
       setActive(response.active_threads);
       setArchived(response.archived_threads);
+      setHasSnapshot(true);
     } catch (cause) {
       console.error("listThreads failed", cause);
       setError(cause instanceof Error ? cause.message : "Failed to load threads.");
@@ -135,7 +144,15 @@ export function ThreadExplorer() {
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-5 px-4 py-6 md:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold text-foreground">Threads</h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-xl font-semibold text-foreground">Threads</h1>
+              {hasSnapshot ? (
+                <div role="group" aria-label="Total token usage" className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground">Total</span>
+                  <ThreadUsageSummary usage={totalUsage} />
+                </div>
+              ) : null}
+            </div>
             <p className="mt-1 text-sm text-muted-foreground">Active and archived Agent work streams.</p>
           </div>
           <div className="flex items-center gap-2">

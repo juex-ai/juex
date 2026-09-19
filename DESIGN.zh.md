@@ -44,6 +44,9 @@ Cancel。结果由服务决定，浏览器不从本地状态推断。
 
 ## Thread Explorer
 
+标题旁展示当前 Agent 的所有 Active 和 Archived Threads（包含 Main）的累计
+Token Usage，使用与单行相同的详情弹层。
+
 Active 与 Archived 分开展示。每一行无需打开 Thread 就应说明身份和可操作性：
 
 - id 与 alias；

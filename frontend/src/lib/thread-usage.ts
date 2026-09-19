@@ -18,6 +18,26 @@ export interface ThreadUsageView {
   models: ThreadUsageModelRow[];
 }
 
+export function aggregateThreadUsage(usages: readonly ThreadTokenUsage[]): ThreadTokenUsage {
+  const total: TokenUsage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
+  const models = new Map<string, TokenUsage>();
+  const add = (target: TokenUsage, usage: TokenUsage) => {
+    const counts = usageCounts(usage);
+    target.input_tokens += counts.inputTokens;
+    target.cached_input_tokens = (target.cached_input_tokens ?? 0) + counts.cachedInputTokens;
+    target.output_tokens += counts.outputTokens;
+  };
+  for (const usage of usages) {
+    add(total, usage.total);
+    for (const [modelRef, modelUsage] of Object.entries(usage.by_model)) {
+      const combined = models.get(modelRef) ?? { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
+      add(combined, modelUsage);
+      models.set(modelRef, combined);
+    }
+  }
+  return { total, by_model: Object.fromEntries(models) };
+}
+
 export function formatThreadTokenCount(value: number): string {
   const tokens = normalizedTokenCount(value);
   if (tokens < 1_000) return String(tokens);
