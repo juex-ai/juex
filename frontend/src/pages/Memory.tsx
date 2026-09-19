@@ -98,8 +98,8 @@ function MemoryDetail({ id }: { id: string }) {
   async function submit(method: "PUT" | "DELETE") {
     if (!entry || busy) return;
     if (method === "PUT" && draft) {
-      for (const [label, value, limit] of [["Name", draft.name, 128], ["Summary", draft.summary, 512]] as const) {
-        if (!value.trim()) { setError(`${label} is required.`); return; }
+      for (const [label, value, limit, required] of [["Name", draft.name, 128, true], ["Summary", draft.summary, 512, true], ["Body", draft.body, 32 * 1024, false]] as const) {
+        if (required && !value.trim()) { setError(`${label} is required.`); return; }
         const bytes = new TextEncoder().encode(value).length;
         if (bytes > limit) { setError(`${label} is too long (${bytes} bytes; maximum ${limit}). Shorten the text before saving.`); return; }
       }

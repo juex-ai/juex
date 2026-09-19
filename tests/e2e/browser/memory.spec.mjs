@@ -115,6 +115,32 @@ test("Memory validates multilingual edit budgets before submitting", async ({ pa
   expect(calls).toHaveLength(1);
 });
 
+test("Memory validates Body bytes while retaining oversized drafts and allowing empty text", async ({ page }) => {
+  const { calls } = await fixture(page);
+  await page.goto("/memory/release-notes");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const body = page.getByLabel("Body", { exact: true });
+  for (const [text, bytes] of [["a".repeat(32769), 32769], ["记".repeat(10923), 32769], ["\u{20bb7}".repeat(8193), 32772]]) {
+    await body.fill(text);
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByRole("alert")).toContainText(`Body is too long (${bytes} bytes; maximum 32768)`);
+    await expect(body).toHaveValue(text);
+    expect(calls).toHaveLength(0);
+  }
+  const boundary = "\u{20bb7}".repeat(8192);
+  await body.fill(boundary);
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
+  expect(calls).toHaveLength(1);
+  expect(calls[0].body.entry.body).toBe(boundary);
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await body.fill("");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("No body text.", { exact: true })).toBeVisible();
+  expect(calls).toHaveLength(2);
+  expect(calls[1].body.entry.body).toBe("");
+});
+
 test("Memory conflicts keep drafts and deletion requires explicit confirmation", async ({ page }) => {
   const options = { conflict: true };
   const { calls } = await fixture(page, options);
