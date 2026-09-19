@@ -25,7 +25,7 @@ const usage = {
   },
 };
 
-async function openThreadExplorer(page, tokenUsage = usage, extraThreads = {}) {
+async function openThreadExplorer(page, tokenUsage = usage, extraThreads = {}, listUnavailable = () => false) {
   await page.route("**/api/fleet/events", (route) => route.abort());
   await page.route("**/api/resource-events", (route) => route.abort());
   await page.route("**/api/agents", (route) =>
@@ -49,7 +49,7 @@ async function openThreadExplorer(page, tokenUsage = usage, extraThreads = {}) {
     }),
   );
   await page.route("**/agents/test-agent/api/threads", (route) =>
-    route.fulfill({
+    listUnavailable() ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Agent unavailable" }) }) : route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         active_threads: [
@@ -76,8 +76,23 @@ async function openThreadExplorer(page, tokenUsage = usage, extraThreads = {}) {
   );
 
   await page.goto("/agents/test-agent/threads");
-  await expect(page.getByText("Usage Thread")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Threads", exact: true })).toBeVisible();
 }
+
+test("total stays unknown after initial failure and retains its last snapshot on refresh failure", async ({ page }) => {
+  let unavailable = true;
+  await openThreadExplorer(page, usage, {}, () => unavailable);
+  await expect(page.getByRole("alert")).toContainText("Agent unavailable");
+  const total = page.getByRole("group", { name: "Total token usage" });
+  await expect(total).toHaveCount(0);
+  unavailable = false;
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(total).toContainText("1.8k tokens");
+  unavailable = true;
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Agent unavailable");
+  await expect(total).toContainText("1.8k tokens");
+});
 
 test("Thread Explorer loads usage from the Agent index and reveals exact per-model values by keyboard", async ({
   page,

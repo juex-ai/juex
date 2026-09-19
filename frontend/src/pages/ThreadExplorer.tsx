@@ -40,6 +40,7 @@ export function ThreadExplorer() {
   const [active, setActive] = useState<ThreadListItem[]>([]);
   const [archived, setArchived] = useState<ThreadListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasSnapshot, setHasSnapshot] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -81,6 +82,7 @@ export function ThreadExplorer() {
       const response = await listThreads();
       setActive(response.active_threads);
       setArchived(response.archived_threads);
+      setHasSnapshot(true);
     } catch (cause) {
       console.error("listThreads failed", cause);
       setError(cause instanceof Error ? cause.message : "Failed to load threads.");
@@ -139,7 +141,7 @@ export function ThreadExplorer() {
           <div>
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-xl font-semibold text-foreground">Threads</h1>
-              {!loading ? (
+              {hasSnapshot ? (
                 <div role="group" aria-label="Total token usage" className="flex items-center gap-1.5">
                   <span className="text-xs text-muted-foreground">Total</span>
                   <ThreadUsageSummary usage={totalUsage} />
