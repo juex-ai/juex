@@ -6,7 +6,44 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/juex-ai/juex/internal/foundation/events"
 )
+
+func TestModuleClearWaitsForContextRenewalAndPublishesEmptyState(t *testing.T) {
+	store := NewNotesStore(t.TempDir())
+	if _, err := store.Update("retained until completion"); err != nil {
+		t.Fatal(err)
+	}
+	var emitted []events.Event
+	m := NewWithOptions(store, Options{CurrentTurnID: func() string { return "turn" }, EventSink: func(event events.Event) error {
+		emitted = append(emitted, event)
+		return nil
+	}})
+	_, rollback, err := store.StageClearForContextRenewal("g000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rollback() })
+	if err := m.Clear(); err == nil || !strings.Contains(err.Error(), "Context renewal") || len(emitted) != 0 {
+		t.Fatalf("staged clear was reported completed: %v, %+v", err, emitted)
+	}
+	if err := rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := store.Snapshot(); err != nil || snapshot.Content != "retained until completion" {
+		t.Fatalf("rollback lost Notes: %+v %v", snapshot, err)
+	}
+	if err := m.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.Path); !os.IsNotExist(err) {
+		t.Fatalf("Notes not removed: %v", err)
+	}
+	if len(emitted) != 1 || emitted[0].TurnID != "turn" || emitted[0].Type != "notes.updated" || emitted[0].Payload.(NotesUpdatedPayload).Content != "" {
+		t.Fatalf("clear publication: %+v", emitted)
+	}
+}
 
 func TestNotesStoreUpdatesSnapshots(t *testing.T) {
 	dir := t.TempDir()

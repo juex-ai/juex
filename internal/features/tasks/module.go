@@ -31,6 +31,7 @@ type ModuleOptions struct {
 	ContinuationDeferrer ContinuationDeferrer
 	EventSink            func(events.Event) error
 	CurrentTurnID        func() string
+	OnAllTasksDone       func() error
 }
 
 type Module struct {
@@ -39,6 +40,7 @@ type Module struct {
 	continuationDeferrer ContinuationDeferrer
 	eventSink            func(events.Event) error
 	currentTurnID        func() string
+	onAllTasksDone       func() error
 }
 
 func New(store *Store) *Module {
@@ -52,6 +54,7 @@ func NewWithOptions(store *Store, opts ModuleOptions) *Module {
 		continuationDeferrer: opts.ContinuationDeferrer,
 		eventSink:            opts.EventSink,
 		currentTurnID:        opts.CurrentTurnID,
+		onAllTasksDone:       opts.OnAllTasksDone,
 	}
 }
 

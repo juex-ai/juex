@@ -2,12 +2,77 @@ package tasks
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/foundation/events"
 )
+
+func TestCompletionCleanupRequiresAllRemainingTasksDone(t *testing.T) {
+	for _, status := range []Status{Done, Todo, Doing, Pending, Failed} {
+		t.Run(string(status), func(t *testing.T) {
+			store := NewStore(t.TempDir(), Options{})
+			first := createTask(t, store, "finished", Done, P1)
+			createTask(t, store, "remaining", status, P1)
+			calls := 0
+			m := NewWithOptions(store, ModuleOptions{OnAllTasksDone: func() error { calls++; return nil }})
+			if _, err := m.call(ToolUpdate, map[string]any{"id": first.ID, "status": "done"}); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if status == Done {
+				want = 1
+			}
+			if calls != want {
+				t.Fatalf("cleanup calls=%d want=%d", calls, want)
+			}
+		})
+	}
+	for _, retainedDone := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delete-retained-done=%v", retainedDone), func(t *testing.T) {
+			store := NewStore(t.TempDir(), Options{})
+			if retainedDone {
+				createTask(t, store, "finished", Done, P1)
+			}
+			removed := createTask(t, store, "obsolete", Pending, P1)
+			called := false
+			m := NewWithOptions(store, ModuleOptions{OnAllTasksDone: func() error { called = true; return nil }})
+			if _, err := m.call(ToolDelete, map[string]any{"id": removed.ID}); err != nil {
+				t.Fatal(err)
+			}
+			if called != retainedDone {
+				t.Fatalf("cleanup called=%v", called)
+			}
+		})
+	}
+}
+
+func TestCompletionCleanupFailurePreservesTaskAndCanRetry(t *testing.T) {
+	store := NewStore(t.TempDir(), Options{})
+	task := createTask(t, store, "finish", Doing, P1)
+	calls := 0
+	m := NewWithOptions(store, ModuleOptions{OnAllTasksDone: func() error {
+		calls++
+		if calls == 1 {
+			return errors.New("notes clear: unavailable")
+		}
+		return nil
+	}})
+	in := map[string]any{"id": task.ID, "status": "done"}
+	if _, err := m.call(ToolUpdate, in); err == nil || !strings.Contains(err.Error(), "task change was saved") || !strings.Contains(err.Error(), "notes clear") {
+		t.Fatalf("partial-success error: %v", err)
+	}
+	state, err := store.Snapshot()
+	if err != nil || state.Tasks[0].Status != Done {
+		t.Fatalf("completion rolled back: %+v %v", state, err)
+	}
+	if _, err := m.call(ToolUpdate, in); err != nil || calls != 2 {
+		t.Fatalf("cleanup retry calls=%d error=%v", calls, err)
+	}
+}
 
 func TestToolsAndEmptyInvalidation(t *testing.T) {
 	store := NewStore(t.TempDir(), Options{})

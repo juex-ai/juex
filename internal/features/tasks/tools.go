@@ -29,7 +29,7 @@ func ToolDefinitions() []toolcore.ToolDefinition {
 	return []toolcore.ToolDefinition{
 		definition(ToolList, "Read this Thread's model-owned tasks before creating or updating work.", map[string]any{}),
 		definition(ToolCreate, "Record a task with a title and description. Defaults to todo and p1. Record completion criteria in acceptance. A request fully captured in durable tasks can then be checked with check_inputs.", fields(), "title", "description"),
-		definition(ToolUpdate, "Update a task by ID. Use doing while working, pending when new external input is required, done only after verifying acceptance, or failed when it cannot be completed.", update, "id"),
+		definition(ToolUpdate, "Update a task by ID. Use doing while working, pending when new external input is required, done only after verifying acceptance, or failed when it cannot be completed. Completing all tasks clears existing Notes; finish Notes edits before marking the last task done. Create a task before recording Notes for new work.", update, "id"),
 		definition(ToolDelete, "Delete a task by ID when it no longer belongs in this Thread's task list.", map[string]any{"id": text()}, "id"),
 	}
 }
@@ -99,8 +99,27 @@ func (m *Module) call(name string, in map[string]any) (string, error) {
 		return "", err
 	}
 	m.emitTasksUpdated(m.activeTurnID())
+	if err := m.notifyAllTasksDone(); err != nil {
+		return "", fmt.Errorf("task change was saved, but completion cleanup failed: %w; use list_tasks, then repeat update_task with status=done on a completed task to retry cleanup", err)
+	}
 	if name == ToolDelete {
 		return marshal(map[string]any{"deleted": true, "id": str("id")})
 	}
 	return marshal(map[string]any{"task": task})
+}
+
+func (m *Module) notifyAllTasksDone() error {
+	if m.onAllTasksDone == nil {
+		return nil
+	}
+	state, err := m.store.Snapshot()
+	if err != nil || len(state.Tasks) == 0 {
+		return err
+	}
+	for _, task := range state.Tasks {
+		if task.Status != Done {
+			return nil
+		}
+	}
+	return m.onAllTasksDone()
 }

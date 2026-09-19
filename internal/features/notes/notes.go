@@ -44,6 +44,9 @@ func (s *NotesStore) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.Path
+	if err := thread.CheckContextRenewalFileReady(s.ThreadDir, path); err != nil {
+		return fmt.Errorf("notes clear: %w", err)
+	}
 	if err := modstate.RemoveFile(path); err != nil {
 		return fmt.Errorf("notes clear: %w", err)
 	}

@@ -42,6 +42,13 @@ the current plan, verified progress, and unresolved issues. Checkbox items
 (`- [ ]` and `- [x]`) are useful for work that changes state. Put long-lived or
 large material in scratchpad files instead of notes.
 
+When a task change leaves a nonempty list entirely `done`, existing Notes in
+that Thread are cleared automatically. Finish Notes edits before marking the
+last task done; create a task before recording Notes for new work. Pending and
+failed tasks retain Notes, as does an empty task list. A cleanup error means the
+task change was saved; follow the error's retry guidance rather than repeating
+a create or delete. Later explicit Notes edits remain ordinary writes.
+
 ## Input checklist
 
 When enabled, `input-tracking` supplies delivered unchecked inputs on every
