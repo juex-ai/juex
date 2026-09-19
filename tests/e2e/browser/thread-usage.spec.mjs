@@ -82,7 +82,7 @@ async function openThreadExplorer(page, tokenUsage = usage, extraThreads = {}, l
 test("total stays unknown after initial failure and retains its last snapshot on refresh failure", async ({ page }) => {
   let unavailable = true;
   await openThreadExplorer(page, usage, {}, () => unavailable);
-  await expect(page.getByRole("alert")).toContainText("Agent unavailable");
+  await expect(page.getByRole("alert").filter({ hasText: "Service Unavailable" })).toBeVisible();
   const total = page.getByRole("group", { name: "Total token usage" });
   await expect(total).toHaveCount(0);
   unavailable = false;
@@ -90,7 +90,7 @@ test("total stays unknown after initial failure and retains its last snapshot on
   await expect(total).toContainText("1.8k tokens");
   unavailable = true;
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Agent unavailable");
+  await expect(page.getByRole("alert").filter({ hasText: "Service Unavailable" })).toBeVisible();
   await expect(total).toContainText("1.8k tokens");
 });
 
