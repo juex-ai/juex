@@ -77,6 +77,26 @@ test("Memory remains usable when the initial Agent roster cannot be loaded", asy
   await expect(page.getByText("Roster-independent correction", { exact: true })).toBeVisible();
 });
 
+test("Memory validates multilingual edit budgets before submitting", async ({ page }) => {
+  const { calls } = await fixture(page);
+  await page.goto("/memory/release-notes");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Name", { exact: true }).fill("记".repeat(43));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("alert")).toContainText("Name is too long (129 bytes; maximum 128)");
+  expect(calls).toHaveLength(0);
+  await expect(page.getByLabel("Name", { exact: true })).toHaveValue("记".repeat(43));
+  await page.getByLabel("Name", { exact: true }).fill("记".repeat(42));
+  await page.getByLabel("Summary", { exact: true }).fill("\u{20bb7}".repeat(129));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("alert")).toContainText("Summary is too long (516 bytes; maximum 512)");
+  expect(calls).toHaveLength(0);
+  await page.getByLabel("Summary", { exact: true }).fill("\u{20bb7}".repeat(128));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
+  expect(calls).toHaveLength(1);
+});
+
 test("Memory conflicts keep drafts and deletion requires explicit confirmation", async ({ page }) => {
   const options = { conflict: true };
   const { calls } = await fixture(page, options);

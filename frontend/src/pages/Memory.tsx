@@ -92,6 +92,13 @@ function MemoryDetail({ id }: { id: string }) {
   }
   async function submit(method: "PUT" | "DELETE") {
     if (!entry || busy) return;
+    if (method === "PUT" && draft) {
+      for (const [label, value, limit] of [["Name", draft.name, 128], ["Summary", draft.summary, 512]] as const) {
+        if (!value.trim()) { setError(`${label} is required.`); return; }
+        const bytes = new TextEncoder().encode(value).length;
+        if (bytes > limit) { setError(`${label} is too long (${bytes} bytes; maximum ${limit}). Shorten the text before saving.`); return; }
+      }
+    }
     let changed = draft;
     if (method === "PUT" && draft && ((entry.entities?.length ?? 0) + (entry.facts?.length ?? 0) > 0)) {
       try {
