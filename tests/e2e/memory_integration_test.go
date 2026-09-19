@@ -30,7 +30,7 @@ func TestLiveConfigs_FleetMemorySupervisorCommit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
 	defer cancel()
 	a := memoryApp(t, cfg, nil)
-	if _, err := a.Run(ctx, "Explicitly remember this stable preference: in this workspace I want release notes in Simplified Chinese. Call memory_propose now, key=release-language, text=Release notes must use Simplified Chinese in this workspace. Then report only that the request was submitted; a Supervisor will review it later."); err != nil {
+	if _, err := a.Run(ctx, "Explicitly remember this stable preference: in this workspace I want release notes in Simplified Chinese. Call memory_propose now, key=release:language, text=Release notes must use Simplified Chinese in this workspace. Then report only that the request was submitted; a Supervisor will review it later."); err != nil {
 		t.Fatalf("source provider %s: %v", selected.name, err)
 	}
 	var receipt mc.Receipt
@@ -68,6 +68,9 @@ func TestLiveConfigs_FleetMemorySupervisorCommit(t *testing.T) {
 			t.Fatalf("live review timed out: %+v", receipt)
 		case <-time.After(250 * time.Millisecond):
 		}
+	}
+	if receipt.Attempts != 1 {
+		t.Fatalf("live review required repeated Workers: %+v", receipt)
 	}
 	cfg.AgentID, cfg.MemoryProfile = "reader-agent", mc.ProfileAgent
 	cfg.AgentStateDir = filepath.Join(home, "agents", cfg.AgentID)

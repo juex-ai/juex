@@ -17,7 +17,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
-	"github.com/juex-ai/juex/internal/foundation/serviceendpoint"
 )
 
 type work struct {
@@ -208,7 +207,7 @@ func (s *Store) loadEntries() error {
 			return err
 		}
 		e.Body = parts[1]
-		if err := serviceendpoint.ValidateID(e.ID); err != nil {
+		if err := mc.ValidateEntryID(e.ID); err != nil {
 			return err
 		}
 		if f.Name() != e.ID+".md" || e.Revision == 0 {
@@ -280,12 +279,12 @@ func (s *Store) recover() error {
 		return errors.New("memory intent Fleet mismatch")
 	}
 	for _, e := range in.Entries {
-		if err := serviceendpoint.ValidateID(e.ID); err != nil {
+		if err := mc.ValidateEntryID(e.ID); err != nil {
 			return err
 		}
 	}
 	for _, id := range in.Deletes {
-		if err := serviceendpoint.ValidateID(id); err != nil {
+		if err := mc.ValidateEntryID(id); err != nil {
 			return err
 		}
 	}
@@ -463,6 +462,9 @@ func (s *Store) Read(ctx context.Context, c mc.Caller, q mc.ReadRequest) (mc.Ent
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.begin(ctx, c); err != nil {
+		return mc.Entry{}, err
+	}
+	if err := mc.ValidateEntryID(q.ID); err != nil {
 		return mc.Entry{}, err
 	}
 	e, ok := s.entries[q.ID]

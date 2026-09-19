@@ -55,6 +55,9 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 }
 func field() map[string]any { return map[string]any{"type": "string"} }
+func entryIDField() map[string]any {
+	return map[string]any{"type": "string", "pattern": mc.EntryIDPattern, "minLength": 1, "maxLength": 64, "description": mc.EntryIDDescription}
+}
 func decode(input map[string]any, target any) error {
 	data, err := json.Marshal(input)
 	if err != nil {
@@ -73,16 +76,16 @@ func result(value any, err error) (string, error) {
 func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	definitions := []toolcore.ToolDefinition{
 		{Name: ToolSearch, Description: "Search scoped Fleet memory previews, including cold entries. Search does not refresh access. Empty queries are paginated. Optional at is an RFC3339 time for historical facts; omit it for current facts.", Schema: objectSchema(map[string]any{"text": field(), "offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50}, "subject": field(), "predicate": field(), "at": field()}, "text")},
-		{Name: ToolRead, Description: "Read one scoped Memory entry with provenance and temporal facts. Explicit reads refresh hot-index access; maintenance reads do not.", Schema: objectSchema(map[string]any{"id": field()}, "id")},
-		{Name: ToolHistory, Description: "Read a bounded original-evidence snapshot permitted by this Thread or assignment. Missing/deleted evidence is reported unavailable.", Schema: objectSchema(map[string]any{"fleet_id": field(), "agent_id": field(), "thread_id": field(), "generation_id": field(), "from": map[string]any{"type": "integer", "minimum": 1}, "through": map[string]any{"type": "integer", "minimum": 1}}, "fleet_id", "agent_id", "thread_id", "generation_id", "from", "through")},
+		{Name: ToolRead, Description: "Read one scoped Memory entry using an ID returned by memory_search. An empty search means no matching entry; do not probe a proposed new ID. Returns provenance and temporal facts. Explicit reads refresh hot-index access; maintenance reads do not.", Schema: objectSchema(map[string]any{"id": entryIDField()}, "id")},
+		{Name: ToolHistory, Description: "Read a bounded original-evidence snapshot permitted by this Thread or assignment. Copy an exact source reference from memory_read or the assignment; never guess Fleet/Agent/Thread/Generation IDs or cursors. Missing/deleted evidence is reported unavailable.", Schema: objectSchema(map[string]any{"fleet_id": field(), "agent_id": field(), "thread_id": field(), "generation_id": field(), "from": map[string]any{"type": "integer", "minimum": 1}, "through": map[string]any{"type": "integer", "minimum": 1}}, "fleet_id", "agent_id", "thread_id", "generation_id", "from", "through")},
 	}
 	handlers := []toolcore.Handler{m.search, m.read, m.history}
 	if m.options.Caller.AssignmentID != "" && m.options.Caller.Profile == mc.ProfileSupervisor {
-		definitions = append(definitions, toolcore.ToolDefinition{Name: ToolDecide, Description: "Settle this assigned request with applied, no_change or rejected. Applied requires bounded entry changes with expected_revision; evidence sources must belong to this assignment. The returned committed receipt is the only completion authority.", Schema: objectSchema(map[string]any{"outcome": map[string]any{"type": "string", "enum": []string{"applied", "no_change", "rejected"}}, "reason": field(), "changes": map[string]any{"type": "array", "maxItems": 20, "items": changeSchema()}}, "outcome", "reason")})
+		definitions = append(definitions, toolcore.ToolDefinition{Name: ToolDecide, Description: "Settle this assigned request with applied, no_change or rejected. Applied requires bounded entry changes with expected_revision; evidence sources must belong to this assignment. A validation error leaves the assignment uncommitted: correct the arguments and call again within the Worker budget. After an uncertain transport failure, retry identical arguments to recover the receipt. Stop after a successful decision receipt; only applied commits knowledge.", Schema: objectSchema(map[string]any{"outcome": map[string]any{"type": "string", "enum": []string{"applied", "no_change", "rejected"}}, "reason": field(), "changes": map[string]any{"type": "array", "maxItems": 20, "items": changeSchema()}}, "outcome", "reason")})
 		handlers = append(handlers, m.decide)
 	} else {
 		definitions = append(definitions,
-			toolcore.ToolDefinition{Name: ToolPropose, Description: "Submit explicitly requested stable knowledge for Supervisor review, with bounded evidence from the current admitted input. Acceptance means submitted, not remembered. Reuse the same key only for identical content.", Schema: objectSchema(map[string]any{"key": field(), "text": field(), "reason": field()}, "key", "text", "reason")},
+			toolcore.ToolDefinition{Name: ToolPropose, Description: "Submit explicitly requested stable knowledge for Supervisor review, with bounded evidence from the current admitted input. Acceptance means submitted, not remembered. The key identifies this request, not a Memory entry. Reuse the same key only for identical content.", Schema: objectSchema(map[string]any{"key": field(), "text": field(), "reason": field()}, "key", "text", "reason")},
 			toolcore.ToolDefinition{Name: ToolResult, Description: "Inspect a submitted Memory request. Report remembered/updated only when its receipt says committed.", Schema: objectSchema(map[string]any{"id": field()}, "id")},
 			toolcore.ToolDefinition{Name: ToolMaintain, Description: "Queue bounded maintenance of this Thread's retained evidence in Advanced strategy. Execution waits until the Thread has no pending input and has been idle for one minute. Basic explicit proposals do not need this operation.", Schema: objectSchema(map[string]any{})})
 		handlers = append(handlers, m.propose, m.requestResult, m.maintain)
@@ -97,11 +100,11 @@ func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.T
 }
 
 func changeSchema() map[string]any {
-	source := objectSchema(map[string]any{"fleet_id": field(), "agent_id": field(), "thread_id": field(), "generation_id": field(), "from": map[string]any{"type": "integer"}, "through": map[string]any{"type": "integer"}}, "fleet_id", "agent_id", "thread_id", "generation_id", "from", "through")
+	source := objectSchema(map[string]any{"fleet_id": field(), "agent_id": field(), "thread_id": field(), "generation_id": field(), "from": map[string]any{"type": "integer", "minimum": 1}, "through": map[string]any{"type": "integer", "minimum": 1}}, "fleet_id", "agent_id", "thread_id", "generation_id", "from", "through")
 	sources := map[string]any{"type": "array", "maxItems": 100, "items": source}
 	entity := objectSchema(map[string]any{"id": field(), "name": field(), "kind": field()}, "id", "name", "kind")
 	fact := objectSchema(map[string]any{"subject": field(), "predicate": field(), "value": field(), "object": field(), "status": map[string]any{"type": "string", "enum": []string{"valid", "superseded", "disputed"}}, "source_type": map[string]any{"type": "string", "enum": []string{"user_statement", "self_report", "observation", "derived"}}, "sources": sources, "recorded_at": field(), "valid_from": field(), "valid_until": field()}, "subject", "predicate", "status", "source_type", "sources", "recorded_at")
-	entry := objectSchema(map[string]any{"id": field(), "name": field(), "summary": field(), "type": map[string]any{"type": "string", "enum": []string{"user", "feedback", "project", "reference"}}, "scope": objectSchema(map[string]any{"workspace": field(), "project": field()}), "body": field(), "sources": sources, "entities": map[string]any{"type": "array", "items": entity, "maxItems": 50}, "facts": map[string]any{"type": "array", "items": fact, "maxItems": 100}}, "id", "name", "summary", "type", "scope", "body", "sources")
+	entry := objectSchema(map[string]any{"id": entryIDField(), "name": field(), "summary": field(), "type": map[string]any{"type": "string", "enum": []string{"user", "feedback", "project", "reference"}}, "scope": objectSchema(map[string]any{"workspace": field(), "project": field()}), "body": field(), "sources": sources, "entities": map[string]any{"type": "array", "items": entity, "maxItems": 50}, "facts": map[string]any{"type": "array", "items": fact, "maxItems": 100}}, "id", "name", "summary", "type", "scope", "body", "sources")
 	return objectSchema(map[string]any{"entry": entry, "expected_revision": map[string]any{"type": "integer", "minimum": 0}, "delete": map[string]any{"type": "boolean"}}, "entry", "expected_revision")
 }
 func (m *Module) search(ctx context.Context, input map[string]any) (string, error) {
@@ -116,11 +119,17 @@ func (m *Module) read(ctx context.Context, input map[string]any) (string, error)
 	if err := decode(input, &q); err != nil {
 		return "", err
 	}
+	if err := mc.ValidateEntryID(q.ID); err != nil {
+		return "", err
+	}
 	return result(m.options.API.Read(ctx, m.options.Caller, q))
 }
 func (m *Module) history(ctx context.Context, input map[string]any) (string, error) {
 	var q mc.Source
 	if err := decode(input, &q); err != nil {
+		return "", err
+	}
+	if err := mc.ValidateSource(q, m.options.Caller.FleetID); err != nil {
 		return "", err
 	}
 	return result(m.options.API.History(ctx, m.options.Caller, q))
@@ -136,6 +145,11 @@ func (m *Module) decide(ctx context.Context, input map[string]any) (string, erro
 	var d mc.Decision
 	if err := decode(input, &d); err != nil {
 		return "", err
+	}
+	for _, change := range d.Changes {
+		if err := mc.ValidateEntryID(change.Entry.ID); err != nil {
+			return "", err
+		}
 	}
 	return result(m.options.API.Decide(ctx, m.options.Caller, d))
 }
