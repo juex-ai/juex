@@ -8,6 +8,7 @@ import (
 )
 
 var (
+	ErrWorkerThreadNotReusable   = errors.New("worker thread is not idle and managed for reuse")
 	ErrWorkerThreadNotActive     = errors.New("worker thread is not active")
 	ErrWorkerThreadManagerClosed = errors.New("worker thread manager is closed")
 	ErrWorkerThreadStopped       = errorclass.WithKind(errorclass.KindTerminated, errors.New("worker thread stopped"))

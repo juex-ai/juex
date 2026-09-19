@@ -644,7 +644,7 @@ func (s *Server) isManagedWorkerAgent(id string, candidate *agent.Agent) bool {
 }
 
 func (s *Server) bindThreadAgent(a *agent.Agent, main *app.App, ownsAgent bool) (*activeThread, error) {
-	workCtx, workCancel := context.WithCancel(context.Background())
+	workCtx, workCancel := context.WithCancel(a.Context())
 	as := &activeThread{
 		agent:      a,
 		main:       main,

@@ -170,6 +170,7 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	runtimePaths := cfg.RuntimePaths()
+	freshMemoryAssignment := opts.memoryAssignment != nil
 	if opts.memoryAssignment == nil {
 		assignment, err := memory.LoadWorkerAssignment(runtimePaths.StateDir, opts.ThreadID)
 		if err != nil {
@@ -349,10 +350,14 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		return nil, err
 	}
 	threadState := attachment.Thread
-	if opts.memoryAssignment != nil {
-		if err := memory.SaveWorkerAssignment(runtimePaths.StateDir, threadState.ID, *opts.memoryAssignment); err != nil {
+	if freshMemoryAssignment {
+		unsettled, err := runtime.HasStoredUnsettledInput(threadState.Dir)
+		if err != nil || unsettled {
 			_ = threadState.Close()
-			return nil, err
+			if err != nil {
+				return nil, err
+			}
+			return nil, errors.New("cannot replace Memory assignment with unsettled input")
 		}
 	}
 	var threadModules *runtimemodule.Set
@@ -632,6 +637,16 @@ func New(opts Options) (createdApp *App, resultErr error) {
 		_ = threadModules.CloseThread(context.Background())
 		_ = a.Close()
 		return nil, err
+	}
+	if freshMemoryAssignment && len(threadState.History) > 0 {
+		if err := a.NewContext(startupCtx); err != nil {
+			return nil, errors.Join(err, a.CloseAndWait())
+		}
+	}
+	if freshMemoryAssignment {
+		if err := memory.SaveWorkerAssignment(runtimePaths.StateDir, threadState.ID, *opts.memoryAssignment); err != nil {
+			return nil, errors.Join(err, a.CloseAndWait())
+		}
 	}
 	if err := a.RestoreAndActivate(startupCtx); err != nil {
 		return nil, err

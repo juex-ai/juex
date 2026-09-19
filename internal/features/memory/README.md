@@ -113,6 +113,10 @@ recall or extraction. Advanced adds bounded automatic work using the same data:
   not automatically recreated; manual maintenance can explicitly retry it.
   Only applied/no-change outcomes
   advance the covered history cursor. Thread completion alone proves nothing.
+- A running Supervisor reuses its idle managed Memory Worker when possible.
+  Each assignment starts a fresh Context Generation with new authorization and
+  execution budgets; history and cumulative usage remain on the same Thread.
+  Restarted Supervisors or unavailable Workers may require a new Thread.
 - Workers have only scoped Memory search/read/history/decision tools, including
   after restoration. They do not share Main's management or general tools.
 - Recall runs once per admitted-input preparation, including mid-Turn inputs,

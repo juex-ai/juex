@@ -94,7 +94,7 @@ func newWorkerThreadManager(parent *Agent, prepare func(string) (PreparedChild, 
 }
 
 func (m *WorkerManager) Create(ctx context.Context, query, alias, model string, subscribe bool) (WorkerThreadStatus, error) {
-	return m.create(ctx, query, alias, subscribe, func() (PreparedChild, error) { return m.prepare(model) })
+	return m.create(ctx, "", query, alias, subscribe, func() (PreparedChild, error) { return m.prepare(model) })
 }
 
 // CreatePrepared lets trusted composition supply a scoped child while retaining
@@ -103,10 +103,22 @@ func (m *WorkerManager) CreatePrepared(ctx context.Context, query, alias string,
 	if prepared.Open == nil {
 		return WorkerThreadStatus{}, errors.New("worker child factory is required")
 	}
-	return m.create(ctx, query, alias, subscribe, func() (PreparedChild, error) { return prepared, nil })
+	return m.create(ctx, "", query, alias, subscribe, func() (PreparedChild, error) { return prepared, nil })
 }
 
-func (m *WorkerManager) create(ctx context.Context, query, alias string, subscribe bool, prepare func() (PreparedChild, error)) (WorkerThreadStatus, error) {
+// ReusePrepared replaces an idle managed Worker's runtime with a freshly
+// composed child, preserving its identity and durable history.
+func (m *WorkerManager) ReusePrepared(ctx context.Context, id, query string, prepared PreparedChild) (WorkerThreadStatus, error) {
+	if prepared.Open == nil {
+		return WorkerThreadStatus{}, errors.New("worker child factory is required")
+	}
+	if strings.TrimSpace(id) == "" {
+		return WorkerThreadStatus{}, ErrWorkerThreadNotReusable
+	}
+	return m.create(ctx, strings.TrimSpace(id), query, "", false, func() (PreparedChild, error) { return prepared, nil })
+}
+
+func (m *WorkerManager) create(ctx context.Context, reuseID, query, alias string, subscribe bool, prepare func() (PreparedChild, error)) (WorkerThreadStatus, error) {
 	createCtx, cancelCreate := workerThreadCreateContext(ctx, m.parent.ctx)
 	defer cancelCreate()
 	m.lifecycleMu.RLock()
@@ -129,19 +141,30 @@ func (m *WorkerManager) create(ctx context.Context, query, alias string, subscri
 		return WorkerThreadStatus{}, err
 	}
 	model := prepared.Model
-	identity, err := m.reserveWorkerThread(strings.TrimSpace(alias))
+	var identity ThreadIdentitySnapshot
+	if reuseID == "" {
+		identity, err = m.reserveWorkerThread(strings.TrimSpace(alias))
+	} else {
+		identity, err = m.reserveReusableWorkerThread(createCtx, reuseID)
+	}
 	if err != nil {
 		return WorkerThreadStatus{}, fmt.Errorf("create Worker Thread identity: %w", err)
 	}
 	finishReservation := func() {
 		m.finishWorkerThreadReservation(identity.ID)
 	}
+	rollbackIdentity := func() error {
+		if reuseID != "" {
+			return nil
+		}
+		return m.parent.ThreadStore.RollbackWorkerCreation(identity.ID)
+	}
 	rollback := func(child *Agent) error {
 		var closeErr error
 		if child != nil {
 			closeErr = child.CloseAndWait()
 		}
-		return errors.Join(closeErr, m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		return errors.Join(closeErr, rollbackIdentity())
 	}
 	type factoryResult struct {
 		child *Agent
@@ -149,7 +172,7 @@ func (m *WorkerManager) create(ctx context.Context, query, alias string, subscri
 	}
 	resultCh := make(chan factoryResult, 1)
 	go func() {
-		child, err := prepared.Open(ChildRequest{Context: createCtx, ThreadID: identity.ID, Alias: strings.TrimSpace(alias)})
+		child, err := prepared.Open(ChildRequest{Context: createCtx, ThreadID: identity.ID, Alias: identity.Alias})
 		resultCh <- factoryResult{child: child, err: err}
 	}()
 	var child *Agent
@@ -222,14 +245,14 @@ func (m *WorkerManager) create(ctx context.Context, query, alias string, subscri
 
 	if err := createCtx.Err(); err != nil {
 		m.removeIfCurrent(managed)
-		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		cleanupErr := errors.Join(stopManagedWorkerThread(managed), rollbackIdentity())
 		finishReservation()
 		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	result := child.admitUserTurn(createCtx, userTurnMessage(query, nil))
 	if result.Kind != TurnAdmissionStarted || result.Start == nil {
 		m.removeIfCurrent(managed)
-		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		cleanupErr := errors.Join(stopManagedWorkerThread(managed), rollbackIdentity())
 		finishReservation()
 		if result.Err != nil {
 			return WorkerThreadStatus{}, errors.Join(fmt.Errorf("start Worker Thread: %w", result.Err), cleanupErr)
@@ -238,18 +261,77 @@ func (m *WorkerManager) create(ctx context.Context, query, alias string, subscri
 	}
 	if err := createCtx.Err(); err != nil {
 		m.removeIfCurrent(managed)
-		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		cleanupErr := errors.Join(stopManagedWorkerThread(managed), rollbackIdentity())
 		finishReservation()
 		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	if err := m.startRun(createCtx, managed, result.Start); err != nil {
 		m.removeIfCurrent(managed)
-		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		cleanupErr := errors.Join(stopManagedWorkerThread(managed), rollbackIdentity())
 		finishReservation()
 		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	finishReservation()
 	return m.snapshot(managed), nil
+}
+
+func (m *WorkerManager) reserveReusableWorkerThread(ctx context.Context, id string) (ThreadIdentitySnapshot, error) {
+	// Readers must see either the old owner or a reservation for its replacement.
+	m.creationMu.Lock()
+	managed, unlock, err := m.lockActive(id)
+	if err != nil {
+		m.creationMu.Unlock()
+		return ThreadIdentitySnapshot{}, ErrWorkerThreadNotReusable
+	}
+	defer unlock()
+	m.mu.Lock()
+	status := m.snapshotLocked(managed)
+	blocked := (status.State != WorkerThreadStateIdle && status.State != WorkerThreadStateFailed) || status.PendingCount != 0 || status.Subscribed || managed.resultHandoffs != 0
+	m.mu.Unlock()
+	if blocked {
+		m.creationMu.Unlock()
+		return ThreadIdentitySnapshot{}, ErrWorkerThreadNotReusable
+	}
+	release, err := managed.app.ReserveIdleMaintenance()
+	if err != nil {
+		m.creationMu.Unlock()
+		if errors.Is(err, errTurnAdmissionBusy) || errors.Is(err, runtime.ErrActiveTurnExists) || errors.Is(err, runtime.ErrMaintenance) {
+			return ThreadIdentitySnapshot{}, errors.Join(ErrWorkerThreadNotReusable, err)
+		}
+		return ThreadIdentitySnapshot{}, err
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	identity, ok := managed.app.ThreadIdentity()
+	if !ok {
+		m.creationMu.Unlock()
+		return ThreadIdentitySnapshot{}, ErrWorkerThreadNotReusable
+	}
+	m.mu.Lock()
+	m.reservations[id] = &workerThreadReservation{ready: make(chan struct{})}
+	m.mu.Unlock()
+	removed := m.removeCurrent(managed)
+	m.creationMu.Unlock()
+	if !removed {
+		m.finishWorkerThreadReservation(id)
+		return ThreadIdentitySnapshot{}, ErrWorkerThreadNotReusable
+	}
+	if err := stopManagedWorkerThreadContext(ctx, managed, &m.deferred); err != nil {
+		// Cancellation must not expose the identity while old cleanup still owns it.
+		heldRelease := release
+		release = nil
+		m.deferCleanupError(func() error {
+			defer m.finishWorkerThreadReservation(id)
+			defer heldRelease()
+			managed.done.Wait()
+			return managed.app.CloseAndWait()
+		})
+		return ThreadIdentitySnapshot{}, err
+	}
+	return identity, nil
 }
 
 func (m *WorkerManager) reserveWorkerThread(alias string) (ThreadIdentitySnapshot, error) {

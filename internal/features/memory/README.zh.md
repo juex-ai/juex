@@ -92,6 +92,9 @@ Basic 支持显式搜索/提案及 Supervisor 审阅，不自动 recall 或提�
   请求、16K 上下文、每次请求 4096 输出 token。基础设施失败最多退避重试两次。
   耗尽重试或被拒绝的批次不会自动重建；手动维护可以显式重试。
   只有 applied/no_change 推进已覆盖历史游标，Thread 完成不能证明业务完成。
+- 运行中的 Supervisor 会尽量复用其管理的空闲 Memory Worker。每次任务使用新的
+  Context Generation、授权和执行预算，同一 Thread 保留历史和累计用量。
+  Supervisor 重启或原 Worker 不可用时，允许新建 Thread。
 - Worker 只有受限 Memory 搜索/读取/历史/决策工具，恢复后也保持此边界，不获得
   Main 的管理或通用工具。
 - recall 在每个已接纳输入的准备边界运行一次，包括 Turn 中途输入，先于 Provider

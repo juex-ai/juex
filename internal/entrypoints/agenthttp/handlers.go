@@ -622,6 +622,8 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			}
 		case <-subscription.done:
 			return
+		case <-active.workCtx.Done():
+			return
 		case <-r.Context().Done():
 			return
 		}
@@ -643,11 +645,13 @@ func (s *Server) handleThreadStatusEvents(w http.ResponseWriter, r *http.Request
 		writeThreadLookupError(w, id, err)
 		return
 	}
+	ctx, cancel := active.workContext(r.Context())
+	defer cancel()
 	stream := active.agent.Status.OpenStream(runtime.StatusStreamOptions{After: sseResumeCursor(r), Follow: true})
 	defer stream.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	for {
-		snapshot, ok := stream.Next(r.Context())
+		snapshot, ok := stream.Next(ctx)
 		if !ok || snapshot.Thread.ID != id || writeStatusSSE(w, statusapi.FromRuntime(snapshot)) != nil {
 			return
 		}
@@ -657,9 +661,12 @@ func (s *Server) handleThreadStatusEvents(w http.ResponseWriter, r *http.Request
 func (s *Server) statusSnapshotForThread(id string) (runtime.StatusSnapshot, error) {
 	if value, ok := s.threads.Load(id); ok {
 		active := value.(*activeThread)
-		if active.agent.Status != nil {
+		if (active.workCtx == nil || active.workCtx.Err() == nil) && active.agent.Status != nil {
 			return active.agent.Status.Snapshot(), nil
 		}
+	}
+	if managed := s.managedWorkerAgent(id); managed != nil && managed.Status != nil {
+		return managed.Status.Snapshot(), nil
 	}
 	store := thread.NewStore(s.opts.Cfg.RuntimePaths().StateDir)
 	target, err := store.OpenActive(id)
