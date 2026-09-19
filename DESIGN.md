@@ -52,6 +52,9 @@ The service owns these outcomes; the browser does not infer them from local stat
 
 ## Thread Explorer
 
+The heading shows cumulative Token Usage across the selected Agent's active
+and archived Threads, including Main, with the same disclosure as each row.
+
 Active and Archived are separate sections. A row should make identity and
 operability understandable without opening the Thread:
 

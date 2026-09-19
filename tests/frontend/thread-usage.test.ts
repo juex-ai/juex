@@ -3,9 +3,39 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  aggregateThreadUsage,
   buildThreadUsageView,
   formatThreadTokenCount,
 } from "../../frontend/src/lib/thread-usage.ts";
+
+test("aggregateThreadUsage combines totals and shared models without mutating source usage", () => {
+  const usages = [
+    { total: { input_tokens: 100, cached_input_tokens: 50, output_tokens: 10 }, by_model: { "p:a": { input_tokens: 100, cached_input_tokens: 50, output_tokens: 10 } } },
+    { total: { input_tokens: 40, output_tokens: 20 }, by_model: { "p:a": { input_tokens: 30, output_tokens: 10 }, "p:b": { input_tokens: 10, output_tokens: 10 } } },
+  ];
+  const before = structuredClone(usages);
+  const combined = aggregateThreadUsage(usages);
+  assert.deepEqual(combined, {
+    total: { input_tokens: 140, cached_input_tokens: 50, output_tokens: 30 },
+    by_model: {
+      "p:a": { input_tokens: 130, cached_input_tokens: 50, output_tokens: 20 },
+      "p:b": { input_tokens: 10, cached_input_tokens: 0, output_tokens: 10 },
+    },
+  });
+  assert.equal(buildThreadUsageView(combined).totalTokens, 170);
+  assert.deepEqual(usages, before);
+});
+
+test("aggregateThreadUsage handles empty and invalid counts before summing", () => {
+  assert.deepEqual(aggregateThreadUsage([]), {
+    total: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 }, by_model: {},
+  });
+  const combined = aggregateThreadUsage([
+    { total: { input_tokens: -1, cached_input_tokens: NaN, output_tokens: Infinity }, by_model: {} },
+    { total: { input_tokens: 10.9, cached_input_tokens: 4.9, output_tokens: 2.9 }, by_model: {} },
+  ]);
+  assert.deepEqual(combined.total, { input_tokens: 10, cached_input_tokens: 4, output_tokens: 2 });
+});
 
 function source(path: string): string {
   return readFileSync(new URL(path, import.meta.url), "utf8");
