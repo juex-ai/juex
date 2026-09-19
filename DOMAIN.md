@@ -110,6 +110,10 @@ continuation. Only done tasks are pruned on new and compact; unfinished tasks
 survive both. The model may check an input after fully recording its request in
 durable tasks; checking an input does not complete those tasks.
 
+When a task mutation leaves a nonempty list entirely done, that Thread clears
+its existing enabled Notes. Unfinished tasks and empty lists retain Notes;
+later explicit Notes writes can record new work.
+
 Tasks and Notes are disposable Module-owned current state that can cross
 Generation boundaries. Applying a configuration that disables or removes their
 owner retires recorded resources across active and archived Threads. Re-enabling

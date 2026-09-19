@@ -8,6 +8,17 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/events"
 )
 
+func (m *Module) Clear() error {
+	if m == nil || m.store == nil {
+		return nil
+	}
+	if err := m.store.Clear(); err != nil {
+		return err
+	}
+	m.clearNotesContextError()
+	return m.emit(events.Event{Type: "notes.updated", TurnID: m.activeTurnID(), Payload: NotesUpdatedPayload{}})
+}
+
 func (m *Module) NotesStore() *NotesStore {
 	if m == nil {
 		return nil

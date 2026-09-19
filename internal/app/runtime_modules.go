@@ -183,6 +183,11 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 		}
 		return engine.PendingInputStatus().TurnID
 	}
+	var notesOwner *notesmodule.Module
+	var clearCompletedNotes func() error
+	if cfg.ModuleEnabled(notesmodule.ModuleID) {
+		clearCompletedNotes = func() error { return notesOwner.Clear() }
+	}
 	builtinSpecs := []runtimemodule.ThreadFactorySpec{
 		{ID: memory.ModuleID, Enabled: cfg.ModuleEnabled(memory.ModuleID), New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
 			client, caller := memoryClient(cfg, threadState.ID, opts.memoryAssignment)
@@ -254,6 +259,7 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 					ContinuationDeferrer: opts.tasksContinuationDeferrer,
 					EventSink:            eventSink,
 					CurrentTurnID:        currentTurnID,
+					OnAllTasksDone:       clearCompletedNotes,
 				}), nil
 			},
 		},
@@ -267,10 +273,11 @@ func threadFactorySpecs(cfg config.Config, extra []runtimemodule.ThreadFactorySp
 				if notes == nil {
 					notes = notesStore(threadState)
 				}
-				return notesmodule.NewWithOptions(notes, notesmodule.Options{
+				notesOwner = notesmodule.NewWithOptions(notes, notesmodule.Options{
 					EventSink:     eventSink,
 					CurrentTurnID: currentTurnID,
-				}), nil
+				})
+				return notesOwner, nil
 			},
 		},
 	}

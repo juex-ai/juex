@@ -91,6 +91,9 @@ p0/p1/p2 优先级和各自的续跑次数。结束 Turn 时先选 doing，再�
 compact 都只清理 done，保留其余任务。模型把输入要求完整记录到持久化任务后，
 可以勾选输入；勾选输入并不代表任务完成。
 
+任务变更后，若非空列表中的任务全部为 done，该 Thread 会清除当前启用的 Notes。
+仍有未完成任务或空列表时保留 Notes；之后显式写入 Notes 可以记录新工作。
+
 Tasks 与 Notes 是由 Module 拥有、可以跨 Generation 的可丢弃当前工作状态。应用
 禁用或移除 owner 的配置时，会清理 active 与 archived Thread 中已登记的资源；
 重新启用从空状态开始，不从保留的历史恢复已退休状态。owner 仍启用时，正常退出
