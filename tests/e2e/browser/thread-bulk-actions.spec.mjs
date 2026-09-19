@@ -10,12 +10,16 @@ const item = (id, archived = false) => ({
   current_context_tokens: 10, token_usage: { total: { input_tokens: 10, output_tokens: 10 }, by_model: {} }, thread_revision: 1,
 });
 
-async function fixture(page, { stopped = false } = {}) {
+async function fixture(page, { stopped = false, parentChild = false } = {}) {
   const state = {
     active_threads: [item("0"), item("active-a"), item("active-b")],
     archived_threads: [item("old-a", true), item("old-b", true)],
-    calls: [], failures: new Set(), holdMutation: undefined, holdList: undefined, heldListStarted: false,
+    calls: [], paths: [], failures: new Set(), holdMutation: undefined, holdList: undefined, heldListStarted: false,
   };
+  if (parentChild) {
+    state.active_threads[2].parent_thread_id = "active-a";
+    state.archived_threads[1].parent_thread_id = "old-a";
+  }
   await page.addInitScript(() => {
     window.EventSource = class extends EventTarget { readyState = 1; close() { this.readyState = 2; } };
   });
@@ -37,8 +41,11 @@ async function fixture(page, { stopped = false } = {}) {
     if (match && ["DELETE", "POST"].includes(route.request().method())) {
       const id = match[1], action = match[2] ? "archive" : "delete";
       state.calls.push({ id, action });
+      state.paths.push(path);
       if (state.holdMutation) await state.holdMutation;
       if (state.failures.has(id)) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { message: "Thread is busy" } }) });
+      const children = action === "archive" ? state.active_threads : [...state.active_threads, ...state.archived_threads];
+      if (children.some((thread) => thread.parent_thread_id === id)) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { message: "Child still references this Thread" } }) });
       if (action === "archive") {
         const index = state.active_threads.findIndex((thread) => thread.thread_id === id);
         state.archived_threads.push({ ...state.active_threads.splice(index, 1)[0], retention_state: "archived" });
@@ -97,6 +104,33 @@ test("partial archive retains only failed selection and its error across refresh
   await expect(active.getByRole("link")).toHaveCount(1);
   await expect(page.getByRole("alert")).toHaveCount(0);
   expect(state.calls.map((call) => call.id)).toEqual(["active-a", "active-b", "active-b"]);
+});
+
+for (const action of ["archive", "delete"]) {
+  test(`batch ${action} completes selected children before their parents`, async ({ page }) => {
+    const state = await fixture(page, { parentChild: true });
+    const section = page.getByRole("region", { name: action === "archive" ? "Active threads" : "Archived threads", exact: true });
+    await section.getByRole("checkbox", { name: action === "archive" ? "Select all active Worker Threads" : "Select all archived Worker Threads" }).check();
+    if (action === "delete") page.once("dialog", (dialog) => dialog.accept());
+    await section.getByRole("button", { name: action === "archive" ? "Archive selected" : "Delete selected", exact: true }).click();
+    await expect(section.getByRole("link")).toHaveCount(action === "archive" ? 1 : 0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    expect(state.calls.map((call) => call.id)).toEqual(action === "archive" ? ["active-b", "active-a"] : ["old-b", "old-a"]);
+  });
+}
+
+test("later ancestry groups keep their original Agent when navigation changes during a batch", async ({ page }) => {
+  const state = await fixture(page, { parentChild: true });
+  let release;
+  state.holdMutation = new Promise((resolve) => { release = resolve; });
+  await page.getByRole("checkbox", { name: "Select all active Worker Threads" }).check();
+  await page.getByRole("button", { name: "Archive selected", exact: true }).click();
+  await expect.poll(() => state.calls.length).toBe(1);
+  await page.getByRole("link", { name: /^Open agent-b,/ }).click();
+  await expect(page).toHaveURL(/\/agents\/agent-b\/threads$/);
+  release();
+  await expect.poll(() => state.calls.length).toBe(2);
+  expect(state.paths.every((path) => path.startsWith("/agents/agent-a/"))).toBe(true);
 });
 
 test("batch delete names selected Threads, supports cancel and preserves partial failures for retry", async ({ page }) => {

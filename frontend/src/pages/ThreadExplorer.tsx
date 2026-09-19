@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
-import { threadHref, threadListTitle } from "@/lib/thread-list";
+import { threadBatchGroups, threadHref, threadListTitle } from "@/lib/thread-list";
 import { aggregateThreadUsage } from "@/lib/thread-usage";
 import { cn } from "@/lib/utils";
 import type { ThreadListItem } from "@/types";
@@ -171,7 +171,8 @@ function AgentThreadExplorer() {
   }
 
   async function mutateSelected(action: BatchAction) {
-    if (!mutationsEnabled || mutationBusy) return;
+    if (!mutationsEnabled || mutationBusy || !agent?.id) return;
+    const targetAgentID = agent.id;
     const section = action === "archive" ? "active" : "archived";
     const targets = (section === "active" ? active : archived).filter((thread) => thread.thread_id !== "0" && selection[section].has(thread.thread_id));
     if (targets.length === 0) return;
@@ -180,10 +181,21 @@ function AgentThreadExplorer() {
     setError(null);
     setBatchFailures([]);
     try {
-      const results = await Promise.allSettled(targets.map((thread) => action === "archive" ? archiveThread(thread.thread_id) : deleteThread(thread.thread_id)));
-      const succeeded = new Set(targets.filter((_, index) => results[index].status === "fulfilled").map((thread) => thread.thread_id));
+      const results = new Map<string, PromiseSettledResult<void>>();
+      // Store lifecycle rules require selected descendants to settle before their ancestors.
+      for (const group of threadBatchGroups(targets, byID)) {
+        const settled = await Promise.allSettled(group.map(async (thread) => {
+          if (action === "archive") await archiveThread(thread.thread_id, targetAgentID);
+          else await deleteThread(thread.thread_id, targetAgentID);
+        }));
+        settled.forEach((result, index) => results.set(group[index].thread_id, result));
+      }
+      const succeeded = new Set(targets.filter((thread) => results.get(thread.thread_id)?.status === "fulfilled").map((thread) => thread.thread_id));
       setSelection((previous) => ({ ...previous, [section]: new Set([...previous[section]].filter((id) => !succeeded.has(id))) }));
-      setBatchFailures(results.flatMap((result, index) => result.status === "rejected" ? [`${threadListTitle(targets[index])}: ${result.reason instanceof Error ? result.reason.message : `Failed to ${action} Thread.`}`] : []));
+      setBatchFailures(targets.flatMap((thread) => {
+        const result = results.get(thread.thread_id);
+        return result?.status === "rejected" ? [`${threadListTitle(thread)}: ${result.reason instanceof Error ? result.reason.message : `Failed to ${action} Thread.`}`] : [];
+      }));
       await refreshThreads({ quiet: true });
       window.dispatchEvent(new Event("juex:threads-changed"));
     } finally {

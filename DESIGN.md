@@ -78,7 +78,8 @@ permanently deleted after explicit confirmation.
 
 Each section supports Worker selection and select-all, with Main's checkbox
 disabled. Active selection can be archived; archived selection can be deleted
-after a confirmation naming the Threads. Partial failures retain the failed
+after a confirmation naming the Threads. Selected descendants finish before
+their ancestors. Partial failures retain the failed
 selection and explain each error, while completed items leave the selection.
 
 List data comes from the Agent index. Rendering the list must not open Thread

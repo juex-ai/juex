@@ -173,9 +173,10 @@ export async function getThread(
   return result;
 }
 
-export async function archiveThread(id: string): Promise<void> {
+export async function archiveThread(id: string, agentID?: string): Promise<void> {
+  const path = `/api/threads/${encodeURIComponent(id)}/archive`;
   await jsonOrThrow(
-    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}/archive`), {
+    await fetch(agentID ? agentPagePath(agentID, path) : agentAPIPath(path), {
       method: "POST",
     }),
   );
@@ -190,9 +191,10 @@ export async function unarchiveThread(id: string): Promise<ThreadInfo> {
   return normalizeThreadInfo(raw);
 }
 
-export async function deleteThread(id: string): Promise<DeleteThreadResponse> {
+export async function deleteThread(id: string, agentID?: string): Promise<DeleteThreadResponse> {
+  const path = `/api/threads/${encodeURIComponent(id)}`;
   return jsonOrThrow(
-    await fetch(agentAPIPath(`/api/threads/${encodeURIComponent(id)}`), {
+    await fetch(agentID ? agentPagePath(agentID, path) : agentAPIPath(path), {
       method: "DELETE",
     }),
   );
