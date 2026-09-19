@@ -150,6 +150,20 @@ test("getThread encodes optional transcript pagination params", async () => {
   ]);
 });
 
+test("getThread carries the durable timeline Turn identity into messages", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    thread_id: "0", items: [{ type: "message", seq: 2, at: "2026-09-19T00:00:00Z", turn_id: "old-turn",
+      message: { id: "assistant", role: "assistant", blocks: [{ type: "text", text: "done" }] } }],
+  }), { headers: { "Content-Type": "application/json" } })) as typeof fetch;
+  try {
+    const result = await getThread("0");
+    assert.equal(result.messages[0].turn_id, "old-turn");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("getThread treats a null empty timeline as no messages", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () =>

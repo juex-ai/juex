@@ -212,6 +212,7 @@ type TimelineItem struct {
 	Type     string       `json:"type"`
 	Seq      uint64       `json:"seq"`
 	At       Timestamp    `json:"at"`
+	TurnID   string       `json:"turn_id,omitempty"`
 	Message  *llm.Message `json:"message,omitempty"`
 	Activity *Activity    `json:"activity,omitempty"`
 }

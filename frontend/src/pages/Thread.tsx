@@ -181,13 +181,15 @@ export function Thread() {
     [messages, runtimeStatus],
   );
   const runtimeTurnState = runtimeStatus?.turn?.state;
+  const runtimeTurnID = runtimeStatus?.turn?.id;
   const transcriptItems = useMemo(
     () =>
       assistantWorkItems(groups, {
         tailActive:
           runtimeTurnState === "admitted" || runtimeTurnState === "active",
+        activeTurnID: runtimeTurnID,
       }),
-    [groups, runtimeTurnState],
+    [groups, runtimeTurnState, runtimeTurnID],
   );
   const modelLabels = useMemo(
     () => transcriptItemModelLabels(transcriptItems),

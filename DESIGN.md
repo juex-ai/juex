@@ -115,6 +115,9 @@ Assistant prose is ordinary conversation content. Operational work uses
 compact progressive-disclosure rows:
 
 - reasoning collapses after completion;
+- consecutive reasoning and Tool calls form a work disclosure even without
+  initial reasoning; visible content or a Turn boundary completes that group,
+  and visible content remains outside the disclosure;
 - Tool request, streaming output, and terminal outcome join by identity;
 - durable terminal content replaces provisional streaming content;
 - system/policy activity is distinct from Provider dialogue;

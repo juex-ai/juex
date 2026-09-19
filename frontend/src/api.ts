@@ -265,6 +265,7 @@ interface RawThreadTimelineItem {
   type: "message" | "activity";
   seq: number;
   at: string;
+  turn_id?: string;
   message?: Message;
   activity?: RawThreadActivity;
 }
@@ -309,7 +310,7 @@ function normalizeThreadShow(raw: RawThreadShowResponse): ThreadShowResponse {
 
 function timelineMessage(item: RawThreadTimelineItem): Message[] {
   if (item.type === "message" && item.message) {
-    return [{ ...item.message, created_at: item.message.created_at ?? item.at }];
+    return [{ ...item.message, turn_id: item.turn_id, created_at: item.message.created_at ?? item.at }];
   }
   const activity = item.activity;
   if (!activity) return [];

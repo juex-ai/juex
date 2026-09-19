@@ -44,11 +44,12 @@ export type TranscriptItem = MessageTranscriptItem | AssistantWorkItem;
 type WorkBuffer = {
   groups: MessageGroup[];
   effectiveModel?: string;
+  turnID?: string;
 };
 
 export function assistantWorkItems(
   groups: readonly MessageGroup[],
-  { tailActive }: { tailActive: boolean },
+  { tailActive, activeTurnID }: { tailActive: boolean; activeTurnID?: string },
 ): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   let buffer: WorkBuffer | undefined;
@@ -65,6 +66,7 @@ export function assistantWorkItems(
           buffer = {
             groups: [group],
             effectiveModel,
+            turnID: group.turnID,
           };
         }
       } else {
@@ -76,11 +78,14 @@ export function assistantWorkItems(
 
     const candidateModel = normalizedModel(group.model);
     if (
-      buffer.effectiveModel &&
-      candidateModel &&
-      candidateModel !== buffer.effectiveModel
+      (buffer.effectiveModel &&
+        candidateModel &&
+        candidateModel !== buffer.effectiveModel) ||
+      (buffer.turnID && group.turnID && buffer.turnID !== group.turnID)
     ) {
-      flushOriginal(items, buffer.groups);
+      items.push(
+        buildWorkItem(buffer.groups, buffer.effectiveModel, "completed"),
+      );
       buffer = undefined;
       continue;
     }
@@ -97,28 +102,28 @@ export function assistantWorkItems(
     if (canContinueWork(group)) {
       buffer.groups.push(group);
       buffer.effectiveModel = effectiveModel;
+      buffer.turnID ??= group.turnID;
       index++;
       continue;
     }
 
-    if (isUserWorkBoundary(group)) {
-      items.push(buildWorkItem(buffer.groups, effectiveModel, "completed"));
-      buffer = undefined;
-      continue;
-    }
-
-    flushOriginal(items, buffer.groups);
+    items.push(
+      buildWorkItem(buffer.groups, buffer.effectiveModel, "completed"),
+    );
     buffer = undefined;
   }
 
   if (buffer) {
-    if (tailActive) {
-      items.push(
-        buildWorkItem(buffer.groups, buffer.effectiveModel, "running"),
-      );
-    } else {
-      flushOriginal(items, buffer.groups);
-    }
+    const running =
+      tailActive &&
+      (!activeTurnID || activeTurnID === buffer.turnID);
+    items.push(
+      buildWorkItem(
+        buffer.groups,
+        buffer.effectiveModel,
+        running ? "running" : "completed",
+      ),
+    );
   }
 
   return items;
@@ -184,19 +189,8 @@ function messageItem(group: MessageGroup): MessageTranscriptItem {
   return { kind: "message", key: group.key, group };
 }
 
-function flushOriginal(
-  items: TranscriptItem[],
-  groups: readonly MessageGroup[],
-) {
-  items.push(...groups.map(messageItem));
-}
-
 function canStartWork(group: MessageGroup): boolean {
-  return (
-    isNormalAssistant(group) &&
-    hasReasoning(group) &&
-    toolCount(group) > 0
-  );
+  return isNormalAssistant(group) && toolCount(group) > 0;
 }
 
 function canContinueWork(group: MessageGroup): boolean {
@@ -217,10 +211,6 @@ function canCompleteWork(group: MessageGroup): boolean {
   return isNormalAssistant(group) && hasVisibleContent(group);
 }
 
-function isUserWorkBoundary(group: MessageGroup): boolean {
-  return group.role === "user";
-}
-
 function isNormalAssistant(group: MessageGroup): boolean {
   return group.role === "assistant" && !group.kind;
 }
@@ -229,10 +219,6 @@ function hasNonEmptyText(group: MessageGroup): boolean {
   return group.units.some(
     (unit) => unit.kind === "text" && Boolean(unit.block.text.trim()),
   );
-}
-
-function hasReasoning(group: MessageGroup): boolean {
-  return group.units.some((unit) => unit.kind === "reasoning");
 }
 
 function hasMedia(group: MessageGroup): boolean {

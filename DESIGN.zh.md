@@ -95,6 +95,7 @@ Turn identity 都来自持久记录。
 Assistant 正文按普通对话展示；运行过程使用紧凑的 progressive-disclosure row：
 
 - reasoning 完成后默认折叠；
+- 连续 reasoning 和 Tool 调用归入工作折叠块，即使开头没有 reasoning 也适用；可见内容或 Turn 边界结束该分组，可见内容保持在折叠块之外；
 - Tool request、streaming output 与 terminal outcome 按 identity 合并；
 - durable terminal content 替换 provisional streaming content；
 - system/policy activity 与 Provider 对话明确区分；

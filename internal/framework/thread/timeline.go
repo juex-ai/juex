@@ -157,7 +157,7 @@ func timelineItems(commit Commit) []TimelineItem {
 		switch fact.Type {
 		case FactMessageAppended:
 			message := *fact.Message
-			items = append(items, TimelineItem{Type: "message", Seq: commit.Seq, At: commit.At, Message: &message})
+			items = append(items, TimelineItem{Type: "message", Seq: commit.Seq, At: commit.At, TurnID: fact.TurnID, Message: &message})
 		case FactContextRenewed, FactContextCompacted:
 			activity := Activity{
 				Type: fact.Type, At: commit.At, FromGenerationID: fact.FromGenerationID,
