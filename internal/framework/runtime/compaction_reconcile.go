@@ -11,6 +11,12 @@ import (
 	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 )
 
+type compactionSummaryBudgetError struct{ Tokens, Limit int }
+
+func (e *compactionSummaryBudgetError) Error() string {
+	return fmt.Sprintf("protected compaction summary exceeds budget: %d tokens, limit %d", e.Tokens, e.Limit)
+}
+
 func reconcileCompactionSummary(ctx context.Context, summary string, state compactionSummaryState, maxTokens int) (string, error) {
 	if err := cancellation.ContextError(ctx); err != nil {
 		return "", err
@@ -82,7 +88,7 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 		return "", fmt.Errorf("compaction summary is empty or invalid UTF-8")
 	}
 	if maxTokens <= 0 || contextbudget.EstimateTextTokens(summary) > maxTokens {
-		return "", fmt.Errorf("protected compaction summary exceeds budget: %d tokens, limit %d", contextbudget.EstimateTextTokens(summary), maxTokens)
+		return "", &compactionSummaryBudgetError{Tokens: contextbudget.EstimateTextTokens(summary), Limit: maxTokens}
 	}
 	return summary, cancellation.ContextError(ctx)
 }

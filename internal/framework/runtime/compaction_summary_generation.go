@@ -29,11 +29,10 @@ func isCompactionSummaryJournalError(err error) bool {
 }
 
 type compactionSummaryGeneration struct {
-	Response  llm.Response
-	Provider  llm.Provider
-	Summary   string
-	MaxTokens int
-	Epoch     provenance.RequestEpoch
+	Response llm.Response
+	Provider llm.Provider
+	Summary  string
+	Epoch    provenance.RequestEpoch
 }
 
 func (e *Engine) generateCompactionSummaryLocked(
@@ -77,6 +76,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 	var failures []modelAttemptFailure
 	useRetryBudget := false
 	candidatePolicy, contextWindow := e.compactionSummaryPolicyForCandidateLocked(candidate, defaultContextWindow)
+	candidatePolicy.SummaryMaxTokens = min(candidatePolicy.SummaryMaxTokens, policy.SummaryMaxTokens)
 	candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 	maxOutputTokens := candidatePolicy.SummaryMaxTokens
 	summarySystem, summaryHistory, err := buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
@@ -94,12 +94,20 @@ func (e *Engine) generateCompactionSummaryLocked(
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 	}
 	if err == nil {
-		if summary, ok := completeCompactionSummaryText(resp); ok {
+		summary, accepted, validationErr := validateCompactionSummary(ctx, resp, state, maxOutputTokens)
+		var budgetErr *compactionSummaryBudgetError
+		if validationErr != nil && !errors.As(validationErr, &budgetErr) {
+			health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
+			return compactionSummaryGeneration{}, validationErr
+		}
+		err = validationErr
+		if accepted {
 			health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
-			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch, MaxTokens: maxOutputTokens}, nil
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 		}
 
-		retryReason := compactionSummaryRetryReason(resp)
+		retryReason := compactionSummaryRetryReason(resp, err)
+		instructions = compactionSummaryRetryInstructions(instructions, resp, err, maxOutputTokens)
 		retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 		if emitErr := e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
 			Attempt:                 2,
@@ -131,9 +139,16 @@ func (e *Engine) generateCompactionSummaryLocked(
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 		}
 		if err == nil {
-			if summary, ok := completeCompactionSummaryText(resp); ok {
+			summary, accepted, validationErr := validateCompactionSummary(ctx, resp, state, maxOutputTokens)
+			var budgetErr *compactionSummaryBudgetError
+			if validationErr != nil && !errors.As(validationErr, &budgetErr) {
+				health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
+				return compactionSummaryGeneration{}, validationErr
+			}
+			err = validationErr
+			if accepted {
 				health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
-				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch, MaxTokens: maxOutputTokens}, nil
+				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 			}
 		}
 	}
@@ -178,6 +193,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 		nextCandidate := candidates[selection.Index]
 		attempted[fallbackRef] = struct{}{}
 		candidatePolicy, contextWindow = e.compactionSummaryPolicyForCandidateLocked(nextCandidate, defaultContextWindow)
+		candidatePolicy.SummaryMaxTokens = min(candidatePolicy.SummaryMaxTokens, policy.SummaryMaxTokens)
 		candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 		if useRetryBudget {
 			candidatePolicy.SummaryMaxTokens = e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
@@ -201,12 +217,20 @@ func (e *Engine) generateCompactionSummaryLocked(
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 		}
 		if err == nil {
-			if summary, ok := completeCompactionSummaryText(resp); ok {
+			summary, accepted, validationErr := validateCompactionSummary(ctx, resp, state, maxOutputTokens)
+			var budgetErr *compactionSummaryBudgetError
+			if validationErr != nil && !errors.As(validationErr, &budgetErr) {
+				health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
+				return compactionSummaryGeneration{}, validationErr
+			}
+			err = validationErr
+			if accepted {
 				health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
-				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch, MaxTokens: maxOutputTokens}, nil
+				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 			}
 			if !useRetryBudget {
-				retryReason := compactionSummaryRetryReason(resp)
+				retryReason := compactionSummaryRetryReason(resp, err)
+				instructions = compactionSummaryRetryInstructions(instructions, resp, err, maxOutputTokens)
 				retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 				if emitErr := e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
 					Attempt:                 2,
@@ -238,9 +262,16 @@ func (e *Engine) generateCompactionSummaryLocked(
 					return compactionSummaryGeneration{Response: resp, Provider: provider, Epoch: epoch}, err
 				}
 				if err == nil {
-					if summary, ok := completeCompactionSummaryText(resp); ok {
+					summary, accepted, validationErr := validateCompactionSummary(ctx, resp, state, maxOutputTokens)
+					var budgetErr *compactionSummaryBudgetError
+					if validationErr != nil && !errors.As(validationErr, &budgetErr) {
+						health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
+						return compactionSummaryGeneration{}, validationErr
+					}
+					err = validationErr
+					if accepted {
 						health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
-						return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch, MaxTokens: maxOutputTokens}, nil
+						return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 					}
 				}
 			}
@@ -479,7 +510,11 @@ func canonicalSummaryHeading(line string, headings []string) (string, bool) {
 	return "", false
 }
 
-func compactionSummaryRetryReason(resp llm.Response) string {
+func compactionSummaryRetryReason(resp llm.Response, err error) string {
+	var budgetErr *compactionSummaryBudgetError
+	if errors.As(err, &budgetErr) {
+		return "summary_budget"
+	}
 	if compactionSummaryText(resp) != "" && resp.StopReason == llm.StopMaxTokens {
 		return "max_tokens"
 	}
@@ -567,4 +602,18 @@ func (e *Engine) compactionSummaryMaxOutputTokens(
 		return maxOutputTokens
 	}
 	return desired
+}
+
+func validateCompactionSummary(ctx context.Context, resp llm.Response, state compactionSummaryState, maxTokens int) (string, bool, error) {
+	summary, complete := completeCompactionSummaryText(resp)
+	if !complete {
+		return summary, false, nil
+	}
+	summary, err := reconcileCompactionSummary(ctx, summary, state, maxTokens)
+	return summary, err == nil, err
+}
+
+func compactionSummaryRetryInstructions(instructions string, resp llm.Response, err error, maxTokens int) string {
+	feedback := compactionSummaryFailure(resp, err)
+	return mergeCompactInstructions(instructions, fmt.Sprintf("The previous summary was rejected: %s. Produce a shorter complete summary, aiming for at most %d tokens including all required sections. Keep authoritative module data exact; compress the surrounding prose. Do not discuss this retry.", feedback, max(1, maxTokens/2)))
 }

@@ -108,3 +108,16 @@ credential. See [Fleet](../../fleet/README.md) for role and application policy.
 the Supervisor role or defaults to `agent`. Participation follows presets and
 `enabled`; service strategy belongs to Home configuration. See
 [Memory](../../features/memory/README.md) for the shared-data contract.
+
+## Summary Output Limits
+
+For `openai/chat`, provider/model `compat.max_tokens_field` selects
+`max_completion_tokens` (default) or `max_tokens` (for endpoints such as Ollama).
+The adapter sends only the selected field when output limits are enabled.
+Other protocols retain their own output-limit parameters.
+
+A model's output cap counts provider tokens, while compaction also checks a
+local estimate after restoring authoritative module sections. The summary target
+reserves room in the complete next context, including tools and retained state.
+An oversized or truncated summary gets a bounded retry with a shorter target;
+state that cannot fit is reported without truncation or a Generation commit.

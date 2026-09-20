@@ -79,7 +79,11 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 		params.ReasoningEffort = shared.ReasoningEffort(effort)
 	}
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
-		params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))
+		if p.profile.Compat.MaxTokensField == "max_tokens" {
+			params.MaxTokens = openai.Int(int64(opts.MaxOutputTokens))
+		} else {
+			params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))
+		}
 	}
 	if opts.CachePolicy.StablePrefixKey != "" {
 		params.PromptCacheKey = openai.String(opts.CachePolicy.StablePrefixKey)

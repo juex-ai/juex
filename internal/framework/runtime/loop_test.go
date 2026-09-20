@@ -2195,8 +2195,8 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.ReserveTokens = 1930
-	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	eng.Compaction.ReserveTokens = 1500
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 800))); err != nil {
 		t.Fatal(err)
 	}
 	var compactErr string
@@ -2243,8 +2243,8 @@ func TestTurnMessage_SideThreadContinuesAfterAutoCompactionFailure(t *testing.T)
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.ReserveTokens = 1930
-	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+	eng.Compaction.ReserveTokens = 1500
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 800))); err != nil {
 		t.Fatal(err)
 	}
 	var compactErr string
@@ -3935,8 +3935,8 @@ func TestCompactCheckpointsEachSummaryAttemptAndLinksOutcomes(t *testing.T) {
 			}
 		}
 	}
-	if epochs[0].EpochID == epochs[1].EpochID || epochs[0].RequestDigest != epochs[1].RequestDigest {
-		t.Fatalf("retry epochs/digests = %+v, want distinct epochs for the same hard-capped request", epochs)
+	if epochs[0].EpochID == epochs[1].EpochID || epochs[0].RequestDigest == epochs[1].RequestDigest {
+		t.Fatal("retry must checkpoint a distinct epoch and request digest for its budget feedback")
 	}
 	if retry.EpochID != epochs[0].EpochID || retry.RequestDigest != epochs[0].RequestDigest {
 		t.Fatalf("retry link = %+v, first epoch = %+v", retry, epochs[0])
@@ -4132,8 +4132,8 @@ func TestCompactCapsSummaryRetryToBoundedRequest(t *testing.T) {
 		t.Fatalf("initial input + output = %d + %d, want positive hard-capped output and total <= summary request budget %d", initialInputTokens, initialBudget, policy.SummaryRequestTokens)
 	}
 	retryBudget := provider.options[1].MaxOutputTokens
-	if retryBudget != initialBudget {
-		t.Fatalf("retry budget = %d, want the same hard cap %d", retryBudget, initialBudget)
+	if retryBudget <= 0 || retryBudget > initialBudget {
+		t.Fatalf("retry budget = %d, want positive budget no larger than %d", retryBudget, initialBudget)
 	}
 	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
 	if retryInputTokens+retryBudget > policy.SummaryRequestTokens {
@@ -9167,8 +9167,8 @@ func TestAutoCompactionCountsPreparedInputBeforeGenerationCommit(t *testing.T) {
 				if eng.Thread.CurrentGenerationJournalPath() != before {
 					t.Fatal("oversized prepared input committed a Generation")
 				}
-				if provider.calls != 1 {
-					t.Fatalf("provider calls = %d, want summary only", provider.calls)
+				if provider.calls != 0 {
+					t.Fatalf("provider calls = %d, want none for an irreducible prepared input", provider.calls)
 				}
 				if got := eng.Thread.History[len(eng.Thread.History)-1].FirstText(); got != incoming {
 					t.Fatalf("accepted user input was not retained exactly: %q", got)

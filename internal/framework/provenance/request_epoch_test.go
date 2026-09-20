@@ -107,7 +107,7 @@ func TestSafeProviderFromProfileExcludesSecrets(t *testing.T) {
 		APIKey: secret, Model: "model", ThinkingEffort: "medium",
 		Headers: map[string]string{"Authorization": secret}, Query: map[string]string{"token": secret},
 		Capabilities: llm.ProviderCapabilities{Tools: true},
-		Compat:       llm.CompatOptions{ReasoningReplayFields: []string{"reasoning_content"}, CodexTransport: "sse"},
+		Compat:       llm.CompatOptions{ReasoningReplayFields: []string{"reasoning_content"}, CodexTransport: "sse", MaxTokensField: "max_tokens"},
 	}
 	descriptor := SafeProviderFromProfile(profile)
 	raw, err := json.Marshal(descriptor)
@@ -119,6 +119,9 @@ func TestSafeProviderFromProfileExcludesSecrets(t *testing.T) {
 	}
 	if descriptor.ID != "custom" || descriptor.Model != "model" || descriptor.Protocol != llm.ProtocolOpenAIChat {
 		t.Fatalf("safe provider = %+v", descriptor)
+	}
+	if descriptor.MaxTokensField != "max_tokens" {
+		t.Fatalf("output field missing: %+v", descriptor)
 	}
 	if descriptor.EndpointDigest == "" {
 		t.Fatal("safe provider endpoint digest is empty")

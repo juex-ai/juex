@@ -593,8 +593,8 @@ func TestTurnPreflightFailureNeutrallyReleasesHalfOpenCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := eng.Turn(context.Background(), "continue"); err == nil || !strings.Contains(err.Error(), "primary:model") || !strings.Contains(err.Error(), "backup:model") {
-		t.Fatalf("Turn err = %v, want exhausted compaction candidates", err)
+	if _, err := eng.Turn(context.Background(), "continue"); err == nil || !strings.Contains(err.Error(), "compacted context exceeds budget before summary") {
+		t.Fatalf("Turn err = %v, want irreducible preflight context", err)
 	}
 	retry, ok := health.Acquire(backupOnly, nil)
 	if !ok || retry.Ticket.Ref != "backup:model" || !retry.Ticket.Probe {

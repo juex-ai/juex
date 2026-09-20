@@ -184,6 +184,7 @@ type providerCapabilitiesConfig struct {
 type providerCompatConfig struct {
 	ReasoningReplayFields []string `yaml:"reasoning_replay_fields"`
 	CodexTransport        string   `yaml:"codex_transport"`
+	MaxTokensField        string   `yaml:"max_tokens_field"`
 }
 
 type CompactionConfig = runtimepolicy.CompactionPolicy
@@ -1282,12 +1283,22 @@ func applyProvidersConfig(cfg *Config, providers []providerConfig) error {
 				return fmt.Errorf("provider %q model %q: %w", id, modelID, err)
 			}
 			model.Compat.CodexTransport = codexTransport
+			field, err := providerprofile.NormalizeMaxTokensField(model.Compat.MaxTokensField)
+			if err != nil {
+				return fmt.Errorf("provider %q model %q: %w", id, modelID, err)
+			}
+			model.Compat.MaxTokensField = field
 		}
 		codexTransport, err := providerprofile.NormalizeCodexTransport(p.Compat.CodexTransport)
 		if err != nil {
 			return fmt.Errorf("provider %q: %w", id, err)
 		}
 		p.Compat.CodexTransport = codexTransport
+		field, err := providerprofile.NormalizeMaxTokensField(p.Compat.MaxTokensField)
+		if err != nil {
+			return fmt.Errorf("provider %q: %w", id, err)
+		}
+		p.Compat.MaxTokensField = field
 		existing := cfg.providerConfigs[id]
 		cfg.providerConfigs[id] = mergeProviderConfig(existing, p)
 	}
@@ -1312,6 +1323,9 @@ func mergeProviderConfig(base, override providerConfig) providerConfig {
 	base.Capabilities = mergeProviderCapabilitiesConfig(base.Capabilities, override.Capabilities)
 	if len(override.Compat.ReasoningReplayFields) > 0 {
 		base.Compat.ReasoningReplayFields = append([]string(nil), override.Compat.ReasoningReplayFields...)
+	}
+	if override.Compat.MaxTokensField != "" {
+		base.Compat.MaxTokensField = override.Compat.MaxTokensField
 	}
 	if override.Compat.CodexTransport != "" {
 		base.Compat.CodexTransport = override.Compat.CodexTransport
@@ -1362,6 +1376,9 @@ func mergeProviderModelConfig(base, override providerModelConfig) providerModelC
 	base.Capabilities = mergeProviderCapabilitiesConfig(base.Capabilities, override.Capabilities)
 	if len(override.Compat.ReasoningReplayFields) > 0 {
 		base.Compat.ReasoningReplayFields = append([]string(nil), override.Compat.ReasoningReplayFields...)
+	}
+	if override.Compat.MaxTokensField != "" {
+		base.Compat.MaxTokensField = override.Compat.MaxTokensField
 	}
 	if override.Compat.CodexTransport != "" {
 		base.Compat.CodexTransport = override.Compat.CodexTransport
@@ -1457,6 +1474,9 @@ func resolveSelectedProviderRef(cfg *Config, ref ModelRef) error {
 	if len(p.Compat.ReasoningReplayFields) > 0 {
 		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), p.Compat.ReasoningReplayFields...)
 	}
+	if p.Compat.MaxTokensField != "" {
+		cfg.ProviderCompat.MaxTokensField = p.Compat.MaxTokensField
+	}
 	if p.Compat.CodexTransport != "" {
 		cfg.ProviderCompat.CodexTransport = p.Compat.CodexTransport
 	}
@@ -1471,6 +1491,9 @@ func resolveSelectedProviderRef(cfg *Config, ref ModelRef) error {
 	applyProviderCapabilitiesConfig(&cfg.ProviderCapabilities, model.Capabilities)
 	if len(model.Compat.ReasoningReplayFields) > 0 {
 		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), model.Compat.ReasoningReplayFields...)
+	}
+	if model.Compat.MaxTokensField != "" {
+		cfg.ProviderCompat.MaxTokensField = model.Compat.MaxTokensField
 	}
 	if model.Compat.CodexTransport != "" {
 		cfg.ProviderCompat.CodexTransport = model.Compat.CodexTransport

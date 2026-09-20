@@ -113,3 +113,21 @@ func TestResolveProfile_RejectsUnknownProtocol(t *testing.T) {
 		t.Fatal("expected unknown protocol error")
 	}
 }
+
+func TestResolveMaxTokensField(t *testing.T) {
+	for _, tc := range []struct {
+		protocol, field string
+		valid           bool
+	}{
+		{"openai/chat", "max_tokens", true},
+		{"openai/chat", "max_completion_tokens", true},
+		{"openai/chat", "invalid", false},
+		{"openai/responses", "max_tokens", false},
+		{"anthropic/messages", "max_tokens", false},
+	} {
+		_, err := ResolveProfile(Config{Protocol: tc.protocol, Compat: llm.CompatOptions{MaxTokensField: tc.field}})
+		if (err == nil) != tc.valid {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+	}
+}
