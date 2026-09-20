@@ -2881,3 +2881,52 @@ func fakeCodexIDToken(t *testing.T, claims map[string]any) string {
 	}
 	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }
+
+func TestLoadFromFile_MaxTokensField(t *testing.T) {
+	for _, tc := range []struct{ provider, model, want string }{
+		{provider: "max_tokens", want: "max_tokens"},
+		{provider: "max_tokens", model: "max_completion_tokens", want: "max_completion_tokens"},
+		{model: "max_tokens", want: "max_tokens"},
+	} {
+		t.Run(tc.provider+"/"+tc.model, func(t *testing.T) {
+			prepareConfigTest(t)
+			path := filepath.Join(t.TempDir(), "juex.yaml")
+			writeTextFile(t, path, fmt.Sprintf(`models: [local:fixture]
+providers:
+  - id: local
+    protocol: openai/chat
+    compat:
+      max_tokens_field: %q
+    models:
+      - id: fixture
+        compat:
+          max_tokens_field: %q
+`, tc.provider, tc.model))
+			cfg, err := LoadFromFile(testModuleInventory(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile, err := cfg.ProviderProfile()
+			if err != nil || profile.Compat.MaxTokensField != tc.want {
+				t.Fatalf("profile=%+v err=%v", profile, err)
+			}
+		})
+	}
+	for _, level := range []string{"provider", "model"} {
+		t.Run("invalid/"+level, func(t *testing.T) {
+			prepareConfigTest(t)
+			body := "models: [local:fixture]\nproviders:\n  - id: local\n    protocol: openai/chat\n"
+			if level == "provider" {
+				body += "    compat:\n      max_tokens_field: typo\n    models:\n      - id: fixture\n"
+			} else {
+				body += "    models:\n      - id: fixture\n        compat:\n          max_tokens_field: typo\n"
+			}
+			path := filepath.Join(t.TempDir(), "juex.yaml")
+			writeTextFile(t, path, body)
+			_, err := LoadFromFile(testModuleInventory(), path)
+			if err == nil || !strings.Contains(err.Error(), "unsupported max_tokens_field") {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}

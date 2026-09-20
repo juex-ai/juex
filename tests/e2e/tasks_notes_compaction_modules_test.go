@@ -390,7 +390,7 @@ func TestTasksNotesAutoCompactionRejectsOversizedPreparedInput(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "compacted context exceeds budget") {
 		t.Fatalf("oversized input did not fail precommit check: %v", err)
 	}
-	if a.Thread.CurrentGenerationJournalPath() != generation || len(provider.history) != 0 || len(summary.history) == 0 {
+	if a.Thread.CurrentGenerationJournalPath() != generation || len(provider.history) != 0 || len(summary.history) != 0 {
 		t.Fatal("oversized input committed or reached the ordinary provider")
 	}
 	for path, before := range map[string][]byte{goals.Path: beforeTasks, notes.Path: beforeNotes} {

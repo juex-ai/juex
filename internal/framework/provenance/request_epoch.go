@@ -37,6 +37,7 @@ type SafeProvider struct {
 	Capabilities          llm.ProviderCapabilities `json:"capabilities"`
 	ReasoningReplayFields []string                 `json:"reasoning_replay_fields,omitempty"`
 	CodexTransport        string                   `json:"codex_transport,omitempty"`
+	MaxTokensField        string                   `json:"max_tokens_field,omitempty"`
 }
 
 func SafeProviderFromProfile(profile llm.ProviderProfile) SafeProvider {
@@ -51,6 +52,7 @@ func SafeProviderFromProfile(profile llm.ProviderProfile) SafeProvider {
 		Capabilities:          profile.Capabilities,
 		ReasoningReplayFields: append([]string(nil), profile.Compat.ReasoningReplayFields...),
 		CodexTransport:        profile.Compat.CodexTransport,
+		MaxTokensField:        profile.Compat.MaxTokensField,
 	}
 }
 

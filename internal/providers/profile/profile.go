@@ -34,6 +34,16 @@ func ResolveProfile(cfg Config) (llm.ProviderProfile, error) {
 		}
 		profile.Compat.CodexTransport = transport
 	}
+	if cfg.Compat.MaxTokensField != "" {
+		field, err := NormalizeMaxTokensField(cfg.Compat.MaxTokensField)
+		if err != nil {
+			return llm.ProviderProfile{}, err
+		}
+		if profile.Protocol != llm.ProtocolOpenAIChat {
+			return llm.ProviderProfile{}, fmt.Errorf("llm: max_tokens_field requires openai/chat")
+		}
+		profile.Compat.MaxTokensField = field
+	}
 	if len(profile.Compat.ReasoningReplayFields) == 0 && profile.Capabilities.ReasoningReplay {
 		profile.Compat.ReasoningReplayFields = []string{"reasoning_content", "reasoning", "thinking"}
 	}
@@ -292,4 +302,13 @@ func cloneStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func NormalizeMaxTokensField(raw string) (string, error) {
+	switch strings.TrimSpace(raw) {
+	case "", "max_tokens", "max_completion_tokens":
+		return strings.TrimSpace(raw), nil
+	default:
+		return "", fmt.Errorf("llm: unsupported max_tokens_field %q", raw)
+	}
 }

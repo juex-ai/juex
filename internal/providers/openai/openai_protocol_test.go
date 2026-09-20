@@ -2656,3 +2656,49 @@ func newTestProvider(cfg providerprofile.Config) (llm.Provider, error) {
 		return nil, fmt.Errorf("unexpected test protocol %s", resolved.Protocol)
 	}
 }
+
+func TestOpenAI_MaxTokensField(t *testing.T) {
+	for _, field := range []string{"", "max_tokens", "max_completion_tokens"} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", field, streaming), func(t *testing.T) {
+				var body map[string]any
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body = nil
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if streaming {
+						w.Header().Set("Content-Type", "text/event-stream")
+						fmt.Fprint(w, "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, `{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+					}
+				}))
+				defer server.Close()
+				profile, err := providerprofile.ResolveProfile(providerprofile.Config{Protocol: "openai/chat", BaseURL: server.URL, Model: "fixture", Compat: llm.CompatOptions{MaxTokensField: field}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				profile.Capabilities.Streaming = streaming
+				for _, enabled := range []bool{true, false} {
+					profile.Capabilities.MaxOutputTokens = enabled
+					_, err := llm.CompleteWithOptions(t.Context(), NewOpenAI(profile, nil), "", []llm.Message{llm.TextMessage(llm.RoleUser, "hello")}, nil, llm.CompleteOptions{MaxOutputTokens: 8})
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := field
+					if want == "" {
+						want = "max_completion_tokens"
+					}
+					for _, key := range []string{"max_tokens", "max_completion_tokens"} {
+						value, present := body[key]
+						if present != (enabled && key == want) || (present && value != float64(8)) {
+							t.Fatalf("enabled=%t body=%v", enabled, body)
+						}
+					}
+				}
+			})
+		}
+	}
+}

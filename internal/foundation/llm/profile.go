@@ -30,6 +30,7 @@ type CapabilityOverrides struct {
 type CompatOptions struct {
 	ReasoningReplayFields []string
 	CodexTransport        string
+	MaxTokensField        string
 }
 
 type ProviderProfile struct {

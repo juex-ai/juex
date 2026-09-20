@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -199,5 +200,70 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 	}
 	if out, err := a.Run(ctx, "Continue from the summary."); err != nil || out != "continued" {
 		t.Fatalf("continuation = %q, %v", out, err)
+	}
+}
+
+func TestEndToEnd_ChatCompactionRetriesAfterProtectedStateExceedsBudget(t *testing.T) {
+	isolateModuleConfig(t)
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request["max_tokens"] != float64(1000) || request["max_completion_tokens"] != nil {
+			t.Errorf("wrong output cap: %v", request)
+		}
+		calls++
+		summary := "Tasks\nPlaceholder\nCritical Context\n" + strings.Repeat("x", 3600) + "\nNext Steps\nVerify"
+		if calls > 1 {
+			summary = "Tasks\nPlaceholder\nCritical Context\nKeep CMP-1003\nNext Steps\nVerify"
+			if !strings.Contains(fmt.Sprint(request["messages"]), "previous summary was rejected") {
+				t.Error("missing retry feedback")
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "summary", "choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": summary}, "finish_reason": "stop"}}, "usage": map[string]int{"prompt_tokens": 500, "completion_tokens": 950}})
+	}))
+	defer server.Close()
+	streaming := false
+	provider, err := providers.New(providerprofile.Config{ID: "fixture", Protocol: "openai/chat", BaseURL: server.URL, APIKey: "fixture", Model: "fixture", Capabilities: llm.CapabilityOverrides{Streaming: &streaming}, Compat: llm.CompatOptions{MaxTokensField: "max_tokens"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 16000, Modules: config.ModulePolicy{tasksmodule.ModuleID: {Enabled: true}}, Compaction: config.DefaultCompactionConfig()}
+	cfg.Compaction.KeepRecentTokens = 1
+	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: provider, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	tasks, _ := modulestate.Stores(a.Engine.ThreadRuntimeSnapshot().Modules)
+	acceptance := strings.TrimSpace(strings.Repeat("exact acceptance ", 30))
+	if _, err := tasks.Create(tasksmodule.Create{Title: "CMP-1003", Description: "Keep exact state", Acceptance: acceptance}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(tasks.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []llm.Message{llm.TextMessage(llm.RoleUser, "Keep CMP-1003"), llm.TextMessage(llm.RoleAssistant, strings.Repeat("earlier ", 100))} {
+		if err := a.Thread.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d want 2", calls)
+	}
+	summary := a.Thread.History[0].FirstText()
+	if !strings.Contains(summary, acceptance) || !strings.Contains(summary, "CMP-1003") {
+		t.Fatalf("lost protected state: %s", summary)
+	}
+	after, err := os.ReadFile(tasks.Path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("changed task authority: %v", err)
 	}
 }

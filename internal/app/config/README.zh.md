@@ -83,3 +83,14 @@ WebSocket 展开后的握手 Header 变化时会重新连接。
 `modules.memory.profile` 接受 `agent` 或 `supervisor`；省略时跟随 Supervisor
 角色，否则默认 `agent`。参与由 preset 与 `enabled` 控制，服务策略属于 Home
 配置。共享数据契约见 [Memory](../../features/memory/README.zh.md)。
+
+## 摘要输出限制
+
+对于 `openai/chat`，provider/model 的 `compat.max_tokens_field` 可选择
+`max_completion_tokens`（默认）或 `max_tokens`（适用于 Ollama 等服务）。
+启用输出限制时，适配器只发送所选字段。其他协议仍使用各自的输出限制参数。
+
+模型输出上限按服务端 token 计数，压缩还会在恢复模块权威内容后检查本地估算。
+摘要目标会为包含工具与保留状态的完整下一次上下文预留空间。超长或截断的摘要
+会在有限次数内按更短目标重试；无法容纳的状态会明确报错，不会被截断或提交新
+Generation。

@@ -198,60 +198,74 @@ func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.
 		return CompactionResult{}, fmt.Errorf("commit compaction start: %w", err)
 	}
 
-	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
-	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions, contextWindow, reservedModelRef)
-	if err != nil {
-		compactErr := newCompactionError(ctx, err)
-		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
-	}
-	generation.Summary, err = reconcileCompactionSummary(ctx, generation.Summary, summaryState, generation.MaxTokens)
-	if err != nil {
-		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
-	}
-	resp := generation.Response
-	summaryProvider := generation.Provider
-	summaryChars := len(generation.Summary)
-	summary := appendCompactionInputReferences(generation.Summary, retainedInputReferences)
-	if contextErr := cancellation.ContextError(ctx); contextErr != nil {
-		compactErr := newCompactionError(ctx, contextErr)
-		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
-	}
-
-	model := resp.Message.Model
-	if model == "" && summaryProvider != nil {
-		model = summaryProvider.Name()
-	}
-	msg := llm.TextMessage(llm.RoleUser, compactMessageText(summary))
-	msg.Kind = llm.MessageKindCompact
-	msg.Compaction = &llm.CompactionMetadata{
-		Auto:                    auto,
-		Reason:                  reason,
-		FirstKeptMessageID:      selection.FirstKeptMessageID,
-		TailStartMessageID:      selection.TailStartMessageID,
-		RetainedMessageIDs:      append([]string(nil), selection.RetainedMessageIDs...),
-		RetainedInputReferences: append([]llm.Message(nil), retainedInputReferences...),
-		TokensBefore:            tokensBefore,
-		SummaryChars:            summaryChars,
-		SummaryModel:            model,
-	}
-	if selection.HasPreviousSummary {
-		msg.Compaction.PreviousSummaryID = selection.PreviousSummary.ID
-	}
-	simulated := make([]llm.Message, 0, len(threadHistory)+1)
-	simulated = append(simulated, threadHistory...)
-	simulated = append(simulated, msg)
-	compacted := assembleActiveContext(simulated, incoming)
-	// Apply each owner's frozen post-compaction projection without reading or
-	// changing its current authority before the Generation commit.
+	// Reserve summary space against exactly the frozen context that will be
+	// committed, including tools and module state outside the model's output.
 	sections, err = runtimemodule.ProjectCompactionContext(sections, summaryState.Contributions)
 	if err != nil {
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
 	}
-	compacted.Messages = append(compacted.Messages, runtimeContextMessages(sections)...)
-	compacted.Messages = append(compacted.Messages, policyContext...)
-	// Provider projection expands retained artifact paths and applies owned tool
-	// projections. Include that representation in the precommit budget check.
-	projectedAfter, _, err := e.projectMessagesForProviderLocked(ctx, compacted.Messages, policy)
+	newSummaryMessage := func(summary string) llm.Message {
+		msg := llm.TextMessage(llm.RoleUser, compactMessageText(appendCompactionInputReferences(summary, retainedInputReferences)))
+		msg.Kind = llm.MessageKindCompact
+		msg.Compaction = &llm.CompactionMetadata{
+			Auto: auto, Reason: reason,
+			FirstKeptMessageID:      selection.FirstKeptMessageID,
+			TailStartMessageID:      selection.TailStartMessageID,
+			RetainedMessageIDs:      append([]string(nil), selection.RetainedMessageIDs...),
+			RetainedInputReferences: append([]llm.Message(nil), retainedInputReferences...),
+			TokensBefore:            tokensBefore, SummaryChars: len(summary),
+		}
+		if selection.HasPreviousSummary {
+			msg.Compaction.PreviousSummaryID = selection.PreviousSummary.ID
+		}
+		return msg
+	}
+	projectSummary := func(msg llm.Message) ([]llm.Message, error) {
+		simulated := append(append([]llm.Message(nil), threadHistory...), msg)
+		compacted := assembleActiveContext(simulated, incoming)
+		compacted.Messages = append(compacted.Messages, runtimeContextMessages(sections)...)
+		compacted.Messages = append(compacted.Messages, policyContext...)
+		projected, _, err := e.projectMessagesForProviderLocked(ctx, compacted.Messages, policy)
+		return projected, err
+	}
+	// A nonempty placeholder also exercises provider URI expansion for retained references.
+	minimum, err := projectSummary(newSummaryMessage("."))
+	if err != nil {
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
+	}
+	baseTokens := estimateContextTokens(systemPrompt, tools, minimum)
+	// Calibration applies to the whole request. Binary search preserves its
+	// rounding behavior instead of subtracting independently rounded counts.
+	low, high := 0, policy.SummaryMaxTokens
+	for low < high {
+		mid := low + (high-low+1)/2
+		if e.applyTokenEstimateCalibration(baseTokens+mid) <= policy.TriggerTokens {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	if low == 0 {
+		err := fmt.Errorf("compacted context exceeds budget before summary: %d tokens, limit %d; system, tools, retained input and module state leave no summary room", e.applyTokenEstimateCalibration(baseTokens), policy.TriggerTokens)
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
+	}
+	policy.SummaryMaxTokens = low
+	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions, contextWindow, reservedModelRef)
+	if err != nil {
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, err))
+	}
+	if contextErr := cancellation.ContextError(ctx); contextErr != nil {
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, contextErr))
+	}
+	model := generation.Response.Message.Model
+	if model == "" && generation.Provider != nil {
+		model = generation.Provider.Name()
+	}
+	summaryChars := len(generation.Summary)
+	msg := newSummaryMessage(generation.Summary)
+	msg.Compaction.SummaryModel = model
+	projectedAfter, err := projectSummary(msg)
 	if err != nil {
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, newCompactionError(ctx, fmt.Errorf("project compacted context: %w", err)))
 	}
