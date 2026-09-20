@@ -47,9 +47,6 @@ func (e *Engine) generateCompactionSummaryLocked(
 	defaultContextWindow int,
 	reservedModelRef string,
 ) (compactionSummaryGeneration, error) {
-	if err := validateCompactionSummaryMinimum(ctx, state, policy.SummaryMaxTokens); err != nil {
-		return compactionSummaryGeneration{}, err
-	}
 	candidates := e.compactionSummaryCandidatesLocked(policy)
 	if len(candidates) == 0 {
 		return compactionSummaryGeneration{}, fmt.Errorf("no compaction summary model candidates configured")
@@ -90,10 +87,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
 	}
 	if err == nil {
-		err = validateCompactionSummaryMinimum(ctx, state, maxOutputTokens)
-		if err == nil {
-			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
-		}
+		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 	}
 	if isCompactionSummaryJournalError(err) {
 		health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
@@ -138,10 +132,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
 		}
 		if err == nil {
-			err = validateCompactionSummaryMinimum(ctx, state, maxOutputTokens)
-			if err == nil {
-				resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
-			}
+			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 		}
 		if isCompactionSummaryJournalError(err) {
 			health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
@@ -219,10 +210,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
 		}
 		if err == nil {
-			err = validateCompactionSummaryMinimum(ctx, state, maxOutputTokens)
-			if err == nil {
-				resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
-			}
+			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 		}
 		if isCompactionSummaryJournalError(err) {
 			health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
@@ -267,10 +255,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 					err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
 				}
 				if err == nil {
-					err = validateCompactionSummaryMinimum(ctx, state, maxOutputTokens)
-					if err == nil {
-						resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
-					}
+					resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, usageModelRef(candidate), summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 				}
 				if isCompactionSummaryJournalError(err) {
 					health.Complete(ticket, modelhealth.ModelHealthNeutral, "")
@@ -631,12 +616,4 @@ func validateCompactionSummary(ctx context.Context, resp llm.Response, state com
 func compactionSummaryRetryInstructions(instructions string, resp llm.Response, err error, maxTokens int) string {
 	feedback := compactionSummaryFailure(resp, err)
 	return mergeCompactInstructions(instructions, fmt.Sprintf("The previous summary was rejected: %s. Produce a shorter complete summary, aiming for at most %d tokens including all required sections. Keep authoritative module data exact; compress the surrounding prose. Do not discuss this retry.", feedback, max(1, maxTokens/2)))
-}
-
-func validateCompactionSummaryMinimum(ctx context.Context, state compactionSummaryState, maxTokens int) error {
-	if len(state.Contributions) == 0 {
-		return nil
-	}
-	_, err := reconcileCompactionSummary(ctx, strings.Join(compactionSummaryHeadings, "\n"), state, maxTokens)
-	return err
 }
