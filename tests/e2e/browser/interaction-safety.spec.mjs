@@ -107,12 +107,12 @@ test("mobile drawer focuses selected navigation and restores the opener", async 
   expect(calls).toEqual([]);
 });
 
-for (const empty of [false, true]) test(`mobile drawer has safe focus from settings: empty=${empty}`, async ({ page }) => {
+for (const empty of [false, true]) test(`mobile drawer focuses Fleet management from settings: empty=${empty}`, async ({ page }) => {
   await fixture(page, { empty });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/settings");
   await page.getByRole("button", { name: "Open fleet agents", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Fleet agents", exact: true }).getByRole("link", { name: "juex", exact: true })).toBeFocused();
+  await expect(page.getByRole("dialog", { name: "Fleet agents", exact: true }).getByRole("link", { name: "Fleet management", exact: true })).toBeFocused();
 });
 
 test("mobile lifecycle menu requires confirmation and returns focus safely", async ({ page }) => {

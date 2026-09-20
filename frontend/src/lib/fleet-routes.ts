@@ -1,5 +1,13 @@
 const AGENT_PREFIX = "/agents/";
 
+export type FleetSection = "settings" | "memory";
+
+export function fleetSectionFromPath(pathname: string): FleetSection | null {
+  if (pathname === "/settings" || pathname === "/settings/") return "settings";
+  if (pathname === "/memory" || pathname.startsWith("/memory/")) return "memory";
+  return null;
+}
+
 export function agentBasePath(pathname: string): string {
   if (!pathname.startsWith(AGENT_PREFIX)) return "";
   const segment = pathname.slice(AGENT_PREFIX.length).split("/", 1)[0];

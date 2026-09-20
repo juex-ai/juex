@@ -25,14 +25,20 @@ The stable route hierarchy is Fleet, selected Agent, Thread list, Thread
 detail, and Runtime views. Main Thread is the default Agent destination.
 Thread Explorer owns both current work and archived history.
 
+The sidebar has one Fleet management entry. Its top navigation exposes Settings
+and Memory as peer sections, independent of Agent selection. Memory details keep
+Memory selected. Both sections mark the Fleet management entry active, including
+in the collapsed sidebar and mobile drawer. Section links remain accessible on
+narrow screens and when the Agent roster is unavailable.
+
 The fixed-height Agent navigation shows the Agent name above the viewed
 Thread's alias/id and its own status. Loading or unknown state never implies
 Idle; archived Threads show Archived. Agent process health remains separate.
 Explorer and Runtime show their page context without a Thread status badge.
 Long identities truncate with their full title available; tabs stay usable.
 
-The mobile Agent drawer initially focuses the selected Agent navigation link,
-or a safe navigation link when none is selected. Closing it returns focus to
+The mobile Agent drawer initially focuses the selected Agent or Fleet management
+navigation link, or a safe navigation link when none is selected. Closing it returns focus to
 its opener. Lifecycle actions live in a labeled action menu, separate from
 navigation. Stop, Restart, and Disable require confirmation naming the Agent
 and explaining the effect on active work and pending inputs; Cancel receives

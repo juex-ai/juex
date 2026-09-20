@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   SlidersHorizontal,
   Menu,
   MessagesSquare,
@@ -18,6 +19,7 @@ import {
   type AgentStageTab,
 } from "@/lib/fleet-shell";
 import { cn } from "@/lib/utils";
+import type { FleetSection } from "@/lib/fleet-routes";
 import type { AgentStatus } from "@/types";
 
 export function FleetStageHeader({
@@ -26,7 +28,7 @@ export function FleetStageHeader({
   threadStatus,
   threadID,
   activeTab,
-  settings,
+  fleetSection,
   onOpenMobileSidebar,
   mobileSidebarButtonRef,
 }: {
@@ -35,11 +37,11 @@ export function FleetStageHeader({
   threadStatus?: "Idle" | "Working" | "Failed" | "Archived" | "Unknown";
   threadID: string;
   activeTab: AgentStageTab;
-  settings: boolean;
+  fleetSection: FleetSection | null;
   onOpenMobileSidebar: () => void;
   mobileSidebarButtonRef?: Ref<HTMLButtonElement>;
 }) {
-  const agentTitle = settings ? "Fleet settings" : agent?.name || agent?.id || contextTitle || "Fleet";
+  const agentTitle = fleetSection ? "Fleet management" : agent?.name || agent?.id || contextTitle || "Fleet";
   const pageTitle = contextTitle || (threadID ? `Loading #${threadID}…` : activeTab === "runtime" ? "Runtime" : "Threads");
 
   return (
@@ -56,38 +58,58 @@ export function FleetStageHeader({
         <Menu className="size-4" />
       </Button>
 
-      {!settings && agent ? (
+      {!fleetSection && agent ? (
         <Link to={agentTabPath(agent.id, "chat")} aria-label={`Chat with ${agentTitle}`}
           className="flex min-h-11 min-w-0 flex-1 items-center rounded-sm px-1 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/35">
           <div className="flex min-w-0 flex-col justify-center gap-0.5">
             <div title={agentTitle} className="truncate text-sm font-semibold leading-4 text-foreground">
               {agentTitle}
             </div>
-            {!settings ? (
-              <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-3.5 text-muted-foreground">
-                <span title={pageTitle} className="truncate">{pageTitle}</span>
-                {threadID && threadStatus ? (
-                    <span
-                      aria-label="Current Thread status"
-                      className={cn(
-                        "shrink-0 rounded-full border px-1.5 py-px text-[9px] font-medium leading-3",
-                        threadStatus === "Working" &&
-                          "border-[var(--juex-gold-400)]/50 bg-[var(--juex-gold-400)]/10 text-primary",
-                        threadStatus === "Failed" &&
-                          "border-destructive/40 bg-destructive/5 text-destructive",
-                      )}
-                    >
-                      {threadStatus}
-                    </span>
-                ) : null}
-              </div>
-            ) : null}
+            <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-3.5 text-muted-foreground">
+              <span title={pageTitle} className="truncate">{pageTitle}</span>
+              {threadID && threadStatus ? (
+                <span
+                  aria-label="Current Thread status"
+                  className={cn(
+                    "shrink-0 rounded-full border px-1.5 py-px text-[9px] font-medium leading-3",
+                    threadStatus === "Working" &&
+                      "border-[var(--juex-gold-400)]/50 bg-[var(--juex-gold-400)]/10 text-primary",
+                    threadStatus === "Failed" &&
+                      "border-destructive/40 bg-destructive/5 text-destructive",
+                  )}
+                >
+                  {threadStatus}
+                </span>
+              ) : null}
+            </div>
           </div>
 
         </Link>
       ) : <div className="min-w-0 flex-1 truncate text-sm font-semibold">{agentTitle}</div>}
 
-      {!settings && agent ? (
+      {fleetSection ? (
+        <nav aria-label="Fleet management" className="flex shrink-0 items-center gap-1 sm:gap-2">
+          <TooltipProvider delayDuration={200}>
+            {([
+              { id: "settings", label: "Settings", icon: SlidersHorizontal },
+              { id: "memory", label: "Memory", icon: BookOpen },
+            ] as const).map(({ id, label, icon: Icon }) => (
+              <Tooltip key={id}>
+                <TooltipTrigger asChild>
+                  <Button asChild variant={fleetSection === id ? "secondary" : "ghost"} size="sm"
+                    className="size-11 shrink-0 px-0 sm:w-auto sm:gap-2 sm:px-3">
+                    <Link to={`/${id}`} aria-label={label} aria-current={fleetSection === id ? "page" : undefined}>
+                      <Icon className="size-4" aria-hidden="true" />
+                      <span className="hidden sm:inline">{label}</span>
+                    </Link>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{label}</TooltipContent>
+              </Tooltip>
+            ))}
+          </TooltipProvider>
+        </nav>
+      ) : agent ? (
         <TooltipProvider delayDuration={200}>
           <Tooltip>
             <TooltipTrigger asChild>
