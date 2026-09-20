@@ -180,7 +180,9 @@ test("Memory is available without Agents, shows service failures and fits mobile
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(page.getByText("No matching memories.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open fleet agents", exact: true }).click();
-  await page.getByRole("dialog").getByRole("link", { name: "Memory", exact: true }).click();
+  await page.getByRole("dialog").getByRole("link", { name: "Fleet management", exact: true }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
+  await page.getByRole("navigation", { name: "Fleet management" }).getByRole("link", { name: "Memory", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Release notes", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

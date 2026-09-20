@@ -1,6 +1,5 @@
 import {
   Gauge,
-  BookOpen,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -25,7 +24,7 @@ import {
   nextAgentLifecycleAction,
   type AgentLifecycleAction,
 } from "@/lib/fleet-shell";
-import { agentSwitchPath } from "@/lib/fleet-routes";
+import { agentSwitchPath, fleetSectionFromPath } from "@/lib/fleet-routes";
 import { cn } from "@/lib/utils";
 import type { AgentStatus } from "@/types";
 
@@ -56,6 +55,7 @@ export function FleetSidebar({
   onLifecycleAction,
 }: FleetSidebarProps) {
   const location = useLocation();
+  const fleetSelected = fleetSectionFromPath(location.pathname) !== null;
   const compact = collapsed && !mobile;
   const version =
     agents.find((agent) => agent.binary_version)?.binary_version ?? "local";
@@ -165,33 +165,27 @@ export function FleetSidebar({
       </nav>
 
       <div className="shrink-0 border-t p-2">
-        <Button asChild variant={location.pathname.startsWith("/memory") ? "secondary" : "ghost"}
-          className={cn("w-full", compact ? "justify-center px-0" : "justify-start")}>
-          <Link to="/memory" onClick={onNavigate} aria-label="Memory" title="Memory"
-            aria-current={location.pathname.startsWith("/memory") ? "true" : undefined}>
-            <BookOpen className="size-4 shrink-0" aria-hidden="true" />
-            {!compact ? <span>Memory</span> : null}
-          </Link>
-        </Button>
         <TooltipProvider delayDuration={200}>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 asChild
-                variant="ghost"
+                variant={fleetSelected ? "secondary" : "ghost"}
                 className={cn(
-                  "w-full text-muted-foreground",
+                  "w-full",
                   compact ? "justify-center px-0" : "justify-start",
                 )}
               >
-                <Link to="/settings" onClick={onNavigate}>
-                  <SlidersHorizontal className="size-4 shrink-0" />
-                  {!compact ? <span>Fleet settings</span> : null}
+                <Link to="/settings" onClick={onNavigate}
+                  aria-label="Fleet management"
+                  aria-current={fleetSelected ? "true" : undefined}>
+                  <SlidersHorizontal className="size-4 shrink-0" aria-hidden="true" />
+                  {!compact ? <span>Fleet management</span> : null}
                 </Link>
               </Button>
             </TooltipTrigger>
             {compact ? (
-              <TooltipContent side="right">Fleet settings</TooltipContent>
+              <TooltipContent side="right">Fleet management</TooltipContent>
             ) : null}
           </Tooltip>
         </TooltipProvider>

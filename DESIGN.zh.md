@@ -23,13 +23,18 @@ Command 使用 HTTP，snapshot 与 event stream 提供状态。重连时从权�
 稳定层级是 Fleet、selected Agent、Thread list、Thread detail 和 Runtime view。
 Main Thread 是 Agent 默认目的地。Thread Explorer 同时承载当前工作与归档历史。
 
+侧栏提供一个 Fleet management 入口。顶部导航将 Settings 与 Memory 作为平级
+目录，独立于 Agent 选择。Memory 详情页保持 Memory 选中。两个目录都将 Fleet
+management 入口标记为当前入口，折叠侧栏与手机抽屉中也保持一致。窄屏或 Agent
+列表不可用时，目录导航仍可访问。
+
 Agent 导航栏保持固定高度，上行显示 Agent 名称，下行显示当前 Thread 的
 alias/id 及其自身状态。加载或未知状态不能默认显示 Idle；归档显示 Archived。
 Agent 进程健康独立展示。Explorer 与 Runtime 显示页面上下文，不显示 Thread
 状态标签。长名称截断并可查看完整标题，切换标签始终可用。
 
-手机 Agent 抽屉打开时聚焦当前 Agent 的导航链接；没有选中 Agent 时聚焦安全
-导航链接。关闭后焦点回到打开按钮。生命周期操作放在有文字标签的操作菜单中，
+手机 Agent 抽屉打开时聚焦当前 Agent 或 Fleet management 的导航链接；没有
+选中项时聚焦安全导航链接。关闭后焦点回到打开按钮。生命周期操作放在有文字标签的操作菜单中，
 与导航分离。Stop、Restart、Disable 需要确认，明确 Agent 名称及对运行中工作和
 排队输入的影响，默认聚焦 Cancel。Start 和 Enable 保持直接操作。
 

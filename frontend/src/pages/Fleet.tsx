@@ -239,7 +239,7 @@ export function Fleet() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold text-foreground">
-                Fleet settings
+                Settings
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
                 Fleet service details and registered agent workspaces.

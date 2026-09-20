@@ -46,6 +46,7 @@ import {
   resolveAgentSelection,
 } from "@/lib/fleet-shell";
 import { AgentViewModelStore } from "@/lib/agent-view-model-store";
+import { fleetSectionFromPath } from "@/lib/fleet-routes";
 import type { AgentStatus } from "@/types";
 import type { AgentResourceName } from "@/types";
 
@@ -94,10 +95,10 @@ export function AppShell() {
   const navigate = useNavigate();
   const agentMatch = useMatch("/agents/:agentId/*");
   const threadMatch = useMatch("/agents/:agentId/threads/:threadId");
-  const memoryRoute = useMatch("/memory/*") !== null;
+  const fleetSection = fleetSectionFromPath(location.pathname);
+  const memoryRoute = fleetSection === "memory";
   const agentId = agentMatch?.params.agentId ?? "";
   const threadID = threadMatch?.params.threadId ?? "";
-  const settings = location.pathname === "/settings";
   const activeTab = agentTabFromPath(location.pathname);
   const workspaceDocked = useMediaQuery(WORKSPACE_DOCK_QUERY);
   const mobileSidebar = useMediaQuery(MOBILE_SIDEBAR_QUERY);
@@ -313,7 +314,7 @@ export function AppShell() {
     workspaceRevision: resourceRevision.workspace,
     workspacePath: currentAgent?.workspace,
   });
-  const workspaceAvailable = Boolean(currentAgent) && activeTab === "chat" && !settings;
+  const workspaceAvailable = Boolean(currentAgent) && activeTab === "chat";
   const workspaceOpen = workspaceDocked
     ? workspaceDockOpen && workspaceAvailable
     : workspaceSheetOpen && workspaceAvailable;
@@ -389,7 +390,7 @@ export function AppShell() {
               threadStatus={shellHeader?.pathname === location.pathname ? shellHeader.threadStatus : undefined}
               threadID={threadID}
               activeTab={activeTab}
-              settings={settings}
+              fleetSection={fleetSection}
               mobileSidebarButtonRef={mobileSidebarButton}
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
             />
