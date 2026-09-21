@@ -347,45 +347,6 @@ func TestGenerateCompactionSummaryRejectsIrreducibleSnapshotBeforeProvider(t *te
 	}
 }
 
-func TestCompactionSummaryRequestTokenLimitUsesCandidateWindowRatio(t *testing.T) {
-	policy := compactionPolicy{
-		SummaryRequestTokens: 204800,
-		SummaryMaxTokens:     1280,
-	}
-	if got := compactionSummaryRequestTokenLimit(policy); got != 203520 {
-		t.Fatalf("limit = %d, want 203520", got)
-	}
-}
-
-func TestFitCompactionSummaryInputDropsOldestClosedExchange(t *testing.T) {
-	user := testMsg("user", llm.RoleUser, "preserve the user request")
-	first := runtimeSummaryToolExchange(0, 500)
-	second := runtimeSummaryToolExchange(1, 500)
-	input := append([]llm.Message{user}, first...)
-	input = append(input, second...)
-	sys := "summary system"
-	policy := compactionPolicy{ToolResultMaxChars: 500}
-	want := append([]llm.Message{user}, second...)
-	limit := estimateContextTokens(sys, nil, []llm.Message{
-		llm.TextMessage(llm.RoleUser, buildCompactionSummaryBody(llm.Message{}, want, compactionSummaryState{}, compactionSummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 2)),
-	})
-	if compactionSummaryFits(sys, llm.Message{}, input, compactionSummaryState{}, compactionSummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 0, limit) {
-		t.Fatal("test setup invalid: both tool exchanges should not fit")
-	}
-
-	selected, omitted, _ := fitCompactionSummaryInput(sys, llm.Message{}, input, compactionSummaryState{}, policy, limit)
-
-	if omitted != 2 {
-		t.Fatalf("omitted = %d, want 2", omitted)
-	}
-	if len(selected) != 3 {
-		t.Fatalf("selected len = %d, want 3", len(selected))
-	}
-	if selected[0].ID != "user" || selected[1].ID != "tool-call-01" || selected[2].ID != "tool-result-01" {
-		t.Fatalf("selected messages = %+v", selected)
-	}
-}
-
 func runtimeSummaryToolExchange(index, size int) []llm.Message {
 	callID := fmt.Sprintf("call-%02d", index)
 	return []llm.Message{

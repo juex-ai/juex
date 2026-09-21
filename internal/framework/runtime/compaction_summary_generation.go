@@ -74,10 +74,10 @@ func (e *Engine) generateCompactionSummaryLocked(
 	ticket := selection.Ticket
 	provider := candidate.Provider
 	var failures []modelAttemptFailure
-	useRetryBudget := false
+	retried := false
 	candidatePolicy, contextWindow := e.compactionSummaryPolicyForCandidateLocked(candidate, defaultContextWindow)
 	candidatePolicy.SummaryMaxTokens = min(candidatePolicy.SummaryMaxTokens, policy.SummaryMaxTokens)
-	candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
+	candidatePolicy.SummaryMaxTokens = e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 	maxOutputTokens := candidatePolicy.SummaryMaxTokens
 	summarySystem, summaryHistory, err := buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
 	attempt := 1
@@ -108,7 +108,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 
 		retryReason := compactionSummaryRetryReason(resp, err)
 		instructions = compactionSummaryRetryInstructions(instructions, resp, err, maxOutputTokens)
-		retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
+		retryMaxOutputTokens := e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 		if emitErr := e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
 			Attempt:                 2,
 			Reason:                  retryReason,
@@ -124,7 +124,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 		}
 		retryPolicy := candidatePolicy
 		retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
-		useRetryBudget = true
+		retried = true
 		summarySystem, summaryHistory, err = buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
 		maxOutputTokens = retryMaxOutputTokens
 		attempt++
@@ -194,10 +194,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 		attempted[fallbackRef] = struct{}{}
 		candidatePolicy, contextWindow = e.compactionSummaryPolicyForCandidateLocked(nextCandidate, defaultContextWindow)
 		candidatePolicy.SummaryMaxTokens = min(candidatePolicy.SummaryMaxTokens, policy.SummaryMaxTokens)
-		candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
-		if useRetryBudget {
-			candidatePolicy.SummaryMaxTokens = e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
-		}
+		candidatePolicy.SummaryMaxTokens = e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 		maxOutputTokens = candidatePolicy.SummaryMaxTokens
 		summarySystem, summaryHistory, err = buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
 		candidate = nextCandidate
@@ -228,10 +225,10 @@ func (e *Engine) generateCompactionSummaryLocked(
 				health.Complete(ticket, modelhealth.ModelHealthSuccess, "")
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Epoch: epoch}, nil
 			}
-			if !useRetryBudget {
+			if !retried {
 				retryReason := compactionSummaryRetryReason(resp, err)
 				instructions = compactionSummaryRetryInstructions(instructions, resp, err, maxOutputTokens)
-				retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
+				retryMaxOutputTokens := e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 				if emitErr := e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
 					Attempt:                 2,
 					Reason:                  retryReason,
@@ -247,7 +244,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 				}
 				retryPolicy := candidatePolicy
 				retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
-				useRetryBudget = true
+				retried = true
 				summarySystem, summaryHistory, err = buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
 				maxOutputTokens = retryMaxOutputTokens
 				attempt++
@@ -548,28 +545,6 @@ func compactionSummaryFailure(resp llm.Response, err error) string {
 	return fmt.Sprintf("empty summary (stop_reason=%s, reasoning_only=%t)", resp.StopReason, compactionResponseReasoningOnly(resp.Message))
 }
 
-func (e *Engine) compactionSummaryRetryMaxOutputTokens(
-	baseSystem string,
-	previous llm.Message,
-	input []llm.Message,
-	state compactionSummaryState,
-	policy compactionPolicy,
-	instructions string,
-) int {
-	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, policy.SummaryMaxTokens)
-}
-
-func (e *Engine) compactionSummaryInitialMaxOutputTokens(
-	baseSystem string,
-	previous llm.Message,
-	input []llm.Message,
-	state compactionSummaryState,
-	policy compactionPolicy,
-	instructions string,
-) int {
-	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, policy.SummaryMaxTokens)
-}
-
 func (e *Engine) compactionSummaryMaxOutputTokens(
 	baseSystem string,
 	previous llm.Message,
@@ -577,8 +552,8 @@ func (e *Engine) compactionSummaryMaxOutputTokens(
 	state compactionSummaryState,
 	policy compactionPolicy,
 	instructions string,
-	desired int,
 ) int {
+	desired := policy.SummaryMaxTokens
 	if desired <= 0 {
 		return desired
 	}
