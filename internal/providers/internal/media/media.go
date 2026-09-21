@@ -27,7 +27,9 @@ func ReadImageBase64(mediaDir string, media *llm.MediaRef) (string, string, bool
 	if err != nil {
 		return "", "", false
 	}
-	data, err := store.ReadLimit(artifact.Ref{Path: media.ArtifactPath, SHA256: media.SHA256, Bytes: media.OriginalBytes}, llm.MaxProviderImageArtifactBytes)
+	// OriginalBytes describes the source before downsampling, not the stored
+	// artifact. Verify the artifact hash and bound the bytes actually read.
+	data, err := store.ReadLimit(artifact.Ref{Path: media.ArtifactPath, SHA256: media.SHA256}, llm.MaxProviderImageArtifactBytes)
 	if err != nil || len(data) == 0 {
 		return "", "", false
 	}

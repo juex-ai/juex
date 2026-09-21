@@ -103,16 +103,38 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 	}
 }
 
+func TestReadImageBase64UsesStoredBytesAfterDownsampling(t *testing.T) {
+	mediaDir := t.TempDir()
+	store, err := artifact.NewStore(mediaDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.PutContentAddressed("read-media", ".png", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, originalBytes := range []int{len(data) * 2, llm.MaxProviderImageArtifactBytes + 1} {
+		media := &llm.MediaRef{
+			ArtifactPath: ref.Path, MediaType: "image/png", SHA256: ref.SHA256,
+			OriginalBytes: originalBytes,
+		}
+		encoded, mediaType, ok := ReadImageBase64(mediaDir, media)
+		if !ok || mediaType != "image/png" || encoded != base64.StdEncoding.EncodeToString(data) {
+			t.Errorf("stored image rejected for source size %d: type=%q ok=%t", originalBytes, mediaType, ok)
+		}
+		media.SHA256 = strings.Repeat("0", 64)
+		if _, _, ok := ReadImageBase64(mediaDir, media); ok {
+			t.Errorf("corrupted downsampled image accepted for source size %d", originalBytes)
+		}
+	}
+}
+
 func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 	mediaDir := t.TempDir()
-	if encoded, mediaType, ok := ReadImageBase64(mediaDir, &llm.MediaRef{
-		ArtifactPath:  "threads/123456/media/too-large.png",
-		MediaType:     "image/png",
-		OriginalBytes: llm.MaxProviderImageArtifactBytes + 1,
-	}); ok || encoded != "" || mediaType != "" {
-		t.Fatalf("oversized metadata accepted: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
-	}
-
 	store, err := artifact.NewStore(mediaDir)
 	if err != nil {
 		t.Fatal(err)
@@ -122,9 +144,10 @@ func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if encoded, mediaType, ok := ReadImageBase64(mediaDir, &llm.MediaRef{
-		ArtifactPath: ref.Path,
-		MediaType:    "image/png",
-		SHA256:       ref.SHA256,
+		ArtifactPath:  ref.Path,
+		MediaType:     "image/png",
+		SHA256:        ref.SHA256,
+		OriginalBytes: 1,
 	}); ok || encoded != "" || mediaType != "" {
 		t.Fatalf("oversized bytes accepted: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
 	}

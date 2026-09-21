@@ -100,7 +100,8 @@ type ResultFact struct {
 
 // MediaRef keeps durable transcripts lightweight by storing a media reference
 // instead of inline bytes. Provider adapters read ArtifactPath only when the
-// selected model declares the matching capability.
+// selected model declares the matching capability. OriginalBytes describes the
+// source before any downsampling; SHA256 identifies the stored artifact bytes.
 type MediaRef struct {
 	ArtifactPath  string `json:"artifact_path,omitempty"`
 	MediaType     string `json:"media_type,omitempty"`
