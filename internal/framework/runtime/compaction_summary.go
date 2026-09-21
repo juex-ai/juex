@@ -51,16 +51,8 @@ func buildCompactionSummaryBody(previous llm.Message, input []llm.Message, state
 	return contextbudget.BuildCompactionSummaryBody(previous, input, state, toolBudget, omitted)
 }
 
-func compactionSummaryRequestTokenLimit(policy compactionPolicy) int {
-	return contextbudget.CompactionSummaryRequestTokenLimit(policy)
-}
-
 func fitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state compactionSummaryState, policy compactionPolicy, limit int) ([]llm.Message, int, compactionSummaryToolBudget) {
 	return contextbudget.FitCompactionSummaryInput(sys, previous, input, state, policy, limit)
-}
-
-func compactionSummaryFits(sys string, previous llm.Message, input []llm.Message, state compactionSummaryState, toolBudget compactionSummaryToolBudget, omitted, limit int) bool {
-	return contextbudget.CompactionSummaryFits(sys, previous, input, state, toolBudget, omitted, limit)
 }
 
 func (e *Engine) compactionSummaryStateLocked(ctx context.Context, policy compactionPolicy) (compactionSummaryState, error) {

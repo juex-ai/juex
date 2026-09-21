@@ -204,8 +204,17 @@ func TestEndToEnd_AnthropicCompactionRecoversFromReasoningBudgetExhaustionWithin
 }
 
 func TestEndToEnd_ChatCompactionRetriesAfterProtectedStateExceedsBudget(t *testing.T) {
+	for _, outcome := range []string{"retry", "fallback", "exhausted"} {
+		t.Run(outcome, func(t *testing.T) {
+			testChatCompactionProtectedStateBudget(t, outcome)
+		})
+	}
+}
+
+func testChatCompactionProtectedStateBudget(t *testing.T, outcome string) {
+	t.Helper()
 	isolateModuleConfig(t)
-	var calls int
+	var calls []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -214,10 +223,13 @@ func TestEndToEnd_ChatCompactionRetriesAfterProtectedStateExceedsBudget(t *testi
 		if request["max_tokens"] != float64(1000) || request["max_completion_tokens"] != nil {
 			t.Errorf("wrong output cap: %v", request)
 		}
-		calls++
+		model, _ := request["model"].(string)
+		calls = append(calls, model)
 		summary := "Tasks\nPlaceholder\nCritical Context\n" + strings.Repeat("x", 3600) + "\nNext Steps\nVerify"
-		if calls > 1 {
+		if (outcome == "retry" && len(calls) == 2) || (outcome == "fallback" && model == "backup") {
 			summary = "Tasks\nPlaceholder\nCritical Context\nKeep CMP-1003\nNext Steps\nVerify"
+		}
+		if len(calls) > 1 {
 			if !strings.Contains(fmt.Sprint(request["messages"]), "previous summary was rejected") {
 				t.Error("missing retry feedback")
 			}
@@ -227,13 +239,16 @@ func TestEndToEnd_ChatCompactionRetriesAfterProtectedStateExceedsBudget(t *testi
 	}))
 	defer server.Close()
 	streaming := false
-	provider, err := providers.New(providerprofile.Config{ID: "fixture", Protocol: "openai/chat", BaseURL: server.URL, APIKey: "fixture", Model: "fixture", Capabilities: llm.CapabilityOverrides{Streaming: &streaming}, Compat: llm.CompatOptions{MaxTokensField: "max_tokens"}})
-	if err != nil {
-		t.Fatal(err)
+	newProvider := func(model string) llm.Provider {
+		provider, err := providers.New(providerprofile.Config{ID: "fixture", Protocol: "openai/chat", BaseURL: server.URL, APIKey: "fixture", Model: model, Capabilities: llm.CapabilityOverrides{Streaming: &streaming}, Compat: llm.CompatOptions{MaxTokensField: "max_tokens"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return provider
 	}
 	cfg := config.Config{ModuleInventory: modulecatalog.Inventory(), Preset: config.PresetMinimal, WorkDir: t.TempDir(), AgentStateDir: t.TempDir(), ContextWindow: 16000, Modules: config.ModulePolicy{tasksmodule.ModuleID: {Enabled: true}}, Compaction: config.DefaultCompactionConfig()}
 	cfg.Compaction.KeepRecentTokens = 1
-	a, err := app.New(app.Options{Config: cfg, Provider: &bareScriptProvider{}, SummaryProvider: provider, DisableMCP: true})
+	a, err := app.New(app.Options{Config: cfg, Provider: newProvider("backup"), SummaryProvider: newProvider("primary"), DisableMCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,15 +267,27 @@ func TestEndToEnd_ChatCompactionRetriesAfterProtectedStateExceedsBudget(t *testi
 			t.Fatal(err)
 		}
 	}
-	if _, err := a.CompactWithInstructions(t.Context(), "manual", false, ""); err != nil {
+	generation := a.Thread.CurrentGenerationJournalPath()
+	_, err = a.CompactWithInstructions(t.Context(), "manual", false, "")
+	if outcome == "exhausted" {
+		if err == nil || !strings.Contains(err.Error(), "protected compaction summary exceeds budget") || a.Thread.CurrentGenerationJournalPath() != generation {
+			t.Fatalf("exhausted summaries committed or lost the budget error: %v", err)
+		}
+	} else if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 {
-		t.Fatalf("calls=%d want 2", calls)
+	wantCalls := []string{"primary", "primary"}
+	if outcome != "retry" {
+		wantCalls = append(wantCalls, "backup")
 	}
-	summary := a.Thread.History[0].FirstText()
-	if !strings.Contains(summary, acceptance) || !strings.Contains(summary, "CMP-1003") {
-		t.Fatalf("lost protected state: %s", summary)
+	if !slices.Equal(calls, wantCalls) {
+		t.Fatalf("calls=%v want %v", calls, wantCalls)
+	}
+	if outcome != "exhausted" {
+		summary := a.Thread.History[0].FirstText()
+		if !strings.Contains(summary, acceptance) || !strings.Contains(summary, "CMP-1003") {
+			t.Fatalf("lost protected state: %s", summary)
+		}
 	}
 	after, err := os.ReadFile(tasks.Path)
 	if err != nil || string(after) != string(before) {
