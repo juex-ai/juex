@@ -194,15 +194,20 @@ func TestBuiltins_ExecCommandOmitsBinaryOutput(t *testing.T) {
 	if wantTokens := (len(shellResult.Output) + 3) / 4; shellResult.OriginalTokenCount != wantTokens {
 		t.Fatalf("original token count = %d, want placeholder token count %d", shellResult.OriginalTokenCount, wantTokens)
 	}
-	if len(deltas) != 1 {
-		t.Fatalf("deltas = %d, want one binary placeholder delta: %+v", len(deltas), deltas)
+	offset := 0
+	for _, delta := range deltas {
+		end := offset + delta.BinaryBytes
+		if !delta.BinaryOmitted || delta.BinaryBytes <= 0 || end > len(wantBytes) {
+			t.Fatalf("delta binary metadata = %+v", delta)
+		}
+		digest := sha256.Sum256(wantBytes[offset:end])
+		if delta.BinarySHA256 != hex.EncodeToString(digest[:]) || !strings.HasPrefix(delta.Text, "[binary output omitted:") {
+			t.Fatalf("delta does not describe its source bytes: %+v", delta)
+		}
+		offset = end
 	}
-	delta := deltas[0]
-	if !delta.BinaryOmitted || delta.BinaryBytes != len(wantBytes) || delta.BinarySHA256 != wantSHA {
-		t.Fatalf("delta binary metadata = %+v", delta)
-	}
-	if strings.Contains(delta.Text, string(wantBytes[:5])) {
-		t.Fatalf("delta contains raw binary prefix: %q", delta.Text)
+	if offset != len(wantBytes) {
+		t.Fatalf("streamed binary bytes = %d, want %d", offset, len(wantBytes))
 	}
 }
 
@@ -1698,4 +1703,27 @@ func (r *shellToolstestFakeSandboxRunner) Prepare(ctx context.Context, req sandb
 		return sandbox.ExecSpec{}, r.err
 	}
 	return req.Spec, nil
+}
+
+func TestShellSessionBinaryDeltasAcrossReadBoundaries(t *testing.T) {
+	var deltas []toolcore.OutputDelta
+	session := &shellSession{id: 1, maxTranscript: 4096, events: toolcore.ToolCallEvents{Emit: func(delta toolcore.OutputDelta) { deltas = append(deltas, delta) }}}
+	payload := shellToolstestTestBinaryShellOutput()
+	for _, part := range [][]byte{payload[:512], payload[512:1024], payload[1024:]} {
+		session.appendOutput(part)
+	}
+	if len(deltas) != 3 {
+		t.Fatalf("deltas = %d", len(deltas))
+	}
+	for _, delta := range deltas {
+		if !delta.BinaryOmitted {
+			t.Fatalf("binary tail exposed as text: %+v", delta)
+		}
+	}
+	session.snapshot(true, 1024)
+	session.setInvocationEvents(toolcore.ToolCallEvents{Emit: func(delta toolcore.OutputDelta) { deltas = append(deltas, delta) }})
+	session.appendOutput([]byte("fresh textual output\n"))
+	if got := deltas[len(deltas)-1]; got.BinaryOmitted || got.Text != "fresh textual output\n" {
+		t.Fatalf("next invocation inherited binary classification: %+v", got)
+	}
 }

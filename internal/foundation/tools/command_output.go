@@ -328,6 +328,17 @@ func (c *commandOutputClassifier) IsBinary(final bool) bool {
 	return c.runes >= 16 && float64(c.controls)/float64(c.runes) > 0.30
 }
 
+// SanitizeDelta uses the current output window's classification. Data must
+// already be appended and have any pending UTF-8 prefix joined by the caller.
+// Binary metadata describes only this delta; Reset starts a new window.
+func (b *CommandOutputBuffer) SanitizeDelta(data []byte) SanitizedOutput {
+	if b != nil && b.classifier.IsBinary(false) {
+		info := newBinaryOutputInfo(data)
+		return SanitizedOutput{Text: info.Placeholder(), Binary: info}
+	}
+	return SanitizedOutput{Text: string(data)}
+}
+
 func SanitizeCommandOutputBytes(data []byte) SanitizedOutput {
 	var classifier commandOutputClassifier
 	classifier.Append(data)
