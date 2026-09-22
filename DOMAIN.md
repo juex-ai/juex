@@ -27,6 +27,11 @@ Agent. Workspace configuration remains user-authored; an Agent's sparse
 `juex.yaml` can specialize the effective Runtime without changing Workspace
 bytes.
 
+Committed Fleet Memory is shared across Agents within one JUEX_HOME. Source
+Agent/Thread references and Workspace/project applicability are metadata, not
+implicit access boundaries. Shared knowledge does not grant access to raw Thread
+history; evidence reads and review changes retain their own capabilities.
+
 ## Main And Worker Threads
 
 Every Agent has exactly one Main Thread:

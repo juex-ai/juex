@@ -325,12 +325,10 @@ func (s *Store) changes(c mc.Caller, changes []mc.Change, allowed []mc.Source) (
 		return nil, nil, errors.New("change set must contain 1-20 entries")
 	}
 	var entries []mc.Entry
-	// A consolidation may retain provenance already committed in this scope.
+	// A consolidation may retain provenance already committed anywhere in this Fleet.
 	allowed = append([]mc.Source(nil), allowed...)
 	for _, current := range s.entries {
-		if visible(current.Scope, s.effectiveScope(c)) {
-			allowed = append(allowed, current.Sources...)
-		}
+		allowed = append(allowed, current.Sources...)
 	}
 	var deletes []string
 	seen := map[string]bool{}
@@ -357,14 +355,6 @@ func (s *Store) changes(c mc.Caller, changes []mc.Change, allowed []mc.Source) (
 		old, exists := s.entries[e.ID]
 		if old.Revision != ch.ExpectedRevision {
 			return nil, nil, fmt.Errorf("memory revision conflict: %s", e.ID)
-		}
-		if c.Profile != mc.ProfileUser {
-			// Read visibility includes broader knowledge; an assignment may only
-			// change knowledge in its own scope, including when deleting by ID.
-			scope := s.effectiveScope(c)
-			if (exists && old.Scope != scope) || (!ch.Delete && e.Scope != scope) {
-				return nil, nil, errors.New("change outside assignment scope")
-			}
 		}
 		if ch.Delete {
 			if !exists {

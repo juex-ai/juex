@@ -25,6 +25,10 @@ JUEX_HOME 内，一个规范 Workspace 最多属于一个 Agent。Workspace 配�
 维护；Agent 自有的稀疏 `juex.yaml` 可以特化有效 Runtime，且不会改写 Workspace
 字节。
 
+同一 JUEX_HOME 内已提交的 Fleet Memory 在 Agent 之间共享。来源 Agent/Thread
+引用与 Workspace/项目适用语境都是元数据，不构成隐式访问边界。共享知识不授予
+原始 Thread 历史访问权限；证据读取和审阅修改仍受各自的能力约束。
+
 ## Main 与 Worker
 
 每个 Agent 恰好有一个 Main Thread：

@@ -18,6 +18,7 @@ const (
 	MaxChanges        = 20
 )
 
+// Scope describes knowledge applicability or proposal context, never read/write authority.
 type Scope struct {
 	Workspace string `json:"workspace,omitempty"`
 	Project   string `json:"project,omitempty"`
@@ -86,13 +87,18 @@ type Entry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Query filters are explicit, exact metadata matches combined with AND.
+// SourceAgentID matches any entry source; empty filters include all Fleet knowledge.
 type Query struct {
-	Text      string     `json:"text"`
-	Offset    int        `json:"offset,omitempty"`
-	Limit     int        `json:"limit,omitempty"`
-	Subject   string     `json:"subject,omitempty"`
-	Predicate string     `json:"predicate,omitempty"`
-	At        *time.Time `json:"at,omitempty"`
+	SourceAgentID string     `json:"source_agent_id,omitempty"`
+	Workspace     string     `json:"workspace,omitempty"`
+	Project       string     `json:"project,omitempty"`
+	Text          string     `json:"text"`
+	Offset        int        `json:"offset,omitempty"`
+	Limit         int        `json:"limit,omitempty"`
+	Subject       string     `json:"subject,omitempty"`
+	Predicate     string     `json:"predicate,omitempty"`
+	At            *time.Time `json:"at,omitempty"`
 }
 
 type Page struct {

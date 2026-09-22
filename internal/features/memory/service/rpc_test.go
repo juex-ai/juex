@@ -61,6 +61,29 @@ func TestTypedMemoryRPCIdentityProfilesAndReceipts(t *testing.T) {
 	if err != nil || !got.Committed {
 		t.Fatalf("receipt %+v %v", got, err)
 	}
+	other := a
+	other.AgentID, other.Scope = "agent-b", mc.Scope{Workspace: "/other", Project: "other"}
+	reader := mc.New(resolver, "memory", other)
+	shared, err := reader.Search(ctx, other, mc.Query{Text: "release", SourceAgentID: a.AgentID, Workspace: a.Scope.Workspace})
+	if err != nil || len(shared.Entries) != 1 || shared.Entries[0].ID != "shared" {
+		t.Fatalf("cross-Workspace RPC search: %+v %v", shared, err)
+	}
+	knowledge, err := reader.Read(ctx, other, mc.ReadRequest{ID: "shared"})
+	if err != nil || knowledge.Scope != a.Scope || len(knowledge.Sources) != 1 {
+		t.Fatalf("cross-Workspace RPC read: %+v %v", knowledge, err)
+	}
+	if _, err := reader.History(ctx, other, knowledge.Sources[0]); err == nil {
+		t.Fatal("shared RPC read unlocked raw history")
+	}
+	filtered, err := reader.Search(ctx, other, mc.Query{SourceAgentID: other.AgentID})
+	if err != nil || len(filtered.Entries) != 0 {
+		t.Fatalf("source filter: %+v %v", filtered, err)
+	}
+	wrongFleet := other
+	wrongFleet.FleetID = "other-fleet"
+	if _, err := mc.New(resolver, "memory", wrongFleet).Read(ctx, wrongFleet, mc.ReadRequest{ID: "shared"}); err == nil {
+		t.Fatal("cross-Fleet RPC read")
+	}
 	for i := 0; i < 50; i++ {
 		e := entry(fmt.Sprintf("provenance-%02d", i))
 		e.Sources = make([]mc.Source, 100)
