@@ -325,3 +325,43 @@ func TestDomainHistoricalSingleValueIntervalsCannotOverlap(t *testing.T) {
 		t.Fatalf("boundary: %+v %v", page, err)
 	}
 }
+
+func TestDomainSharedReplacementHistoryAndCycles(t *testing.T) {
+	for _, cycle := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cycle=%v", cycle), func(t *testing.T) {
+			s, a, _, user := fixture(t)
+			e := domainEntry("history", "first", "preferences", "prefers", "mistaken preference")
+			original := e.Facts[0]
+			e.Facts = nil
+			for i := 0; i < 40; i++ {
+				f := clone(original)
+				f.ID = fmt.Sprintf("claim-%02d", i)
+				f.Status = "corrected"
+				if i > 0 {
+					f.Replaces = append(f.Replaces, fmt.Sprintf("claim-%02d", i-1))
+				}
+				if i > 1 {
+					f.Replaces = append(f.Replaces, fmt.Sprintf("claim-%02d", i-2))
+				}
+				e.Facts = append(e.Facts, f)
+			}
+			if cycle {
+				e.Facts[0].Replaces = []string{"claim-39"}
+			}
+			_, err := s.Admin(t.Context(), user, mc.AdminRequest{Key: "history", Action: "correct", Changes: []mc.Change{{Entry: e}}})
+			if cycle {
+				if err == nil || !strings.Contains(err.Error(), "cycle") || len(s.entries) != 0 {
+					t.Fatalf("cyclic commit: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := s.Facts(t.Context(), a, mc.Query{View: "history", Limit: 50})
+			if err != nil || len(page.Facts) != 40 {
+				t.Fatalf("shared ancestry lost: %+v %v", page, err)
+			}
+		})
+	}
+}

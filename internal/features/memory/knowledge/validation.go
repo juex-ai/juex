@@ -179,10 +179,15 @@ func Validate(entries map[string]mc.Entry) error {
 			}
 		}
 	}
+	// Shared replacement ancestors must be checked once, not once per path.
+	checked := map[string]bool{}
 	for id := range facts {
 		seen := map[string]bool{}
 		var visit func(string) error
 		visit = func(id string) error {
+			if checked[id] {
+				return nil
+			}
 			if seen[id] {
 				return fmt.Errorf("memory replacement cycle at %s", id)
 			}
@@ -193,6 +198,7 @@ func Validate(entries map[string]mc.Entry) error {
 				}
 			}
 			delete(seen, id)
+			checked[id] = true
 			return nil
 		}
 		if err := visit(id); err != nil {
