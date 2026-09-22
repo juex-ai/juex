@@ -38,7 +38,13 @@ func key(f mc.Fact, scope mc.Scope, r mc.Relation) string {
 	return strings.Join(parts, "\x00")
 }
 func overlaps(a, b mc.Fact) bool {
-	return !(a.ValidUntil != nil && b.ValidFrom != nil && !b.ValidFrom.Before(*a.ValidUntil) || b.ValidUntil != nil && a.ValidFrom != nil && !a.ValidFrom.Before(*b.ValidUntil))
+	if a.ValidUntil != nil && b.ValidFrom != nil && !b.ValidFrom.Before(*a.ValidUntil) {
+		return false
+	}
+	if b.ValidUntil != nil && a.ValidFrom != nil && !a.ValidFrom.Before(*b.ValidUntil) {
+		return false
+	}
+	return true
 }
 
 // A known start is required by as-of queries; an ended assertion also needs

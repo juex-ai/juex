@@ -104,7 +104,8 @@ func (s *Store) validateKnowledgeChanges(c mc.Caller, entries []mc.Entry, delete
 			if !knowledge.SameIdentity(old.fact, current.fact) || old.scope != current.scope || !slices.Equal(old.fact.Replaces, current.fact.Replaces) {
 				return fmt.Errorf("memory fact %s identity/effective start cannot be rewritten; retain it as corrected and add a replacement", id)
 			}
-			if !reflect.DeepEqual(old.fact.ValidUntil, current.fact.ValidUntil) && !((old.fact.Status == "valid" || old.fact.Status == "disputed") && current.fact.Status == "superseded") {
+			endingAssertion := (old.fact.Status == "valid" || old.fact.Status == "disputed") && current.fact.Status == "superseded"
+			if !reflect.DeepEqual(old.fact.ValidUntil, current.fact.ValidUntil) && !endingAssertion {
 				return fmt.Errorf("memory confirmation cannot refresh validity for %s", id)
 			}
 			if old.fact.Status != current.fact.Status && old.fact.Status != "valid" && old.fact.Status != "disputed" {
