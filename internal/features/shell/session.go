@@ -502,7 +502,7 @@ func (s *shellSession) appendOutput(p []byte) {
 			s.mu.Unlock()
 			return
 		}
-		sanitized := toolcore.SanitizeCommandOutputBytes(data)
+		sanitized := s.unread.SanitizeDelta(data)
 		if sanitized.Binary.Omitted {
 			s.chunkID++
 			s.deltaCount++

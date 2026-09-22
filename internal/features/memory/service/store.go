@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/features/memory/knowledge"
 	"github.com/juex-ai/juex/internal/foundation/homestore"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 )
@@ -344,10 +345,14 @@ func (s *Store) rebuild() error {
 	if len(ids) > mc.MaxEntries {
 		ids = ids[:mc.MaxEntries]
 	}
+	now := s.now()
 	var b strings.Builder
 	b.WriteString("# Memory\n\nGenerated hot index; search includes cold entries.\n\n")
 	for _, id := range ids {
-		e := s.entries[id]
+		e, ok := knowledge.Project(s.entries[id], mc.Query{}, now)
+		if !ok {
+			continue
+		}
 		fmt.Fprintf(&b, "- [%s](memory/%s.md): %s\n", e.Name, e.ID, e.Summary)
 	}
 	err := s.write(filepath.Join(s.dir, "MEMORY.md"), []byte(b.String()))
@@ -374,12 +379,13 @@ func (s *Store) Status(ctx context.Context, c mc.Caller) (mc.Status, error) {
 }
 
 func (s *Store) search(q mc.Query, body bool) (mc.Page, error) {
-	if q.Offset < 0 || q.Limit < 0 || q.Limit > 50 || len(q.Text) > 4096 {
-		return mc.Page{}, errors.New("memory invalid query budget")
+	if err := knowledge.ValidateQuery(q); err != nil {
+		return mc.Page{}, err
 	}
 	if q.Limit == 0 {
 		q.Limit = 20
 	}
+	now := s.now()
 	terms := strings.Fields(strings.ToLower(q.Text))
 	type scored struct {
 		e     mc.Entry
@@ -402,6 +408,11 @@ func (s *Store) search(q mc.Query, body bool) (mc.Page, error) {
 				continue
 			}
 		}
+		var selected bool
+		e, selected = knowledge.Project(e, q, now)
+		if !selected {
+			continue
+		}
 		text := strings.ToLower(e.Name + " " + e.Summary + " " + e.Body)
 		score := 0
 		for _, term := range terms {
@@ -412,22 +423,7 @@ func (s *Store) search(q mc.Query, body bool) (mc.Page, error) {
 		if len(terms) > 0 && score == 0 {
 			continue
 		}
-		if q.Subject != "" || q.Predicate != "" || q.At != nil {
-			found := false
-			for _, f := range e.Facts {
-				at := s.now()
-				if q.At != nil {
-					at = *q.At
-				}
-				if (q.Subject == "" || f.Subject == q.Subject) && (q.Predicate == "" || f.Predicate == q.Predicate) && f.Status != "disputed" && (q.At != nil || f.Status == "valid") && (f.ValidFrom == nil || !at.Before(*f.ValidFrom)) && (f.ValidUntil == nil || at.Before(*f.ValidUntil)) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
+
 		matches = append(matches, scored{e, score})
 	}
 	sort.Slice(matches, func(i, j int) bool {
@@ -482,6 +478,16 @@ func (s *Store) Read(ctx context.Context, c mc.Caller, q mc.ReadRequest) (mc.Ent
 			return mc.Entry{}, err
 		}
 		_ = s.rebuild()
+	}
+	if q.View != "" && q.View != "current" && q.View != "history" && q.View != "as_of" {
+		return mc.Entry{}, errors.New("memory invalid read view")
+	}
+	if q.View == "as_of" && q.At == nil || q.At != nil && q.View != "" && q.View != "as_of" {
+		return mc.Entry{}, errors.New("memory invalid read time")
+	}
+	audit := q.View == "history" || (q.View == "" && q.At == nil && (c.Profile == mc.ProfileUser || c.Purpose == "maintenance"))
+	if !audit {
+		e, _ = knowledge.Project(e, mc.Query{View: q.View, At: q.At}, s.now())
 	}
 	return clone(e), nil
 }

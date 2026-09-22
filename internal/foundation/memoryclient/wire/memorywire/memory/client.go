@@ -11,6 +11,8 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	Domains(ctx context.Context, request *memorywire.Call, callOptions ...callopt.Option) (r string, err error)
+	Facts(ctx context.Context, request *memorywire.Call, callOptions ...callopt.Option) (r string, err error)
 	Status(ctx context.Context, request *memorywire.Call, callOptions ...callopt.Option) (r string, err error)
 	Search(ctx context.Context, request *memorywire.Call, callOptions ...callopt.Option) (r string, err error)
 	Read(ctx context.Context, request *memorywire.Call, callOptions ...callopt.Option) (r string, err error)
@@ -55,6 +57,16 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kMemoryClient struct {
 	*kClient
+}
+
+func (p *kMemoryClient) Domains(ctx context.Context, request *memorywire.Call, callOptions ...callopt.Option) (r string, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Domains(ctx, request)
+}
+
+func (p *kMemoryClient) Facts(ctx context.Context, request *memorywire.Call, callOptions ...callopt.Option) (r string, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Facts(ctx, request)
 }
 
 func (p *kMemoryClient) Status(ctx context.Context, request *memorywire.Call, callOptions ...callopt.Option) (r string, err error) {

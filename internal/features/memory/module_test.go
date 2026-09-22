@@ -156,11 +156,11 @@ func TestOrdinaryAndAssignedToolCatalogs(t *testing.T) {
 	for _, assigned := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary", true: "assigned"}[assigned], func(t *testing.T) {
 			caller := mc.Caller{Profile: mc.ProfileAgent}
-			want := []string{ToolSearch, ToolRead, ToolHistory, ToolPropose, ToolMaintain}
+			want := []string{ToolDomains, ToolFacts, ToolSearch, ToolRead, ToolHistory, ToolPropose, ToolMaintain}
 			if assigned {
 				caller.Profile = mc.ProfileSupervisor
 				caller.AssignmentID = "job"
-				want = []string{ToolSearch, ToolRead, ToolHistory, ToolDecide}
+				want = []string{ToolDomains, ToolFacts, ToolSearch, ToolRead, ToolHistory, ToolDecide}
 			}
 			m := New(Options{API: &recallAPI{}, Caller: caller})
 			tools, err := m.Tools(context.Background(), runtimemodule.ToolContext{})

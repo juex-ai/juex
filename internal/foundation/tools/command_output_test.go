@@ -165,6 +165,17 @@ func TestShellOutputBufferClassifiesANSIAndLocalizedTextAcrossAppends(t *testing
 	}
 }
 
+func TestShellOutputBufferDeltaUsesANSIStateAcrossAppends(t *testing.T) {
+	var buffer CommandOutputBuffer
+	parts := [][]byte{[]byte("\x1b]0;title"), []byte(strings.Repeat("\x01", 20) + "\x07正文")}
+	for _, part := range parts {
+		buffer.Append(part, DefaultCommandOutputBytes)
+		if got := buffer.SanitizeDelta(part); got.Binary.Omitted || got.Text != string(part) {
+			t.Fatalf("ANSI delta lost preceding escape state: %+v", got)
+		}
+	}
+}
+
 func TestShellOutputBufferDetectsBinaryInsideANSIEscape(t *testing.T) {
 	tests := []struct {
 		name  string

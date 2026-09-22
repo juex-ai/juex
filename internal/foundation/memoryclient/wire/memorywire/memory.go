@@ -73,6 +73,10 @@ var fieldIDToName_Call = map[int16]string{
 }
 
 type Memory interface {
+	Domains(ctx context.Context, request *Call) (r string, err error)
+
+	Facts(ctx context.Context, request *Call) (r string, err error)
+
 	Status(ctx context.Context, request *Call) (r string, err error)
 
 	Search(ctx context.Context, request *Call) (r string, err error)
@@ -102,6 +106,158 @@ type Memory interface {
 	Recall(ctx context.Context, request *Call) (r string, err error)
 
 	Admin(ctx context.Context, request *Call) (r string, err error)
+}
+
+type MemoryDomainsArgs struct {
+	Request *Call `thrift:"request,1" frugal:"1,default,Call" json:"request"`
+}
+
+func NewMemoryDomainsArgs() *MemoryDomainsArgs {
+	return &MemoryDomainsArgs{}
+}
+
+func (p *MemoryDomainsArgs) InitDefault() {
+}
+
+var MemoryDomainsArgs_Request_DEFAULT *Call
+
+func (p *MemoryDomainsArgs) GetRequest() (v *Call) {
+	if !p.IsSetRequest() {
+		return MemoryDomainsArgs_Request_DEFAULT
+	}
+	return p.Request
+}
+func (p *MemoryDomainsArgs) SetRequest(val *Call) {
+	p.Request = val
+}
+
+func (p *MemoryDomainsArgs) IsSetRequest() bool {
+	return p.Request != nil
+}
+
+func (p *MemoryDomainsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryDomainsArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryDomainsArgs = map[int16]string{
+	1: "request",
+}
+
+type MemoryDomainsResult struct {
+	Success *string `thrift:"success,0,optional" frugal:"0,optional,string" json:"success,omitempty"`
+}
+
+func NewMemoryDomainsResult() *MemoryDomainsResult {
+	return &MemoryDomainsResult{}
+}
+
+func (p *MemoryDomainsResult) InitDefault() {
+}
+
+var MemoryDomainsResult_Success_DEFAULT string
+
+func (p *MemoryDomainsResult) GetSuccess() (v string) {
+	if !p.IsSetSuccess() {
+		return MemoryDomainsResult_Success_DEFAULT
+	}
+	return *p.Success
+}
+func (p *MemoryDomainsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*string)
+}
+
+func (p *MemoryDomainsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryDomainsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryDomainsResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryDomainsResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryFactsArgs struct {
+	Request *Call `thrift:"request,1" frugal:"1,default,Call" json:"request"`
+}
+
+func NewMemoryFactsArgs() *MemoryFactsArgs {
+	return &MemoryFactsArgs{}
+}
+
+func (p *MemoryFactsArgs) InitDefault() {
+}
+
+var MemoryFactsArgs_Request_DEFAULT *Call
+
+func (p *MemoryFactsArgs) GetRequest() (v *Call) {
+	if !p.IsSetRequest() {
+		return MemoryFactsArgs_Request_DEFAULT
+	}
+	return p.Request
+}
+func (p *MemoryFactsArgs) SetRequest(val *Call) {
+	p.Request = val
+}
+
+func (p *MemoryFactsArgs) IsSetRequest() bool {
+	return p.Request != nil
+}
+
+func (p *MemoryFactsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryFactsArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryFactsArgs = map[int16]string{
+	1: "request",
+}
+
+type MemoryFactsResult struct {
+	Success *string `thrift:"success,0,optional" frugal:"0,optional,string" json:"success,omitempty"`
+}
+
+func NewMemoryFactsResult() *MemoryFactsResult {
+	return &MemoryFactsResult{}
+}
+
+func (p *MemoryFactsResult) InitDefault() {
+}
+
+var MemoryFactsResult_Success_DEFAULT string
+
+func (p *MemoryFactsResult) GetSuccess() (v string) {
+	if !p.IsSetSuccess() {
+		return MemoryFactsResult_Success_DEFAULT
+	}
+	return *p.Success
+}
+func (p *MemoryFactsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*string)
+}
+
+func (p *MemoryFactsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryFactsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryFactsResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryFactsResult = map[int16]string{
+	0: "success",
 }
 
 type MemoryStatusArgs struct {

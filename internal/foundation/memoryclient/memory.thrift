@@ -12,6 +12,8 @@ struct Call {
   5: required string payload
 }
 service Memory {
+  string Domains(1: Call request)
+  string Facts(1: Call request)
   string Status(1: Call request)
   string Search(1: Call request)
   string Read(1: Call request)

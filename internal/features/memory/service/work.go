@@ -292,18 +292,11 @@ func (s *Store) validateEntry(e mc.Entry, allowed []mc.Source, user bool) error 
 		if !entities[f.Subject] || f.Predicate == "" || ((f.Value == "") == (f.Object == "")) || (f.Object != "" && !entities[f.Object]) || f.RecordedAt.IsZero() || len(f.Sources) == 0 {
 			return errors.New("fact requires entity, value/relation, source and time")
 		}
-		if f.Status != "valid" && f.Status != "superseded" && f.Status != "disputed" {
+		if f.Status != "valid" && f.Status != "superseded" && f.Status != "disputed" && f.Status != "corrected" && f.Status != "retracted" {
 			return errors.New("invalid temporal fact status")
 		}
 		if f.SourceType != "user_statement" && f.SourceType != "self_report" && f.SourceType != "observation" && f.SourceType != "derived" {
 			return errors.New("invalid fact source type")
-		}
-		predicate := strings.ToLower(f.Predicate)
-		if strings.Contains(predicate, "mbti") && f.SourceType != "self_report" {
-			return errors.New("mBTI must be dated self-report")
-		}
-		if strings.Contains(predicate, "zodiac") && f.SourceType != "derived" {
-			return errors.New("birthday-derived labels must be marked derived")
 		}
 		if f.ValidFrom != nil && f.ValidUntil != nil && !f.ValidFrom.Before(*f.ValidUntil) {
 			return errors.New("invalid fact validity interval")
@@ -377,6 +370,9 @@ func (s *Store) changes(c mc.Caller, changes []mc.Change, allowed []mc.Source) (
 		}
 		e.UpdatedAt = s.now()
 		entries = append(entries, e)
+	}
+	if err := s.validateKnowledgeChanges(c, entries, deletes); err != nil {
+		return nil, nil, err
 	}
 	return entries, deletes, nil
 }

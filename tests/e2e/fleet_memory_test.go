@@ -20,7 +20,7 @@ func TestEndToEnd_FleetMemoryAdministration(t *testing.T) {
 	source := mc.Source{FleetID: user.FleetID, AgentID: "source", ThreadID: "0", GenerationID: "g000001", From: 1, Through: 1}
 	entry := mc.Entry{ID: "release-notes", Name: "Release notes", Summary: "Keep notes concise", Type: "reference", Body: "Original text", Scope: mc.Scope{Workspace: "/project"}, Sources: []mc.Source{source}}
 	entry.Entities = []mc.Entity{{ID: "project", Name: "Project", Kind: "project"}}
-	entry.Facts = []mc.Fact{{Subject: "project", Predicate: "release-notes", Value: "concise", Status: "valid", SourceType: "user_statement", Sources: entry.Sources, RecordedAt: time.Now().UTC()}}
+	entry.Facts = []mc.Fact{{ID: "release-style", Domain: "projects", Reason: "Explicit project decision", Qualifiers: map[string]string{"area": "release-notes"}, Subject: "project", Predicate: "decided", Value: "concise", Status: "valid", SourceType: "user_statement", Sources: entry.Sources, RecordedAt: time.Now().UTC()}}
 	if _, err := api.Admin(t.Context(), user, mc.AdminRequest{Key: "seed", Action: "correct", Changes: []mc.Change{{Entry: entry}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +51,23 @@ func TestEndToEnd_FleetMemoryAdministration(t *testing.T) {
 		return r.Body.Bytes()
 	}
 	request("GET", "/api/memory/status", nil, http.StatusOK)
+	var domains []mc.Domain
+	if err := json.Unmarshal(request("GET", "/api/memory/domains", nil, 200), &domains); err != nil || len(domains) != 11 {
+		t.Fatalf("domain overview: %+v %v", domains, err)
+	}
+	if err := json.Unmarshal(request("GET", "/api/memory/domains?id=projects", nil, 200), &domains); err != nil || len(domains) != 1 || len(domains[0].Relations) == 0 {
+		t.Fatalf("domain template: %+v %v", domains, err)
+	}
+	var facts mc.FactPage
+	if err := json.Unmarshal(request("GET", "/api/memory/facts?domain=projects&entity=project&predicate=decided&workspace=%2Fproject&limit=1", nil, 200), &facts); err != nil || facts.Total != 1 || len(facts.Facts) != 1 || facts.Facts[0].EntryID != entry.ID || facts.Facts[0].Lifecycle != "current" {
+		t.Fatalf("fact contract: %+v %v", facts, err)
+	}
+	request("GET", "/api/memory/facts?view=as_of", nil, 400)
+	request("GET", "/api/memory/facts?view=current&at=2026-01-01T00:00:00Z", nil, 400)
+	request("GET", "/api/memory/facts?limit=51", nil, 400)
+	request("GET", "/api/memory/facts?at=not-a-time", nil, 400)
+	request("GET", "/api/memory/domains?id=unknown", nil, 422)
+
 	var page mc.Page
 	if err := json.Unmarshal(request("GET", "/api/memory/entries?q=concise&limit=1", nil, 200), &page); err != nil {
 		t.Fatal(err)

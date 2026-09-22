@@ -64,6 +64,10 @@ func (c *Client) call(ctx context.Context, caller Caller, method string, payload
 	opts := []callopt.Option{callopt.WithHostPort(record.Address)}
 	var reply string
 	switch method {
+	case "Domains":
+		reply, err = cli.Domains(ctx, request, opts...)
+	case "Facts":
+		reply, err = cli.Facts(ctx, request, opts...)
 	case "Status":
 		reply, err = cli.Status(ctx, request, opts...)
 	case "Search":
@@ -325,3 +329,29 @@ func (h *rpcHandler) Admin(ctx context.Context, request *memorywire.Call) (strin
 }
 
 var _ API = (*Client)(nil)
+
+func (c *Client) Domains(ctx context.Context, caller Caller, q DomainRequest) (out []Domain, err error) {
+	err = c.call(ctx, caller, "Domains", q, &out)
+	return
+}
+func (h *rpcHandler) Domains(ctx context.Context, request *memorywire.Call) (string, error) {
+	var q DomainRequest
+	c, err := h.decode(request, &q)
+	if err != nil {
+		return "", err
+	}
+	return encode(h.api.Domains(ctx, c, q))
+}
+
+func (c *Client) Facts(ctx context.Context, caller Caller, q Query) (out FactPage, err error) {
+	err = c.call(ctx, caller, "Facts", q, &out)
+	return
+}
+func (h *rpcHandler) Facts(ctx context.Context, request *memorywire.Call) (string, error) {
+	var q Query
+	c, err := h.decode(request, &q)
+	if err != nil {
+		return "", err
+	}
+	return encode(h.api.Facts(ctx, c, q))
+}

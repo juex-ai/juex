@@ -56,6 +56,17 @@ from search-index readiness. Deletion names the memory, explains suppression of
 relearning and the retained original conversations, and initially focuses Cancel.
 The service owns these outcomes; the browser does not infer them from local state.
 
+
+Domain structure and persisted knowledge are distinct views within Memory. Every
+default domain remains inspectable when empty. Directed type/relation diagrams
+and readable constraints accompany actual entity/relation rows and fact details;
+all graph interactions have keyboard-accessible text controls. Entity identity
+spans domains. Server-bounded filters and pagination preserve context on return.
+Current/history/as-of views and lifecycle labels come from the Memory service;
+expired obligations are not presented as completed. Provenance links reach the
+owning entry; unavailable raw history has a readable reference and explanation.
+Loading, empty domains, no matches and service failure are visibly distinct.
+
 ## Thread Explorer
 
 The heading shows cumulative Token Usage across the selected Agent's active

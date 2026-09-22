@@ -86,7 +86,11 @@ func TestLiveConfigs_FleetMemorySupervisorCommit(t *testing.T) {
 		t.Fatal("committed entry is missing")
 	}
 	body, err := read.Handler(ctx, map[string]any{"id": receipt.EntryIDs[0]})
-	if err != nil || (!strings.Contains(strings.ToLower(body), "chinese") && !strings.Contains(body, "中文")) {
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = readMemoryToolResult(t, ctx, read.Handler, body)
+	if !strings.Contains(strings.ToLower(body), "chinese") && !strings.Contains(body, "中文") {
 		t.Fatalf("cross-Agent committed knowledge: %s %v", body, err)
 	}
 	t.Logf("Fleet Memory live chain: provider=%s receipt=%s state=%s entries=%d", selected.name, receipt.ID, receipt.State, len(receipt.EntryIDs))
