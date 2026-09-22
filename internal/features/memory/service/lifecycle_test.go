@@ -298,3 +298,30 @@ func TestDomainUnknownTransitionAndDisputeDoNotInventTruth(t *testing.T) {
 		t.Fatal("contradictory evidence lost")
 	}
 }
+
+func TestDomainHistoricalSingleValueIntervalsCannotOverlap(t *testing.T) {
+	s, a, _, user := fixture(t)
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(1, 0, 0)
+	old := domainEntry("past", "past-residence", "identity", "resides_in", "")
+	old.Entities = append(old.Entities, mc.Entity{ID: "shanghai", Name: "Shanghai", Kind: "place"})
+	old.Facts[0].Object = "shanghai"
+	old.Facts[0].Status = "superseded"
+	old.Facts[0].ValidFrom, old.Facts[0].ValidUntil = &start, &end
+	commitDomain(t, s, user, "past", old)
+	next := clone(old)
+	next.ID, next.Facts[0].ID = "present", "present-residence"
+	next.Entities[1] = mc.Entity{ID: "hangzhou", Name: "Hangzhou", Kind: "place"}
+	next.Facts[0].Object, next.Facts[0].Status = "hangzhou", "valid"
+	next.Facts[0].ValidUntil = nil
+	// Omitting replaces must not bypass the historical competition constraint.
+	if _, err := s.Admin(t.Context(), user, mc.AdminRequest{Key: "overlap", Action: "correct", Changes: []mc.Change{{Entry: next}}}); err == nil {
+		t.Fatal("overlapping historical single-value assertions accepted")
+	}
+	next.Facts[0].ValidFrom = &end
+	commitDomain(t, s, user, "adjacent", next)
+	page, err := s.Facts(t.Context(), a, mc.Query{View: "as_of", At: &end})
+	if err != nil || len(page.Facts) != 1 || page.Facts[0].Fact.ID != "present-residence" {
+		t.Fatalf("boundary: %+v %v", page, err)
+	}
+}

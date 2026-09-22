@@ -40,6 +40,13 @@ func key(f mc.Fact, scope mc.Scope, r mc.Relation) string {
 func overlaps(a, b mc.Fact) bool {
 	return !(a.ValidUntil != nil && b.ValidFrom != nil && !b.ValidFrom.Before(*a.ValidUntil) || b.ValidUntil != nil && a.ValidFrom != nil && !a.ValidFrom.Before(*b.ValidUntil))
 }
+
+// A known start is required by as-of queries; an ended assertion also needs
+// its known end. Unknown transitions cannot establish historical truth.
+func knownEffectiveTruth(f mc.Fact) bool {
+	return f.ValidFrom != nil && (f.Status == "valid" || f.Status == "superseded" && f.ValidUntil != nil)
+}
+
 func sameTime(a, b *time.Time) bool {
 	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
 }
@@ -136,6 +143,9 @@ func Validate(entries map[string]mc.Entry) error {
 			for _, other := range groups[group] {
 				if !overlaps(f, other.fact) {
 					continue
+				}
+				if r.Cardinality == "one" && knownEffectiveTruth(f) && knownEffectiveTruth(other.fact) {
+					return fmt.Errorf("memory competing effective-time facts %s (%s) and %s (%s); historical single-value intervals cannot overlap", other.fact.ID, other.entry, f.ID, e.ID)
 				}
 				if f.Status == "valid" && other.fact.Status == "valid" {
 					if r.Cardinality == "one" {
