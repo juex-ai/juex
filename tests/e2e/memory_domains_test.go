@@ -15,6 +15,70 @@ import (
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 )
 
+func readMemoryToolResult(t *testing.T, ctx context.Context, read func(context.Context, map[string]any) (string, error), body string) string {
+	t.Helper()
+	var ref struct {
+		ResultID string `json:"result_id"`
+		Parts    int    `json:"parts"`
+	}
+	if err := json.Unmarshal([]byte(body), &ref); err != nil {
+		t.Fatal(err)
+	}
+	if ref.ResultID == "" {
+		return body
+	}
+	if ref.Parts <= 0 || ref.Parts > 1024 {
+		t.Fatalf("invalid Memory result handle: %s", body)
+	}
+	var full strings.Builder
+	for i := 0; i < ref.Parts; i++ {
+		part, err := read(ctx, map[string]any{"result_id": ref.ResultID, "part": i})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var value struct {
+			ResultID string `json:"result_id"`
+			Part     int    `json:"part"`
+			Parts    int    `json:"parts"`
+			Text     string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(part), &value); err != nil || value.ResultID != ref.ResultID || value.Part != i || value.Parts != ref.Parts {
+			t.Fatalf("invalid Memory result part: %s %v", part, err)
+		}
+		full.WriteString(value.Text)
+	}
+	return full.String()
+}
+
+func TestEndToEnd_MemoryCrossAgentReadResultPages(t *testing.T) {
+	isolateModuleConfig(t)
+	home := t.TempDir()
+	api, user := startMemoryFixture(t, home, mc.Basic)
+	reader := memoryApp(t, memoryAgentConfig(t, home, "reader"), &bareScriptProvider{})
+	read, ok := reader.Engine.Tools.Get(memory.ToolRead)
+	if !ok {
+		t.Fatal("Memory read unavailable")
+	}
+	for _, size := range []int{1, 200} {
+		entry := mc.Entry{ID: fmt.Sprintf("shared-%d", size), Name: "Shared preference", Summary: "Release language", Type: "user", Body: strings.Repeat("Use Simplified Chinese（简体中文）.\n", size)}
+		if _, err := api.Admin(t.Context(), user, mc.AdminRequest{Key: entry.ID, Action: "correct", Changes: []mc.Change{{Entry: entry}}}); err != nil {
+			t.Fatal(err)
+		}
+		body, err := read.Handler(t.Context(), map[string]any{"id": entry.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if paged := strings.Contains(body, `"result_id"`); paged != (size == 200) {
+			t.Fatalf("unexpected paging for %d repetitions: %s", size, body)
+		}
+		var got mc.Entry
+		full := readMemoryToolResult(t, t.Context(), read.Handler, body)
+		if err := json.Unmarshal([]byte(full), &got); err != nil || got.ID != entry.ID || got.Body != entry.Body {
+			t.Fatalf("cross-Agent read changed committed content: %+v %v", got, err)
+		}
+	}
+}
+
 // This provider exercises the real Worker tool loop. Semantic extraction is
 // assessed separately by the build-tagged live multi-turn evaluation.
 type domainReviewProvider struct {
