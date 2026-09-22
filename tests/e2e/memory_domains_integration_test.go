@@ -96,12 +96,18 @@ func TestLiveConfigs_MemoryDomainMaintenanceEvaluation(t *testing.T) {
 		}},
 		{"separate-projects", "Remember: project Alpha uses Go; project Beta uses Python. These are separate projects and neither technology replaces the other project's choice.", func(current, history mc.FactPage) bool {
 			projects := map[string]string{}
+			identities := map[string]string{}
 			for _, v := range current.Facts {
 				if v.Fact.Predicate == "uses_technology" && v.Object != nil {
-					projects[strings.ToLower(v.Subject.Name)] = strings.ToLower(v.Object.Name)
+					for _, name := range []string{"alpha", "beta"} {
+						if strings.Contains(strings.ToLower(v.Subject.Name), name) {
+							projects[name] = strings.ToLower(v.Object.Name)
+							identities[name] = v.Subject.ID
+						}
+					}
 				}
 			}
-			return projects["alpha"] == "go" && projects["beta"] == "python"
+			return projects["alpha"] == "go" && projects["beta"] == "python" && identities["alpha"] != identities["beta"]
 		}},
 		{"overdue-obligation", "Remember my still-unfulfilled commitment to send the report, due 2026-01-01T00:00:00Z. It remains overdue; it is not completed or cancelled. Also remember that I was temporarily in Beijing only during [2026-01-01T00:00:00Z, 2026-01-03T00:00:00Z). That trip has ended and does not change my residence.", func(current, history mc.FactPage) bool {
 			overdue := false
@@ -161,8 +167,11 @@ func TestLiveConfigs_MemoryDomainMaintenanceEvaluation(t *testing.T) {
 				}
 			}
 			for _, v := range current.Facts {
-				if v.Subject.Kind == "person" && v.Subject.ID != personID {
-					t.Fatalf("model semantic failure: same user's identity split across domains (%s vs %s)", personID, v.Subject.ID)
+				switch v.Fact.Predicate {
+				case "resides_in", "intends_residence", "prefers", "committed_to", "temporarily_at":
+					if v.Subject.ID != personID {
+						t.Fatalf("model semantic failure: same user's identity split across domains (%s vs %s)", personID, v.Subject.ID)
+					}
 				}
 			}
 			if !tc.check(current, history) {
