@@ -111,7 +111,7 @@ func (s *Store) schedule(manual bool, only string) *work {
 		if !manual && len(src.EndedGenerations) < 5 && (src.FirstPending.IsZero() || s.now().Sub(src.FirstPending) < 24*time.Hour) {
 			continue
 		}
-		p := mc.Proposal{Key: fmt.Sprintf("maintenance/%s/%s/%d/%d", key, src.Epoch, src.ProcessedThrough, src.AcceptedThrough), Text: "Review bounded original dialogue for stable, useful knowledge. Compare existing scoped knowledge, preserve direct provenance and temporal uncertainty; commit a bounded change or no_change.", Reason: "bounded history maintenance", Evidence: clone(src.Evidence)}
+		p := mc.Proposal{Key: fmt.Sprintf("maintenance/%s/%s/%d/%d", key, src.Epoch, src.ProcessedThrough, src.AcceptedThrough), Text: "Review bounded original dialogue for stable, useful knowledge. Compare existing shared Fleet knowledge, preserve project applicability, direct provenance and temporal uncertainty; commit a bounded change or no_change.", Reason: "bounded history maintenance", Evidence: clone(src.Evidence)}
 		// A terminal failure or rejection must not reset its budget by creating
 		// another automatic request for the same frozen range. Manual work is an
 		// explicit retry; new source progress or participation gets a new key.

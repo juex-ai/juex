@@ -355,15 +355,6 @@ func (s *Store) rebuild() error {
 	return err
 }
 
-func visible(scope, caller mc.Scope) bool {
-	return (scope.Workspace == "" || scope.Workspace == caller.Workspace) && (scope.Project == "" || scope.Project == caller.Project)
-}
-func (s *Store) effectiveScope(c mc.Caller) mc.Scope {
-	if w := s.state.Requests[c.AssignmentID]; w != nil && c.Profile == mc.ProfileSupervisor && w.Token == c.Token && w.Executor == c.AgentID {
-		return w.Caller.Scope
-	}
-	return c.Scope
-}
 func (s *Store) Status(ctx context.Context, c mc.Caller) (mc.Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -382,7 +373,7 @@ func (s *Store) Status(ctx context.Context, c mc.Caller) (mc.Status, error) {
 	return r, nil
 }
 
-func (s *Store) search(c mc.Caller, q mc.Query, body bool) (mc.Page, error) {
+func (s *Store) search(q mc.Query, body bool) (mc.Page, error) {
 	if q.Offset < 0 || q.Limit < 0 || q.Limit > 50 || len(q.Text) > 4096 {
 		return mc.Page{}, errors.New("memory invalid query budget")
 	}
@@ -390,15 +381,26 @@ func (s *Store) search(c mc.Caller, q mc.Query, body bool) (mc.Page, error) {
 		q.Limit = 20
 	}
 	terms := strings.Fields(strings.ToLower(q.Text))
-	scope := s.effectiveScope(c)
 	type scored struct {
 		e     mc.Entry
 		score int
 	}
 	var matches []scored
 	for _, e := range s.entries {
-		if c.Profile != mc.ProfileUser && !visible(e.Scope, scope) {
+		if (q.Workspace != "" && e.Scope.Workspace != q.Workspace) || (q.Project != "" && e.Scope.Project != q.Project) {
 			continue
+		}
+		if q.SourceAgentID != "" {
+			found := false
+			for _, source := range e.Sources {
+				if source.AgentID == q.SourceAgentID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
 		}
 		text := strings.ToLower(e.Name + " " + e.Summary + " " + e.Body)
 		score := 0
@@ -456,7 +458,7 @@ func (s *Store) Search(ctx context.Context, c mc.Caller, q mc.Query) (mc.Page, e
 	if err := s.begin(ctx, c); err != nil {
 		return mc.Page{}, err
 	}
-	return s.search(c, q, false)
+	return s.search(q, false)
 }
 func (s *Store) Read(ctx context.Context, c mc.Caller, q mc.ReadRequest) (mc.Entry, error) {
 	s.mu.Lock()
@@ -468,8 +470,8 @@ func (s *Store) Read(ctx context.Context, c mc.Caller, q mc.ReadRequest) (mc.Ent
 		return mc.Entry{}, err
 	}
 	e, ok := s.entries[q.ID]
-	if !ok || (c.Profile != mc.ProfileUser && !visible(e.Scope, s.effectiveScope(c))) {
-		return mc.Entry{}, errors.New("memory entry unavailable in caller scope")
+	if !ok {
+		return mc.Entry{}, errors.New("memory entry unavailable")
 	}
 	if c.Purpose != "maintenance" {
 		before := clone(s.state)
@@ -495,7 +497,7 @@ func (s *Store) Recall(ctx context.Context, c mc.Caller, q mc.Query) (mc.Recall,
 	}
 	q.Limit = 8
 	q.Offset = 0
-	p, err := s.search(c, q, true)
+	p, err := s.search(q, true)
 	if err != nil {
 		return r, err
 	}

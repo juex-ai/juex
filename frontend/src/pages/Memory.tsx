@@ -13,7 +13,7 @@ const fieldClass = "grid min-w-0 gap-1.5 text-sm font-medium";
 const controlClass = "h-9 w-full rounded-md border bg-background px-3 text-sm";
 const userControlNotice = "Saving or deleting ends unfinished Memory reviews so they cannot overwrite your changes.";
 function message(error: unknown) { return error instanceof Error ? error.message : "Memory request failed."; }
-function scope(entry: MemoryEntry) { return [entry.scope.workspace, entry.scope.project].filter(Boolean).join(" · ") || "Fleet-wide"; }
+function contextLabel(entry: MemoryEntry) { return [entry.scope.workspace, entry.scope.project].filter(Boolean).join(" · ") || "No specific context"; }
 function ErrorMessage({ text }: { text: string | null }) { return text ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive break-words">{text}</p> : null; }
 
 export function Memory() {
@@ -63,7 +63,7 @@ function MemoryList() {
       {entries.length ? <ul className="divide-y rounded-md border bg-card">{entries.map(entry => <li key={entry.id} className="p-4">
         <Link className="font-medium text-primary underline-offset-4 hover:underline focus-visible:underline" to={`/memory/${encodeURIComponent(entry.id)}${location.search}`}>{entry.name}</Link>
         <p className="mt-1 break-words text-sm text-muted-foreground">{entry.summary}</p>
-        <p className="mt-2 break-all text-xs text-muted-foreground">{entry.type} · {scope(entry)}</p>
+        <p className="mt-2 break-all text-xs text-muted-foreground">{entry.type} · Context: {contextLabel(entry)}</p>
       </li>)}</ul> : <p className="rounded-md border p-6 text-sm text-muted-foreground">{query ? "No matching memories." : offset ? "No more memories." : "No memories yet."}</p>}
       {(offset > 0 || data.page.next >= 0) ? <div className="flex items-center justify-between"><Button variant="outline" disabled={!offset} onClick={() => pageTo(Math.max(0, offset - 20))}>Previous</Button><span className="text-xs text-muted-foreground">Page {Math.floor(offset / 20) + 1}</span><Button variant="outline" disabled={data.page.next < 0} onClick={() => pageTo(data.page.next)}>Next</Button></div> : null}
     </> : null}
@@ -153,11 +153,11 @@ function MemoryDetail({ id }: { id: string }) {
       </fieldset>
     </form> : entry ? <>
       <p className="break-words text-sm text-muted-foreground">{entry.summary}</p>
-      <p className="break-all text-xs text-muted-foreground">{entry.type} · {scope(entry)} · Revision {entry.revision}</p>
+      <p className="break-all text-xs text-muted-foreground">{entry.type} · Context: {contextLabel(entry)} · Revision {entry.revision}</p>
       <div className="whitespace-pre-wrap break-words rounded-md border bg-card p-4 text-sm">{entry.body || "No body text."}</div>
       {hasStructured ? <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Structured knowledge</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify({ entities: entry.entities, facts: entry.facts }, null, 2)}</pre></details> : null}
     </> : null}
-    {entry ? <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Sources and metadata</summary><div className="mt-3 space-y-2 break-all text-xs text-muted-foreground"><p>ID: {entry.id}</p><p>Scope: {scope(entry)}</p><p>Created: {new Date(entry.created_at).toLocaleString()}</p><p>Updated: {new Date(entry.updated_at).toLocaleString()}</p>{entry.sources?.length ? <ul className="space-y-2">{entry.sources.map((source, index) => <li key={index}>Fleet {source.fleet_id} · Agent {source.agent_id} · Thread {source.thread_id} · {source.generation_id} · {source.from}–{source.through}</li>)}</ul> : <p>No recorded sources.</p>}</div></details> : null}
+    {entry ? <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Sources and metadata</summary><div className="mt-3 space-y-2 break-all text-xs text-muted-foreground"><p>Shared with all Agents in this Fleet. Context describes applicability.</p><p>ID: {entry.id}</p><p>Context: {contextLabel(entry)}</p><p>Created: {new Date(entry.created_at).toLocaleString()}</p><p>Updated: {new Date(entry.updated_at).toLocaleString()}</p>{entry.sources?.length ? <ul className="space-y-2">{entry.sources.map((source, index) => <li key={index}>Fleet {source.fleet_id} · Agent {source.agent_id} · Thread {source.thread_id} · {source.generation_id} · {source.from}–{source.through}</li>)}</ul> : <p>No recorded sources.</p>}</div></details> : null}
     <Dialog open={deleting} onOpenChange={open => { if (!busy) setDeleting(open); }}><DialogContent role="alertdialog" showCloseButton={false} onCloseAutoFocus={event => { event.preventDefault(); deleteTrigger.current?.focus(); }} onOpenAutoFocus={event => { event.preventDefault(); cancelDelete.current?.focus(); }}><DialogHeader><DialogTitle>Delete “{entry?.name}”?</DialogTitle><DialogDescription>This removes the memory and prevents automatic relearning from its recorded sources. Original conversations and external copies remain. {userControlNotice}</DialogDescription></DialogHeader><ErrorMessage text={deleteError} /><DialogFooter><Button variant="outline" ref={cancelDelete} disabled={busy} onClick={() => setDeleting(false)}>Cancel</Button><Button variant="destructive" disabled={busy} onClick={() => void submit("DELETE")}>{busy ? "Deleting…" : "Delete memory"}</Button></DialogFooter></DialogContent></Dialog>
   </div>;
 }

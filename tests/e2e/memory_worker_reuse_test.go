@@ -30,7 +30,7 @@ func (*reusableMemoryProvider) Complete(_ context.Context, _ string, history []l
 			if err := json.Unmarshal([]byte(payload), &proposal); err != nil {
 				return llm.Response{}, err
 			}
-			_, raw, _ := strings.Cut(msg.FirstText(), "Assignment scope JSON:\n")
+			_, raw, _ := strings.Cut(msg.FirstText(), "Proposal context JSON:\n")
 			raw, _, _ = strings.Cut(raw, "\n\nProposal JSON:")
 			if err := json.Unmarshal([]byte(raw), &scope); err != nil {
 				return llm.Response{}, err

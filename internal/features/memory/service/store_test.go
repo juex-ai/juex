@@ -48,7 +48,7 @@ func entry(id string) mc.Entry {
 	return mc.Entry{ID: id, Name: id, Summary: "release convention", Type: "project", Body: "Use the release checklist", Sources: []mc.Source{testSource()}, Scope: mc.Scope{Workspace: "/project"}}
 }
 
-func TestProposalCommitReplayAndScope(t *testing.T) {
+func TestProposalCommitReplayAndFleetSharing(t *testing.T) {
 	s, a, super, _ := fixture(t)
 	ctx := context.Background()
 	r, worker := proposal(t, s, a, super, "one")
@@ -71,8 +71,8 @@ func TestProposalCommitReplayAndScope(t *testing.T) {
 		t.Fatalf("shared read %+v %v", read, err)
 	}
 	other.Scope.Workspace = "/unrelated"
-	if _, err = s.Read(ctx, other, mc.ReadRequest{ID: "release"}); err == nil {
-		t.Fatal("scope leak")
+	if _, err = s.Read(ctx, other, mc.ReadRequest{ID: "release"}); err != nil {
+		t.Fatalf("cross-Workspace read: %v", err)
 	}
 	other = a
 	other.FleetID = "fleet-b"
@@ -107,38 +107,38 @@ func TestDecisionEntryIDValidationCanBeCorrectedInSameAssignment(t *testing.T) {
 	}
 }
 
-func TestAssignmentCannotBroadenKnowledgeScope(t *testing.T) {
-	for _, scope := range []mc.Scope{{Workspace: "/project"}, {Project: "project"}, {Workspace: "/project", Project: "project"}} {
+func TestAssignmentCanConsolidateKnowledgeAcrossContexts(t *testing.T) {
+	for _, scope := range []mc.Scope{{Workspace: "/other"}, {Project: "other"}, {Workspace: "/other", Project: "other"}, {}} {
 		t.Run(fmt.Sprint(scope), func(t *testing.T) {
 			s, a, super, user := fixture(t)
-			a.Scope = scope
-			ctx := context.Background()
-			global := entry("global")
-			global.Scope = mc.Scope{}
-			if _, err := s.Admin(ctx, user, mc.AdminRequest{Key: "global", Action: "correct", Changes: []mc.Change{{Entry: global}}}); err != nil {
+			old := entry("existing")
+			old.Scope = scope
+			old.Sources[0].AgentID = "agent-b"
+			if _, err := s.Admin(t.Context(), user, mc.AdminRequest{Key: "seed", Action: "correct", Changes: []mc.Change{{Entry: old}}}); err != nil {
 				t.Fatal(err)
 			}
-			_, worker := proposal(t, s, a, super, "scoped")
-			broader := entry("broader")
-			broader.Scope = mc.Scope{}
-			for _, change := range []mc.Change{
-				{Entry: broader},
-				{Entry: global, ExpectedRevision: 1},
-				{Entry: mc.Entry{ID: global.ID}, ExpectedRevision: 1, Delete: true},
-			} {
-				if _, err := s.Decide(ctx, worker, mc.Decision{Outcome: "applied", Changes: []mc.Change{change}}); err == nil {
-					t.Fatalf("assignment changed broader knowledge: %+v", change)
-				}
+			_, worker := proposal(t, s, a, super, "consolidate")
+			merged := old
+			merged.ID = "merged"
+			merged.Sources = append(merged.Sources, testSource())
+			decision := mc.Decision{Outcome: "applied", Changes: []mc.Change{{Entry: merged}, {Entry: mc.Entry{ID: old.ID}, ExpectedRevision: 1, Delete: true}}}
+			if _, err := s.Decide(t.Context(), worker, decision); err != nil {
+				t.Fatalf("cross-context consolidation: %v", err)
 			}
-			local := entry("local")
-			local.Scope = scope
-			if _, err := s.Decide(ctx, worker, mc.Decision{Outcome: "applied", Changes: []mc.Change{{Entry: local}}}); err != nil {
-				t.Fatalf("same-scope commit: %v", err)
+			got, err := s.Read(t.Context(), a, mc.ReadRequest{ID: merged.ID})
+			if err != nil || got.Scope != scope || len(got.Sources) != 2 {
+				t.Fatalf("context/provenance lost: %+v, %v", got, err)
 			}
-			other := a
-			other.Scope = mc.Scope{Workspace: "/unrelated", Project: "unrelated"}
-			if _, err := s.Read(ctx, other, mc.ReadRequest{ID: local.ID}); err == nil {
-				t.Fatal("unrelated scope read committed knowledge")
+			if _, err := s.Read(t.Context(), a, mc.ReadRequest{ID: old.ID}); err == nil {
+				t.Fatal("consolidated entry still exists")
+			}
+			if _, err := s.History(t.Context(), a, old.Sources[0]); err == nil {
+				t.Fatal("shared knowledge unlocked raw history")
+			}
+			_, worker = proposal(t, s, a, super, "correct")
+			got.Body = "Corrected shared knowledge"
+			if _, err := s.Decide(t.Context(), worker, mc.Decision{Outcome: "applied", Changes: []mc.Change{{Entry: got, ExpectedRevision: got.Revision}}}); err != nil {
+				t.Fatalf("cross-context correction: %v", err)
 			}
 		})
 	}

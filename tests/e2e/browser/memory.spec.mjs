@@ -186,3 +186,16 @@ test("Memory is available without Agents, shows service failures and fits mobile
   await expect(page.getByRole("link", { name: "Release notes", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+
+test("Memory distinguishes shared visibility from project applicability", async ({ page }) => {
+  await fixture(page);
+  await page.goto("/memory");
+  await expect(page.getByText("Shared knowledge in this Fleet.", { exact: true })).toBeVisible();
+  await expect(page.getByText("reference · Context: /project", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Release notes", exact: true }).click();
+  await page.getByText("Sources and metadata", { exact: true }).click();
+  await expect(page.getByText("Shared with all Agents in this Fleet. Context describes applicability.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Context: /project", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Fleet fleet · Agent writer · Thread 0/)).toBeVisible();
+});

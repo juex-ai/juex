@@ -4,7 +4,7 @@
 
 Memory is an independent Fleet-owned service. Agent Modules connect directly
 through a typed Kitex client. The service owns knowledge, work receipts and
-commit recovery; Supervisor executes model review in an ordinary scoped Worker.
+commit recovery; Supervisor executes model review in an ordinary capability-limited Worker.
 Fleet only manages the service process and discovery. Reads remain available
 without Supervisor, and an existing connection does not depend on Fleet's Web
 process. Standard enables Agent participation; minimal disables it.
@@ -38,10 +38,22 @@ once the service accepts a proposal; they do not wait or poll for review.
 Acceptance means submitted, not remembered. Supervisor executes background work;
 users can inspect receipts on demand with `juex memory result <id>`. Necessary
 guidance is built in and works with Skills, Hooks, MCP and Extensions disabled.
-Search previews omit full provenance; read the entry for its sources. Maintenance
-assignments may change or delete only entries in their exact workspace/project
-scope. Broader visible knowledge is read-only context for that assignment;
-trusted user administration can explicitly change broader knowledge.
+All committed knowledge is shared across Agents in this Fleet, including entries
+with Workspace/project metadata. Basic search/read and Advanced recall have the
+same visibility; a caller's Workspace never filters knowledge implicitly. Search
+can explicitly filter by source Agent or Workspace/project applicability. Source
+Agent matches any recorded source; supplied metadata filters use exact matches
+combined with AND. Empty filters search all Fleet knowledge. Search previews omit
+full provenance; read the entry for its sources.
+
+Entry `scope` describes applicability, not access isolation. Supervisor assignments
+may consolidate, correct or remove knowledge across contexts, retaining multiple
+Agent sources and meaningful project qualifications. Keep independent project
+rules separate; sharing a fact does not make it universally applicable. Provenance
+must come from assigned evidence or already committed knowledge. Shared sources
+do not authorize raw history access: that stays limited to the caller's Thread or
+the current assignment's evidence. Assignment capabilities, revisions and user
+suppression constraints still govern changes.
 
 Proposal keys identify requests independently of entry IDs. The tool schema
 publishes entry ID constraints. Workers read IDs returned by search and copy
@@ -59,7 +71,7 @@ use `juex memory admin --file request.json`. For example:
 
 Fleet Web's Memory navigation provides search, inspection, editing and confirmed
 deletion for the default `memory` service. It works without an Agent or Supervisor.
-Edits retain identity, scope and provenance; concurrent changes require reloading
+Edits retain identity, context and provenance; concurrent changes require reloading
 the current revision. User edits and deletions supersede unfinished Memory reviews.
 
 The request/response types and tool schemas define exact fields. Administration
@@ -73,11 +85,13 @@ Supervisor transcripts, previously delivered context or external copies.
 ## Authority and recovery
 
 `$JUEX_HOME/services/memory/memory/<id>.md` holds authoritative entries with JSON
-frontmatter (a YAML subset). Stable IDs, content, scope, source/time and structured
+frontmatter (a YAML subset). Stable IDs, content, applicability metadata, source/time and structured
 facts belong to knowledge revisions. `state/` holds durable requests, leases,
 receipts, source progress, suppression constraints and commit intents. Generated
 `MEMORY.md` contains at most 200 hot entries. Search/entity projections rebuild
-from Markdown in memory; no database is required.
+from Markdown in memory; no database is required. Existing scoped entries use the
+same format and become shared without rewriting their content, identity, provenance
+or timestamps. No data conversion is needed.
 
 One service holds the writer lease. A commit intent precedes all entry changes
 and the receipt; recovery completes it before any reader sees the result.
@@ -117,7 +131,7 @@ recall or extraction. Advanced adds bounded automatic work using the same data:
   Each assignment starts a fresh Context Generation with new authorization and
   execution budgets; history and cumulative usage remain on the same Thread.
   Restarted Supervisors or unavailable Workers may require a new Thread.
-- Workers have only scoped Memory search/read/history/decision tools, including
+- Workers have only Memory search/read/history/decision tools, including
   after restoration. They do not share Main's management or general tools.
 - Recall runs once per admitted-input preparation, including mid-Turn inputs,
   before Provider execution: at most 500 ms, eight entries and 4096 bytes.

@@ -119,7 +119,7 @@ func writeMemoryError(w http.ResponseWriter, err error) {
 	switch {
 	case strings.Contains(message, "revision conflict"), strings.Contains(message, "idempotency conflict"):
 		writeError(w, 409, "conflict", message)
-	case strings.Contains(message, "memory entry unavailable in caller scope"):
+	case strings.Contains(message, "memory entry unavailable"):
 		writeError(w, 404, "not_found", message)
 	case strings.Contains(message, "biz error:"):
 		writeError(w, 422, "invalid_memory", message)

@@ -96,9 +96,9 @@ func (p *memoryReviewProvider) Complete(ctx context.Context, _ string, history [
 			if err := json.Unmarshal([]byte(payload), &proposal); err != nil {
 				return llm.Response{}, err
 			}
-			_, scopeText, ok := strings.Cut(m.FirstText(), "Assignment scope JSON:\n")
+			_, scopeText, ok := strings.Cut(m.FirstText(), "Proposal context JSON:\n")
 			if !ok {
-				return llm.Response{}, errors.New("assignment scope missing")
+				return llm.Response{}, errors.New("proposal context missing")
 			}
 			scopeText, _, _ = strings.Cut(scopeText, "\n\nProposal JSON:")
 			if err := json.Unmarshal([]byte(scopeText), &scope); err != nil {
@@ -167,9 +167,16 @@ func TestEndToEnd_MemorySubmissionFailureRemainsVisible(t *testing.T) {
 }
 
 func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
+	for _, strategy := range []string{mc.Basic, mc.Advanced} {
+		t.Run(strategy, func(t *testing.T) { testMemoryCrossAgentSharing(t, strategy) })
+	}
+}
+
+func testMemoryCrossAgentSharing(t *testing.T, strategy string) {
+	t.Helper()
 	isolateModuleConfig(t)
 	home := t.TempDir()
-	api, user := startMemoryFixture(t, home, mc.Basic)
+	api, user := startMemoryFixture(t, home, strategy)
 	cfgA := memoryAgentConfig(t, home, "agent-a")
 	source := &bareScriptProvider{steps: []llm.Response{{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{memoryCall("proposal", memory.ToolPropose, map[string]any{"key": "remember-release", "text": "We release on Tuesday", "reason": "explicit user request"})}}, StopReason: llm.StopToolUse}, {Message: llm.TextMessage(llm.RoleAssistant, "Submitted for review"), StopReason: llm.StopEndTurn}}}
 	a := memoryApp(t, cfgA, source)
@@ -230,8 +237,25 @@ func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	cfgB := memoryAgentConfig(t, home, "agent-b")
-	cfgB.WorkDir = cfgA.WorkDir
-	b := memoryApp(t, cfgB, &bareScriptProvider{})
+	readerProvider := &bareScriptProvider{steps: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "Read shared release knowledge"), StopReason: llm.StopEndTurn}}}
+	b := memoryApp(t, cfgB, readerProvider)
+	search, ok := b.Engine.Tools.Get(memory.ToolSearch)
+	if !ok {
+		t.Fatal("Memory search unavailable")
+	}
+	preview, err := search.Handler(t.Context(), map[string]any{"text": "release", "source_agent_id": cfgA.AgentID, "workspace": cfgA.WorkDir})
+	var page mc.Page
+	if err != nil || json.Unmarshal([]byte(preview), &page) != nil || len(page.Entries) != 1 || page.Entries[0].ID != "release-convention" {
+		t.Fatalf("cross-Workspace tool search: %s %v", preview, err)
+	}
+	if _, err := b.Run(t.Context(), "release"); err != nil {
+		t.Fatal(err)
+	}
+	contextJSON, _ := json.Marshal(readerProvider.history[0])
+	if recalled := strings.Contains(string(contextJSON), "release-convention"); recalled != (strategy == mc.Advanced) {
+		t.Fatalf("%s cross-Workspace automatic recall: %s", strategy, contextJSON)
+	}
+
 	read, ok := b.Engine.Tools.Get(memory.ToolRead)
 	if !ok {
 		t.Fatal("Memory read unavailable")
@@ -240,10 +264,21 @@ func TestEndToEnd_FleetMemoryProposalSupervisorAndCrossAgentRead(t *testing.T) {
 	if err != nil || !strings.Contains(result, "We release on Tuesday") {
 		t.Fatalf("cross-Agent read %q %v", result, err)
 	}
+	var shared mc.Entry
+	if err := json.Unmarshal([]byte(result), &shared); err != nil || shared.Scope.Workspace != cfgA.WorkDir || len(shared.Sources) == 0 || shared.Sources[0].AgentID != cfgA.AgentID {
+		t.Fatalf("shared provenance: %+v %v", shared, err)
+	}
+	history, _ := b.Engine.Tools.Get(memory.ToolHistory)
+	sourceJSON, _ := json.Marshal(shared.Sources[0])
+	var sourceInput map[string]any
+	_ = json.Unmarshal(sourceJSON, &sourceInput)
+	if _, err := history.Handler(t.Context(), sourceInput); err == nil {
+		t.Fatal("knowledge unlocked another Thread's history")
+	}
 	unrelated := memoryApp(t, memoryAgentConfig(t, home, "unrelated"), &bareScriptProvider{})
 	unrelatedRead, _ := unrelated.Engine.Tools.Get(memory.ToolRead)
-	if _, err := unrelatedRead.Handler(t.Context(), map[string]any{"id": "release-convention"}); err == nil {
-		t.Fatal("unrelated workspace read assignment knowledge")
+	if _, err := unrelatedRead.Handler(t.Context(), map[string]any{"id": "release-convention"}); err != nil {
+		t.Fatalf("unrelated workspace cannot read shared knowledge: %v", err)
 	}
 	// Reopening a Worker retains the actual execution capability boundary.
 	workers, err := supervisor.ThreadStore.List()

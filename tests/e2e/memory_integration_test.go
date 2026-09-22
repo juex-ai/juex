@@ -76,6 +76,7 @@ func TestLiveConfigs_FleetMemorySupervisorCommit(t *testing.T) {
 	if receipt.Attempts != 1 {
 		t.Fatalf("live review required repeated Workers: %+v", receipt)
 	}
+	cfg.WorkDir = t.TempDir()
 	cfg.AgentID, cfg.MemoryProfile = "reader-agent", mc.ProfileAgent
 	cfg.AgentStateDir = filepath.Join(home, "agents", cfg.AgentID)
 	cfg.Modules = config.ModulePolicy{memory.ModuleID: {Enabled: true}}
