@@ -156,7 +156,9 @@ recorded/effective time. New or changed model-maintained facts require current
 assignment user evidence; assistant repetitions and recalled facts are not new
 confirmation. The service validates the complete candidate store, including
 cross-entry competition, references, original provenance and expected revisions.
-Worker changes retain audit facts; user deletion/no-store remains authoritative.
+Evidence-backed semantic corrections/retractions are reviewed by the Worker and
+retain audit facts. Forced user overrides and deletion/no-store use the trusted
+administration entrypoint; model evidence cannot acquire that authority.
 
 `valid`, `superseded`, `corrected`, `retracted` and `disputed` describe stored
 claims. Effective intervals are half-open. Supersession ends past truth;

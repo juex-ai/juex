@@ -95,7 +95,13 @@ func TestLiveConfigs_MemoryDomainMaintenanceEvaluation(t *testing.T) {
 			return len(ids) == 2
 		}},
 		{"separate-projects", "Remember: project Alpha uses Go; project Beta uses Python. These are separate projects and neither technology replaces the other project's choice.", func(current, history mc.FactPage) bool {
-			return has(current, "uses_technology", "Go") && has(current, "uses_technology", "Python")
+			projects := map[string]string{}
+			for _, v := range current.Facts {
+				if v.Fact.Predicate == "uses_technology" && v.Object != nil {
+					projects[strings.ToLower(v.Subject.Name)] = strings.ToLower(v.Object.Name)
+				}
+			}
+			return projects["alpha"] == "go" && projects["beta"] == "python"
 		}},
 		{"overdue-obligation", "Remember my still-unfulfilled commitment to send the report, due 2026-01-01T00:00:00Z. It remains overdue; it is not completed or cancelled. Also remember that I was temporarily in Beijing only during [2026-01-01T00:00:00Z, 2026-01-03T00:00:00Z). That trip has ended and does not change my residence.", func(current, history mc.FactPage) bool {
 			overdue := false
@@ -107,6 +113,7 @@ func TestLiveConfigs_MemoryDomainMaintenanceEvaluation(t *testing.T) {
 			return overdue && !has(current, "temporarily_at", "Beijing") && has(history, "temporarily_at", "Beijing")
 		}},
 	}
+	personID := ""
 	for i, tc := range cases {
 		if !t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 210*time.Second)
@@ -126,11 +133,15 @@ func TestLiveConfigs_MemoryDomainMaintenanceEvaluation(t *testing.T) {
 					t.Fatal(err)
 				}
 				if receipt.State == "failed" || receipt.State == "rejected" || receipt.State == "no_change" {
-					t.Fatalf("model/provider maintenance failure (provider=%s; inspect receipt reason): %+v", selected.name, receipt)
+					kind := "model_semantic_failure"
+					if receipt.State == "failed" {
+						kind = "worker_execution_failure"
+					}
+					t.Fatalf("%s provider=%s: %+v", kind, selected.name, receipt)
 				}
 				select {
 				case <-ctx.Done():
-					t.Fatalf("provider/Worker timeout %s: %+v", selected.name, receipt)
+					t.Fatalf("worker_execution_timeout provider=%s: %+v", selected.name, receipt)
 				case <-time.After(250 * time.Millisecond):
 				}
 			}
@@ -141,6 +152,18 @@ func TestLiveConfigs_MemoryDomainMaintenanceEvaluation(t *testing.T) {
 			history, err := api.Facts(ctx, user, mc.Query{View: "history", Limit: 50})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if i == 0 {
+				for _, v := range current.Facts {
+					if v.Fact.Predicate == "resides_in" {
+						personID = v.Subject.ID
+					}
+				}
+			}
+			for _, v := range current.Facts {
+				if v.Subject.Kind == "person" && v.Subject.ID != personID {
+					t.Fatalf("model semantic failure: same user's identity split across domains (%s vs %s)", personID, v.Subject.ID)
+				}
 			}
 			if !tc.check(current, history) {
 				t.Fatalf("model semantic failure provider=%s case=%s current=%+v history=%+v", selected.name, tc.name, current, history)
