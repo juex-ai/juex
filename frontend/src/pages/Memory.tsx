@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import { ArrowLeft, RefreshCw, Search } from "lucide-react";
 import { nanoid } from "nanoid";
 import { APIError, changeMemory, getMemoryStatus, readMemory, searchMemories, type MemoryEntry, type MemoryMutation, type MemoryPage, type MemoryStatus } from "@/api";
+import { MemoryKnowledge } from "./MemoryKnowledge";
 import { useShellTitle } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,8 +20,11 @@ function ErrorMessage({ text }: { text: string | null }) { return text ? <p role
 export function Memory() {
   useShellTitle("Memory");
   const { entryId } = useParams();
+  const [params] = useSearchParams();
+  const knowledge = params.get("tab") === "knowledge";
   return <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div className="mx-auto w-full max-w-4xl">
-    {entryId ? <MemoryDetail key={entryId} id={entryId} /> : <MemoryList />}
+    {!entryId ? <nav aria-label="Memory views" className="mb-5 flex gap-4 border-b pb-3 text-sm"><Link className="text-primary underline" aria-current={!knowledge ? "page" : undefined} to="/memory">Entries</Link><Link className="text-primary underline" aria-current={knowledge ? "page" : undefined} to="/memory?tab=knowledge">Domains and facts</Link></nav> : null}
+    {entryId ? <MemoryDetail key={entryId} id={entryId} /> : knowledge ? <MemoryKnowledge /> : <MemoryList />}
   </div></main>;
 }
 
@@ -154,8 +158,9 @@ function MemoryDetail({ id }: { id: string }) {
     </form> : entry ? <>
       <p className="break-words text-sm text-muted-foreground">{entry.summary}</p>
       <p className="break-all text-xs text-muted-foreground">{entry.type} · Context: {contextLabel(entry)} · Revision {entry.revision}</p>
+      {hasStructured ? <p className="text-xs text-muted-foreground">Stored audit text may describe historical or disputed claims. Use Domains and facts for the current view.</p> : null}
       <div className="whitespace-pre-wrap break-words rounded-md border bg-card p-4 text-sm">{entry.body || "No body text."}</div>
-      {hasStructured ? <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Structured knowledge</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify({ entities: entry.entities, facts: entry.facts }, null, 2)}</pre></details> : null}
+      {hasStructured ? <section className="space-y-2 rounded-md border p-3"><h2 className="text-sm font-medium">Structured knowledge · audit</h2><ul className="space-y-2 text-sm">{entry.facts?.map(fact => <li key={fact.id} className="break-words"><strong>{fact.subject}</strong> → {fact.predicate} → {fact.object || fact.value} · {fact.status} <span className="text-xs text-muted-foreground">({fact.domain}, {fact.id})</span></li>)}</ul><Link className="text-sm text-primary underline" to={`/memory?tab=knowledge&domain=&entity=${encodeURIComponent(entry.entities?.[0]?.id || "")}`}>Explore entity relationships</Link></section> : null}
     </> : null}
     {entry ? <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Sources and metadata</summary><div className="mt-3 space-y-2 break-all text-xs text-muted-foreground"><p>Shared with all Agents in this Fleet. Context describes applicability.</p><p>ID: {entry.id}</p><p>Context: {contextLabel(entry)}</p><p>Created: {new Date(entry.created_at).toLocaleString()}</p><p>Updated: {new Date(entry.updated_at).toLocaleString()}</p>{entry.sources?.length ? <ul className="space-y-2">{entry.sources.map((source, index) => <li key={index}>Fleet {source.fleet_id} · Agent {source.agent_id} · Thread {source.thread_id} · {source.generation_id} · {source.from}–{source.through}</li>)}</ul> : <p>No recorded sources.</p>}</div></details> : null}
     <Dialog open={deleting} onOpenChange={open => { if (!busy) setDeleting(open); }}><DialogContent role="alertdialog" showCloseButton={false} onCloseAutoFocus={event => { event.preventDefault(); deleteTrigger.current?.focus(); }} onOpenAutoFocus={event => { event.preventDefault(); cancelDelete.current?.focus(); }}><DialogHeader><DialogTitle>Delete “{entry?.name}”?</DialogTitle><DialogDescription>This removes the memory and prevents automatic relearning from its recorded sources. Original conversations and external copies remain. {userControlNotice}</DialogDescription></DialogHeader><ErrorMessage text={deleteError} /><DialogFooter><Button variant="outline" ref={cancelDelete} disabled={busy} onClick={() => setDeleting(false)}>Cancel</Button><Button variant="destructive" disabled={busy} onClick={() => void submit("DELETE")}>{busy ? "Deleting…" : "Delete memory"}</Button></DialogFooter></DialogContent></Dialog>

@@ -156,8 +156,8 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		}
 		count += len(group.Tools)
 	}
-	if status.Tools.Count != count || count != 40 {
-		t.Fatalf("tool count = %d, grouped=%d, want 40", status.Tools.Count, count)
+	if status.Tools.Count != count || count != 42 {
+		t.Fatalf("tool count = %d, grouped=%d, want 42", status.Tools.Count, count)
 	}
 }
 

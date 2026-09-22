@@ -191,7 +191,7 @@ func TestStructuredTemporalKnowledgeAndStrategySwitch(t *testing.T) {
 	e.Type = "user"
 	e.Sources = []mc.Source{ref}
 	e.Entities = []mc.Entity{{ID: "person-1", Name: "Alex", Kind: "person"}, {ID: "person-2", Name: "Alex", Kind: "person"}}
-	e.Facts = []mc.Fact{{Subject: "person-1", Predicate: "mbti", Value: "INTP", Status: "valid", SourceType: "derived", Sources: []mc.Source{ref}, RecordedAt: s.now()}}
+	e.Facts = []mc.Fact{{ID: "profile-mbti", Domain: "identity", Reason: "Dated self report", Subject: "person-1", Predicate: "mbti", Value: "INTP", Status: "valid", SourceType: "derived", Sources: []mc.Source{ref}, RecordedAt: s.now()}}
 	if _, err := s.Admin(ctx, user, mc.AdminRequest{Key: "bad", Action: "correct", Changes: []mc.Change{{Entry: e}}}); err == nil {
 		t.Fatal("inferred MBTI accepted")
 	}
@@ -218,7 +218,7 @@ func TestStructuredTemporalKnowledgeAndStrategySwitch(t *testing.T) {
 	if _, err := s.Decide(ctx, worker, mc.Decision{Outcome: "no_change"}); err == nil {
 		t.Fatal("old strategy assignment committed")
 	}
-	got, err := s.Read(ctx, a, mc.ReadRequest{ID: e.ID})
+	got, err := s.Read(ctx, a, mc.ReadRequest{ID: e.ID, View: "history"})
 	if err != nil || len(got.Entities) != 2 || len(got.Facts) != 1 {
 		t.Fatalf("Basic lost structured knowledge %+v %v", got, err)
 	}

@@ -59,8 +59,8 @@ export interface MemoryEntry {
   scope: { workspace?: string; project?: string };
   body: string;
   sources: { fleet_id: string; agent_id: string; thread_id: string; generation_id: string; from: number; through: number }[];
-  entities?: { id: string; name: string; kind: string }[];
-  facts?: Record<string, unknown>[];
+  entities?: MemoryEntity[];
+  facts?: MemoryFact[];
   created_at: string;
   updated_at: string;
 }
@@ -745,3 +745,28 @@ export async function updateAgentConfig(
 }
 
 export { APIError };
+
+export interface MemoryEntity { id: string; name: string; kind: string }
+export interface MemoryFact {
+  id: string; domain: string; subject: string; predicate: string; value?: string; object?: string;
+  status: string; source_type: string; sources: MemoryEntry["sources"]; recorded_at: string;
+  valid_from?: string; valid_until?: string; due_at?: string; time_note?: string;
+  reason: string; qualifiers?: Record<string, string>; replaces?: string[];
+}
+export interface MemoryRelation {
+  predicate: string; description: string; subjects: string[]; objects?: string[]; value_type?: string;
+  qualifiers?: string[]; optional_qualifiers?: string[]; source_types: string[]; cardinality: string; competition: string[]; temporal: string;
+  updates: string[]; evidence: string; positive: string; negative: string;
+}
+export interface MemoryDomain { id: string; name: string; description: string; policy: string; relations?: MemoryRelation[] }
+export interface MemoryFactView {
+  entry_id: string; revision: number; scope: MemoryEntry["scope"]; fact: MemoryFact;
+  subject: MemoryEntity; object?: MemoryEntity; lifecycle: string;
+}
+export interface MemoryFactPage { facts: MemoryFactView[]; next: number; total: number; domain_total: number; fence: number }
+export async function getMemoryDomains(id = ""): Promise<MemoryDomain[]> {
+  return jsonOrThrow(await fetch(`/api/memory/domains?${new URLSearchParams({ id })}`));
+}
+export async function getMemoryFacts(params: URLSearchParams): Promise<MemoryFactPage> {
+  return jsonOrThrow(await fetch(`/api/memory/facts?${params}`));
+}

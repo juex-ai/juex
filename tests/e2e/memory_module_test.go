@@ -112,11 +112,11 @@ func (p *memoryReviewProvider) Complete(ctx context.Context, _ string, history [
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Main remains available"), StopReason: llm.StopEndTurn}, nil
 	}
 	for _, spec := range tools {
-		if spec.Name != memory.ToolSearch && spec.Name != memory.ToolRead && spec.Name != memory.ToolHistory && spec.Name != memory.ToolDecide {
+		if spec.Name != memory.ToolDomains && spec.Name != memory.ToolFacts && spec.Name != memory.ToolSearch && spec.Name != memory.ToolRead && spec.Name != memory.ToolHistory && spec.Name != memory.ToolDecide {
 			p.t.Errorf("maintenance capability escaped: %s", spec.Name)
 		}
 	}
-	if len(tools) != 4 {
+	if len(tools) != 6 {
 		p.t.Errorf("maintenance tools=%d", len(tools))
 	}
 	for _, m := range history {
@@ -303,7 +303,7 @@ func testMemoryCrossAgentSharing(t *testing.T, strategy string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = restored.CloseAndWait() }()
-	if len(restored.Engine.Tools.List()) != 4 {
+	if len(restored.Engine.Tools.List()) != 6 {
 		t.Fatalf("restored tools %+v", restored.Engine.Tools.List())
 	}
 	if _, ok := restored.Engine.Tools.Get("exec_command"); ok {

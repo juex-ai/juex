@@ -48,11 +48,11 @@ func (*reusableMemoryProvider) Complete(_ context.Context, _ string, history []l
 	if assignments != 1 {
 		return llm.Response{}, fmt.Errorf("assignment context count %d, want 1", assignments)
 	}
-	if len(tools) != 4 {
-		return llm.Response{}, fmt.Errorf("maintenance tools %d, want 4", len(tools))
+	if len(tools) != 6 {
+		return llm.Response{}, fmt.Errorf("maintenance tools %d, want 6", len(tools))
 	}
 	for _, tool := range tools {
-		if tool.Name != memory.ToolSearch && tool.Name != memory.ToolRead && tool.Name != memory.ToolHistory && tool.Name != memory.ToolDecide {
+		if tool.Name != memory.ToolDomains && tool.Name != memory.ToolFacts && tool.Name != memory.ToolSearch && tool.Name != memory.ToolRead && tool.Name != memory.ToolHistory && tool.Name != memory.ToolDecide {
 			return llm.Response{}, fmt.Errorf("unexpected tool %s", tool.Name)
 		}
 	}

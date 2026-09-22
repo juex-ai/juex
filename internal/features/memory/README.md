@@ -131,7 +131,7 @@ recall or extraction. Advanced adds bounded automatic work using the same data:
   Each assignment starts a fresh Context Generation with new authorization and
   execution budgets; history and cumulative usage remain on the same Thread.
   Restarted Supervisors or unavailable Workers may require a new Thread.
-- Workers have only Memory search/read/history/decision tools, including
+- Workers have only Memory domain/fact discovery and search/read/history/decision tools, including
   after restoration. They do not share Main's management or general tools.
 - Recall runs once per admitted-input preparation, including mid-Turn inputs,
   before Provider execution: at most 500 ms, eight entries and 4096 bytes.
@@ -139,8 +139,50 @@ recall or extraction. Advanced adds bounded automatic work using the same data:
   New preparation clears stale recall; service failures remain observable and
   do not fail ordinary conversation. Explicit tools still report errors.
 
-Structured facts use explicit entity IDs, typed values/relations, direct sources,
-recorded/effective times and valid/superseded/disputed status. Current queries
-exclude superseded/disputed facts; time queries preserve supported history.
-Names do not establish identity. MBTI requires dated self-report; birthday-derived
-labels are marked derived. Basic retains structured data across strategy changes.
+## Domains and evidence-driven maintenance
+
+`knowledge/` owns eleven built-in domain declarations: identity, interpersonal,
+knowledge interests, health, projects, hobbies, preferences, finance, obligations,
+temporary context and open Other. The service, Agent templates and Fleet UI consume
+these same declarations. Canonical relations specify types, required qualifiers,
+cardinality, competition scope, temporal rules, evidence and examples. Workers
+read relevant templates on demand and query existing entities/facts before editing;
+ordinary Agents provide evidence and do not edit the ontology. No automatic decay
+or domain-specific Agent is introduced.
+
+Entity IDs are shared across domains; equal names do not establish identity. Fact
+IDs have one owning entry. Confirmations add original sources without refreshing
+recorded/effective time. New or changed model-maintained facts require current
+assignment user evidence; assistant repetitions and recalled facts are not new
+confirmation. The service validates the complete candidate store, including
+cross-entry competition, references, original provenance and expected revisions.
+Worker changes retain audit facts; user deletion/no-store remains authoritative.
+
+`valid`, `superseded`, `corrected`, `retracted` and `disputed` describe stored
+claims. Effective intervals are half-open. Supersession ends past truth;
+correction marks an earlier error. Unknown dates remain unspecified with a time note; as-of queries do not guess
+unknown starts or ends.
+Deadlines use `due_at`: outstanding obligations become overdue, never automatically
+completed. Current queries include applicable facts; history includes audit
+claims; as-of means effective-time truth, not a snapshot of what was known then.
+Corrections/retractions do not become true again in historical time queries.
+
+Search, ordinary read, recall and Web fact queries use the same service projection.
+Structured current views generate names, summaries and body text from selected
+facts so mixed entries cannot leak old claims through their prose. This projection
+does not prove the semantics of stored prose; Workers must update prose alongside
+facts in the same transaction. User/maintenance entry reads retain the full audit
+record. Untouched entries without Facts remain usable without conversion.
+
+Fleet Memory offers directed domain structures even when empty, and bounded,
+filterable persisted entity/relation views with lifecycle, scope and provenance.
+Entity selection spans domains; entry links preserve the query. Raw history links
+are not fabricated from source IDs. Refresh reflects committed facts independently
+of hot-index readiness. The browser does not calculate lifecycle itself.
+
+Large read-only tool results are immutable, input-local pages retrieved through
+`memory_read` result handles; the restricted Worker gains no filesystem access.
+Pages recheck user-administration fences and History permissions, expire on new
+input/reopening, and remain within tool output limits. Successful write receipts
+remain immediately visible. Narrow queries still need to fit the Worker context;
+paging does not increase its eight-request or 16K budget.

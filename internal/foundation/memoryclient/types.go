@@ -60,16 +60,23 @@ type Entity struct {
 }
 
 type Fact struct {
-	Subject    string     `json:"subject"`
-	Predicate  string     `json:"predicate"`
-	Value      string     `json:"value,omitempty"`
-	Object     string     `json:"object,omitempty"`
-	Status     string     `json:"status"`
-	SourceType string     `json:"source_type"`
-	Sources    []Source   `json:"sources"`
-	RecordedAt time.Time  `json:"recorded_at"`
-	ValidFrom  *time.Time `json:"valid_from,omitempty"`
-	ValidUntil *time.Time `json:"valid_until,omitempty"`
+	ID         string            `json:"id"`
+	Domain     string            `json:"domain"`
+	Qualifiers map[string]string `json:"qualifiers,omitempty"`
+	Reason     string            `json:"reason"`
+	Replaces   []string          `json:"replaces,omitempty"`
+	DueAt      *time.Time        `json:"due_at,omitempty"`
+	TimeNote   string            `json:"time_note,omitempty"`
+	Subject    string            `json:"subject"`
+	Predicate  string            `json:"predicate"`
+	Value      string            `json:"value,omitempty"`
+	Object     string            `json:"object,omitempty"`
+	Status     string            `json:"status"`
+	SourceType string            `json:"source_type"`
+	Sources    []Source          `json:"sources"`
+	RecordedAt time.Time         `json:"recorded_at"`
+	ValidFrom  *time.Time        `json:"valid_from,omitempty"`
+	ValidUntil *time.Time        `json:"valid_until,omitempty"`
 }
 
 type Entry struct {
@@ -90,6 +97,10 @@ type Entry struct {
 // Query filters are explicit, exact metadata matches combined with AND.
 // SourceAgentID matches any entry source; empty filters include all Fleet knowledge.
 type Query struct {
+	Domain        string     `json:"domain,omitempty"`
+	Entity        string     `json:"entity,omitempty"`
+	View          string     `json:"view,omitempty"`
+	Status        string     `json:"status,omitempty"`
 	SourceAgentID string     `json:"source_agent_id,omitempty"`
 	Workspace     string     `json:"workspace,omitempty"`
 	Project       string     `json:"project,omitempty"`
@@ -108,7 +119,9 @@ type Page struct {
 }
 
 type ReadRequest struct {
-	ID string `json:"id"`
+	ID   string     `json:"id"`
+	View string     `json:"view,omitempty"`
+	At   *time.Time `json:"at,omitempty"`
 }
 
 type Proposal struct {
@@ -213,6 +226,8 @@ type Status struct {
 
 // API contains Memory operations only; it is not a Fleet forwarding interface.
 type API interface {
+	Domains(context.Context, Caller, DomainRequest) ([]Domain, error)
+	Facts(context.Context, Caller, Query) (FactPage, error)
 	Status(context.Context, Caller) (Status, error)
 	Search(context.Context, Caller, Query) (Page, error)
 	Read(context.Context, Caller, ReadRequest) (Entry, error)

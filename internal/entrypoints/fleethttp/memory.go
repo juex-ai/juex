@@ -5,12 +5,15 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/foundation/serviceendpoint"
 )
 
 type memoryBackend interface {
+	Domains(context.Context, mc.Caller, mc.DomainRequest) ([]mc.Domain, error)
+	Facts(context.Context, mc.Caller, mc.Query) (mc.FactPage, error)
 	Status(context.Context, mc.Caller) (mc.Status, error)
 	Search(context.Context, mc.Caller, mc.Query) (mc.Page, error)
 	Read(context.Context, mc.Caller, mc.ReadRequest) (mc.Entry, error)
@@ -39,12 +42,31 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		result, err = s.memory.Status(r.Context(), s.memoryCaller)
-	case path == "entries":
+	case path == "domains":
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method_not_allowed", "GET required")
 			return
 		}
-		q := mc.Query{Text: r.URL.Query().Get("q"), Limit: 20}
+		result, err = s.memory.Domains(r.Context(), s.memoryCaller, mc.DomainRequest{ID: r.URL.Query().Get("id")})
+	case path == "entries" || path == "facts":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method_not_allowed", "GET required")
+			return
+		}
+		values := r.URL.Query()
+		q := mc.Query{Text: values.Get("q"), Limit: 20, Domain: values.Get("domain"), Entity: values.Get("entity"), Predicate: values.Get("predicate"), Workspace: values.Get("workspace"), Project: values.Get("project"), SourceAgentID: values.Get("source_agent_id"), View: values.Get("view"), Status: values.Get("status")}
+		if value := values.Get("at"); value != "" {
+			at, parseErr := time.Parse(time.RFC3339, value)
+			if parseErr != nil {
+				writeError(w, 400, "bad_request", "Invalid RFC3339 time")
+				return
+			}
+			q.At = &at
+		}
+		if q.View != "" && q.View != "current" && q.View != "history" && q.View != "as_of" || q.View == "as_of" && q.At == nil || q.At != nil && q.View != "" && q.View != "as_of" {
+			writeError(w, 400, "bad_request", "Invalid Memory view/time combination")
+			return
+		}
 		for name, dest := range map[string]*int{"offset": &q.Offset, "limit": &q.Limit} {
 			if value := r.URL.Query().Get(name); value != "" {
 				*dest, err = strconv.Atoi(value)
@@ -58,7 +80,11 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "bad_request", "Search requires offset >= 0, limit 1-50 and a query up to 2048 bytes")
 			return
 		}
-		result, err = s.memory.Search(r.Context(), s.memoryCaller, q)
+		if path == "facts" {
+			result, err = s.memory.Facts(r.Context(), s.memoryCaller, q)
+		} else {
+			result, err = s.memory.Search(r.Context(), s.memoryCaller, q)
+		}
 	case strings.HasPrefix(path, "entries/"):
 		id := strings.TrimPrefix(path, "entries/")
 		if err := mc.ValidateEntryID(id); err != nil {

@@ -13,6 +13,20 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"Domains": kitex.NewMethodInfo(
+		domainsHandler,
+		newMemoryDomainsArgs,
+		newMemoryDomainsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"Facts": kitex.NewMethodInfo(
+		factsHandler,
+		newMemoryFactsArgs,
+		newMemoryFactsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Status": kitex.NewMethodInfo(
 		statusHandler,
 		newMemoryStatusArgs,
@@ -182,6 +196,42 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func domainsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*memorywire.MemoryDomainsArgs)
+	realResult := result.(*memorywire.MemoryDomainsResult)
+	success, err := handler.(memorywire.Memory).Domains(ctx, realArg.Request)
+	if err != nil {
+		return err
+	}
+	realResult.Success = &success
+	return nil
+}
+func newMemoryDomainsArgs() interface{} {
+	return memorywire.NewMemoryDomainsArgs()
+}
+
+func newMemoryDomainsResult() interface{} {
+	return memorywire.NewMemoryDomainsResult()
+}
+
+func factsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*memorywire.MemoryFactsArgs)
+	realResult := result.(*memorywire.MemoryFactsResult)
+	success, err := handler.(memorywire.Memory).Facts(ctx, realArg.Request)
+	if err != nil {
+		return err
+	}
+	realResult.Success = &success
+	return nil
+}
+func newMemoryFactsArgs() interface{} {
+	return memorywire.NewMemoryFactsArgs()
+}
+
+func newMemoryFactsResult() interface{} {
+	return memorywire.NewMemoryFactsResult()
 }
 
 func statusHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -462,6 +512,26 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) Domains(ctx context.Context, request *memorywire.Call) (r string, err error) {
+	var _args memorywire.MemoryDomainsArgs
+	_args.Request = request
+	var _result memorywire.MemoryDomainsResult
+	if err = p.c.Call(ctx, "Domains", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Facts(ctx context.Context, request *memorywire.Call) (r string, err error) {
+	var _args memorywire.MemoryFactsArgs
+	_args.Request = request
+	var _result memorywire.MemoryFactsResult
+	if err = p.c.Call(ctx, "Facts", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) Status(ctx context.Context, request *memorywire.Call) (r string, err error) {
