@@ -22,7 +22,7 @@ export function Memory() {
   const { entryId } = useParams();
   const [params] = useSearchParams();
   const knowledge = params.get("tab") === "knowledge";
-  return <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div className="mx-auto w-full max-w-4xl">
+  return <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div className={`mx-auto w-full ${knowledge && !entryId ? "max-w-6xl" : "max-w-4xl"}`}>
     {!entryId ? <nav aria-label="Memory views" className="mb-5 flex gap-4 border-b pb-3 text-sm"><Link className="text-primary underline" aria-current={!knowledge ? "page" : undefined} to="/memory">Entries</Link><Link className="text-primary underline" aria-current={knowledge ? "page" : undefined} to="/memory?tab=knowledge">Domains and facts</Link></nav> : null}
     {entryId ? <MemoryDetail key={entryId} id={entryId} /> : knowledge ? <MemoryKnowledge /> : <MemoryList />}
   </div></main>;
@@ -88,10 +88,19 @@ function MemoryDetail({ id }: { id: string }) {
   const last = useRef<{ fingerprint: string; request: MemoryMutation } | null>(null);
   const cancelDelete = useRef<HTMLButtonElement>(null);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
+  const editOnLoad = useRef(location.state?.editMemory === true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let active = true; setLoading(true); setError(null);
-    readMemory(id).then(value => { if (active) setEntry(value); }).catch(cause => { if (active) setError(message(cause)); }).finally(() => { if (active) setLoading(false); });
+    readMemory(id).then(value => {
+      if (!active) return;
+      setEntry(value);
+      if (editOnLoad.current) {
+        editOnLoad.current = false;
+        setDraft(structuredClone(value)); setStructured(JSON.stringify({ entities: value.entities ?? [], facts: value.facts ?? [] }, null, 2));
+        setEditing(true);
+      }
+    }).catch(cause => { if (active) setError(message(cause)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [id, refresh]);
   function startEditing() {

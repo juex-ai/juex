@@ -8,7 +8,8 @@ async function fixture(page) {
   const source = { fleet_id: "fleet", agent_id: "writer", thread_id: "0", generation_id: "g000001", from: 1, through: 1 };
   const base = { entry_id: "home", revision: 2, scope: { project: "personal" }, subject: { id: "self", name: "User", kind: "person" } };
   const fact = (id, city, lifecycle) => ({ ...base, object: { id: city.toLowerCase(), name: city, kind: "place" }, lifecycle, fact: { id, domain: "identity", subject: "self", predicate: "resides_in", object: city.toLowerCase(), status: lifecycle === "current" ? "valid" : lifecycle, source_type: "user_statement", sources: [source], recorded_at: "2026-01-01T00:00:00Z", valid_from: "2026-01-01T00:00:00Z", reason: "Explicitly reported move", replaces: lifecycle === "current" ? ["old-home"] : [] } });
-  const state = { city: "Hangzhou", offline: false, queries: [], paginated: false };
+  const state = { city: "Hangzhou", offline: false, queries: [], paginated: false, edits: [], conflict: false };
+  let entry = { id: "home", name: "Home history", revision: 2, summary: "Residence audit", body: "Stored residence audit", type: "user", scope: { project: "personal" }, sources: [source], entities: [base.subject, { id: "hangzhou", name: "Hangzhou", kind: "place" }], facts: [fact("current-home", "Hangzhou", "current").fact], created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
   await page.addInitScript(() => { window.EventSource = class extends EventTarget { close() {} }; });
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url()), path = url.pathname;
@@ -25,10 +26,19 @@ async function fixture(page) {
       if (view === "as_of") facts = [fact("old-home", "Shanghai", "current")];
       if (domain && domain !== "identity") facts = [];
       if (url.searchParams.get("q") === "missing") facts = [];
+      if (url.searchParams.get("predicate")) facts = facts.filter(f => f.fact.predicate === url.searchParams.get("predicate"));
       if (url.searchParams.get("status")) facts = facts.filter(f => f.lifecycle === url.searchParams.get("status"));
       return json({ facts, total: state.paginated ? 21 : facts.length, domain_total: domain && domain !== "identity" ? 0 : 2, next: state.paginated && !offset ? 20 : -1, fence: 1 });
     }
-    if (path === "/api/memory/entries/home") return json({ id: "home", name: "Home history", revision: 2, summary: "Residence audit", body: "Stored residence audit", type: "user", scope: {}, sources: [source], created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    if (path === "/api/memory/entries/home") {
+      if (route.request().method() === "PUT") {
+        const request = route.request().postDataJSON(); state.edits.push(request);
+        if (state.conflict) return json({ error: { message: "memory revision conflict: home" } }, 409);
+        entry = { ...request.entry, revision: request.expected_revision + 1 };
+        return json({ committed: true, state: "applied", index_ready: true });
+      }
+      return json(entry);
+    }
     return json({}, 404);
   });
   return state;
@@ -39,7 +49,10 @@ test("Memory domain structure, real-query navigation, history, provenance and re
   await page.goto("/memory?tab=knowledge");
   await expect(page.getByLabel("Domain", { exact: true }).locator("option")).toHaveCount(12);
   await expect(page.getByRole("region", { name: "Domain structure" })).toContainText("No automatic decay");
-  await page.getByRole("region", { name: "Domain structure" }).locator("summary").click();
+  await page.getByText("Domain policy", { exact: true }).click();
+  await page.getByRole("button", { name: "Filter by relation resides_in" }).click();
+  await expect.poll(() => state.queries.at(-1)?.predicate).toBe("resides_in");
+  await page.getByText("Relation rules · resides in", { exact: true }).click();
   await expect(page.getByText("Single value", { exact: true })).toBeVisible();
   await expect(page.getByText("An intention is not a completed move.")).toBeVisible();
   await expect(page.getByRole("list", { name: "Entity relationships" })).toContainText("Hangzhou");
@@ -60,13 +73,14 @@ test("Memory domain structure, real-query navigation, history, provenance and re
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect.poll(() => state.queries.at(-1)?.at).toBe("2025-01-01T00:00:00.000Z");
   await page.getByLabel("Knowledge view").selectOption("current");
+  await page.getByRole("button", { name: "Advanced filters", exact: true }).click();
   await page.getByLabel("Source Agent", { exact: true }).fill("writer");
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect.poll(() => state.queries.at(-1)?.source_agent_id).toBe("writer");
   state.city = "Chengdu";
   await page.getByRole("button", { name: "Refresh knowledge" }).click();
   await expect(page.getByRole("list", { name: "Entity relationships" })).toContainText("Chengdu");
-  await page.getByRole("button", { name: "User person · self", exact: true }).click();
+  await page.getByRole("button", { name: "Explore entity User (self)", exact: true }).click();
   await expect(page.getByLabel("Domain", { exact: true })).toHaveValue("");
   await expect(page.getByLabel("Entity ID", { exact: true })).toHaveValue("self");
   await expect.poll(() => state.queries.at(-1)?.entity).toBe("self");
@@ -94,4 +108,76 @@ test("Memory domain empty, filtered, paged and offline states remain distinct on
   state.offline = true;
   await page.getByRole("button", { name: "Refresh knowledge" }).click();
   await expect(page.getByRole("alert")).toContainText("This is not an empty result");
+});
+
+
+test("Memory relation filters are keyboard accessible, removable and preserve context", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/memory?tab=knowledge&source_agent_id=writer&project=personal&offset=20");
+  await expect(page.getByRole("button", { name: "Advanced filters (2)", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Source Agent", { exact: true })).not.toBeVisible();
+  const relation = page.getByRole("button", { name: "Filter by relation resides_in" });
+  await relation.focus(); await page.keyboard.press("Enter");
+  await expect(relation).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => state.queries.at(-1)?.predicate).toBe("resides_in");
+  expect(state.queries.at(-1).source_agent_id).toBe("writer");
+  await expect(page.getByRole("list", { name: "Entity relationships" })).toBeVisible();
+  await expect(relation).toBeFocused();
+  expect(state.queries.at(-1).project).toBe("personal");
+  expect(state.queries.at(-1).offset).toBeUndefined();
+  await page.getByRole("button", { name: "Remove Source Agent filter: writer" }).click();
+  await expect.poll(() => state.queries.at(-1)?.source_agent_id).toBeUndefined();
+  await expect(relation).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Remove Relation filter: resides_in" }).click();
+  await expect(relation).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(() => state.queries.at(-1)?.predicate).toBeUndefined();
+  expect(state.queries.at(-1).project).toBe("personal");
+});
+
+test("Memory direct editing retains drafts on conflict and restores the facts context", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/memory?tab=knowledge&domain=identity&predicate=resides_in&source_agent_id=writer");
+  await page.getByRole("link", { name: "Edit memory for fact current-home" }).click();
+  await expect(page.getByRole("heading", { name: "Edit memory", exact: true })).toBeVisible();
+  await page.getByLabel("Body", { exact: true }).fill("Updated residence audit");
+  state.conflict = true;
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("alert")).toContainText("revision conflict");
+  await expect(page.getByLabel("Body", { exact: true })).toHaveValue("Updated residence audit");
+  await page.getByRole("button", { name: "Cancel editing" }).click();
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Refresh memory" }).click();
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeEnabled();
+  state.conflict = false;
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Body", { exact: true }).fill("Updated residence audit");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
+  expect(state.edits.at(-1).expected_revision).toBe(2);
+  expect(state.edits.at(-1).entry.facts[0].predicate).toBe("resides_in");
+  expect(state.edits.at(-1).entry.entities).toHaveLength(2);
+  expect(state.edits.at(-1).entry.sources[0].agent_id).toBe("writer");
+  await page.getByRole("link", { name: "All memories" }).click();
+  await expect(page.getByRole("region", { name: "Fact details" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Filter by relation resides_in" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Remove Source Agent filter: writer" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Entity relationships" })).toContainText("Hangzhou");
+});
+
+test("Memory mobile structure disclosure keeps search and edit actions reachable", async ({ page }) => {
+  await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/memory?tab=knowledge");
+  await expect(page.getByLabel("Search facts", { exact: true })).toBeInViewport();
+  const toggle = page.getByRole("button", { name: "Domain structure", exact: true });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await page.getByRole("button", { name: "Filter by relation resides_in" }).click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("button", { name: "Filter by relation resides_in" })).toHaveAttribute("aria-pressed", "true");
+  await toggle.click();
+  await expect(page.getByRole("button", { name: "Filter by relation resides_in" })).not.toBeVisible();
+  await page.getByRole("link", { name: "Edit memory for fact current-home" }).click();
+  await expect(page.getByRole("heading", { name: "Edit memory", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 });
