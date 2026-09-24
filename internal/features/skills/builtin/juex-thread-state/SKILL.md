@@ -52,8 +52,8 @@ a create or delete. Later explicit Notes edits remain ordinary writes.
 ## Input checklist
 
 When enabled, `input-tracking` supplies delivered unchecked inputs on every
-request. Call `check_inputs` with `input_ids` after handling them; answer a
-question before checking it. When an input request is fully captured in durable tasks, check it only after
+request. Use `check_inputs` with `input_ids` to mark handled inputs.
+When an input request is fully captured in durable tasks, check it only after
 those task tools succeed; tasks then track completion. Uncaptured partial work,
 failures, waiting requests and active constraints stay unchecked. A new question does not replace earlier
 work. Checking is idempotent and does not cancel the Turn. Compaction retains

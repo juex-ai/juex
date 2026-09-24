@@ -19,14 +19,14 @@ func New(tracker runtimemodule.InputTracker) *Module { return &Module{tracker: t
 func (*Module) ID() runtimemodule.ID                 { return ModuleID }
 
 const guidance = `Input checklist: the following entries are delivered user inputs that still need attention. Preserve ongoing work while applying later amendments. Unchecked does not mean no progress was made. History includes handled requests; do not restart them merely because they remain in context.
-Use check_inputs only after handling every part of an input. Answer questions before checking them (answer text may precede the tool call in the same response). Finish other tools in a previous response before checking. A request fully recorded in durable tasks with its requirements and acceptance may be checked after those task tools succeed; the tasks then track completion. Keep work not fully captured, failures, waiting requests, and still-applicable constraints unchecked. A new status question does not replace the original task. If the user explicitly cancels or fully replaces a request, handle that instruction before checking the obsolete input. Do not cancel work just to empty the list.
+Use check_inputs to mark handled inputs. Finish other tools in a previous response before checking. A request fully recorded in durable tasks with its requirements and acceptance may be checked after those task tools succeed; the tasks then track completion. Keep work not fully captured, failures, waiting requests, and still-applicable constraints unchecked. A new status question does not replace the original task. If the user explicitly cancels or fully replaces a request, handle that instruction before checking the obsolete input. Do not cancel work just to empty the list.
 This is a reminder, not a new user message or a reason to keep running while waiting. Entries preserve user priority; later user amendments apply. Entries with external content references require the existing file/media tools.`
 
 func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]toolcore.Tool, error) {
 	definition := toolcore.ToolDefinition{
 		Name: ToolCheck, Group: toolcore.ToolGroupThreadState, ExecutionPolicy: toolcore.ToolExecutionSerial,
 		Guide:       toolcore.ToolGuide{Loader: "skill_load", Name: "juex-thread-state"},
-		Description: "Check handled input IDs from the checklist after answering, completing the work, or fully recording the request in durable tasks. Keep uncaptured partial work and active constraints unchecked. Rechecking is idempotent.",
+		Description: "Mark handled input IDs from the checklist with check_inputs. Requests fully recorded in durable tasks may also be checked after those task tools succeed. Keep uncaptured partial work and active constraints unchecked. Rechecking is idempotent.",
 		Schema: map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{"input_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1, "maxItems": 256}},
