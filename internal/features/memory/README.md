@@ -161,7 +161,9 @@ retain audit facts. Forced user overrides and deletion/no-store use the trusted
 administration entrypoint; model evidence cannot acquire that authority.
 
 `valid`, `superseded`, `corrected`, `retracted` and `disputed` describe stored
-claims. Effective intervals are half-open. Supersession ends past truth;
+claims. Effective intervals are half-open. A scheduled supersession retains the
+old fact as current until its known end, when the replacement becomes applicable.
+Supersession ends past truth;
 correction marks an earlier error. Unknown dates remain unspecified with a time note; as-of queries do not guess
 unknown starts or ends.
 Deadlines use `due_at`: outstanding obligations become overdue, never automatically

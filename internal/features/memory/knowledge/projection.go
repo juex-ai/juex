@@ -38,7 +38,9 @@ func Lifecycle(f mc.Fact, at time.Time, asOf bool) string {
 	if f.Status == "corrected" || f.Status == "retracted" || f.Status == "disputed" {
 		return f.Status
 	}
-	if f.Status == "superseded" && !asOf {
+	// A known end may still be in the future; only an undated supersession
+	// ends current applicability independently of the interval below.
+	if f.Status == "superseded" && f.ValidUntil == nil && !asOf {
 		return "superseded"
 	}
 	if asOf && (f.ValidFrom == nil || (f.Status == "superseded" && f.ValidUntil == nil)) {
