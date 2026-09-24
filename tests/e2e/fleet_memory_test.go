@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -21,10 +23,28 @@ func TestEndToEnd_FleetMemoryAdministration(t *testing.T) {
 	entry := mc.Entry{ID: "release-notes", Name: "Release notes", Summary: "Keep notes concise", Type: "reference", Body: "Original text", Scope: mc.Scope{Workspace: "/project"}, Sources: []mc.Source{source}}
 	entry.Entities = []mc.Entity{{ID: "project", Name: "Project", Kind: "project"}}
 	entry.Facts = []mc.Fact{{ID: "release-style", Domain: "projects", Reason: "Explicit project decision", Qualifiers: map[string]string{"area": "release-notes"}, Subject: "project", Predicate: "decided", Value: "concise", Status: "valid", SourceType: "user_statement", Sources: entry.Sources, RecordedAt: time.Now().UTC()}}
+	start, transition := time.Now().Add(-24*time.Hour).UTC(), time.Now().Add(24*time.Hour).UTC()
+	entry.Facts[0].Status, entry.Facts[0].ValidFrom, entry.Facts[0].ValidUntil = "superseded", &start, &transition
+	next := entry.Facts[0]
+	next.ID, next.Value, next.Status = "release-style-next", "detailed", "valid"
+	next.ValidFrom, next.ValidUntil, next.Replaces = &transition, nil, []string{"release-style"}
+	entry.Facts = append(entry.Facts, next)
 	if _, err := api.Admin(t.Context(), user, mc.AdminRequest{Key: "seed", Action: "correct", Changes: []mc.Change{{Entry: entry}}}); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := api.Read(t.Context(), user, mc.ReadRequest{ID: entry.ID})
+	statePath := filepath.Join(home, "services", "memory", "state", "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Read(t.Context(), user, mc.ReadRequest{ID: entry.ID, View: "as_of"}); err == nil {
+		t.Fatal("RPC accepted as-of read without a time")
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected RPC read changed durable state: %v", err)
+	}
+	entry, err = api.Read(t.Context(), user, mc.ReadRequest{ID: entry.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +81,15 @@ func TestEndToEnd_FleetMemoryAdministration(t *testing.T) {
 	var facts mc.FactPage
 	if err := json.Unmarshal(request("GET", "/api/memory/facts?domain=projects&entity=project&predicate=decided&workspace=%2Fproject&limit=1", nil, 200), &facts); err != nil || facts.Total != 1 || len(facts.Facts) != 1 || facts.Facts[0].EntryID != entry.ID || facts.Facts[0].Lifecycle != "current" {
 		t.Fatalf("fact contract: %+v %v", facts, err)
+	}
+	if facts.Facts[0].Fact.ID != "release-style" {
+		t.Fatalf("scheduled replacement became current early: %+v", facts)
+	}
+	if err := json.Unmarshal(request("GET", "/api/memory/facts?view=history", nil, 200), &facts); err != nil || facts.Total != 2 {
+		t.Fatalf("scheduled audit: %+v %v", facts, err)
+	}
+	if err := json.Unmarshal(request("GET", "/api/memory/facts?view=as_of&at="+transition.Format(time.RFC3339Nano), nil, 200), &facts); err != nil || len(facts.Facts) != 1 || facts.Facts[0].Fact.ID != "release-style-next" {
+		t.Fatalf("effective-time boundary: %+v %v", facts, err)
 	}
 	request("GET", "/api/memory/facts?view=as_of", nil, 400)
 	request("GET", "/api/memory/facts?view=current&at=2026-01-01T00:00:00Z", nil, 400)

@@ -469,6 +469,12 @@ func (s *Store) Read(ctx context.Context, c mc.Caller, q mc.ReadRequest) (mc.Ent
 	if !ok {
 		return mc.Entry{}, errors.New("memory entry unavailable")
 	}
+	if q.View != "" && q.View != "current" && q.View != "history" && q.View != "as_of" {
+		return mc.Entry{}, errors.New("memory invalid read view")
+	}
+	if q.View == "as_of" && q.At == nil || q.At != nil && q.View != "" && q.View != "as_of" {
+		return mc.Entry{}, errors.New("memory invalid read time")
+	}
 	if c.Purpose != "maintenance" {
 		before := clone(s.state)
 		s.state.Clock++
@@ -478,12 +484,6 @@ func (s *Store) Read(ctx context.Context, c mc.Caller, q mc.ReadRequest) (mc.Ent
 			return mc.Entry{}, err
 		}
 		_ = s.rebuild()
-	}
-	if q.View != "" && q.View != "current" && q.View != "history" && q.View != "as_of" {
-		return mc.Entry{}, errors.New("memory invalid read view")
-	}
-	if q.View == "as_of" && q.At == nil || q.At != nil && q.View != "" && q.View != "as_of" {
-		return mc.Entry{}, errors.New("memory invalid read time")
 	}
 	audit := q.View == "history" || (q.View == "" && q.At == nil && (c.Profile == mc.ProfileUser || c.Purpose == "maintenance"))
 	if !audit {

@@ -176,6 +176,21 @@ func TestHotIndexAndExplicitAccessOnly(t *testing.T) {
 	if contains(index, "entry-000") {
 		t.Fatal("maintenance heated index")
 	}
+	at := time.Now()
+	for _, q := range []mc.ReadRequest{
+		{ID: "entry-000", View: "invalid"},
+		{ID: "entry-000", View: "as_of"},
+		{ID: "entry-000", View: "current", At: &at},
+		{ID: "entry-000", View: "history", At: &at},
+	} {
+		if _, err := s.Read(ctx, a, q); err == nil {
+			t.Fatalf("invalid read accepted: %+v", q)
+		}
+		index, err := os.ReadFile(filepath.Join(s.dir, "MEMORY.md"))
+		if err != nil || contains(index, "entry-000") {
+			t.Fatalf("rejected read heated index: %+v %v", q, err)
+		}
+	}
 	if _, err := s.Read(ctx, a, mc.ReadRequest{ID: "entry-000"}); err != nil {
 		t.Fatal(err)
 	}

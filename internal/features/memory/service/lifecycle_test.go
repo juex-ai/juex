@@ -162,6 +162,61 @@ func TestDomainLifecycleAsOfAndAtomicSupersession(t *testing.T) {
 		t.Fatal("corrected assertion returned as truth")
 	}
 }
+func TestScheduledSupersessionAcrossCurrentViews(t *testing.T) {
+	s, a, _, user := fixture(t)
+	s.state.Strategy = mc.Advanced
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	transition := start.AddDate(0, 1, 0)
+	e := domainEntry("rent", "rent-before", "finance", "rent", "1000")
+	e.Facts[0].Qualifiers = map[string]string{"currency": "CNY", "period": "month", "contract": "home"}
+	e.Facts[0].ValidFrom = &start
+	e.Facts[0].ValidUntil = &transition
+	e.Facts[0].Status = "superseded"
+	next := clone(e.Facts[0])
+	next.ID, next.Value, next.Status = "rent-after", "2000", "valid"
+	next.ValidFrom, next.ValidUntil = &transition, nil
+	next.Replaces = []string{"rent-before"}
+	e.Facts = append(e.Facts, next)
+	commitDomain(t, s, user, "scheduled-rent", e)
+	for _, tc := range []struct {
+		name string
+		at   time.Time
+		want string
+	}{
+		{"before", transition.Add(-time.Millisecond), "rent-before"},
+		{"at", transition, "rent-after"},
+		{"after", transition.Add(time.Millisecond), "rent-after"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s.now = func() time.Time { return tc.at }
+			facts, err := s.Facts(t.Context(), a, mc.Query{})
+			if err != nil || len(facts.Facts) != 1 || facts.Facts[0].Fact.ID != tc.want || facts.Facts[0].Lifecycle != "current" {
+				t.Fatalf("current facts: %+v %v", facts, err)
+			}
+			read, err := s.Read(t.Context(), a, mc.ReadRequest{ID: e.ID})
+			if err != nil || len(read.Facts) != 1 || read.Facts[0].ID != tc.want {
+				t.Fatalf("current read: %+v %v", read, err)
+			}
+			search, err := s.Search(t.Context(), a, mc.Query{Text: "rent"})
+			if err != nil || len(search.Entries) != 1 || search.Entries[0].Summary != read.Summary {
+				t.Fatalf("current search: %+v %v", search, err)
+			}
+			recall, err := s.Recall(t.Context(), a, mc.Query{Text: "rent"})
+			if err != nil || len(recall.Entries) != 1 || len(recall.Entries[0].Facts) != 1 || recall.Entries[0].Facts[0].ID != tc.want || recall.Entries[0].Body != read.Body {
+				t.Fatalf("current recall: %+v %v", recall, err)
+			}
+			history, err := s.Facts(t.Context(), a, mc.Query{View: "history"})
+			if err != nil || len(history.Facts) != 2 {
+				t.Fatalf("audit facts: %+v %v", history, err)
+			}
+		})
+	}
+	audit, err := s.Read(t.Context(), user, mc.ReadRequest{ID: e.ID})
+	if err != nil || audit.Revision != 1 || len(audit.Facts) != 2 || audit.Facts[0].Status != "superseded" || audit.Facts[1].Status != "valid" {
+		t.Fatalf("projection mutated persisted facts: %+v %v", audit, err)
+	}
+}
+
 func TestDomainExpiryAndOverdueAreDistinct(t *testing.T) {
 	s, a, _, user := fixture(t)
 	past := s.now().Add(-time.Hour)
