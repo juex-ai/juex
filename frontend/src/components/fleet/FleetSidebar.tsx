@@ -3,6 +3,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
 import type { ReactElement } from "react";
@@ -25,6 +26,7 @@ import {
   type AgentLifecycleAction,
 } from "@/lib/fleet-shell";
 import { agentSwitchPath, fleetSectionFromPath } from "@/lib/fleet-routes";
+import { orderFleetAgents } from "@/lib/fleet-roster";
 import { cn } from "@/lib/utils";
 import type { AgentStatus } from "@/types";
 
@@ -149,7 +151,7 @@ export function FleetSidebar({
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto py-2" aria-label="Agents">
-        {agents.map((agent) => (
+        {orderFleetAgents(agents).map((agent) => (
           <AgentRailRow
             key={agent.id}
             agent={agent}
@@ -228,9 +230,11 @@ function AgentRailRow({
       className={cn(
         "group relative mx-2 mb-1 flex h-12 items-center rounded-md transition-colors",
         selected ? "bg-sidebar-accent" : "hover:bg-muted/70",
+        agent.is_supervisor && "ring-1 ring-inset ring-juex-gold-400/40",
         compact && "justify-center",
       )}
       data-agent-state={state}
+      data-supervisor={agent.is_supervisor ? "true" : undefined}
     >
       <Link
         to={agentSwitchPath(agent.id, currentPath)}
@@ -242,8 +246,8 @@ function AgentRailRow({
         )}
         onClick={onNavigate}
         aria-current={selected ? "true" : undefined}
-        aria-label={`Open ${name}, ${agentStatusText(agent)}`}
-        title={compact ? `${name}: ${agentStatusText(agent)}` : undefined}
+        aria-label={`Open ${name}, ${agent.is_supervisor ? "Supervisor, " : ""}${agentStatusText(agent)}`}
+        title={compact ? `${name}: ${agent.is_supervisor ? "Supervisor · " : ""}${agentStatusText(agent)}` : undefined}
       >
         <AgentAvatar agent={agent} state={state} compact={compact} />
         {!compact ? (
@@ -257,6 +261,7 @@ function AgentRailRow({
                 state === "failed" && "text-destructive",
               )}
             >
+              {agent.is_supervisor ? <span className="font-medium text-juex-gold-900 dark:text-juex-gold-300">Supervisor · </span> : null}
               {agentStatusText(agent)}
             </span>
           </span>
@@ -345,10 +350,11 @@ function AgentAvatar({
       className={cn(
         "relative grid size-8 shrink-0 place-items-center rounded-md bg-juex-gold-100 font-serif font-semibold text-juex-gold-900 dark:bg-juex-gold-400/10 dark:text-juex-gold-300",
         compact ? "text-sm" : "text-xs",
+        agent.is_supervisor && "bg-juex-gold-400/25 ring-1 ring-inset ring-juex-gold-400/50 dark:bg-juex-gold-400/20",
       )}
       aria-hidden="true"
     >
-      {initial}
+      {agent.is_supervisor ? <ShieldCheck className="size-4" /> : initial}
       <span
         className={cn(
           "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card",

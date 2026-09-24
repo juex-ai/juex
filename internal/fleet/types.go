@@ -35,6 +35,7 @@ const (
 type AgentStatus struct {
 	ID                string                `json:"id"`
 	Name              string                `json:"name,omitempty"`
+	IsSupervisor      bool                  `json:"is_supervisor,omitempty"`
 	Workspace         string                `json:"workspace,omitempty"`
 	Enabled           bool                  `json:"enabled"`
 	Autostart         bool                  `json:"autostart"`

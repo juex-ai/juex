@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCw,
   ScrollText,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 
@@ -65,7 +66,7 @@ import {
   agentVisualState,
   nextFleetRosterLifecycleAction,
 } from "@/lib/fleet-shell";
-import { mergeFleetRoster } from "@/lib/fleet-roster";
+import { mergeFleetRoster, orderFleetAgents } from "@/lib/fleet-roster";
 import { cn } from "@/lib/utils";
 import type { AgentStatus, DirectoryListing, FleetStatus } from "@/types";
 
@@ -342,7 +343,7 @@ export function Fleet() {
                 </div>
               ) : (
                 <div className="divide-y">
-                  {agents.map((agent) => (
+                  {orderFleetAgents(agents).map((agent) => (
                     <AgentRow
                       key={agent.id}
                       agent={agent}
@@ -423,7 +424,10 @@ function AgentRow({
         FLEET_ROSTER_GRID_CLASS,
         "items-center text-sm transition-colors",
         !agent.enabled && "bg-muted/25",
+        agent.is_supervisor && "bg-juex-gold-400/10",
       )}
+      data-supervisor={agent.is_supervisor ? "true" : undefined}
+      data-testid="fleet-agent-row"
     >
       <div className="min-w-0 px-3 py-3">
         <Link
@@ -435,6 +439,12 @@ function AgentRow({
         >
           {agent.name || agent.id}
         </Link>
+        {agent.is_supervisor ? (
+          <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-juex-gold-900 dark:text-juex-gold-300">
+            <ShieldCheck className="size-3" aria-hidden="true" />
+            Supervisor
+          </span>
+        ) : null}
         <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
           {agent.id}
         </div>
