@@ -22,7 +22,7 @@ export function Memory() {
   const { entryId } = useParams();
   const [params] = useSearchParams();
   const knowledge = params.get("tab") === "knowledge";
-  return <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div className="mx-auto w-full max-w-4xl">
+  return <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div className={`mx-auto w-full ${knowledge && !entryId ? "max-w-6xl" : "max-w-4xl"}`}>
     {!entryId ? <nav aria-label="Memory views" className="mb-5 flex gap-4 border-b pb-3 text-sm"><Link className="text-primary underline" aria-current={!knowledge ? "page" : undefined} to="/memory">Entries</Link><Link className="text-primary underline" aria-current={knowledge ? "page" : undefined} to="/memory?tab=knowledge">Domains and facts</Link></nav> : null}
     {entryId ? <MemoryDetail key={entryId} id={entryId} /> : knowledge ? <MemoryKnowledge /> : <MemoryList />}
   </div></main>;
@@ -75,7 +75,11 @@ function MemoryList() {
 }
 
 function MemoryDetail({ id }: { id: string }) {
-  const navigate = useNavigate(), location = useLocation();
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const returnParams = new URLSearchParams(params);
+  returnParams.delete("edit");
+  const returnSearch = returnParams.size ? `?${returnParams}` : "";
   const [entry, setEntry] = useState<MemoryEntry | null>(null);
   const [draft, setDraft] = useState<MemoryEntry | null>(null);
   const [structured, setStructured] = useState("");
@@ -88,16 +92,30 @@ function MemoryDetail({ id }: { id: string }) {
   const last = useRef<{ fingerprint: string; request: MemoryMutation } | null>(null);
   const cancelDelete = useRef<HTMLButtonElement>(null);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
+  const editOnLoad = useRef(params.get("edit") === "1");
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let active = true; setLoading(true); setError(null);
-    readMemory(id).then(value => { if (active) setEntry(value); }).catch(cause => { if (active) setError(message(cause)); }).finally(() => { if (active) setLoading(false); });
+    readMemory(id).then(value => {
+      if (!active) return;
+      setEntry(value);
+      if (editOnLoad.current) {
+        editOnLoad.current = false;
+        setDraft(structuredClone(value)); setStructured(JSON.stringify({ entities: value.entities ?? [], facts: value.facts ?? [] }, null, 2));
+        setEditing(true);
+      }
+    }).catch(cause => { if (active) setError(message(cause)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [id, refresh]);
   function startEditing() {
     if (!entry) return;
     setDraft(structuredClone(entry)); setStructured(JSON.stringify({ entities: entry.entities ?? [], facts: entry.facts ?? [] }, null, 2));
     setError(null); setNotice(null); setEditing(true);
+    const next = new URLSearchParams(params); next.set("edit", "1"); setParams(next, { replace: true });
+  }
+  function finishEditing() {
+    setEditing(false); setDraft(null);
+    const next = new URLSearchParams(params); next.delete("edit"); setParams(next, { replace: true });
   }
   async function submit(method: "PUT" | "DELETE") {
     if (!entry || busy) return;
@@ -126,8 +144,8 @@ function MemoryDetail({ id }: { id: string }) {
       if (!alive.current) return;
       if (!receipt.committed) throw new Error(receipt.reason || "Memory change has not committed.");
       const text = `${method === "DELETE" ? "Memory deleted." : "Changes saved."}${!receipt.index_ready ? " Search index is not ready yet." : ""}`;
-      if (method === "DELETE") { navigate(`/memory${location.search}`, { state: { memoryNotice: text }, replace: true }); return; }
-      setNotice(text); setEditing(false); setDraft(null); last.current = null;
+      if (method === "DELETE") { navigate(`/memory${returnSearch}`, { state: { memoryNotice: text }, replace: true }); return; }
+      setNotice(text); finishEditing(); last.current = null;
       try { const updated = await readMemory(id); if (alive.current) setEntry(updated); }
       catch (cause) { if (alive.current) setError(`Saved, but the displayed entry could not be refreshed: ${message(cause)}`); }
     } catch (cause) {
@@ -138,7 +156,7 @@ function MemoryDetail({ id }: { id: string }) {
   }
   const hasStructured = Boolean(entry?.entities?.length || entry?.facts?.length);
   return <div className="space-y-5">
-    <Button asChild variant="ghost" className="-ml-3"><Link to={`/memory${location.search}`}><ArrowLeft className="size-4" />All memories</Link></Button>
+    <Button asChild variant="ghost" className="-ml-3"><Link to={`/memory${returnSearch}`}><ArrowLeft className="size-4" />All memories</Link></Button>
     {notice ? <p role="status" className="rounded-md border p-3 text-sm">{notice}</p> : null}
     <ErrorMessage text={editing ? null : error} />
     {loading ? <p className="text-sm text-muted-foreground">Loading memory…</p> : null}
@@ -153,7 +171,7 @@ function MemoryDetail({ id }: { id: string }) {
         {hasStructured ? <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Structured knowledge</summary><p className="my-2 text-xs text-muted-foreground">Update the facts alongside the text when their meaning changes. Keep explicit identities and source references.</p><div className={fieldClass}><label htmlFor="memory-structured">Entities and facts (JSON)</label><Textarea id="memory-structured" className="min-h-48 font-mono text-xs" value={structured} onChange={e => setStructured(e.target.value)} /></div></details> : null}
         <p className="text-xs text-muted-foreground">{userControlNotice}</p>
         <ErrorMessage text={error} />
-        <div className="flex gap-2"><Button type="submit">{busy ? "Saving…" : "Save changes"}</Button><Button type="button" variant="outline" onClick={() => { setEditing(false); setDraft(null); setError(null); }}>Cancel editing</Button></div>
+        <div className="flex gap-2"><Button type="submit">{busy ? "Saving…" : "Save changes"}</Button><Button type="button" variant="outline" onClick={() => { finishEditing(); setError(null); }}>Cancel editing</Button></div>
       </fieldset>
     </form> : entry ? <>
       <p className="break-words text-sm text-muted-foreground">{entry.summary}</p>

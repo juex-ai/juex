@@ -71,6 +71,10 @@ Current/history/as-of views and lifecycle labels come from the Memory service;
 expired obligations are not presented as completed. Provenance links reach the
 owning entry; unavailable raw history has a readable reference and explanation.
 Loading, empty domains, no matches and service failure are visibly distinct.
+Compact relation maps filter the adjacent facts directly. On narrow screens,
+structure is collapsible; active filters remain visible even when advanced
+controls are closed. Fact rows lead directly to the owning entry editor while
+retaining the browsing context.
 
 ## Thread Explorer
 
