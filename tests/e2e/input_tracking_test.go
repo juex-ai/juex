@@ -52,7 +52,6 @@ func inputTrackingAnswer(text string) llm.Response {
 
 func inputTrackingCheck(ids ...string) llm.Response {
 	return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-		{Type: llm.BlockText, Text: "The status question has been answered."},
 		memoryCall("check-batch", inputtracking.ToolCheck, map[string]any{"input_ids": ids}),
 	}}, StopReason: llm.StopToolUse}
 }
@@ -68,9 +67,17 @@ func inputTrackingReminders(history []llm.Message) string {
 }
 
 func TestInputTrackingMidTurnChecklistAndAnswerCommit(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+	for _, tc := range []struct {
+		name, answerOrder string
+		enabled           bool
+	}{
+		{name: "disabled"},
+		{name: "check_then_answer", enabled: true, answerOrder: "after"},
+		{name: "answer_with_check", enabled: true, answerOrder: "with"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			isolateModuleConfig(t)
+			enabled := tc.enabled
 			provider := &inputTrackingProvider{}
 			a := inputTrackingApp(t, inputTrackingConfig(t, enabled), provider)
 			call := 0
@@ -106,12 +113,19 @@ func TestInputTrackingMidTurnChecklistAndAnswerCommit(t *testing.T) {
 								t.Errorf("missing input %q", text)
 							}
 						}
-						return inputTrackingCheck(questionID), nil
+						response := inputTrackingCheck(questionID)
+						if tc.answerOrder == "with" {
+							response.Message.Blocks = append([]llm.Block{{Type: llm.BlockText, Text: "The status question has been answered."}}, response.Message.Blocks...)
+						}
+						return response, nil
 					}
 					return inputTrackingAnswer("Waiting for requested information."), nil
 				case 3:
 					if strings.Contains(reminders, "status question") || !strings.Contains(reminders, "original implementation") || !strings.Contains(reminders, "do not merge yet") {
 						t.Fatalf("independent check lost other work: %s", reminders)
+					}
+					if tc.answerOrder == "after" {
+						return inputTrackingAnswer("The status question has been answered."), nil
 					}
 					return inputTrackingAnswer("Waiting for requested information."), nil
 				default:
@@ -171,21 +185,18 @@ func TestInputTrackingMidTurnChecklistAndAnswerCommit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			answered := false
+			answers := 0
 			checked := false
 			for _, event := range events {
 				if event.Type == "llm.responded" && strings.Contains(fmt.Sprint(event.Payload), "status question has been answered") {
-					answered = true
+					answers++
 				}
 				if event.Type == runtime.InputCheckedType {
 					checked = true
-					if !answered {
-						t.Fatal("check committed before the answer")
-					}
 				}
 			}
-			if !checked {
-				t.Fatal("no durable check fact")
+			if !checked || answers != 1 {
+				t.Fatalf("durable check=%v, answer messages=%d", checked, answers)
 			}
 		})
 	}

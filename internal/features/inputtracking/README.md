@@ -9,12 +9,12 @@ preset with `modules.input-tracking.enabled`.
 Framework registers direct user inputs at acceptance, including Main and
 direct Worker inputs. Automated continuations, observations and notifications
 are excluded. Each request receives the delivered unchecked inputs in acceptance
-order. The model checks an input after handling it or fully recording its request in
-durable tasks after the task tools succeed. Tasks then track completion.
+order. The model uses `check_inputs` to mark handled inputs, including requests
+fully recorded in durable tasks after the task tools succeed. Tasks then track completion.
 Uncaptured partial work, failures,
-waiting requests and still-applicable constraints remain unchecked. Questions
-must be answered before checking, and other tools must finish in a previous
-response. Checks are atomic across the requested IDs and idempotent within
+waiting requests and still-applicable constraints remain unchecked. The model
+chooses the order of answer text and checking. Other tools must finish in a
+previous response. Checks are atomic across the requested IDs and idempotent within
 the same Thread and work scope.
 
 Framework owns `inputs.json`, original input content, check facts and recovery.

@@ -64,7 +64,7 @@ When Tasks is enabled, the model may also check an input after successful task t
 | Situation | Rule |
 | --- | --- |
 | “Implement export and write tests” | Check after both are complete, or after both requirements are fully recorded in durable tasks. |
-| “What is the current progress?” | Check after answering this question; the original work remains tracked by its unchecked input or tasks. |
+| “What is the current progress?” | Mark this question handled with `check_inputs`; the original work remains tracked by its unchecked input or tasks. |
 | “Change the format to JSON” | Check after applying the change or updating the durable task contract, not merely acknowledging receipt. |
 | “Do not merge the PR this time” | Keep the constraint in recitation until work ends or it is durably captured in the relevant task contract. |
 | Failure or waiting for the user | Explain the obstacle; keep the input unchecked unless durable tasks fully track the remaining work. |
@@ -74,7 +74,7 @@ Keep originals unchanged and present them chronologically. Guidance makes later 
 
 Framework validates identity, scope, and ordering; the model still judges whether handling is sufficient. Do not add mandatory evidence parameters or a separate verifier model initially, and do not claim a check proves correctness.
 
-For questions, save the answer before committing the check. If an answer and tool call share a model response, Framework persists the answer first. Never check before relying on an answer that has not yet been generated. Accept a short additional call when checking requires another step.
+The model chooses the order of answer text and `check_inputs`. Checking marks the model's judgement that the input has been handled; it does not terminate the tool loop.
 
 ## 5. Recitation Supplies All Unchecked Information
 
@@ -123,7 +123,7 @@ This ensures unchecked information does not silently disappear after dequeuing o
 
 Web may show a check beside an input, with failures handled by existing error presentation. Assistant prose remains plain conversation text. Add no task board, disposition categories, or semantic-completion wait mode. `send --wait` still means the consuming Turn settled.
 
-Acceptance tests should cover registration of initial and mid-run inputs, independent checks across multiple inputs, immutable originals, idempotent and scope-safe checks, retention across errors/compaction, answer-before-check ordering, recovery without action replay, module disable/re-enable and work-scope boundaries, and large checklists without silent omission. Cross-module behavior requires e2e tests, visible Web changes require browser verification, and implementation follows the [local validation skill](../../.agents/skills/juex-localtest/SKILL.md).
+Acceptance tests should cover registration of initial and mid-run inputs, independent checks across multiple inputs, immutable originals, idempotent and scope-safe checks, retention across errors/compaction, durable answers and checks in either order, recovery without action replay, module disable/re-enable and work-scope boundaries, and large checklists without silent omission. Cross-module behavior requires e2e tests, visible Web changes require browser verification, and implementation follows the [local validation skill](../../.agents/skills/juex-localtest/SKILL.md).
 
 Model evaluations reproduce the original five scenarios, comparing existing behavior, Notes reminders, and this proposal. Report omissions, duplicate actions, false checks, unchecked-input retention after recovery, and additional calls/tokens. Do not promise unmeasured improvement; specifically check whether the model still ends prematurely.
 
