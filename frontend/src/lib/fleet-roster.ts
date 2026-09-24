@@ -1,5 +1,9 @@
 import type { AgentStatus } from "../types.ts";
 
+export function orderFleetAgents(agents: readonly AgentStatus[]): AgentStatus[] {
+  return [...agents].sort((a, b) => Number(!!b.is_supervisor) - Number(!!a.is_supervisor));
+}
+
 export function mergeFleetRoster(
   current: readonly AgentStatus[],
   next: readonly AgentStatus[],

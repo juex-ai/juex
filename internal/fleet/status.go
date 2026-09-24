@@ -17,10 +17,11 @@ func (m *Manager) Status(ctx context.Context) ([]AgentStatus, error) {
 		return nil, err
 	}
 	statuses := make([]AgentStatus, 0, len(entries))
+	supervisor, supervisorErr := m.readSupervisor()
 	metricKeys := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		metricKeys = append(metricKeys, entry.ID)
-		statuses = append(statuses, m.inspectStatus(ctx, entry))
+		statuses = append(statuses, withSupervisorRole(m.inspectRuntimeStatus(ctx, entry), supervisor, supervisorErr))
 	}
 	if m.processMetrics != nil {
 		m.processMetrics.Retain(metricKeys)
@@ -53,6 +54,19 @@ func (m *Manager) StatusOne(ctx context.Context, selector string) (AgentStatus, 
 }
 
 func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEntry) AgentStatus {
+	supervisor, err := m.readSupervisor()
+	return withSupervisorRole(m.inspectRuntimeStatus(ctx, entry), supervisor, err)
+}
+
+func withSupervisorRole(status AgentStatus, binding supervisorBinding, err error) AgentStatus {
+	status.IsSupervisor = err == nil && binding.State != "removed" && binding.Agent.ID == status.ID
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		status.Problem = appendProblem(status.Problem, fmt.Sprintf("read Supervisor binding: %v", err))
+	}
+	return status
+}
+
+func (m *Manager) inspectRuntimeStatus(ctx context.Context, entry agentstate.RegistryEntry) AgentStatus {
 	status := AgentStatus{
 		ID:        entry.ID,
 		Name:      entry.Agent.Name,

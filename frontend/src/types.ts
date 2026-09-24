@@ -1301,6 +1301,7 @@ export interface FleetStatus {
 export interface AgentStatus {
   id: string;
   name?: string;
+  is_supervisor?: boolean;
   workspace?: string;
   enabled: boolean;
   autostart: boolean;

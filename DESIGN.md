@@ -31,6 +31,11 @@ Memory selected. Both sections mark the Fleet management entry active, including
 in the collapsed sidebar and mobile drawer. Section links remain accessible on
 narrow screens and when the Agent roster is unavailable.
 
+The current bound Supervisor appears first in Agent lists, with a distinct role
+icon and label in the sidebar and Settings roster. Its role remains recognizable
+in collapsed and mobile navigation, independently of its name or runtime state.
+Ordinary Agents retain their relative order.
+
 The fixed-height Agent navigation shows the Agent name above the viewed
 Thread's alias/id and its own status. Loading or unknown state never implies
 Idle; archived Threads show Archived. Agent process health remains separate.

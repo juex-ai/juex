@@ -28,6 +28,9 @@ Main Thread 是 Agent 默认目的地。Thread Explorer 同时承载当前工作
 management 入口标记为当前入口，折叠侧栏与手机抽屉中也保持一致。窄屏或 Agent
 列表不可用时，目录导航仍可访问。
 
+当前绑定的 Supervisor 在 Agent 列表中置顶，在侧栏和 Settings 列表中使用专属角色图标和标签。
+无论名称或运行状态如何，折叠侧栏和移动端导航都能识别其角色。普通 Agent 保持原有相对顺序。
+
 Agent 导航栏保持固定高度，上行显示 Agent 名称，下行显示当前 Thread 的
 alias/id 及其自身状态。加载或未知状态不能默认显示 Idle；归档显示 Archived。
 Agent 进程健康独立展示。Explorer 与 Runtime 显示页面上下文，不显示 Thread
