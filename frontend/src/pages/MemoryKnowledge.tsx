@@ -553,8 +553,7 @@ export function MemoryKnowledge() {
                         <Button asChild variant="ghost" size="sm">
                           <Link
                             aria-label={`Edit memory for fact ${v.fact.id}`}
-                            to={`/memory/${encodeURIComponent(v.entry_id)}${paramsWithFact(params, v.fact.id)}`}
-                            state={{ editMemory: true }}
+                        to={`/memory/${encodeURIComponent(v.entry_id)}${memoryEditSearch(params, v.fact.id)}`}
                           >
                             <Pencil className="size-3.5" />
                             Edit memory
@@ -620,8 +619,9 @@ export function MemoryKnowledge() {
   );
 }
 
-function paramsWithFact(params: URLSearchParams, fact: string) {
+function memoryEditSearch(params: URLSearchParams, fact: string) {
   const next = new URLSearchParams(params);
   next.set("fact", fact);
+  next.set("edit", "1");
   return `?${next}`;
 }

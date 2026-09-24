@@ -162,6 +162,9 @@ test("Memory direct editing retains drafts on conflict and restores the facts co
   await expect(page.getByRole("button", { name: "Filter by relation resides_in" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Remove Source Agent filter: writer" })).toBeVisible();
   await expect(page.getByRole("list", { name: "Entity relationships" })).toContainText("Hangzhou");
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Home history", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Body", { exact: true })).not.toBeVisible();
 });
 
 test("Memory mobile structure disclosure keeps search and edit actions reachable", async ({ page }) => {
@@ -180,4 +183,20 @@ test("Memory mobile structure disclosure keeps search and edit actions reachable
   await page.getByRole("link", { name: "Edit memory for fact current-home" }).click();
   await expect(page.getByRole("heading", { name: "Edit memory", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+});
+
+test("Memory copied edit URLs open the editor and cancel clears the history intent", async ({ page }) => {
+  await fixture(page);
+  await page.goto("/memory?tab=knowledge&predicate=resides_in");
+  const destination = await page.getByRole("link", { name: "Edit memory for fact current-home" }).getAttribute("href");
+  // A direct navigation has no React Router history state, like a copied link.
+  await page.goto(destination);
+  await expect(page.getByRole("heading", { name: "Edit memory", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel editing" }).click();
+  await expect(page.getByRole("heading", { name: "Home history", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "All memories" }).click();
+  await expect(page.getByRole("button", { name: "Remove Relation filter: resides_in" })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Home history", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Body", { exact: true })).not.toBeVisible();
 });
