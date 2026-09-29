@@ -6,6 +6,19 @@
 module ownership, dependency direction, and data flow. Exact structs, routes,
 flags, and file schemas are owned by code and tests.
 
+## Management Platform Boundary
+
+[Management](internal/management/README.md) owns the new platform directory and
+its PostgreSQL schema. Business operations authorize against current membership
+inside their transaction; Tenant locks serialize membership changes. Audit and
+outbox facts commit with lifecycle mutations. This boundary has no dependency
+on Home discovery or the existing Fleet process supervisor.
+
+App owns composition. Public authentication, HTTP/Kitex adapters and the Runtime
+connection are subsequent integration work; the directory is not an exposed
+service yet. [ADR-0003](docs/adr/0003-managed-agent-platform.md) defines the accepted
+target. The runtime/storage sections below describe the existing implementation.
+
 ## Runtime Shape
 
 ```text
@@ -39,13 +52,14 @@ business transactions remain in the independent Memory service.
 ## Ownership And Dependency Direction
 
 The repository is one Go module. Executable entry points stay in `cmd`; every
-production package under `internal` belongs to one of these seven groups:
+production package under `internal` belongs to one of these eight groups:
 
 | Group | Owns |
 | --- | --- |
 | `internal/app` | Product composition, explicit Module inventory/presets, layered configuration, resource selection, process-shared services, Provider factories, and API/status projections. |
 | `internal/entrypoints` | CLI and Agent/Fleet HTTP adapters, request/SSE lifetimes, wire DTOs, and one shared Web asset handler. |
 | `internal/fleet` | Registered Agent and independent service process lifecycles, verified endpoint selection, lifecycle locks, restart continuation, and platform service integration. |
+| `internal/management` | Global users, tenant memberships, Fleet ownership, authorization transactions, audit and lifecycle outbox. |
 | `internal/framework` | Agent execution and Worker orchestration, Thread/Generation storage, Module contracts, input admission, recovery, Provider loops, context control, and passive lifecycle operations. |
 | `internal/features` | Concrete Module Tools, context, policy, observation producers, scoped state, and resource implementations. |
 | `internal/providers` | Provider construction, vendor protocols/SDKs, transport adaptation, and Provider profile defaults. |
@@ -57,6 +71,9 @@ upward dependency. Fleet depends on Framework and Foundation and receives
 application configuration publication as an explicit callback. App composes
 these groups; entrypoints adapt them to users. No runtime service locator or
 compatibility package bypasses these boundaries.
+Management depends only on its own packages and Foundation. App and entrypoints
+may consume its contracts; existing Fleet, Framework, Features and Providers
+cannot import it. Entry adapters cannot import its PostgreSQL implementation.
 [`tests/architecture`](tests/architecture/boundary_test.go) checks every
 production Go file, including other operating systems, and rejects unclassified
 package groups. See [ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.md)

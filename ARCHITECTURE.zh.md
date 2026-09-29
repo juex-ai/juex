@@ -5,6 +5,16 @@
 [DOMAIN.zh.md](DOMAIN.zh.md) 定义产品语义，本文定义稳定的模块所有权、依赖方向
 和数据流。具体 struct、route、flag 和文件 schema 以代码和测试为准。
 
+## Management 平台边界
+
+[Management](internal/management/README.zh.md) 拥有新平台 directory 及其 PostgreSQL schema。
+业务操作在事务内根据当前成员状态授权，Tenant 行锁串行化成员变更。
+审计和 outbox 事实与生命周期修改一起提交。该边界不依赖 Home 发现或现有 Fleet 进程管理器。
+
+App 负责组装。公开认证、HTTP/Kitex 适配和 Runtime 连接仍是后续接入工作，directory
+尚未作为服务公开。[ADR-0003](docs/adr/0003-managed-agent-platform.zh.md) 定义已接受的目标。
+下文 Runtime／存储章节描述现有实现。
+
 ## Runtime 结构
 
 ```text
@@ -34,13 +44,14 @@ App 从所属 Home 加载定义，共享 endpoint 和类型化控制辅助位于
 ## 所有权与依赖方向
 
 仓库保持单个 Go module。可执行入口位于 `cmd`；`internal` 下的每个生产包
-都归属于以下七个组之一：
+都归属于以下八个组之一：
 
 | 目录组 | 所有权 |
 | --- | --- |
 | `internal/app` | 产品装配、显式 Module 清单与预设、分层配置、资源选择、进程共享服务、Provider 工厂与 API/status 投影。 |
 | `internal/entrypoints` | CLI、Agent/Fleet HTTP 适配、请求/SSE 生命周期、wire DTO 与唯一共享 Web 资源 handler。 |
 | `internal/fleet` | 已注册 Agent 与独立服务的进程生命周期、验证后的 endpoint 选择、生命周期锁、重启续接与平台服务集成。 |
+| `internal/management` | 全局用户、租户成员、Fleet 归属、授权事务、审计与生命周期 outbox。 |
 | `internal/framework` | Agent 执行与 Worker 编排、Thread/Generation 存储、Module 契约、输入接纳、恢复、Provider 循环、上下文控制与被动生命周期操作。 |
 | `internal/features` | 具体 Module 的 Tool、context、policy、Observation producer、作用域状态与资源实现。 |
 | `internal/providers` | Provider 构造、厂商协议/SDK、传输适配与 Provider profile 默认值。 |
@@ -50,6 +61,8 @@ Feature 依赖 Framework 与 Foundation。Provider 依赖 Foundation；Framework
 不得导入具体 Feature 或 Provider。Foundation 没有向上依赖。Fleet 依赖
 Framework 与 Foundation，通过显式回调接收应用配置发布能力。App 负责装配，
 entrypoint 负责面向用户的适配。运行时 service locator 或兼容包不能绕过边界。
+Management 只依赖自身和 Foundation。App 与 entrypoint 可以使用它的契约；
+现有 Fleet、Framework、Feature、Provider 不得导入它。入口适配器不能导入其 PostgreSQL 实现。
 [`tests/architecture`](tests/architecture/boundary_test.go) 检查所有生产 Go 文件，
 包括其他操作系统的实现，并拒绝未分类的目录组。Module 边界的原因见
 [ADR-0001](docs/adr/0001-lifecycle-driven-module-architecture.zh.md)。

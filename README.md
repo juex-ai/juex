@@ -10,6 +10,11 @@ Juex is an agent runtime, not an RPC or workflow engine. Sending an Input means
 durable acceptance into a Thread; it does not imply that the next Assistant
 message is a one-to-one response.
 
+The approved [Managed Agent platform](docs/adr/0003-managed-agent-platform.md)
+refactor is in progress. Its first [Management directory](internal/management/README.md)
+owns database-backed tenant identities and permissions. The commands below still
+describe the existing runtime; platform login, Web and execution are not yet wired.
+
 ## Quick Start
 
 Install a published release:

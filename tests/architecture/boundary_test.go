@@ -21,8 +21,9 @@ var dependencies = map[string]map[string]bool{
 	"features":    {"foundation": true, "framework": true, "features": true},
 	"providers":   {"foundation": true, "providers": true},
 	"fleet":       {"foundation": true, "framework": true, "fleet": true},
-	"app":         {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "app": true},
-	"entrypoints": {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "app": true, "entrypoints": true},
+	"management":  {"foundation": true, "management": true},
+	"app":         {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "app": true},
+	"entrypoints": {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "app": true, "entrypoints": true},
 	"cmd":         {"foundation": true, "entrypoints": true},
 }
 
@@ -69,6 +70,9 @@ func TestProductionPackageOwnershipAndDependencies(t *testing.T) {
 				if err != nil {
 					return err
 				}
+				if owner == "entrypoints" && strings.HasPrefix(imported, modulePath+"/internal/management/postgres") {
+					t.Errorf("entrypoint imports Management storage adapter: %s -> %s", relative, imported)
+				}
 				if owner == "foundation" && (strings.HasPrefix(imported, "github.com/openai/") || strings.HasPrefix(imported, "github.com/anthropics/")) {
 					t.Errorf("Foundation imports Provider SDK: %s -> %s", relative, imported)
 				}
@@ -99,6 +103,7 @@ func TestPackageOwnershipClassifiesNestedAndUnknownRoots(t *testing.T) {
 		"internal/features/skills/internal/frontmatter": "features",
 		"internal/providers/internal/protocol":          "providers",
 		"internal/fleet/service":                        "fleet",
+		"internal/management/postgres":                  "management",
 		"internal/app/config":                           "app",
 		"internal/entrypoints/agenthttp":                "entrypoints",
 		"cmd/juex":                                      "cmd",

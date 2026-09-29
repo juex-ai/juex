@@ -5,6 +5,28 @@
 This document is the canonical vocabulary and invariant set. Package and
 storage implementation belong in [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Managed Platform Identity
+
+The accepted platform direction is [ADR-0003](docs/adr/0003-managed-agent-platform.md).
+Management's implemented directory has global Users, Tenant Memberships and one
+Fleet per `(Tenant, User)`. Credentials and email verification do not define
+User identity. An invitation grants membership, not proof of mailbox ownership.
+
+Only active tenant administrators manage members. No concurrent change may
+remove, suspend or demote the last active administrator. A suspended or removed
+member loses access in that tenant only. Re-enabling a suspended membership
+preserves its Fleet; a removed membership requires accepting a new invitation.
+Rejoining restores the retained Fleet with the newly invited role.
+
+An active administrator may read another member's retained Fleet in the same
+tenant; the audit records actor and owner separately. Read access is not an
+execution grant. Membership lifecycle events preserve monotonic versions and
+durable intent, not proof that remote work has stopped. Re-enabling must not
+erase earlier cancellation intent or replay old work.
+
+The directory is not yet connected to public authentication or Runtime. The
+remaining sections describe current runtime contracts until platform cutover.
+
 ## Ownership
 
 | Owner | Responsibility |

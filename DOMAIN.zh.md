@@ -5,6 +5,23 @@
 本文是规范词汇和不变量的唯一来源。模块和存储实现见
 [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)。
 
+## Managed 平台身份
+
+已接受的平台方向见 [ADR-0003](docs/adr/0003-managed-agent-platform.zh.md)。
+Management 已实现的 directory 包含全局 User、Tenant Membership，以及每个
+`(Tenant, User)` 的唯一 Fleet。凭据和邮箱验证不定义 User 身份，邀请授予成员资格，
+不证明邮箱归属。
+
+只有有效租户管理员可以管理成员。并发修改也不能移除、停用或降级最后一位有效管理员。
+成员停用或移除只撤销当前租户的访问。停用后重新启用保留 Fleet；移除后必须接受新邀请。
+重新加入恢复保留的 Fleet，角色按本次邀请授予。
+
+有效管理员可以读取同租户其他成员保留的 Fleet，审计分别记录 actor 与 owner。
+读取权限不代表执行许可。成员生命周期事件保存单调版本与持久意图，不证明远端任务已经停止。
+重新启用不能抹去之前的取消意图，也不能重放历史工作。
+
+directory 尚未接入公开认证和 Runtime。平台切换前，下文仍描述现有 Runtime 契约。
+
 ## 所有权
 
 | 所有者 | 职责 |
