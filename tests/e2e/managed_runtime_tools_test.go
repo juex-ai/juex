@@ -237,6 +237,57 @@ func TestManagedRuntimeCancellationClosesToolTranscriptAndStopsOfflineWork(t *te
 	}
 }
 
+func TestManagedRuntimeCancelCompletedTurnStopsItsBackgroundOperations(t *testing.T) {
+	var deviceID string
+	var mainCalls, workerCalls atomic.Int32
+	f := executionDatabaseWithProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		encoded, _ := json.Marshal(body["messages"])
+		calls := &mainCalls
+		if strings.Contains(string(encoded), "worker-background") {
+			calls = &workerCalls
+		}
+		if calls.Add(1) == 1 {
+			streamManagedTool(w, "exec_command", map[string]any{"environment_id": deviceID, "command": "printf ready; sleep 60"})
+			return
+		}
+		streamManagedReply(w, "Background process started")
+	})
+	ctx := context.Background()
+	device, token := f.pairDevice(t)
+	deviceID = device.ID
+	engine := openNative(t, native.Config{StateDirectory: filepath.Join(t.TempDir(), "state"), WorkingDirectory: t.TempDir(), EnvironmentID: device.ID, Grants: device.Ceiling})
+	connectExecutionDevice(t, f, device, token, engine)
+	runRuntimeTools(t, f, runtimeExecutionGateway(t, f))
+	f.submit(t, "main-background", f.main.ID, "Run a background process")
+	runtimeEventually(t, func() bool { return mainCalls.Load() == 2 && f.timeline(t, f.main.ID).Thread.State == "idle" })
+	worker, err := f.service.Worker(ctx, f.actor, f.tenant, f.agent.ID, f.main.ID, "background-worker", "Independent process")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t, "worker-background", worker.ID, "worker-background")
+	runtimeEventually(t, func() bool { return workerCalls.Load() == 2 && f.timeline(t, worker.ID).Thread.State == "idle" })
+	if err := f.service.Cancel(ctx, f.actor, f.tenant, f.agent.ID, f.main.ID); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEventually(t, func() bool {
+		var cancelled bool
+		return f.pool.QueryRow(ctx, `SELECT o.state='cancelled' FROM execution.operations o JOIN runtime.tools j ON j.id::text=o.id JOIN runtime.turns t ON t.id=j.turn_id WHERE t.thread_id=$1`, f.main.ID).Scan(&cancelled) == nil && cancelled
+	})
+	var workerRunning, mainCompleted bool
+	if err := f.pool.QueryRow(ctx, `SELECT o.state='running' AND NOT o.cancel_requested FROM execution.operations o JOIN runtime.tools j ON j.id::text=o.id JOIN runtime.turns t ON t.id=j.turn_id WHERE t.thread_id=$1`, worker.ID).Scan(&workerRunning); err != nil || !workerRunning {
+		t.Fatal("cancellation reached independent Worker", err, workerRunning)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT state='completed' FROM runtime.turns WHERE thread_id=$1`, f.main.ID).Scan(&mainCompleted); err != nil || !mainCompleted {
+		t.Fatal("cancellation rewrote completed history", err, mainCompleted)
+	}
+	assertRuntimeTranscript(t, f)
+}
+
 func prepareRuntimeTool(t *testing.T, f *executionFixture, device string) (managedruntime.Scope, managedruntime.ToolWork) {
 	t.Helper()
 	ctx := context.Background()

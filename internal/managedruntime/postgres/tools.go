@@ -52,11 +52,11 @@ func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.To
 	err = tx.QueryRow(ctx, `WITH candidate AS (
  SELECT j.id FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id
  WHERE j.lease_until<=clock_timestamp() AND j.next_check<=clock_timestamp()
- AND (j.state IN ('pending','waiting') OR (t.state='cancelled' AND j.operation_live))
+ AND (j.state IN ('pending','waiting') OR ((t.state='cancelled' OR j.cancel_requested) AND j.operation_live))
  ORDER BY j.next_check,j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1)
  UPDATE runtime.tools j SET lease_epoch=j.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds'
  FROM candidate c,runtime.turns t WHERE j.id=c.id AND t.id=j.turn_id
- RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled',j.operation_live`, holder).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive)
+ RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live`, holder).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return work, managedruntime.ErrNoWork
 	}
@@ -91,7 +91,7 @@ func (s *Store) PrepareTool(ctx context.Context, work managedruntime.ToolWork, e
 	if _, err := readThread(ctx, tx, work.Scope.AgentID, work.ThreadID); err != nil {
 		return err
 	}
-	result, err := tx.Exec(ctx, `UPDATE runtime.tools j SET environment_id=$3,request=$4 FROM runtime.turns t WHERE j.id=$1 AND j.lease_epoch=$2 AND j.lease_until>clock_timestamp() AND j.request IS NULL AND t.id=j.turn_id AND t.state='waiting' AND NOT j.consumed`, work.ID, work.LeaseEpoch, environment, encoded)
+	result, err := tx.Exec(ctx, `UPDATE runtime.tools j SET environment_id=$3,request=$4 FROM runtime.turns t WHERE j.id=$1 AND j.lease_epoch=$2 AND j.lease_until>clock_timestamp() AND j.request IS NULL AND t.id=j.turn_id AND t.state='waiting' AND NOT j.consumed AND NOT j.cancel_requested`, work.ID, work.LeaseEpoch, environment, encoded)
 	if err != nil {
 		return err
 	}

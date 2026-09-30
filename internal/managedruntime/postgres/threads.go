@@ -92,7 +92,9 @@ func (s *Store) CancelThread(ctx context.Context, scope managedruntime.Scope, th
 	if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET state='cancelled',completed_at=clock_timestamp() WHERE thread_id=$1 AND state IN ('running','waiting')`, thread.ID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE runtime.tools SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE turn_id=ANY($1::uuid[]) AND (state IN ('pending','waiting') OR operation_live)`, turns); err != nil {
+	// A completed Turn can still own a live shell/MCP handle. Cancel its
+	// delivery independently without rewriting completed conversation history.
+	if _, err := tx.Exec(ctx, `UPDATE runtime.tools j SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 FROM runtime.turns t WHERE t.id=j.turn_id AND t.thread_id=$1 AND (j.state IN ('pending','waiting') OR j.operation_live)`, thread.ID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state='idle' WHERE id=$1`, thread.ID); err != nil {

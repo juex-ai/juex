@@ -42,5 +42,7 @@ The model receives authorized environments and selects a location only for file,
 process and MCP tools. Handles retain their original environment. Device presence
 changes update waiting work; other observations are included in the next Turn.
 Cancelling a Thread closes its tool transcript and persists external cancellation
-delivery. A late result cannot restart it. Context compaction, subscriptions and
+delivery, including live handles from its already completed Turns. Completed
+conversation history and other Threads remain unchanged. A late result cannot
+restart it. Context compaction, subscriptions and
 independent application integrations remain separate platform work.
