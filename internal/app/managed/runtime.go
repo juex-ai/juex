@@ -62,28 +62,36 @@ func (a RuntimeAuthority) Snapshot(ctx context.Context, scope managedruntime.Sco
 }
 
 func (a RuntimeAuthority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.TurnConfig) (llm.Provider, error) {
-	fresh, err := a.Authorize(ctx, scope.ActorID, scope.TenantID, scope.AgentID, true)
+	profile, err := a.Profile(ctx, scope, config)
 	if err != nil {
 		return nil, err
 	}
+	return providers.NewProvider(profile)
+}
+
+func (a RuntimeAuthority) Profile(ctx context.Context, scope managedruntime.Scope, config managedruntime.TurnConfig) (llm.ProviderProfile, error) {
+	fresh, err := a.Authorize(ctx, scope.ActorID, scope.TenantID, scope.AgentID, true)
+	if err != nil {
+		return llm.ProviderProfile{}, err
+	}
 	if !scope.SameAuthority(fresh) {
-		return nil, managedruntime.ErrDenied
+		return llm.ProviderProfile{}, managedruntime.ErrDenied
 	}
 	resolved, err := a.Directory.ResolveModel(ctx, config.ModelID)
 	if errors.Is(err, management.ErrDenied) {
-		return nil, managedruntime.ErrModelUnavailable
+		return llm.ProviderProfile{}, managedruntime.ErrModelUnavailable
 	}
 	if err != nil {
-		return nil, err
+		return llm.ProviderProfile{}, err
 	}
 	// Never send a rotated credential to an old endpoint after an operator
 	// changes routing. The next explicitly submitted Turn takes a new snapshot.
 	if resolved.Endpoint != config.Endpoint || resolved.Model.Protocol != config.Protocol || resolved.Model.Provider != config.Provider || resolved.Model.Name != config.Model {
-		return nil, managedruntime.ErrModelUnavailable
+		return llm.ProviderProfile{}, managedruntime.ErrModelUnavailable
 	}
 	profile, err := providerprofile.ResolveProfile(providerprofile.Config{ID: "managed-" + config.ModelID, Protocol: string(config.Protocol), BaseURL: config.Endpoint, APIKey: resolved.APIKey, Model: config.Model})
 	if err != nil {
-		return nil, managedruntime.ErrModelUnavailable
+		return llm.ProviderProfile{}, managedruntime.ErrModelUnavailable
 	}
-	return providers.NewProvider(profile)
+	return profile, nil
 }

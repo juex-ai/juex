@@ -7,6 +7,12 @@ an Activation is a replaceable lease holder. Main and Workers have independent
 inputs, history, context generations and cancellation. The scheduler interleaves
 owners and limits active Threads; idle Activations do not consume execution slots.
 
+`juex-runtime` runs independently of `juex-management`. Management forwards
+conversation requests over Kitex; Runtime obtains current authority and model
+credentials through Management RPC. Both directions require service-specific
+certificates from the deployment CA. Only the operator retains the CA private
+key. Runtime needs neither the Management encryption key nor its database schema.
+
 Input receipts and request-ID deduplication commit before execution. Events have
 a contiguous per-Thread sequence. Reconstructing context never reads workspace
 files. A Turn freezes its instructions and model configuration. Every new model

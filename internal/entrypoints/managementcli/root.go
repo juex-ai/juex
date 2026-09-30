@@ -4,23 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/juex-ai/juex/internal/app/managed"
-	"github.com/juex-ai/juex/internal/entrypoints/managementhttp"
-	"github.com/juex-ai/juex/internal/entrypoints/webassets"
 	"github.com/juex-ai/juex/internal/foundation/maildelivery"
+	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/spf13/cobra"
 )
 
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	var publicURL, listen, email, name string
+	var credentials, rpcListen, runtimeAddress string
 	var insecure bool
 	root := &cobra.Command{Use: "juex-management", Short: "Run and administer the JueX management service", SilenceUsage: true, SilenceErrors: true}
 	root.SetArgs(args)
@@ -28,6 +24,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root.SetErr(errOut)
 	root.PersistentFlags().StringVar(&publicURL, "public-url", os.Getenv("JUEX_PUBLIC_URL"), "Public HTTPS origin")
 	root.PersistentFlags().BoolVar(&insecure, "insecure-http", false, "Allow HTTP for a local development deployment")
+	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Management service identity")
 	open := func(cmd *cobra.Command) (*managed.Management, error) {
 		config := managed.ManagementConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), MasterKey: os.Getenv("JUEX_MASTER_KEY"), PublicURL: strings.TrimSuffix(publicURL, "/"), InsecureHTTP: insecure}
 		if address := os.Getenv("JUEX_SMTP_ADDRESS"); address != "" {
@@ -88,6 +85,20 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	tenant.AddCommand(createTenant)
 	root.AddCommand(tenant)
 	root.AddCommand(modelCommand(open, out))
+	services := &cobra.Command{Use: "services", Short: "Operator private service identities"}
+	var directory string
+	initialize := &cobra.Command{Use: "init", Short: "Create the platform CA and private service certificates in a new directory", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		if err := platformrpc.CreateCredentials(directory); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(map[string]string{"directory": directory})
+	}}
+	initialize.Flags().StringVar(&directory, "directory", "", "New private directory for service identities and the operator CA key")
+	if err := initialize.MarkFlagRequired("directory"); err != nil {
+		return err
+	}
+	services.AddCommand(initialize)
+	root.AddCommand(services)
 	recovery := &cobra.Command{Use: "recover", Short: "Issue a one-use recovery link after operator identity verification", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		if publicURL == "" {
 			return errors.New("--public-url is required")
@@ -114,35 +125,11 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return err
 		}
 		defer app.Close()
-		handler, err := managementhttp.New(managementhttp.Options{Auth: app.Auth, Directory: app.Directory, Runtime: app.Runtime, PublicURL: publicURL, InsecureHTTP: insecure, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
-		if err != nil {
-			return err
-		}
-		server := &http.Server{Addr: listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 16 << 10}
-		listener, err := net.Listen("tcp", listen)
-		if err != nil {
-			return err
-		}
-		done := make(chan error, 1)
-		backgroundCtx, stopBackground := context.WithCancel(cmd.Context())
-		backgroundDone := make(chan struct{})
-		go func() { defer close(backgroundDone); app.RunBackground(backgroundCtx) }()
-		defer func() { stopBackground(); <-backgroundDone }()
-		go func() { done <- server.Serve(listener) }()
-		fmt.Fprintln(out, "Management listening on", listener.Addr())
-		select {
-		case err := <-done:
-			if errors.Is(err, http.ErrServerClosed) {
-				return nil
-			}
-			return err
-		case <-cmd.Context().Done():
-			shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			return server.Shutdown(shutdown)
-		}
+		return serveManagement(cmd.Context(), app, serveConfig{HTTPAddress: listen, RPCAddress: rpcListen, RuntimeAddress: runtimeAddress, Credentials: platformrpc.CredentialsAt(credentials, "management"), PublicURL: publicURL, InsecureHTTP: insecure}, out)
 	}}
 	serve.Flags().StringVar(&listen, "listen", "0.0.0.0:8680", "Management HTTP listen address (use an HTTPS proxy for public access)")
+	serve.Flags().StringVar(&rpcListen, "rpc-listen", "0.0.0.0:8781", "Private Management RPC listen address")
+	serve.Flags().StringVar(&runtimeAddress, "runtime", os.Getenv("JUEX_RUNTIME_RPC"), "Private Runtime RPC address")
 	root.AddCommand(serve)
 	return root.ExecuteContext(ctx)
 }

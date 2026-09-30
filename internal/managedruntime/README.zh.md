@@ -5,6 +5,9 @@
 Runtime 拥有 `runtime` PostgreSQL schema。Agent 是持久身份，Activation 是可替换的租约持有者。
 Main 与 Workers 分别保存输入、历史、上下文代际和取消状态。调度器交错处理不同用户，限制活跃 Thread；空闲 Activation 不占用执行槽位。
 
+`juex-runtime` 与 `juex-management` 独立运行。Management 通过 Kitex 转发会话请求，Runtime 通过 Management RPC 获取当前权限与模型凭据。
+双向通信都要求部署 CA 签发的对应服务证书，CA 私钥只由运维保管。Runtime 不需要 Management 的加密密钥或数据库 schema。
+
 输入回执和 request ID 去重在执行前提交。事件使用 Thread 内连续序号；重建上下文不读取 Workspace 文件。
 Turn 固定指令和模型配置。每次新模型调用通过注入的业务接口重新检查当前权限与凭据可用性，Runtime 不查询 Management 表。
 

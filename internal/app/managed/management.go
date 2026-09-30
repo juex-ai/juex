@@ -6,14 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juex-ai/juex/internal/foundation/maildelivery"
 	"github.com/juex-ai/juex/internal/foundation/secrets"
-	"github.com/juex-ai/juex/internal/managedruntime"
-	runtimepg "github.com/juex-ai/juex/internal/managedruntime/postgres"
 	"github.com/juex-ai/juex/internal/management"
 	"github.com/juex-ai/juex/internal/management/postgres"
 )
@@ -24,7 +21,6 @@ type ManagementConfig struct {
 	PublicURL    string
 	SMTP         *maildelivery.Config
 	InsecureHTTP bool
-	Runtime      managedruntime.RunnerConfig
 }
 
 type Management struct {
@@ -32,8 +28,7 @@ type Management struct {
 	Directory *postgres.Directory
 	Auth      *postgres.Auth
 	Mailer    *maildelivery.SMTP
-	Runtime   *managedruntime.Service
-	Runner    *managedruntime.Runner
+	Authority RuntimeAuthority
 }
 
 func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, error) {
@@ -59,14 +54,9 @@ func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, 
 	if err != nil {
 		return nil, err
 	}
-	poolConfig, err := pgxpool.ParseConfig(config.DatabaseURL)
+	pool, err := openDatabase(ctx, config.DatabaseURL)
 	if err != nil {
-		return nil, errors.New("invalid JUEX_DATABASE_URL")
-	}
-	poolConfig.MaxConns = 12
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		return nil, errors.New("could not create PostgreSQL pool")
+		return nil, err
 	}
 	ok := false
 	defer func() {
@@ -74,9 +64,6 @@ func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, 
 			pool.Close()
 		}
 	}()
-	if err := pool.Ping(ctx); err != nil {
-		return nil, errors.New("PostgreSQL unavailable; check database address and credentials")
-	}
 	if err := postgres.Migrate(ctx, pool); err != nil {
 		return nil, err
 	}
@@ -85,26 +72,14 @@ func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, 
 	if err != nil {
 		return nil, err
 	}
-	if err := runtimepg.Migrate(ctx, pool); err != nil {
-		return nil, err
-	}
-	runtimeStore := runtimepg.New(pool)
-	authority := RuntimeAuthority{Directory: d}
-	runner, err := managedruntime.NewRunner(runtimeStore, authority, config.Runtime)
-	if err != nil {
-		return nil, err
-	}
 	ok = true
-	return &Management{Pool: pool, Directory: d, Auth: auth, Mailer: mailer, Runtime: &managedruntime.Service{Store: runtimeStore, Authority: authority}, Runner: runner}, nil
+	return &Management{Pool: pool, Directory: d, Auth: auth, Mailer: mailer, Authority: RuntimeAuthority{Directory: d}}, nil
 }
 
 func (m *Management) Close() { m.Pool.Close() }
 
 func (m *Management) RunBackground(ctx context.Context) {
-	var workers sync.WaitGroup
-	workers.Go(func() { m.Runner.Run(ctx) })
-	workers.Go(func() { m.runMail(ctx) })
-	workers.Wait()
+	m.runMail(ctx)
 }
 
 func (m *Management) runMail(ctx context.Context) {
