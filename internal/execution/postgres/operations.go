@@ -22,6 +22,19 @@ func scanOperation(row pgx.Row) (execution.Operation, error) {
 }
 
 func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope execution.Scope, request execprotocol.Request, wait time.Duration, hold bool) (execution.Operation, error) {
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return execution.Operation{}, err
+	}
+	defer rollback(tx)
+	operation, err := s.enqueue(ctx, tx, device, scope, request, wait, hold)
+	if err != nil {
+		return operation, err
+	}
+	return operation, tx.Commit(ctx)
+}
+
+func (s *Store) enqueue(ctx context.Context, tx pgx.Tx, device execution.Device, scope execution.Scope, request execprotocol.Request, wait time.Duration, hold bool) (execution.Operation, error) {
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return execution.Operation{}, err
@@ -44,11 +57,6 @@ func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope exec
 	if err != nil {
 		return execution.Operation{}, err
 	}
-	tx, err := s.begin(ctx)
-	if err != nil {
-		return execution.Operation{}, err
-	}
-	defer rollback(tx)
 	// Lock the environment before every operation mutation, including revocation.
 	current, err := scanDevice(tx.QueryRow(ctx, `SELECT `+deviceColumns+` FROM execution.environments WHERE id=$1 FOR UPDATE`, device.ID))
 	if err != nil {
@@ -67,10 +75,19 @@ func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope exec
 		if err != nil {
 			return operation, err
 		}
-		return operation, tx.Commit(ctx)
+		return operation, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return execution.Operation{}, err
+	}
+	cancelled, err := cancelledBeforeAdmission(ctx, tx, scope, "operation", device.ID, request.ID)
+	if err != nil {
+		return execution.Operation{}, err
+	}
+	if cancelled {
+		snapshot, _ = json.Marshal(execprotocol.Snapshot{Version: execprotocol.Version, EnvironmentID: device.ID, ID: request.ID, AgentID: request.AgentID, Kind: request.Kind, State: execprotocol.Cancelled})
+		operation, err := scanOperation(tx.QueryRow(ctx, `INSERT INTO execution.operations(environment_id,id,scope,request,request_hash,wait_until,snapshot,state,cancel_requested,acknowledged) VALUES($1,$2,$3,$4,$5,clock_timestamp(),$6,'cancelled',true,true) RETURNING `+operationColumns, device.ID, request.ID, owner, encoded, hash, snapshot))
+		return operation, err
 	}
 	var reserved int64
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(greatest(octet_length(output),CASE WHEN state IN ('waiting','dispatched','accepted','running') THEN 8388608 ELSE 0 END)),0)::bigint FROM execution.operations WHERE environment_id=$1`, device.ID).Scan(&reserved); err != nil {
@@ -92,7 +109,7 @@ func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope exec
 		}
 		return operation, err
 	}
-	return operation, tx.Commit(ctx)
+	return operation, nil
 }
 
 func (s *Store) Operation(ctx context.Context, environment, id string, cursor int64, limit int) (execution.Operation, error) {
@@ -195,6 +212,13 @@ func (s *Store) CancelOperation(ctx context.Context, environment, id string) err
 	if err := tx.QueryRow(ctx, `SELECT id FROM execution.environments WHERE id=$1 FOR UPDATE`, environment).Scan(&locked); err != nil {
 		return classify(err)
 	}
+	if err := cancelOperation(ctx, tx, environment, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelOperation(ctx context.Context, tx pgx.Tx, environment, id string) error {
 	result, err := tx.Exec(ctx, `UPDATE execution.operations SET cancel_requested=true,state=CASE WHEN state='waiting' THEN 'cancelled' ELSE state END,snapshot=CASE WHEN state='waiting' THEN jsonb_set(snapshot,'{state}','"cancelled"') ELSE snapshot END,acknowledged=acknowledged OR state='waiting',updated_at=clock_timestamp() WHERE environment_id=$1 AND id=$2`, environment, id)
 	if err != nil {
 		return err
@@ -202,11 +226,11 @@ func (s *Store) CancelOperation(ctx context.Context, environment, id string) err
 	if result.RowsAffected() != 1 {
 		return execprotocol.ErrDenied
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) ExtendWait(ctx context.Context, environment, id string, wait time.Duration) error {
-	result, err := s.pool.Exec(ctx, `UPDATE execution.operations SET wait_until=clock_timestamp()+$3*interval '1 millisecond',updated_at=clock_timestamp() WHERE environment_id=$1 AND id=$2 AND state='waiting' AND NOT cancel_requested`, environment, id, wait.Milliseconds())
+	result, err := s.exec(ctx, `UPDATE execution.operations SET wait_until=clock_timestamp()+$3*interval '1 millisecond',updated_at=clock_timestamp() WHERE environment_id=$1 AND id=$2 AND state='waiting' AND NOT cancel_requested`, environment, id, wait.Milliseconds())
 	if err != nil {
 		return err
 	}
@@ -218,6 +242,10 @@ func (s *Store) ExtendWait(ctx context.Context, environment, id string, wait tim
 
 func (s *Store) Observe(ctx context.Context, environment string, epoch int64, snapshot execprotocol.Snapshot) error {
 	if snapshot.Version != execprotocol.Version || snapshot.EnvironmentID != environment || snapshot.NextCursor < int64(len(snapshot.Output)) || snapshot.OutputBytes < snapshot.NextCursor || snapshot.OutputBytes > 8<<20 || len(snapshot.Output) > 256<<10 {
+		return execprotocol.ErrInvalid
+	}
+	fileOperation := snapshot.Kind == "import_file" || snapshot.Kind == "export_file"
+	if snapshot.File != nil && (!fileOperation || snapshot.File.Manifest.Validate() != nil || snapshot.File.Cursor < 0 || snapshot.File.Cursor > snapshot.File.Manifest.Size || snapshot.File.Ready && snapshot.File.Cursor != snapshot.File.Manifest.Size) || fileOperation && snapshot.State == execprotocol.Completed && (snapshot.File == nil || !snapshot.File.Ready) {
 		return execprotocol.ErrInvalid
 	}
 	switch snapshot.State {
@@ -313,7 +341,12 @@ func (s *Store) Unsettled(ctx context.Context, limit int) ([]execution.Operation
 	}
 	// Rotation by updated_at prevents a permanently offline operation from
 	// starving later owners out of the lifecycle reconciliation batch.
-	rows, err := s.pool.Query(ctx, `UPDATE execution.operations SET updated_at=clock_timestamp() WHERE (environment_id,id) IN (SELECT environment_id,id FROM execution.operations WHERE state IN ('waiting','dispatched','accepted','running') AND NOT cancel_requested ORDER BY updated_at LIMIT $1) RETURNING `+operationColumns, limit)
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	rows, err := tx.Query(ctx, `UPDATE execution.operations SET updated_at=clock_timestamp() WHERE (environment_id,id) IN (SELECT environment_id,id FROM execution.operations WHERE state IN ('waiting','dispatched','accepted','running') AND NOT cancel_requested ORDER BY updated_at LIMIT $1) RETURNING `+operationColumns, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -326,20 +359,23 @@ func (s *Store) Unsettled(ctx context.Context, limit int) ([]execution.Operation
 		}
 		operations = append(operations, operation)
 	}
-	return operations, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return operations, tx.Commit(ctx)
 }
 
 func (s *Store) ExpireWaiting(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `UPDATE execution.operations SET state='failed',snapshot=jsonb_set(jsonb_set(snapshot,'{state}','"failed"'),'{error}','"environment wait expired before dispatch"'),acknowledged=true,updated_at=clock_timestamp() WHERE state='waiting' AND wait_until<=clock_timestamp()`)
+	_, err := s.exec(ctx, `UPDATE execution.operations SET state='failed',snapshot=jsonb_set(jsonb_set(snapshot,'{state}','"failed"'),'{error}','"environment wait expired before dispatch"'),acknowledged=true,updated_at=clock_timestamp() WHERE state='waiting' AND wait_until<=clock_timestamp()`)
 	if err != nil {
 		return err
 	}
 	// Acknowledged output can expire; operation identities and unknown outcomes
 	// remain durable so restoring an old caller cannot repeat an external effect.
-	_, err = s.pool.Exec(ctx, `UPDATE execution.operations SET output='',snapshot=jsonb_set(snapshot,'{output_expired}','true') WHERE acknowledged AND state IN ('completed','failed','cancelled') AND greatest(updated_at,observed_at)<clock_timestamp()-interval '7 days' AND octet_length(output)>0 AND (NOT output_hold OR observed_bytes>=octet_length(output))`)
+	_, err = s.exec(ctx, `UPDATE execution.operations SET output='',snapshot=jsonb_set(snapshot,'{output_expired}','true') WHERE acknowledged AND state IN ('completed','failed','cancelled') AND greatest(updated_at,observed_at)<clock_timestamp()-interval '7 days' AND octet_length(output)>0 AND (NOT output_hold OR observed_bytes>=octet_length(output))`)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `DELETE FROM execution.pairings WHERE state!='confirmed' AND expires_at<clock_timestamp()-interval '1 day'`)
+	_, err = s.exec(ctx, `DELETE FROM execution.pairings WHERE state!='confirmed' AND expires_at<clock_timestamp()-interval '1 day'`)
 	return err
 }

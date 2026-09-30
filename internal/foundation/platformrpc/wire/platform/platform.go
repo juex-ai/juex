@@ -1073,6 +1073,22 @@ var fieldIDToName_RuntimeCreateWorkerResult = map[int16]string{
 type Execution interface {
 	Health(ctx context.Context) (r *Reply, err error)
 
+	CancelPreparedOperation(ctx context.Context, actor *Actor, environmentID string, requestID string) (r *Reply, err error)
+
+	CancelPreparedTransfer(ctx context.Context, actor *Actor, requestID string) (r *Reply, err error)
+
+	BeginTransfer(ctx context.Context, actor *Actor, requestJSON string) (r *Reply, err error)
+
+	BeginTransferFenced(ctx context.Context, actor *Actor, requestJSON string, fenceJSON string) (r *Reply, err error)
+
+	Transfer(ctx context.Context, actor *Actor, transferID string) (r *Reply, err error)
+
+	ListTransfers(ctx context.Context, actor *Actor, after string, limit int32) (r *Reply, err error)
+
+	CancelTransfer(ctx context.Context, actor *Actor, transferID string) (r *Reply, err error)
+
+	ExtendTransfer(ctx context.Context, actor *Actor, transferID string, waitMillis int64) (r *Reply, err error)
+
 	BeginArtifact(ctx context.Context, actor *Actor, requestJSON string) (r *Reply, err error)
 
 	WriteArtifact(ctx context.Context, actor *Actor, artifactID string, chunkJSON string) (r *Reply, err error)
@@ -1170,6 +1186,722 @@ func (p *ExecutionHealthResult) String() string {
 }
 
 var fieldIDToName_ExecutionHealthResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionCancelPreparedOperationArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	EnvironmentID string `thrift:"environmentID,2" frugal:"2,default,string" json:"environmentID"`
+	RequestID     string `thrift:"requestID,3" frugal:"3,default,string" json:"requestID"`
+}
+
+func NewExecutionCancelPreparedOperationArgs() *ExecutionCancelPreparedOperationArgs {
+	return &ExecutionCancelPreparedOperationArgs{}
+}
+
+func (p *ExecutionCancelPreparedOperationArgs) InitDefault() {
+}
+
+var ExecutionCancelPreparedOperationArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionCancelPreparedOperationArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionCancelPreparedOperationArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionCancelPreparedOperationArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionCancelPreparedOperationArgs) GetRequestID() (v string) {
+	return p.RequestID
+}
+func (p *ExecutionCancelPreparedOperationArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionCancelPreparedOperationArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionCancelPreparedOperationArgs) SetRequestID(val string) {
+	p.RequestID = val
+}
+
+func (p *ExecutionCancelPreparedOperationArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionCancelPreparedOperationArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCancelPreparedOperationArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCancelPreparedOperationArgs = map[int16]string{
+	1: "actor",
+	2: "environmentID",
+	3: "requestID",
+}
+
+type ExecutionCancelPreparedOperationResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionCancelPreparedOperationResult() *ExecutionCancelPreparedOperationResult {
+	return &ExecutionCancelPreparedOperationResult{}
+}
+
+func (p *ExecutionCancelPreparedOperationResult) InitDefault() {
+}
+
+var ExecutionCancelPreparedOperationResult_Success_DEFAULT *Reply
+
+func (p *ExecutionCancelPreparedOperationResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionCancelPreparedOperationResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionCancelPreparedOperationResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionCancelPreparedOperationResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionCancelPreparedOperationResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCancelPreparedOperationResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCancelPreparedOperationResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionCancelPreparedTransferArgs struct {
+	Actor     *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	RequestID string `thrift:"requestID,2" frugal:"2,default,string" json:"requestID"`
+}
+
+func NewExecutionCancelPreparedTransferArgs() *ExecutionCancelPreparedTransferArgs {
+	return &ExecutionCancelPreparedTransferArgs{}
+}
+
+func (p *ExecutionCancelPreparedTransferArgs) InitDefault() {
+}
+
+var ExecutionCancelPreparedTransferArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionCancelPreparedTransferArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionCancelPreparedTransferArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionCancelPreparedTransferArgs) GetRequestID() (v string) {
+	return p.RequestID
+}
+func (p *ExecutionCancelPreparedTransferArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionCancelPreparedTransferArgs) SetRequestID(val string) {
+	p.RequestID = val
+}
+
+func (p *ExecutionCancelPreparedTransferArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionCancelPreparedTransferArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCancelPreparedTransferArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCancelPreparedTransferArgs = map[int16]string{
+	1: "actor",
+	2: "requestID",
+}
+
+type ExecutionCancelPreparedTransferResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionCancelPreparedTransferResult() *ExecutionCancelPreparedTransferResult {
+	return &ExecutionCancelPreparedTransferResult{}
+}
+
+func (p *ExecutionCancelPreparedTransferResult) InitDefault() {
+}
+
+var ExecutionCancelPreparedTransferResult_Success_DEFAULT *Reply
+
+func (p *ExecutionCancelPreparedTransferResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionCancelPreparedTransferResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionCancelPreparedTransferResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionCancelPreparedTransferResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionCancelPreparedTransferResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCancelPreparedTransferResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCancelPreparedTransferResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionBeginTransferArgs struct {
+	Actor       *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
+}
+
+func NewExecutionBeginTransferArgs() *ExecutionBeginTransferArgs {
+	return &ExecutionBeginTransferArgs{}
+}
+
+func (p *ExecutionBeginTransferArgs) InitDefault() {
+}
+
+var ExecutionBeginTransferArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionBeginTransferArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionBeginTransferArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionBeginTransferArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *ExecutionBeginTransferArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionBeginTransferArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *ExecutionBeginTransferArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionBeginTransferArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionBeginTransferArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionBeginTransferArgs = map[int16]string{
+	1: "actor",
+	2: "requestJSON",
+}
+
+type ExecutionBeginTransferResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionBeginTransferResult() *ExecutionBeginTransferResult {
+	return &ExecutionBeginTransferResult{}
+}
+
+func (p *ExecutionBeginTransferResult) InitDefault() {
+}
+
+var ExecutionBeginTransferResult_Success_DEFAULT *Reply
+
+func (p *ExecutionBeginTransferResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionBeginTransferResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionBeginTransferResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionBeginTransferResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionBeginTransferResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionBeginTransferResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionBeginTransferResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionBeginTransferFencedArgs struct {
+	Actor       *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
+	FenceJSON   string `thrift:"fenceJSON,3" frugal:"3,default,string" json:"fenceJSON"`
+}
+
+func NewExecutionBeginTransferFencedArgs() *ExecutionBeginTransferFencedArgs {
+	return &ExecutionBeginTransferFencedArgs{}
+}
+
+func (p *ExecutionBeginTransferFencedArgs) InitDefault() {
+}
+
+var ExecutionBeginTransferFencedArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionBeginTransferFencedArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionBeginTransferFencedArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionBeginTransferFencedArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+
+func (p *ExecutionBeginTransferFencedArgs) GetFenceJSON() (v string) {
+	return p.FenceJSON
+}
+func (p *ExecutionBeginTransferFencedArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionBeginTransferFencedArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+func (p *ExecutionBeginTransferFencedArgs) SetFenceJSON(val string) {
+	p.FenceJSON = val
+}
+
+func (p *ExecutionBeginTransferFencedArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionBeginTransferFencedArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionBeginTransferFencedArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionBeginTransferFencedArgs = map[int16]string{
+	1: "actor",
+	2: "requestJSON",
+	3: "fenceJSON",
+}
+
+type ExecutionBeginTransferFencedResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionBeginTransferFencedResult() *ExecutionBeginTransferFencedResult {
+	return &ExecutionBeginTransferFencedResult{}
+}
+
+func (p *ExecutionBeginTransferFencedResult) InitDefault() {
+}
+
+var ExecutionBeginTransferFencedResult_Success_DEFAULT *Reply
+
+func (p *ExecutionBeginTransferFencedResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionBeginTransferFencedResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionBeginTransferFencedResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionBeginTransferFencedResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionBeginTransferFencedResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionBeginTransferFencedResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionBeginTransferFencedResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionTransferArgs struct {
+	Actor      *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	TransferID string `thrift:"transferID,2" frugal:"2,default,string" json:"transferID"`
+}
+
+func NewExecutionTransferArgs() *ExecutionTransferArgs {
+	return &ExecutionTransferArgs{}
+}
+
+func (p *ExecutionTransferArgs) InitDefault() {
+}
+
+var ExecutionTransferArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionTransferArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionTransferArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionTransferArgs) GetTransferID() (v string) {
+	return p.TransferID
+}
+func (p *ExecutionTransferArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionTransferArgs) SetTransferID(val string) {
+	p.TransferID = val
+}
+
+func (p *ExecutionTransferArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionTransferArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionTransferArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionTransferArgs = map[int16]string{
+	1: "actor",
+	2: "transferID",
+}
+
+type ExecutionTransferResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionTransferResult() *ExecutionTransferResult {
+	return &ExecutionTransferResult{}
+}
+
+func (p *ExecutionTransferResult) InitDefault() {
+}
+
+var ExecutionTransferResult_Success_DEFAULT *Reply
+
+func (p *ExecutionTransferResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionTransferResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionTransferResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionTransferResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionTransferResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionTransferResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionTransferResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionListTransfersArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	After string `thrift:"after,2" frugal:"2,default,string" json:"after"`
+	Limit int32  `thrift:"limit,3" frugal:"3,default,i32" json:"limit"`
+}
+
+func NewExecutionListTransfersArgs() *ExecutionListTransfersArgs {
+	return &ExecutionListTransfersArgs{}
+}
+
+func (p *ExecutionListTransfersArgs) InitDefault() {
+}
+
+var ExecutionListTransfersArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionListTransfersArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionListTransfersArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionListTransfersArgs) GetAfter() (v string) {
+	return p.After
+}
+
+func (p *ExecutionListTransfersArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *ExecutionListTransfersArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionListTransfersArgs) SetAfter(val string) {
+	p.After = val
+}
+func (p *ExecutionListTransfersArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *ExecutionListTransfersArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionListTransfersArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionListTransfersArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionListTransfersArgs = map[int16]string{
+	1: "actor",
+	2: "after",
+	3: "limit",
+}
+
+type ExecutionListTransfersResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionListTransfersResult() *ExecutionListTransfersResult {
+	return &ExecutionListTransfersResult{}
+}
+
+func (p *ExecutionListTransfersResult) InitDefault() {
+}
+
+var ExecutionListTransfersResult_Success_DEFAULT *Reply
+
+func (p *ExecutionListTransfersResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionListTransfersResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionListTransfersResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionListTransfersResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionListTransfersResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionListTransfersResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionListTransfersResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionCancelTransferArgs struct {
+	Actor      *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	TransferID string `thrift:"transferID,2" frugal:"2,default,string" json:"transferID"`
+}
+
+func NewExecutionCancelTransferArgs() *ExecutionCancelTransferArgs {
+	return &ExecutionCancelTransferArgs{}
+}
+
+func (p *ExecutionCancelTransferArgs) InitDefault() {
+}
+
+var ExecutionCancelTransferArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionCancelTransferArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionCancelTransferArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionCancelTransferArgs) GetTransferID() (v string) {
+	return p.TransferID
+}
+func (p *ExecutionCancelTransferArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionCancelTransferArgs) SetTransferID(val string) {
+	p.TransferID = val
+}
+
+func (p *ExecutionCancelTransferArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionCancelTransferArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCancelTransferArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCancelTransferArgs = map[int16]string{
+	1: "actor",
+	2: "transferID",
+}
+
+type ExecutionCancelTransferResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionCancelTransferResult() *ExecutionCancelTransferResult {
+	return &ExecutionCancelTransferResult{}
+}
+
+func (p *ExecutionCancelTransferResult) InitDefault() {
+}
+
+var ExecutionCancelTransferResult_Success_DEFAULT *Reply
+
+func (p *ExecutionCancelTransferResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionCancelTransferResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionCancelTransferResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionCancelTransferResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionCancelTransferResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCancelTransferResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCancelTransferResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionExtendTransferArgs struct {
+	Actor      *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	TransferID string `thrift:"transferID,2" frugal:"2,default,string" json:"transferID"`
+	WaitMillis int64  `thrift:"waitMillis,3" frugal:"3,default,i64" json:"waitMillis"`
+}
+
+func NewExecutionExtendTransferArgs() *ExecutionExtendTransferArgs {
+	return &ExecutionExtendTransferArgs{}
+}
+
+func (p *ExecutionExtendTransferArgs) InitDefault() {
+}
+
+var ExecutionExtendTransferArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionExtendTransferArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionExtendTransferArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionExtendTransferArgs) GetTransferID() (v string) {
+	return p.TransferID
+}
+
+func (p *ExecutionExtendTransferArgs) GetWaitMillis() (v int64) {
+	return p.WaitMillis
+}
+func (p *ExecutionExtendTransferArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionExtendTransferArgs) SetTransferID(val string) {
+	p.TransferID = val
+}
+func (p *ExecutionExtendTransferArgs) SetWaitMillis(val int64) {
+	p.WaitMillis = val
+}
+
+func (p *ExecutionExtendTransferArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionExtendTransferArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionExtendTransferArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionExtendTransferArgs = map[int16]string{
+	1: "actor",
+	2: "transferID",
+	3: "waitMillis",
+}
+
+type ExecutionExtendTransferResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionExtendTransferResult() *ExecutionExtendTransferResult {
+	return &ExecutionExtendTransferResult{}
+}
+
+func (p *ExecutionExtendTransferResult) InitDefault() {
+}
+
+var ExecutionExtendTransferResult_Success_DEFAULT *Reply
+
+func (p *ExecutionExtendTransferResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionExtendTransferResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionExtendTransferResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionExtendTransferResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionExtendTransferResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionExtendTransferResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionExtendTransferResult = map[int16]string{
 	0: "success",
 }
 

@@ -34,6 +34,14 @@ service Runtime {
 
 service Execution {
   Reply Health()
+  Reply CancelPreparedOperation(1: Actor actor, 2: string environmentID, 3: string requestID)
+  Reply CancelPreparedTransfer(1: Actor actor, 2: string requestID)
+  Reply BeginTransfer(1: Actor actor, 2: string requestJSON)
+  Reply BeginTransferFenced(1: Actor actor, 2: string requestJSON, 3: string fenceJSON)
+  Reply Transfer(1: Actor actor, 2: string transferID)
+  Reply ListTransfers(1: Actor actor, 2: string after, 3: i32 limit)
+  Reply CancelTransfer(1: Actor actor, 2: string transferID)
+  Reply ExtendTransfer(1: Actor actor, 2: string transferID, 3: i64 waitMillis)
   Reply BeginArtifact(1: Actor actor, 2: string requestJSON)
   Reply WriteArtifact(1: Actor actor, 2: string artifactID, 3: string chunkJSON)
   Reply CommitArtifact(1: Actor actor, 2: string artifactID)

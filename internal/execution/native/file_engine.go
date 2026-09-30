@@ -122,6 +122,16 @@ func (e *Engine) CommitFile(agent, id string) (execprotocol.FileStatus, error) {
 // File acknowledgment is separate from the small operation result. A source
 // snapshot must survive until the platform has durably received its bytes.
 func (e *Engine) AcknowledgeFile(agent, id string, manifest execprotocol.FileManifest) error {
+	return e.acknowledgeFile(agent, id, manifest, false)
+}
+
+// DiscardFile records the platform's explicit cancellation of a source transfer.
+// It does not claim that the platform received the bytes.
+func (e *Engine) DiscardFile(agent, id string, manifest execprotocol.FileManifest) error {
+	return e.acknowledgeFile(agent, id, manifest, true)
+}
+
+func (e *Engine) acknowledgeFile(agent, id string, manifest execprotocol.FileManifest, discard bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.ctx.Err() != nil || e.fault != nil {
@@ -142,6 +152,7 @@ func (e *Engine) AcknowledgeFile(agent, id string, manifest execprotocol.FileMan
 	}
 	now := time.Now().UTC()
 	op.record.FileAcknowledgedAt = &now
+	op.record.FileDiscarded = discard
 	return e.save(&op.record)
 }
 

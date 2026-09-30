@@ -19,6 +19,7 @@ type toolRunner struct {
 	observations ObservationStore
 	store        ToolStore
 	gateway      ToolGateway
+	files        FileGateway
 	authority    Authority
 }
 
@@ -91,12 +92,15 @@ func (r toolRunner) deliver(ctx context.Context) {
 
 func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 	if work.Cancelled {
+		if fileCreationTool(work.Call.ToolName) {
+			return r.cancelFileWork(ctx, *work)
+		}
 		if work.EnvironmentID != "" && work.Request.ID != "" {
 			if r.gateway == nil {
 				return retryTool()
 			}
-			err := r.gateway.Cancel(ctx, work.Scope, work.EnvironmentID, work.ID)
-			if err != nil && !errors.Is(err, execprotocol.ErrDenied) && !errors.Is(err, execprotocol.ErrNotFound) {
+			err := r.gateway.CancelPrepared(ctx, work.Scope, work.EnvironmentID, work.ID)
+			if err != nil {
 				return retryTool()
 			}
 		}
@@ -117,6 +121,9 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 	}
 	if r.gateway == nil {
 		return toolResult(work.Call, map[string]string{"error": "execution unavailable"}, true)
+	}
+	if outcome, handled := r.fileTool(ctx, work); handled {
+		return outcome
 	}
 	newlyPrepared := false
 	if outcome, handled := r.observationTool(ctx, *work); handled {

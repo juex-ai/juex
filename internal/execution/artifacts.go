@@ -22,9 +22,11 @@ type Artifact struct {
 }
 
 type ArtifactSource struct {
-	EnvironmentID string `json:"environment_id"`
-	OperationID   string `json:"operation_id"`
-	Path          string `json:"path"`
+	EnvironmentID        string `json:"environment_id"`
+	AuthorizationVersion int64  `json:"authorization_version"`
+	OperationID          string `json:"operation_id"`
+	Path                 string `json:"path"`
+	WorkingDirectory     string `json:"working_directory,omitempty"`
 }
 
 type ArtifactRequest struct {
@@ -47,7 +49,7 @@ func (r ArtifactRequest) Validate() error {
 		return execprotocol.ErrInvalid
 	}
 	if r.Source != nil {
-		if _, err := uuid.Parse(r.Source.EnvironmentID); err != nil || r.Source.OperationID == "" || len(r.Source.OperationID) > 200 || r.Source.Path == "" || len(r.Source.Path) > 4096 || strings.IndexByte(r.Source.Path, 0) >= 0 {
+		if _, err := uuid.Parse(r.Source.EnvironmentID); err != nil || r.Source.AuthorizationVersion < 1 || r.Source.OperationID == "" || len(r.Source.OperationID) > 200 || r.Source.Path == "" || len(r.Source.Path) > 4096 || strings.IndexByte(r.Source.Path, 0) >= 0 || len(r.Source.WorkingDirectory) > 4096 || strings.IndexByte(r.Source.WorkingDirectory, 0) >= 0 {
 			return execprotocol.ErrInvalid
 		}
 	}

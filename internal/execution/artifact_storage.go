@@ -70,7 +70,7 @@ func (s *Service) BeginArtifact(ctx context.Context, actor, tenant, agent string
 		if err != nil {
 			return ArtifactUpload{}, err
 		}
-		if !permits(device, scope, "read") {
+		if !permits(device, scope, "read") || device.Version != request.Source.AuthorizationVersion {
 			return ArtifactUpload{}, execprotocol.ErrDenied
 		}
 		operation, err := s.Store.Operation(ctx, device.ID, request.Source.OperationID, 0, 4096)
@@ -79,9 +79,10 @@ func (s *Service) BeginArtifact(ctx context.Context, actor, tenant, agent string
 		}
 		var manifest execprotocol.FileManifest
 		var arguments struct {
-			Path string `json:"path"`
+			Path             string `json:"path"`
+			WorkingDirectory string `json:"working_directory"`
 		}
-		if !operation.Scope.SameAuthority(scope) || operation.Request.Kind != "export_file" || operation.State != "completed" || json.Unmarshal(operation.Snapshot.Output, &manifest) != nil || manifest != request.Manifest || json.Unmarshal(operation.Request.Arguments, &arguments) != nil || arguments.Path != request.Source.Path {
+		if !operation.Scope.SameAuthority(scope) || operation.Request.Kind != "export_file" || operation.State != "completed" || json.Unmarshal(operation.Snapshot.Output, &manifest) != nil || manifest != request.Manifest || json.Unmarshal(operation.Request.Arguments, &arguments) != nil || arguments.Path != request.Source.Path || arguments.WorkingDirectory != request.Source.WorkingDirectory {
 			return ArtifactUpload{}, execprotocol.ErrDenied
 		}
 	}

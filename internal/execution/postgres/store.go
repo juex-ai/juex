@@ -33,6 +33,12 @@ var observedOutputSchema string
 //go:embed artifacts_schema.sql
 var artifactsSchema string
 
+//go:embed transfers_schema.sql
+var transfersSchema string
+
+//go:embed cancellations_schema.sql
+var cancellationsSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -46,7 +52,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.migrations')); CREATE SCHEMA IF NOT EXISTS execution; CREATE TABLE IF NOT EXISTS execution.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, eventsSchema, hostedSchema, hostedStorageSchema, observedOutputSchema, artifactsSchema}
+	migrations := []string{schema, eventsSchema, hostedSchema, hostedStorageSchema, observedOutputSchema, artifactsSchema, transfersSchema, cancellationsSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM execution.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -82,6 +88,21 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 
 func (s *Store) begin(ctx context.Context) (pgx.Tx, error) {
 	return s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+}
+
+// Single-statement mutations also need the service's isolation contract;
+// deployments may configure a stricter default that rejects concurrent ticks.
+func (s *Store) exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return pgconn.CommandTag{}, err
+	}
+	defer rollback(tx)
+	result, err := tx.Exec(ctx, sql, args...)
+	if err != nil {
+		return result, err
+	}
+	return result, tx.Commit(ctx)
 }
 func rollback(tx pgx.Tx) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

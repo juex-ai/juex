@@ -11,11 +11,18 @@ import (
 
 type Execution interface {
 	ArtifactAPI
+	TransferAPI
+	Environments(context.Context, string, string, string) ([]execprotocol.Environment, error)
 	PreviewPair(context.Context, string, string, string) (execution.Pairing, error)
 	ApprovePair(context.Context, string, string, string, map[string][]execprotocol.Capability) (execution.Pairing, error)
 	Devices(context.Context, string, string, string) ([]execution.Device, error)
 	Restrict(context.Context, string, string, string, int64, map[string][]execprotocol.Capability) (execution.Device, error)
 	Revoke(context.Context, string, string, string) error
+}
+
+func (s *Server) environments(w http.ResponseWriter, r *http.Request, user management.User) {
+	v, err := s.options.Execution.Environments(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"))
+	respond(w, v, err)
 }
 
 func (s *Server) previewPair(w http.ResponseWriter, r *http.Request, user management.User) {

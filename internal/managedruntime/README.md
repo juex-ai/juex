@@ -52,6 +52,14 @@ late commits cannot be skipped by a sequence cursor. Results resume the original
 Turn under its current Activation fence, preserving configuration and tool-result
 ordering. Unknown external outcomes block the Thread for a human decision.
 
+File publication, Artifact import and explicit environment-to-environment copy
+freeze both authorized locations before admission. Their durable transfer IDs
+and completion events resume the original tool call without polling the model.
+File metadata and Artifact references enter context; binary contents do not.
+Omitting a location selects only the hosted workspace, never another device.
+External cancellation stays pending until Execution durably accepts responsibility,
+including cancellation arriving before a timed-out admission request.
+
 The model receives authorized environments and selects a location only for file,
 process and MCP tools. Handles retain their original environment. Device presence
 changes update waiting work. Independent observers read durable MCP notification

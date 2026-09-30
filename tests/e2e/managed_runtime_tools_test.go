@@ -62,7 +62,9 @@ func runRuntimeTools(t *testing.T, f *executionFixture, gateway managedruntime.T
 			}
 		}
 	})
-	runner, err := managedruntime.NewRunner(f.store, f.authority, managedruntime.RunnerConfig{Concurrency: 1, PollInterval: 20 * time.Millisecond, AuthorityInterval: 20 * time.Millisecond, IdleTimeout: 100 * time.Millisecond, Tools: gateway})
+	config := managedruntime.RunnerConfig{Concurrency: 1, PollInterval: 20 * time.Millisecond, AuthorityInterval: 20 * time.Millisecond, IdleTimeout: 100 * time.Millisecond, Tools: gateway}
+	config.Files, _ = gateway.(managedruntime.FileGateway)
+	runner, err := managedruntime.NewRunner(f.store, f.authority, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,6 +297,12 @@ func prepareRuntimeTool(t *testing.T, f *executionFixture, device string) (manag
 
 func prepareRuntimeThreadTool(t *testing.T, f *executionFixture, thread, device, requestID string) (managedruntime.Scope, managedruntime.ToolWork) {
 	t.Helper()
+	call := llm.Block{Type: llm.BlockToolUse, ToolUseID: "prepared-call", ToolName: "read", Input: map[string]any{"environment_id": device, "path": "result.txt"}}
+	return prepareRuntimeCall(t, f, thread, requestID, call)
+}
+
+func prepareRuntimeCall(t *testing.T, f *executionFixture, thread, requestID string, call llm.Block) (managedruntime.Scope, managedruntime.ToolWork) {
+	t.Helper()
 	ctx := context.Background()
 	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
 	if err != nil {
@@ -320,7 +328,7 @@ func prepareRuntimeThreadTool(t *testing.T, f *executionFixture, thread, device,
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "prepared-call", ToolName: "read", Input: map[string]any{"environment_id": device, "path": "result.txt"}}}}}
+	response := llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{call}}}
 	if err := f.store.FinishAttempt(ctx, lease, attempt.ID, response, ""); err != nil {
 		t.Fatal(err)
 	}

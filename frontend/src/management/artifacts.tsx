@@ -8,6 +8,7 @@ import { api, errorText } from './api'
 import { Empty, Failure, Field, Loading, Notice } from './components'
 import { fileManifest, uploadFile } from './file-transfer'
 import { useResource } from './use-resource'
+import { TransfersPanel } from './transfers'
 import type { Artifact, ArtifactRequest } from './schema'
 
 function sizeText(bytes: number): string {
@@ -18,6 +19,7 @@ function sizeText(bytes: number): string {
 
 export function ArtifactDialog({ base, agent, writable, close }: { base: string; agent: string; writable: boolean; close: () => void }) {
   const path = `${base}/artifacts`
+  const [view, setView] = useState('files')
   const [revision, setRevision] = useState(0)
   const [after, setAfter] = useState('')
   const refresh = () => setRevision(value => value + 1)
@@ -58,6 +60,8 @@ export function ArtifactDialog({ base, agent, writable, close }: { base: string;
     try { await navigator.clipboard.writeText(`artifact:${artifact.id}`); setNotice('文件引用已复制，可粘贴到对话中。') } catch { setError('复制失败，请手动复制下方文件引用。') }
   }
   return <Dialog open onOpenChange={open => { if (!open) close() }}><DialogContent className="management-artifact-dialog"><DialogHeader><DialogTitle>文件与产物</DialogTitle><DialogDescription>私有文件仅供此 Agent 使用；Fleet 共享文件可供同一 Fleet 的 Agents 使用。单个文件最多 256 MiB。</DialogDescription></DialogHeader>
+    <div className="management-row-actions"><Button variant={view === 'files' ? 'default' : 'outline'} disabled={busy} onClick={() => { setView('files'); refresh() }}>文件产物</Button><Button variant={view === 'transfers' ? 'default' : 'outline'} disabled={busy} onClick={() => setView('transfers')}>文件传输</Button></div>
+    {view === 'transfers' ? <TransfersPanel base={base} writable={writable} /> : <>
     {error && <Notice error>{error}</Notice>}{notice && <Notice>{notice}</Notice>}
     {writable && <form className="management-file-upload" onSubmit={upload}>
       {resume && <Notice>续传 {resume.request.name}：请选择原文件。<Button type="button" variant="ghost" disabled={busy} onClick={reset}>改为新上传</Button></Notice>}
@@ -72,6 +76,7 @@ export function ArtifactDialog({ base, agent, writable, close }: { base: string;
         {writable && artifact.scope.agent_id === agent && (remove === artifact.id ? <><span>永久删除此文件？</span><Button variant="destructive" size="sm" disabled={busy} onClick={() => void deleteFile(artifact.id)}>确认删除</Button><Button variant="ghost" size="sm" disabled={busy} onClick={() => setRemove(null)}>取消</Button></> : <Button variant="ghost" size="sm" disabled={busy} onClick={() => setRemove(artifact.id)}>删除</Button>)}
       </div></article>)}
     </div>
-    <div className="management-row-actions">{after && <Button variant="ghost" onClick={() => setAfter('')}>回到第一页</Button>}{files.data?.length === 100 && <Button variant="outline" onClick={() => setAfter(files.data![files.data!.length - 1].id)}>下一页</Button>}<Button variant="outline" onClick={close}>关闭</Button></div>
+    <div className="management-row-actions">{after && <Button variant="ghost" onClick={() => setAfter('')}>回到第一页</Button>}{files.data?.length === 100 && <Button variant="outline" onClick={() => setAfter(files.data![files.data!.length - 1].id)}>下一页</Button>}</div></>}
+    <div className="management-row-actions"><Button variant="outline" onClick={close}>关闭</Button></div>
   </DialogContent></Dialog>
 }

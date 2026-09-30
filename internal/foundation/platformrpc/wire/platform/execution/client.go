@@ -12,6 +12,14 @@ import (
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	CancelPreparedOperation(ctx context.Context, actor *platform.Actor, environmentID string, requestID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	CancelPreparedTransfer(ctx context.Context, actor *platform.Actor, requestID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	BeginTransfer(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	BeginTransferFenced(ctx context.Context, actor *platform.Actor, requestJSON string, fenceJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Transfer(ctx context.Context, actor *platform.Actor, transferID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ListTransfers(ctx context.Context, actor *platform.Actor, after string, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	CancelTransfer(ctx context.Context, actor *platform.Actor, transferID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ExtendTransfer(ctx context.Context, actor *platform.Actor, transferID string, waitMillis int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	BeginArtifact(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	WriteArtifact(ctx context.Context, actor *platform.Actor, artifactID string, chunkJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CommitArtifact(ctx context.Context, actor *platform.Actor, artifactID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -67,6 +75,46 @@ type kExecutionClient struct {
 func (p *kExecutionClient) Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Health(ctx)
+}
+
+func (p *kExecutionClient) CancelPreparedOperation(ctx context.Context, actor *platform.Actor, environmentID string, requestID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.CancelPreparedOperation(ctx, actor, environmentID, requestID)
+}
+
+func (p *kExecutionClient) CancelPreparedTransfer(ctx context.Context, actor *platform.Actor, requestID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.CancelPreparedTransfer(ctx, actor, requestID)
+}
+
+func (p *kExecutionClient) BeginTransfer(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.BeginTransfer(ctx, actor, requestJSON)
+}
+
+func (p *kExecutionClient) BeginTransferFenced(ctx context.Context, actor *platform.Actor, requestJSON string, fenceJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.BeginTransferFenced(ctx, actor, requestJSON, fenceJSON)
+}
+
+func (p *kExecutionClient) Transfer(ctx context.Context, actor *platform.Actor, transferID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Transfer(ctx, actor, transferID)
+}
+
+func (p *kExecutionClient) ListTransfers(ctx context.Context, actor *platform.Actor, after string, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ListTransfers(ctx, actor, after, limit)
+}
+
+func (p *kExecutionClient) CancelTransfer(ctx context.Context, actor *platform.Actor, transferID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.CancelTransfer(ctx, actor, transferID)
+}
+
+func (p *kExecutionClient) ExtendTransfer(ctx context.Context, actor *platform.Actor, transferID string, waitMillis int64, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ExtendTransfer(ctx, actor, transferID, waitMillis)
 }
 
 func (p *kExecutionClient) BeginArtifact(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

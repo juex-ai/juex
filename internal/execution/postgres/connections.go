@@ -45,7 +45,7 @@ func (s *Store) Connect(ctx context.Context, id, journal string) (execution.Devi
 }
 
 func (s *Store) Touch(ctx context.Context, id string, epoch int64, online bool) error {
-	result, err := s.pool.Exec(ctx, `UPDATE execution.environments SET online_until=CASE WHEN $3 THEN clock_timestamp()+interval '30 seconds' ELSE NULL END,last_seen=clock_timestamp() WHERE id=$1 AND connection_epoch=$2`, id, epoch, online)
+	result, err := s.exec(ctx, `UPDATE execution.environments SET online_until=CASE WHEN $3 THEN clock_timestamp()+interval '30 seconds' ELSE NULL END,last_seen=clock_timestamp() WHERE id=$1 AND connection_epoch=$2`, id, epoch, online)
 	if err != nil {
 		return err
 	}

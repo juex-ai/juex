@@ -52,8 +52,10 @@ export interface ArtifactRequest {
 
 export interface ArtifactSource {
   environment_id: string;
+  authorization_version: number;
   operation_id: string;
   path: string;
+  working_directory?: string;
 }
 
 export interface ArtifactUpload {
@@ -141,6 +143,21 @@ export interface Device {
   connection_epoch: number;
 }
 
+export interface Environment {
+  id: string;
+  journal_id: string;
+  name: string;
+  kind: string;
+  os: string;
+  online: boolean;
+  capabilities: Array<string>;
+  working_directory: string;
+  permission_mode: string;
+  authorization_version: number;
+  availability?: string;
+  error?: string;
+}
+
 export interface Event {
   id: string;
   thread_id: string;
@@ -151,10 +168,21 @@ export interface Event {
   created_at: string;
 }
 
+export interface ExtendTransferRequest {
+  wait_hours: number;
+}
+
 export interface FileChunk {
   offset: number;
   data: string;
   sha256: string;
+}
+
+export interface FileLocation {
+  environment_id: string;
+  authorization_version: number;
+  path: string;
+  working_directory?: string;
 }
 
 export interface FileManifest {
@@ -349,6 +377,28 @@ export interface Timeline {
   events: Array<Event>;
   next_sequence: number;
   has_more: boolean;
+}
+
+export interface Transfer {
+  id: string;
+  scope: Scope;
+  request: TransferRequest;
+  state: string;
+  artifact_id: string;
+  cancel_requested: boolean;
+  error: string;
+  wait_until: string;
+  created_at: string;
+}
+
+export interface TransferRequest {
+  request_id: string;
+  source?: FileLocation | null;
+  target?: FileLocation | null;
+  artifact_id?: string;
+  name?: string;
+  media_type?: string;
+  visibility?: string;
 }
 
 export interface User {

@@ -26,7 +26,9 @@ func GenerateTypeScript() ([]byte, error) {
 		reflect.TypeFor[management.FleetOverview](), reflect.TypeFor[management.Model](),
 		reflect.TypeFor[management.AgentDetail](),
 		reflect.TypeFor[execution.Device](), reflect.TypeFor[execution.Pairing](),
+		reflect.TypeFor[execprotocol.Environment](),
 		reflect.TypeFor[execution.Artifact](), reflect.TypeFor[execution.ArtifactUpload](), reflect.TypeFor[execprotocol.FileChunk](),
+		reflect.TypeFor[execution.Transfer](), reflect.TypeFor[ExtendTransferRequest](),
 		reflect.TypeFor[management.AgentConfig](), reflect.TypeFor[ConfigureAgentRequest](), reflect.TypeFor[ArchiveAgentRequest](),
 		reflect.TypeFor[managedruntime.Thread](), reflect.TypeFor[managedruntime.Timeline](), reflect.TypeFor[managedruntime.CompactionRequest](), reflect.TypeFor[managedruntime.InputRequest](), reflect.TypeFor[managedruntime.InputReceipt](), reflect.TypeFor[WorkerRequest](), reflect.TypeFor[llm.Message](),
 	} {

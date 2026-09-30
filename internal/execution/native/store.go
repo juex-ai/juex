@@ -35,6 +35,7 @@ type record struct {
 	FileReserved       int64                    `json:"file_reserved,omitempty"`
 	FileExpired        bool                     `json:"file_expired,omitempty"`
 	FileAcknowledgedAt *time.Time               `json:"file_acknowledged_at,omitempty"`
+	FileDiscarded      bool                     `json:"file_discarded,omitempty"`
 }
 
 type stateIdentity struct {

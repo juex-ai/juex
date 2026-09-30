@@ -31,6 +31,7 @@ type ExecutionStore interface {
 
 type RunnerConfig struct {
 	Tools             ToolGateway
+	Files             FileGateway
 	Concurrency       int
 	IdleTimeout       time.Duration
 	PollInterval      time.Duration
@@ -48,6 +49,9 @@ type Runner struct {
 
 func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (*Runner, error) {
 	if store == nil || authority == nil {
+		return nil, ErrInvalid
+	}
+	if config.Files != nil && config.Tools == nil {
 		return nil, ErrInvalid
 	}
 	if config.Concurrency == 0 {
@@ -80,7 +84,7 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 	if !ok {
 		return nil, ErrInvalid
 	}
-	runner.tools = &toolRunner{store: toolStore, context: contextStore, gateway: config.Tools, authority: authority}
+	runner.tools = &toolRunner{store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
 	if config.Tools != nil {
 		observations, ok := store.(ObservationStore)
 		if !ok {
@@ -306,6 +310,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 		request.System += executionContext(environments)
 		request.Tools = append(request.Tools, executionTools()...)
+		if r.tools.files != nil {
+			request.Tools = append(request.Tools, fileTools()...)
+		}
 	}
 	provider, request, err := r.selectModel(ctx, lease, work, request)
 	if errors.Is(err, ErrNoCompaction) {

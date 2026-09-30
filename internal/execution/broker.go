@@ -100,6 +100,12 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 		return s.Store.Settle(ctx, device.ID, device.ConnectionEpoch, operation.ID, execprotocol.Failed, "environment wait expired before dispatch")
 	}
 	if terminal && operation.ResultCursor == operation.Snapshot.OutputBytes {
+		if operation.Request.Kind == "export_file" || operation.Request.Kind == "import_file" {
+			ready, err := s.reconcileFileOperation(ctx, device, operation, exchange)
+			if err != nil || !ready {
+				return err
+			}
+		}
 		_, err := callDevice(ctx, exchange, execprotocol.Envelope{Type: "ack", AgentID: operation.Scope.AgentID, OperationID: operation.ID, Cursor: operation.ResultCursor})
 		if err != nil {
 			return err
@@ -146,6 +152,11 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 		_, err := callDevice(ctx, exchange, execprotocol.Envelope{Type: "cancel", AgentID: operation.Scope.AgentID, OperationID: operation.ID})
 		return err
 	}
+	if operation.Request.Kind == "import_file" && !reply.Snapshot.State.Terminal() {
+		operation.Snapshot, operation.State = *reply.Snapshot, string(reply.Snapshot.State)
+		_, err := s.reconcileFileOperation(ctx, device, operation, exchange)
+		return err
+	}
 	return nil
 }
 
@@ -177,5 +188,5 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return s.reconcileTransfers(ctx)
 }

@@ -120,11 +120,24 @@ func (s *Store) PublishArtifact(ctx context.Context, scope execution.Scope, id s
 	if !scope.CanExecute {
 		return execution.Artifact{}, execprotocol.ErrDenied
 	}
+	prior, err := s.Artifact(ctx, scope, id)
+	if err != nil {
+		return execution.Artifact{}, err
+	}
 	tx, err := s.begin(ctx)
 	if err != nil {
 		return execution.Artifact{}, err
 	}
 	defer rollback(tx)
+	if source := prior.Request.Source; source != nil {
+		device, err := scanDevice(tx.QueryRow(ctx, `SELECT `+deviceColumns+` FROM execution.environments WHERE id=$1 FOR UPDATE`, source.EnvironmentID))
+		if err != nil {
+			return execution.Artifact{}, err
+		}
+		if !(execution.FileLocation{EnvironmentID: source.EnvironmentID, AuthorizationVersion: source.AuthorizationVersion}).Permits(device, scope) {
+			return execution.Artifact{}, execprotocol.ErrDenied
+		}
+	}
 	artifact, err := scanArtifact(tx.QueryRow(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE id=$1 FOR UPDATE`, id))
 	if err != nil {
 		return execution.Artifact{}, err
@@ -161,6 +174,17 @@ func (s *Store) BeginArtifactPurge(ctx context.Context, scope execution.Scope, i
 		return execution.Artifact{}, err
 	}
 	if artifact.State != "purging" && artifact.State != "deleted" {
+		var active bool
+		sourceOperation := ""
+		if artifact.Request.Source != nil {
+			sourceOperation = artifact.Request.Source.OperationID
+		}
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM execution.transfers WHERE state='accepted' AND (artifact_id=$1 OR 'transfer/'||id::text||'/source'=$2))`, id, sourceOperation).Scan(&active); err != nil {
+			return execution.Artifact{}, err
+		}
+		if active {
+			return execution.Artifact{}, execprotocol.ErrConflict
+		}
 		if _, err := tx.Exec(ctx, `UPDATE execution.artifacts SET state='purging' WHERE id=$1`, id); err != nil {
 			return execution.Artifact{}, err
 		}
@@ -173,7 +197,7 @@ func (s *Store) BeginArtifactPurge(ctx context.Context, scope execution.Scope, i
 }
 
 func (s *Store) FinishArtifactPurge(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE execution.artifacts SET state='deleted',request='{}',request_hash='',scope=scope-'owner_email'-'tenant_name' WHERE id=$1 AND state IN ('purging','deleted')`, id)
+	tag, err := s.exec(ctx, `UPDATE execution.artifacts SET state='deleted',request='{}',request_hash='',scope=scope-'owner_email'-'tenant_name' WHERE id=$1 AND state IN ('purging','deleted')`, id)
 	if err != nil {
 		return classify(err)
 	}

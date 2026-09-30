@@ -53,6 +53,9 @@ func (s *Service) SubmitFenced(ctx context.Context, actor, tenant, environment s
 }
 
 func (s *Service) submit(ctx context.Context, actor, tenant, environment string, request execprotocol.Request, wait time.Duration, fence *execprotocol.AuthorityFence) (Operation, error) {
+	if request.Kind == "export_file" || request.Kind == "import_file" {
+		return Operation{}, execprotocol.ErrInvalid
+	}
 	if err := request.Validate(); err != nil {
 		return Operation{}, err
 	}

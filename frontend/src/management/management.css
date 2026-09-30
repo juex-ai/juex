@@ -119,6 +119,9 @@
 .management-file-upload { padding: 16px; border: 1px solid var(--juex-cream-300); border-radius: 6px; }
 .management-file-progress { margin-top: 12px; font-size: 12px; color: var(--juex-ink-600); }
 .management-artifact-list { min-width: 0; }
+.management-transfer-locations { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(250px,100%),1fr)); gap: 16px; }
+.management-transfer-location { min-width: 0; margin: 8px 0; padding: 12px; border: 1px solid var(--juex-cream-300); border-radius: 6px; }
+.management-transfer-location legend { padding: 0 6px; font-size: 13px; font-weight: 600; }
 .management-artifact-row { padding: 16px 0; border-bottom: 1px solid var(--juex-cream-200); }
 .management-artifact-row strong { font-size: 14px; overflow-wrap: anywhere; }
 .management-artifact-row small,.management-artifact-row code { display: block; margin-top: 6px; font-size: 11px; color: var(--juex-ink-600); overflow-wrap: anywhere; }

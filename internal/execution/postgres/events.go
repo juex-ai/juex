@@ -31,15 +31,15 @@ func (s *Store) AcknowledgeEvents(ctx context.Context, ids []string) error {
 	if len(ids) < 1 || len(ids) > 500 {
 		return execprotocol.ErrInvalid
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE execution.events SET delivered_at=clock_timestamp() WHERE id=ANY($1::uuid[]) AND delivered_at IS NULL`, ids)
+	_, err := s.exec(ctx, `UPDATE execution.events SET delivered_at=clock_timestamp() WHERE id=ANY($1::uuid[]) AND delivered_at IS NULL`, ids)
 	return classify(err)
 }
 
 func (s *Store) ExpirePresence(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `UPDATE execution.environments SET online_until=NULL WHERE online_until<=clock_timestamp()`)
+	_, err := s.exec(ctx, `UPDATE execution.environments SET online_until=NULL WHERE online_until<=clock_timestamp()`)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `DELETE FROM execution.events WHERE delivered_at<clock_timestamp()-interval '7 days'`)
+	_, err = s.exec(ctx, `DELETE FROM execution.events WHERE delivered_at<clock_timestamp()-interval '7 days'`)
 	return err
 }

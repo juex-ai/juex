@@ -19,6 +19,19 @@ Deletion releases capacity only after physical cleanup; interrupted purges resum
 Fresh authority fences publication, including after hashing. Dashboard uploads,
 downloads and references use this API; large bytes never enter model tool output.
 
+Explicit file transfers publish from an authorized environment, import an
+Artifact, or copy through an Artifact to another authorized environment. The
+transfer and its first operation are admitted atomically; target admission is
+atomic with attaching the published Artifact. Durable request identities and
+completion events survive platform restarts and lost responses. Every chunk and
+publication checks the original authority and device grant versions, so revoking
+and restoring a grant cannot revive old work. Binary requests cannot bypass the
+coordinator through the ordinary operation API. Storage exhaustion leaves a
+visible durable wait; cancellation and a 24-hour extendable deadline bound it.
+Active transfers retain their source Artifact against deletion. Cancellation
+records a discard separately from acknowledgment of received source bytes; an
+already published destination is never silently undone.
+
 The platform service owns the `execution` PostgreSQL schema. Management and
 Runtime call its Kitex API over mutually authenticated TLS; device administration
 is restricted to Management's service identity. Current Management authority
@@ -29,6 +42,14 @@ Runtime admission also carries the original Turn's authority epochs; refreshing
 current permissions cannot legitimize a delayed call from before revocation.
 Environment and operation changes commit durable outbox facts in the resource
 transaction. Only Runtime consumes and acknowledges them, by event identity.
+
+Runtime can durably cancel a prepared request before admission reaches Execution.
+Cancellation decisions are scoped to Tenant/User/Fleet/Agent and the original
+environment/request identity. Admission checks them in its resource transaction;
+timeouts, service restarts and later reauthorization cannot revive that work.
+Only Runtime's authenticated RPC identity can reserve such a cancellation; public
+Dashboard cancellation requires an existing operation or transfer. Confirmation
+means Execution owns delivery, not that an external effect has been undone.
 
 Native devices initiate the encrypted connection. Pairing first binds the
 owner's selected Agents/capabilities in the Dashboard, then requires a local

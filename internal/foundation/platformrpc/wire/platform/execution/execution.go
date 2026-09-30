@@ -20,6 +20,62 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"CancelPreparedOperation": kitex.NewMethodInfo(
+		cancelPreparedOperationHandler,
+		newExecutionCancelPreparedOperationArgs,
+		newExecutionCancelPreparedOperationResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"CancelPreparedTransfer": kitex.NewMethodInfo(
+		cancelPreparedTransferHandler,
+		newExecutionCancelPreparedTransferArgs,
+		newExecutionCancelPreparedTransferResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"BeginTransfer": kitex.NewMethodInfo(
+		beginTransferHandler,
+		newExecutionBeginTransferArgs,
+		newExecutionBeginTransferResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"BeginTransferFenced": kitex.NewMethodInfo(
+		beginTransferFencedHandler,
+		newExecutionBeginTransferFencedArgs,
+		newExecutionBeginTransferFencedResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"Transfer": kitex.NewMethodInfo(
+		transferHandler,
+		newExecutionTransferArgs,
+		newExecutionTransferResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ListTransfers": kitex.NewMethodInfo(
+		listTransfersHandler,
+		newExecutionListTransfersArgs,
+		newExecutionListTransfersResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"CancelTransfer": kitex.NewMethodInfo(
+		cancelTransferHandler,
+		newExecutionCancelTransferArgs,
+		newExecutionCancelTransferResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ExtendTransfer": kitex.NewMethodInfo(
+		extendTransferHandler,
+		newExecutionExtendTransferArgs,
+		newExecutionExtendTransferResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"BeginArtifact": kitex.NewMethodInfo(
 		beginArtifactHandler,
 		newExecutionBeginArtifactArgs,
@@ -249,6 +305,150 @@ func newExecutionHealthArgs() interface{} {
 
 func newExecutionHealthResult() interface{} {
 	return platform.NewExecutionHealthResult()
+}
+
+func cancelPreparedOperationHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionCancelPreparedOperationArgs)
+	realResult := result.(*platform.ExecutionCancelPreparedOperationResult)
+	success, err := handler.(platform.Execution).CancelPreparedOperation(ctx, realArg.Actor, realArg.EnvironmentID, realArg.RequestID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionCancelPreparedOperationArgs() interface{} {
+	return platform.NewExecutionCancelPreparedOperationArgs()
+}
+
+func newExecutionCancelPreparedOperationResult() interface{} {
+	return platform.NewExecutionCancelPreparedOperationResult()
+}
+
+func cancelPreparedTransferHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionCancelPreparedTransferArgs)
+	realResult := result.(*platform.ExecutionCancelPreparedTransferResult)
+	success, err := handler.(platform.Execution).CancelPreparedTransfer(ctx, realArg.Actor, realArg.RequestID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionCancelPreparedTransferArgs() interface{} {
+	return platform.NewExecutionCancelPreparedTransferArgs()
+}
+
+func newExecutionCancelPreparedTransferResult() interface{} {
+	return platform.NewExecutionCancelPreparedTransferResult()
+}
+
+func beginTransferHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionBeginTransferArgs)
+	realResult := result.(*platform.ExecutionBeginTransferResult)
+	success, err := handler.(platform.Execution).BeginTransfer(ctx, realArg.Actor, realArg.RequestJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionBeginTransferArgs() interface{} {
+	return platform.NewExecutionBeginTransferArgs()
+}
+
+func newExecutionBeginTransferResult() interface{} {
+	return platform.NewExecutionBeginTransferResult()
+}
+
+func beginTransferFencedHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionBeginTransferFencedArgs)
+	realResult := result.(*platform.ExecutionBeginTransferFencedResult)
+	success, err := handler.(platform.Execution).BeginTransferFenced(ctx, realArg.Actor, realArg.RequestJSON, realArg.FenceJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionBeginTransferFencedArgs() interface{} {
+	return platform.NewExecutionBeginTransferFencedArgs()
+}
+
+func newExecutionBeginTransferFencedResult() interface{} {
+	return platform.NewExecutionBeginTransferFencedResult()
+}
+
+func transferHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionTransferArgs)
+	realResult := result.(*platform.ExecutionTransferResult)
+	success, err := handler.(platform.Execution).Transfer(ctx, realArg.Actor, realArg.TransferID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionTransferArgs() interface{} {
+	return platform.NewExecutionTransferArgs()
+}
+
+func newExecutionTransferResult() interface{} {
+	return platform.NewExecutionTransferResult()
+}
+
+func listTransfersHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionListTransfersArgs)
+	realResult := result.(*platform.ExecutionListTransfersResult)
+	success, err := handler.(platform.Execution).ListTransfers(ctx, realArg.Actor, realArg.After, realArg.Limit)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionListTransfersArgs() interface{} {
+	return platform.NewExecutionListTransfersArgs()
+}
+
+func newExecutionListTransfersResult() interface{} {
+	return platform.NewExecutionListTransfersResult()
+}
+
+func cancelTransferHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionCancelTransferArgs)
+	realResult := result.(*platform.ExecutionCancelTransferResult)
+	success, err := handler.(platform.Execution).CancelTransfer(ctx, realArg.Actor, realArg.TransferID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionCancelTransferArgs() interface{} {
+	return platform.NewExecutionCancelTransferArgs()
+}
+
+func newExecutionCancelTransferResult() interface{} {
+	return platform.NewExecutionCancelTransferResult()
+}
+
+func extendTransferHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionExtendTransferArgs)
+	realResult := result.(*platform.ExecutionExtendTransferResult)
+	success, err := handler.(platform.Execution).ExtendTransfer(ctx, realArg.Actor, realArg.TransferID, realArg.WaitMillis)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionExtendTransferArgs() interface{} {
+	return platform.NewExecutionExtendTransferArgs()
+}
+
+func newExecutionExtendTransferResult() interface{} {
+	return platform.NewExecutionExtendTransferResult()
 }
 
 func beginArtifactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -643,6 +843,98 @@ func (p *kClient) Health(ctx context.Context) (r *platform.Reply, err error) {
 	var _args platform.ExecutionHealthArgs
 	var _result platform.ExecutionHealthResult
 	if err = p.c.Call(ctx, "Health", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) CancelPreparedOperation(ctx context.Context, actor *platform.Actor, environmentID string, requestID string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionCancelPreparedOperationArgs
+	_args.Actor = actor
+	_args.EnvironmentID = environmentID
+	_args.RequestID = requestID
+	var _result platform.ExecutionCancelPreparedOperationResult
+	if err = p.c.Call(ctx, "CancelPreparedOperation", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) CancelPreparedTransfer(ctx context.Context, actor *platform.Actor, requestID string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionCancelPreparedTransferArgs
+	_args.Actor = actor
+	_args.RequestID = requestID
+	var _result platform.ExecutionCancelPreparedTransferResult
+	if err = p.c.Call(ctx, "CancelPreparedTransfer", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) BeginTransfer(ctx context.Context, actor *platform.Actor, requestJSON string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionBeginTransferArgs
+	_args.Actor = actor
+	_args.RequestJSON = requestJSON
+	var _result platform.ExecutionBeginTransferResult
+	if err = p.c.Call(ctx, "BeginTransfer", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) BeginTransferFenced(ctx context.Context, actor *platform.Actor, requestJSON string, fenceJSON string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionBeginTransferFencedArgs
+	_args.Actor = actor
+	_args.RequestJSON = requestJSON
+	_args.FenceJSON = fenceJSON
+	var _result platform.ExecutionBeginTransferFencedResult
+	if err = p.c.Call(ctx, "BeginTransferFenced", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Transfer(ctx context.Context, actor *platform.Actor, transferID string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionTransferArgs
+	_args.Actor = actor
+	_args.TransferID = transferID
+	var _result platform.ExecutionTransferResult
+	if err = p.c.Call(ctx, "Transfer", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ListTransfers(ctx context.Context, actor *platform.Actor, after string, limit int32) (r *platform.Reply, err error) {
+	var _args platform.ExecutionListTransfersArgs
+	_args.Actor = actor
+	_args.After = after
+	_args.Limit = limit
+	var _result platform.ExecutionListTransfersResult
+	if err = p.c.Call(ctx, "ListTransfers", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) CancelTransfer(ctx context.Context, actor *platform.Actor, transferID string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionCancelTransferArgs
+	_args.Actor = actor
+	_args.TransferID = transferID
+	var _result platform.ExecutionCancelTransferResult
+	if err = p.c.Call(ctx, "CancelTransfer", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ExtendTransfer(ctx context.Context, actor *platform.Actor, transferID string, waitMillis int64) (r *platform.Reply, err error) {
+	var _args platform.ExecutionExtendTransferArgs
+	_args.Actor = actor
+	_args.TransferID = transferID
+	_args.WaitMillis = waitMillis
+	var _result platform.ExecutionExtendTransferResult
+	if err = p.c.Call(ctx, "ExtendTransfer", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

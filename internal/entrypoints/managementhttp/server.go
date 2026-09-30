@@ -116,7 +116,13 @@ func New(options Options) (http.Handler, error) {
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/workers", s.signedIn(s.createWorker))
 	}
 	if options.Execution != nil {
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/environments", s.signedIn(s.environments))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/artifacts", s.signedIn(s.beginArtifact))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/transfers", s.signedIn(s.beginTransfer))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/transfers", s.signedIn(s.transfers))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/transfers/{transfer}", s.signedIn(s.transfer))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/transfers/{transfer}/cancel", s.signedIn(s.cancelTransfer))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/transfers/{transfer}/extend", s.signedIn(s.extendTransfer))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/artifacts", s.signedIn(s.artifacts))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/artifacts/{artifact}", s.signedIn(s.artifact))
 		mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/artifacts/{artifact}/chunks", s.signedIn(s.writeArtifact))

@@ -114,6 +114,7 @@ type Repository interface {
 	Pending(context.Context, string, int) ([]Operation, error)
 	Dispatch(context.Context, string, int64, string) (Operation, error)
 	CancelOperation(context.Context, string, string) error
+	CancelPreparedOperation(context.Context, Scope, string, string) error
 	ExtendWait(context.Context, string, string, time.Duration) error
 	Observe(context.Context, string, int64, execprotocol.Snapshot) error
 	Settle(context.Context, string, int64, string, execprotocol.State, string) error

@@ -190,9 +190,11 @@ func serve(ctx context.Context, connection *websocket.Conn, config Config, ready
 				status, commitErr := config.Engine.CommitFile(request.AgentID, request.OperationID)
 				err = commitErr
 				reply.FileStatus = &status
-			case "file_ack":
+			case "file_ack", "file_discard":
 				if request.FileManifest == nil {
 					err = execprotocol.ErrInvalid
+				} else if request.Type == "file_discard" {
+					err = config.Engine.DiscardFile(request.AgentID, request.OperationID, *request.FileManifest)
 				} else {
 					err = config.Engine.AcknowledgeFile(request.AgentID, request.OperationID, *request.FileManifest)
 				}
