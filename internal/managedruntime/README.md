@@ -26,6 +26,11 @@ unknown. Provider adapters perform one wire attempt per durable attempt;
 complete, partial and missing usage remain distinct. A model call's result is
 not permission to replay an external tool operation.
 
+Large text is projected into explicitly marked previews with scoped `read_context`
+references. Original messages remain in PostgreSQL; byte pages preserve UTF-8
+and cannot cross Thread ownership. This Runtime tool works without an Execution
+gateway. Read pages are never silently truncated behind their returned cursor.
+
 The Turn freezes an ordered, authorized model plan. Fallback only advances to a
 configured candidate; its position survives tool rounds and Activation recovery.
 Each attempt stores its actual model, context/output limits and reported usage.

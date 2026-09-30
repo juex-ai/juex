@@ -27,7 +27,7 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 	for index := work.ModelIndex; index < len(work.Config.Models); index++ {
 		model := work.Config.Models[index]
 		request.Model = model
-		request.Messages = modelHistory(work, model)
+		request.Messages = projectContext(modelHistory(work, model), model)
 		reason := "model_unavailable"
 		if llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+model.MaxOutput+max(1024, model.ContextWindow/20) <= model.ContextWindow {
 			provider, err := r.authority.Provider(ctx, work.Scope, model)

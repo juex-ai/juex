@@ -110,14 +110,18 @@ func prepareExecution(work ToolWork, environments []execprotocol.Environment) (s
 	return environment, execprotocol.Request{Version: execprotocol.Version, ID: work.ID, AgentID: work.Scope.AgentID, Kind: work.Call.ToolName, Arguments: encoded}, err
 }
 
-func validToolResponse(message llm.Message, enabled bool) bool {
+func validToolResponse(message llm.Message, available []llm.ToolSpec) bool {
 	calls := message.ToolCalls()
-	if len(calls) > 32 || len(calls) > 0 && !enabled {
+	if len(calls) > 32 {
 		return false
+	}
+	known := map[string]bool{}
+	for _, tool := range available {
+		known[tool.Name] = true
 	}
 	seen := map[string]bool{}
 	for _, call := range calls {
-		if call.ToolUseID == "" || call.ToolName == "" || seen[call.ToolUseID] {
+		if call.ToolUseID == "" || !known[call.ToolName] || seen[call.ToolUseID] {
 			return false
 		}
 		seen[call.ToolUseID] = true

@@ -247,7 +247,12 @@ func TestManagedRuntimeFallbackContextLimitHoldsWithoutRequest(t *testing.T) {
 	if err := f.directory.SetModelFallbacks(context.Background(), f.agent.ModelID, []string{model.ID}); err != nil {
 		t.Fatal(err)
 	}
-	f.submit(t, "oversized", f.main.ID, strings.Repeat("context ", 1000))
+	// Original user/tool text can be projected into readable references. Agent
+	// instructions are authoritative and cannot be truncated to make a call fit.
+	if _, err := f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Instructions: strings.Repeat("context ", 1000)}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t, "oversized", f.main.ID, "Hello")
 	f.run(t)
 	runtimeEventually(t, func() bool {
 		for _, event := range f.timeline(t, f.main.ID).Events {

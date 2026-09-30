@@ -15,6 +15,7 @@ import (
 )
 
 type toolRunner struct {
+	context      ContextStore
 	observations ObservationStore
 	store        ToolStore
 	gateway      ToolGateway
@@ -26,10 +27,12 @@ func (r toolRunner) run(ctx context.Context) {
 	for range 3 {
 		workers.Go(func() { r.deliver(ctx) })
 	}
-	workers.Go(func() { r.receive(ctx) })
-	workers.Go(func() { r.observe(ctx) })
-	workers.Go(func() { r.deliverObservations(ctx) })
-	workers.Go(func() { r.acknowledgeObservations(ctx) })
+	if r.gateway != nil {
+		workers.Go(func() { r.receive(ctx) })
+		workers.Go(func() { r.observe(ctx) })
+		workers.Go(func() { r.deliverObservations(ctx) })
+		workers.Go(func() { r.acknowledgeObservations(ctx) })
+	}
 	workers.Wait()
 }
 
@@ -89,6 +92,9 @@ func (r toolRunner) deliver(ctx context.Context) {
 func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 	if work.Cancelled {
 		if work.EnvironmentID != "" && work.Request.ID != "" {
+			if r.gateway == nil {
+				return retryTool()
+			}
 			err := r.gateway.Cancel(ctx, work.Scope, work.EnvironmentID, work.ID)
 			if err != nil && !errors.Is(err, execprotocol.ErrDenied) && !errors.Is(err, execprotocol.ErrNotFound) {
 				return retryTool()
@@ -105,6 +111,12 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			return ToolOutcome{State: "unknown", Content: "Authority changed while execution could be pending. Do not repeat the operation.", IsError: true, OperationLive: true}
 		}
 		return toolResult(work.Call, map[string]string{"error": "authority_changed"}, true)
+	}
+	if outcome, handled := r.contextTool(ctx, *work); handled {
+		return outcome
+	}
+	if r.gateway == nil {
+		return toolResult(work.Call, map[string]string{"error": "execution unavailable"}, true)
 	}
 	newlyPrepared := false
 	if outcome, handled := r.observationTool(ctx, *work); handled {

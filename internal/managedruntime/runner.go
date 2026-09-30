@@ -70,16 +70,21 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 		return nil, ErrInvalid
 	}
 	runner := &Runner{store: store, authority: authority, config: config, holder: rand.Text()}
+	toolStore, ok := store.(ToolStore)
+	if !ok {
+		return nil, ErrInvalid
+	}
+	contextStore, ok := store.(ContextStore)
+	if !ok {
+		return nil, ErrInvalid
+	}
+	runner.tools = &toolRunner{store: toolStore, context: contextStore, gateway: config.Tools, authority: authority}
 	if config.Tools != nil {
-		toolStore, ok := store.(ToolStore)
-		if !ok {
-			return nil, ErrInvalid
-		}
 		observations, ok := store.(ObservationStore)
 		if !ok {
 			return nil, ErrInvalid
 		}
-		runner.tools = &toolRunner{store: toolStore, observations: observations, gateway: config.Tools, authority: authority}
+		runner.tools.observations = observations
 	}
 	return runner, nil
 }
@@ -285,11 +290,11 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if err != nil {
 		return err
 	}
-	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation"}
+	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation", Tools: runtimeTools()}
 	if work.Source.Kind == "observation" {
 		request.Purpose = "observation"
 	}
-	if r.tools != nil {
+	if r.tools.gateway != nil {
 		environments, err := r.tools.gateway.Environments(ctx, scope)
 		if err != nil {
 			return err
@@ -298,7 +303,7 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 			return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
 		}
 		request.System += executionContext(environments)
-		request.Tools = executionTools()
+		request.Tools = append(request.Tools, executionTools()...)
 	}
 	provider, request, err := r.selectModel(ctx, lease, work, request)
 	if errors.Is(err, ErrContextLimit) {
@@ -357,7 +362,7 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 		failure = "cancelled"
 	}
-	if failure == "" && (response.Message.Role != llm.RoleAssistant || len(response.Message.Blocks) == 0 || !validToolResponse(response.Message, r.tools != nil)) {
+	if failure == "" && (response.Message.Role != llm.RoleAssistant || len(response.Message.Blocks) == 0 || !validToolResponse(response.Message, request.Tools)) {
 		failure = "invalid_response"
 	}
 	return r.store.FinishAttempt(ctx, lease, attempt.ID, response, failure)
