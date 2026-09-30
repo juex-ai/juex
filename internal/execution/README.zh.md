@@ -16,6 +16,12 @@ Runtime 提交时还必须携带原 Turn 的授权代际；刷新当前权限不
 `juex-execution serve` 运行平台服务。`juex-executor --state /absolute/private/directory pair --server https://platform.example` 绑定 Linux/macOS 设备，`run` 维持前台连接。
 HTTPS 反向代理将 `/device/` 路由到 Execution，将 Dashboard/API 路由到 Management。
 
+同一绑定支持 `start`、`stop`、`status`、`logs --tail 200` 和 `autostart enable|disable`。
+后台模式使用 Linux 的 `systemd --user` 或 macOS 的 `launchd`；用户显式启用自启动后在操作系统用户登录时启动。
+Linux 需要可用的用户服务管理器；CLI 不自动启用 lingering 或请求 root 权限。关闭自启动不改变正在运行的执行器。
+可执行文件需要保留在安装时的绝对路径。状态检查核对进程启动标识，停止等待执行引擎关闭；前台运行仍由原终端控制。
+私有服务日志每日或达到 2 MiB 时轮转，最多保留八个文件，七天后过期；操作恢复记录独立保存。
+
 原生引擎以当前 Linux/macOS 用户运行，默认工作目录不是沙箱。Shell 和 stdio MCP 可使用该用户的操作系统权限；能力开关选择暴露哪些操作，不代表独立的操作系统安全边界。
 托管隔离由经过验证的容器后端负责。子进程不继承平台模型和服务凭据。
 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/execution/connector"
+	"github.com/juex-ai/juex/internal/execution/hostservice"
 	"github.com/juex-ai/juex/internal/execution/native"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/spf13/cobra"
@@ -39,7 +40,7 @@ type pendingPair struct {
 
 func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
 	var state, server, name, workingDirectory string
-	var insecure, restart bool
+	var insecure, restart, background bool
 	root := &cobra.Command{Use: "juex-executor", Short: "Connect this Linux or macOS user account as an Agent execution environment", SilenceUsage: true, SilenceErrors: true}
 	root.SetArgs(args)
 	root.SetIn(in)
@@ -53,6 +54,7 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 		if !filepath.IsAbs(state) {
 			return errors.New("--state must be an absolute private directory")
 		}
+		state = filepath.Clean(state)
 		if err := os.MkdirAll(state, 0700); err != nil {
 			return err
 		}
@@ -186,11 +188,119 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 		if err != nil {
 			return err
 		}
-		defer func() { _ = engine.Close() }()
-		return connector.Run(cmd.Context(), connector.Config{URL: config.Server, Token: config.Credential, Environment: config.Device.Environment, Engine: engine, InsecureHTTP: config.InsecureHTTP, OnState: func(state string) { fmt.Fprintln(out, "Device", state) }})
+		return runDevice(cmd.Context(), state, config, engine, background, out)
 	}}
+	run.Flags().BoolVar(&background, "background-log", false, "Write service output to the private rotating log")
 	root.AddCommand(pair, run)
+	addServiceCommands(root, &state, out)
 	return root.ExecuteContext(ctx)
+}
+
+func runDevice(ctx context.Context, directory string, config enrollment, engine *native.Engine, background bool, out io.Writer) (result error) {
+	log, err := hostservice.OpenLog(directory)
+	if err != nil {
+		_ = engine.Close()
+		return err
+	}
+	defer func() { result = errors.Join(result, log.Close()) }()
+	writer := io.Writer(log)
+	if !background {
+		writer = io.MultiWriter(out, log)
+	}
+	recorder, err := hostservice.Record(directory, config.Device.ID, background)
+	if err != nil {
+		_ = engine.Close()
+		return err
+	}
+	defer func() { result = errors.Join(result, engine.Close(), recorder.Update("stopped")) }()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var stateErr error
+	err = connector.Run(ctx, connector.Config{URL: config.Server, Token: config.Credential, Environment: config.Device.Environment, Engine: engine, InsecureHTTP: config.InsecureHTTP, OnState: func(state string) {
+		_, logErr := fmt.Fprintf(writer, "%s Device %s\n", time.Now().UTC().Format(time.RFC3339), state)
+		stateErr = errors.Join(stateErr, logErr, recorder.Update(state))
+		if stateErr != nil {
+			cancel()
+		}
+	}})
+	if err != nil {
+		_, logErr := fmt.Fprintf(writer, "%s Executor stopped: %v\n", time.Now().UTC().Format(time.RFC3339), err)
+		stateErr = errors.Join(stateErr, logErr)
+	}
+	return errors.Join(err, stateErr)
+}
+
+func addServiceCommands(root *cobra.Command, state *string, out io.Writer) {
+	manager := func() (*hostservice.Manager, error) { return hostservice.New(*state) }
+	paired := func() error {
+		var config enrollment
+		return readPrivate(filepath.Join(*state, "enrollment.json"), &config)
+	}
+	root.AddCommand(&cobra.Command{Use: "start", Short: "Start this enrollment in the OS user service manager", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if err := paired(); err != nil {
+			return err
+		}
+		m, err := manager()
+		if err != nil {
+			return err
+		}
+		status, err := m.Start(cmd.Context())
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(status)
+	}})
+	root.AddCommand(&cobra.Command{Use: "stop", Short: "Stop the background executor and cancel its operations", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		m, err := manager()
+		if err != nil {
+			return err
+		}
+		if err := m.Stop(cmd.Context()); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Executor stopped.")
+		return nil
+	}})
+	root.AddCommand(&cobra.Command{Use: "status", Short: "Show the verified process, connection and autostart status", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+		m, err := manager()
+		if err != nil {
+			return err
+		}
+		status, err := m.Status()
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(status)
+	}})
+	var tail int
+	logs := &cobra.Command{Use: "logs", Short: "Read recent lines from the private rotating log", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+		text, err := hostservice.Logs(*state, tail)
+		if err != nil {
+			return err
+		}
+		if text != "" {
+			_, err = fmt.Fprintln(out, text)
+		}
+		return err
+	}}
+	logs.Flags().IntVar(&tail, "tail", 200, "Number of recent lines (1-2000)")
+	root.AddCommand(logs)
+	root.AddCommand(&cobra.Command{Use: "autostart enable|disable", Short: "Explicitly enable or disable starting at OS user login", Args: cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs), ValidArgs: []string{"enable", "disable"}, RunE: func(cmd *cobra.Command, args []string) error {
+		if args[0] == "enable" {
+			if err := paired(); err != nil {
+				return err
+			}
+		}
+		m, err := manager()
+		if err != nil {
+			return err
+		}
+		if err := m.Autostart(cmd.Context(), args[0] == "enable"); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Autostart %sd. Running executor state is unchanged.\n", args[0])
+		return nil
+	}})
 }
 
 func publicURL(raw string, insecure bool) (string, error) {

@@ -29,6 +29,16 @@ sessions. Each Tenant/User enrollment has its own private state directory.
 Linux/macOS device; `run` maintains its foreground connection. An HTTPS reverse
 proxy routes `/device/` to Execution and the Dashboard/API to Management.
 
+The same enrollment supports `start`, `stop`, `status`, `logs --tail 200` and
+`autostart enable|disable`. Background mode uses Linux `systemd --user` or macOS
+`launchd`; autostart is explicitly enabled and runs at OS user login. Linux
+requires an available user service manager; the CLI does not enable lingering or
+request root access. Disabling autostart leaves the running executor unchanged.
+Keep the executable at its installed absolute path. Status verifies the process
+incarnation, and stop waits for engine shutdown. Foreground runs remain owned by
+their terminal. Private service logs rotate daily or at 2 MiB, retain at most
+eight files and expire after seven days; operation recovery records are separate.
+
 The native engine runs as the current Linux/macOS user. Its default working
 directory is not a sandbox. Shell and stdio MCP can exercise that user's OS
 permissions; capability gates select exposed operations, not independent OS

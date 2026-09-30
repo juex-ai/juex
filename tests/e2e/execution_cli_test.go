@@ -20,6 +20,7 @@ import (
 	"github.com/juex-ai/juex/internal/entrypoints/managementhttp"
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
 	"github.com/juex-ai/juex/internal/execution"
+	"github.com/juex-ai/juex/internal/execution/hostservice"
 	"github.com/juex-ai/juex/internal/execution/native"
 	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
@@ -128,6 +129,23 @@ func TestExecutionCLIWebPairingAndPrivateRPC(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Error("executor CLI shutdown timeout")
 		}
+		var status bytes.Buffer
+		if err := executorcli.Execute(ctx, []string{"--state", state, "status"}, strings.NewReader(""), &status, io.Discard); err != nil {
+			t.Error(err)
+			return
+		}
+		var stopped hostservice.Status
+		if err := json.Unmarshal(status.Bytes(), &stopped); err != nil || stopped.Running || stopped.State != "stopped" {
+			t.Error("CLI did not confirm shutdown", stopped, err)
+		}
+	})
+	runtimeEventually(t, func() bool {
+		var output bytes.Buffer
+		if err := executorcli.Execute(ctx, []string{"--state", state, "status"}, strings.NewReader(""), &output, io.Discard); err != nil {
+			return false
+		}
+		var status hostservice.Status
+		return json.Unmarshal(output.Bytes(), &status) == nil && status.Running && !status.Background && status.State == "online"
 	})
 	request := nativeRequest(t, "cli-command", "exec_command", native.CommandArguments{Command: "printf cli-success"})
 	request.AgentID = f.agent.ID

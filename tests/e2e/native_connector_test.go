@@ -29,7 +29,7 @@ func TestNativeConnectorDisconnectRejoinsOriginalOperationAndRevokes(t *testing.
 	errorsCh := make(chan error, 8)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/device/connect" || r.Header.Get("Authorization") != "Bearer fixture-device-credential" {
-			http.Error(w, "denied", 401)
+			http.Error(w, "denied", http.StatusUnauthorized)
 			return
 		}
 		connection, err := websocket.Accept(w, r, nil)
@@ -37,7 +37,7 @@ func TestNativeConnectorDisconnectRejoinsOriginalOperationAndRevokes(t *testing.
 			errorsCh <- err
 			return
 		}
-		defer connection.CloseNow()
+		defer func() { _ = connection.CloseNow() }()
 		var hello execprotocol.Envelope
 		if err := wsjson.Read(ctx, connection, &hello); err != nil {
 			errorsCh <- err
@@ -157,7 +157,7 @@ func TestNativeConnectorRejectsProtocolMismatch(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer connection.CloseNow()
+		defer func() { _ = connection.CloseNow() }()
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
 		var hello execprotocol.Envelope
