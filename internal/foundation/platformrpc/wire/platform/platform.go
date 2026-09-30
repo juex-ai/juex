@@ -968,6 +968,10 @@ var fieldIDToName_RuntimeCreateWorkerResult = map[int16]string{
 type Execution interface {
 	Health(ctx context.Context) (r *Reply, err error)
 
+	Events(ctx context.Context, limit int32) (r *Reply, err error)
+
+	AcknowledgeEvents(ctx context.Context, eventIDs []string) (r *Reply, err error)
+
 	PreviewPair(ctx context.Context, actorID string, tenantID string, pairID string) (r *Reply, err error)
 
 	ApprovePair(ctx context.Context, actorID string, tenantID string, pairID string, grantsJSON string) (r *Reply, err error)
@@ -981,6 +985,8 @@ type Execution interface {
 	Environments(ctx context.Context, actor *Actor) (r *Reply, err error)
 
 	Submit(ctx context.Context, actor *Actor, environmentID string, requestJSON string, waitMillis int64) (r *Reply, err error)
+
+	SubmitFenced(ctx context.Context, actor *Actor, environmentID string, requestJSON string, waitMillis int64, fenceJSON string) (r *Reply, err error)
 
 	Operation(ctx context.Context, actor *Actor, environmentID string, operationID string, cursor int64, limit int32) (r *Reply, err error)
 
@@ -1043,6 +1049,140 @@ func (p *ExecutionHealthResult) String() string {
 }
 
 var fieldIDToName_ExecutionHealthResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionEventsArgs struct {
+	Limit int32 `thrift:"limit,1" frugal:"1,default,i32" json:"limit"`
+}
+
+func NewExecutionEventsArgs() *ExecutionEventsArgs {
+	return &ExecutionEventsArgs{}
+}
+
+func (p *ExecutionEventsArgs) InitDefault() {
+}
+
+func (p *ExecutionEventsArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *ExecutionEventsArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *ExecutionEventsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionEventsArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionEventsArgs = map[int16]string{
+	1: "limit",
+}
+
+type ExecutionEventsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionEventsResult() *ExecutionEventsResult {
+	return &ExecutionEventsResult{}
+}
+
+func (p *ExecutionEventsResult) InitDefault() {
+}
+
+var ExecutionEventsResult_Success_DEFAULT *Reply
+
+func (p *ExecutionEventsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionEventsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionEventsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionEventsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionEventsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionEventsResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionEventsResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionAcknowledgeEventsArgs struct {
+	EventIDs []string `thrift:"eventIDs,1" frugal:"1,default,list<string>" json:"eventIDs"`
+}
+
+func NewExecutionAcknowledgeEventsArgs() *ExecutionAcknowledgeEventsArgs {
+	return &ExecutionAcknowledgeEventsArgs{}
+}
+
+func (p *ExecutionAcknowledgeEventsArgs) InitDefault() {
+}
+
+func (p *ExecutionAcknowledgeEventsArgs) GetEventIDs() (v []string) {
+	return p.EventIDs
+}
+func (p *ExecutionAcknowledgeEventsArgs) SetEventIDs(val []string) {
+	p.EventIDs = val
+}
+
+func (p *ExecutionAcknowledgeEventsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionAcknowledgeEventsArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionAcknowledgeEventsArgs = map[int16]string{
+	1: "eventIDs",
+}
+
+type ExecutionAcknowledgeEventsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionAcknowledgeEventsResult() *ExecutionAcknowledgeEventsResult {
+	return &ExecutionAcknowledgeEventsResult{}
+}
+
+func (p *ExecutionAcknowledgeEventsResult) InitDefault() {
+}
+
+var ExecutionAcknowledgeEventsResult_Success_DEFAULT *Reply
+
+func (p *ExecutionAcknowledgeEventsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionAcknowledgeEventsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionAcknowledgeEventsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionAcknowledgeEventsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionAcknowledgeEventsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionAcknowledgeEventsResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionAcknowledgeEventsResult = map[int16]string{
 	0: "success",
 }
 
@@ -1674,6 +1814,118 @@ func (p *ExecutionSubmitResult) String() string {
 }
 
 var fieldIDToName_ExecutionSubmitResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionSubmitFencedArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	EnvironmentID string `thrift:"environmentID,2" frugal:"2,default,string" json:"environmentID"`
+	RequestJSON   string `thrift:"requestJSON,3" frugal:"3,default,string" json:"requestJSON"`
+	WaitMillis    int64  `thrift:"waitMillis,4" frugal:"4,default,i64" json:"waitMillis"`
+	FenceJSON     string `thrift:"fenceJSON,5" frugal:"5,default,string" json:"fenceJSON"`
+}
+
+func NewExecutionSubmitFencedArgs() *ExecutionSubmitFencedArgs {
+	return &ExecutionSubmitFencedArgs{}
+}
+
+func (p *ExecutionSubmitFencedArgs) InitDefault() {
+}
+
+var ExecutionSubmitFencedArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionSubmitFencedArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionSubmitFencedArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionSubmitFencedArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionSubmitFencedArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+
+func (p *ExecutionSubmitFencedArgs) GetWaitMillis() (v int64) {
+	return p.WaitMillis
+}
+
+func (p *ExecutionSubmitFencedArgs) GetFenceJSON() (v string) {
+	return p.FenceJSON
+}
+func (p *ExecutionSubmitFencedArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionSubmitFencedArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionSubmitFencedArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+func (p *ExecutionSubmitFencedArgs) SetWaitMillis(val int64) {
+	p.WaitMillis = val
+}
+func (p *ExecutionSubmitFencedArgs) SetFenceJSON(val string) {
+	p.FenceJSON = val
+}
+
+func (p *ExecutionSubmitFencedArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionSubmitFencedArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionSubmitFencedArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionSubmitFencedArgs = map[int16]string{
+	1: "actor",
+	2: "environmentID",
+	3: "requestJSON",
+	4: "waitMillis",
+	5: "fenceJSON",
+}
+
+type ExecutionSubmitFencedResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionSubmitFencedResult() *ExecutionSubmitFencedResult {
+	return &ExecutionSubmitFencedResult{}
+}
+
+func (p *ExecutionSubmitFencedResult) InitDefault() {
+}
+
+var ExecutionSubmitFencedResult_Success_DEFAULT *Reply
+
+func (p *ExecutionSubmitFencedResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionSubmitFencedResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionSubmitFencedResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionSubmitFencedResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionSubmitFencedResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionSubmitFencedResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionSubmitFencedResult = map[int16]string{
 	0: "success",
 }
 

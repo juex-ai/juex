@@ -31,6 +31,16 @@ from reviving queued work. A human cancellation is durable and affects only its
 Thread. Late provider usage may settle a cancelled attempt, but cannot append an
 assistant message. Service shutdown retains unfinished work for recovery.
 
-The HTTP/Web conversation path is implemented. Tool execution, device routing,
-context compaction and independent application integrations are separate work
-within the platform refactor; a passing conversation test does not verify them.
+Tool calls commit stable operation identities before delivery to Execution.
+Independent delivery workers release the model slot while an environment is
+offline. Execution facts enter a deduplicated durable inbox before acknowledgment;
+late commits cannot be skipped by a sequence cursor. Results resume the original
+Turn under its current Activation fence, preserving configuration and tool-result
+ordering. Unknown external outcomes block the Thread for a human decision.
+
+The model receives authorized environments and selects a location only for file,
+process and MCP tools. Handles retain their original environment. Device presence
+changes update waiting work; other observations are included in the next Turn.
+Cancelling a Thread closes its tool transcript and persists external cancellation
+delivery. A late result cannot restart it. Context compaction, subscriptions and
+independent application integrations remain separate platform work.

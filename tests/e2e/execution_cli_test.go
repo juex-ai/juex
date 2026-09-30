@@ -131,7 +131,15 @@ func TestExecutionCLIWebPairingAndPrivateRPC(t *testing.T) {
 	})
 	request := nativeRequest(t, "cli-command", "exec_command", native.CommandArguments{Command: "printf cli-success"})
 	request.AgentID = f.agent.ID
-	if _, err := runtimeClient.Submit(ctx, f.actor, f.tenant, devices[0].ID, request, 0); err != nil {
+	if _, err := runtimeClient.Submit(ctx, f.actor, f.tenant, devices[0].ID, request, 0); !errors.Is(err, execprotocol.ErrDenied) {
+		t.Fatal("runtime bypassed authority fence", err)
+	}
+	scope, err := f.execution.Authority.Agent(ctx, f.actor, f.tenant, f.agent.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence := execprotocol.AuthorityFence{ActorEpoch: scope.ActorAuthorizationEpoch, MembershipEpoch: scope.MembershipExecutionEpoch, AgentEpoch: scope.AgentExecutionEpoch}
+	if _, err := runtimeClient.SubmitFenced(ctx, f.actor, f.tenant, devices[0].ID, request, 0, fence); err != nil {
 		t.Fatal(err)
 	}
 	result := executionEventually(t, f, devices[0].ID, request.ID, func(operation execution.Operation) bool { return operation.Acknowledged })
@@ -139,7 +147,21 @@ func TestExecutionCLIWebPairingAndPrivateRPC(t *testing.T) {
 		t.Fatal(result)
 	}
 	managementCall[any](t, f.client, "POST", base+"/devices/"+devices[0].ID+"/revoke", f.origin, struct{}{}, 200)
-	if _, err := runtimeClient.Submit(ctx, f.actor, f.tenant, devices[0].ID, request, 0); !errors.Is(err, execprotocol.ErrDenied) {
+	if _, err := runtimeClient.SubmitFenced(ctx, f.actor, f.tenant, devices[0].ID, request, 0, fence); !errors.Is(err, execprotocol.ErrDenied) {
 		t.Fatal("RPC ignored revoked device", err)
+	}
+	if _, err := client.Events(ctx, 100); !errors.Is(err, execprotocol.ErrDenied) {
+		t.Fatal("management consumed execution events", err)
+	}
+	events, err := runtimeClient.Events(ctx, 100)
+	if err != nil || len(events) == 0 {
+		t.Fatal("runtime missing execution facts", events, err)
+	}
+	ids := make([]string, len(events))
+	for i, event := range events {
+		ids[i] = event.ID
+	}
+	if err := runtimeClient.AcknowledgeEvents(ctx, ids); err != nil {
+		t.Fatal(err)
 	}
 }

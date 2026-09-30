@@ -64,10 +64,35 @@ func (s *Store) CancelThread(ctx context.Context, scope managedruntime.Scope, th
 	if err != nil {
 		return err
 	}
+	rows, err := tx.Query(ctx, `SELECT id FROM runtime.turns WHERE thread_id=$1 AND state IN ('running','waiting')`, thread.ID)
+	if err != nil {
+		return err
+	}
+	var turns []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		turns = append(turns, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range turns {
+		if err := consumeToolResults(ctx, tx, id, thread.ID, true); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.inputs SET state='cancelled' WHERE thread_id=$1 AND state IN ('queued','active');`, thread.ID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET state='cancelled',completed_at=clock_timestamp() WHERE thread_id=$1 AND state IN ('running','waiting')`, thread.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.tools SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE turn_id=ANY($1::uuid[]) AND (state IN ('pending','waiting') OR operation_live)`, turns); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state='idle' WHERE id=$1`, thread.ID); err != nil {

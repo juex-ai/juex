@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -51,23 +52,41 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 	case "active":
 		var encoded []byte
 		var oldEpoch int64
-		err = tx.QueryRow(ctx, `SELECT id,config,generation,activation_epoch FROM runtime.turns WHERE input_id=$1 AND state='running'`, inputID).Scan(&work.TurnID, &encoded, &work.Generation, &oldEpoch)
+		var turnState string
+		err = tx.QueryRow(ctx, `SELECT id,config,generation,activation_epoch,state FROM runtime.turns WHERE input_id=$1 AND state IN ('running','waiting')`, inputID).Scan(&work.TurnID, &encoded, &work.Generation, &oldEpoch, &turnState)
 		if err != nil {
 			return work, classify(err)
 		}
-		if oldEpoch == lease.Epoch {
-			return work, managedruntime.ErrConflict
+		if turnState == "waiting" {
+			if err := consumeToolResults(ctx, tx, work.TurnID, thread.ID, false); err != nil {
+				return work, err
+			}
+		} else if oldEpoch == lease.Epoch {
+			var started bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.attempts WHERE turn_id=$1 AND state='started')`, work.TurnID).Scan(&started); err != nil {
+				return work, err
+			}
+			if started {
+				return work, managedruntime.ErrConflict
+			}
 		}
 		if err := json.Unmarshal(encoded, &work.Config); err != nil {
 			return work, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET activation_epoch=$2 WHERE id=$1`, work.TurnID, lease.Epoch); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET activation_epoch=$2,state='running' WHERE id=$1`, work.TurnID, lease.Epoch); err != nil {
 			return work, err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE runtime.attempts SET state='unknown',completed_at=clock_timestamp() WHERE turn_id=$1 AND state='started'`, work.TurnID); err != nil {
 			return work, err
 		}
-		if err := appendEvent(ctx, tx, thread.ID, "turn.recovered", map[string]any{"turn_id": work.TurnID, "epoch": lease.Epoch}); err != nil {
+		kind := "turn.resumed"
+		if turnState == "running" && oldEpoch != lease.Epoch {
+			kind = "turn.recovered"
+		}
+		if err := appendEvent(ctx, tx, thread.ID, kind, map[string]any{"turn_id": work.TurnID, "epoch": lease.Epoch}); err != nil {
+			return work, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state='running' WHERE id=$1`, thread.ID); err != nil {
 			return work, err
 		}
 	case "queued":
@@ -100,6 +119,11 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		}
 	default:
 		return work, managedruntime.ErrConflict
+	}
+	if thread.Kind == "main" {
+		if err := consumeObservations(ctx, tx, scope.AgentID, thread.ID); err != nil {
+			return work, err
+		}
 	}
 	work.History, err = history(ctx, tx, thread.ID, work.Generation)
 	if err != nil {
@@ -248,6 +272,9 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 			return err
 		}
 		if len(response.Message.ToolCalls()) > 0 {
+			if err := recordTools(ctx, tx, turnID, attemptID, response.Message.ToolCalls()); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET state='waiting' WHERE id=$1`, turnID); err != nil {
 				return err
 			}
@@ -300,6 +327,19 @@ func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, input
 	}
 	if result.RowsAffected() == 0 {
 		return managedruntime.ErrConflict
+	}
+	var turnID string
+	err = tx.QueryRow(ctx, `SELECT id FROM runtime.turns WHERE input_id=$1 AND state IN ('running','waiting')`, inputID).Scan(&turnID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if turnID != "" {
+		if err := consumeToolResults(ctx, tx, turnID, threadID, true); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runtime.tools SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE turn_id=$1 AND (state IN ('pending','waiting') OR operation_live)`, turnID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET state='cancelled',completed_at=clock_timestamp() WHERE input_id=$1 AND state IN ('running','waiting')`, inputID); err != nil {
 		return err

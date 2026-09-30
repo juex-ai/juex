@@ -10,6 +10,14 @@ import (
 
 const Version = 1
 
+// AuthorityFence binds an external operation to the human/Agent authority of
+// its original Turn. It is supplied by Runtime, never by a model argument.
+type AuthorityFence struct {
+	ActorEpoch      int64 `json:"actor_epoch"`
+	MembershipEpoch int64 `json:"membership_epoch"`
+	AgentEpoch      int64 `json:"agent_epoch"`
+}
+
 var (
 	ErrVersion        = errors.New("execution protocol incompatible; upgrade required")
 	ErrInvalid        = errors.New("invalid execution request")

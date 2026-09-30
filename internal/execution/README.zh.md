@@ -7,6 +7,8 @@ Execution 拥有执行环境、外部操作身份和持久结果。Agent Activat
 
 平台服务拥有 PostgreSQL 的 `execution` schema。Management 与 Runtime 通过双向 TLS 调用其 Kitex API；设备管理仅允许 Management 服务身份。
 接收与下发操作前检查当前 Management 授权。成员／Agent 执行代际使旧操作失效；独立的成员移除代际防止用户重新加入 Tenant 后恢复旧设备授权。
+Runtime 提交时还必须携带原 Turn 的授权代际；刷新当前权限不能使撤销前的迟到调用重新获得执行资格。
+环境与操作变化在资源事务内提交持久事件。只有 Runtime 可以消费并按事件 ID 确认它们。
 
 原生设备主动建立加密连接。配对先在 Dashboard 绑定所属用户选择的 Agent／能力，再在本机核对 Tenant 和账号并确认。
 仅 Web 批准不会激活设备凭据。设备凭据独立于人的登录会话；每个 Tenant/User 绑定使用独立私有状态目录。

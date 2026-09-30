@@ -28,7 +28,9 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
       rows.push({ kind: 'notice', id: event.id, text: data.error === 'invalid_response' ? '模型返回了无法处理的响应。请检查模型配置后重试。' : '模型请求失败，本轮已停止。已接收的输入和历史仍然保留。' })
     } else if (event.kind === 'thread.cancelled' || event.kind === 'turn.cancelled') {
       for (const row of messages.values()) if (row.status === '已接收，等待执行') row.status = '已取消'
-      rows.push({ kind: 'notice', id: event.id, text: '本次执行已停止。' })
+      rows.push({ kind: 'notice', id: event.id, text: '已取消本次对话。已经开始的外部操作可能仍在结束中。' })
+    } else if (event.kind === 'tool.unknown') {
+      rows.push({ kind: 'notice', id: event.id, text: '无法确认外部操作的结果，对话已暂停。请先核对设备上的实际状态；停止本轮后，可以发送新的处理指令。' })
     } else if (event.kind === 'turn.recovered') {
       rows.push({ kind: 'notice', id: event.id, text: '服务已恢复，正在继续原来的对话。' })
     }

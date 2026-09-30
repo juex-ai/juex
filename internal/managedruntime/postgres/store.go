@@ -20,6 +20,9 @@ import (
 //go:embed schema.sql
 var schema string
 
+//go:embed tools_schema.sql
+var toolsSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -34,21 +37,36 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(schema)))
-	var version int
-	var stored string
-	err = tx.QueryRow(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version DESC LIMIT 1`).Scan(&version, &stored)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, err := tx.Exec(ctx, schema); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO runtime.schema_versions VALUES(1,$1)`, checksum); err != nil {
-			return err
-		}
-	} else if err != nil {
+	migrations := []string{schema, toolsSchema}
+	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
+	if err != nil {
 		return err
-	} else if version != 1 || stored != checksum {
-		return errors.New("unsupported or modified Runtime schema")
+	}
+	installed := 0
+	for rows.Next() {
+		var version int
+		var stored string
+		if err := rows.Scan(&version, &stored); err != nil {
+			rows.Close()
+			return err
+		}
+		if version != installed+1 || version > len(migrations) || stored != fmt.Sprintf("%x", sha256.Sum256([]byte(migrations[version-1]))) {
+			rows.Close()
+			return fmt.Errorf("unsupported or modified Runtime schema version %d", version)
+		}
+		installed++
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := installed; i < len(migrations); i++ {
+		if _, err := tx.Exec(ctx, migrations[i]); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.schema_versions VALUES($1,$2)`, i+1, fmt.Sprintf("%x", sha256.Sum256([]byte(migrations[i])))); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }

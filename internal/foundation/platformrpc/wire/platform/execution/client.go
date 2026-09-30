@@ -12,6 +12,8 @@ import (
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Events(ctx context.Context, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	AcknowledgeEvents(ctx context.Context, eventIDs []string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	PreviewPair(ctx context.Context, actorID string, tenantID string, pairID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ApprovePair(ctx context.Context, actorID string, tenantID string, pairID string, grantsJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Devices(ctx context.Context, actorID string, tenantID string, ownerID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -19,6 +21,7 @@ type Client interface {
 	Revoke(ctx context.Context, actorID string, tenantID string, environmentID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Environments(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Submit(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	SubmitFenced(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, fenceJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Operation(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, cursor int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Cancel(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Extend(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, waitMillis int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -58,6 +61,16 @@ func (p *kExecutionClient) Health(ctx context.Context, callOptions ...callopt.Op
 	return p.kClient.Health(ctx)
 }
 
+func (p *kExecutionClient) Events(ctx context.Context, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Events(ctx, limit)
+}
+
+func (p *kExecutionClient) AcknowledgeEvents(ctx context.Context, eventIDs []string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.AcknowledgeEvents(ctx, eventIDs)
+}
+
 func (p *kExecutionClient) PreviewPair(ctx context.Context, actorID string, tenantID string, pairID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.PreviewPair(ctx, actorID, tenantID, pairID)
@@ -91,6 +104,11 @@ func (p *kExecutionClient) Environments(ctx context.Context, actor *platform.Act
 func (p *kExecutionClient) Submit(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Submit(ctx, actor, environmentID, requestJSON, waitMillis)
+}
+
+func (p *kExecutionClient) SubmitFenced(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, fenceJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.SubmitFenced(ctx, actor, environmentID, requestJSON, waitMillis, fenceJSON)
 }
 
 func (p *kExecutionClient) Operation(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, cursor int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {

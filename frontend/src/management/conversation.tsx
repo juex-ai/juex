@@ -78,6 +78,10 @@ function storedSubmission(key: string): InputRequest | null {
   try { const raw = sessionStorage.getItem(key); if (!raw) return null; const value = JSON.parse(raw) as InputRequest; return typeof value.request_id === 'string' && typeof value.text === 'string' ? value : null } catch { return null }
 }
 
+function saveSubmission(key: string, request: InputRequest | null) {
+  try { if (request) sessionStorage.setItem(key, JSON.stringify(request)); else sessionStorage.removeItem(key) } catch { /* The in-memory request ID still deduplicates retries when storage is unavailable. */ }
+}
+
 function ThreadConversation({ base, thread, actor, writable, onThread }: { base: string; thread: Thread; actor: string; writable: boolean; onThread: (thread: Thread) => void }) {
   const storageKey = `juex.pending:${actor}:${base}:${thread.id}`
   const [submission, setSubmission] = useState<InputRequest | null>(() => storedSubmission(storageKey))
@@ -96,19 +100,19 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
   useEffect(() => {
     if (!submission) return
     const accepted = timeline.events.some(event => event.kind === 'input.accepted' && (event.data as { receipt?: InputReceipt }).receipt?.request_id === submission.request_id)
-    if (accepted) { setSubmission(null); setDraft(''); setError(''); sessionStorage.removeItem(storageKey) }
+    if (accepted) { setSubmission(null); setDraft(''); setError(''); saveSubmission(storageKey, null) }
   }, [timeline.events, submission, storageKey])
   async function send(event: FormEvent) {
     event.preventDefault(); if (!draft.trim() || busy) return
     const request = submission ?? { request_id: nanoid(), thread_id: thread.id, text: draft }
     setBusy(true); setError(''); setSubmission(request)
     try {
-      sessionStorage.setItem(storageKey, JSON.stringify(request))
+      saveSubmission(storageKey, request)
       await api<InputReceipt>(`${base}/inputs`, request)
-      sessionStorage.removeItem(storageKey); setSubmission(null); setDraft('')
+      saveSubmission(storageKey, null); setSubmission(null); setDraft('')
     } catch (err) {
       setError(errorText(err))
-      if (err instanceof APIError && err.status >= 400 && err.status < 500) { setSubmission(null); sessionStorage.removeItem(storageKey) }
+      if (err instanceof APIError && err.status >= 400 && err.status < 500) { setSubmission(null); saveSubmission(storageKey, null) }
     } finally { setBusy(false) }
   }
   async function cancel() {
@@ -129,6 +133,8 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
 }
 
 function MessageView({ message, status }: { message: Message; status: string }) {
+  if (message.kind === 'tool_result') return <div className="management-message from-agent">{message.blocks.map((block, index) => <details key={index} className="management-tool-row"><summary>{block.is_error ? '执行未完成' : '执行结果'} · {block.tool_name}</summary><pre>{block.content}</pre></details>)}</div>
+  if (message.kind === 'system_notice') return <details className="management-tool-row"><summary>执行环境动态</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
   const user = message.role === 'user'
   return <article className={`management-message ${user ? 'from-user' : 'from-agent'}`}><div className="management-message-author">{user ? '你' : 'Agent'}</div>{message.blocks.map((block, index) => {
     if (block.type === 'text') return user ? <p key={index} className="management-user-text">{block.text}</p> : <MessageResponse key={index} isAnimating={false}>{block.text ?? ''}</MessageResponse>

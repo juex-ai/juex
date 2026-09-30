@@ -152,6 +152,9 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 // Reconcile also visits disconnected devices: queued work expires without an
 // activation, and lifecycle changes persist cancellation for the next contact.
 func (s *Service) Reconcile(ctx context.Context) error {
+	if err := s.Store.ExpirePresence(ctx); err != nil {
+		return err
+	}
 	if err := s.Store.ExpireWaiting(ctx); err != nil {
 		return err
 	}

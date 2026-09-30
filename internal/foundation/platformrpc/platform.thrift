@@ -33,6 +33,8 @@ service Runtime {
 
 service Execution {
   Reply Health()
+  Reply Events(1: i32 limit)
+  Reply AcknowledgeEvents(1: list<string> eventIDs)
   Reply PreviewPair(1: string actorID, 2: string tenantID, 3: string pairID)
   Reply ApprovePair(1: string actorID, 2: string tenantID, 3: string pairID, 4: string grantsJSON)
   Reply Devices(1: string actorID, 2: string tenantID, 3: string ownerID)
@@ -40,6 +42,7 @@ service Execution {
   Reply Revoke(1: string actorID, 2: string tenantID, 3: string environmentID)
   Reply Environments(1: Actor actor)
   Reply Submit(1: Actor actor, 2: string environmentID, 3: string requestJSON, 4: i64 waitMillis)
+  Reply SubmitFenced(1: Actor actor, 2: string environmentID, 3: string requestJSON, 4: i64 waitMillis, 5: string fenceJSON)
   Reply Operation(1: Actor actor, 2: string environmentID, 3: string operationID, 4: i64 cursor, 5: i32 limit)
   Reply Cancel(1: Actor actor, 2: string environmentID, 3: string operationID)
   Reply Extend(1: Actor actor, 2: string environmentID, 3: string operationID, 4: i64 waitMillis)

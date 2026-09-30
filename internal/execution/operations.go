@@ -40,6 +40,17 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 }
 
 func (s *Service) Submit(ctx context.Context, actor, tenant, environment string, request execprotocol.Request, wait time.Duration) (Operation, error) {
+	return s.submit(ctx, actor, tenant, environment, request, wait, nil)
+}
+
+func (s *Service) SubmitFenced(ctx context.Context, actor, tenant, environment string, request execprotocol.Request, wait time.Duration, fence execprotocol.AuthorityFence) (Operation, error) {
+	if fence.ActorEpoch < 1 || fence.MembershipEpoch < 1 || fence.AgentEpoch < 1 {
+		return Operation{}, execprotocol.ErrDenied
+	}
+	return s.submit(ctx, actor, tenant, environment, request, wait, &fence)
+}
+
+func (s *Service) submit(ctx context.Context, actor, tenant, environment string, request execprotocol.Request, wait time.Duration, fence *execprotocol.AuthorityFence) (Operation, error) {
 	if err := request.Validate(); err != nil {
 		return Operation{}, err
 	}
@@ -59,6 +70,9 @@ func (s *Service) Submit(ctx context.Context, actor, tenant, environment string,
 	if err != nil {
 		return Operation{}, err
 	}
+	if fence != nil && (scope.ActorAuthorizationEpoch != fence.ActorEpoch || scope.MembershipExecutionEpoch != fence.MembershipEpoch || scope.AgentExecutionEpoch != fence.AgentEpoch) {
+		return Operation{}, execprotocol.ErrDenied
+	}
 	device, err := s.Store.Device(ctx, environment)
 	if err != nil {
 		return Operation{}, err
@@ -73,6 +87,13 @@ func (s *Service) Operation(ctx context.Context, actor, tenant, agent, environme
 	scope, err := s.Authority.Agent(ctx, actor, tenant, agent, false)
 	if err != nil {
 		return Operation{}, err
+	}
+	device, err := s.Store.Device(ctx, environment)
+	if err != nil {
+		return Operation{}, err
+	}
+	if device.TenantID != scope.TenantID || device.UserID != scope.UserID || device.FleetID != scope.FleetID {
+		return Operation{}, execprotocol.ErrDenied
 	}
 	operation, err := s.Store.Operation(ctx, environment, id, cursor, limit)
 	if err != nil {
@@ -122,7 +143,7 @@ func (s *Service) EffectiveGrants(ctx context.Context, device Device) (map[strin
 		return nil, err
 	}
 	if owner.RemovalEpoch != device.RemovalEpoch || owner.FleetID != device.FleetID {
-		return grants, nil
+		return grants, s.Store.Revoke(ctx, device.ID, device.UserID)
 	}
 	for agent, capabilities := range device.Grants {
 		scope, err := s.Authority.Agent(ctx, device.UserID, device.TenantID, agent, true)

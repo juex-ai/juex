@@ -105,6 +105,9 @@ func (s *Store) Operation(ctx context.Context, environment, id string, cursor in
 	defer rollback(tx)
 	operation, err := scanOperation(tx.QueryRow(ctx, `SELECT `+operationColumns+` FROM execution.operations WHERE environment_id=$1 AND id=$2 FOR SHARE`, environment, id))
 	if err != nil {
+		if errors.Is(err, execprotocol.ErrDenied) {
+			err = execprotocol.ErrNotFound
+		}
 		return operation, err
 	}
 	if cursor > operation.ResultCursor {

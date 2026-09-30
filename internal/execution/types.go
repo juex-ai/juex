@@ -116,6 +116,9 @@ type Repository interface {
 	Acknowledge(context.Context, string, int64, string) error
 	Unsettled(context.Context, int) ([]Operation, error)
 	ExpireWaiting(context.Context) error
+	Events(context.Context, int) ([]execprotocol.Event, error)
+	AcknowledgeEvents(context.Context, []string) error
+	ExpirePresence(context.Context) error
 }
 
 func CanonicalHash(value any) (string, error) {

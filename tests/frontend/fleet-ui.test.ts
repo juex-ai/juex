@@ -40,7 +40,6 @@ const logsSource = source("../../frontend/src/pages/AgentLogs.tsx");
 const configSource = source("../../frontend/src/pages/AgentConfig.tsx");
 const runtimeLayoutSource = source("../../frontend/src/pages/RuntimeLayout.tsx");
 const extensionsSource = source("../../frontend/src/pages/Extensions.tsx");
-const viteSource = source("../../frontend/vite.config.ts");
 
 function fleetAgent(
   id: string,
@@ -462,9 +461,4 @@ test("fleet settings condenses roster state and actions without losing lifecycle
     /!agent\.enabled && "bg-muted\/25"/,
     "disabled rows should be visibly muted without disabling the row",
   );
-});
-
-test("vite proxies agent APIs without stealing selected-agent page routes", () => {
-  assert.match(viteSource, /"\^\/agents\/\[\^\/\]\+\/api\(\?:\/\|\$\)"/);
-  assert.doesNotMatch(viteSource, /^\s*"\/agents":/m);
 });

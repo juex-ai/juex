@@ -88,6 +88,33 @@ func (c *Client) Submit(ctx context.Context, user, tenant, environment string, r
 	err = decode(reply, err, &result)
 	return result, err
 }
+func (c *Client) SubmitFenced(ctx context.Context, user, tenant, environment string, request execprotocol.Request, wait time.Duration, fence execprotocol.AuthorityFence) (execution.Operation, error) {
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return execution.Operation{}, err
+	}
+	encodedFence, err := json.Marshal(fence)
+	if err != nil {
+		return execution.Operation{}, err
+	}
+	reply, err := c.client.SubmitFenced(ctx, actor(user, tenant, request.AgentID), environment, string(encoded), wait.Milliseconds(), string(encodedFence))
+	var result execution.Operation
+	err = decode(reply, err, &result)
+	return result, err
+}
+func (c *Client) Events(ctx context.Context, limit int) ([]execprotocol.Event, error) {
+	if limit < 1 || limit > 500 {
+		return nil, execprotocol.ErrInvalid
+	}
+	reply, err := c.client.Events(ctx, int32(limit))
+	var result []execprotocol.Event
+	err = decode(reply, err, &result)
+	return result, err
+}
+func (c *Client) AcknowledgeEvents(ctx context.Context, ids []string) error {
+	reply, err := c.client.AcknowledgeEvents(ctx, ids)
+	return decode(reply, err, nil)
+}
 func (c *Client) Operation(ctx context.Context, user, tenant, agent, environment, id string, cursor int64, limit int) (execution.Operation, error) {
 	if limit < 1 || limit > 256<<10 {
 		return execution.Operation{}, execprotocol.ErrInvalid

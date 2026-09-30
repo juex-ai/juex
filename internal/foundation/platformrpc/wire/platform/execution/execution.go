@@ -20,6 +20,20 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"Events": kitex.NewMethodInfo(
+		eventsHandler,
+		newExecutionEventsArgs,
+		newExecutionEventsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"AcknowledgeEvents": kitex.NewMethodInfo(
+		acknowledgeEventsHandler,
+		newExecutionAcknowledgeEventsArgs,
+		newExecutionAcknowledgeEventsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"PreviewPair": kitex.NewMethodInfo(
 		previewPairHandler,
 		newExecutionPreviewPairArgs,
@@ -66,6 +80,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		submitHandler,
 		newExecutionSubmitArgs,
 		newExecutionSubmitResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"SubmitFenced": kitex.NewMethodInfo(
+		submitFencedHandler,
+		newExecutionSubmitFencedArgs,
+		newExecutionSubmitFencedResult,
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
@@ -172,6 +193,42 @@ func newExecutionHealthArgs() interface{} {
 
 func newExecutionHealthResult() interface{} {
 	return platform.NewExecutionHealthResult()
+}
+
+func eventsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionEventsArgs)
+	realResult := result.(*platform.ExecutionEventsResult)
+	success, err := handler.(platform.Execution).Events(ctx, realArg.Limit)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionEventsArgs() interface{} {
+	return platform.NewExecutionEventsArgs()
+}
+
+func newExecutionEventsResult() interface{} {
+	return platform.NewExecutionEventsResult()
+}
+
+func acknowledgeEventsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionAcknowledgeEventsArgs)
+	realResult := result.(*platform.ExecutionAcknowledgeEventsResult)
+	success, err := handler.(platform.Execution).AcknowledgeEvents(ctx, realArg.EventIDs)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionAcknowledgeEventsArgs() interface{} {
+	return platform.NewExecutionAcknowledgeEventsArgs()
+}
+
+func newExecutionAcknowledgeEventsResult() interface{} {
+	return platform.NewExecutionAcknowledgeEventsResult()
 }
 
 func previewPairHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -300,6 +357,24 @@ func newExecutionSubmitResult() interface{} {
 	return platform.NewExecutionSubmitResult()
 }
 
+func submitFencedHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionSubmitFencedArgs)
+	realResult := result.(*platform.ExecutionSubmitFencedResult)
+	success, err := handler.(platform.Execution).SubmitFenced(ctx, realArg.Actor, realArg.EnvironmentID, realArg.RequestJSON, realArg.WaitMillis, realArg.FenceJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionSubmitFencedArgs() interface{} {
+	return platform.NewExecutionSubmitFencedArgs()
+}
+
+func newExecutionSubmitFencedResult() interface{} {
+	return platform.NewExecutionSubmitFencedResult()
+}
+
 func operationHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.ExecutionOperationArgs)
 	realResult := result.(*platform.ExecutionOperationResult)
@@ -368,6 +443,26 @@ func (p *kClient) Health(ctx context.Context) (r *platform.Reply, err error) {
 	var _args platform.ExecutionHealthArgs
 	var _result platform.ExecutionHealthResult
 	if err = p.c.Call(ctx, "Health", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Events(ctx context.Context, limit int32) (r *platform.Reply, err error) {
+	var _args platform.ExecutionEventsArgs
+	_args.Limit = limit
+	var _result platform.ExecutionEventsResult
+	if err = p.c.Call(ctx, "Events", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) AcknowledgeEvents(ctx context.Context, eventIDs []string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionAcknowledgeEventsArgs
+	_args.EventIDs = eventIDs
+	var _result platform.ExecutionAcknowledgeEventsResult
+	if err = p.c.Call(ctx, "AcknowledgeEvents", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil
@@ -454,6 +549,20 @@ func (p *kClient) Submit(ctx context.Context, actor *platform.Actor, environment
 	_args.WaitMillis = waitMillis
 	var _result platform.ExecutionSubmitResult
 	if err = p.c.Call(ctx, "Submit", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) SubmitFenced(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, fenceJSON string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionSubmitFencedArgs
+	_args.Actor = actor
+	_args.EnvironmentID = environmentID
+	_args.RequestJSON = requestJSON
+	_args.WaitMillis = waitMillis
+	_args.FenceJSON = fenceJSON
+	var _result platform.ExecutionSubmitFencedResult
+	if err = p.c.Call(ctx, "SubmitFenced", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

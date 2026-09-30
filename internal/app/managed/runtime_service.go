@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	runtimepg "github.com/juex-ai/juex/internal/managedruntime/postgres"
@@ -14,6 +15,7 @@ import (
 type RuntimeConfig struct {
 	DatabaseURL       string
 	ManagementAddress string
+	ExecutionAddress  string
 	Credentials       platformrpc.Credentials
 	Runner            managedruntime.RunnerConfig
 }
@@ -43,6 +45,13 @@ func OpenRuntime(ctx context.Context, config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 	store := runtimepg.New(pool)
+	if config.ExecutionAddress != "" {
+		client, err := executionrpc.NewClient(config.ExecutionAddress, config.Credentials)
+		if err != nil {
+			return nil, err
+		}
+		config.Runner.Tools = RuntimeTools{Client: client}
+	}
 	runner, err := managedruntime.NewRunner(store, authority, config.Runner)
 	if err != nil {
 		return nil, err

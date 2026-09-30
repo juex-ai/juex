@@ -27,6 +27,7 @@ type ExecutionStore interface {
 }
 
 type RunnerConfig struct {
+	Tools             ToolGateway
 	Concurrency       int
 	IdleTimeout       time.Duration
 	PollInterval      time.Duration
@@ -35,6 +36,7 @@ type RunnerConfig struct {
 }
 
 type Runner struct {
+	tools     *toolRunner
 	store     ExecutionStore
 	authority Authority
 	config    RunnerConfig
@@ -66,7 +68,15 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 	if config.IdleTimeout < 0 || config.PollInterval < 10*time.Millisecond || config.AuthorityInterval < 10*time.Millisecond || config.AttemptTimeout < time.Second {
 		return nil, ErrInvalid
 	}
-	return &Runner{store: store, authority: authority, config: config, holder: rand.Text()}, nil
+	runner := &Runner{store: store, authority: authority, config: config, holder: rand.Text()}
+	if config.Tools != nil {
+		toolStore, ok := store.(ToolStore)
+		if !ok {
+			return nil, ErrInvalid
+		}
+		runner.tools = &toolRunner{store: toolStore, gateway: config.Tools, authority: authority}
+	}
+	return runner, nil
 }
 
 type activation struct {
@@ -89,6 +99,12 @@ type candidate struct {
 // Run is a shared scheduler. Only active Thread work consumes a slot; dormant
 // Agents and queued inputs have no process or model-call loop of their own.
 func (r *Runner) Run(ctx context.Context) {
+	if r.tools != nil {
+		toolCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); r.tools.run(toolCtx) }()
+		defer func() { cancel(); <-done }()
+	}
 	const ttl = 30 * time.Second
 	activations := map[string]*activation{}
 	ownerOrder := map[string]uint64{}
@@ -272,6 +288,14 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		return err
 	}
 	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation"}
+	if r.tools != nil {
+		environments, err := r.tools.gateway.Environments(ctx, scope)
+		if err != nil {
+			return err
+		}
+		request.System += executionContext(environments)
+		request.Tools = executionTools()
+	}
 	attempt, err := r.store.BeginAttempt(ctx, lease, work.TurnID, request)
 	if err != nil {
 		return err
@@ -310,7 +334,7 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 		failure = "cancelled"
 	}
-	if failure == "" && (response.Message.Role != llm.RoleAssistant || len(response.Message.Blocks) == 0 || len(response.Message.ToolCalls()) > 0) {
+	if failure == "" && (response.Message.Role != llm.RoleAssistant || len(response.Message.Blocks) == 0 || !validToolResponse(response.Message, r.tools != nil)) {
 		failure = "invalid_response"
 	}
 	return r.store.FinishAttempt(ctx, lease, attempt.ID, response, failure)

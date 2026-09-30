@@ -29,8 +29,12 @@ type executionFixture struct {
 }
 
 func executionDatabase(t *testing.T) *executionFixture {
+	return executionDatabaseWithProvider(t, func(http.ResponseWriter, *http.Request) {})
+}
+
+func executionDatabaseWithProvider(t *testing.T, provider http.HandlerFunc) *executionFixture {
 	t.Helper()
-	f := managedRuntimeHTTP(t, func(http.ResponseWriter, *http.Request) {})
+	f := managedRuntimeHTTP(t, provider)
 	if err := executionpg.Migrate(context.Background(), f.pool); err != nil {
 		t.Fatal(err)
 	}

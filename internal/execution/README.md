@@ -13,6 +13,10 @@ is restricted to Management's service identity. Current Management authority
 is checked before admission and dispatch. Membership/Agent execution epochs
 invalidate old work; the separate membership removal epoch prevents previous
 device grants from returning when a user rejoins a Tenant.
+Runtime admission also carries the original Turn's authority epochs; refreshing
+current permissions cannot legitimize a delayed call from before revocation.
+Environment and operation changes commit durable outbox facts in the resource
+transaction. Only Runtime consumes and acknowledges them, by event identity.
 
 Native devices initiate the encrypted connection. Pairing first binds the
 owner's selected Agents/capabilities in the Dashboard, then requires a local

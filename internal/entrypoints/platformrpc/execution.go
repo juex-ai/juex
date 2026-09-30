@@ -93,12 +93,37 @@ func (h *executionHandler) Environments(ctx context.Context, actor *platform.Act
 	return executionReply(v, err)
 }
 func (h *executionHandler) Submit(ctx context.Context, actor *platform.Actor, environment, encoded string, wait int64) (*platform.Reply, error) {
+	if !managementCaller(ctx) {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
 	var request execprotocol.Request
 	if !validActor(actor) || len(encoded) > 3<<20 || json.Unmarshal([]byte(encoded), &request) != nil || request.AgentID != actor.AgentID || wait < 0 || wait > (30*24*time.Hour).Milliseconds() {
 		return executionReply(nil, execprotocol.ErrInvalid)
 	}
 	v, err := h.service.Submit(ctx, actor.UserID, actor.TenantID, environment, request, time.Duration(wait)*time.Millisecond)
 	return executionReply(v, err)
+}
+func (h *executionHandler) SubmitFenced(ctx context.Context, actor *platform.Actor, environment, encoded string, wait int64, encodedFence string) (*platform.Reply, error) {
+	var request execprotocol.Request
+	var fence execprotocol.AuthorityFence
+	if !validActor(actor) || len(encoded) > 3<<20 || len(encodedFence) > 1024 || json.Unmarshal([]byte(encoded), &request) != nil || json.Unmarshal([]byte(encodedFence), &fence) != nil || request.AgentID != actor.AgentID || wait < 0 || wait > (30*24*time.Hour).Milliseconds() {
+		return executionReply(nil, execprotocol.ErrInvalid)
+	}
+	v, err := h.service.SubmitFenced(ctx, actor.UserID, actor.TenantID, environment, request, time.Duration(wait)*time.Millisecond, fence)
+	return executionReply(v, err)
+}
+func (h *executionHandler) Events(ctx context.Context, limit int32) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "runtime" {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
+	v, err := h.service.Store.Events(ctx, int(limit))
+	return executionReply(v, err)
+}
+func (h *executionHandler) AcknowledgeEvents(ctx context.Context, ids []string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "runtime" {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
+	return executionReply(nil, h.service.Store.AcknowledgeEvents(ctx, ids))
 }
 func (h *executionHandler) Operation(ctx context.Context, actor *platform.Actor, environment, id string, cursor int64, limit int32) (*platform.Reply, error) {
 	if !validActor(actor) {
