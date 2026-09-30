@@ -59,7 +59,7 @@ export function AuthPage({ user, mailEnabled, onSession }: { user: User | null; 
       if (mode === 'join') {
         if (preview?.requires_login) await api('/auth/accept-invitation', { token })
         navigate('/', { replace: true })
-      } else navigate('/', { replace: true })
+      } else navigate(location.pathname.startsWith('/pair/') ? location.pathname : '/', { replace: true })
     } catch (err) { setError(errorText(err)) } finally { setBusy(false) }
   }
 

@@ -259,7 +259,7 @@ func (d *Directory) ChangeMember(ctx context.Context, actorID, tenantID, ownerID
 	if before.Status == management.Active && status != management.Active {
 		after.ExecutionEpoch++
 	}
-	if _, err := tx.Exec(ctx, `UPDATE management.memberships SET role=$3, status=$4, version=version+1,execution_epoch=$5 WHERE tenant_id=$1 AND user_id=$2`, tenantID, ownerID, role, status, after.ExecutionEpoch); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE management.memberships SET role=$3, status=$4, version=version+1,execution_epoch=$5,removal_epoch=removal_epoch+CASE WHEN $4='removed' AND status<>'removed' THEN 1 ELSE 0 END WHERE tenant_id=$1 AND user_id=$2`, tenantID, ownerID, role, status, after.ExecutionEpoch); err != nil {
 		return management.Membership{}, err
 	}
 	fleet, err := fleetFor(ctx, tx, tenantID, ownerID)

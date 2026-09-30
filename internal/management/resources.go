@@ -74,6 +74,21 @@ type FleetOverview struct {
 	Agents     []Agent       `json:"agents"`
 }
 
+// FleetAuthority is a current authorization snapshot for private services.
+// RemovalEpoch prevents retained device grants from reviving after rejoining.
+type FleetAuthority struct {
+	Fleet                    Fleet         `json:"fleet"`
+	ActorID                  string        `json:"actor_id"`
+	ActorAuthorizationEpoch  int64         `json:"actor_authorization_epoch"`
+	MembershipVersion        int64         `json:"membership_version"`
+	MembershipExecutionEpoch int64         `json:"membership_execution_epoch"`
+	RemovalEpoch             int64         `json:"removal_epoch"`
+	CanExecute               bool          `json:"can_execute"`
+	OwnerEmail               string        `json:"owner_email"`
+	TenantName               string        `json:"tenant_name"`
+	Settings                 FleetSettings `json:"settings"`
+}
+
 // AgentAuthority is a server-derived snapshot for service admission. Services
 // recheck authority before each execution; it is not a durable grant or token.
 type AgentAuthority struct {

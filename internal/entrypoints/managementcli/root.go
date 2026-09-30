@@ -16,7 +16,7 @@ import (
 
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	var publicURL, listen, email, name string
-	var credentials, rpcListen, runtimeAddress string
+	var credentials, rpcListen, runtimeAddress, executionAddress string
 	var insecure bool
 	root := &cobra.Command{Use: "juex-management", Short: "Run and administer the JueX management service", SilenceUsage: true, SilenceErrors: true}
 	root.SetArgs(args)
@@ -125,11 +125,12 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return err
 		}
 		defer app.Close()
-		return serveManagement(cmd.Context(), app, serveConfig{HTTPAddress: listen, RPCAddress: rpcListen, RuntimeAddress: runtimeAddress, Credentials: platformrpc.CredentialsAt(credentials, "management"), PublicURL: publicURL, InsecureHTTP: insecure}, out)
+		return serveManagement(cmd.Context(), app, serveConfig{HTTPAddress: listen, RPCAddress: rpcListen, RuntimeAddress: runtimeAddress, ExecutionAddress: executionAddress, Credentials: platformrpc.CredentialsAt(credentials, "management"), PublicURL: publicURL, InsecureHTTP: insecure}, out)
 	}}
 	serve.Flags().StringVar(&listen, "listen", "0.0.0.0:8680", "Management HTTP listen address (use an HTTPS proxy for public access)")
 	serve.Flags().StringVar(&rpcListen, "rpc-listen", "0.0.0.0:8781", "Private Management RPC listen address")
 	serve.Flags().StringVar(&runtimeAddress, "runtime", os.Getenv("JUEX_RUNTIME_RPC"), "Private Runtime RPC address")
+	serve.Flags().StringVar(&executionAddress, "execution", os.Getenv("JUEX_EXECUTION_RPC"), "Private Execution RPC address")
 	root.AddCommand(serve)
 	return root.ExecuteContext(ctx)
 }

@@ -93,11 +93,107 @@ var fieldIDToName_Reply = map[int16]string{
 }
 
 type Management interface {
+	AuthorizeFleet(ctx context.Context, actorID string, tenantID string, ownerID string, execute bool) (r *Reply, err error)
+
 	Authorize(ctx context.Context, actor *Actor, execute bool) (r *Reply, err error)
 
 	Snapshot(ctx context.Context, scopeJSON string) (r *Reply, err error)
 
 	ModelProfile(ctx context.Context, scopeJSON string, configJSON string) (r *Reply, err error)
+}
+
+type ManagementAuthorizeFleetArgs struct {
+	ActorID  string `thrift:"actorID,1" frugal:"1,default,string" json:"actorID"`
+	TenantID string `thrift:"tenantID,2" frugal:"2,default,string" json:"tenantID"`
+	OwnerID  string `thrift:"ownerID,3" frugal:"3,default,string" json:"ownerID"`
+	Execute  bool   `thrift:"execute,4" frugal:"4,default,bool" json:"execute"`
+}
+
+func NewManagementAuthorizeFleetArgs() *ManagementAuthorizeFleetArgs {
+	return &ManagementAuthorizeFleetArgs{}
+}
+
+func (p *ManagementAuthorizeFleetArgs) InitDefault() {
+}
+
+func (p *ManagementAuthorizeFleetArgs) GetActorID() (v string) {
+	return p.ActorID
+}
+
+func (p *ManagementAuthorizeFleetArgs) GetTenantID() (v string) {
+	return p.TenantID
+}
+
+func (p *ManagementAuthorizeFleetArgs) GetOwnerID() (v string) {
+	return p.OwnerID
+}
+
+func (p *ManagementAuthorizeFleetArgs) GetExecute() (v bool) {
+	return p.Execute
+}
+func (p *ManagementAuthorizeFleetArgs) SetActorID(val string) {
+	p.ActorID = val
+}
+func (p *ManagementAuthorizeFleetArgs) SetTenantID(val string) {
+	p.TenantID = val
+}
+func (p *ManagementAuthorizeFleetArgs) SetOwnerID(val string) {
+	p.OwnerID = val
+}
+func (p *ManagementAuthorizeFleetArgs) SetExecute(val bool) {
+	p.Execute = val
+}
+
+func (p *ManagementAuthorizeFleetArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementAuthorizeFleetArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementAuthorizeFleetArgs = map[int16]string{
+	1: "actorID",
+	2: "tenantID",
+	3: "ownerID",
+	4: "execute",
+}
+
+type ManagementAuthorizeFleetResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementAuthorizeFleetResult() *ManagementAuthorizeFleetResult {
+	return &ManagementAuthorizeFleetResult{}
+}
+
+func (p *ManagementAuthorizeFleetResult) InitDefault() {
+}
+
+var ManagementAuthorizeFleetResult_Success_DEFAULT *Reply
+
+func (p *ManagementAuthorizeFleetResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementAuthorizeFleetResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementAuthorizeFleetResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementAuthorizeFleetResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementAuthorizeFleetResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementAuthorizeFleetResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementAuthorizeFleetResult = map[int16]string{
+	0: "success",
 }
 
 type ManagementAuthorizeArgs struct {
@@ -866,5 +962,1026 @@ func (p *RuntimeCreateWorkerResult) String() string {
 }
 
 var fieldIDToName_RuntimeCreateWorkerResult = map[int16]string{
+	0: "success",
+}
+
+type Execution interface {
+	Health(ctx context.Context) (r *Reply, err error)
+
+	PreviewPair(ctx context.Context, actorID string, tenantID string, pairID string) (r *Reply, err error)
+
+	ApprovePair(ctx context.Context, actorID string, tenantID string, pairID string, grantsJSON string) (r *Reply, err error)
+
+	Devices(ctx context.Context, actorID string, tenantID string, ownerID string) (r *Reply, err error)
+
+	Restrict(ctx context.Context, actorID string, tenantID string, environmentID string, version int64, grantsJSON string) (r *Reply, err error)
+
+	Revoke(ctx context.Context, actorID string, tenantID string, environmentID string) (r *Reply, err error)
+
+	Environments(ctx context.Context, actor *Actor) (r *Reply, err error)
+
+	Submit(ctx context.Context, actor *Actor, environmentID string, requestJSON string, waitMillis int64) (r *Reply, err error)
+
+	Operation(ctx context.Context, actor *Actor, environmentID string, operationID string, cursor int64, limit int32) (r *Reply, err error)
+
+	Cancel(ctx context.Context, actor *Actor, environmentID string, operationID string) (r *Reply, err error)
+
+	Extend(ctx context.Context, actor *Actor, environmentID string, operationID string, waitMillis int64) (r *Reply, err error)
+}
+
+type ExecutionHealthArgs struct {
+}
+
+func NewExecutionHealthArgs() *ExecutionHealthArgs {
+	return &ExecutionHealthArgs{}
+}
+
+func (p *ExecutionHealthArgs) InitDefault() {
+}
+
+func (p *ExecutionHealthArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionHealthArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionHealthArgs = map[int16]string{}
+
+type ExecutionHealthResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionHealthResult() *ExecutionHealthResult {
+	return &ExecutionHealthResult{}
+}
+
+func (p *ExecutionHealthResult) InitDefault() {
+}
+
+var ExecutionHealthResult_Success_DEFAULT *Reply
+
+func (p *ExecutionHealthResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionHealthResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionHealthResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionHealthResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionHealthResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionHealthResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionHealthResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionPreviewPairArgs struct {
+	ActorID  string `thrift:"actorID,1" frugal:"1,default,string" json:"actorID"`
+	TenantID string `thrift:"tenantID,2" frugal:"2,default,string" json:"tenantID"`
+	PairID   string `thrift:"pairID,3" frugal:"3,default,string" json:"pairID"`
+}
+
+func NewExecutionPreviewPairArgs() *ExecutionPreviewPairArgs {
+	return &ExecutionPreviewPairArgs{}
+}
+
+func (p *ExecutionPreviewPairArgs) InitDefault() {
+}
+
+func (p *ExecutionPreviewPairArgs) GetActorID() (v string) {
+	return p.ActorID
+}
+
+func (p *ExecutionPreviewPairArgs) GetTenantID() (v string) {
+	return p.TenantID
+}
+
+func (p *ExecutionPreviewPairArgs) GetPairID() (v string) {
+	return p.PairID
+}
+func (p *ExecutionPreviewPairArgs) SetActorID(val string) {
+	p.ActorID = val
+}
+func (p *ExecutionPreviewPairArgs) SetTenantID(val string) {
+	p.TenantID = val
+}
+func (p *ExecutionPreviewPairArgs) SetPairID(val string) {
+	p.PairID = val
+}
+
+func (p *ExecutionPreviewPairArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionPreviewPairArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionPreviewPairArgs = map[int16]string{
+	1: "actorID",
+	2: "tenantID",
+	3: "pairID",
+}
+
+type ExecutionPreviewPairResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionPreviewPairResult() *ExecutionPreviewPairResult {
+	return &ExecutionPreviewPairResult{}
+}
+
+func (p *ExecutionPreviewPairResult) InitDefault() {
+}
+
+var ExecutionPreviewPairResult_Success_DEFAULT *Reply
+
+func (p *ExecutionPreviewPairResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionPreviewPairResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionPreviewPairResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionPreviewPairResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionPreviewPairResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionPreviewPairResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionPreviewPairResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionApprovePairArgs struct {
+	ActorID    string `thrift:"actorID,1" frugal:"1,default,string" json:"actorID"`
+	TenantID   string `thrift:"tenantID,2" frugal:"2,default,string" json:"tenantID"`
+	PairID     string `thrift:"pairID,3" frugal:"3,default,string" json:"pairID"`
+	GrantsJSON string `thrift:"grantsJSON,4" frugal:"4,default,string" json:"grantsJSON"`
+}
+
+func NewExecutionApprovePairArgs() *ExecutionApprovePairArgs {
+	return &ExecutionApprovePairArgs{}
+}
+
+func (p *ExecutionApprovePairArgs) InitDefault() {
+}
+
+func (p *ExecutionApprovePairArgs) GetActorID() (v string) {
+	return p.ActorID
+}
+
+func (p *ExecutionApprovePairArgs) GetTenantID() (v string) {
+	return p.TenantID
+}
+
+func (p *ExecutionApprovePairArgs) GetPairID() (v string) {
+	return p.PairID
+}
+
+func (p *ExecutionApprovePairArgs) GetGrantsJSON() (v string) {
+	return p.GrantsJSON
+}
+func (p *ExecutionApprovePairArgs) SetActorID(val string) {
+	p.ActorID = val
+}
+func (p *ExecutionApprovePairArgs) SetTenantID(val string) {
+	p.TenantID = val
+}
+func (p *ExecutionApprovePairArgs) SetPairID(val string) {
+	p.PairID = val
+}
+func (p *ExecutionApprovePairArgs) SetGrantsJSON(val string) {
+	p.GrantsJSON = val
+}
+
+func (p *ExecutionApprovePairArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionApprovePairArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionApprovePairArgs = map[int16]string{
+	1: "actorID",
+	2: "tenantID",
+	3: "pairID",
+	4: "grantsJSON",
+}
+
+type ExecutionApprovePairResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionApprovePairResult() *ExecutionApprovePairResult {
+	return &ExecutionApprovePairResult{}
+}
+
+func (p *ExecutionApprovePairResult) InitDefault() {
+}
+
+var ExecutionApprovePairResult_Success_DEFAULT *Reply
+
+func (p *ExecutionApprovePairResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionApprovePairResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionApprovePairResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionApprovePairResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionApprovePairResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionApprovePairResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionApprovePairResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionDevicesArgs struct {
+	ActorID  string `thrift:"actorID,1" frugal:"1,default,string" json:"actorID"`
+	TenantID string `thrift:"tenantID,2" frugal:"2,default,string" json:"tenantID"`
+	OwnerID  string `thrift:"ownerID,3" frugal:"3,default,string" json:"ownerID"`
+}
+
+func NewExecutionDevicesArgs() *ExecutionDevicesArgs {
+	return &ExecutionDevicesArgs{}
+}
+
+func (p *ExecutionDevicesArgs) InitDefault() {
+}
+
+func (p *ExecutionDevicesArgs) GetActorID() (v string) {
+	return p.ActorID
+}
+
+func (p *ExecutionDevicesArgs) GetTenantID() (v string) {
+	return p.TenantID
+}
+
+func (p *ExecutionDevicesArgs) GetOwnerID() (v string) {
+	return p.OwnerID
+}
+func (p *ExecutionDevicesArgs) SetActorID(val string) {
+	p.ActorID = val
+}
+func (p *ExecutionDevicesArgs) SetTenantID(val string) {
+	p.TenantID = val
+}
+func (p *ExecutionDevicesArgs) SetOwnerID(val string) {
+	p.OwnerID = val
+}
+
+func (p *ExecutionDevicesArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionDevicesArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionDevicesArgs = map[int16]string{
+	1: "actorID",
+	2: "tenantID",
+	3: "ownerID",
+}
+
+type ExecutionDevicesResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionDevicesResult() *ExecutionDevicesResult {
+	return &ExecutionDevicesResult{}
+}
+
+func (p *ExecutionDevicesResult) InitDefault() {
+}
+
+var ExecutionDevicesResult_Success_DEFAULT *Reply
+
+func (p *ExecutionDevicesResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionDevicesResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionDevicesResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionDevicesResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionDevicesResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionDevicesResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionDevicesResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionRestrictArgs struct {
+	ActorID       string `thrift:"actorID,1" frugal:"1,default,string" json:"actorID"`
+	TenantID      string `thrift:"tenantID,2" frugal:"2,default,string" json:"tenantID"`
+	EnvironmentID string `thrift:"environmentID,3" frugal:"3,default,string" json:"environmentID"`
+	Version       int64  `thrift:"version,4" frugal:"4,default,i64" json:"version"`
+	GrantsJSON    string `thrift:"grantsJSON,5" frugal:"5,default,string" json:"grantsJSON"`
+}
+
+func NewExecutionRestrictArgs() *ExecutionRestrictArgs {
+	return &ExecutionRestrictArgs{}
+}
+
+func (p *ExecutionRestrictArgs) InitDefault() {
+}
+
+func (p *ExecutionRestrictArgs) GetActorID() (v string) {
+	return p.ActorID
+}
+
+func (p *ExecutionRestrictArgs) GetTenantID() (v string) {
+	return p.TenantID
+}
+
+func (p *ExecutionRestrictArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionRestrictArgs) GetVersion() (v int64) {
+	return p.Version
+}
+
+func (p *ExecutionRestrictArgs) GetGrantsJSON() (v string) {
+	return p.GrantsJSON
+}
+func (p *ExecutionRestrictArgs) SetActorID(val string) {
+	p.ActorID = val
+}
+func (p *ExecutionRestrictArgs) SetTenantID(val string) {
+	p.TenantID = val
+}
+func (p *ExecutionRestrictArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionRestrictArgs) SetVersion(val int64) {
+	p.Version = val
+}
+func (p *ExecutionRestrictArgs) SetGrantsJSON(val string) {
+	p.GrantsJSON = val
+}
+
+func (p *ExecutionRestrictArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionRestrictArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionRestrictArgs = map[int16]string{
+	1: "actorID",
+	2: "tenantID",
+	3: "environmentID",
+	4: "version",
+	5: "grantsJSON",
+}
+
+type ExecutionRestrictResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionRestrictResult() *ExecutionRestrictResult {
+	return &ExecutionRestrictResult{}
+}
+
+func (p *ExecutionRestrictResult) InitDefault() {
+}
+
+var ExecutionRestrictResult_Success_DEFAULT *Reply
+
+func (p *ExecutionRestrictResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionRestrictResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionRestrictResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionRestrictResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionRestrictResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionRestrictResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionRestrictResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionRevokeArgs struct {
+	ActorID       string `thrift:"actorID,1" frugal:"1,default,string" json:"actorID"`
+	TenantID      string `thrift:"tenantID,2" frugal:"2,default,string" json:"tenantID"`
+	EnvironmentID string `thrift:"environmentID,3" frugal:"3,default,string" json:"environmentID"`
+}
+
+func NewExecutionRevokeArgs() *ExecutionRevokeArgs {
+	return &ExecutionRevokeArgs{}
+}
+
+func (p *ExecutionRevokeArgs) InitDefault() {
+}
+
+func (p *ExecutionRevokeArgs) GetActorID() (v string) {
+	return p.ActorID
+}
+
+func (p *ExecutionRevokeArgs) GetTenantID() (v string) {
+	return p.TenantID
+}
+
+func (p *ExecutionRevokeArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+func (p *ExecutionRevokeArgs) SetActorID(val string) {
+	p.ActorID = val
+}
+func (p *ExecutionRevokeArgs) SetTenantID(val string) {
+	p.TenantID = val
+}
+func (p *ExecutionRevokeArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+
+func (p *ExecutionRevokeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionRevokeArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionRevokeArgs = map[int16]string{
+	1: "actorID",
+	2: "tenantID",
+	3: "environmentID",
+}
+
+type ExecutionRevokeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionRevokeResult() *ExecutionRevokeResult {
+	return &ExecutionRevokeResult{}
+}
+
+func (p *ExecutionRevokeResult) InitDefault() {
+}
+
+var ExecutionRevokeResult_Success_DEFAULT *Reply
+
+func (p *ExecutionRevokeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionRevokeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionRevokeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionRevokeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionRevokeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionRevokeResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionRevokeResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionEnvironmentsArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+}
+
+func NewExecutionEnvironmentsArgs() *ExecutionEnvironmentsArgs {
+	return &ExecutionEnvironmentsArgs{}
+}
+
+func (p *ExecutionEnvironmentsArgs) InitDefault() {
+}
+
+var ExecutionEnvironmentsArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionEnvironmentsArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionEnvironmentsArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+func (p *ExecutionEnvironmentsArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+
+func (p *ExecutionEnvironmentsArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionEnvironmentsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionEnvironmentsArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionEnvironmentsArgs = map[int16]string{
+	1: "actor",
+}
+
+type ExecutionEnvironmentsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionEnvironmentsResult() *ExecutionEnvironmentsResult {
+	return &ExecutionEnvironmentsResult{}
+}
+
+func (p *ExecutionEnvironmentsResult) InitDefault() {
+}
+
+var ExecutionEnvironmentsResult_Success_DEFAULT *Reply
+
+func (p *ExecutionEnvironmentsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionEnvironmentsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionEnvironmentsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionEnvironmentsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionEnvironmentsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionEnvironmentsResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionEnvironmentsResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionSubmitArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	EnvironmentID string `thrift:"environmentID,2" frugal:"2,default,string" json:"environmentID"`
+	RequestJSON   string `thrift:"requestJSON,3" frugal:"3,default,string" json:"requestJSON"`
+	WaitMillis    int64  `thrift:"waitMillis,4" frugal:"4,default,i64" json:"waitMillis"`
+}
+
+func NewExecutionSubmitArgs() *ExecutionSubmitArgs {
+	return &ExecutionSubmitArgs{}
+}
+
+func (p *ExecutionSubmitArgs) InitDefault() {
+}
+
+var ExecutionSubmitArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionSubmitArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionSubmitArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionSubmitArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionSubmitArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+
+func (p *ExecutionSubmitArgs) GetWaitMillis() (v int64) {
+	return p.WaitMillis
+}
+func (p *ExecutionSubmitArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionSubmitArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionSubmitArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+func (p *ExecutionSubmitArgs) SetWaitMillis(val int64) {
+	p.WaitMillis = val
+}
+
+func (p *ExecutionSubmitArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionSubmitArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionSubmitArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionSubmitArgs = map[int16]string{
+	1: "actor",
+	2: "environmentID",
+	3: "requestJSON",
+	4: "waitMillis",
+}
+
+type ExecutionSubmitResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionSubmitResult() *ExecutionSubmitResult {
+	return &ExecutionSubmitResult{}
+}
+
+func (p *ExecutionSubmitResult) InitDefault() {
+}
+
+var ExecutionSubmitResult_Success_DEFAULT *Reply
+
+func (p *ExecutionSubmitResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionSubmitResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionSubmitResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionSubmitResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionSubmitResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionSubmitResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionSubmitResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionOperationArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	EnvironmentID string `thrift:"environmentID,2" frugal:"2,default,string" json:"environmentID"`
+	OperationID   string `thrift:"operationID,3" frugal:"3,default,string" json:"operationID"`
+	Cursor        int64  `thrift:"cursor,4" frugal:"4,default,i64" json:"cursor"`
+	Limit         int32  `thrift:"limit,5" frugal:"5,default,i32" json:"limit"`
+}
+
+func NewExecutionOperationArgs() *ExecutionOperationArgs {
+	return &ExecutionOperationArgs{}
+}
+
+func (p *ExecutionOperationArgs) InitDefault() {
+}
+
+var ExecutionOperationArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionOperationArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionOperationArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionOperationArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionOperationArgs) GetOperationID() (v string) {
+	return p.OperationID
+}
+
+func (p *ExecutionOperationArgs) GetCursor() (v int64) {
+	return p.Cursor
+}
+
+func (p *ExecutionOperationArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *ExecutionOperationArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionOperationArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionOperationArgs) SetOperationID(val string) {
+	p.OperationID = val
+}
+func (p *ExecutionOperationArgs) SetCursor(val int64) {
+	p.Cursor = val
+}
+func (p *ExecutionOperationArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *ExecutionOperationArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionOperationArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionOperationArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionOperationArgs = map[int16]string{
+	1: "actor",
+	2: "environmentID",
+	3: "operationID",
+	4: "cursor",
+	5: "limit",
+}
+
+type ExecutionOperationResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionOperationResult() *ExecutionOperationResult {
+	return &ExecutionOperationResult{}
+}
+
+func (p *ExecutionOperationResult) InitDefault() {
+}
+
+var ExecutionOperationResult_Success_DEFAULT *Reply
+
+func (p *ExecutionOperationResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionOperationResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionOperationResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionOperationResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionOperationResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionOperationResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionOperationResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionCancelArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	EnvironmentID string `thrift:"environmentID,2" frugal:"2,default,string" json:"environmentID"`
+	OperationID   string `thrift:"operationID,3" frugal:"3,default,string" json:"operationID"`
+}
+
+func NewExecutionCancelArgs() *ExecutionCancelArgs {
+	return &ExecutionCancelArgs{}
+}
+
+func (p *ExecutionCancelArgs) InitDefault() {
+}
+
+var ExecutionCancelArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionCancelArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionCancelArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionCancelArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionCancelArgs) GetOperationID() (v string) {
+	return p.OperationID
+}
+func (p *ExecutionCancelArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionCancelArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionCancelArgs) SetOperationID(val string) {
+	p.OperationID = val
+}
+
+func (p *ExecutionCancelArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionCancelArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCancelArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCancelArgs = map[int16]string{
+	1: "actor",
+	2: "environmentID",
+	3: "operationID",
+}
+
+type ExecutionCancelResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionCancelResult() *ExecutionCancelResult {
+	return &ExecutionCancelResult{}
+}
+
+func (p *ExecutionCancelResult) InitDefault() {
+}
+
+var ExecutionCancelResult_Success_DEFAULT *Reply
+
+func (p *ExecutionCancelResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionCancelResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionCancelResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionCancelResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionCancelResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCancelResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCancelResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionExtendArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	EnvironmentID string `thrift:"environmentID,2" frugal:"2,default,string" json:"environmentID"`
+	OperationID   string `thrift:"operationID,3" frugal:"3,default,string" json:"operationID"`
+	WaitMillis    int64  `thrift:"waitMillis,4" frugal:"4,default,i64" json:"waitMillis"`
+}
+
+func NewExecutionExtendArgs() *ExecutionExtendArgs {
+	return &ExecutionExtendArgs{}
+}
+
+func (p *ExecutionExtendArgs) InitDefault() {
+}
+
+var ExecutionExtendArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionExtendArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionExtendArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionExtendArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionExtendArgs) GetOperationID() (v string) {
+	return p.OperationID
+}
+
+func (p *ExecutionExtendArgs) GetWaitMillis() (v int64) {
+	return p.WaitMillis
+}
+func (p *ExecutionExtendArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionExtendArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionExtendArgs) SetOperationID(val string) {
+	p.OperationID = val
+}
+func (p *ExecutionExtendArgs) SetWaitMillis(val int64) {
+	p.WaitMillis = val
+}
+
+func (p *ExecutionExtendArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionExtendArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionExtendArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionExtendArgs = map[int16]string{
+	1: "actor",
+	2: "environmentID",
+	3: "operationID",
+	4: "waitMillis",
+}
+
+type ExecutionExtendResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionExtendResult() *ExecutionExtendResult {
+	return &ExecutionExtendResult{}
+}
+
+func (p *ExecutionExtendResult) InitDefault() {
+}
+
+var ExecutionExtendResult_Success_DEFAULT *Reply
+
+func (p *ExecutionExtendResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionExtendResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionExtendResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionExtendResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionExtendResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionExtendResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionExtendResult = map[int16]string{
 	0: "success",
 }

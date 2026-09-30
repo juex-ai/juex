@@ -16,6 +16,7 @@ type Envelope struct {
 	Snapshot    *Snapshot               `json:"snapshot,omitempty"`
 	Environment *Environment            `json:"environment,omitempty"`
 	Grants      map[string][]Capability `json:"grants,omitempty"`
+	Revoked     bool                    `json:"revoked,omitempty"`
 	Error       string                  `json:"error,omitempty"`
 }
 

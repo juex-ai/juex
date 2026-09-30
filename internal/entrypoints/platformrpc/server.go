@@ -14,16 +14,18 @@ import (
 	runtimewire "github.com/juex-ai/juex/internal/foundation/platformrpc/wire/platform/runtime"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	runtimeclient "github.com/juex-ai/juex/internal/managedruntime/rpc"
+	"github.com/juex-ai/juex/internal/management"
 )
 
 type Authority interface {
+	AuthorizeFleet(context.Context, string, string, string, bool) (management.FleetAuthority, error)
 	Authorize(context.Context, string, string, string, bool) (managedruntime.Scope, error)
 	Snapshot(context.Context, managedruntime.Scope) (managedruntime.TurnConfig, error)
 	Profile(context.Context, managedruntime.Scope, managedruntime.TurnConfig) (llm.ProviderProfile, error)
 }
 
 func NewManagement(listener net.Listener, credentials transport.Credentials, authority Authority) (server.Server, error) {
-	opts, err := transport.ServerOptions(listener, credentials, "runtime")
+	opts, err := transport.ServerOptions(listener, credentials, "runtime", "execution", "memory", "calendar")
 	if err != nil {
 		return nil, err
 	}
@@ -33,6 +35,14 @@ func NewManagement(listener net.Listener, credentials transport.Credentials, aut
 }
 
 type managementHandler struct{ authority Authority }
+
+func (h *managementHandler) AuthorizeFleet(ctx context.Context, actorID, tenantID, ownerID string, execute bool) (*platform.Reply, error) {
+	if actorID == "" || tenantID == "" || ownerID == "" {
+		return invalid()
+	}
+	value, err := h.authority.AuthorizeFleet(ctx, actorID, tenantID, ownerID, execute)
+	return reply(value, err)
+}
 
 func reply(value any, err error) (*platform.Reply, error) {
 	return transport.Reply(value, runtimeclient.ErrorCode(err)), nil
@@ -49,6 +59,9 @@ func (h *managementHandler) Authorize(ctx context.Context, actor *platform.Actor
 	return reply(v, err)
 }
 func (h *managementHandler) Snapshot(ctx context.Context, scopeJSON string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "runtime" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	var scope managedruntime.Scope
 	if len(scopeJSON) > 4096 || json.Unmarshal([]byte(scopeJSON), &scope) != nil {
 		return invalid()
@@ -57,6 +70,9 @@ func (h *managementHandler) Snapshot(ctx context.Context, scopeJSON string) (*pl
 	return reply(v, err)
 }
 func (h *managementHandler) ModelProfile(ctx context.Context, scopeJSON, configJSON string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "runtime" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	var scope managedruntime.Scope
 	var config managedruntime.TurnConfig
 	if len(scopeJSON) > 4096 || len(configJSON) > 256<<10 || json.Unmarshal([]byte(scopeJSON), &scope) != nil || json.Unmarshal([]byte(configJSON), &config) != nil {

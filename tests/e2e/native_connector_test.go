@@ -110,19 +110,19 @@ func TestNativeConnectorDisconnectRejoinsOriginalOperationAndRevokes(t *testing.
 	if reply := call(first, execprotocol.Envelope{ID: "submit-first", Type: "submit", Request: &request}); reply.Error != "" {
 		t.Fatal(reply)
 	}
-	nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Output, "start") })
+	nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Text(), "start") })
 	if err := first.CloseNow(); err != nil {
 		t.Fatal(err)
 	}
 	result := nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return snapshot.State.Terminal() })
-	if result.State != execprotocol.Completed || result.Output != "startdone" {
+	if result.State != execprotocol.Completed || result.Text() != "startdone" {
 		t.Fatal("disconnect cancelled child process", result)
 	}
 	second := getConnection()
 	if reply := call(second, execprotocol.Envelope{ID: "resend", Type: "submit", Request: &request}); reply.Error != "" || reply.Snapshot == nil || reply.Snapshot.State != execprotocol.Completed {
 		t.Fatal(reply)
 	}
-	if reply := call(second, execprotocol.Envelope{ID: "cursor", Type: "query", AgentID: request.AgentID, OperationID: request.ID, Cursor: 5}); reply.Snapshot == nil || reply.Snapshot.Output != "done" {
+	if reply := call(second, execprotocol.Envelope{ID: "cursor", Type: "query", AgentID: request.AgentID, OperationID: request.ID, Cursor: 5}); reply.Snapshot == nil || reply.Snapshot.Text() != "done" {
 		t.Fatal(reply)
 	}
 	data, err := os.ReadFile(filepath.Join(config.WorkingDirectory, "counter"))
@@ -133,7 +133,7 @@ func TestNativeConnectorDisconnectRejoinsOriginalOperationAndRevokes(t *testing.
 	if reply := call(second, execprotocol.Envelope{ID: "start-long", Type: "submit", Request: &long}); reply.Error != "" {
 		t.Fatal(reply)
 	}
-	nativeEventually(t, engine, long.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Output, "running") })
+	nativeEventually(t, engine, long.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Text(), "running") })
 	if reply := call(second, execprotocol.Envelope{ID: "revoke", Type: "grants", Grants: map[string][]execprotocol.Capability{"agent-one": {execprotocol.Files}, "agent-two": {execprotocol.Shell}, "unapproved-agent": {execprotocol.Shell}}}); reply.Error != "" {
 		t.Fatal(reply)
 	}

@@ -82,7 +82,7 @@ type Snapshot struct {
 	AgentID       string    `json:"agent_id"`
 	Kind          string    `json:"kind"`
 	State         State     `json:"state"`
-	Output        string    `json:"output"`
+	Output        []byte    `json:"output"`
 	NextCursor    int64     `json:"next_cursor"`
 	OutputBytes   int64     `json:"output_bytes"`
 	Truncated     bool      `json:"truncated"`
@@ -93,9 +93,12 @@ type Snapshot struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+func (s Snapshot) Text() string { return string(s.Output) }
+
 // Environment is descriptive context, not authority supplied by the model.
 type Environment struct {
 	ID               string       `json:"id"`
+	JournalID        string       `json:"journal_id"`
 	Name             string       `json:"name"`
 	Kind             string       `json:"kind"`
 	OS               string       `json:"os"`

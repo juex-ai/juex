@@ -22,6 +22,13 @@ attempts without Home-based storage. [ADR-0003](docs/adr/0003-managed-agent-plat
 defines the accepted target. The runtime/storage sections below describe the
 existing implementation awaiting full execution and application cutover.
 
+[Execution](internal/execution/README.md) independently owns its PostgreSQL
+environment/operation ledger and the outbound device protocol. Management
+authorizes the owner; Execution enforces device grants, connection fencing and
+durable result acknowledgment. Runtime receives no device credential or native
+filesystem access. Service identities restrict both connections and sensitive
+methods: only Runtime can obtain provider credentials from Management.
+
 ## Runtime Shape
 
 ```text

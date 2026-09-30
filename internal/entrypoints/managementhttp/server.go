@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
 )
@@ -50,6 +51,7 @@ type Options struct {
 	Auth         Auth
 	Directory    Directory
 	Runtime      Runtime
+	Execution    Execution
 	PublicURL    string
 	InsecureHTTP bool
 	MailEnabled  bool
@@ -111,6 +113,13 @@ func New(options Options) (http.Handler, error) {
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads/{thread}/events", s.signedIn(s.threadEvents))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/cancel", s.signedIn(s.cancelThread))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/workers", s.signedIn(s.createWorker))
+	}
+	if options.Execution != nil {
+		mux.HandleFunc("GET /api/tenants/{tenant}/device-pairings/{pair}", s.signedIn(s.previewPair))
+		mux.HandleFunc("POST /api/tenants/{tenant}/device-pairings/{pair}", s.signedIn(s.approvePair))
+		mux.HandleFunc("GET /api/tenants/{tenant}/users/{owner}/devices", s.signedIn(s.devices))
+		mux.HandleFunc("PUT /api/tenants/{tenant}/devices/{device}/grants", s.signedIn(s.deviceGrants))
+		mux.HandleFunc("POST /api/tenants/{tenant}/devices/{device}/revoke", s.signedIn(s.revokeDevice))
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
 	if options.Static != nil {
@@ -239,15 +248,15 @@ func respond(w http.ResponseWriter, value any, err error) {
 	if err != nil {
 		status, code, message := http.StatusInternalServerError, "internal_error", "Request could not be completed"
 		switch {
-		case errors.Is(err, management.ErrInvalid), errors.Is(err, managedruntime.ErrInvalid):
+		case errors.Is(err, management.ErrInvalid), errors.Is(err, managedruntime.ErrInvalid), errors.Is(err, execprotocol.ErrInvalid):
 			status, code, message = 400, "invalid_request", err.Error()
 		case errors.Is(err, management.ErrCredentials), errors.Is(err, management.ErrSession):
 			status, code, message = 401, "authentication_required", err.Error()
-		case errors.Is(err, management.ErrDenied), errors.Is(err, managedruntime.ErrDenied):
+		case errors.Is(err, management.ErrDenied), errors.Is(err, managedruntime.ErrDenied), errors.Is(err, execprotocol.ErrDenied):
 			status, code, message = 403, "access_denied", err.Error()
 		case errors.Is(err, management.ErrInvitation):
 			status, code, message = 400, "invitation_unavailable", err.Error()
-		case errors.Is(err, management.ErrConflict), errors.Is(err, management.ErrLoginRequired), errors.Is(err, management.ErrLastAdmin), errors.Is(err, managedruntime.ErrConflict):
+		case errors.Is(err, management.ErrConflict), errors.Is(err, management.ErrLoginRequired), errors.Is(err, management.ErrLastAdmin), errors.Is(err, managedruntime.ErrConflict), errors.Is(err, execprotocol.ErrConflict):
 			status, code, message = 409, "conflict", err.Error()
 		case errors.Is(err, management.ErrRateLimit):
 			status, code, message = 429, "rate_limited", err.Error()

@@ -72,7 +72,7 @@ func TestProductionPackageOwnershipAndDependencies(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if owner == "entrypoints" && (strings.HasPrefix(imported, modulePath+"/internal/management/postgres") || strings.HasPrefix(imported, modulePath+"/internal/managedruntime/postgres")) {
+				if owner == "entrypoints" && (strings.HasPrefix(imported, modulePath+"/internal/management/postgres") || strings.HasPrefix(imported, modulePath+"/internal/managedruntime/postgres") || strings.HasPrefix(imported, modulePath+"/internal/execution/postgres")) {
 					t.Errorf("entrypoint imports service storage adapter: %s -> %s", relative, imported)
 				}
 				if owner == "foundation" && (strings.HasPrefix(imported, "github.com/openai/") || strings.HasPrefix(imported, "github.com/anthropics/")) {

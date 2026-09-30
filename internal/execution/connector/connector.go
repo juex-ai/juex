@@ -54,6 +54,11 @@ func Run(ctx context.Context, config Config) error {
 	if config.Token == "" || config.Engine == nil || config.Environment.ID == "" {
 		return execprotocol.ErrInvalid
 	}
+	environmentID, journalID := config.Engine.Identity()
+	if config.Environment.ID != environmentID {
+		return execprotocol.ErrInvalid
+	}
+	config.Environment.JournalID = journalID
 	client := &http.Client{}
 	if config.HTTPClient != nil {
 		*client = *config.HTTPClient
@@ -75,7 +80,7 @@ func Run(ctx context.Context, config Config) error {
 		connection, response, err := websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPClient: client, HTTPHeader: http.Header{"Authorization": {"Bearer " + config.Token}}})
 		cancel()
 		if err == nil {
-			err = serve(ctx, connection, config, func() { backoff = 250 * time.Millisecond; update("online") })
+			err = serve(ctx, connection, config, func(state string) { backoff = 250 * time.Millisecond; update(state) })
 			_ = connection.CloseNow()
 		} else if response != nil {
 			if response.Body != nil {
@@ -104,7 +109,7 @@ func Run(ctx context.Context, config Config) error {
 	return nil
 }
 
-func serve(ctx context.Context, connection *websocket.Conn, config Config, ready func()) error {
+func serve(ctx context.Context, connection *websocket.Conn, config Config, ready func(string)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	connection.SetReadLimit(3 << 20)
@@ -129,7 +134,11 @@ func serve(ctx context.Context, connection *websocket.Conn, config Config, ready
 	if err := config.Engine.Restrict(welcome.Grants); err != nil {
 		return err
 	}
-	ready()
+	if welcome.Revoked {
+		ready("revoked")
+	} else {
+		ready("online")
+	}
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)
@@ -185,6 +194,13 @@ func serve(ctx context.Context, connection *websocket.Conn, config Config, ready
 				err = config.Engine.Acknowledge(request.AgentID, request.OperationID, request.Cursor)
 			case "grants":
 				err = config.Engine.Restrict(request.Grants)
+				if err == nil {
+					if request.Revoked {
+						ready("revoked")
+					} else {
+						ready("online")
+					}
+				}
 			default:
 				err = execprotocol.ErrInvalid
 			}

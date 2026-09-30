@@ -47,6 +47,11 @@ type Engine struct {
 	lock        *os.File
 	fault       error
 	allowed     map[string][]execprotocol.Capability
+	identity    stateIdentity
+}
+
+func (e *Engine) Identity() (environment, journal string) {
+	return e.identity.EnvironmentID, e.identity.JournalID
 }
 
 func Open(config Config) (*Engine, error) {
@@ -238,7 +243,7 @@ func (e *Engine) snapshotLocked(operation *operation, cursor int64, limit int) (
 	if err != nil && !errors.Is(err, io.EOF) {
 		return execprotocol.Snapshot{}, execprotocol.ErrUnavailable
 	}
-	snapshot.Output, snapshot.NextCursor = string(buffer[:n]), cursor+int64(n)
+	snapshot.Output, snapshot.NextCursor = buffer[:n], cursor+int64(n)
 	return snapshot, nil
 }
 

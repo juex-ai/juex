@@ -83,6 +83,28 @@ export interface ContextArtifactProjection {
   truncated: boolean;
 }
 
+export interface Device {
+  id: string;
+  journal_id: string;
+  name: string;
+  kind: string;
+  os: string;
+  online: boolean;
+  capabilities: Array<string>;
+  working_directory: string;
+  permission_mode: string;
+  tenant_id: string;
+  user_id: string;
+  fleet_id: string;
+  removal_epoch: number;
+  status: string;
+  version: number;
+  grants: Record<string, Array<string>>;
+  ceiling: Record<string, Array<string>>;
+  last_seen: string | null;
+  connection_epoch: number;
+}
+
 export interface Event {
   id: string;
   thread_id: string;
@@ -197,6 +219,34 @@ export interface Model {
   context_window: number;
   max_output: number;
   enabled: boolean;
+}
+
+export interface OwnerScope {
+  tenant_id: string;
+  user_id: string;
+  fleet_id: string;
+  actor_id: string;
+  actor_authorization_epoch: number;
+  membership_execution_epoch: number;
+  removal_epoch: number;
+  can_execute: boolean;
+  owner_email: string;
+  tenant_name: string;
+}
+
+export interface Pairing {
+  id: string;
+  environment_id: string;
+  name: string;
+  os: string;
+  working_directory: string;
+  capabilities: Array<string>;
+  state: string;
+  expires_at: string;
+  owner: OwnerScope;
+  grants: Record<string, Array<string>>;
+  agent_epochs: Record<string, number>;
+  approval_nonce: string;
 }
 
 export interface ResultFact {

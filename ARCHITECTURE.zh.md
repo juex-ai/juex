@@ -17,6 +17,10 @@ Runtime 只依赖自身和 Foundation；App 注入 Management 授权和 Provider
 [ADR-0003](docs/adr/0003-managed-agent-platform.zh.md) 定义已接受的目标。
 下文 Runtime／存储章节描述等待完整执行和应用切换的现有实现。
 
+[Execution](internal/execution/README.zh.md) 独立拥有 PostgreSQL 环境／操作账本与设备出站协议。
+Management 授权所属用户，Execution 执行设备能力授权、连接 fencing 和持久结果确认。
+Runtime 不持有设备凭据或原生文件系统访问权。服务身份限制连接和敏感方法：仅 Runtime 可从 Management 获取 Provider 凭据。
+
 ## Runtime 结构
 
 ```text

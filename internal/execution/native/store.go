@@ -3,6 +3,7 @@
 package native
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -35,11 +36,12 @@ type record struct {
 type stateIdentity struct {
 	Version       int    `json:"version"`
 	EnvironmentID string `json:"environment_id"`
+	JournalID     string `json:"journal_id"`
 }
 
 func (e *Engine) checkIdentity() error {
 	path := filepath.Join(e.config.StateDirectory, "identity.json")
-	want := stateIdentity{execprotocol.Version, e.config.EnvironmentID}
+	want := stateIdentity{Version: execprotocol.Version, EnvironmentID: e.config.EnvironmentID}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		entries, readErr := os.ReadDir(filepath.Join(e.config.StateDirectory, "operations"))
@@ -49,15 +51,18 @@ func (e *Engine) checkIdentity() error {
 		if len(entries) != 0 {
 			return errors.New("execution journal has lost its enrollment identity")
 		}
+		want.JournalID = rand.Text()
+		e.identity = want
 		return saveJSON(path, want)
 	}
 	if err != nil {
 		return err
 	}
 	var got stateIdentity
-	if json.Unmarshal(data, &got) != nil || got != want {
+	if json.Unmarshal(data, &got) != nil || got.Version != want.Version || got.EnvironmentID != want.EnvironmentID || got.JournalID == "" {
 		return errors.New("execution state belongs to a different environment or protocol version")
 	}
+	e.identity = got
 	return nil
 }
 

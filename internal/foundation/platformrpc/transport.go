@@ -18,6 +18,7 @@ import (
 
 	"github.com/cloudwego/gopkg/bufiox"
 	"github.com/cloudwego/kitex/client"
+	"github.com/cloudwego/kitex/pkg/remote"
 	"github.com/cloudwego/kitex/pkg/remote/trans/gonet"
 	"github.com/cloudwego/kitex/server"
 	"github.com/cloudwego/kitex/transport"
@@ -55,7 +56,7 @@ func ServerOptions(listener net.Listener, credentials Credentials, clients ...st
 	}
 	config.ClientAuth = tls.RequireAndVerifyClientCert
 	config.VerifyConnection = func(state tls.ConnectionState) error {
-		if len(state.PeerCertificates) == 0 {
+		if len(state.PeerCertificates) == 0 || len(state.PeerCertificates[0].DNSNames) != 1 {
 			return errors.New("service identity required")
 		}
 		for _, name := range state.PeerCertificates[0].DNSNames {
@@ -66,7 +67,44 @@ func ServerOptions(listener net.Listener, credentials Credentials, clients ...st
 		return errors.New("service identity not authorized")
 	}
 	secured := &drainingListener{Listener: tls.NewListener(listener, config), connections: make(map[*drainingConnection]struct{})}
-	return []server.Option{server.WithListener(secured), server.WithTransServerFactory(gonet.NewTransServerFactory()), server.WithTransHandlerFactory(gonet.NewSvrTransHandlerFactory()), server.WithExitWaitTime(10 * time.Second), server.WithExitSignal(func() <-chan error { return make(chan error) })}, nil
+	return []server.Option{server.WithListener(secured), server.WithTransServerFactory(gonet.NewTransServerFactory()), server.WithTransHandlerFactory(gonet.NewSvrTransHandlerFactory()), server.WithBoundHandler(&peerIdentity{listener: secured}), server.WithExitWaitTime(10 * time.Second), server.WithExitSignal(func() <-chan error { return make(chan error) })}, nil
+}
+
+type identityKey struct{}
+
+// CallerRole comes from the verified TLS connection, never caller metadata.
+func CallerRole(ctx context.Context) string {
+	role, _ := ctx.Value(identityKey{}).(string)
+	return role
+}
+
+type peerIdentity struct{ listener *drainingListener }
+
+func (p *peerIdentity) OnActive(ctx context.Context, _ net.Conn) (context.Context, error) {
+	return ctx, nil
+}
+func (p *peerIdentity) OnInactive(ctx context.Context, _ net.Conn) context.Context { return ctx }
+func (p *peerIdentity) OnMessage(ctx context.Context, _, _ remote.Message) (context.Context, error) {
+	return ctx, nil
+}
+func (p *peerIdentity) OnRead(ctx context.Context, connection net.Conn) (context.Context, error) {
+	p.listener.mu.Lock()
+	defer p.listener.mu.Unlock()
+	for candidate := range p.listener.connections {
+		if candidate.RemoteAddr().String() != connection.RemoteAddr().String() {
+			continue
+		}
+		secure, ok := candidate.Conn.(*tls.Conn)
+		if !ok {
+			break
+		}
+		state := secure.ConnectionState()
+		if !state.HandshakeComplete || len(state.VerifiedChains) == 0 || len(state.PeerCertificates[0].DNSNames) != 1 {
+			break
+		}
+		return context.WithValue(ctx, identityKey{}, state.PeerCertificates[0].DNSNames[0]), nil
+	}
+	return ctx, errors.New("verified service identity unavailable")
 }
 
 // Kitex's gonet shutdown stops accepting but otherwise waits for its two-minute

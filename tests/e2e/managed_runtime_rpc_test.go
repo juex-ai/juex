@@ -81,6 +81,20 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	}
 	ctx := context.Background()
 	runtimeEventually(t, func() bool { return client.Health(ctx) == nil })
+	executorAuthority, err := runtimeclient.NewAuthority(managementListener.Addr().String(), platformrpc.CredentialsAt(directory, "execution"), providers.NewProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executorScope, err := executorAuthority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
+	if err != nil {
+		t.Fatal("Execution could not check Agent authority", err)
+	}
+	if _, err := executorAuthority.Snapshot(ctx, executorScope); !errors.Is(err, managedruntime.ErrDenied) {
+		t.Fatal("Execution obtained Runtime-only configuration", err)
+	}
+	if _, err := executorAuthority.Provider(ctx, executorScope, managedruntime.TurnConfig{}); !errors.Is(err, managedruntime.ErrDenied) {
+		t.Fatal("Execution obtained model credentials", err)
+	}
 	threads, err := client.Threads(ctx, f.actor, f.tenant, f.agent.ID)
 	if err != nil || len(threads) != 1 {
 		t.Fatal(threads, err)

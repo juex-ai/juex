@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Layers3, LogOut, Users, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { APIError, api, errorText } from './api'
@@ -7,6 +7,7 @@ import { AuthPage } from './auth'
 import { Empty, Failure, Loading, Notice } from './components'
 import { FleetPage } from './fleet'
 import { ConversationPage } from './conversation'
+import { DevicePairPage } from './devices'
 import { UsersPage } from './users'
 import { useResource } from './use-resource'
 import type { TenantAccess, User } from './schema'
@@ -17,6 +18,7 @@ export default function ManagementApp() {
 }
 
 function SessionRoot() {
+	const location = useLocation()
   const [user, setUser] = useState<User | null | undefined>(undefined)
   const [mailEnabled, setMailEnabled] = useState(false)
   const [error, setError] = useState('')
@@ -42,7 +44,7 @@ function SessionRoot() {
   return <Routes>
     <Route path="/login" element={user ? <Navigate to="/" replace /> : auth} />
     <Route path="/join" element={auth} /><Route path="/set-password" element={auth} /><Route path="/verify-email" element={auth} /><Route path="/recover" element={auth} />
-    <Route path="*" element={user ? <Workspace key={`${user.id}:${revision}`} user={user} mailEnabled={mailEnabled} logout={logout} /> : <Navigate to="/login" replace />} />
+    <Route path="*" element={user ? <Workspace key={`${user.id}:${revision}`} user={user} mailEnabled={mailEnabled} logout={logout} /> : location.pathname.startsWith('/pair/') ? auth : <Navigate to="/login" replace />} />
   </Routes>
 }
 
@@ -54,7 +56,7 @@ function Workspace({ user, mailEnabled, logout }: { user: User; mailEnabled: boo
   if (tenants.error) return <main className="management-start"><Failure message={tenants.error} retry={refresh} /><Button variant="outline" onClick={() => void logout()}>退出登录</Button></main>
   if (!tenants.data) return <main className="management-start"><Loading /></main>
   if (!tenants.data.length) return <main className="management-start"><Empty title="暂时没有可访问的租户">请联系租户管理员确认成员状态，或打开新的邀请链接。</Empty><Button onClick={() => void logout()}>退出登录</Button></main>
-  return <Routes><Route path="/t/:tenantId/*" element={<TenantShell user={user} tenants={tenants.data} mailEnabled={mailEnabled} logout={logout} refresh={refresh} />} /><Route path="*" element={<Navigate to={`/t/${tenants.data[0].id}/fleet`} replace />} /></Routes>
+  return <Routes><Route path="/pair/:pairId" element={<DevicePairPage tenants={tenants.data} user={user} />} /><Route path="/t/:tenantId/*" element={<TenantShell user={user} tenants={tenants.data} mailEnabled={mailEnabled} logout={logout} refresh={refresh} />} /><Route path="*" element={<Navigate to={`/t/${tenants.data[0].id}/fleet`} replace />} /></Routes>
 }
 
 function TenantShell({ user, tenants, mailEnabled, logout, refresh }: { user: User; tenants: TenantAccess[]; mailEnabled: boolean; logout: () => Promise<void>; refresh: () => void }) {

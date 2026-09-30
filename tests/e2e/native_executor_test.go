@@ -49,20 +49,20 @@ func TestNativeExecutorMCPPersistsNotificationsAndCallIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	nativeEventually(t, engine, connection.ID, func(snapshot execprotocol.Snapshot) bool {
-		return strings.Contains(snapshot.Output, `"type":"connected"`)
+		return strings.Contains(snapshot.Text(), `"type":"connected"`)
 	})
 	list := nativeRun(t, engine, nativeRequest(t, "mcp-tools", "mcp_list", native.MCPArguments{ConnectionID: connection.ID}))
-	if list.State != execprotocol.Completed || !strings.Contains(list.Output, `"name":"echo"`) {
+	if list.State != execprotocol.Completed || !strings.Contains(list.Text(), `"name":"echo"`) {
 		t.Fatal(list)
 	}
 	call := nativeRequest(t, "mcp-call-once", "mcp_call", native.MCPArguments{ConnectionID: connection.ID, Name: "echo", Arguments: map[string]any{"text": "hello"}})
 	for range 2 {
 		result := nativeRun(t, engine, call)
-		if result.State != execprotocol.Completed || !strings.Contains(result.Output, "echo:hello") {
+		if result.State != execprotocol.Completed || !strings.Contains(result.Text(), "echo:hello") {
 			t.Fatal(result)
 		}
 	}
-	notification := nativeEventually(t, engine, connection.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Output, "after-call") })
+	notification := nativeEventually(t, engine, connection.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Text(), "after-call") })
 	if notification.State != execprotocol.Running {
 		t.Fatal("connection did not outlive tool calls", notification)
 	}
@@ -75,7 +75,7 @@ func TestNativeExecutorMCPPersistsNotificationsAndCallIdentity(t *testing.T) {
 	}
 	engine = openNative(t, config)
 	retained, err := engine.Snapshot("agent-one", connection.ID, 0, 64<<10)
-	if err != nil || !strings.Contains(retained.Output, "after-call") || retained.State != execprotocol.Cancelled {
+	if err != nil || !strings.Contains(retained.Text(), "after-call") || retained.State != execprotocol.Cancelled {
 		t.Fatal(retained, err)
 	}
 }
@@ -195,13 +195,13 @@ func TestNativeExecutorFilesIdentityAndRestart(t *testing.T) {
 	if result := nativeRun(t, engine, nativeRequest(t, "edit-note", "edit", native.FileArguments{Path: "note.txt", OldText: "beta", NewText: "gamma"})); result.State != execprotocol.Completed {
 		t.Fatal(result)
 	}
-	if result := nativeRun(t, engine, nativeRequest(t, "read-note", "read", native.FileArguments{Path: "note.txt"})); result.Output != "alpha gamma\n" {
+	if result := nativeRun(t, engine, nativeRequest(t, "read-note", "read", native.FileArguments{Path: "note.txt"})); result.Text() != "alpha gamma\n" {
 		t.Fatal(result)
 	}
-	if result := nativeRun(t, engine, nativeRequest(t, "search-note", "grep", native.FileArguments{Path: ".", Pattern: "gamma"})); !strings.Contains(result.Output, "alpha gamma") {
+	if result := nativeRun(t, engine, nativeRequest(t, "search-note", "grep", native.FileArguments{Path: ".", Pattern: "gamma"})); !strings.Contains(result.Text(), "alpha gamma") {
 		t.Fatal(result)
 	}
-	if result := nativeRun(t, engine, nativeRequest(t, "glob-note", "glob", native.FileArguments{Path: ".", Pattern: "*.txt"})); !strings.Contains(result.Output, "note.txt") {
+	if result := nativeRun(t, engine, nativeRequest(t, "glob-note", "glob", native.FileArguments{Path: ".", Pattern: "*.txt"})); !strings.Contains(result.Text(), "note.txt") {
 		t.Fatal(result)
 	}
 	if _, err := engine.Snapshot("agent-two", request.ID, 0, 1024); !errors.Is(err, execprotocol.ErrDenied) {
@@ -230,17 +230,17 @@ func TestNativeExecutorPTYStdinCursorAndCancellation(t *testing.T) {
 	if _, err := engine.Submit(request); err != nil {
 		t.Fatal(err)
 	}
-	ready := nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Output, "ready") })
+	ready := nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Text(), "ready") })
 	input := nativeRequest(t, "stdin-once", "write_stdin", native.StdinArguments{OperationID: request.ID, Chars: "hello\n", After: ready.NextCursor, YieldTimeMS: 100})
 	if result := nativeRun(t, engine, input); result.State != execprotocol.Completed {
 		t.Fatal(result)
 	}
 	complete := nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return snapshot.State.Terminal() })
-	if complete.State != execprotocol.Completed || !strings.Contains(complete.Output, "answer=hello") {
+	if complete.State != execprotocol.Completed || !strings.Contains(complete.Text(), "answer=hello") {
 		t.Fatal(complete)
 	}
 	continuation, err := engine.Snapshot("agent-one", request.ID, ready.NextCursor, 64<<10)
-	if err != nil || strings.Contains(continuation.Output, "ready") || continuation.NextCursor != complete.OutputBytes {
+	if err != nil || strings.Contains(continuation.Text(), "ready") || continuation.NextCursor != complete.OutputBytes {
 		t.Fatal(continuation, err)
 	}
 	if result := nativeRun(t, engine, input); result.State != execprotocol.Completed {
@@ -250,7 +250,7 @@ func TestNativeExecutorPTYStdinCursorAndCancellation(t *testing.T) {
 	if _, err := engine.Submit(long); err != nil {
 		t.Fatal(err)
 	}
-	nativeEventually(t, engine, long.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Output, "started") })
+	nativeEventually(t, engine, long.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Text(), "started") })
 	if err := engine.Cancel("agent-one", long.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestNativeExecutorResultQuotaAndExplicitRetention(t *testing.T) {
 	if err := engine.Prune(time.Now().Add(8 * 24 * time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if result := nativeRun(t, engine, second); result.Output != "next" {
+	if result := nativeRun(t, engine, second); result.Text() != "next" {
 		t.Fatal(result)
 	}
 	if replay, err := engine.Submit(request); err != nil || !replay.OutputExpired || replay.State != execprotocol.Completed {
@@ -315,7 +315,7 @@ func TestNativeExecutorLocalGrantAndCredentialBoundary(t *testing.T) {
 	t.Setenv("JUEX_MASTER_KEY", "must-not-reach-child")
 	t.Setenv("JUEX_DEVICE_TOKEN", "must-not-reach-child")
 	result := nativeRun(t, engine, nativeRequest(t, "environment", "exec_command", native.CommandArguments{Command: "printf '%s:%s' \"${JUEX_MASTER_KEY-unset}\" \"${JUEX_DEVICE_TOKEN-unset}\""}))
-	if result.Output != "unset:unset" {
+	if result.Text() != "unset:unset" {
 		t.Fatal(result)
 	}
 	if err := engine.Close(); err != nil {

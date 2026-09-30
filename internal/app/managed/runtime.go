@@ -14,6 +14,11 @@ import (
 
 type RuntimeAuthority struct{ Directory *postgres.Directory }
 
+func (a RuntimeAuthority) AuthorizeFleet(ctx context.Context, actor, tenant, owner string, execute bool) (management.FleetAuthority, error) {
+	value, err := a.Directory.AuthorizeFleet(ctx, actor, tenant, owner, execute)
+	return value, runtimeError(err)
+}
+
 func runtimeScope(a management.AgentAuthority) managedruntime.Scope {
 	return managedruntime.Scope{TenantID: a.Fleet.TenantID, UserID: a.Fleet.UserID, FleetID: a.Fleet.ID, AgentID: a.Agent.ID, ActorID: a.ActorID,
 		ActorAuthorizationEpoch: a.ActorAuthorizationEpoch, MembershipVersion: a.MembershipVersion, MembershipExecutionEpoch: a.MembershipExecutionEpoch, AgentExecutionEpoch: a.Agent.ExecutionEpoch}

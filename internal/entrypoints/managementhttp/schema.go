@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
@@ -23,6 +24,7 @@ func GenerateTypeScript() ([]byte, error) {
 		reflect.TypeFor[management.Fleet](),
 		reflect.TypeFor[management.FleetOverview](), reflect.TypeFor[management.Model](),
 		reflect.TypeFor[management.AgentDetail](),
+		reflect.TypeFor[execution.Device](), reflect.TypeFor[execution.Pairing](),
 		reflect.TypeFor[management.AgentConfig](), reflect.TypeFor[ConfigureAgentRequest](), reflect.TypeFor[ArchiveAgentRequest](),
 		reflect.TypeFor[managedruntime.Thread](), reflect.TypeFor[managedruntime.Timeline](), reflect.TypeFor[managedruntime.InputRequest](), reflect.TypeFor[managedruntime.InputReceipt](), reflect.TypeFor[WorkerRequest](), reflect.TypeFor[llm.Message](),
 	} {
