@@ -36,6 +36,13 @@ func (s *Store) CreateWorker(ctx context.Context, scope managedruntime.Scope, pa
 }
 
 func createWorker(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, parent managedruntime.Thread, requestID, name string, maxDepth int) (managedruntime.Thread, error) {
+	var applicationParent bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs WHERE thread_id=$1)`, parent.ID).Scan(&applicationParent); err != nil {
+		return managedruntime.Thread{}, err
+	}
+	if applicationParent {
+		return managedruntime.Thread{}, managedruntime.ErrDenied
+	}
 	if strings.TrimSpace(name) == "" || len([]rune(name)) > 100 {
 		return managedruntime.Thread{}, managedruntime.ErrInvalid
 	}

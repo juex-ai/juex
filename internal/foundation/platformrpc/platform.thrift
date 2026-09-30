@@ -40,6 +40,9 @@ service Memory {
 }
 
 service Runtime {
+	Reply AdmitApplication(1: string scopeJSON, 2: string jobJSON)
+	Reply ApplicationReceipt(1: string scopeJSON, 2: string application, 3: string jobID)
+	Reply CancelApplication(1: string scopeJSON, 2: string application, 3: string jobID)
   Reply Health()
   Reply Submit(1: Actor actor, 2: string requestID, 3: string threadID, 4: string text)
   Reply Threads(1: Actor actor)

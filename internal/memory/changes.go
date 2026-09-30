@@ -123,9 +123,6 @@ func (s *State) changes(fleet string, changes []mc.Change, review *Review, human
 		candidate[e.ID] = e
 		ids = append(ids, e.ID)
 	}
-	if len(candidate) > mc.MaxEntries {
-		return nil, nil, invalid("Fleet knowledge capacity reached")
-	}
 	if err := knowledge.Validate(candidate); err != nil {
 		return nil, nil, invalid(err.Error())
 	}

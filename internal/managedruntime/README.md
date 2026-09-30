@@ -25,6 +25,20 @@ target's scope and original actor govern execution; source identities are
 provenance, not continuing dependencies. Peer discovery exposes names and IDs,
 never private conversations or cross-Agent context references.
 
+Built-in applications admit a frozen task into an ordinary Worker through their
+own authenticated RPC namespace. Job identity, first input and Worker purpose
+commit together; cancellation arriving first leaves a durable receipt without a
+Worker. Application service credentials cannot submit ordinary inputs, inspect
+arbitrary history or control another app's jobs. Accepted application work is
+independent of the source conversation's cancellation.
+
+Application Workers reject unrelated inputs and child creation. Memory review
+Workers expose only scoped context and Memory review tools; the dispatch and
+attempt-admission boundaries enforce the same restriction. Model calls, including
+unknown attempts and compaction, share the normal scheduler and consume a durable
+job budget. Every call and tool dispatch checks current application authority;
+revocation stops the job without granting a new execution epoch on recovery.
+
 `juex-runtime` runs independently of `juex-management`. Management forwards
 conversation requests over Kitex; Runtime obtains current authority and model
 credentials through Management RPC. Both directions require service-specific

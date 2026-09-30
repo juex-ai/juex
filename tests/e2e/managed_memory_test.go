@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -358,5 +359,26 @@ func TestManagedMemoryNoStoreRelearningAndInvalidDecision(t *testing.T) {
 	spoofed.Sources[0].ThreadID = uuid.NewString()
 	if _, err := f.service.Propose(ctx, f.scope, f.thread, spoofed, false); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("another Thread evidence admitted", err)
+	}
+}
+
+func TestManagedMemoryColdKnowledgeRemainsSearchable(t *testing.T) {
+	f := managedMemory(t)
+	ctx := context.Background()
+	for offset := 0; offset < 205; offset += 20 {
+		request := mc.AdminRequest{Key: fmt.Sprint("batch-", offset), Action: "correct"}
+		for i := offset; i < min(offset+20, 205); i++ {
+			request.Changes = append(request.Changes, mc.Change{Entry: mc.Entry{ID: fmt.Sprintf("entry-%03d", i), Name: "Cold knowledge", Summary: "Retained reference", Type: "reference", Body: fmt.Sprintf("Original retained fact %03d", i)}})
+		}
+		if _, err := f.service.Administer(ctx, f.human, request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := f.service.Search(ctx, f.scope.Access, mc.Query{Offset: 200, Limit: 20})
+	if err != nil || len(page.Entries) != 5 || page.Next != -1 {
+		t.Fatal("hot index size became a storage limit", page, err)
+	}
+	if entry, err := f.service.Read(ctx, f.scope.Access, mc.ReadRequest{ID: "entry-000"}); err != nil || entry.Body != "Original retained fact 000" {
+		t.Fatal("cold knowledge unavailable", entry, err)
 	}
 }

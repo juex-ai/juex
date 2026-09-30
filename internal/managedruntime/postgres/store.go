@@ -38,6 +38,9 @@ var compactionSchema string
 //go:embed collaboration_schema.sql
 var collaborationSchema string
 
+//go:embed applications_schema.sql
+var applicationsSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -52,7 +55,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -194,6 +197,9 @@ func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, req
 }
 
 func acceptThreadInput(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, thread managedruntime.Thread, request managedruntime.InputRequest, source managedruntime.InputSource) (managedruntime.InputReceipt, error) {
+	if err := applicationInput(ctx, tx, thread.ID, source); err != nil {
+		return managedruntime.InputReceipt{}, err
+	}
 	encodedSource, err := json.Marshal(source)
 	if err != nil {
 		return managedruntime.InputReceipt{}, err

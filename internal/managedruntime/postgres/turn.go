@@ -134,7 +134,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		message := llm.TextMessage(llm.RoleUser, text)
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
-		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" {
+		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" {
 			message.Kind = llm.MessageKindSystemNotice
 		}
 		if work.Source.Kind != "compaction" {
@@ -280,6 +280,9 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 		return managedruntime.Attempt{}, managedruntime.ErrInvalid
 	}
 	if err := admitCompactionAttempt(ctx, tx, turnID, request); err != nil {
+		return managedruntime.Attempt{}, err
+	}
+	if err := applicationAttempt(ctx, tx, threadID, request); err != nil {
 		return managedruntime.Attempt{}, err
 	}
 	encoded, err := json.Marshal(request)
@@ -450,7 +453,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 // HoldInput prevents revoked work from automatically running after a later
 // membership/Agent restore. Releasing it requires a new authorized user action.
 func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, inputID, reason string) error {
-	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" {
+	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" {
 		return managedruntime.ErrInvalid
 	}
 	tx, err := s.begin(ctx)

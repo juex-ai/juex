@@ -96,7 +96,7 @@ func (h *managementHandler) ModelProfile(ctx context.Context, scopeJSON, configJ
 }
 
 func NewRuntime(listener net.Listener, credentials transport.Credentials, service *managedruntime.Service, health func(context.Context) error) (server.Server, error) {
-	opts, err := transport.ServerOptions(listener, credentials, "management")
+	opts, err := transport.ServerOptions(listener, credentials, "management", "memory", "calendar")
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +114,9 @@ func (h *runtimeHandler) Health(ctx context.Context) (*platform.Reply, error) {
 	return reply(map[string]int{"protocol_version": 1}, h.health(ctx))
 }
 func (h *runtimeHandler) Submit(ctx context.Context, actor *platform.Actor, requestID, threadID, text string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	if !validActor(actor) {
 		return invalid()
 	}
@@ -121,6 +124,9 @@ func (h *runtimeHandler) Submit(ctx context.Context, actor *platform.Actor, requ
 	return reply(v, err)
 }
 func (h *runtimeHandler) Threads(ctx context.Context, actor *platform.Actor) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	if !validActor(actor) {
 		return invalid()
 	}
@@ -128,6 +134,9 @@ func (h *runtimeHandler) Threads(ctx context.Context, actor *platform.Actor) (*p
 	return reply(v, err)
 }
 func (h *runtimeHandler) Timeline(ctx context.Context, actor *platform.Actor, threadID string, after int64, limit int32) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	if !validActor(actor) {
 		return invalid()
 	}
@@ -135,6 +144,9 @@ func (h *runtimeHandler) Timeline(ctx context.Context, actor *platform.Actor, th
 	return reply(v, err)
 }
 func (h *runtimeHandler) Cancel(ctx context.Context, actor *platform.Actor, threadID string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	if !validActor(actor) {
 		return invalid()
 	}
@@ -142,6 +154,9 @@ func (h *runtimeHandler) Cancel(ctx context.Context, actor *platform.Actor, thre
 	return reply(nil, err)
 }
 func (h *runtimeHandler) CreateWorker(ctx context.Context, actor *platform.Actor, parentID, requestID, name string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	if !validActor(actor) {
 		return invalid()
 	}
@@ -150,6 +165,9 @@ func (h *runtimeHandler) CreateWorker(ctx context.Context, actor *platform.Actor
 }
 
 func (h *runtimeHandler) Compact(ctx context.Context, actor *platform.Actor, thread, requestID, focus string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	if !validActor(actor) {
 		return invalid()
 	}
@@ -170,6 +188,9 @@ func (h *managementHandler) Peers(ctx context.Context, scopeJSON string) (*platf
 }
 
 func (h *runtimeHandler) Archive(ctx context.Context, actor *platform.Actor, thread string, archived bool) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
 	if !validActor(actor) || thread == "" {
 		return invalid()
 	}

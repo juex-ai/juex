@@ -1536,6 +1536,12 @@ var fieldIDToName_MemoryAdministerResult = map[int16]string{
 }
 
 type Runtime interface {
+	AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string) (r *Reply, err error)
+
+	ApplicationReceipt(ctx context.Context, scopeJSON string, application string, jobID string) (r *Reply, err error)
+
+	CancelApplication(ctx context.Context, scopeJSON string, application string, jobID string) (r *Reply, err error)
+
 	Health(ctx context.Context) (r *Reply, err error)
 
 	Submit(ctx context.Context, actor *Actor, requestID string, threadID string, text string) (r *Reply, err error)
@@ -1551,6 +1557,252 @@ type Runtime interface {
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
 	CreateWorker(ctx context.Context, actor *Actor, parentID string, requestID string, name string) (r *Reply, err error)
+}
+
+type RuntimeAdmitApplicationArgs struct {
+	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	JobJSON   string `thrift:"jobJSON,2" frugal:"2,default,string" json:"jobJSON"`
+}
+
+func NewRuntimeAdmitApplicationArgs() *RuntimeAdmitApplicationArgs {
+	return &RuntimeAdmitApplicationArgs{}
+}
+
+func (p *RuntimeAdmitApplicationArgs) InitDefault() {
+}
+
+func (p *RuntimeAdmitApplicationArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *RuntimeAdmitApplicationArgs) GetJobJSON() (v string) {
+	return p.JobJSON
+}
+func (p *RuntimeAdmitApplicationArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *RuntimeAdmitApplicationArgs) SetJobJSON(val string) {
+	p.JobJSON = val
+}
+
+func (p *RuntimeAdmitApplicationArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeAdmitApplicationArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeAdmitApplicationArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "jobJSON",
+}
+
+type RuntimeAdmitApplicationResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeAdmitApplicationResult() *RuntimeAdmitApplicationResult {
+	return &RuntimeAdmitApplicationResult{}
+}
+
+func (p *RuntimeAdmitApplicationResult) InitDefault() {
+}
+
+var RuntimeAdmitApplicationResult_Success_DEFAULT *Reply
+
+func (p *RuntimeAdmitApplicationResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeAdmitApplicationResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeAdmitApplicationResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeAdmitApplicationResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeAdmitApplicationResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeAdmitApplicationResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeAdmitApplicationResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeApplicationReceiptArgs struct {
+	ScopeJSON   string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	Application string `thrift:"application,2" frugal:"2,default,string" json:"application"`
+	JobID       string `thrift:"jobID,3" frugal:"3,default,string" json:"jobID"`
+}
+
+func NewRuntimeApplicationReceiptArgs() *RuntimeApplicationReceiptArgs {
+	return &RuntimeApplicationReceiptArgs{}
+}
+
+func (p *RuntimeApplicationReceiptArgs) InitDefault() {
+}
+
+func (p *RuntimeApplicationReceiptArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *RuntimeApplicationReceiptArgs) GetApplication() (v string) {
+	return p.Application
+}
+
+func (p *RuntimeApplicationReceiptArgs) GetJobID() (v string) {
+	return p.JobID
+}
+func (p *RuntimeApplicationReceiptArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *RuntimeApplicationReceiptArgs) SetApplication(val string) {
+	p.Application = val
+}
+func (p *RuntimeApplicationReceiptArgs) SetJobID(val string) {
+	p.JobID = val
+}
+
+func (p *RuntimeApplicationReceiptArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeApplicationReceiptArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeApplicationReceiptArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "application",
+	3: "jobID",
+}
+
+type RuntimeApplicationReceiptResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeApplicationReceiptResult() *RuntimeApplicationReceiptResult {
+	return &RuntimeApplicationReceiptResult{}
+}
+
+func (p *RuntimeApplicationReceiptResult) InitDefault() {
+}
+
+var RuntimeApplicationReceiptResult_Success_DEFAULT *Reply
+
+func (p *RuntimeApplicationReceiptResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeApplicationReceiptResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeApplicationReceiptResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeApplicationReceiptResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeApplicationReceiptResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeApplicationReceiptResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeApplicationReceiptResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeCancelApplicationArgs struct {
+	ScopeJSON   string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	Application string `thrift:"application,2" frugal:"2,default,string" json:"application"`
+	JobID       string `thrift:"jobID,3" frugal:"3,default,string" json:"jobID"`
+}
+
+func NewRuntimeCancelApplicationArgs() *RuntimeCancelApplicationArgs {
+	return &RuntimeCancelApplicationArgs{}
+}
+
+func (p *RuntimeCancelApplicationArgs) InitDefault() {
+}
+
+func (p *RuntimeCancelApplicationArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *RuntimeCancelApplicationArgs) GetApplication() (v string) {
+	return p.Application
+}
+
+func (p *RuntimeCancelApplicationArgs) GetJobID() (v string) {
+	return p.JobID
+}
+func (p *RuntimeCancelApplicationArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *RuntimeCancelApplicationArgs) SetApplication(val string) {
+	p.Application = val
+}
+func (p *RuntimeCancelApplicationArgs) SetJobID(val string) {
+	p.JobID = val
+}
+
+func (p *RuntimeCancelApplicationArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeCancelApplicationArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeCancelApplicationArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "application",
+	3: "jobID",
+}
+
+type RuntimeCancelApplicationResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeCancelApplicationResult() *RuntimeCancelApplicationResult {
+	return &RuntimeCancelApplicationResult{}
+}
+
+func (p *RuntimeCancelApplicationResult) InitDefault() {
+}
+
+var RuntimeCancelApplicationResult_Success_DEFAULT *Reply
+
+func (p *RuntimeCancelApplicationResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeCancelApplicationResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeCancelApplicationResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeCancelApplicationResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeCancelApplicationResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeCancelApplicationResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeCancelApplicationResult = map[int16]string{
+	0: "success",
 }
 
 type RuntimeHealthArgs struct {

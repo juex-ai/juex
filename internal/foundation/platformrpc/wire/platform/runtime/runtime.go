@@ -13,6 +13,27 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"AdmitApplication": kitex.NewMethodInfo(
+		admitApplicationHandler,
+		newRuntimeAdmitApplicationArgs,
+		newRuntimeAdmitApplicationResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ApplicationReceipt": kitex.NewMethodInfo(
+		applicationReceiptHandler,
+		newRuntimeApplicationReceiptArgs,
+		newRuntimeApplicationReceiptResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"CancelApplication": kitex.NewMethodInfo(
+		cancelApplicationHandler,
+		newRuntimeCancelApplicationArgs,
+		newRuntimeCancelApplicationResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Health": kitex.NewMethodInfo(
 		healthHandler,
 		newRuntimeHealthArgs,
@@ -133,6 +154,60 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func admitApplicationHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeAdmitApplicationArgs)
+	realResult := result.(*platform.RuntimeAdmitApplicationResult)
+	success, err := handler.(platform.Runtime).AdmitApplication(ctx, realArg.ScopeJSON, realArg.JobJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeAdmitApplicationArgs() interface{} {
+	return platform.NewRuntimeAdmitApplicationArgs()
+}
+
+func newRuntimeAdmitApplicationResult() interface{} {
+	return platform.NewRuntimeAdmitApplicationResult()
+}
+
+func applicationReceiptHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeApplicationReceiptArgs)
+	realResult := result.(*platform.RuntimeApplicationReceiptResult)
+	success, err := handler.(platform.Runtime).ApplicationReceipt(ctx, realArg.ScopeJSON, realArg.Application, realArg.JobID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeApplicationReceiptArgs() interface{} {
+	return platform.NewRuntimeApplicationReceiptArgs()
+}
+
+func newRuntimeApplicationReceiptResult() interface{} {
+	return platform.NewRuntimeApplicationReceiptResult()
+}
+
+func cancelApplicationHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeCancelApplicationArgs)
+	realResult := result.(*platform.RuntimeCancelApplicationResult)
+	success, err := handler.(platform.Runtime).CancelApplication(ctx, realArg.ScopeJSON, realArg.Application, realArg.JobID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeCancelApplicationArgs() interface{} {
+	return platform.NewRuntimeCancelApplicationArgs()
+}
+
+func newRuntimeCancelApplicationResult() interface{} {
+	return platform.NewRuntimeCancelApplicationResult()
 }
 
 func healthHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -287,6 +362,41 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeAdmitApplicationArgs
+	_args.ScopeJSON = scopeJSON
+	_args.JobJSON = jobJSON
+	var _result platform.RuntimeAdmitApplicationResult
+	if err = p.c.Call(ctx, "AdmitApplication", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ApplicationReceipt(ctx context.Context, scopeJSON string, application string, jobID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeApplicationReceiptArgs
+	_args.ScopeJSON = scopeJSON
+	_args.Application = application
+	_args.JobID = jobID
+	var _result platform.RuntimeApplicationReceiptResult
+	if err = p.c.Call(ctx, "ApplicationReceipt", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) CancelApplication(ctx context.Context, scopeJSON string, application string, jobID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeCancelApplicationArgs
+	_args.ScopeJSON = scopeJSON
+	_args.Application = application
+	_args.JobID = jobID
+	var _result platform.RuntimeCancelApplicationResult
+	if err = p.c.Call(ctx, "CancelApplication", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) Health(ctx context.Context) (r *platform.Reply, err error) {

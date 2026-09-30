@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -30,6 +31,7 @@ type ExecutionStore interface {
 }
 
 type RunnerConfig struct {
+	Applications      ApplicationGateway
 	Tools             ToolGateway
 	Files             FileGateway
 	Concurrency       int
@@ -85,6 +87,8 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 		return nil, ErrInvalid
 	}
 	runner.tools = &toolRunner{store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
+	runner.tools.applications = config.Applications
+	runner.tools.applicationStore, _ = store.(ApplicationStore)
 	runner.tools.collaboration, _ = store.(CollaborationStore)
 	if config.Tools != nil {
 		observations, ok := store.(ObservationStore)
@@ -280,6 +284,13 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if err != nil {
 		return err
 	}
+	job, err := r.application(ctx, scope, pending.ThreadID)
+	if errors.Is(err, ErrDenied) {
+		return r.store.HoldInput(ctx, lease, pending.InputID, "application_revoked")
+	}
+	if err != nil {
+		return err
+	}
 	var config TurnConfig
 	if pending.State == "queued" {
 		config, err = r.authority.Snapshot(ctx, scope)
@@ -298,7 +309,7 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		return err
 	}
 	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation", Tools: runtimeTools()}
-	if r.tools.collaboration != nil {
+	if r.tools.collaboration != nil && (job == nil || job.Application != "memory") {
 		_, peers := r.authority.(AgentDirectory)
 		request.Tools = append(request.Tools, collaborationTools(peers)...)
 		request.System += "\n\nCurrent Agent: " + work.Scope.AgentID + "; current Thread: " + work.ThreadID + "; maximum Worker nesting depth: " + strconv.Itoa(max(work.Config.WorkerDepth, 1)) + ". Each Worker starts with only its explicit task, not the parent conversation. Other Agents receive only explicit messages."
@@ -306,7 +317,21 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if work.Source.Kind == "observation" {
 		request.Purpose = "observation"
 	}
-	if r.tools.gateway != nil {
+	if job != nil {
+		request.Purpose = "application:" + job.Application
+	}
+	if r.config.Applications != nil {
+		catalog, err := r.config.Applications.Tools(ctx, scope, job)
+		if err != nil {
+			return err
+		}
+		for _, tool := range catalog {
+			if job == nil || job.AllowsTool(tool.Name) {
+				request.Tools = append(request.Tools, tool)
+			}
+		}
+	}
+	if r.tools.gateway != nil && (job == nil || job.Application != "memory") {
 		environments, err := r.tools.gateway.Environments(ctx, scope)
 		if err != nil {
 			return err
@@ -319,6 +344,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		if r.tools.files != nil {
 			request.Tools = append(request.Tools, fileTools()...)
 		}
+	}
+	if job != nil {
+		request.Tools = slices.DeleteFunc(request.Tools, func(tool llm.ToolSpec) bool { return !job.AllowsTool(tool.Name) })
 	}
 	provider, request, err := r.selectModel(ctx, lease, work, request)
 	if errors.Is(err, ErrNoCompaction) {
@@ -337,6 +365,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		return err
 	}
 	attempt, err := r.store.BeginAttempt(ctx, lease, work.TurnID, request)
+	if errors.Is(err, ErrApplicationBudget) {
+		return r.store.HoldInput(ctx, lease, pending.InputID, "application_budget_exhausted")
+	}
 	if errors.Is(err, ErrCompactionFailed) {
 		return r.store.HoldInput(ctx, lease, pending.InputID, "compaction_failed")
 	}
@@ -383,6 +414,12 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 		failure = "cancelled"
 	}
+	if _, err := r.application(ctx, scope, work.ThreadID); err != nil {
+		if !errors.Is(err, ErrDenied) {
+			return err
+		}
+		failure = "cancelled"
+	}
 	if failure == "" && (response.Message.Role != llm.RoleAssistant || len(response.Message.Blocks) == 0 || !validToolResponse(response.Message, request.Tools)) {
 		failure = "invalid_response"
 	}
@@ -399,6 +436,10 @@ func (r *Runner) watch(ctx context.Context, cancel context.CancelCauseFunc, leas
 		case <-ticker.C:
 		}
 		if _, err := r.currentScope(ctx, work.Scope); err != nil {
+			cancel(err)
+			return
+		}
+		if _, err := r.application(ctx, work.Scope, work.ThreadID); err != nil {
 			cancel(err)
 			return
 		}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,13 +16,15 @@ import (
 )
 
 type toolRunner struct {
-	collaboration CollaborationStore
-	context       ContextStore
-	observations  ObservationStore
-	store         ToolStore
-	gateway       ToolGateway
-	files         FileGateway
-	authority     Authority
+	applications     ApplicationGateway
+	applicationStore ApplicationStore
+	collaboration    CollaborationStore
+	context          ContextStore
+	observations     ObservationStore
+	store            ToolStore
+	gateway          ToolGateway
+	files            FileGateway
+	authority        Authority
 }
 
 func (r toolRunner) run(ctx context.Context) {
@@ -119,6 +122,37 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			return ToolOutcome{State: "unknown", Content: "Authority changed while execution could be pending. Do not repeat the operation.", IsError: true, OperationLive: true}
 		}
 		return toolResult(work.Call, map[string]string{"error": "authority_changed"}, true)
+	}
+	var job *ApplicationJob
+	if r.applicationStore != nil {
+		job, err = r.applicationStore.ThreadApplication(ctx, work.Scope, work.ThreadID)
+		if err != nil && !errors.Is(err, ErrDenied) {
+			return retryTool()
+		}
+		if errors.Is(err, ErrDenied) {
+			return toolResult(work.Call, map[string]string{"error": "application_revoked"}, true)
+		}
+	}
+	if job != nil {
+		if r.applications == nil || !job.AllowsTool(work.Call.ToolName) {
+			return toolResult(work.Call, map[string]string{"error": "application_tool_denied"}, true)
+		}
+		if err := r.applications.Check(ctx, work.Scope, *job); err != nil {
+			if !errors.Is(err, ErrDenied) {
+				return retryTool()
+			}
+			return toolResult(work.Call, map[string]string{"error": "application_revoked"}, true)
+		}
+	}
+	if r.applications != nil && (strings.HasPrefix(work.Call.ToolName, "memory_") || strings.HasPrefix(work.Call.ToolName, "calendar_")) {
+		value, err := r.applications.Call(ctx, *work, job)
+		if err != nil {
+			if !errors.Is(err, ErrDenied) && !errors.Is(err, ErrInvalid) && !errors.Is(err, ErrConflict) {
+				return retryTool()
+			}
+			return toolResult(work.Call, map[string]string{"error": err.Error()}, true)
+		}
+		return toolResult(work.Call, value, false)
 	}
 	if outcome, handled := r.contextTool(ctx, *work); handled {
 		return outcome

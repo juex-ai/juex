@@ -26,8 +26,9 @@ type ConversationStore interface {
 }
 
 type Service struct {
-	Store     ConversationStore
-	Authority Authority
+	Store        ConversationStore
+	Authority    Authority
+	Applications ApplicationGateway
 }
 
 func (s *Service) scope(ctx context.Context, actor, tenant, agent string, execute bool) (Scope, error) {

@@ -11,6 +11,9 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ApplicationReceipt(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	CancelApplication(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Submit(ctx context.Context, actor *platform.Actor, requestID string, threadID string, text string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Threads(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -48,6 +51,21 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kRuntimeClient struct {
 	*kClient
+}
+
+func (p *kRuntimeClient) AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.AdmitApplication(ctx, scopeJSON, jobJSON)
+}
+
+func (p *kRuntimeClient) ApplicationReceipt(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ApplicationReceipt(ctx, scopeJSON, application, jobID)
+}
+
+func (p *kRuntimeClient) CancelApplication(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.CancelApplication(ctx, scopeJSON, application, jobID)
 }
 
 func (p *kRuntimeClient) Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error) {

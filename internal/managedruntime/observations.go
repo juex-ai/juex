@@ -75,6 +75,8 @@ type ObservationDelivery struct {
 
 // InputSource preserves event provenance and the grant that allowed a wakeup.
 type InputSource struct {
+	Application          string                  `json:"application,omitempty"`
+	ApplicationJobID     string                  `json:"application_job_id,omitempty"`
 	SenderAgentID        string                  `json:"sender_agent_id,omitempty"`
 	SenderThreadID       string                  `json:"sender_thread_id,omitempty"`
 	SenderTurnID         string                  `json:"sender_turn_id,omitempty"`
