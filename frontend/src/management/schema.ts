@@ -33,6 +33,34 @@ export interface ArchiveAgentRequest {
   archived: boolean;
 }
 
+export interface Artifact {
+  id: string;
+  scope: Scope;
+  request: ArtifactRequest;
+  state: string;
+  created_at: string;
+}
+
+export interface ArtifactRequest {
+  request_id: string;
+  name: string;
+  media_type: string;
+  visibility: string;
+  manifest: FileManifest;
+  source?: ArtifactSource | null;
+}
+
+export interface ArtifactSource {
+  environment_id: string;
+  operation_id: string;
+  path: string;
+}
+
+export interface ArtifactUpload {
+  artifact: Artifact;
+  cursor: number;
+}
+
 export interface Block {
   type: string;
   text?: string;
@@ -121,6 +149,17 @@ export interface Event {
   kind: string;
   data: unknown;
   created_at: string;
+}
+
+export interface FileChunk {
+  offset: number;
+  data: string;
+  sha256: string;
+}
+
+export interface FileManifest {
+  size: number;
+  sha256: string;
 }
 
 export interface Fleet {
@@ -261,6 +300,21 @@ export interface Pairing {
 export interface ResultFact {
   owner: string;
   data?: unknown;
+}
+
+export interface Scope {
+  tenant_id: string;
+  user_id: string;
+  fleet_id: string;
+  actor_id: string;
+  actor_authorization_epoch: number;
+  membership_execution_epoch: number;
+  removal_epoch: number;
+  can_execute: boolean;
+  owner_email: string;
+  tenant_name: string;
+  agent_id: string;
+  agent_execution_epoch: number;
 }
 
 export interface Session {

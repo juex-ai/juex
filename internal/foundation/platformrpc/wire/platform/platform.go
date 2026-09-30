@@ -1073,6 +1073,20 @@ var fieldIDToName_RuntimeCreateWorkerResult = map[int16]string{
 type Execution interface {
 	Health(ctx context.Context) (r *Reply, err error)
 
+	BeginArtifact(ctx context.Context, actor *Actor, requestJSON string) (r *Reply, err error)
+
+	WriteArtifact(ctx context.Context, actor *Actor, artifactID string, chunkJSON string) (r *Reply, err error)
+
+	CommitArtifact(ctx context.Context, actor *Actor, artifactID string) (r *Reply, err error)
+
+	Artifact(ctx context.Context, actor *Actor, artifactID string) (r *Reply, err error)
+
+	Artifacts(ctx context.Context, actor *Actor, after string, limit int32) (r *Reply, err error)
+
+	ReadArtifact(ctx context.Context, actor *Actor, artifactID string, offset int64, limit int32) (r *Reply, err error)
+
+	DeleteArtifact(ctx context.Context, actor *Actor, artifactID string) (r *Reply, err error)
+
 	Events(ctx context.Context, limit int32) (r *Reply, err error)
 
 	AcknowledgeEvents(ctx context.Context, eventIDs []string) (r *Reply, err error)
@@ -1156,6 +1170,637 @@ func (p *ExecutionHealthResult) String() string {
 }
 
 var fieldIDToName_ExecutionHealthResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionBeginArtifactArgs struct {
+	Actor       *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
+}
+
+func NewExecutionBeginArtifactArgs() *ExecutionBeginArtifactArgs {
+	return &ExecutionBeginArtifactArgs{}
+}
+
+func (p *ExecutionBeginArtifactArgs) InitDefault() {
+}
+
+var ExecutionBeginArtifactArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionBeginArtifactArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionBeginArtifactArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionBeginArtifactArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *ExecutionBeginArtifactArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionBeginArtifactArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *ExecutionBeginArtifactArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionBeginArtifactArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionBeginArtifactArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionBeginArtifactArgs = map[int16]string{
+	1: "actor",
+	2: "requestJSON",
+}
+
+type ExecutionBeginArtifactResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionBeginArtifactResult() *ExecutionBeginArtifactResult {
+	return &ExecutionBeginArtifactResult{}
+}
+
+func (p *ExecutionBeginArtifactResult) InitDefault() {
+}
+
+var ExecutionBeginArtifactResult_Success_DEFAULT *Reply
+
+func (p *ExecutionBeginArtifactResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionBeginArtifactResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionBeginArtifactResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionBeginArtifactResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionBeginArtifactResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionBeginArtifactResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionBeginArtifactResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionWriteArtifactArgs struct {
+	Actor      *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ArtifactID string `thrift:"artifactID,2" frugal:"2,default,string" json:"artifactID"`
+	ChunkJSON  string `thrift:"chunkJSON,3" frugal:"3,default,string" json:"chunkJSON"`
+}
+
+func NewExecutionWriteArtifactArgs() *ExecutionWriteArtifactArgs {
+	return &ExecutionWriteArtifactArgs{}
+}
+
+func (p *ExecutionWriteArtifactArgs) InitDefault() {
+}
+
+var ExecutionWriteArtifactArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionWriteArtifactArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionWriteArtifactArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionWriteArtifactArgs) GetArtifactID() (v string) {
+	return p.ArtifactID
+}
+
+func (p *ExecutionWriteArtifactArgs) GetChunkJSON() (v string) {
+	return p.ChunkJSON
+}
+func (p *ExecutionWriteArtifactArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionWriteArtifactArgs) SetArtifactID(val string) {
+	p.ArtifactID = val
+}
+func (p *ExecutionWriteArtifactArgs) SetChunkJSON(val string) {
+	p.ChunkJSON = val
+}
+
+func (p *ExecutionWriteArtifactArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionWriteArtifactArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionWriteArtifactArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionWriteArtifactArgs = map[int16]string{
+	1: "actor",
+	2: "artifactID",
+	3: "chunkJSON",
+}
+
+type ExecutionWriteArtifactResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionWriteArtifactResult() *ExecutionWriteArtifactResult {
+	return &ExecutionWriteArtifactResult{}
+}
+
+func (p *ExecutionWriteArtifactResult) InitDefault() {
+}
+
+var ExecutionWriteArtifactResult_Success_DEFAULT *Reply
+
+func (p *ExecutionWriteArtifactResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionWriteArtifactResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionWriteArtifactResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionWriteArtifactResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionWriteArtifactResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionWriteArtifactResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionWriteArtifactResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionCommitArtifactArgs struct {
+	Actor      *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ArtifactID string `thrift:"artifactID,2" frugal:"2,default,string" json:"artifactID"`
+}
+
+func NewExecutionCommitArtifactArgs() *ExecutionCommitArtifactArgs {
+	return &ExecutionCommitArtifactArgs{}
+}
+
+func (p *ExecutionCommitArtifactArgs) InitDefault() {
+}
+
+var ExecutionCommitArtifactArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionCommitArtifactArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionCommitArtifactArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionCommitArtifactArgs) GetArtifactID() (v string) {
+	return p.ArtifactID
+}
+func (p *ExecutionCommitArtifactArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionCommitArtifactArgs) SetArtifactID(val string) {
+	p.ArtifactID = val
+}
+
+func (p *ExecutionCommitArtifactArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionCommitArtifactArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCommitArtifactArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCommitArtifactArgs = map[int16]string{
+	1: "actor",
+	2: "artifactID",
+}
+
+type ExecutionCommitArtifactResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionCommitArtifactResult() *ExecutionCommitArtifactResult {
+	return &ExecutionCommitArtifactResult{}
+}
+
+func (p *ExecutionCommitArtifactResult) InitDefault() {
+}
+
+var ExecutionCommitArtifactResult_Success_DEFAULT *Reply
+
+func (p *ExecutionCommitArtifactResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionCommitArtifactResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionCommitArtifactResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionCommitArtifactResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionCommitArtifactResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionCommitArtifactResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionCommitArtifactResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionArtifactArgs struct {
+	Actor      *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ArtifactID string `thrift:"artifactID,2" frugal:"2,default,string" json:"artifactID"`
+}
+
+func NewExecutionArtifactArgs() *ExecutionArtifactArgs {
+	return &ExecutionArtifactArgs{}
+}
+
+func (p *ExecutionArtifactArgs) InitDefault() {
+}
+
+var ExecutionArtifactArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionArtifactArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionArtifactArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionArtifactArgs) GetArtifactID() (v string) {
+	return p.ArtifactID
+}
+func (p *ExecutionArtifactArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionArtifactArgs) SetArtifactID(val string) {
+	p.ArtifactID = val
+}
+
+func (p *ExecutionArtifactArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionArtifactArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionArtifactArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionArtifactArgs = map[int16]string{
+	1: "actor",
+	2: "artifactID",
+}
+
+type ExecutionArtifactResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionArtifactResult() *ExecutionArtifactResult {
+	return &ExecutionArtifactResult{}
+}
+
+func (p *ExecutionArtifactResult) InitDefault() {
+}
+
+var ExecutionArtifactResult_Success_DEFAULT *Reply
+
+func (p *ExecutionArtifactResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionArtifactResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionArtifactResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionArtifactResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionArtifactResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionArtifactResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionArtifactResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionArtifactsArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	After string `thrift:"after,2" frugal:"2,default,string" json:"after"`
+	Limit int32  `thrift:"limit,3" frugal:"3,default,i32" json:"limit"`
+}
+
+func NewExecutionArtifactsArgs() *ExecutionArtifactsArgs {
+	return &ExecutionArtifactsArgs{}
+}
+
+func (p *ExecutionArtifactsArgs) InitDefault() {
+}
+
+var ExecutionArtifactsArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionArtifactsArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionArtifactsArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionArtifactsArgs) GetAfter() (v string) {
+	return p.After
+}
+
+func (p *ExecutionArtifactsArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *ExecutionArtifactsArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionArtifactsArgs) SetAfter(val string) {
+	p.After = val
+}
+func (p *ExecutionArtifactsArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *ExecutionArtifactsArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionArtifactsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionArtifactsArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionArtifactsArgs = map[int16]string{
+	1: "actor",
+	2: "after",
+	3: "limit",
+}
+
+type ExecutionArtifactsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionArtifactsResult() *ExecutionArtifactsResult {
+	return &ExecutionArtifactsResult{}
+}
+
+func (p *ExecutionArtifactsResult) InitDefault() {
+}
+
+var ExecutionArtifactsResult_Success_DEFAULT *Reply
+
+func (p *ExecutionArtifactsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionArtifactsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionArtifactsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionArtifactsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionArtifactsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionArtifactsResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionArtifactsResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionReadArtifactArgs struct {
+	Actor      *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ArtifactID string `thrift:"artifactID,2" frugal:"2,default,string" json:"artifactID"`
+	Offset     int64  `thrift:"offset,3" frugal:"3,default,i64" json:"offset"`
+	Limit      int32  `thrift:"limit,4" frugal:"4,default,i32" json:"limit"`
+}
+
+func NewExecutionReadArtifactArgs() *ExecutionReadArtifactArgs {
+	return &ExecutionReadArtifactArgs{}
+}
+
+func (p *ExecutionReadArtifactArgs) InitDefault() {
+}
+
+var ExecutionReadArtifactArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionReadArtifactArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionReadArtifactArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionReadArtifactArgs) GetArtifactID() (v string) {
+	return p.ArtifactID
+}
+
+func (p *ExecutionReadArtifactArgs) GetOffset() (v int64) {
+	return p.Offset
+}
+
+func (p *ExecutionReadArtifactArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *ExecutionReadArtifactArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionReadArtifactArgs) SetArtifactID(val string) {
+	p.ArtifactID = val
+}
+func (p *ExecutionReadArtifactArgs) SetOffset(val int64) {
+	p.Offset = val
+}
+func (p *ExecutionReadArtifactArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *ExecutionReadArtifactArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionReadArtifactArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionReadArtifactArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionReadArtifactArgs = map[int16]string{
+	1: "actor",
+	2: "artifactID",
+	3: "offset",
+	4: "limit",
+}
+
+type ExecutionReadArtifactResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionReadArtifactResult() *ExecutionReadArtifactResult {
+	return &ExecutionReadArtifactResult{}
+}
+
+func (p *ExecutionReadArtifactResult) InitDefault() {
+}
+
+var ExecutionReadArtifactResult_Success_DEFAULT *Reply
+
+func (p *ExecutionReadArtifactResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionReadArtifactResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionReadArtifactResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionReadArtifactResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionReadArtifactResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionReadArtifactResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionReadArtifactResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionDeleteArtifactArgs struct {
+	Actor      *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ArtifactID string `thrift:"artifactID,2" frugal:"2,default,string" json:"artifactID"`
+}
+
+func NewExecutionDeleteArtifactArgs() *ExecutionDeleteArtifactArgs {
+	return &ExecutionDeleteArtifactArgs{}
+}
+
+func (p *ExecutionDeleteArtifactArgs) InitDefault() {
+}
+
+var ExecutionDeleteArtifactArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionDeleteArtifactArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionDeleteArtifactArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionDeleteArtifactArgs) GetArtifactID() (v string) {
+	return p.ArtifactID
+}
+func (p *ExecutionDeleteArtifactArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionDeleteArtifactArgs) SetArtifactID(val string) {
+	p.ArtifactID = val
+}
+
+func (p *ExecutionDeleteArtifactArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionDeleteArtifactArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionDeleteArtifactArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionDeleteArtifactArgs = map[int16]string{
+	1: "actor",
+	2: "artifactID",
+}
+
+type ExecutionDeleteArtifactResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionDeleteArtifactResult() *ExecutionDeleteArtifactResult {
+	return &ExecutionDeleteArtifactResult{}
+}
+
+func (p *ExecutionDeleteArtifactResult) InitDefault() {
+}
+
+var ExecutionDeleteArtifactResult_Success_DEFAULT *Reply
+
+func (p *ExecutionDeleteArtifactResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionDeleteArtifactResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionDeleteArtifactResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionDeleteArtifactResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionDeleteArtifactResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionDeleteArtifactResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionDeleteArtifactResult = map[int16]string{
 	0: "success",
 }
 

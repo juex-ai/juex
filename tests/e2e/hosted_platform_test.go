@@ -68,7 +68,7 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	databaseURL.Path = "/" + f.pool.Config().ConnConfig.Database
-	app, err := managed.OpenExecution(ctx, managed.ExecutionConfig{DatabaseURL: databaseURL.String(), ManagementAddress: managementListener.Addr().String(), Credentials: identity, HostedConfiguration: configPath, HostedListen: listener.Addr().String()})
+	app, err := managed.OpenExecution(ctx, managed.ExecutionConfig{DatabaseURL: databaseURL.String(), ManagementAddress: managementListener.Addr().String(), Credentials: identity, HostedConfiguration: configPath, HostedListen: listener.Addr().String(), BlobDirectory: filepath.Join(t.TempDir(), "blobs")})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,6 +33,8 @@ export function errorText(error: unknown): string {
       conflict: '资源状态已改变或请求已存在，请刷新后重试。',
       model_unavailable: '所选模型不可用，请在 Fleet 或 Agent 设置中选择可用模型。',
       rate_limited: '尝试次数过多，请稍后重试。',
+      storage_full: '平台文件存储已满，请删除不再需要的文件，或联系部署管理员增加容量。',
+      execution_unavailable: '执行服务暂时不可用，请稍后重试。',
       email_unavailable: '此部署尚未配置邮件服务，请联系部署管理员。',
       invalid_request: '请检查输入内容或请求格式。',
       internal_error: '服务暂时不可用，请稍后重试。',

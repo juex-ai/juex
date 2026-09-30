@@ -21,6 +21,7 @@ type Service struct {
 	Store     Repository
 	Authority Authority
 	Hosted    *HostedManager
+	Blobs     *ArtifactManager
 }
 
 func validDigest(value string) bool {

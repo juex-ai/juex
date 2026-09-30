@@ -116,6 +116,14 @@ func New(options Options) (http.Handler, error) {
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/workers", s.signedIn(s.createWorker))
 	}
 	if options.Execution != nil {
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/artifacts", s.signedIn(s.beginArtifact))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/artifacts", s.signedIn(s.artifacts))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/artifacts/{artifact}", s.signedIn(s.artifact))
+		mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/artifacts/{artifact}/chunks", s.signedIn(s.writeArtifact))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/artifacts/{artifact}/chunks", s.signedIn(s.readArtifact))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/artifacts/{artifact}/commit", s.signedIn(s.commitArtifact))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/artifacts/{artifact}/delete", s.signedIn(s.deleteArtifact))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/artifacts/{artifact}/download", s.signedIn(s.downloadArtifact))
 		mux.HandleFunc("GET /api/tenants/{tenant}/device-pairings/{pair}", s.signedIn(s.previewPair))
 		mux.HandleFunc("POST /api/tenants/{tenant}/device-pairings/{pair}", s.signedIn(s.approvePair))
 		mux.HandleFunc("GET /api/tenants/{tenant}/users/{owner}/devices", s.signedIn(s.devices))
@@ -158,7 +166,11 @@ func (s *Server) guard(next http.Handler) http.Handler {
 					respond(w, nil, management.ErrDenied)
 					return
 				}
-				r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+				var bodyLimit int64 = 64 << 10
+				if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/chunks") {
+					bodyLimit = 512 << 10
+				}
+				r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 			}
 			if strings.HasPrefix(r.URL.Path, "/api/auth/") && r.Method == "POST" && !s.allowIP(r.RemoteAddr) {
 				respond(w, nil, management.ErrRateLimit)
@@ -262,6 +274,10 @@ func respond(w http.ResponseWriter, value any, err error) {
 		case errors.Is(err, management.ErrRateLimit):
 			status, code, message = 429, "rate_limited", err.Error()
 			w.Header().Set("Retry-After", "900")
+		case errors.Is(err, execprotocol.ErrQuota):
+			status, code, message = http.StatusInsufficientStorage, "storage_full", "Platform file storage is full; remove unused files or ask the operator to increase capacity"
+		case errors.Is(err, execprotocol.ErrUnavailable):
+			status, code, message = 503, "execution_unavailable", err.Error()
 		case errors.Is(err, management.ErrMailUnavailable):
 			status, code, message = 503, "email_unavailable", err.Error()
 		case errors.Is(err, managedruntime.ErrModelUnavailable):

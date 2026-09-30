@@ -12,6 +12,13 @@ import (
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	BeginArtifact(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	WriteArtifact(ctx context.Context, actor *platform.Actor, artifactID string, chunkJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	CommitArtifact(ctx context.Context, actor *platform.Actor, artifactID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Artifact(ctx context.Context, actor *platform.Actor, artifactID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Artifacts(ctx context.Context, actor *platform.Actor, after string, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ReadArtifact(ctx context.Context, actor *platform.Actor, artifactID string, offset int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	DeleteArtifact(ctx context.Context, actor *platform.Actor, artifactID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Events(ctx context.Context, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AcknowledgeEvents(ctx context.Context, eventIDs []string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AcknowledgeOutput(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, cursor int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -60,6 +67,41 @@ type kExecutionClient struct {
 func (p *kExecutionClient) Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Health(ctx)
+}
+
+func (p *kExecutionClient) BeginArtifact(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.BeginArtifact(ctx, actor, requestJSON)
+}
+
+func (p *kExecutionClient) WriteArtifact(ctx context.Context, actor *platform.Actor, artifactID string, chunkJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.WriteArtifact(ctx, actor, artifactID, chunkJSON)
+}
+
+func (p *kExecutionClient) CommitArtifact(ctx context.Context, actor *platform.Actor, artifactID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.CommitArtifact(ctx, actor, artifactID)
+}
+
+func (p *kExecutionClient) Artifact(ctx context.Context, actor *platform.Actor, artifactID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Artifact(ctx, actor, artifactID)
+}
+
+func (p *kExecutionClient) Artifacts(ctx context.Context, actor *platform.Actor, after string, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Artifacts(ctx, actor, after, limit)
+}
+
+func (p *kExecutionClient) ReadArtifact(ctx context.Context, actor *platform.Actor, artifactID string, offset int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ReadArtifact(ctx, actor, artifactID, offset, limit)
+}
+
+func (p *kExecutionClient) DeleteArtifact(ctx context.Context, actor *platform.Actor, artifactID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.DeleteArtifact(ctx, actor, artifactID)
 }
 
 func (p *kExecutionClient) Events(ctx context.Context, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {

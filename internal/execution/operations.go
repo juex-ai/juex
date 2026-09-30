@@ -9,10 +9,6 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
-func sameGeneration(a, b Scope) bool {
-	return a.TenantID == b.TenantID && a.UserID == b.UserID && a.FleetID == b.FleetID && a.AgentID == b.AgentID && a.ActorID == b.ActorID && a.ActorAuthorizationEpoch == b.ActorAuthorizationEpoch && a.MembershipExecutionEpoch == b.MembershipExecutionEpoch && a.RemovalEpoch == b.RemovalEpoch && a.AgentExecutionEpoch == b.AgentExecutionEpoch
-}
-
 func permits(device Device, scope Scope, kind string) bool {
 	return device.Status == "active" && scope.CanExecute && device.TenantID == scope.TenantID && device.UserID == scope.UserID && device.FleetID == scope.FleetID && device.RemovalEpoch == scope.RemovalEpoch && slices.Contains(device.Grants[scope.AgentID], execprotocol.RequiredCapability(kind))
 }

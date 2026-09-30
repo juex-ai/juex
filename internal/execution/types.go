@@ -28,6 +28,10 @@ type Scope struct {
 	AgentExecutionEpoch int64  `json:"agent_execution_epoch"`
 }
 
+func (s Scope) SameAuthority(other Scope) bool {
+	return s.TenantID == other.TenantID && s.UserID == other.UserID && s.FleetID == other.FleetID && s.AgentID == other.AgentID && s.ActorID == other.ActorID && s.ActorAuthorizationEpoch == other.ActorAuthorizationEpoch && s.MembershipExecutionEpoch == other.MembershipExecutionEpoch && s.RemovalEpoch == other.RemovalEpoch && s.AgentExecutionEpoch == other.AgentExecutionEpoch
+}
+
 type Authority interface {
 	Owner(context.Context, string, string, string, bool) (OwnerScope, error)
 	Agent(context.Context, string, string, string, bool) (Scope, error)

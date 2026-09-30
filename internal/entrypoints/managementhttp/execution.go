@@ -10,6 +10,7 @@ import (
 )
 
 type Execution interface {
+	ArtifactAPI
 	PreviewPair(context.Context, string, string, string) (execution.Pairing, error)
 	ApprovePair(context.Context, string, string, string, map[string][]execprotocol.Capability) (execution.Pairing, error)
 	Devices(context.Context, string, string, string) ([]execution.Device, error)

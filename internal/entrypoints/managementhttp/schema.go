@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/execution"
+	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
@@ -25,6 +26,7 @@ func GenerateTypeScript() ([]byte, error) {
 		reflect.TypeFor[management.FleetOverview](), reflect.TypeFor[management.Model](),
 		reflect.TypeFor[management.AgentDetail](),
 		reflect.TypeFor[execution.Device](), reflect.TypeFor[execution.Pairing](),
+		reflect.TypeFor[execution.Artifact](), reflect.TypeFor[execution.ArtifactUpload](), reflect.TypeFor[execprotocol.FileChunk](),
 		reflect.TypeFor[management.AgentConfig](), reflect.TypeFor[ConfigureAgentRequest](), reflect.TypeFor[ArchiveAgentRequest](),
 		reflect.TypeFor[managedruntime.Thread](), reflect.TypeFor[managedruntime.Timeline](), reflect.TypeFor[managedruntime.CompactionRequest](), reflect.TypeFor[managedruntime.InputRequest](), reflect.TypeFor[managedruntime.InputReceipt](), reflect.TypeFor[WorkerRequest](), reflect.TypeFor[llm.Message](),
 	} {
@@ -98,6 +100,9 @@ func (g *typeGenerator) fields(typ reflect.Type) (string, error) {
 }
 
 func (g *typeGenerator) render(typ reflect.Type) (string, error) {
+	if typ == reflect.TypeFor[[]byte]() {
+		return "string", nil
+	}
 	if typ == reflect.TypeFor[json.RawMessage]() {
 		return "unknown", nil
 	}

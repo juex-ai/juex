@@ -115,6 +115,14 @@
 .management-composer small { font-size: 10px; color: var(--juex-ink-600); }
 .management-composer span { display: flex; gap: 6px; }
 .management-devices { margin-top: 28px; }
+.management-artifact-dialog { width: min(780px,calc(100vw - 32px)); max-width: 780px; max-height: 90dvh; overflow-y: auto; }
+.management-file-upload { padding: 16px; border: 1px solid var(--juex-cream-300); border-radius: 6px; }
+.management-file-progress { margin-top: 12px; font-size: 12px; color: var(--juex-ink-600); }
+.management-artifact-list { min-width: 0; }
+.management-artifact-row { padding: 16px 0; border-bottom: 1px solid var(--juex-cream-200); }
+.management-artifact-row strong { font-size: 14px; overflow-wrap: anywhere; }
+.management-artifact-row small,.management-artifact-row code { display: block; margin-top: 6px; font-size: 11px; color: var(--juex-ink-600); overflow-wrap: anywhere; }
+.management-artifact-row .management-row-actions { flex-wrap: wrap; margin-top: 12px; font-size: 12px; }
 .management-pair-page { max-width: 760px; margin: 40px auto; padding: 24px; }
 .management-pair-card { padding: 28px; margin-top: 24px; }
 .management-pair-card h2 { font-size: 22px; margin: 14px 0 8px; }

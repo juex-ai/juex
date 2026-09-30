@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ArrowUp, GitBranch, LoaderCircle, Minimize2, Square } from 'lucide-react'
+import { ArrowLeft, ArrowUp, FolderOpen, GitBranch, LoaderCircle, Minimize2, Square } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,6 +11,7 @@ import { APIError, api, errorText } from './api'
 import { Empty, Failure, Field, Loading, Notice, PageHeading } from './components'
 import { useResource } from './use-resource'
 import { projectTranscript } from './timeline'
+import { ArtifactDialog } from './artifacts'
 import type { AgentDetail, CompactionRequest, Event, InputReceipt, InputRequest, Message, TenantAccess, Thread, Timeline, User } from './schema'
 
 const stateText: Record<string, string> = { idle: '就绪', queued: '排队中', running: '处理中', waiting: '等待工具结果', failed: '本轮失败', blocked: '等待处理' }
@@ -24,6 +25,7 @@ export function ConversationPage({ tenant, user }: { tenant: TenantAccess; user:
   const detail = useResource<AgentDetail>(base, revision)
   const threads = useResource<Thread[]>(`${base}/threads`, revision)
   const [workerName, setWorkerName] = useState<string | null>(null)
+  const [filesOpen, setFilesOpen] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [liveThread, setLiveThread] = useState<Thread | null>(null)
@@ -39,7 +41,8 @@ export function ConversationPage({ tenant, user }: { tenant: TenantAccess; user:
   const value = detail.data
   const back = `/t/${tenant.id}/${value.owner_id === user.id ? 'fleet' : `users/${value.owner_id}`}`
   return <>
-    <PageHeading title={value.agent.name} description={value.owner_id !== user.id ? `正在代管此 Agent · 操作者：${user.email}` : 'Main 和 Workers 分别保存对话上下文。'} actions={<Button variant="outline" asChild><Link to={back}><ArrowLeft />返回 Fleet</Link></Button>} />
+    <PageHeading title={value.agent.name} description={value.owner_id !== user.id ? `正在代管此 Agent · 操作者：${user.email}` : 'Main 和 Workers 分别保存对话上下文。'} actions={<><Button variant="outline" onClick={() => setFilesOpen(true)}><FolderOpen />文件与产物</Button><Button variant="outline" asChild><Link to={back}><ArrowLeft />返回 Fleet</Link></Button></>} />
+    {filesOpen && <ArtifactDialog key={base} base={base} agent={value.agent.id} writable={value.can_execute} close={() => setFilesOpen(false)} />}
     {!value.can_execute && <Notice>此 Agent 或所属成员已停用，当前仅可查看历史。</Notice>}
     <div className="management-conversation-layout">
       <aside className="management-thread-list"><div className="management-thread-heading"><strong>对话</strong><Button variant="ghost" size="icon" aria-label="创建 Worker" disabled={!thread || !value.can_execute} onClick={() => { setError(''); setWorkerName('') }}><GitBranch size={16} /></Button></div><nav aria-label="Agent 对话">{threads.data.map(item => { const current = liveThread?.id === item.id && liveThread.sequence >= item.sequence ? liveThread : item; return <button key={item.id} className={item.id === thread?.id ? 'active' : ''} onClick={() => setSearch(item.kind === 'main' ? {} : { thread: item.id })}><span>{item.name}</span><small>{item.kind === 'main' ? 'Main' : 'Worker'} · {stateText[current.state] ?? current.state}</small></button> })}</nav></aside>

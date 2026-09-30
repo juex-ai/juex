@@ -2,6 +2,8 @@
 
 > [English](README.md) | 中文
 
+Execution 同时拥有不可变文件对象。PostgreSQL 分配 ID，保存归属、可见范围和容量预留；必填的 `--blob-root` 是部署方拥有的绝对路径私有目录，不承担业务身份。私有附件属于单个 Agent；明确发布的 Fleet 产物可供同一 Tenant/User/Fleet 的其他 Agents 读取。只有文件持久落盘且数据库确认发布后才可共享。单文件上限为 256 MiB，按 256 KiB 分块传输，以 SHA-256 和持久字节游标校验、续传。可配置存储池默认 20 GiB，最多接纳 65,536 个存续对象（包含空文件）。删除在实际清理文件后才释放容量，中断的清理会恢复执行。发布前（包括完整文件校验后）重新检查授权。Dashboard 的上传、下载和引用使用此 API；大文件内容不进入模型工具输出。
+
 Execution 拥有执行环境、外部操作身份和持久结果。Agent Activation 不拥有设备连接或其进程的生命周期。
 依赖位置的请求明确指定执行环境，进程与连接句柄始终绑定原环境和 Agent。
 
@@ -13,7 +15,7 @@ Runtime 提交时还必须携带原 Turn 的授权代际；刷新当前权限不
 原生设备主动建立加密连接。配对先在 Dashboard 绑定所属用户选择的 Agent／能力，再在本机核对 Tenant 和账号并确认。
 仅 Web 批准不会激活设备凭据。设备凭据独立于人的登录会话；每个 Tenant/User 绑定使用独立私有状态目录。
 
-`juex-execution serve` 运行平台服务。`juex-executor --state /absolute/private/directory pair --server https://platform.example` 绑定 Linux/macOS 设备，`run` 维持前台连接。
+`juex-execution serve --blob-root /var/lib/juex/execution/blobs` 运行平台服务。`juex-executor --state /absolute/private/directory pair --server https://platform.example` 绑定 Linux/macOS 设备，`run` 维持前台连接。
 HTTPS 反向代理将 `/device/` 路由到 Execution，将 Dashboard/API 路由到 Management。
 
 同一绑定支持 `start`、`stop`、`status`、`logs --tail 200` 和 `autostart enable|disable`。

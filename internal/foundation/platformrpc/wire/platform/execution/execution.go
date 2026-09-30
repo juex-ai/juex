@@ -20,6 +20,55 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"BeginArtifact": kitex.NewMethodInfo(
+		beginArtifactHandler,
+		newExecutionBeginArtifactArgs,
+		newExecutionBeginArtifactResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"WriteArtifact": kitex.NewMethodInfo(
+		writeArtifactHandler,
+		newExecutionWriteArtifactArgs,
+		newExecutionWriteArtifactResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"CommitArtifact": kitex.NewMethodInfo(
+		commitArtifactHandler,
+		newExecutionCommitArtifactArgs,
+		newExecutionCommitArtifactResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"Artifact": kitex.NewMethodInfo(
+		artifactHandler,
+		newExecutionArtifactArgs,
+		newExecutionArtifactResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"Artifacts": kitex.NewMethodInfo(
+		artifactsHandler,
+		newExecutionArtifactsArgs,
+		newExecutionArtifactsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ReadArtifact": kitex.NewMethodInfo(
+		readArtifactHandler,
+		newExecutionReadArtifactArgs,
+		newExecutionReadArtifactResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"DeleteArtifact": kitex.NewMethodInfo(
+		deleteArtifactHandler,
+		newExecutionDeleteArtifactArgs,
+		newExecutionDeleteArtifactResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Events": kitex.NewMethodInfo(
 		eventsHandler,
 		newExecutionEventsArgs,
@@ -200,6 +249,132 @@ func newExecutionHealthArgs() interface{} {
 
 func newExecutionHealthResult() interface{} {
 	return platform.NewExecutionHealthResult()
+}
+
+func beginArtifactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionBeginArtifactArgs)
+	realResult := result.(*platform.ExecutionBeginArtifactResult)
+	success, err := handler.(platform.Execution).BeginArtifact(ctx, realArg.Actor, realArg.RequestJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionBeginArtifactArgs() interface{} {
+	return platform.NewExecutionBeginArtifactArgs()
+}
+
+func newExecutionBeginArtifactResult() interface{} {
+	return platform.NewExecutionBeginArtifactResult()
+}
+
+func writeArtifactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionWriteArtifactArgs)
+	realResult := result.(*platform.ExecutionWriteArtifactResult)
+	success, err := handler.(platform.Execution).WriteArtifact(ctx, realArg.Actor, realArg.ArtifactID, realArg.ChunkJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionWriteArtifactArgs() interface{} {
+	return platform.NewExecutionWriteArtifactArgs()
+}
+
+func newExecutionWriteArtifactResult() interface{} {
+	return platform.NewExecutionWriteArtifactResult()
+}
+
+func commitArtifactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionCommitArtifactArgs)
+	realResult := result.(*platform.ExecutionCommitArtifactResult)
+	success, err := handler.(platform.Execution).CommitArtifact(ctx, realArg.Actor, realArg.ArtifactID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionCommitArtifactArgs() interface{} {
+	return platform.NewExecutionCommitArtifactArgs()
+}
+
+func newExecutionCommitArtifactResult() interface{} {
+	return platform.NewExecutionCommitArtifactResult()
+}
+
+func artifactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionArtifactArgs)
+	realResult := result.(*platform.ExecutionArtifactResult)
+	success, err := handler.(platform.Execution).Artifact(ctx, realArg.Actor, realArg.ArtifactID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionArtifactArgs() interface{} {
+	return platform.NewExecutionArtifactArgs()
+}
+
+func newExecutionArtifactResult() interface{} {
+	return platform.NewExecutionArtifactResult()
+}
+
+func artifactsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionArtifactsArgs)
+	realResult := result.(*platform.ExecutionArtifactsResult)
+	success, err := handler.(platform.Execution).Artifacts(ctx, realArg.Actor, realArg.After, realArg.Limit)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionArtifactsArgs() interface{} {
+	return platform.NewExecutionArtifactsArgs()
+}
+
+func newExecutionArtifactsResult() interface{} {
+	return platform.NewExecutionArtifactsResult()
+}
+
+func readArtifactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionReadArtifactArgs)
+	realResult := result.(*platform.ExecutionReadArtifactResult)
+	success, err := handler.(platform.Execution).ReadArtifact(ctx, realArg.Actor, realArg.ArtifactID, realArg.Offset, realArg.Limit)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionReadArtifactArgs() interface{} {
+	return platform.NewExecutionReadArtifactArgs()
+}
+
+func newExecutionReadArtifactResult() interface{} {
+	return platform.NewExecutionReadArtifactResult()
+}
+
+func deleteArtifactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionDeleteArtifactArgs)
+	realResult := result.(*platform.ExecutionDeleteArtifactResult)
+	success, err := handler.(platform.Execution).DeleteArtifact(ctx, realArg.Actor, realArg.ArtifactID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionDeleteArtifactArgs() interface{} {
+	return platform.NewExecutionDeleteArtifactArgs()
+}
+
+func newExecutionDeleteArtifactResult() interface{} {
+	return platform.NewExecutionDeleteArtifactResult()
 }
 
 func eventsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -468,6 +643,87 @@ func (p *kClient) Health(ctx context.Context) (r *platform.Reply, err error) {
 	var _args platform.ExecutionHealthArgs
 	var _result platform.ExecutionHealthResult
 	if err = p.c.Call(ctx, "Health", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) BeginArtifact(ctx context.Context, actor *platform.Actor, requestJSON string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionBeginArtifactArgs
+	_args.Actor = actor
+	_args.RequestJSON = requestJSON
+	var _result platform.ExecutionBeginArtifactResult
+	if err = p.c.Call(ctx, "BeginArtifact", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) WriteArtifact(ctx context.Context, actor *platform.Actor, artifactID string, chunkJSON string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionWriteArtifactArgs
+	_args.Actor = actor
+	_args.ArtifactID = artifactID
+	_args.ChunkJSON = chunkJSON
+	var _result platform.ExecutionWriteArtifactResult
+	if err = p.c.Call(ctx, "WriteArtifact", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) CommitArtifact(ctx context.Context, actor *platform.Actor, artifactID string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionCommitArtifactArgs
+	_args.Actor = actor
+	_args.ArtifactID = artifactID
+	var _result platform.ExecutionCommitArtifactResult
+	if err = p.c.Call(ctx, "CommitArtifact", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Artifact(ctx context.Context, actor *platform.Actor, artifactID string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionArtifactArgs
+	_args.Actor = actor
+	_args.ArtifactID = artifactID
+	var _result platform.ExecutionArtifactResult
+	if err = p.c.Call(ctx, "Artifact", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Artifacts(ctx context.Context, actor *platform.Actor, after string, limit int32) (r *platform.Reply, err error) {
+	var _args platform.ExecutionArtifactsArgs
+	_args.Actor = actor
+	_args.After = after
+	_args.Limit = limit
+	var _result platform.ExecutionArtifactsResult
+	if err = p.c.Call(ctx, "Artifacts", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ReadArtifact(ctx context.Context, actor *platform.Actor, artifactID string, offset int64, limit int32) (r *platform.Reply, err error) {
+	var _args platform.ExecutionReadArtifactArgs
+	_args.Actor = actor
+	_args.ArtifactID = artifactID
+	_args.Offset = offset
+	_args.Limit = limit
+	var _result platform.ExecutionReadArtifactResult
+	if err = p.c.Call(ctx, "ReadArtifact", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) DeleteArtifact(ctx context.Context, actor *platform.Actor, artifactID string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionDeleteArtifactArgs
+	_args.Actor = actor
+	_args.ArtifactID = artifactID
+	var _result platform.ExecutionDeleteArtifactResult
+	if err = p.c.Call(ctx, "DeleteArtifact", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

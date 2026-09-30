@@ -34,6 +34,13 @@ service Runtime {
 
 service Execution {
   Reply Health()
+  Reply BeginArtifact(1: Actor actor, 2: string requestJSON)
+  Reply WriteArtifact(1: Actor actor, 2: string artifactID, 3: string chunkJSON)
+  Reply CommitArtifact(1: Actor actor, 2: string artifactID)
+  Reply Artifact(1: Actor actor, 2: string artifactID)
+  Reply Artifacts(1: Actor actor, 2: string after, 3: i32 limit)
+  Reply ReadArtifact(1: Actor actor, 2: string artifactID, 3: i64 offset, 4: i32 limit)
+  Reply DeleteArtifact(1: Actor actor, 2: string artifactID)
   Reply Events(1: i32 limit)
   Reply AcknowledgeEvents(1: list<string> eventIDs)
   Reply AcknowledgeOutput(1: Actor actor, 2: string environmentID, 3: string operationID, 4: i64 cursor)

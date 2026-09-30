@@ -7,6 +7,18 @@ An Agent Activation does not own a device connection or the lifetime of its
 processes. Location-dependent requests use an explicit environment; process and
 connection handles remain bound to that environment and Agent.
 
+Execution also owns immutable file objects. PostgreSQL assigns IDs, ownership,
+visibility and capacity reservations; the required `--blob-root` is an absolute,
+private operator-owned directory, not business identity. Private attachments
+belong to one Agent. Explicitly published Fleet artifacts can be read by other
+Agents of the same Tenant/User/Fleet. Uploads remain private until both durable
+bytes and database publication succeed. Files are limited to 256 MiB, transferred
+in 256 KiB chunks with SHA-256 and durable byte cursors. The configurable pool
+defaults to 20 GiB and admits at most 65,536 live objects, including empty files.
+Deletion releases capacity only after physical cleanup; interrupted purges resume.
+Fresh authority fences publication, including after hashing. Dashboard uploads,
+downloads and references use this API; large bytes never enter model tool output.
+
 The platform service owns the `execution` PostgreSQL schema. Management and
 Runtime call its Kitex API over mutually authenticated TLS; device administration
 is restricted to Management's service identity. Current Management authority
@@ -24,7 +36,7 @@ confirmation showing Tenant and account. Browser approval alone creates no
 device credential. The device holds the credential independently of human
 sessions. Each Tenant/User enrollment has its own private state directory.
 
-`juex-execution serve` runs the platform service. `juex-executor --state
+`juex-execution serve --blob-root /var/lib/juex/execution/blobs` runs the platform service. `juex-executor --state
 /absolute/private/directory pair --server https://platform.example` enrolls a
 Linux/macOS device; `run` maintains its foreground connection. An HTTPS reverse
 proxy routes `/device/` to Execution and the Dashboard/API to Management.

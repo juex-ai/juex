@@ -20,7 +20,8 @@ import (
 )
 
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
-	var address, httpAddress, management, credentials, hostedConfiguration, hostedAddress string
+	var address, httpAddress, management, credentials, hostedConfiguration, hostedAddress, blobDirectory string
+	var blobCapacity int64
 	root := &cobra.Command{Use: "juex-execution", Short: "Run the managed execution service", SilenceUsage: true, SilenceErrors: true}
 	root.SetArgs(args)
 	root.SetOut(out)
@@ -29,7 +30,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Execution service identity")
 	serve := &cobra.Command{Use: "serve", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		identity := platformrpc.CredentialsAt(credentials, "execution")
-		app, err := managed.OpenExecution(cmd.Context(), managed.ExecutionConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: management, Credentials: identity, HostedConfiguration: hostedConfiguration, HostedListen: hostedAddress})
+		app, err := managed.OpenExecution(cmd.Context(), managed.ExecutionConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: management, Credentials: identity, HostedConfiguration: hostedConfiguration, HostedListen: hostedAddress, BlobDirectory: blobDirectory, BlobCapacity: blobCapacity})
 		if err != nil {
 			return err
 		}
@@ -123,6 +124,8 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	serve.Flags().StringVar(&httpAddress, "device-listen", "0.0.0.0:8683", "Device HTTP listen address behind the HTTPS reverse proxy")
 	serve.Flags().StringVar(&hostedConfiguration, "hosted-config", os.Getenv("JUEX_HOSTED_CONFIG"), "Operator-owned hosted backend JSON configuration")
 	serve.Flags().StringVar(&hostedAddress, "hosted-listen", "0.0.0.0:8684", "Dedicated hosted device TLS endpoint (connect only)")
+	serve.Flags().StringVar(&blobDirectory, "blob-root", os.Getenv("JUEX_BLOB_ROOT"), "Absolute operator-owned directory for platform file bytes (required)")
+	serve.Flags().Int64Var(&blobCapacity, "blob-capacity", 20<<30, "Maximum reserved platform file bytes")
 	root.AddCommand(serve)
 	return root.ExecuteContext(ctx)
 }

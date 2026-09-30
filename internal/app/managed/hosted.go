@@ -7,7 +7,9 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/juex-ai/juex/internal/execution"
@@ -55,6 +57,9 @@ func (e *Execution) configureHosted(ctx context.Context, path, listen, caPath st
 	if err := json.Unmarshal(data, &config); err != nil {
 		return err
 	}
+	if err := separateBlobWorkspace(e.blobDirectory, config.Backend.WorkspaceRoot); err != nil {
+		return err
+	}
 	_, port, err := net.SplitHostPort(listen)
 	server, urlErr := url.Parse(config.Backend.Server)
 	if err != nil || urlErr != nil || port != strconv.Itoa(int(config.Backend.Control.Port())) || server.Hostname() != "execution" {
@@ -91,5 +96,26 @@ func (e *Execution) configureHosted(ctx context.Context, path, listen, caPath st
 	}
 	e.hosted = backend
 	e.Service.Hosted = &execution.HostedManager{Store: store, Authority: e.Service.Authority, Backend: hostedBackend{backend}, Key: key, Idle: time.Duration(config.IdleSeconds) * time.Second, Memory: config.Memory, NanoCPUs: config.NanoCPUs, StorageIdentity: config.Backend.StorageIdentity, WorkspaceBytes: config.WorkspaceBytes, WorkspaceInodes: config.WorkspaceInodes}
+	return nil
+}
+
+func separateBlobWorkspace(blobRoot, workspaceRoot string) error {
+	blobRoot, err := filepath.EvalSymlinks(blobRoot)
+	if err != nil {
+		return err
+	}
+	workspaceRoot, err = filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	for _, paths := range [][2]string{{blobRoot, workspaceRoot}, {workspaceRoot, blobRoot}} {
+		relative, err := filepath.Rel(paths[0], paths[1])
+		if err != nil {
+			return err
+		}
+		if relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return errors.New("platform blob storage must not overlap hosted Workspace storage")
+		}
+	}
 	return nil
 }

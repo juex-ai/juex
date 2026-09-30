@@ -30,6 +30,9 @@ var hostedStorageSchema string
 //go:embed observed_output_schema.sql
 var observedOutputSchema string
 
+//go:embed artifacts_schema.sql
+var artifactsSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -43,7 +46,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.migrations')); CREATE SCHEMA IF NOT EXISTS execution; CREATE TABLE IF NOT EXISTS execution.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, eventsSchema, hostedSchema, hostedStorageSchema, observedOutputSchema}
+	migrations := []string{schema, eventsSchema, hostedSchema, hostedStorageSchema, observedOutputSchema, artifactsSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM execution.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
