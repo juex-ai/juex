@@ -586,11 +586,13 @@ type Memory interface {
 
 	Domains(ctx context.Context, accessJSON string, requestJSON string) (r *Reply, err error)
 
-	Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool) (r *Reply, err error)
+	Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool, commandID string) (r *Reply, err error)
 
 	Review(ctx context.Context, scopeJSON string, bindingJSON string) (r *Reply, err error)
 
-	Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string) (r *Reply, err error)
+	Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string, commandID string) (r *Reply, err error)
+
+	CancelCommand(ctx context.Context, scopeJSON string, commandID string) (r *Reply, err error)
 
 	ReviewResult_(ctx context.Context, accessJSON string, threadID string, reviewID string) (r *Reply, err error)
 
@@ -1124,6 +1126,7 @@ type MemoryProposeArgs struct {
 	ThreadID     string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
 	ProposalJSON string `thrift:"proposalJSON,3" frugal:"3,default,string" json:"proposalJSON"`
 	Automatic    bool   `thrift:"automatic,4" frugal:"4,default,bool" json:"automatic"`
+	CommandID    string `thrift:"commandID,5" frugal:"5,default,string" json:"commandID"`
 }
 
 func NewMemoryProposeArgs() *MemoryProposeArgs {
@@ -1148,6 +1151,10 @@ func (p *MemoryProposeArgs) GetProposalJSON() (v string) {
 func (p *MemoryProposeArgs) GetAutomatic() (v bool) {
 	return p.Automatic
 }
+
+func (p *MemoryProposeArgs) GetCommandID() (v string) {
+	return p.CommandID
+}
 func (p *MemoryProposeArgs) SetScopeJSON(val string) {
 	p.ScopeJSON = val
 }
@@ -1159,6 +1166,9 @@ func (p *MemoryProposeArgs) SetProposalJSON(val string) {
 }
 func (p *MemoryProposeArgs) SetAutomatic(val bool) {
 	p.Automatic = val
+}
+func (p *MemoryProposeArgs) SetCommandID(val string) {
+	p.CommandID = val
 }
 
 func (p *MemoryProposeArgs) String() string {
@@ -1173,6 +1183,7 @@ var fieldIDToName_MemoryProposeArgs = map[int16]string{
 	2: "threadID",
 	3: "proposalJSON",
 	4: "automatic",
+	5: "commandID",
 }
 
 type MemoryProposeResult struct {
@@ -1293,6 +1304,7 @@ type MemoryDecideArgs struct {
 	ScopeJSON    string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
 	BindingJSON  string `thrift:"bindingJSON,2" frugal:"2,default,string" json:"bindingJSON"`
 	DecisionJSON string `thrift:"decisionJSON,3" frugal:"3,default,string" json:"decisionJSON"`
+	CommandID    string `thrift:"commandID,4" frugal:"4,default,string" json:"commandID"`
 }
 
 func NewMemoryDecideArgs() *MemoryDecideArgs {
@@ -1313,6 +1325,10 @@ func (p *MemoryDecideArgs) GetBindingJSON() (v string) {
 func (p *MemoryDecideArgs) GetDecisionJSON() (v string) {
 	return p.DecisionJSON
 }
+
+func (p *MemoryDecideArgs) GetCommandID() (v string) {
+	return p.CommandID
+}
 func (p *MemoryDecideArgs) SetScopeJSON(val string) {
 	p.ScopeJSON = val
 }
@@ -1321,6 +1337,9 @@ func (p *MemoryDecideArgs) SetBindingJSON(val string) {
 }
 func (p *MemoryDecideArgs) SetDecisionJSON(val string) {
 	p.DecisionJSON = val
+}
+func (p *MemoryDecideArgs) SetCommandID(val string) {
+	p.CommandID = val
 }
 
 func (p *MemoryDecideArgs) String() string {
@@ -1334,6 +1353,7 @@ var fieldIDToName_MemoryDecideArgs = map[int16]string{
 	1: "scopeJSON",
 	2: "bindingJSON",
 	3: "decisionJSON",
+	4: "commandID",
 }
 
 type MemoryDecideResult struct {
@@ -1371,6 +1391,82 @@ func (p *MemoryDecideResult) String() string {
 }
 
 var fieldIDToName_MemoryDecideResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryCancelCommandArgs struct {
+	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	CommandID string `thrift:"commandID,2" frugal:"2,default,string" json:"commandID"`
+}
+
+func NewMemoryCancelCommandArgs() *MemoryCancelCommandArgs {
+	return &MemoryCancelCommandArgs{}
+}
+
+func (p *MemoryCancelCommandArgs) InitDefault() {
+}
+
+func (p *MemoryCancelCommandArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *MemoryCancelCommandArgs) GetCommandID() (v string) {
+	return p.CommandID
+}
+func (p *MemoryCancelCommandArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *MemoryCancelCommandArgs) SetCommandID(val string) {
+	p.CommandID = val
+}
+
+func (p *MemoryCancelCommandArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryCancelCommandArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryCancelCommandArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "commandID",
+}
+
+type MemoryCancelCommandResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryCancelCommandResult() *MemoryCancelCommandResult {
+	return &MemoryCancelCommandResult{}
+}
+
+func (p *MemoryCancelCommandResult) InitDefault() {
+}
+
+var MemoryCancelCommandResult_Success_DEFAULT *Reply
+
+func (p *MemoryCancelCommandResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryCancelCommandResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryCancelCommandResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryCancelCommandResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryCancelCommandResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryCancelCommandResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryCancelCommandResult = map[int16]string{
 	0: "success",
 }
 

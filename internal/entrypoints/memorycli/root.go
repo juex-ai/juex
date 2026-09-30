@@ -14,16 +14,17 @@ import (
 )
 
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
-	var listen, managementAddress, credentials string
+	var listen, managementAddress, runtimeAddress, credentials string
 	root := &cobra.Command{Use: "juex-memory", Short: "Run the independent Fleet Memory service", SilenceUsage: true, SilenceErrors: true}
 	root.SetArgs(args)
 	root.SetOut(out)
 	root.SetErr(errOut)
 	root.PersistentFlags().StringVar(&managementAddress, "management", os.Getenv("JUEX_MANAGEMENT_RPC"), "Private Management RPC address")
+	root.PersistentFlags().StringVar(&runtimeAddress, "runtime", os.Getenv("JUEX_RUNTIME_RPC"), "Private Runtime RPC address")
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Memory service identity")
 	serve := &cobra.Command{Use: "serve", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		identity := platformrpc.CredentialsAt(credentials, "memory")
-		app, err := managed.OpenMemory(cmd.Context(), managed.MemoryConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: managementAddress, Credentials: identity})
+		app, err := managed.OpenMemory(cmd.Context(), managed.MemoryConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: managementAddress, RuntimeAddress: runtimeAddress, Credentials: identity})
 		if err != nil {
 			return err
 		}
@@ -38,7 +39,11 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return err
 		}
 		fmt.Fprintln(out, "Memory listening on", listener.Addr())
-		return serverrpc.Run(cmd.Context(), service)
+		runCtx, cancel := context.WithCancel(cmd.Context())
+		done := make(chan struct{})
+		go func() { defer close(done); app.Service.Run(runCtx) }()
+		defer func() { cancel(); <-done }()
+		return serverrpc.Run(runCtx, service)
 	}}
 	serve.Flags().StringVar(&listen, "listen", "0.0.0.0:8784", "Private Memory RPC listen address")
 	root.AddCommand(serve)

@@ -73,7 +73,7 @@ func (f memoryFixture) proposal(key string) mc.Proposal {
 func (f memoryFixture) propose(t *testing.T, key string) (memory.Binding, mc.Proposal) {
 	t.Helper()
 	proposal := f.proposal(key)
-	receipt, err := f.service.Propose(context.Background(), f.scope, f.thread, proposal, false)
+	receipt, err := f.service.Propose(context.Background(), f.scope, f.thread, proposal, false, proposal.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,21 +92,21 @@ func TestManagedMemorySharedKnowledgeAndAuthority(t *testing.T) {
 	f := managedMemory(t)
 	ctx := context.Background()
 	binding, proposal := f.propose(t, "remember")
-	if duplicate, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false); err != nil || duplicate.ID != binding.ReviewID {
+	if duplicate, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key); err != nil || duplicate.ID != binding.ReviewID {
 		t.Fatal("proposal replay", duplicate, err)
 	}
 	changed := proposal
 	changed.Text = "Different"
-	if _, err := f.service.Propose(ctx, f.scope, f.thread, changed, false); !errors.Is(err, application.ErrConflict) {
+	if _, err := f.service.Propose(ctx, f.scope, f.thread, changed, false, changed.Key); !errors.Is(err, application.ErrConflict) {
 		t.Fatal("proposal key reused", err)
 	}
 	decision := memoryDecision("preference", proposal)
-	receipt, err := f.service.Decide(ctx, f.scope, binding, decision)
+	receipt, err := f.service.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID)
 	if err != nil || !receipt.Committed {
 		t.Fatal(receipt, err)
 	}
 	f.service.Repository = memorypg.New(f.pool)
-	if repeated, err := f.service.Decide(ctx, f.scope, binding, decision); err != nil || repeated.ID != receipt.ID {
+	if repeated, err := f.service.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID); err != nil || repeated.ID != receipt.ID {
 		t.Fatal("lost response receipt", repeated, err)
 	}
 	peer, err := f.directory.CreateAgent(ctx, f.human.ActorID, f.human.TenantID, f.human.UserID, management.AgentConfig{Name: "Peer"})
@@ -165,7 +165,7 @@ func TestManagedMemoryDisableAndAdministrativeFences(t *testing.T) {
 	ctx := context.Background()
 	binding, proposal := f.propose(t, "first")
 	decision := memoryDecision("preference", proposal)
-	if _, err := f.service.Decide(ctx, f.scope, binding, decision); err != nil {
+	if _, err := f.service.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID); err != nil {
 		t.Fatal(err)
 	}
 	stale, _ := f.propose(t, "pending")
@@ -186,13 +186,13 @@ func TestManagedMemoryDisableAndAdministrativeFences(t *testing.T) {
 	if _, err := f.service.Administer(ctx, f.human, mc.AdminRequest{Key: "disabled", Action: "delete", EntryIDs: []string{"preference"}}); !errors.Is(err, application.ErrDisabled) {
 		t.Fatal("disabled write", err)
 	}
-	if _, err := f.service.Decide(ctx, f.scope, binding, decision); err != nil {
+	if _, err := f.service.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID); err != nil {
 		t.Fatal("receipt retry changed into mutation", err)
 	}
 	if _, err := f.service.Configure(ctx, f.human, disabled.Version, true, mc.Basic); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.service.Decide(ctx, f.scope, stale, decision); !errors.Is(err, application.ErrConflict) {
+	if _, err := f.service.Decide(ctx, f.scope, stale, decision, "decide-"+stale.ReviewID); !errors.Is(err, application.ErrConflict) {
 		t.Fatal("old assignment revived", err)
 	}
 	old, newProposal := f.propose(t, "before-delete")
@@ -204,14 +204,14 @@ func TestManagedMemoryDisableAndAdministrativeFences(t *testing.T) {
 	if again, err := f.service.Administer(ctx, f.human, request); err != nil || again.ID != forgot.ID {
 		t.Fatal("admin receipt replay", again, err)
 	}
-	if _, err := f.service.Decide(ctx, f.scope, old, memoryDecision("different-id", newProposal)); err == nil {
+	if _, err := f.service.Decide(ctx, f.scope, old, memoryDecision("different-id", newProposal), "stale-decision"); err == nil {
 		t.Fatal("old assignment restored forgotten source under another ID")
 	}
 	proposal.Key = "after-delete"
-	if _, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false); !errors.Is(err, application.ErrDenied) {
+	if _, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("forgotten source re-extracted", err)
 	}
-	if _, err := f.service.Decide(ctx, f.scope, binding, decision); err != nil {
+	if _, err := f.service.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID); err != nil {
 		t.Fatal("original commit receipt unavailable", err)
 	}
 	page, err := f.service.Search(ctx, f.human, mc.Query{})
@@ -247,7 +247,10 @@ func TestManagedMemoryFleetCommitSerialization(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
 	for i := range 2 {
-		wg.Go(func() { _, err := f.service.Decide(ctx, f.scope, bindings[i], decisions[i]); results <- err })
+		wg.Go(func() {
+			_, err := f.service.Decide(ctx, f.scope, bindings[i], decisions[i], "decide-"+bindings[i].ReviewID)
+			results <- err
+		})
 	}
 	wg.Wait()
 	close(results)
@@ -285,7 +288,10 @@ func TestManagedMemoryDisableOrdersWithReviewCommit(t *testing.T) {
 	}()
 	<-locked
 	result := make(chan error, 1)
-	go func() { _, err := f.service.Decide(ctx, f.scope, binding, memoryDecision("entry", p)); result <- err }()
+	go func() {
+		_, err := f.service.Decide(ctx, f.scope, binding, memoryDecision("entry", p), "blocked-decision")
+		result <- err
+	}()
 	select {
 	case err := <-result:
 		t.Fatal("review bypassed Fleet lock", err)
@@ -310,28 +316,28 @@ func TestManagedMemoryNoStoreRelearningAndInvalidDecision(t *testing.T) {
 	binding, proposal := f.propose(t, "original")
 	decision := memoryDecision("entry", proposal)
 	decision.Changes[0].ExpectedRevision = 7
-	if _, err := f.service.Decide(ctx, f.scope, binding, decision); !errors.Is(err, application.ErrConflict) {
+	if _, err := f.service.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID); !errors.Is(err, application.ErrConflict) {
 		t.Fatal("wrong revision accepted", err)
 	}
 	if work, err := f.service.Review(ctx, f.scope, binding); err != nil || work.Receipt.Committed {
 		t.Fatal("invalid decision settled assignment", work, err)
 	}
 	decision.Changes[0].ExpectedRevision = 0
-	if _, err := f.service.Decide(ctx, f.scope, binding, decision); err != nil {
+	if _, err := f.service.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.service.Administer(ctx, f.human, mc.AdminRequest{Key: "no-store", Action: "no_store", Sources: proposal.Sources}); err != nil {
 		t.Fatal(err)
 	}
 	proposal.Key = "blocked-replay"
-	if _, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false); !errors.Is(err, application.ErrDenied) {
+	if _, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("no-store source admitted", err)
 	}
 	if _, err := f.service.Administer(ctx, f.human, mc.AdminRequest{Key: "relearn", Action: "allow_store", EntryIDs: []string{"entry"}, Sources: proposal.Sources}); err != nil {
 		t.Fatal(err)
 	}
 	proposal.Key = "explicitly-relearned"
-	receipt, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false)
+	receipt, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +346,7 @@ func TestManagedMemoryNoStoreRelearningAndInvalidDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	newBinding := memory.Binding{ReviewID: receipt.ID, Epoch: status.Epoch, Fence: status.Fence}
-	if _, err := f.service.Decide(ctx, f.scope, newBinding, decision); err != nil {
+	if _, err := f.service.Decide(ctx, f.scope, newBinding, decision, "decide-"+newBinding.ReviewID); err != nil {
 		t.Fatal(err)
 	}
 	if entry, err := f.service.Read(ctx, f.human, mc.ReadRequest{ID: "entry"}); err != nil || entry.Revision != 1 {
@@ -350,14 +356,14 @@ func TestManagedMemoryNoStoreRelearningAndInvalidDecision(t *testing.T) {
 	spoofed.Key = "fake-evidence"
 	spoofed.Evidence = append([]mc.Evidence(nil), proposal.Evidence...)
 	spoofed.Evidence[0].Kind = "tool"
-	if _, err := f.service.Propose(ctx, f.scope, f.thread, spoofed, false); !errors.Is(err, application.ErrInvalid) {
+	if _, err := f.service.Propose(ctx, f.scope, f.thread, spoofed, false, spoofed.Key); !errors.Is(err, application.ErrInvalid) {
 		t.Fatal("tool output became original evidence", err)
 	}
 	spoofed = proposal
 	spoofed.Key = "another-thread"
 	spoofed.Sources = append([]mc.Source(nil), proposal.Sources...)
 	spoofed.Sources[0].ThreadID = uuid.NewString()
-	if _, err := f.service.Propose(ctx, f.scope, f.thread, spoofed, false); !errors.Is(err, application.ErrDenied) {
+	if _, err := f.service.Propose(ctx, f.scope, f.thread, spoofed, false, spoofed.Key); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("another Thread evidence admitted", err)
 	}
 }
@@ -380,5 +386,64 @@ func TestManagedMemoryColdKnowledgeRemainsSearchable(t *testing.T) {
 	}
 	if entry, err := f.service.Read(ctx, f.scope.Access, mc.ReadRequest{ID: "entry-000"}); err != nil || entry.Body != "Original retained fact 000" {
 		t.Fatal("cold knowledge unavailable", entry, err)
+	}
+}
+
+func TestManagedMemoryCommandCancellationOrdersAcceptance(t *testing.T) {
+	f := managedMemory(t)
+	ctx := context.Background()
+	proposal := f.proposal("cancelled-proposal")
+	if err := f.service.CancelCommand(ctx, f.scope, "cancel-before-proposal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false, "cancel-before-proposal"); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("cancel-before-proposal executed", err)
+	}
+	status, err := f.service.Status(ctx, f.human)
+	if err != nil || status.Pending != 0 {
+		t.Fatal("cancelled command created review", status, err)
+	}
+	proposal.Key = "accepted-proposal"
+	receipt, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false, "accepted-command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.CancelCommand(ctx, f.scope, "accepted-command"); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := f.service.Result(ctx, f.scope.Access, f.thread, receipt.ID); err != nil || current.State != "pending" {
+		t.Fatal("source cancellation revoked accepted business work", current, err)
+	}
+	binding := memory.Binding{ReviewID: receipt.ID, Epoch: status.Epoch, Fence: status.Fence}
+	if err := f.service.CancelCommand(ctx, f.scope, "cancel-before-decision"); err != nil {
+		t.Fatal(err)
+	}
+	decision := memoryDecision("cancelled-entry", proposal)
+	if _, err := f.service.Decide(ctx, f.scope, binding, decision, "cancel-before-decision"); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("cancel-before-decision wrote knowledge", err)
+	}
+	if _, err := f.service.Decide(ctx, f.scope, binding, decision, "accepted-decision"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.CancelCommand(ctx, f.scope, "accepted-decision"); err != nil {
+		t.Fatal(err)
+	}
+	if entry, err := f.service.Read(ctx, f.human, mc.ReadRequest{ID: "cancelled-entry"}); err != nil || entry.Revision != 1 {
+		t.Fatal("cancellation undid committed knowledge", entry, err)
+	}
+	if _, err := f.service.Configure(ctx, f.human, status.Version, false, mc.Basic); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.CancelCommand(ctx, f.scope, "disabled-cancel"); err != nil {
+		t.Fatal("disabled application lost cancellation responsibility", err)
+	}
+	f.service.Repository = memorypg.New(f.pool)
+	if err := f.store.View(ctx, f.scope, func(state *memory.State) error {
+		if !state.Commands[f.scope.AgentID+"/disabled-cancel"].Cancelled {
+			t.Error("cancellation not durable")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

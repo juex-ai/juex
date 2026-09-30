@@ -56,8 +56,17 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 		t.Fatal(status, err)
 	}
 	proposal := f.proposal("rpc")
-	if _, err := client.Propose(ctx, f.scope, f.thread, proposal, false); !errors.Is(err, application.ErrDenied) {
+	if _, err := client.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("Management invented original Runtime evidence", err)
+	}
+	if err := client.CancelCommand(ctx, f.scope, "cancel-rpc"); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("Management used prepared tool cancellation", err)
+	}
+	if err := runtime.CancelCommand(ctx, f.scope, "cancel-rpc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Propose(ctx, f.scope, f.thread, proposal, false, "cancel-rpc"); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("RPC cancellation lost", err)
 	}
 	if _, err := runtime.Administer(ctx, f.human, mc.AdminRequest{Key: "fake-user", Action: "delete", EntryIDs: []string{"entry"}}); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("Runtime forged human administration", err)
@@ -65,7 +74,7 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 	if _, err := client.Search(ctx, f.scope.Access, mc.Query{}); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("Management forged Agent tool call", err)
 	}
-	receipt, err := runtime.Propose(ctx, f.scope, f.thread, proposal, false)
+	receipt, err := runtime.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +90,7 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 		t.Fatal(domains, err)
 	}
 	decision := memoryDecision("rpc-entry", proposal)
-	if result, err := runtime.Decide(ctx, f.scope, binding, decision); err != nil || !result.Committed {
+	if result, err := runtime.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID); err != nil || !result.Committed {
 		t.Fatal(result, err)
 	}
 	if result, err := client.Result(ctx, f.human, "", receipt.ID); err != nil || !result.Committed {

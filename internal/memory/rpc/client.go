@@ -78,8 +78,8 @@ func (c *Client) Result(ctx context.Context, access application.Access, thread, 
 	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
 	return value, err
 }
-func (c *Client) Propose(ctx context.Context, scope application.Scope, thread string, proposal mc.Proposal, automatic bool) (mc.Receipt, error) {
-	reply, err := c.client.Propose(ctx, encode(scope), thread, encode(proposal), automatic)
+func (c *Client) Propose(ctx context.Context, scope application.Scope, thread string, proposal mc.Proposal, automatic bool, commandID string) (mc.Receipt, error) {
+	reply, err := c.client.Propose(ctx, encode(scope), thread, encode(proposal), automatic, commandID)
 	var value mc.Receipt
 	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
 	return value, err
@@ -90,9 +90,14 @@ func (c *Client) Review(ctx context.Context, scope application.Scope, binding me
 	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
 	return value, err
 }
-func (c *Client) Decide(ctx context.Context, scope application.Scope, binding memory.Binding, decision mc.Decision) (mc.Receipt, error) {
-	reply, err := c.client.Decide(ctx, encode(scope), encode(binding), encode(decision))
+func (c *Client) Decide(ctx context.Context, scope application.Scope, binding memory.Binding, decision mc.Decision, commandID string) (mc.Receipt, error) {
+	reply, err := c.client.Decide(ctx, encode(scope), encode(binding), encode(decision), commandID)
 	var value mc.Receipt
 	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
 	return value, err
+}
+
+func (c *Client) CancelCommand(ctx context.Context, scope application.Scope, id string) error {
+	reply, err := c.client.CancelCommand(ctx, encode(scope), id)
+	return platformrpc.Decode(reply, err, nil, appwire.DecodeError)
 }

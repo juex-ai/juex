@@ -19,20 +19,23 @@ type Repository interface {
 type Service struct {
 	Repository Repository
 	Authority  application.Authority
+	Workers    WorkerGateway
 }
 
 type Review struct {
-	ID           string            `json:"id"`
-	Scope        application.Scope `json:"scope"`
-	ThreadID     string            `json:"source_thread_id"`
-	Proposal     mc.Proposal       `json:"proposal"`
-	Epoch        int64             `json:"epoch"`
-	Fence        uint64            `json:"fence"`
-	Receipt      mc.Receipt        `json:"receipt"`
-	Fingerprint  string            `json:"fingerprint"`
-	DecisionHash string            `json:"decision_hash,omitempty"`
-	Automatic    bool              `json:"automatic"`
-	WorkerID     string            `json:"worker_id,omitempty"`
+	ID             string            `json:"id"`
+	Scope          application.Scope `json:"scope"`
+	ThreadID       string            `json:"source_thread_id"`
+	Proposal       mc.Proposal       `json:"proposal"`
+	Epoch          int64             `json:"epoch"`
+	Fence          uint64            `json:"fence"`
+	Receipt        mc.Receipt        `json:"receipt"`
+	Fingerprint    string            `json:"fingerprint"`
+	DecisionHash   string            `json:"decision_hash,omitempty"`
+	Automatic      bool              `json:"automatic"`
+	WorkerID       string            `json:"worker_id,omitempty"`
+	WorkerFinished bool              `json:"worker_finished"`
+	AttemptedAt    time.Time         `json:"attempted_at"`
 }
 
 // Binding is injected by Runtime from the persisted application Worker purpose.
@@ -49,20 +52,21 @@ type AdminReceipt struct {
 }
 
 type State struct {
-	Control    application.Control     `json:"control"`
-	Fence      uint64                  `json:"fence"`
-	Strategy   string                  `json:"strategy"`
-	Entries    map[string]mc.Entry     `json:"entries"`
-	Reviews    map[string]*Review      `json:"reviews"`
-	Keys       map[string]string       `json:"keys"`
-	Admin      map[string]AdminReceipt `json:"admin"`
-	Deleted    map[string]bool         `json:"deleted"`
-	Suppressed []mc.Source             `json:"suppressed"`
+	Commands   map[string]CommandReceipt `json:"commands"`
+	Control    application.Control       `json:"control"`
+	Fence      uint64                    `json:"fence"`
+	Strategy   string                    `json:"strategy"`
+	Entries    map[string]mc.Entry       `json:"entries"`
+	Reviews    map[string]*Review        `json:"reviews"`
+	Keys       map[string]string         `json:"keys"`
+	Admin      map[string]AdminReceipt   `json:"admin"`
+	Deleted    map[string]bool           `json:"deleted"`
+	Suppressed []mc.Source               `json:"suppressed"`
 }
 
 func NewState() *State {
 	return &State{Control: application.Control{Enabled: true, Epoch: 1, Version: 1}, Fence: 1, Strategy: mc.Basic,
-		Entries: map[string]mc.Entry{}, Reviews: map[string]*Review{}, Keys: map[string]string{}, Admin: map[string]AdminReceipt{}, Deleted: map[string]bool{}}
+		Entries: map[string]mc.Entry{}, Reviews: map[string]*Review{}, Keys: map[string]string{}, Admin: map[string]AdminReceipt{}, Deleted: map[string]bool{}, Commands: map[string]CommandReceipt{}}
 }
 
 type Status struct {

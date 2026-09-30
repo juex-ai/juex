@@ -30,3 +30,12 @@ history belongs to Runtime. Explicit relearning removes only selected constraint
 Review bindings and original evidence arrive through trusted Runtime composition,
 never model-supplied role or capability fields. Runtime owns ordinary Worker
 execution, model credentials and usage; Memory owns the application decision.
+
+The review outbox admits one ordinary Runtime Worker per stable review ID. It
+recovers lost admission replies and cancels revoked jobs even before admission.
+The Worker has a durable model-call budget and only knowledge review tools. A
+successful decision permits its final response, but no second knowledge mutation.
+Runtime injects bounded original human evidence from the current input; peer,
+application and observation messages cannot be presented as human statements.
+Tool command IDs order cancellation against acceptance across service restarts.
+Stopping the source conversation does not retract an already accepted review.

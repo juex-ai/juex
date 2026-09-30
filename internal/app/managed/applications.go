@@ -24,13 +24,13 @@ func (a RuntimeAuthority) AuthorizeApplication(ctx context.Context, access appli
 		if access.UserID != "" && access.UserID != value.Fleet.UserID {
 			return scope, application.ErrDenied
 		}
-		scope = application.Scope{Access: application.Access{ActorID: access.ActorID, TenantID: access.TenantID, UserID: value.Fleet.UserID, AgentID: access.AgentID}, FleetID: value.Fleet.ID, ActorEpoch: value.ActorAuthorizationEpoch, MemberEpoch: value.MembershipExecutionEpoch, AgentEpoch: value.Agent.ExecutionEpoch}
+		scope = application.Scope{Access: application.Access{ActorID: access.ActorID, TenantID: access.TenantID, UserID: value.Fleet.UserID, AgentID: access.AgentID}, FleetID: value.Fleet.ID, ActorEpoch: value.ActorAuthorizationEpoch, MemberVersion: value.MembershipVersion, MemberEpoch: value.MembershipExecutionEpoch, AgentEpoch: value.Agent.ExecutionEpoch}
 	} else {
 		value, err := a.Directory.AuthorizeFleet(ctx, access.ActorID, access.TenantID, access.UserID, execute)
 		if err != nil {
 			return scope, applicationError(err)
 		}
-		scope = application.Scope{Access: access, FleetID: value.Fleet.ID, ActorEpoch: value.ActorAuthorizationEpoch, MemberEpoch: value.MembershipExecutionEpoch}
+		scope = application.Scope{Access: access, FleetID: value.Fleet.ID, ActorEpoch: value.ActorAuthorizationEpoch, MemberVersion: value.MembershipVersion, MemberEpoch: value.MembershipExecutionEpoch}
 	}
 	return scope, nil
 }

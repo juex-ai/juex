@@ -60,6 +60,7 @@ type ApplicationGateway interface {
 	Check(context.Context, Scope, ApplicationJob) error
 	Tools(context.Context, Scope, *ApplicationJob) ([]llm.ToolSpec, error)
 	Call(context.Context, ToolWork, *ApplicationJob) (any, error)
+	Cancel(context.Context, ToolWork) error
 }
 
 func (s *Service) AdmitApplication(ctx context.Context, original Scope, job ApplicationJob) (ApplicationReceipt, error) {

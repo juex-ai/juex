@@ -99,6 +99,12 @@ func (r toolRunner) deliver(ctx context.Context) {
 
 func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 	if work.Cancelled {
+		if strings.HasPrefix(work.Call.ToolName, "memory_") || strings.HasPrefix(work.Call.ToolName, "calendar_") {
+			if r.applications == nil || r.applications.Cancel(ctx, *work) != nil {
+				return retryTool()
+			}
+			return ToolOutcome{State: "cancelled"}
+		}
 		if fileCreationTool(work.Call.ToolName) {
 			return r.cancelFileWork(ctx, *work)
 		}

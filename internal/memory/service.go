@@ -81,13 +81,18 @@ func (s *Service) Domains(ctx context.Context, access application.Access, reques
 }
 
 // Frozen scope and original evidence arrive only from the Runtime service.
-func (s *Service) Propose(ctx context.Context, frozen application.Scope, thread string, proposal mc.Proposal, automatic bool) (mc.Receipt, error) {
+func (s *Service) Propose(ctx context.Context, frozen application.Scope, thread string, proposal mc.Proposal, automatic bool, commandID string) (mc.Receipt, error) {
 	var value mc.Receipt
 	err := s.transact(ctx, frozen.Access, true, func(state *State, scope application.Scope) (err error) {
-		if scope != frozen {
+		if !scope.SameAuthority(frozen) {
 			return application.ErrDenied
 		}
-		value, err = state.Propose(scope, thread, proposal, automatic, time.Now())
+		payload := struct {
+			Kind, Thread string
+			Proposal     mc.Proposal
+			Automatic    bool
+		}{"propose", thread, proposal, automatic}
+		value, err = state.command(scope, commandID, payload, func() (mc.Receipt, error) { return state.Propose(scope, thread, proposal, automatic, time.Now()) })
 		return
 	})
 	return value, err
@@ -96,7 +101,7 @@ func (s *Service) Propose(ctx context.Context, frozen application.Scope, thread 
 func (s *Service) Review(ctx context.Context, frozen application.Scope, binding Binding) (Review, error) {
 	var value Review
 	err := s.transact(ctx, frozen.Access, false, func(state *State, scope application.Scope) error {
-		if scope != frozen {
+		if !scope.SameAuthority(frozen) {
 			return application.ErrDenied
 		}
 		work, err := state.Review(scope, binding)
@@ -109,22 +114,31 @@ func (s *Service) Review(ctx context.Context, frozen application.Scope, binding 
 	return value, err
 }
 
-func (s *Service) Decide(ctx context.Context, frozen application.Scope, binding Binding, decision mc.Decision) (mc.Receipt, error) {
+func (s *Service) Decide(ctx context.Context, frozen application.Scope, binding Binding, decision mc.Decision, commandID string) (mc.Receipt, error) {
 	// Receipt retries must remain readable after app disable. State.Decide still
 	// refuses any new mutation; the fresh Agent authorization is mandatory.
 	scope, err := s.Authority.AuthorizeApplication(ctx, frozen.Access, true)
 	if err != nil {
 		return mc.Receipt{}, err
 	}
-	if scope != frozen {
+	if !scope.SameAuthority(frozen) {
 		return mc.Receipt{}, application.ErrDenied
 	}
 	var value mc.Receipt
 	err = s.Repository.Update(ctx, scope, func(state *State) (err error) {
-		value, err = state.Decide(scope, binding, decision, time.Now())
+		payload := struct {
+			Kind     string
+			Binding  Binding
+			Decision mc.Decision
+		}{"decide", binding, decision}
+		value, err = state.command(scope, commandID, payload, func() (mc.Receipt, error) { return state.Decide(scope, binding, decision, time.Now()) })
 		return
 	})
 	return value, err
+}
+
+func (s *Service) CancelCommand(ctx context.Context, scope application.Scope, id string) error {
+	return s.Repository.Update(ctx, scope, func(state *State) error { return state.CancelCommand(scope, id) })
 }
 
 func (s *Service) Result(ctx context.Context, access application.Access, thread, id string) (mc.Receipt, error) {

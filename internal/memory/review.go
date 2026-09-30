@@ -86,7 +86,7 @@ func (s *State) Propose(scope application.Scope, thread string, p mc.Proposal, a
 	}{p, automatic})
 	if id := s.Keys[key]; id != "" {
 		w := s.Reviews[id]
-		if w.Fingerprint != hash || w.Scope != scope {
+		if w.Fingerprint != hash || !w.Scope.SameAuthority(scope) {
 			return mc.Receipt{}, application.ErrConflict
 		}
 		return w.Receipt, nil
@@ -104,13 +104,13 @@ func (s *State) Propose(scope application.Scope, thread string, p mc.Proposal, a
 
 func (s *State) Review(scope application.Scope, binding Binding) (*Review, error) {
 	w := s.Reviews[binding.ReviewID]
-	if w == nil || w.Scope != scope || w.Epoch != binding.Epoch || w.Fence != binding.Fence {
+	if w == nil || !w.Scope.SameAuthority(scope) || w.Epoch != binding.Epoch || w.Fence != binding.Fence {
 		return nil, application.ErrDenied
 	}
 	if !s.Control.Enabled {
 		return nil, application.ErrDisabled
 	}
-	if w.Epoch != s.Control.Epoch || w.Fence != s.Fence || terminal(w.Receipt.State) {
+	if w.Epoch != s.Control.Epoch || w.Fence != s.Fence || terminal(w.Receipt.State) && w.DecisionHash == "" {
 		return nil, application.ErrConflict
 	}
 	return w, nil
@@ -121,12 +121,15 @@ func (s *State) Decide(scope application.Scope, binding Binding, decision mc.Dec
 	hash := digest(decision)
 	// A receipt may be read again after disable/correction; this cannot apply a
 	// second mutation or resurrect knowledge removed by human administration.
-	if w != nil && w.Scope == scope && w.Epoch == binding.Epoch && w.Fence == binding.Fence && terminal(w.Receipt.State) && w.DecisionHash == hash {
+	if w != nil && w.Scope.SameAuthority(scope) && w.Epoch == binding.Epoch && w.Fence == binding.Fence && terminal(w.Receipt.State) && w.DecisionHash == hash {
 		return w.Receipt, nil
 	}
 	w, err := s.Review(scope, binding)
 	if err != nil {
 		return mc.Receipt{}, err
+	}
+	if terminal(w.Receipt.State) {
+		return mc.Receipt{}, application.ErrConflict
 	}
 	if decision.Outcome != "applied" && decision.Outcome != "rejected" && decision.Outcome != "no_change" || strings.TrimSpace(decision.Reason) == "" || len(decision.Reason) > 4096 {
 		return mc.Receipt{}, application.ErrInvalid

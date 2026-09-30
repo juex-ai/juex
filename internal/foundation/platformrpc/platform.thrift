@@ -32,9 +32,10 @@ service Memory {
   Reply Read(1: string accessJSON, 2: string requestJSON)
   Reply Facts(1: string accessJSON, 2: string queryJSON)
   Reply Domains(1: string accessJSON, 2: string requestJSON)
-  Reply Propose(1: string scopeJSON, 2: string threadID, 3: string proposalJSON, 4: bool automatic)
+  Reply Propose(1: string scopeJSON, 2: string threadID, 3: string proposalJSON, 4: bool automatic, 5: string commandID)
   Reply Review(1: string scopeJSON, 2: string bindingJSON)
-  Reply Decide(1: string scopeJSON, 2: string bindingJSON, 3: string decisionJSON)
+  Reply Decide(1: string scopeJSON, 2: string bindingJSON, 3: string decisionJSON, 4: string commandID)
+  Reply CancelCommand(1: string scopeJSON, 2: string commandID)
   Reply ReviewResult(1: string accessJSON, 2: string threadID, 3: string reviewID)
   Reply Administer(1: string accessJSON, 2: string requestJSON)
 }

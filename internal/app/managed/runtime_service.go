@@ -9,6 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/managedruntime"
 	runtimepg "github.com/juex-ai/juex/internal/managedruntime/postgres"
 	runtimerpc "github.com/juex-ai/juex/internal/managedruntime/rpc"
+	memoryrpc "github.com/juex-ai/juex/internal/memory/rpc"
 	"github.com/juex-ai/juex/internal/providers"
 )
 
@@ -16,6 +17,7 @@ type RuntimeConfig struct {
 	DatabaseURL       string
 	ManagementAddress string
 	ExecutionAddress  string
+	MemoryAddress     string
 	Credentials       platformrpc.Credentials
 	Runner            managedruntime.RunnerConfig
 }
@@ -45,6 +47,13 @@ func OpenRuntime(ctx context.Context, config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 	store := runtimepg.New(pool)
+	if config.MemoryAddress != "" {
+		client, err := memoryrpc.NewClient(config.MemoryAddress, config.Credentials)
+		if err != nil {
+			return nil, err
+		}
+		config.Runner.Applications = RuntimeApplications{Memory: client, Evidence: store}
+	}
 	if config.ExecutionAddress != "" {
 		client, err := executionrpc.NewClient(config.ExecutionAddress, config.Credentials)
 		if err != nil {

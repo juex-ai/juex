@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	applicationrpc "github.com/juex-ai/juex/internal/foundation/application/rpc"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
+	runtimerpc "github.com/juex-ai/juex/internal/managedruntime/rpc"
 	"github.com/juex-ai/juex/internal/memory"
 	memorypg "github.com/juex-ai/juex/internal/memory/postgres"
 )
@@ -13,6 +14,7 @@ import (
 type MemoryConfig struct {
 	DatabaseURL       string
 	ManagementAddress string
+	RuntimeAddress    string
 	Credentials       platformrpc.Credentials
 }
 
@@ -34,7 +36,14 @@ func OpenMemory(ctx context.Context, config MemoryConfig) (*Memory, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Memory{Pool: pool, Service: &memory.Service{Repository: memorypg.New(pool), Authority: authority}}, nil
+	service := &memory.Service{Repository: memorypg.New(pool), Authority: authority}
+	client, err := runtimerpc.NewClient(config.RuntimeAddress, config.Credentials)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	service.Workers = MemoryWorkers{Runtime: client}
+	return &Memory{Pool: pool, Service: service}, nil
 }
 
 func (m *Memory) Close() { m.Pool.Close() }

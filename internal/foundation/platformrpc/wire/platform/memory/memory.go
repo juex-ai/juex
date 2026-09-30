@@ -83,6 +83,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"CancelCommand": kitex.NewMethodInfo(
+		cancelCommandHandler,
+		newMemoryCancelCommandArgs,
+		newMemoryCancelCommandResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"ReviewResult": kitex.NewMethodInfo(
 		reviewResult_Handler,
 		newMemoryReviewResultArgs,
@@ -292,7 +299,7 @@ func newMemoryDomainsResult() interface{} {
 func proposeHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.MemoryProposeArgs)
 	realResult := result.(*platform.MemoryProposeResult)
-	success, err := handler.(platform.Memory).Propose(ctx, realArg.ScopeJSON, realArg.ThreadID, realArg.ProposalJSON, realArg.Automatic)
+	success, err := handler.(platform.Memory).Propose(ctx, realArg.ScopeJSON, realArg.ThreadID, realArg.ProposalJSON, realArg.Automatic, realArg.CommandID)
 	if err != nil {
 		return err
 	}
@@ -328,7 +335,7 @@ func newMemoryReviewResult() interface{} {
 func decideHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.MemoryDecideArgs)
 	realResult := result.(*platform.MemoryDecideResult)
-	success, err := handler.(platform.Memory).Decide(ctx, realArg.ScopeJSON, realArg.BindingJSON, realArg.DecisionJSON)
+	success, err := handler.(platform.Memory).Decide(ctx, realArg.ScopeJSON, realArg.BindingJSON, realArg.DecisionJSON, realArg.CommandID)
 	if err != nil {
 		return err
 	}
@@ -341,6 +348,24 @@ func newMemoryDecideArgs() interface{} {
 
 func newMemoryDecideResult() interface{} {
 	return platform.NewMemoryDecideResult()
+}
+
+func cancelCommandHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.MemoryCancelCommandArgs)
+	realResult := result.(*platform.MemoryCancelCommandResult)
+	success, err := handler.(platform.Memory).CancelCommand(ctx, realArg.ScopeJSON, realArg.CommandID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newMemoryCancelCommandArgs() interface{} {
+	return platform.NewMemoryCancelCommandArgs()
+}
+
+func newMemoryCancelCommandResult() interface{} {
+	return platform.NewMemoryCancelCommandResult()
 }
 
 func reviewResult_Handler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -465,12 +490,13 @@ func (p *kClient) Domains(ctx context.Context, accessJSON string, requestJSON st
 	return _result.GetSuccess(), nil
 }
 
-func (p *kClient) Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool) (r *platform.Reply, err error) {
+func (p *kClient) Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool, commandID string) (r *platform.Reply, err error) {
 	var _args platform.MemoryProposeArgs
 	_args.ScopeJSON = scopeJSON
 	_args.ThreadID = threadID
 	_args.ProposalJSON = proposalJSON
 	_args.Automatic = automatic
+	_args.CommandID = commandID
 	var _result platform.MemoryProposeResult
 	if err = p.c.Call(ctx, "Propose", &_args, &_result); err != nil {
 		return
@@ -489,13 +515,25 @@ func (p *kClient) Review(ctx context.Context, scopeJSON string, bindingJSON stri
 	return _result.GetSuccess(), nil
 }
 
-func (p *kClient) Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string) (r *platform.Reply, err error) {
+func (p *kClient) Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string, commandID string) (r *platform.Reply, err error) {
 	var _args platform.MemoryDecideArgs
 	_args.ScopeJSON = scopeJSON
 	_args.BindingJSON = bindingJSON
 	_args.DecisionJSON = decisionJSON
+	_args.CommandID = commandID
 	var _result platform.MemoryDecideResult
 	if err = p.c.Call(ctx, "Decide", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) CancelCommand(ctx context.Context, scopeJSON string, commandID string) (r *platform.Reply, err error) {
+	var _args platform.MemoryCancelCommandArgs
+	_args.ScopeJSON = scopeJSON
+	_args.CommandID = commandID
+	var _result platform.MemoryCancelCommandResult
+	if err = p.c.Call(ctx, "CancelCommand", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

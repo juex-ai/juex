@@ -16,7 +16,7 @@ import (
 )
 
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
-	var listen, managementAddress, executionAddress, credentials string
+	var listen, managementAddress, executionAddress, memoryAddress, credentials string
 	var threads int
 	var idle time.Duration
 	root := &cobra.Command{Use: "juex-runtime", Short: "Run the managed Agent Runtime service", SilenceUsage: true, SilenceErrors: true}
@@ -25,10 +25,11 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root.SetErr(errOut)
 	root.PersistentFlags().StringVar(&managementAddress, "management", os.Getenv("JUEX_MANAGEMENT_RPC"), "Private Management RPC address")
 	root.PersistentFlags().StringVar(&executionAddress, "execution", os.Getenv("JUEX_EXECUTION_RPC"), "Private Execution RPC address")
+	root.PersistentFlags().StringVar(&memoryAddress, "memory", os.Getenv("JUEX_MEMORY_RPC"), "Private Memory RPC address")
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Runtime service identity")
 	serve := &cobra.Command{Use: "serve", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		identity := platformrpc.CredentialsAt(credentials, "runtime")
-		app, err := managed.OpenRuntime(cmd.Context(), managed.RuntimeConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: managementAddress, ExecutionAddress: executionAddress, Credentials: identity, Runner: managedruntime.RunnerConfig{Concurrency: threads, IdleTimeout: idle}})
+		app, err := managed.OpenRuntime(cmd.Context(), managed.RuntimeConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: managementAddress, ExecutionAddress: executionAddress, MemoryAddress: memoryAddress, Credentials: identity, Runner: managedruntime.RunnerConfig{Concurrency: threads, IdleTimeout: idle}})
 		if err != nil {
 			return err
 		}

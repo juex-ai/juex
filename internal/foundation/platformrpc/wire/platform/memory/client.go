@@ -18,9 +18,10 @@ type Client interface {
 	Read(ctx context.Context, accessJSON string, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Facts(ctx context.Context, accessJSON string, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Domains(ctx context.Context, accessJSON string, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
-	Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Review(ctx context.Context, scopeJSON string, bindingJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
-	Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	CancelCommand(ctx context.Context, scopeJSON string, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ReviewResult_(ctx context.Context, accessJSON string, threadID string, reviewID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Administer(ctx context.Context, accessJSON string, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 }
@@ -89,9 +90,9 @@ func (p *kMemoryClient) Domains(ctx context.Context, accessJSON string, requestJ
 	return p.kClient.Domains(ctx, accessJSON, requestJSON)
 }
 
-func (p *kMemoryClient) Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+func (p *kMemoryClient) Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
-	return p.kClient.Propose(ctx, scopeJSON, threadID, proposalJSON, automatic)
+	return p.kClient.Propose(ctx, scopeJSON, threadID, proposalJSON, automatic, commandID)
 }
 
 func (p *kMemoryClient) Review(ctx context.Context, scopeJSON string, bindingJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
@@ -99,9 +100,14 @@ func (p *kMemoryClient) Review(ctx context.Context, scopeJSON string, bindingJSO
 	return p.kClient.Review(ctx, scopeJSON, bindingJSON)
 }
 
-func (p *kMemoryClient) Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+func (p *kMemoryClient) Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
-	return p.kClient.Decide(ctx, scopeJSON, bindingJSON, decisionJSON)
+	return p.kClient.Decide(ctx, scopeJSON, bindingJSON, decisionJSON, commandID)
+}
+
+func (p *kMemoryClient) CancelCommand(ctx context.Context, scopeJSON string, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.CancelCommand(ctx, scopeJSON, commandID)
 }
 
 func (p *kMemoryClient) ReviewResult_(ctx context.Context, accessJSON string, threadID string, reviewID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

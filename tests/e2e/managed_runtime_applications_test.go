@@ -370,3 +370,7 @@ func TestManagedRuntimeApplicationUnknownAttemptConsumesBudget(t *testing.T) {
 		t.Fatal("recovery reset unknown attempt budget", state, calls.Load(), err)
 	}
 }
+
+func (g *runtimeApplicationGateway) Cancel(context.Context, managedruntime.ToolWork) error {
+	return nil
+}

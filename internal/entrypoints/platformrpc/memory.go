@@ -140,7 +140,7 @@ func (h *memoryHandler) ReviewResult_(ctx context.Context, accessJSON, thread, i
 	value, err := h.service.Result(ctx, access, thread, id)
 	return appReply(value, err)
 }
-func (h *memoryHandler) Propose(ctx context.Context, scopeJSON, thread, proposalJSON string, automatic bool) (*platform.Reply, error) {
+func (h *memoryHandler) Propose(ctx context.Context, scopeJSON, thread, proposalJSON string, automatic bool, commandID string) (*platform.Reply, error) {
 	if transport.CallerRole(ctx) != "runtime" {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -149,7 +149,7 @@ func (h *memoryHandler) Propose(ctx context.Context, scopeJSON, thread, proposal
 	if !appDecode(scopeJSON, &scope) || !appDecode(proposalJSON, &proposal) {
 		return appReply(nil, application.ErrInvalid)
 	}
-	value, err := h.service.Propose(ctx, scope, thread, proposal, automatic)
+	value, err := h.service.Propose(ctx, scope, thread, proposal, automatic, commandID)
 	return appReply(value, err)
 }
 func (h *memoryHandler) Review(ctx context.Context, scopeJSON, bindingJSON string) (*platform.Reply, error) {
@@ -164,7 +164,7 @@ func (h *memoryHandler) Review(ctx context.Context, scopeJSON, bindingJSON strin
 	value, err := h.service.Review(ctx, scope, binding)
 	return appReply(value, err)
 }
-func (h *memoryHandler) Decide(ctx context.Context, scopeJSON, bindingJSON, decisionJSON string) (*platform.Reply, error) {
+func (h *memoryHandler) Decide(ctx context.Context, scopeJSON, bindingJSON, decisionJSON string, commandID string) (*platform.Reply, error) {
 	if transport.CallerRole(ctx) != "runtime" {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -174,6 +174,17 @@ func (h *memoryHandler) Decide(ctx context.Context, scopeJSON, bindingJSON, deci
 	if !appDecode(scopeJSON, &scope) || !appDecode(bindingJSON, &binding) || !appDecode(decisionJSON, &decision) {
 		return appReply(nil, application.ErrInvalid)
 	}
-	value, err := h.service.Decide(ctx, scope, binding, decision)
+	value, err := h.service.Decide(ctx, scope, binding, decision, commandID)
 	return appReply(value, err)
+}
+
+func (h *memoryHandler) CancelCommand(ctx context.Context, scopeJSON, id string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "runtime" {
+		return appReply(nil, application.ErrDenied)
+	}
+	var scope application.Scope
+	if !appDecode(scopeJSON, &scope) {
+		return appReply(nil, application.ErrInvalid)
+	}
+	return appReply(nil, h.service.CancelCommand(ctx, scope, id))
 }
