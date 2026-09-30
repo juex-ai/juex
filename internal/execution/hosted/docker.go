@@ -31,17 +31,19 @@ const ownershipLabel = "ai.juex.hosted.environment"
 var imageID = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 type Config struct {
-	Socket      string         `json:"socket"`
-	Root        string         `json:"root"`
-	GuestBinary string         `json:"guest_binary"`
-	Image       string         `json:"image"`
-	Pool        netip.Prefix   `json:"pool"`
-	Control     netip.AddrPort `json:"control"`
-	Server      string         `json:"server"`
-	CA          []byte         `json:"-"`
-	DNS         []netip.Addr   `json:"dns"`
-	Protected   []netip.Prefix `json:"protected"`
-	Allow       []Endpoint     `json:"allow"`
+	Socket          string         `json:"socket"`
+	Root            string         `json:"root"`
+	WorkspaceRoot   string         `json:"workspace_root"`
+	StorageIdentity string         `json:"storage_identity"`
+	GuestBinary     string         `json:"guest_binary"`
+	Image           string         `json:"image"`
+	Pool            netip.Prefix   `json:"pool"`
+	Control         netip.AddrPort `json:"control"`
+	Server          string         `json:"server"`
+	CA              []byte         `json:"-"`
+	DNS             []netip.Addr   `json:"dns"`
+	Protected       []netip.Prefix `json:"protected"`
+	Allow           []Endpoint     `json:"allow"`
 }
 
 // Spec is produced by Execution's durable resource record, not by a model or
@@ -51,6 +53,10 @@ type Spec struct {
 	Slot                                                 uint16
 	Memory                                               int64
 	NanoCPUs                                             int64
+	StorageIdentity                                      string
+	ProjectID                                            uint32
+	WorkspaceBytes, WorkspaceInodes                      int64
+	Provisioned                                          bool
 }
 type Instance struct {
 	ID, EnvironmentID, NetworkID, Bridge, Subnet string
@@ -113,6 +119,11 @@ func New(config Config) (*Docker, error) {
 }
 func (d *Docker) Close() error { return d.client.Close() }
 func (d *Docker) Check(ctx context.Context) error {
+	storage, err := storageMount(ctx, d.config)
+	if err != nil {
+		return err
+	}
+	_ = storage.Close()
 	info, err := d.client.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return err
@@ -169,13 +180,19 @@ func (d *Docker) Ensure(ctx context.Context, spec Spec) (Instance, error) {
 	if err := d.Check(ctx); err != nil {
 		return Instance{}, err
 	}
+	if err := prepareStorage(ctx, d.config, spec); err != nil {
+		return Instance{}, err
+	}
 	name := "juex-" + spec.EnvironmentID
+	// Provisioned records lifecycle progress, not the container configuration.
+	fingerprintSpec := spec
+	fingerprintSpec.Provisioned = false
 	encoded, _ := json.Marshal(struct {
 		Spec      Spec
 		Config    Config
 		GuestHash string
 		CAHash    [32]byte
-	}{spec, d.config, d.guestHash, sha256.Sum256(d.config.CA)})
+	}{fingerprintSpec, d.config, d.guestHash, sha256.Sum256(d.config.CA)})
 	hash := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(hash[:])
 	labels := map[string]string{ownershipLabel: spec.EnvironmentID, "ai.juex.agent": spec.AgentID, "ai.juex.spec": fingerprint}
@@ -213,7 +230,7 @@ func (d *Docker) Ensure(ctx context.Context, spec Spec) (Instance, error) {
 		for _, entry := range []struct {
 			name string
 			uid  int
-		}{{"control", 0}, {"workspace", 1000}, {"home", 1000}} {
+		}{{"control", 0}} {
 			if err := privateDirectory(filepath.Join(root, entry.name), 0700, entry.uid); err != nil {
 				return result, err
 			}
@@ -245,7 +262,7 @@ func (d *Docker) Ensure(ctx context.Context, spec Spec) (Instance, error) {
 		pids := int64(256)
 		server, _ := url.Parse(d.config.Server)
 		extraHosts := []string{server.Hostname() + ":" + d.config.Control.Addr().String()}
-		mounts := []mount.Mount{{Type: mount.TypeBind, Source: d.config.GuestBinary, Target: "/usr/local/bin/juex-guest", ReadOnly: true}, {Type: mount.TypeBind, Source: filepath.Join(root, "control"), Target: "/var/lib/juex-control"}, {Type: mount.TypeBind, Source: filepath.Join(root, "workspace"), Target: "/workspace"}, {Type: mount.TypeBind, Source: filepath.Join(root, "home"), Target: "/home/agent"}}
+		mounts := []mount.Mount{{Type: mount.TypeBind, Source: d.config.GuestBinary, Target: "/usr/local/bin/juex-guest", ReadOnly: true}, {Type: mount.TypeBind, Source: filepath.Join(root, "control"), Target: "/var/lib/juex-control"}, {Type: mount.TypeBind, Source: filepath.Join(d.config.WorkspaceRoot, spec.EnvironmentID, "workspace"), Target: "/workspace"}, {Type: mount.TypeBind, Source: filepath.Join(d.config.WorkspaceRoot, spec.EnvironmentID, "home"), Target: "/home/agent"}}
 		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: resolverPath, Target: "/etc/resolv.conf", ReadOnly: true})
 		created, err := d.client.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: &container.Config{Image: d.config.Image, User: "0:0", Entrypoint: []string{"/usr/local/bin/juex-guest"}, Cmd: []string{"serve"}, WorkingDir: "/", Labels: labels, Env: []string{"HOME=/home/agent", "PATH=/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}}, HostConfig: &container.HostConfig{Runtime: "runsc", ExtraHosts: extraHosts, NetworkMode: container.NetworkMode(nw.ID), ReadonlyRootfs: true, CapDrop: []string{"ALL"}, CapAdd: []string{"SETUID", "SETGID", "KILL"}, SecurityOpt: []string{"no-new-privileges:true"}, Mounts: mounts, Tmpfs: map[string]string{"/tmp": "rw,exec,nosuid,nodev,mode=1777,size=268435456"}, Sysctls: map[string]string{"net.ipv6.conf.all.disable_ipv6": "1", "net.ipv6.conf.default.disable_ipv6": "1"}, Resources: container.Resources{Memory: spec.Memory, MemorySwap: spec.Memory, NanoCPUs: spec.NanoCPUs, PidsLimit: &pids}, LogConfig: container.LogConfig{Type: "local", Config: map[string]string{"max-size": "2m", "max-file": "4"}}, RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyDisabled}}, NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{nw.ID: {}}}})
 		if err != nil {

@@ -10,11 +10,11 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
-const hostedColumns = `h.environment_id,h.agent_id,e.tenant_id,e.user_id,e.credential_hash,h.slot,h.memory_bytes,h.nano_cpus,h.running,h.last_activity,COALESCE(e.online_until>clock_timestamp(),false),EXISTS(SELECT 1 FROM execution.operations o WHERE o.environment_id=e.id AND (NOT o.acknowledged OR o.state IN ('waiting','dispatched','accepted','running')))`
+const hostedColumns = `h.environment_id,h.agent_id,e.tenant_id,e.user_id,e.credential_hash,h.slot,h.memory_bytes,h.nano_cpus,h.running,h.last_activity,COALESCE(e.online_until>clock_timestamp(),false),EXISTS(SELECT 1 FROM execution.operations o WHERE o.environment_id=e.id AND (NOT o.acknowledged OR o.state IN ('waiting','dispatched','accepted','running'))),h.storage_identity,h.project_id,h.workspace_bytes,h.workspace_inodes,h.provisioned`
 
 func scanHosted(row pgx.Row) (execution.HostedResource, error) {
 	var h execution.HostedResource
-	err := row.Scan(&h.EnvironmentID, &h.AgentID, &h.TenantID, &h.UserID, &h.CredentialHash, &h.Slot, &h.Memory, &h.NanoCPUs, &h.Running, &h.LastActivity, &h.Online, &h.Busy)
+	err := row.Scan(&h.EnvironmentID, &h.AgentID, &h.TenantID, &h.UserID, &h.CredentialHash, &h.Slot, &h.Memory, &h.NanoCPUs, &h.Running, &h.LastActivity, &h.Online, &h.Busy, &h.StorageIdentity, &h.ProjectID, &h.WorkspaceBytes, &h.WorkspaceInodes, &h.Provisioned)
 	return h, err
 }
 
@@ -54,7 +54,7 @@ func (s *Store) EnsureHosted(ctx context.Context, scope execution.Scope, candida
 	if _, err := tx.Exec(ctx, `INSERT INTO execution.environments(id,tenant_id,user_id,fleet_id,kind,name,os,working_directory,credential_hash,removal_epoch,grants,ceiling) VALUES($1,$2,$3,$4,'hosted','Hosted workspace','linux','/workspace',$5,$6,$7,$7)`, candidate.EnvironmentID, scope.TenantID, scope.UserID, scope.FleetID, candidate.CredentialHash, scope.RemovalEpoch, grants); err != nil {
 		return h, classify(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO execution.hosted(environment_id,agent_id,slot,memory_bytes,nano_cpus) VALUES($1,$2,$3,$4,$5)`, candidate.EnvironmentID, scope.AgentID, slot, candidate.Memory, candidate.NanoCPUs); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO execution.hosted(environment_id,agent_id,slot,memory_bytes,nano_cpus,storage_identity,workspace_bytes,workspace_inodes) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, candidate.EnvironmentID, scope.AgentID, slot, candidate.Memory, candidate.NanoCPUs, candidate.StorageIdentity, candidate.WorkspaceBytes, candidate.WorkspaceInodes); err != nil {
 		return h, classify(err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO execution.audit(tenant_id,owner_id,actor_id,environment_id,agent_id,action,version) VALUES($1,$2,$3,$4,$5,'hosted.created',1)`, scope.TenantID, scope.UserID, scope.ActorID, candidate.EnvironmentID, scope.AgentID); err != nil {
@@ -103,7 +103,7 @@ func (s *Store) LockHosted(ctx context.Context, id string, action func(execution
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE execution.hosted SET running=$2,last_error=$3 WHERE environment_id=$1`, id, result.Running, result.Error); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE execution.hosted SET running=$2,last_error=$3,provisioned=provisioned OR $4 WHERE environment_id=$1`, id, result.Running, result.Error, result.Provisioned); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

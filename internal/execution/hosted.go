@@ -20,11 +20,16 @@ type HostedResource struct {
 	Memory, NanoCPUs                                         int64
 	Running, Busy, Online                                    bool
 	LastActivity                                             time.Time
+	StorageIdentity                                          string
+	ProjectID                                                uint32
+	WorkspaceBytes, WorkspaceInodes                          int64
+	Provisioned                                              bool
 }
 
 type HostedResult struct {
-	Running bool
-	Error   string
+	Running     bool
+	Error       string
+	Provisioned bool
 }
 
 type HostedRepository interface {
@@ -41,13 +46,15 @@ type HostedBackend interface {
 }
 
 type HostedManager struct {
-	Store     HostedRepository
-	Backend   HostedBackend
-	Authority Authority
-	Key       []byte
-	Idle      time.Duration
-	Memory    int64
-	NanoCPUs  int64
+	Store                           HostedRepository
+	Backend                         HostedBackend
+	Authority                       Authority
+	Key                             []byte
+	Idle                            time.Duration
+	Memory                          int64
+	NanoCPUs                        int64
+	StorageIdentity                 string
+	WorkspaceBytes, WorkspaceInodes int64
 }
 
 func (h *HostedManager) credential(id string) string {
@@ -68,9 +75,22 @@ func (h *HostedManager) Ensure(ctx context.Context, scope Scope) error {
 	if cpu == 0 {
 		cpu = 1000000000
 	}
-	resource, err := h.Store.EnsureHosted(ctx, scope, HostedResource{EnvironmentID: id, AgentID: scope.AgentID, TenantID: scope.TenantID, UserID: scope.UserID, CredentialHash: Digest(h.credential(id)), Memory: memory, NanoCPUs: cpu})
+	bytes, inodes := h.WorkspaceBytes, h.WorkspaceInodes
+	if bytes == 0 {
+		bytes = 2 << 30
+	}
+	if inodes == 0 {
+		inodes = 131072
+	}
+	if _, err := uuid.Parse(h.StorageIdentity); err != nil {
+		return errors.New("hosted storage identity must be configured")
+	}
+	resource, err := h.Store.EnsureHosted(ctx, scope, HostedResource{EnvironmentID: id, AgentID: scope.AgentID, TenantID: scope.TenantID, UserID: scope.UserID, CredentialHash: Digest(h.credential(id)), Memory: memory, NanoCPUs: cpu, StorageIdentity: h.StorageIdentity, WorkspaceBytes: bytes, WorkspaceInodes: inodes})
 	if err == nil && resource.CredentialHash != Digest(h.credential(resource.EnvironmentID)) {
 		return errors.New("hosted enrollment key does not match persisted environment")
+	}
+	if err == nil && resource.StorageIdentity != h.StorageIdentity {
+		return errors.New("hosted storage identity does not match persisted environment")
 	}
 	return err
 }
@@ -87,7 +107,7 @@ func (h *HostedManager) Reconcile(ctx context.Context) error {
 	var failures []error
 	for _, id := range ids {
 		err := h.Store.LockHosted(ctx, id, func(resource HostedResource) (HostedResult, error) {
-			result := HostedResult{Running: resource.Running}
+			result := HostedResult{Running: resource.Running, Provisioned: resource.Provisioned}
 			scope, err := h.Authority.Agent(ctx, resource.UserID, resource.TenantID, resource.AgentID, true)
 			if err != nil && !errors.Is(err, execprotocol.ErrDenied) {
 				return result, err
@@ -110,6 +130,7 @@ func (h *HostedManager) Reconcile(ctx context.Context) error {
 					return result, nil
 				}
 				result.Running = true
+				result.Provisioned = true
 			} else if resource.Running && (!active || time.Since(resource.LastActivity) >= idle) {
 				if err := h.Backend.Stop(ctx, resource); err != nil {
 					return result, err

@@ -56,7 +56,7 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 	if err := os.WriteFile(keyFile, key, 0600); err != nil {
 		t.Fatal(err)
 	}
-	configuration := managed.HostedConfiguration{KeyFile: keyFile, IdleSeconds: 1, Memory: 512 << 20, NanoCPUs: 1000000000, Backend: hosted.Config{Socket: os.Getenv("JUEX_DOCKER_SOCKET"), Root: root, GuestBinary: os.Getenv("JUEX_GUEST_BINARY"), Image: os.Getenv("JUEX_HOSTED_IMAGE"), Pool: netip.MustParsePrefix("172.30.0.0/16"), Control: netip.AddrPortFrom(address, uint16(port)), Server: "https://execution:" + portText, DNS: []netip.Addr{netip.MustParseAddr("10.0.2.3")}, Protected: []netip.Prefix{netip.MustParsePrefix("172.19.0.0/16")}}}
+	configuration := managed.HostedConfiguration{KeyFile: keyFile, IdleSeconds: 1, Memory: 512 << 20, NanoCPUs: 1000000000, Backend: hosted.Config{Socket: os.Getenv("JUEX_DOCKER_SOCKET"), WorkspaceRoot: os.Getenv("JUEX_HOSTED_STORAGE_ROOT"), StorageIdentity: os.Getenv("JUEX_HOSTED_STORAGE_ID"), Root: root, GuestBinary: os.Getenv("JUEX_GUEST_BINARY"), Image: os.Getenv("JUEX_HOSTED_IMAGE"), Pool: netip.MustParsePrefix("172.30.0.0/16"), Control: netip.AddrPortFrom(address, uint16(port)), Server: "https://execution:" + portText, DNS: []netip.Addr{netip.MustParseAddr("10.0.2.3")}, Protected: []netip.Prefix{netip.MustParsePrefix("172.19.0.0/16")}}}
 	data, _ := json.Marshal(configuration)
 	configPath := filepath.Join(t.TempDir(), "hosted.json")
 	if err := os.WriteFile(configPath, data, 0600); err != nil {
@@ -128,6 +128,9 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 			t.Error(err)
 		}
 		if err := cleanupBackend.RemoveContainer(stop, spec); err != nil {
+			t.Error(err)
+		}
+		if err := os.RemoveAll(filepath.Join(configuration.Backend.WorkspaceRoot, environment.ID)); err != nil {
 			t.Error(err)
 		}
 		_ = cleanupBackend.Close()

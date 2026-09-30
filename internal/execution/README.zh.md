@@ -34,6 +34,11 @@ Linux 需要可用的用户服务管理器；CLI 不自动启用 lingering 或�
 该用户不能访问私有绑定凭据与恢复状态。根文件系统只读，Workspace 与 Home 持久保存，临时目录限制容量。
 guest 不获得平台数据库、模型、RPC 或 Docker 凭据。Execution 使用独立的 32 字节私有密钥派生绑定凭据，PostgreSQL 仅保存摘要。
 
+Workspace 与 Home 在独立文件系统上共用 XFS 项目配额，与控制状态分开保存。
+PostgreSQL 管理不可变的存储 UUID、项目编号和硬限额；初始化后的数据丢失不会被静默重建。
+字节数与 inode 数限额在容器替换后仍然有效，后端在启动容器前检查挂载身份、配额执行和继承状态。
+详见[托管部署配方](../../deploy/hosted/README.zh.md)。
+
 `juex-execution serve --hosted-config /absolute/operator-config.json` 启用托管后端。
 运维配置描述 Docker socket、固定镜像、guest 二进制、私有存储根、IPv4 地址池、DNS、受保护的平台网络和精确内网例外。
 专用托管 TLS 监听器使用 Execution 服务证书，仅在 `/device/connect` 接受托管连接；配置中的控制端点例外必须匹配该监听器。

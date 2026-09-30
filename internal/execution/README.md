@@ -62,6 +62,13 @@ and Home and a bounded temporary directory. The guest receives no platform
 database, provider, RPC or Docker credentials. Execution derives its enrollment
 credential from a separate 32-byte private key; PostgreSQL stores only its hash.
 
+Workspace and Home share an XFS project quota on a dedicated filesystem,
+separate from control state. PostgreSQL owns the immutable storage UUID, project
+ID and hard limits; existing data is never silently recreated after provisioning.
+Both byte and inode limits survive container replacement. The backend validates
+mount identity, enforcement and inheritance before starting any container.
+See the [hosted deployment recipe](../../deploy/hosted/README.md).
+
 `juex-execution serve --hosted-config /absolute/operator-config.json` enables the
 backend. The operator configuration describes the Docker socket, pinned image,
 guest binary, private storage root, IPv4 address pool, DNS resolvers, protected

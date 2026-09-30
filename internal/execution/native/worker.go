@@ -22,7 +22,7 @@ func (e *Engine) processEnvironment(extra map[string]string) ([]string, error) {
 	if e.config.ProcessUser == nil {
 		return processEnvironment(extra)
 	}
-	values := map[string]string{"HOME": e.config.ProcessUser.Home, "USER": "agent", "LOGNAME": "agent", "TMPDIR": "/tmp"}
+	values := map[string]string{"HOME": e.config.ProcessUser.Home, "USER": "agent", "LOGNAME": "agent", "TMPDIR": "/tmp", "NPM_CONFIG_PREFIX": e.config.ProcessUser.Home + "/.local", "PYTHONUSERBASE": e.config.ProcessUser.Home + "/.local"}
 	for k, v := range extra {
 		values[k] = v
 	}

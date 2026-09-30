@@ -34,6 +34,15 @@ type hostedPeer struct {
 }
 
 func TestHostedDockerProtocolIsolationAndRebuild(t *testing.T) {
+	hostedDockerProtocol(t, false)
+}
+
+func TestHostedDependenciesSurviveRebuild(t *testing.T) {
+	hostedDockerProtocol(t, true)
+}
+
+func hostedDockerProtocol(t *testing.T, dependencies bool) {
+	t.Helper()
 	if os.Geteuid() != 0 {
 		t.Fatal("hosted test requires an isolated Linux network namespace with root")
 	}
@@ -42,6 +51,14 @@ func TestHostedDockerProtocolIsolationAndRebuild(t *testing.T) {
 	ready := make(chan *hostedPeer, 8)
 	tenant, user := uuid.NewString(), uuid.NewString()
 	specs := []hosted.Spec{{EnvironmentID: uuid.NewString(), AgentID: uuid.NewString(), TenantID: tenant, UserID: user, Credential: rand.Text() + rand.Text(), Slot: 3000, Memory: 512 << 20, NanoCPUs: 1000000000}, {EnvironmentID: uuid.NewString(), AgentID: uuid.NewString(), TenantID: tenant, UserID: user, Credential: rand.Text() + rand.Text(), Slot: 3001, Memory: 512 << 20, NanoCPUs: 1000000000}}
+	for i := range specs {
+		specs[i].StorageIdentity = os.Getenv("JUEX_HOSTED_STORAGE_ID")
+		specs[i].ProjectID = uint32(3000 + i)
+		specs[i].WorkspaceBytes = 256 << 20
+		specs[i].WorkspaceInodes = 4096
+		id := specs[i].EnvironmentID
+		t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(os.Getenv("JUEX_HOSTED_STORAGE_ROOT"), id)) })
+	}
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var spec *hosted.Spec
 		for i := range specs {
@@ -102,7 +119,7 @@ func TestHostedDockerProtocolIsolationAndRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal("JUEX_HOSTED_TEST_IP must name the namespace host address", err)
 	}
-	config := hosted.Config{Socket: os.Getenv("JUEX_DOCKER_SOCKET"), Root: t.TempDir(), GuestBinary: os.Getenv("JUEX_GUEST_BINARY"), Image: os.Getenv("JUEX_HOSTED_IMAGE"), Pool: netip.MustParsePrefix("172.30.0.0/16"), Control: netip.AddrPortFrom(address, uint16(port)), Server: "https://example.com:" + portText, CA: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), Protected: []netip.Prefix{netip.MustParsePrefix("172.19.0.0/16")}}
+	config := hosted.Config{Socket: os.Getenv("JUEX_DOCKER_SOCKET"), WorkspaceRoot: os.Getenv("JUEX_HOSTED_STORAGE_ROOT"), StorageIdentity: os.Getenv("JUEX_HOSTED_STORAGE_ID"), Root: t.TempDir(), GuestBinary: os.Getenv("JUEX_GUEST_BINARY"), Image: os.Getenv("JUEX_HOSTED_IMAGE"), Pool: netip.MustParsePrefix("172.30.0.0/16"), Control: netip.AddrPortFrom(address, uint16(port)), Server: "https://example.com:" + portText, CA: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), Protected: []netip.Prefix{netip.MustParsePrefix("172.19.0.0/16")}}
 	// This isolated lab uses slirp DNS. Only its DNS ports are allowed; ordinary
 	// private destinations remain denied, including DNS-rebinding answers.
 	config.DNS = []netip.Addr{netip.MustParseAddr("10.0.2.3")}
@@ -168,7 +185,7 @@ func TestHostedDockerProtocolIsolationAndRebuild(t *testing.T) {
 		data, _ := json.Marshal(args)
 		request := execprotocol.Request{Version: execprotocol.Version, ID: id, AgentID: spec.AgentID, Kind: kind, Arguments: data}
 		call(peer, execprotocol.Envelope{Type: "submit", Request: &request})
-		deadline := time.Now().Add(20 * time.Second)
+		deadline := time.Now().Add(2 * time.Minute)
 		for time.Now().Before(deadline) {
 			reply := call(peer, execprotocol.Envelope{Type: "query", AgentID: spec.AgentID, OperationID: id, Limit: 64 << 10})
 			if reply.Snapshot != nil && reply.Snapshot.State.Terminal() {
@@ -209,6 +226,13 @@ func TestHostedDockerProtocolIsolationAndRebuild(t *testing.T) {
 			t.Fatal("protected destination reachable", endpoint)
 		}
 	}
+	if dependencies {
+		command := `python3 -m venv "$HOME/.venvs/proof" && "$HOME/.venvs/proof/bin/pip" install --disable-pip-version-check --no-cache-dir six==1.17.0 && npm install --global --no-audit --no-fund is-number@7.0.0 && git --version && node --version && rg --version && printf 'int main(void){return 0;}' > /workspace/check.c && cc /workspace/check.c -o /workspace/check && /workspace/check`
+		result := run(a, specs[0], "install-dependencies", "exec_command", native.CommandArguments{Command: command, TimeoutMS: 90000})
+		if result.State != execprotocol.Completed {
+			t.Fatal("hosted dependency installation failed", result)
+		}
+	}
 	if err := backend.Stop(ctx, specs[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +251,13 @@ func TestHostedDockerProtocolIsolationAndRebuild(t *testing.T) {
 	if result.State != execprotocol.Completed || result.Text() != "onceagent-ahome" {
 		t.Fatal("rebuild replayed an effect or lost persistent files", result)
 	}
+	if dependencies {
+		command := `"$HOME/.venvs/proof/bin/python" -c 'import six; assert six.__version__ == "1.17.0"' && node -e 'if(!require(process.env.HOME+"/.local/lib/node_modules/is-number")(42))process.exit(1)' && /workspace/check && printf dependencies-preserved`
+		result := run(rebuilt, specs[0], "verify-dependencies", "exec_command", native.CommandArguments{Command: command})
+		if result.State != execprotocol.Completed || result.Text() != "dependencies-preserved" {
+			t.Fatal("rebuild lost installed dependencies", result)
+		}
+	}
 	// Install this test's network helper as an ordinary workspace artifact. It
 	// uses the same UID/network as other user programs, not Docker exec or the host.
 	for name, source := range map[string]string{"network-probe": os.Args[0], "public-ca.pem": "/etc/ssl/certs/ca-certificates.crt"} {
@@ -234,7 +265,7 @@ func TestHostedDockerProtocolIsolationAndRebuild(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		path := filepath.Join(config.Root, specs[0].EnvironmentID, "workspace", name)
+		path := filepath.Join(config.WorkspaceRoot, specs[0].EnvironmentID, "workspace", name)
 		if err := os.WriteFile(path, data, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -245,6 +276,30 @@ func TestHostedDockerProtocolIsolationAndRebuild(t *testing.T) {
 	result = run(rebuilt, specs[0], "public-https", "exec_command", native.CommandArguments{Command: "/workspace/network-probe -test.run=^TestHostedNetworkProbe$", Environment: map[string]string{"JUEX_HOSTED_NETWORK_PROBE": "https://public.ecr.aws/v2/", "SSL_CERT_FILE": "/workspace/public-ca.pem"}})
 	if result.State != execprotocol.Completed || !strings.Contains(result.Text(), "HTTPS status 401") {
 		t.Fatal("public DNS/TLS unavailable", result)
+	}
+	result = run(rebuilt, specs[0], "fill-workspace", "exec_command", native.CommandArguments{Command: "dd if=/dev/zero of=/workspace/quota-fill bs=1048576 count=300", TimeoutMS: 30000})
+	// XFS project quotas report ENOSPC (user quotas may report EDQUOT).
+	quotaFailure := func(result execprotocol.Snapshot) bool {
+		return result.State == execprotocol.Failed && (strings.Contains(result.Text(), "No space left on device") || strings.Contains(result.Text(), "Disk quota exceeded"))
+	}
+	if !quotaFailure(result) {
+		t.Fatal("workspace exceeded hard byte quota", result)
+	}
+	result = run(rebuilt, specs[0], "fill-home", "exec_command", native.CommandArguments{Command: "dd if=/dev/zero of=$HOME/quota-fill bs=1048576 count=2", TimeoutMS: 30000})
+	if !quotaFailure(result) {
+		t.Fatal("home bypassed shared byte quota", result)
+	}
+	result = run(b, specs[1], "other-agent-after-full", "write", native.FileArguments{Path: "unaffected", Content: "available"})
+	if result.State != execprotocol.Completed {
+		t.Fatal("one Agent quota affected another", result)
+	}
+	result = run(rebuilt, specs[0], "fill-inodes", "exec_command", native.CommandArguments{Command: "rm -f /workspace/quota-fill $HOME/quota-fill; mkdir /workspace/quota-inodes; for i in $(seq 1 5000); do : > /workspace/quota-inodes/$i || exit 1; done", TimeoutMS: 30000})
+	if !quotaFailure(result) {
+		t.Fatal("inode hard quota was not enforced", result)
+	}
+	result = run(rebuilt, specs[0], "clear-inodes", "exec_command", native.CommandArguments{Command: "rm -rf /workspace/quota-inodes && printf recovered", TimeoutMS: 30000})
+	if result.State != execprotocol.Completed || result.Text() != "recovered" {
+		t.Fatal("control journal could not continue after quota", result)
 	}
 }
 

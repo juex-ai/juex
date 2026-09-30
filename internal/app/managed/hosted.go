@@ -17,17 +17,19 @@ import (
 // HostedConfiguration is operator-owned. Neither this file, the engine socket,
 // nor the enrollment key is exposed through model tools or Management APIs.
 type HostedConfiguration struct {
-	Backend     hosted.Config `json:"backend"`
-	KeyFile     string        `json:"key_file"`
-	IdleSeconds int           `json:"idle_seconds"`
-	Memory      int64         `json:"memory_bytes"`
-	NanoCPUs    int64         `json:"nano_cpus"`
+	Backend         hosted.Config `json:"backend"`
+	KeyFile         string        `json:"key_file"`
+	IdleSeconds     int           `json:"idle_seconds"`
+	Memory          int64         `json:"memory_bytes"`
+	NanoCPUs        int64         `json:"nano_cpus"`
+	WorkspaceBytes  int64         `json:"workspace_bytes"`
+	WorkspaceInodes int64         `json:"workspace_inodes"`
 }
 
 type hostedBackend struct{ docker *hosted.Docker }
 
 func hostedSpec(resource execution.HostedResource, credential string) hosted.Spec {
-	return hosted.Spec{EnvironmentID: resource.EnvironmentID, AgentID: resource.AgentID, TenantID: resource.TenantID, UserID: resource.UserID, Credential: credential, Slot: resource.Slot, Memory: resource.Memory, NanoCPUs: resource.NanoCPUs}
+	return hosted.Spec{EnvironmentID: resource.EnvironmentID, AgentID: resource.AgentID, TenantID: resource.TenantID, UserID: resource.UserID, Credential: credential, Slot: resource.Slot, Memory: resource.Memory, NanoCPUs: resource.NanoCPUs, StorageIdentity: resource.StorageIdentity, ProjectID: resource.ProjectID, WorkspaceBytes: resource.WorkspaceBytes, WorkspaceInodes: resource.WorkspaceInodes, Provisioned: resource.Provisioned}
 }
 func (b hostedBackend) Ensure(ctx context.Context, resource execution.HostedResource, credential string) error {
 	_, err := b.docker.Ensure(ctx, hostedSpec(resource, credential))
@@ -76,6 +78,9 @@ func (e *Execution) configureHosted(ctx context.Context, path, listen, caPath st
 	if config.IdleSeconds < 0 || config.IdleSeconds > 86400 {
 		return errors.New("hosted idle timeout must be between zero and 86400 seconds")
 	}
+	if config.WorkspaceBytes != 0 && (config.WorkspaceBytes < 16<<20 || config.WorkspaceBytes%512 != 0) || config.WorkspaceInodes != 0 && config.WorkspaceInodes < 64 {
+		return errors.New("hosted workspace requires a byte hard limit aligned to 512 bytes and at least 64 inodes")
+	}
 	backend, err := hosted.New(config.Backend)
 	if err != nil {
 		return err
@@ -85,6 +90,6 @@ func (e *Execution) configureHosted(ctx context.Context, path, listen, caPath st
 		return err
 	}
 	e.hosted = backend
-	e.Service.Hosted = &execution.HostedManager{Store: store, Authority: e.Service.Authority, Backend: hostedBackend{backend}, Key: key, Idle: time.Duration(config.IdleSeconds) * time.Second, Memory: config.Memory, NanoCPUs: config.NanoCPUs}
+	e.Service.Hosted = &execution.HostedManager{Store: store, Authority: e.Service.Authority, Backend: hostedBackend{backend}, Key: key, Idle: time.Duration(config.IdleSeconds) * time.Second, Memory: config.Memory, NanoCPUs: config.NanoCPUs, StorageIdentity: config.Backend.StorageIdentity, WorkspaceBytes: config.WorkspaceBytes, WorkspaceInodes: config.WorkspaceInodes}
 	return nil
 }

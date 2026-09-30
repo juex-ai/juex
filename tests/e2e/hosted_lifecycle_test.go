@@ -41,7 +41,7 @@ func hostedFixture(t *testing.T) (*executionFixture, *hostedBackendProbe, execpr
 	t.Helper()
 	f := executionDatabase(t)
 	backend := &hostedBackendProbe{}
-	f.execution.Hosted = &execution.HostedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: make([]byte, 32), Idle: time.Minute}
+	f.execution.Hosted = &execution.HostedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: make([]byte, 32), Idle: time.Minute, StorageIdentity: "11111111-1111-4111-8111-111111111111"}
 	environments, err := f.execution.Environments(context.Background(), f.actor, f.tenant, f.agent.ID)
 	if err != nil || len(environments) != 1 || environments[0].Kind != "hosted" || environments[0].PermissionMode != "gvisor" {
 		t.Fatal(environments, err)
@@ -85,6 +85,18 @@ func TestHostedLazyAdmissionLifecycleAndCredentialBoundary(t *testing.T) {
 	if err := f.execution.Hosted.Reconcile(ctx); err != nil || backend.starts != 1 {
 		t.Fatal("durable work did not start environment", err, backend.starts)
 	}
+	var provisioned bool
+	var storage string
+	var project, bytes, inodes int64
+	if err := f.pool.QueryRow(ctx, `SELECT provisioned,storage_identity,project_id,workspace_bytes,workspace_inodes FROM execution.hosted WHERE environment_id=$1`, environment.ID).Scan(&provisioned, &storage, &project, &bytes, &inodes); err != nil || !provisioned || storage != f.execution.Hosted.StorageIdentity || project == 0 || bytes != 2<<30 || inodes != 131072 {
+		t.Fatal("storage allocation not persisted", err, provisioned, storage, project, bytes, inodes)
+	}
+	originalStorage := f.execution.Hosted.StorageIdentity
+	f.execution.Hosted.StorageIdentity = "22222222-2222-4222-8222-222222222222"
+	if _, err := f.execution.Environments(ctx, f.actor, f.tenant, f.agent.ID); err == nil {
+		t.Fatal("storage reconfiguration silently replaced workspace")
+	}
+	f.execution.Hosted.StorageIdentity = originalStorage
 	device, err := f.executionStore.AuthenticateDevice(ctx, backend.credential)
 	if err != nil || device.ID != environment.ID {
 		t.Fatal("hosted enrollment cannot authenticate", device.ID, err)
@@ -107,7 +119,7 @@ func TestHostedLazyAdmissionLifecycleAndCredentialBoundary(t *testing.T) {
 	}
 	// A restart derives the same enrollment without storing plaintext in SQL.
 	key := make([]byte, 32)
-	f.execution.Hosted = &execution.HostedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: key}
+	f.execution.Hosted = &execution.HostedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: key, StorageIdentity: "11111111-1111-4111-8111-111111111111"}
 	if _, err := f.execution.Environments(ctx, f.actor, f.tenant, f.agent.ID); err != nil {
 		t.Fatal("restart lost environment", err)
 	}
