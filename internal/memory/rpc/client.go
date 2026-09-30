@@ -12,7 +12,21 @@ import (
 	"github.com/juex-ai/juex/internal/memory"
 )
 
+func (c *Client) Contribute(ctx context.Context, scope application.Scope, batch memory.Contribution) error {
+	scopeJSON, _ := json.Marshal(scope)
+	batchJSON, _ := json.Marshal(batch)
+	reply, err := c.client.Contribute(ctx, string(scopeJSON), string(batchJSON))
+	return platformrpc.Decode(reply, err, nil, appwire.DecodeError)
+}
+
 type Client struct{ client wire.Client }
+
+func (c *Client) Maintain(ctx context.Context, scope application.Scope, thread, reason, commandID string) (mc.Receipt, error) {
+	reply, err := c.client.Maintain(ctx, encode(scope), thread, reason, commandID)
+	var value mc.Receipt
+	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
+	return value, err
+}
 
 func (c *Client) Reviews(ctx context.Context, access application.Access, offset, limit int) (memory.ReviewPage, error) {
 	if offset < 0 || offset > 1<<30 || limit < 1 || limit > 50 {

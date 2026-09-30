@@ -23,6 +23,7 @@ type Service struct {
 }
 
 type Review struct {
+	SourceThrough  uint64            `json:"source_through,omitempty"`
 	ID             string            `json:"id"`
 	Scope          application.Scope `json:"scope"`
 	ThreadID       string            `json:"source_thread_id"`
@@ -52,20 +53,22 @@ type AdminReceipt struct {
 }
 
 type State struct {
-	Commands   map[string]CommandReceipt `json:"commands"`
-	Control    application.Control       `json:"control"`
-	Fence      uint64                    `json:"fence"`
-	Strategy   string                    `json:"strategy"`
-	Entries    map[string]mc.Entry       `json:"entries"`
-	Reviews    map[string]*Review        `json:"reviews"`
-	Keys       map[string]string         `json:"keys"`
-	Admin      map[string]AdminReceipt   `json:"admin"`
-	Deleted    map[string]bool           `json:"deleted"`
-	Suppressed []mc.Source               `json:"suppressed"`
+	AdvancedSince time.Time                 `json:"advanced_since"`
+	Participation map[string]*Participation `json:"participation"`
+	Commands      map[string]CommandReceipt `json:"commands"`
+	Control       application.Control       `json:"control"`
+	Fence         uint64                    `json:"fence"`
+	Strategy      string                    `json:"strategy"`
+	Entries       map[string]mc.Entry       `json:"entries"`
+	Reviews       map[string]*Review        `json:"reviews"`
+	Keys          map[string]string         `json:"keys"`
+	Admin         map[string]AdminReceipt   `json:"admin"`
+	Deleted       map[string]bool           `json:"deleted"`
+	Suppressed    []mc.Source               `json:"suppressed"`
 }
 
 func NewState() *State {
-	return &State{Control: application.Control{Enabled: true, Epoch: 1, Version: 1}, Fence: 1, Strategy: mc.Basic,
+	return &State{Participation: map[string]*Participation{}, Control: application.Control{Enabled: true, Epoch: 1, Version: 1}, Fence: 1, Strategy: mc.Basic,
 		Entries: map[string]mc.Entry{}, Reviews: map[string]*Review{}, Keys: map[string]string{}, Admin: map[string]AdminReceipt{}, Deleted: map[string]bool{}, Commands: map[string]CommandReceipt{}}
 }
 
@@ -99,6 +102,8 @@ func (s *State) Configure(version int64, enabled bool, strategy string, now time
 		return application.ErrInvalid
 	}
 	if enabled != s.Control.Enabled || strategy != s.Strategy {
+		s.AdvancedSince = now
+		s.Participation = map[string]*Participation{}
 		s.Control.Epoch++
 		s.revoke("application configuration changed", now)
 	}

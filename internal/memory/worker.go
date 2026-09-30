@@ -10,6 +10,7 @@ import (
 )
 
 var ErrWorkerMissing = errors.New("application Worker has not been admitted")
+var ErrWorkerBusy = errors.New("source Thread is not idle")
 
 type WorkerState struct{ ID, State string }
 type WorkerGateway interface {
@@ -27,6 +28,12 @@ func (s *Service) Step(ctx context.Context) error {
 	repo, ok := s.Repository.(JobRepository)
 	if !ok || s.Workers == nil {
 		return application.ErrInvalid
+	}
+	if err := s.pruneEvidence(ctx); err != nil {
+		return err
+	}
+	if err := s.advance(ctx); err != nil {
+		return err
 	}
 	jobs, err := repo.PendingReviews(ctx, 100)
 	if err != nil {
@@ -51,7 +58,7 @@ func (s *Service) Step(ctx context.Context) error {
 			err = s.deliver(call, job)
 		}
 		cancel()
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrWorkerBusy) {
 			failures = append(failures, err)
 		}
 		if ctx.Err() != nil {
@@ -117,6 +124,7 @@ func (s *Service) failWorker(ctx context.Context, job Review, reason string) err
 			w.Receipt.Reason = reason
 			w.Receipt.UpdatedAt = time.Now()
 		}
+		state.settleParticipation(w)
 		return nil
 	})
 	if err != nil {

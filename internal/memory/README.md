@@ -45,3 +45,18 @@ review receipts, storage suppression and versioned application configuration.
 These views remain readable when disabled. Human administration is unavailable
 to Runtime callers. Validation replies expose bounded business reasons so a
 review Worker can correct its proposal without receiving internal diagnostics.
+
+Advanced maintains durable participation boundaries, independent of process
+heartbeats. Runtime publishes original direct-user input after a completed Turn
+through an ordered outbox; other input kinds never become evidence. Enabling,
+strategy changes and explicit human administration establish a new acceptance-time
+boundary. Older disconnected deliveries cannot backfill it.
+
+Automatic reviews freeze at most 100 events and 32 KiB after five completed user
+Turns or 24 hours at low volume. Explicit maintenance and buffer pressure bypass
+that threshold. Admission still requires 60 seconds of source Thread idleness,
+no pending/held input and no uncertain tool operation. Runtime serializes automatic
+Memory admission per Fleet; a busy source does not block other eligible sources.
+Retries recover the same Worker. Failed ranges retain their outcome and cannot be
+silently repackaged by later input. Terminal review evidence is removed after seven
+days; receipt identities and shared knowledge provenance remain.

@@ -120,6 +120,10 @@ type candidate struct {
 // Run is a shared scheduler. Only active Thread work consumes a slot; dormant
 // Agents and queued inputs have no process or model-call loop of their own.
 func (r *Runner) Run(ctx context.Context) {
+	feedCtx, stopFeed := context.WithCancel(ctx)
+	feedDone := make(chan struct{})
+	go func() { defer close(feedDone); r.deliverEvidence(feedCtx) }()
+	defer func() { stopFeed(); <-feedDone }()
 	if r.tools != nil {
 		toolCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})

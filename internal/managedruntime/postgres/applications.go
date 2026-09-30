@@ -27,6 +27,11 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 	if err := checkScope(ctx, tx, scope); err != nil {
 		return managedruntime.ApplicationReceipt{}, err
 	}
+	if job.IdleSourceThread != "" {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,5110))`, scope.FleetID); err != nil {
+			return managedruntime.ApplicationReceipt{}, err
+		}
+	}
 	if err := threadGraph(ctx, tx, scope.AgentID); err != nil {
 		return managedruntime.ApplicationReceipt{}, err
 	}
@@ -52,6 +57,18 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	if threadID == "" && !cancelled {
+		if job.IdleSourceThread != "" {
+			var busy bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs j JOIN runtime.inputs i ON i.id=j.input_id WHERE j.fleet_id=$1 AND j.application='memory' AND NOT j.cancelled AND i.state IN ('queued','active'))`, scope.FleetID).Scan(&busy); err != nil {
+				return managedruntime.ApplicationReceipt{}, err
+			}
+			if busy {
+				return managedruntime.ApplicationReceipt{}, managedruntime.ErrSourceBusy
+			}
+			if err := lockIdleApplicationSource(ctx, tx, scope, job); err != nil {
+				return managedruntime.ApplicationReceipt{}, err
+			}
+		}
 		parent, err := readThread(ctx, tx, scope.AgentID, "")
 		if err != nil {
 			return managedruntime.ApplicationReceipt{}, err

@@ -65,6 +65,12 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 		t.Fatal(rules, err)
 	}
 	proposal := f.proposal("rpc")
+	if err := client.Contribute(ctx, f.scope, memory.Contribution{Epoch: status.Epoch, Evidence: proposal.Evidence[0]}); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("Management invented automatic evidence", err)
+	}
+	if _, err := client.Maintain(ctx, f.scope, f.thread, "user requested", "maintain"); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("Management forged maintenance tool", err)
+	}
 	if _, err := client.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("Management invented original Runtime evidence", err)
 	}
@@ -129,6 +135,17 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 	}
 	if page, err := client.Search(ctx, f.human, mc.Query{}); err != nil || len(page.Entries) != 1 {
 		t.Fatal("disabled RPC UI read", page, err)
+	}
+	status, err = client.Configure(ctx, f.human, status.Version+1, true, mc.Advanced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal = f.proposal("advanced-rpc")
+	if err := runtime.Contribute(ctx, f.scope, memory.Contribution{Epoch: status.Epoch, Evidence: proposal.Evidence[0]}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Maintain(ctx, f.scope, f.thread, "user requested", "maintain"); err != nil {
+		t.Fatal(err)
 	}
 	execution, err := memoryrpc.NewClient(listener.Addr().String(), platformrpc.CredentialsAt(pki, "execution"))
 	if err != nil {

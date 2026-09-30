@@ -282,6 +282,11 @@ func TestManagedRuntimeApplicationRPCNamespace(t *testing.T) {
 	if _, err := management.AdmitApplication(ctx, scope, job); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Management forged app task", err)
 	}
+	busyJob := applicationJob()
+	busyJob.IdleSourceThread = f.main.ID
+	if _, err := client.AdmitApplication(ctx, scope, busyJob); !errors.Is(err, managedruntime.ErrSourceBusy) {
+		t.Fatal("idle wait lost over RPC", err)
+	}
 	if _, err := calendar.AdmitApplication(ctx, scope, job); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Calendar forged Memory task", err)
 	}

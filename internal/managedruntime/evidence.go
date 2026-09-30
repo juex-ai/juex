@@ -16,3 +16,17 @@ type OriginalEvidence struct {
 type EvidenceStore interface {
 	ToolEvidence(context.Context, ToolWork) (OriginalEvidence, error)
 }
+
+type EvidenceDelivery struct {
+	ID       string
+	Scope    Scope
+	ThreadID string
+	OriginalEvidence
+}
+type EvidenceOutbox interface {
+	PendingEvidence(context.Context, int) ([]EvidenceDelivery, error)
+	FinishEvidence(context.Context, string, string) error
+}
+type EvidenceGateway interface {
+	Contribute(context.Context, EvidenceDelivery) error
+}

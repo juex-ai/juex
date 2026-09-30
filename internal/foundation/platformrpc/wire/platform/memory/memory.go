@@ -13,6 +13,20 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"Maintain": kitex.NewMethodInfo(
+		maintainHandler,
+		newMemoryMaintainArgs,
+		newMemoryMaintainResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"Contribute": kitex.NewMethodInfo(
+		contributeHandler,
+		newMemoryContributeArgs,
+		newMemoryContributeResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Reviews": kitex.NewMethodInfo(
 		reviewsHandler,
 		newMemoryReviewsArgs,
@@ -182,6 +196,42 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func maintainHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.MemoryMaintainArgs)
+	realResult := result.(*platform.MemoryMaintainResult)
+	success, err := handler.(platform.Memory).Maintain(ctx, realArg.ScopeJSON, realArg.ThreadID, realArg.Reason, realArg.CommandID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newMemoryMaintainArgs() interface{} {
+	return platform.NewMemoryMaintainArgs()
+}
+
+func newMemoryMaintainResult() interface{} {
+	return platform.NewMemoryMaintainResult()
+}
+
+func contributeHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.MemoryContributeArgs)
+	realResult := result.(*platform.MemoryContributeResult)
+	success, err := handler.(platform.Memory).Contribute(ctx, realArg.ScopeJSON, realArg.ContributionJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newMemoryContributeArgs() interface{} {
+	return platform.NewMemoryContributeArgs()
+}
+
+func newMemoryContributeResult() interface{} {
+	return platform.NewMemoryContributeResult()
 }
 
 func reviewsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -462,6 +512,30 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) Maintain(ctx context.Context, scopeJSON string, threadID string, reason string, commandID string) (r *platform.Reply, err error) {
+	var _args platform.MemoryMaintainArgs
+	_args.ScopeJSON = scopeJSON
+	_args.ThreadID = threadID
+	_args.Reason = reason
+	_args.CommandID = commandID
+	var _result platform.MemoryMaintainResult
+	if err = p.c.Call(ctx, "Maintain", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Contribute(ctx context.Context, scopeJSON string, contributionJSON string) (r *platform.Reply, err error) {
+	var _args platform.MemoryContributeArgs
+	_args.ScopeJSON = scopeJSON
+	_args.ContributionJSON = contributionJSON
+	var _result platform.MemoryContributeResult
+	if err = p.c.Call(ctx, "Contribute", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) Reviews(ctx context.Context, accessJSON string, offset int32, limit int32) (r *platform.Reply, err error) {

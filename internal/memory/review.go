@@ -148,6 +148,7 @@ func (s *State) Decide(scope application.Scope, binding Binding, decision mc.Dec
 	w.Receipt.State, w.Receipt.Reason = decision.Outcome, decision.Reason
 	w.Receipt.Committed, w.Receipt.IndexReady = decision.Outcome == "applied", true
 	w.Receipt.EntryIDs, w.Receipt.UpdatedAt = ids, now
+	s.settleParticipation(w)
 	return w.Receipt, nil
 }
 
@@ -160,6 +161,15 @@ func (s *State) Result(scope application.Scope, thread, id string) (mc.Receipt, 
 }
 
 func (s *State) scrub(sources []mc.Source) {
+	for _, p := range s.Participation {
+		retained := p.Evidence[:0]
+		for _, e := range p.Evidence {
+			if !intersects(e.Source, sources) {
+				retained = append(retained, e)
+			}
+		}
+		p.Evidence = retained
+	}
 	for _, w := range s.Reviews {
 		for _, ref := range w.Proposal.Sources {
 			if intersects(ref, sources) {

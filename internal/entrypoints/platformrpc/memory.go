@@ -31,6 +31,30 @@ type memoryHandler struct {
 	health  func(context.Context) error
 }
 
+func (h *memoryHandler) Maintain(ctx context.Context, scopeJSON, thread, reason, commandID string) (*platform.Reply, error) {
+	var scope application.Scope
+	if transport.CallerRole(ctx) != "runtime" {
+		return appReply(nil, application.ErrDenied)
+	}
+	if !appDecode(scopeJSON, &scope) {
+		return appReply(nil, application.ErrInvalid)
+	}
+	v, err := h.service.Maintain(ctx, scope, thread, reason, commandID)
+	return appReply(v, err)
+}
+
+func (h *memoryHandler) Contribute(ctx context.Context, scopeJSON, contributionJSON string) (*platform.Reply, error) {
+	var scope application.Scope
+	var batch memory.Contribution
+	if transport.CallerRole(ctx) != "runtime" {
+		return appReply(nil, application.ErrDenied)
+	}
+	if !appDecode(scopeJSON, &scope) || !appDecode(contributionJSON, &batch) {
+		return appReply(nil, application.ErrInvalid)
+	}
+	return appReply(nil, h.service.Contribute(ctx, scope, batch))
+}
+
 func (h *memoryHandler) Reviews(ctx context.Context, accessJSON string, offset, limit int32) (*platform.Reply, error) {
 	access, ok := memoryAccess(ctx, accessJSON)
 	if !ok || transport.CallerRole(ctx) != "management" {

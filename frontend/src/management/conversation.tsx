@@ -154,7 +154,7 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
   return <section className="management-conversation" aria-label={`${thread.name} 对话`}>
     <div className="management-conversation-heading"><strong>{thread.name}</strong><Button size="sm" variant="ghost" disabled={!inputWritable || busy} onClick={() => { setError(''); setCompactFocus(compactRequest?.focus ?? '') }}><Minimize2 size={14} />压缩上下文</Button><span>{running && <LoaderCircle size={13} className="animate-spin" />}{stateText[current.state] ?? current.state}</span></div>
     <div className="management-transcript" ref={scroll} onScroll={event => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
-      {!timeline.thread ? <Loading /> : rows.length === 0 ? <Empty title="从一条消息开始">说明你要完成的事，Agent 会在这里持续处理。</Empty> : rows.map(row => row.kind === 'notice' ? <p className="management-turn-notice" key={row.id}>{row.text}</p> : <MessageView key={row.id} message={row.message} status={row.status} />)}
+      {!timeline.thread ? <Loading /> : rows.length === 0 ? <Empty title="从一条消息开始">说明你要完成的事，Agent 会在这里持续处理。</Empty> : rows.map(row => row.kind === 'notice' ? <p className="management-turn-notice" key={row.id}>{row.text}</p> : <MessageView key={row.id} message={row.message} status={row.status} application={current.application} />)}
       {current.state === 'running' && <div className="management-working" role="status"><LoaderCircle size={14} className="animate-spin" />正在处理…</div>}
     </div>
     <div className="management-composer-wrap">{timeline.error && <Failure message={timeline.error} retry={() => setRevision(value => value + 1)} />}{error && <Notice error>{error}</Notice>}
@@ -165,10 +165,10 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
   </section>
 }
 
-function MessageView({ message, status }: { message: Message; status: string }) {
+function MessageView({ message, status, application }: { message: Message; status: string; application?: string }) {
   if (message.kind === 'tool_result') return <div className="management-message from-agent">{message.blocks.map((block, index) => <details key={index} className="management-tool-row"><summary>{block.is_error ? '执行未完成' : '执行结果'} · {block.tool_name}</summary><pre>{block.content}</pre></details>)}</div>
   if (message.kind === 'compact') return <details className="management-tool-row"><summary>上下文摘要 · 原始对话已保留</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
-  if (message.kind === 'system_notice') return <details className="management-tool-row"><summary>{message.blocks.some(block => block.text?.startsWith('Explicit collaboration message')) ? '协作消息与结果' : '执行环境动态'}</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
+  if (message.kind === 'system_notice') return <details className="management-tool-row"><summary>{application ? '应用任务' : message.blocks.some(block => block.text?.startsWith('Explicit collaboration message')) ? '协作消息与结果' : '系统动态'}</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
   const user = message.role === 'user'
   return <article className={`management-message ${user ? 'from-user' : 'from-agent'}`}><div className="management-message-author">{user ? '你' : 'Agent'}</div>{message.blocks.map((block, index) => {
     if (block.type === 'text') return user ? <p key={index} className="management-user-text">{block.text}</p> : <MessageResponse key={index} isAnimating={false}>{block.text ?? ''}</MessageResponse>

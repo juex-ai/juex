@@ -447,6 +447,11 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 	if err := appendEvent(ctx, tx, threadID, "turn."+state, map[string]string{"turn_id": turnID, "input_id": inputID, "error": failure}); err != nil {
 		return err
 	}
+	if state == "completed" {
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.memory_evidence(input_id) SELECT id FROM runtime.inputs WHERE id=$1 AND COALESCE(source->>'kind','')='' ON CONFLICT DO NOTHING`, inputID); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 

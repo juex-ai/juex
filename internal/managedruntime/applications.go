@@ -9,17 +9,19 @@ import (
 )
 
 var ErrApplicationBudget = errors.New("application Worker model budget exhausted")
+var ErrSourceBusy = errors.New("source Thread is not safely idle")
 
 // ApplicationJob is a frozen task from a trusted built-in service. The app owns
 // its business result; Runtime owns this ordinary Worker's execution and usage.
 type ApplicationJob struct {
-	Application string `json:"application"`
-	ID          string `json:"id"`
-	Epoch       int64  `json:"epoch"`
-	Fence       uint64 `json:"fence"`
-	Name        string `json:"name"`
-	Instruction string `json:"instruction"`
-	MaxCalls    int    `json:"max_calls"`
+	IdleSourceThread string `json:"idle_source_thread,omitempty"`
+	Application      string `json:"application"`
+	ID               string `json:"id"`
+	Epoch            int64  `json:"epoch"`
+	Fence            uint64 `json:"fence"`
+	Name             string `json:"name"`
+	Instruction      string `json:"instruction"`
+	MaxCalls         int    `json:"max_calls"`
 }
 
 func (j ApplicationJob) Valid() bool {

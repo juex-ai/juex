@@ -89,6 +89,8 @@ func (s *State) Administer(scope application.Scope, request mc.AdminRequest, now
 		return mc.Receipt{}, application.ErrInvalid
 	}
 	s.Fence++
+	s.AdvancedSince = now
+	s.Participation = map[string]*Participation{}
 	s.revoke("superseded by explicit user control", now)
 	s.Suppressed = append(s.Suppressed, removedSources...)
 	s.scrub(removedSources)

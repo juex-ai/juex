@@ -572,6 +572,10 @@ var fieldIDToName_ManagementModelProfileResult = map[int16]string{
 }
 
 type Memory interface {
+	Maintain(ctx context.Context, scopeJSON string, threadID string, reason string, commandID string) (r *Reply, err error)
+
+	Contribute(ctx context.Context, scopeJSON string, contributionJSON string) (r *Reply, err error)
+
 	Reviews(ctx context.Context, accessJSON string, offset int32, limit int32) (r *Reply, err error)
 
 	StorageRules(ctx context.Context, accessJSON string, offset int32, limit int32) (r *Reply, err error)
@@ -601,6 +605,176 @@ type Memory interface {
 	ReviewResult_(ctx context.Context, accessJSON string, threadID string, reviewID string) (r *Reply, err error)
 
 	Administer(ctx context.Context, accessJSON string, requestJSON string) (r *Reply, err error)
+}
+
+type MemoryMaintainArgs struct {
+	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	ThreadID  string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+	Reason    string `thrift:"reason,3" frugal:"3,default,string" json:"reason"`
+	CommandID string `thrift:"commandID,4" frugal:"4,default,string" json:"commandID"`
+}
+
+func NewMemoryMaintainArgs() *MemoryMaintainArgs {
+	return &MemoryMaintainArgs{}
+}
+
+func (p *MemoryMaintainArgs) InitDefault() {
+}
+
+func (p *MemoryMaintainArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *MemoryMaintainArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *MemoryMaintainArgs) GetReason() (v string) {
+	return p.Reason
+}
+
+func (p *MemoryMaintainArgs) GetCommandID() (v string) {
+	return p.CommandID
+}
+func (p *MemoryMaintainArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *MemoryMaintainArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *MemoryMaintainArgs) SetReason(val string) {
+	p.Reason = val
+}
+func (p *MemoryMaintainArgs) SetCommandID(val string) {
+	p.CommandID = val
+}
+
+func (p *MemoryMaintainArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryMaintainArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryMaintainArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "threadID",
+	3: "reason",
+	4: "commandID",
+}
+
+type MemoryMaintainResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryMaintainResult() *MemoryMaintainResult {
+	return &MemoryMaintainResult{}
+}
+
+func (p *MemoryMaintainResult) InitDefault() {
+}
+
+var MemoryMaintainResult_Success_DEFAULT *Reply
+
+func (p *MemoryMaintainResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryMaintainResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryMaintainResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryMaintainResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryMaintainResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryMaintainResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryMaintainResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryContributeArgs struct {
+	ScopeJSON        string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	ContributionJSON string `thrift:"contributionJSON,2" frugal:"2,default,string" json:"contributionJSON"`
+}
+
+func NewMemoryContributeArgs() *MemoryContributeArgs {
+	return &MemoryContributeArgs{}
+}
+
+func (p *MemoryContributeArgs) InitDefault() {
+}
+
+func (p *MemoryContributeArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *MemoryContributeArgs) GetContributionJSON() (v string) {
+	return p.ContributionJSON
+}
+func (p *MemoryContributeArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *MemoryContributeArgs) SetContributionJSON(val string) {
+	p.ContributionJSON = val
+}
+
+func (p *MemoryContributeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryContributeArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryContributeArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "contributionJSON",
+}
+
+type MemoryContributeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryContributeResult() *MemoryContributeResult {
+	return &MemoryContributeResult{}
+}
+
+func (p *MemoryContributeResult) InitDefault() {
+}
+
+var MemoryContributeResult_Success_DEFAULT *Reply
+
+func (p *MemoryContributeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryContributeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryContributeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryContributeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryContributeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryContributeResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryContributeResult = map[int16]string{
+	0: "success",
 }
 
 type MemoryReviewsArgs struct {

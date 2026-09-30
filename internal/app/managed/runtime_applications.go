@@ -16,6 +16,8 @@ import (
 )
 
 type RuntimeMemory interface {
+	Maintain(context.Context, application.Scope, string, string, string) (mc.Receipt, error)
+	Contribute(context.Context, application.Scope, memory.Contribution) error
 	Status(context.Context, application.Access) (memory.Status, error)
 	Search(context.Context, application.Access, mc.Query) (mc.Page, error)
 	Facts(context.Context, application.Access, mc.Query) (mc.FactPage, error)
@@ -25,6 +27,22 @@ type RuntimeMemory interface {
 	Review(context.Context, application.Scope, memory.Binding) (memory.Review, error)
 	Decide(context.Context, application.Scope, memory.Binding, mc.Decision, string) (mc.Receipt, error)
 	CancelCommand(context.Context, application.Scope, string) error
+}
+
+func (a RuntimeApplications) Contribute(ctx context.Context, item managedruntime.EvidenceDelivery) error {
+	if a.Memory == nil {
+		return managedruntime.ErrDenied
+	}
+	scope := appScope(item.Scope)
+	status, err := a.Memory.Status(ctx, scope.Access)
+	if err != nil {
+		return appRuntimeError(err)
+	}
+	if status.Strategy != mc.Advanced {
+		return managedruntime.ErrDenied
+	}
+	ref := mc.Source{FleetID: scope.FleetID, AgentID: scope.AgentID, ThreadID: item.ThreadID, GenerationID: strconv.FormatInt(item.Generation, 10), From: uint64(item.Sequence), Through: uint64(item.Sequence)}
+	return appRuntimeError(a.Memory.Contribute(ctx, scope, memory.Contribution{Epoch: status.Epoch, Evidence: mc.Evidence{Source: ref, Kind: "user", Text: item.Text, RecordedAt: item.RecordedAt}}))
 }
 
 type RuntimeApplications struct {
@@ -71,7 +89,7 @@ func (a RuntimeApplications) Tools(ctx context.Context, scope managedruntime.Sco
 	if job != nil && job.Application != "memory" {
 		return managedruntime.ApplicationTools{}, nil
 	}
-	_, err := a.Memory.Status(ctx, appScope(scope).Access)
+	status, err := a.Memory.Status(ctx, appScope(scope).Access)
 	if errors.Is(err, application.ErrDisabled) {
 		return managedruntime.ApplicationTools{}, nil
 	}
@@ -81,6 +99,9 @@ func (a RuntimeApplications) Tools(ctx context.Context, scope managedruntime.Sco
 	catalog := managedruntime.ApplicationTools{Tools: memory.Tools(job != nil)}
 	if job == nil {
 		catalog.Instructions = memory.AgentGuidance
+		if status.Strategy == mc.Advanced {
+			catalog.Tools = append(catalog.Tools, memory.MaintainTool())
+		}
 	}
 	return catalog, nil
 }
@@ -110,6 +131,20 @@ func (a RuntimeApplications) Call(ctx context.Context, work managedruntime.ToolW
 	}
 	scope := appScope(work.Scope)
 	switch work.Call.ToolName {
+	case "memory_maintain":
+		if job != nil || a.Evidence == nil {
+			return nil, managedruntime.ErrDenied
+		}
+		var q struct {
+			Reason string `json:"reason"`
+		}
+		if err = decodeAppTool(work.Call.Input, &q); err != nil {
+			return nil, err
+		}
+		if _, err = a.Evidence.ToolEvidence(ctx, work); err != nil {
+			return nil, err
+		}
+		return a.Memory.Maintain(ctx, scope, work.ThreadID, q.Reason, work.ID)
 	case "memory_search", "memory_facts":
 		var q mc.Query
 		if err = decodeAppTool(work.Call.Input, &q); err != nil {
@@ -169,7 +204,7 @@ func (a RuntimeApplications) Call(ctx context.Context, work managedruntime.ToolW
 }
 func (a RuntimeApplications) Cancel(ctx context.Context, work managedruntime.ToolWork) error {
 	switch work.Call.ToolName {
-	case "memory_propose", "memory_decide":
+	case "memory_propose", "memory_decide", "memory_maintain":
 		if a.Memory == nil {
 			return managedruntime.ErrDenied
 		}

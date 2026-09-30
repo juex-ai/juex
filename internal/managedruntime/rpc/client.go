@@ -24,6 +24,8 @@ func ErrorCode(err error) string {
 		return "invalid"
 	case errors.Is(err, managedruntime.ErrConflict):
 		return "conflict"
+	case errors.Is(err, managedruntime.ErrSourceBusy):
+		return "source_busy"
 	case errors.Is(err, managedruntime.ErrModelUnavailable):
 		return "model_unavailable"
 	default:
@@ -38,6 +40,8 @@ func decodeError(code string) error {
 		return managedruntime.ErrInvalid
 	case "conflict":
 		return managedruntime.ErrConflict
+	case "source_busy":
+		return managedruntime.ErrSourceBusy
 	case "model_unavailable":
 		return managedruntime.ErrModelUnavailable
 	default:

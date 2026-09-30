@@ -22,6 +22,9 @@ func (a MemoryWorkers) Admit(ctx context.Context, review memory.Review) (memory.
 		return memory.WorkerState{}, err
 	}
 	job := managedruntime.ApplicationJob{Application: "memory", ID: review.ID, Epoch: review.Epoch, Fence: review.Fence, Name: "Memory review", Instruction: prompt, MaxCalls: 24}
+	if review.Automatic {
+		job.IdleSourceThread = review.ThreadID
+	}
 	r, err := a.Runtime.AdmitApplication(ctx, workerScope(review.Scope), job)
 	return memory.WorkerState{ID: r.ThreadID, State: r.State}, memoryWorkerError(err)
 }
@@ -37,6 +40,8 @@ func (a MemoryWorkers) Cancel(ctx context.Context, review memory.Review) error {
 }
 func memoryWorkerError(err error) error {
 	switch {
+	case errors.Is(err, managedruntime.ErrSourceBusy):
+		return memory.ErrWorkerBusy
 	case errors.Is(err, managedruntime.ErrDenied):
 		return application.ErrDenied
 	case errors.Is(err, managedruntime.ErrInvalid):
