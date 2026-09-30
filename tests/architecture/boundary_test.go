@@ -23,8 +23,9 @@ var dependencies = map[string]map[string]bool{
 	"fleet":          {"foundation": true, "framework": true, "fleet": true},
 	"management":     {"foundation": true, "management": true},
 	"managedruntime": {"foundation": true, "managedruntime": true},
-	"app":            {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "app": true},
-	"entrypoints":    {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "app": true, "entrypoints": true},
+	"execution":      {"foundation": true, "execution": true},
+	"app":            {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "execution": true, "app": true},
+	"entrypoints":    {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "execution": true, "app": true, "entrypoints": true},
 	"cmd":            {"foundation": true, "entrypoints": true},
 }
 
