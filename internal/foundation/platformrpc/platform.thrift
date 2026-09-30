@@ -16,11 +16,27 @@ struct Reply {
 }
 
 service Management {
+	Reply ApplicationAuthority(1: string accessJSON, 2: bool execute)
 	Reply AuthorizeFleet(1: string actorID, 2: string tenantID, 3: string ownerID, 4: bool execute)
   Reply Authorize(1: Actor actor, 2: bool execute)
   Reply Peers(1: string scopeJSON)
   Reply Snapshot(1: string scopeJSON)
   Reply ModelProfile(1: string scopeJSON, 2: string configJSON)
+}
+
+service Memory {
+  Reply Health()
+  Reply Status(1: string accessJSON)
+  Reply Configure(1: string accessJSON, 2: i64 version, 3: bool enabled, 4: string strategy)
+  Reply Search(1: string accessJSON, 2: string queryJSON)
+  Reply Read(1: string accessJSON, 2: string requestJSON)
+  Reply Facts(1: string accessJSON, 2: string queryJSON)
+  Reply Domains(1: string accessJSON, 2: string requestJSON)
+  Reply Propose(1: string scopeJSON, 2: string threadID, 3: string proposalJSON, 4: bool automatic)
+  Reply Review(1: string scopeJSON, 2: string bindingJSON)
+  Reply Decide(1: string scopeJSON, 2: string bindingJSON, 3: string decisionJSON)
+  Reply ReviewResult(1: string accessJSON, 2: string threadID, 3: string reviewID)
+  Reply Administer(1: string accessJSON, 2: string requestJSON)
 }
 
 service Runtime {

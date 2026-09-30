@@ -24,8 +24,9 @@ var dependencies = map[string]map[string]bool{
 	"management":     {"foundation": true, "management": true},
 	"managedruntime": {"foundation": true, "managedruntime": true},
 	"execution":      {"foundation": true, "execution": true},
-	"app":            {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "execution": true, "app": true},
-	"entrypoints":    {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "execution": true, "app": true, "entrypoints": true},
+	"memory":         {"foundation": true, "memory": true},
+	"app":            {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "app": true},
+	"entrypoints":    {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "app": true, "entrypoints": true},
 	"cmd":            {"foundation": true, "entrypoints": true},
 }
 
@@ -72,7 +73,7 @@ func TestProductionPackageOwnershipAndDependencies(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if owner == "entrypoints" && (strings.HasPrefix(imported, modulePath+"/internal/management/postgres") || strings.HasPrefix(imported, modulePath+"/internal/managedruntime/postgres") || strings.HasPrefix(imported, modulePath+"/internal/execution/postgres")) {
+				if owner == "entrypoints" && (strings.HasPrefix(imported, modulePath+"/internal/management/postgres") || strings.HasPrefix(imported, modulePath+"/internal/managedruntime/postgres") || strings.HasPrefix(imported, modulePath+"/internal/execution/postgres") || strings.HasPrefix(imported, modulePath+"/internal/memory/postgres")) {
 					t.Errorf("entrypoint imports service storage adapter: %s -> %s", relative, imported)
 				}
 				if owner == "foundation" && (strings.HasPrefix(imported, "github.com/openai/") || strings.HasPrefix(imported, "github.com/anthropics/")) {

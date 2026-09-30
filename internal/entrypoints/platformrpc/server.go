@@ -7,6 +7,8 @@ import (
 	"net"
 
 	"github.com/cloudwego/kitex/server"
+	"github.com/juex-ai/juex/internal/foundation/application"
+	applicationrpc "github.com/juex-ai/juex/internal/foundation/application/rpc"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	transport "github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc/wire/platform"
@@ -18,6 +20,7 @@ import (
 )
 
 type Authority interface {
+	AuthorizeApplication(context.Context, application.Access, bool) (application.Scope, error)
 	Peers(context.Context, managedruntime.Scope) ([]managedruntime.PeerAgent, error)
 	AuthorizeFleet(context.Context, string, string, string, bool) (management.FleetAuthority, error)
 	Authorize(context.Context, string, string, string, bool) (managedruntime.Scope, error)
@@ -36,6 +39,15 @@ func NewManagement(listener net.Listener, credentials transport.Credentials, aut
 }
 
 type managementHandler struct{ authority Authority }
+
+func (h *managementHandler) ApplicationAuthority(ctx context.Context, accessJSON string, execute bool) (*platform.Reply, error) {
+	var access application.Access
+	if len(accessJSON) > 4096 || json.Unmarshal([]byte(accessJSON), &access) != nil {
+		return transport.Reply(nil, "invalid"), nil
+	}
+	value, err := h.authority.AuthorizeApplication(ctx, access, execute)
+	return transport.Reply(value, applicationrpc.ErrorCode(err)), nil
+}
 
 func (h *managementHandler) AuthorizeFleet(ctx context.Context, actorID, tenantID, ownerID string, execute bool) (*platform.Reply, error) {
 	if actorID == "" || tenantID == "" || ownerID == "" {

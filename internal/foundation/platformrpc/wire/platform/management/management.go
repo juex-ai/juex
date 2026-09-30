@@ -13,6 +13,13 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"ApplicationAuthority": kitex.NewMethodInfo(
+		applicationAuthorityHandler,
+		newManagementApplicationAuthorityArgs,
+		newManagementApplicationAuthorityResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"AuthorizeFleet": kitex.NewMethodInfo(
 		authorizeFleetHandler,
 		newManagementAuthorizeFleetArgs,
@@ -114,6 +121,24 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 	return svcInfo
 }
 
+func applicationAuthorityHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ManagementApplicationAuthorityArgs)
+	realResult := result.(*platform.ManagementApplicationAuthorityResult)
+	success, err := handler.(platform.Management).ApplicationAuthority(ctx, realArg.AccessJSON, realArg.Execute)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newManagementApplicationAuthorityArgs() interface{} {
+	return platform.NewManagementApplicationAuthorityArgs()
+}
+
+func newManagementApplicationAuthorityResult() interface{} {
+	return platform.NewManagementApplicationAuthorityResult()
+}
+
 func authorizeFleetHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.ManagementAuthorizeFleetArgs)
 	realResult := result.(*platform.ManagementAuthorizeFleetResult)
@@ -212,6 +237,17 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) ApplicationAuthority(ctx context.Context, accessJSON string, execute bool) (r *platform.Reply, err error) {
+	var _args platform.ManagementApplicationAuthorityArgs
+	_args.AccessJSON = accessJSON
+	_args.Execute = execute
+	var _result platform.ManagementApplicationAuthorityResult
+	if err = p.c.Call(ctx, "ApplicationAuthority", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) AuthorizeFleet(ctx context.Context, actorID string, tenantID string, ownerID string, execute bool) (r *platform.Reply, err error) {

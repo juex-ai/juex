@@ -93,6 +93,8 @@ var fieldIDToName_Reply = map[int16]string{
 }
 
 type Management interface {
+	ApplicationAuthority(ctx context.Context, accessJSON string, execute bool) (r *Reply, err error)
+
 	AuthorizeFleet(ctx context.Context, actorID string, tenantID string, ownerID string, execute bool) (r *Reply, err error)
 
 	Authorize(ctx context.Context, actor *Actor, execute bool) (r *Reply, err error)
@@ -102,6 +104,82 @@ type Management interface {
 	Snapshot(ctx context.Context, scopeJSON string) (r *Reply, err error)
 
 	ModelProfile(ctx context.Context, scopeJSON string, configJSON string) (r *Reply, err error)
+}
+
+type ManagementApplicationAuthorityArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	Execute    bool   `thrift:"execute,2" frugal:"2,default,bool" json:"execute"`
+}
+
+func NewManagementApplicationAuthorityArgs() *ManagementApplicationAuthorityArgs {
+	return &ManagementApplicationAuthorityArgs{}
+}
+
+func (p *ManagementApplicationAuthorityArgs) InitDefault() {
+}
+
+func (p *ManagementApplicationAuthorityArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *ManagementApplicationAuthorityArgs) GetExecute() (v bool) {
+	return p.Execute
+}
+func (p *ManagementApplicationAuthorityArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *ManagementApplicationAuthorityArgs) SetExecute(val bool) {
+	p.Execute = val
+}
+
+func (p *ManagementApplicationAuthorityArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementApplicationAuthorityArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementApplicationAuthorityArgs = map[int16]string{
+	1: "accessJSON",
+	2: "execute",
+}
+
+type ManagementApplicationAuthorityResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementApplicationAuthorityResult() *ManagementApplicationAuthorityResult {
+	return &ManagementApplicationAuthorityResult{}
+}
+
+func (p *ManagementApplicationAuthorityResult) InitDefault() {
+}
+
+var ManagementApplicationAuthorityResult_Success_DEFAULT *Reply
+
+func (p *ManagementApplicationAuthorityResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementApplicationAuthorityResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementApplicationAuthorityResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementApplicationAuthorityResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementApplicationAuthorityResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementApplicationAuthorityResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementApplicationAuthorityResult = map[int16]string{
+	0: "success",
 }
 
 type ManagementAuthorizeFleetArgs struct {
@@ -490,6 +568,970 @@ func (p *ManagementModelProfileResult) String() string {
 }
 
 var fieldIDToName_ManagementModelProfileResult = map[int16]string{
+	0: "success",
+}
+
+type Memory interface {
+	Health(ctx context.Context) (r *Reply, err error)
+
+	Status(ctx context.Context, accessJSON string) (r *Reply, err error)
+
+	Configure(ctx context.Context, accessJSON string, version int64, enabled bool, strategy string) (r *Reply, err error)
+
+	Search(ctx context.Context, accessJSON string, queryJSON string) (r *Reply, err error)
+
+	Read(ctx context.Context, accessJSON string, requestJSON string) (r *Reply, err error)
+
+	Facts(ctx context.Context, accessJSON string, queryJSON string) (r *Reply, err error)
+
+	Domains(ctx context.Context, accessJSON string, requestJSON string) (r *Reply, err error)
+
+	Propose(ctx context.Context, scopeJSON string, threadID string, proposalJSON string, automatic bool) (r *Reply, err error)
+
+	Review(ctx context.Context, scopeJSON string, bindingJSON string) (r *Reply, err error)
+
+	Decide(ctx context.Context, scopeJSON string, bindingJSON string, decisionJSON string) (r *Reply, err error)
+
+	ReviewResult_(ctx context.Context, accessJSON string, threadID string, reviewID string) (r *Reply, err error)
+
+	Administer(ctx context.Context, accessJSON string, requestJSON string) (r *Reply, err error)
+}
+
+type MemoryHealthArgs struct {
+}
+
+func NewMemoryHealthArgs() *MemoryHealthArgs {
+	return &MemoryHealthArgs{}
+}
+
+func (p *MemoryHealthArgs) InitDefault() {
+}
+
+func (p *MemoryHealthArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryHealthArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryHealthArgs = map[int16]string{}
+
+type MemoryHealthResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryHealthResult() *MemoryHealthResult {
+	return &MemoryHealthResult{}
+}
+
+func (p *MemoryHealthResult) InitDefault() {
+}
+
+var MemoryHealthResult_Success_DEFAULT *Reply
+
+func (p *MemoryHealthResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryHealthResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryHealthResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryHealthResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryHealthResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryHealthResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryHealthResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryStatusArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+}
+
+func NewMemoryStatusArgs() *MemoryStatusArgs {
+	return &MemoryStatusArgs{}
+}
+
+func (p *MemoryStatusArgs) InitDefault() {
+}
+
+func (p *MemoryStatusArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+func (p *MemoryStatusArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+
+func (p *MemoryStatusArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryStatusArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryStatusArgs = map[int16]string{
+	1: "accessJSON",
+}
+
+type MemoryStatusResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryStatusResult() *MemoryStatusResult {
+	return &MemoryStatusResult{}
+}
+
+func (p *MemoryStatusResult) InitDefault() {
+}
+
+var MemoryStatusResult_Success_DEFAULT *Reply
+
+func (p *MemoryStatusResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryStatusResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryStatusResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryStatusResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryStatusResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryStatusResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryStatusResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryConfigureArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	Version    int64  `thrift:"version,2" frugal:"2,default,i64" json:"version"`
+	Enabled    bool   `thrift:"enabled,3" frugal:"3,default,bool" json:"enabled"`
+	Strategy   string `thrift:"strategy,4" frugal:"4,default,string" json:"strategy"`
+}
+
+func NewMemoryConfigureArgs() *MemoryConfigureArgs {
+	return &MemoryConfigureArgs{}
+}
+
+func (p *MemoryConfigureArgs) InitDefault() {
+}
+
+func (p *MemoryConfigureArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryConfigureArgs) GetVersion() (v int64) {
+	return p.Version
+}
+
+func (p *MemoryConfigureArgs) GetEnabled() (v bool) {
+	return p.Enabled
+}
+
+func (p *MemoryConfigureArgs) GetStrategy() (v string) {
+	return p.Strategy
+}
+func (p *MemoryConfigureArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryConfigureArgs) SetVersion(val int64) {
+	p.Version = val
+}
+func (p *MemoryConfigureArgs) SetEnabled(val bool) {
+	p.Enabled = val
+}
+func (p *MemoryConfigureArgs) SetStrategy(val string) {
+	p.Strategy = val
+}
+
+func (p *MemoryConfigureArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryConfigureArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryConfigureArgs = map[int16]string{
+	1: "accessJSON",
+	2: "version",
+	3: "enabled",
+	4: "strategy",
+}
+
+type MemoryConfigureResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryConfigureResult() *MemoryConfigureResult {
+	return &MemoryConfigureResult{}
+}
+
+func (p *MemoryConfigureResult) InitDefault() {
+}
+
+var MemoryConfigureResult_Success_DEFAULT *Reply
+
+func (p *MemoryConfigureResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryConfigureResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryConfigureResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryConfigureResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryConfigureResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryConfigureResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryConfigureResult = map[int16]string{
+	0: "success",
+}
+
+type MemorySearchArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	QueryJSON  string `thrift:"queryJSON,2" frugal:"2,default,string" json:"queryJSON"`
+}
+
+func NewMemorySearchArgs() *MemorySearchArgs {
+	return &MemorySearchArgs{}
+}
+
+func (p *MemorySearchArgs) InitDefault() {
+}
+
+func (p *MemorySearchArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemorySearchArgs) GetQueryJSON() (v string) {
+	return p.QueryJSON
+}
+func (p *MemorySearchArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemorySearchArgs) SetQueryJSON(val string) {
+	p.QueryJSON = val
+}
+
+func (p *MemorySearchArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemorySearchArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemorySearchArgs = map[int16]string{
+	1: "accessJSON",
+	2: "queryJSON",
+}
+
+type MemorySearchResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemorySearchResult() *MemorySearchResult {
+	return &MemorySearchResult{}
+}
+
+func (p *MemorySearchResult) InitDefault() {
+}
+
+var MemorySearchResult_Success_DEFAULT *Reply
+
+func (p *MemorySearchResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemorySearchResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemorySearchResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemorySearchResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemorySearchResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemorySearchResult(%+v)", *p)
+}
+
+var fieldIDToName_MemorySearchResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryReadArgs struct {
+	AccessJSON  string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
+}
+
+func NewMemoryReadArgs() *MemoryReadArgs {
+	return &MemoryReadArgs{}
+}
+
+func (p *MemoryReadArgs) InitDefault() {
+}
+
+func (p *MemoryReadArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryReadArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *MemoryReadArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryReadArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *MemoryReadArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryReadArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryReadArgs = map[int16]string{
+	1: "accessJSON",
+	2: "requestJSON",
+}
+
+type MemoryReadResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryReadResult() *MemoryReadResult {
+	return &MemoryReadResult{}
+}
+
+func (p *MemoryReadResult) InitDefault() {
+}
+
+var MemoryReadResult_Success_DEFAULT *Reply
+
+func (p *MemoryReadResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryReadResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryReadResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryReadResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryReadResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryReadResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryReadResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryFactsArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	QueryJSON  string `thrift:"queryJSON,2" frugal:"2,default,string" json:"queryJSON"`
+}
+
+func NewMemoryFactsArgs() *MemoryFactsArgs {
+	return &MemoryFactsArgs{}
+}
+
+func (p *MemoryFactsArgs) InitDefault() {
+}
+
+func (p *MemoryFactsArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryFactsArgs) GetQueryJSON() (v string) {
+	return p.QueryJSON
+}
+func (p *MemoryFactsArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryFactsArgs) SetQueryJSON(val string) {
+	p.QueryJSON = val
+}
+
+func (p *MemoryFactsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryFactsArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryFactsArgs = map[int16]string{
+	1: "accessJSON",
+	2: "queryJSON",
+}
+
+type MemoryFactsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryFactsResult() *MemoryFactsResult {
+	return &MemoryFactsResult{}
+}
+
+func (p *MemoryFactsResult) InitDefault() {
+}
+
+var MemoryFactsResult_Success_DEFAULT *Reply
+
+func (p *MemoryFactsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryFactsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryFactsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryFactsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryFactsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryFactsResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryFactsResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryDomainsArgs struct {
+	AccessJSON  string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
+}
+
+func NewMemoryDomainsArgs() *MemoryDomainsArgs {
+	return &MemoryDomainsArgs{}
+}
+
+func (p *MemoryDomainsArgs) InitDefault() {
+}
+
+func (p *MemoryDomainsArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryDomainsArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *MemoryDomainsArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryDomainsArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *MemoryDomainsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryDomainsArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryDomainsArgs = map[int16]string{
+	1: "accessJSON",
+	2: "requestJSON",
+}
+
+type MemoryDomainsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryDomainsResult() *MemoryDomainsResult {
+	return &MemoryDomainsResult{}
+}
+
+func (p *MemoryDomainsResult) InitDefault() {
+}
+
+var MemoryDomainsResult_Success_DEFAULT *Reply
+
+func (p *MemoryDomainsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryDomainsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryDomainsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryDomainsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryDomainsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryDomainsResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryDomainsResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryProposeArgs struct {
+	ScopeJSON    string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	ThreadID     string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+	ProposalJSON string `thrift:"proposalJSON,3" frugal:"3,default,string" json:"proposalJSON"`
+	Automatic    bool   `thrift:"automatic,4" frugal:"4,default,bool" json:"automatic"`
+}
+
+func NewMemoryProposeArgs() *MemoryProposeArgs {
+	return &MemoryProposeArgs{}
+}
+
+func (p *MemoryProposeArgs) InitDefault() {
+}
+
+func (p *MemoryProposeArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *MemoryProposeArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *MemoryProposeArgs) GetProposalJSON() (v string) {
+	return p.ProposalJSON
+}
+
+func (p *MemoryProposeArgs) GetAutomatic() (v bool) {
+	return p.Automatic
+}
+func (p *MemoryProposeArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *MemoryProposeArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *MemoryProposeArgs) SetProposalJSON(val string) {
+	p.ProposalJSON = val
+}
+func (p *MemoryProposeArgs) SetAutomatic(val bool) {
+	p.Automatic = val
+}
+
+func (p *MemoryProposeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryProposeArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryProposeArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "threadID",
+	3: "proposalJSON",
+	4: "automatic",
+}
+
+type MemoryProposeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryProposeResult() *MemoryProposeResult {
+	return &MemoryProposeResult{}
+}
+
+func (p *MemoryProposeResult) InitDefault() {
+}
+
+var MemoryProposeResult_Success_DEFAULT *Reply
+
+func (p *MemoryProposeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryProposeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryProposeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryProposeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryProposeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryProposeResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryProposeResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryReviewArgs struct {
+	ScopeJSON   string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	BindingJSON string `thrift:"bindingJSON,2" frugal:"2,default,string" json:"bindingJSON"`
+}
+
+func NewMemoryReviewArgs() *MemoryReviewArgs {
+	return &MemoryReviewArgs{}
+}
+
+func (p *MemoryReviewArgs) InitDefault() {
+}
+
+func (p *MemoryReviewArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *MemoryReviewArgs) GetBindingJSON() (v string) {
+	return p.BindingJSON
+}
+func (p *MemoryReviewArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *MemoryReviewArgs) SetBindingJSON(val string) {
+	p.BindingJSON = val
+}
+
+func (p *MemoryReviewArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryReviewArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryReviewArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "bindingJSON",
+}
+
+type MemoryReviewResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryReviewResult() *MemoryReviewResult {
+	return &MemoryReviewResult{}
+}
+
+func (p *MemoryReviewResult) InitDefault() {
+}
+
+var MemoryReviewResult_Success_DEFAULT *Reply
+
+func (p *MemoryReviewResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryReviewResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryReviewResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryReviewResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryReviewResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryReviewResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryReviewResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryDecideArgs struct {
+	ScopeJSON    string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	BindingJSON  string `thrift:"bindingJSON,2" frugal:"2,default,string" json:"bindingJSON"`
+	DecisionJSON string `thrift:"decisionJSON,3" frugal:"3,default,string" json:"decisionJSON"`
+}
+
+func NewMemoryDecideArgs() *MemoryDecideArgs {
+	return &MemoryDecideArgs{}
+}
+
+func (p *MemoryDecideArgs) InitDefault() {
+}
+
+func (p *MemoryDecideArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *MemoryDecideArgs) GetBindingJSON() (v string) {
+	return p.BindingJSON
+}
+
+func (p *MemoryDecideArgs) GetDecisionJSON() (v string) {
+	return p.DecisionJSON
+}
+func (p *MemoryDecideArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *MemoryDecideArgs) SetBindingJSON(val string) {
+	p.BindingJSON = val
+}
+func (p *MemoryDecideArgs) SetDecisionJSON(val string) {
+	p.DecisionJSON = val
+}
+
+func (p *MemoryDecideArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryDecideArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryDecideArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "bindingJSON",
+	3: "decisionJSON",
+}
+
+type MemoryDecideResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryDecideResult() *MemoryDecideResult {
+	return &MemoryDecideResult{}
+}
+
+func (p *MemoryDecideResult) InitDefault() {
+}
+
+var MemoryDecideResult_Success_DEFAULT *Reply
+
+func (p *MemoryDecideResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryDecideResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryDecideResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryDecideResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryDecideResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryDecideResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryDecideResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryReviewResultArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	ThreadID   string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+	ReviewID   string `thrift:"reviewID,3" frugal:"3,default,string" json:"reviewID"`
+}
+
+func NewMemoryReviewResultArgs() *MemoryReviewResultArgs {
+	return &MemoryReviewResultArgs{}
+}
+
+func (p *MemoryReviewResultArgs) InitDefault() {
+}
+
+func (p *MemoryReviewResultArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryReviewResultArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *MemoryReviewResultArgs) GetReviewID() (v string) {
+	return p.ReviewID
+}
+func (p *MemoryReviewResultArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryReviewResultArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *MemoryReviewResultArgs) SetReviewID(val string) {
+	p.ReviewID = val
+}
+
+func (p *MemoryReviewResultArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryReviewResultArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryReviewResultArgs = map[int16]string{
+	1: "accessJSON",
+	2: "threadID",
+	3: "reviewID",
+}
+
+type MemoryReviewResultResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryReviewResultResult() *MemoryReviewResultResult {
+	return &MemoryReviewResultResult{}
+}
+
+func (p *MemoryReviewResultResult) InitDefault() {
+}
+
+var MemoryReviewResultResult_Success_DEFAULT *Reply
+
+func (p *MemoryReviewResultResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryReviewResultResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryReviewResultResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryReviewResultResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryReviewResultResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryReviewResultResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryReviewResultResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryAdministerArgs struct {
+	AccessJSON  string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
+}
+
+func NewMemoryAdministerArgs() *MemoryAdministerArgs {
+	return &MemoryAdministerArgs{}
+}
+
+func (p *MemoryAdministerArgs) InitDefault() {
+}
+
+func (p *MemoryAdministerArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryAdministerArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *MemoryAdministerArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryAdministerArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *MemoryAdministerArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryAdministerArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryAdministerArgs = map[int16]string{
+	1: "accessJSON",
+	2: "requestJSON",
+}
+
+type MemoryAdministerResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryAdministerResult() *MemoryAdministerResult {
+	return &MemoryAdministerResult{}
+}
+
+func (p *MemoryAdministerResult) InitDefault() {
+}
+
+var MemoryAdministerResult_Success_DEFAULT *Reply
+
+func (p *MemoryAdministerResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryAdministerResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryAdministerResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryAdministerResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryAdministerResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryAdministerResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryAdministerResult = map[int16]string{
 	0: "success",
 }
 
