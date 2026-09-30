@@ -7,6 +7,17 @@ function event(sequence: number, kind: string, data: unknown): Event {
   return { id: `event-${sequence}`, thread_id: 'thread', sequence, generation: 1, kind, data, created_at: '2026-09-30T00:00:00Z' }
 }
 
+test('optional Memory failure is a notice and leaves user input intact', () => {
+  const rows = projectTranscript([
+    event(1, 'input.accepted', { receipt: { id: 'input' }, text: 'continue' }),
+    event(2, 'memory.recall_unavailable', { input_id: 'input' }),
+  ])
+  assert.equal(rows.length, 2)
+  if (rows[0].kind === 'message') assert.equal(rows[0].status, '已接收，等待执行')
+  assert.equal(rows[1].kind, 'notice')
+  if (rows[1].kind === 'notice') assert.match(rows[1].text, /对话将继续/)
+})
+
 test('managed timeline reconciles a receipt with its committed message without duplication', () => {
   const accepted = event(1, 'input.accepted', { receipt: { id: 'input-1', request_id: 'request-1' }, text: 'hello' })
   const rows = projectTranscript([accepted, accepted, event(2, 'message.appended', { id: 'input-1', role: 'user', blocks: [{ type: 'text', text: 'hello' }] }), event(3, 'message.appended', { id: 'answer', role: 'assistant', blocks: [{ type: 'text', text: 'reply' }] })])

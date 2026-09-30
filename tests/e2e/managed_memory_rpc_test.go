@@ -71,6 +71,9 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 	if _, err := client.Maintain(ctx, f.scope, f.thread, "user requested", "maintain"); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("Management forged maintenance tool", err)
 	}
+	if _, err := client.Recall(ctx, f.scope.Access, "concise"); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("Management forged per-input recall", err)
+	}
 	if _, err := client.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("Management invented original Runtime evidence", err)
 	}
@@ -141,6 +144,9 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	proposal = f.proposal("advanced-rpc")
+	if value, err := runtime.Recall(ctx, f.scope.Access, "concise"); err != nil || value.Text == "" || value.Epoch != status.Epoch || value.Fence != status.Fence {
+		t.Fatal("atomic recall response", value, err)
+	}
 	if err := runtime.Contribute(ctx, f.scope, memory.Contribution{Epoch: status.Epoch, Evidence: proposal.Evidence[0]}); err != nil {
 		t.Fatal(err)
 	}

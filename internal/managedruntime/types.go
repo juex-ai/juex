@@ -150,6 +150,7 @@ type Attempt struct {
 }
 
 type ModelRequest struct {
+	Recall          *llm.Message     `json:"-"`
 	Generation      int64            `json:"generation"`
 	MaxOutputTokens int              `json:"max_output_tokens"`
 	Compaction      *CompactionDraft `json:"compaction,omitempty"`

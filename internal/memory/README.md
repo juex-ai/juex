@@ -60,3 +60,10 @@ Memory admission per Fleet; a busy source does not block other eligible sources.
 Retries recover the same Worker. Failed ranges retain their outcome and cannot be
 silently repackaged by later input. Terminal review evidence is removed after seven
 days; receipt identities and shared knowledge provenance remain.
+
+Advanced recall prepares one bounded keyword-search snapshot per original human
+input. Runtime persists even an unavailable outcome, so recovery, retries and tool
+iterations never repeat retrieval. Injection verifies the current application
+epoch and human-control fence, fits the selected model's context, and remains
+optional reference data outside durable conversation history and compaction.
+An unavailable Memory service does not block ordinary conversation.

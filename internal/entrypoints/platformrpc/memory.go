@@ -31,6 +31,15 @@ type memoryHandler struct {
 	health  func(context.Context) error
 }
 
+func (h *memoryHandler) Recall(ctx context.Context, accessJSON, query string) (*platform.Reply, error) {
+	access, ok := memoryAccess(ctx, accessJSON)
+	if !ok || transport.CallerRole(ctx) != "runtime" {
+		return appReply(nil, application.ErrDenied)
+	}
+	v, err := h.service.Recall(ctx, access, query)
+	return appReply(v, err)
+}
+
 func (h *memoryHandler) Maintain(ctx context.Context, scopeJSON, thread, reason, commandID string) (*platform.Reply, error) {
 	var scope application.Scope
 	if transport.CallerRole(ctx) != "runtime" {

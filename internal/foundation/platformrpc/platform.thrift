@@ -25,6 +25,7 @@ service Management {
 }
 
 service Memory {
+	Reply Recall(1: string accessJSON, 2: string query)
 	Reply Maintain(1: string scopeJSON, 2: string threadID, 3: string reason, 4: string commandID)
 	Reply Contribute(1: string scopeJSON, 2: string contributionJSON)
 	Reply Reviews(1: string accessJSON, 2: i32 offset, 3: i32 limit)

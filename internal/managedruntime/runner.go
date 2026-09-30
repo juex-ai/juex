@@ -355,6 +355,11 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if job != nil {
 		request.Tools = slices.DeleteFunc(request.Tools, func(tool llm.ToolSpec) bool { return !job.AllowsTool(tool.Name) })
 	}
+	if job == nil {
+		if err := r.recall(ctx, lease, work, &request); err != nil {
+			return err
+		}
+	}
 	provider, request, err := r.selectModel(ctx, lease, work, request)
 	if errors.Is(err, ErrNoCompaction) {
 		return r.store.SkipCompaction(ctx, lease, work)

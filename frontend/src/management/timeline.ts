@@ -44,6 +44,8 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
       rows.push({ kind: 'notice', id: event.id, text: '已取消本次对话。已经开始的外部操作可能仍在结束中。' })
     } else if (event.kind === 'tool.unknown') {
       rows.push({ kind: 'notice', id: event.id, text: '无法确认外部操作的结果，对话已暂停。请先核对设备上的实际状态；停止本轮后，可以发送新的处理指令。' })
+    } else if (event.kind === 'memory.recall_unavailable') {
+      rows.push({ kind: 'notice', id: event.id, text: '本轮未能取得共享记忆参考，对话将继续。' })
     } else if (event.kind === 'turn.recovered') {
       rows.push({ kind: 'notice', id: event.id, text: '服务已恢复，正在继续原来的对话。' })
     }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/application"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
@@ -16,6 +17,7 @@ import (
 )
 
 type RuntimeMemory interface {
+	Recall(context.Context, application.Access, string) (memory.Recall, error)
 	Maintain(context.Context, application.Scope, string, string, string) (mc.Receipt, error)
 	Contribute(context.Context, application.Scope, memory.Contribution) error
 	Status(context.Context, application.Access) (memory.Status, error)
@@ -27,6 +29,26 @@ type RuntimeMemory interface {
 	Review(context.Context, application.Scope, memory.Binding) (memory.Review, error)
 	Decide(context.Context, application.Scope, memory.Binding, mc.Decision, string) (mc.Receipt, error)
 	CancelCommand(context.Context, application.Scope, string) error
+}
+
+func (a RuntimeApplications) Recall(ctx context.Context, scope managedruntime.Scope, text string) (managedruntime.RecallSnapshot, error) {
+	if a.Memory == nil {
+		return managedruntime.RecallSnapshot{}, nil
+	}
+	v, err := a.Memory.Recall(ctx, appScope(scope).Access, text)
+	if errors.Is(err, application.ErrDisabled) {
+		return managedruntime.RecallSnapshot{}, nil
+	}
+	return managedruntime.RecallSnapshot{Epoch: v.Epoch, Fence: v.Fence, Text: v.Text}, appRuntimeError(err)
+}
+func (a RuntimeApplications) RecallValid(ctx context.Context, scope managedruntime.Scope, snapshot managedruntime.RecallSnapshot) bool {
+	if a.Memory == nil {
+		return false
+	}
+	call, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	status, err := a.Memory.Status(call, appScope(scope).Access)
+	return err == nil && status.Enabled && status.Strategy == mc.Advanced && status.Epoch == snapshot.Epoch && status.Fence == snapshot.Fence
 }
 
 func (a RuntimeApplications) Contribute(ctx context.Context, item managedruntime.EvidenceDelivery) error {
@@ -89,11 +111,13 @@ func (a RuntimeApplications) Tools(ctx context.Context, scope managedruntime.Sco
 	if job != nil && job.Application != "memory" {
 		return managedruntime.ApplicationTools{}, nil
 	}
-	status, err := a.Memory.Status(ctx, appScope(scope).Access)
+	call, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	status, err := a.Memory.Status(call, appScope(scope).Access)
 	if errors.Is(err, application.ErrDisabled) {
 		return managedruntime.ApplicationTools{}, nil
 	}
-	if err != nil {
+	if err != nil && (job != nil || errors.Is(err, application.ErrDenied)) {
 		return managedruntime.ApplicationTools{}, appRuntimeError(err)
 	}
 	catalog := managedruntime.ApplicationTools{Tools: memory.Tools(job != nil)}

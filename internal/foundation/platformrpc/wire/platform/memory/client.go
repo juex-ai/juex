@@ -11,6 +11,7 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	Recall(ctx context.Context, accessJSON string, query string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Maintain(ctx context.Context, scopeJSON string, threadID string, reason string, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Contribute(ctx context.Context, scopeJSON string, contributionJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Reviews(ctx context.Context, accessJSON string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -57,6 +58,11 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kMemoryClient struct {
 	*kClient
+}
+
+func (p *kMemoryClient) Recall(ctx context.Context, accessJSON string, query string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Recall(ctx, accessJSON, query)
 }
 
 func (p *kMemoryClient) Maintain(ctx context.Context, scopeJSON string, threadID string, reason string, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

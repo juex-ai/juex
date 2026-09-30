@@ -13,6 +13,13 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"Recall": kitex.NewMethodInfo(
+		recallHandler,
+		newMemoryRecallArgs,
+		newMemoryRecallResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Maintain": kitex.NewMethodInfo(
 		maintainHandler,
 		newMemoryMaintainArgs,
@@ -196,6 +203,24 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func recallHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.MemoryRecallArgs)
+	realResult := result.(*platform.MemoryRecallResult)
+	success, err := handler.(platform.Memory).Recall(ctx, realArg.AccessJSON, realArg.Query)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newMemoryRecallArgs() interface{} {
+	return platform.NewMemoryRecallArgs()
+}
+
+func newMemoryRecallResult() interface{} {
+	return platform.NewMemoryRecallResult()
 }
 
 func maintainHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -512,6 +537,17 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) Recall(ctx context.Context, accessJSON string, query string) (r *platform.Reply, err error) {
+	var _args platform.MemoryRecallArgs
+	_args.AccessJSON = accessJSON
+	_args.Query = query
+	var _result platform.MemoryRecallResult
+	if err = p.c.Call(ctx, "Recall", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) Maintain(ctx context.Context, scopeJSON string, threadID string, reason string, commandID string) (r *platform.Reply, err error) {

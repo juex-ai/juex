@@ -24,6 +24,9 @@ func TestCompactionCanReduceAnActiveLongTurnWithoutLosingInputOrToolPairs(t *tes
 	notice.Kind = llm.MessageKindSystemNotice
 	work.History = append(work.History, notice)
 	base := ModelRequest{System: "Agent constraints", Tools: runtimeTools()}
+	recall := llm.TextMessage(llm.RoleUser, "optional_recall_must_not_become_durable_history")
+	recall.ID = "recall/" + input.ID
+	base.Recall = &recall
 	request, err := planCompaction(work, base, model)
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +35,10 @@ func TestCompactionCanReduceAnActiveLongTurnWithoutLosingInputOrToolPairs(t *tes
 		t.Fatal("summary request changed model or tool authority", request)
 	}
 	retained := request.Compaction.Retained
+	encoded, _ := json.Marshal(request)
+	if strings.Contains(string(encoded), "optional_recall_must_not_become_durable_history") || strings.Contains(string(encoded), recall.ID) {
+		t.Fatal("optional recall entered durable compaction")
+	}
 	if len(retained) >= len(work.History)/2 {
 		t.Fatal("retained the entire active Turn")
 	}

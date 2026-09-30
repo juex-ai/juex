@@ -32,6 +32,12 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 		request.Generation = work.Generation
 		request.MaxOutputTokens = model.MaxOutput
 		request.Messages = projectModelHistory(work, model)
+		if base.Recall != nil && work.Compaction == nil {
+			withRecall := append([]llm.Message{*base.Recall}, request.Messages...)
+			if llm.EstimateContextTokens(request.System, request.Tools, withRecall)+request.MaxOutputTokens+contextSafety(model) <= model.ContextWindow {
+				request.Messages = withRecall
+			}
+		}
 		reason := "model_unavailable"
 		var planErr error
 		if work.Source.Kind == "compaction" || work.Compaction != nil || compactionNeeded(work, request, model) {

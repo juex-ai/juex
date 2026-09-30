@@ -572,6 +572,8 @@ var fieldIDToName_ManagementModelProfileResult = map[int16]string{
 }
 
 type Memory interface {
+	Recall(ctx context.Context, accessJSON string, query string) (r *Reply, err error)
+
 	Maintain(ctx context.Context, scopeJSON string, threadID string, reason string, commandID string) (r *Reply, err error)
 
 	Contribute(ctx context.Context, scopeJSON string, contributionJSON string) (r *Reply, err error)
@@ -605,6 +607,82 @@ type Memory interface {
 	ReviewResult_(ctx context.Context, accessJSON string, threadID string, reviewID string) (r *Reply, err error)
 
 	Administer(ctx context.Context, accessJSON string, requestJSON string) (r *Reply, err error)
+}
+
+type MemoryRecallArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	Query      string `thrift:"query,2" frugal:"2,default,string" json:"query"`
+}
+
+func NewMemoryRecallArgs() *MemoryRecallArgs {
+	return &MemoryRecallArgs{}
+}
+
+func (p *MemoryRecallArgs) InitDefault() {
+}
+
+func (p *MemoryRecallArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryRecallArgs) GetQuery() (v string) {
+	return p.Query
+}
+func (p *MemoryRecallArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryRecallArgs) SetQuery(val string) {
+	p.Query = val
+}
+
+func (p *MemoryRecallArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryRecallArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryRecallArgs = map[int16]string{
+	1: "accessJSON",
+	2: "query",
+}
+
+type MemoryRecallResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryRecallResult() *MemoryRecallResult {
+	return &MemoryRecallResult{}
+}
+
+func (p *MemoryRecallResult) InitDefault() {
+}
+
+var MemoryRecallResult_Success_DEFAULT *Reply
+
+func (p *MemoryRecallResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryRecallResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryRecallResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryRecallResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryRecallResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryRecallResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryRecallResult = map[int16]string{
+	0: "success",
 }
 
 type MemoryMaintainArgs struct {

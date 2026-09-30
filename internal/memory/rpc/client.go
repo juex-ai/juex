@@ -21,6 +21,13 @@ func (c *Client) Contribute(ctx context.Context, scope application.Scope, batch 
 
 type Client struct{ client wire.Client }
 
+func (c *Client) Recall(ctx context.Context, access application.Access, query string) (memory.Recall, error) {
+	reply, err := c.client.Recall(ctx, encode(access), query)
+	var value memory.Recall
+	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
+	return value, err
+}
+
 func (c *Client) Maintain(ctx context.Context, scope application.Scope, thread, reason, commandID string) (mc.Receipt, error) {
 	reply, err := c.client.Maintain(ctx, encode(scope), thread, reason, commandID)
 	var value mc.Receipt
