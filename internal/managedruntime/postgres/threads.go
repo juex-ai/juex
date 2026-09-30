@@ -21,15 +21,43 @@ func (s *Store) CreateWorker(ctx context.Context, scope managedruntime.Scope, pa
 	if err := checkScope(ctx, tx, scope); err != nil {
 		return managedruntime.Thread{}, err
 	}
+	if err := threadGraph(ctx, tx, scope.AgentID); err != nil {
+		return managedruntime.Thread{}, err
+	}
 	parent, err := readThread(ctx, tx, scope.AgentID, parentID)
 	if err != nil {
 		return parent, err
+	}
+	thread, err := createWorker(ctx, tx, scope, parent, requestID, name, scope.WorkerDepth)
+	if err != nil {
+		return thread, err
+	}
+	return thread, tx.Commit(ctx)
+}
+
+func createWorker(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, parent managedruntime.Thread, requestID, name string, maxDepth int) (managedruntime.Thread, error) {
+	if strings.TrimSpace(name) == "" || len([]rune(name)) > 100 {
+		return managedruntime.Thread{}, managedruntime.ErrInvalid
+	}
+	if maxDepth == 0 {
+		maxDepth = 1
+	}
+	if maxDepth < 1 || maxDepth > 2 {
+		return managedruntime.Thread{}, managedruntime.ErrInvalid
+	}
+	parentID := parent.ID
+	var depth int
+	if err := tx.QueryRow(ctx, `WITH RECURSIVE parents AS (SELECT id,parent_id,0 AS depth FROM runtime.threads WHERE id=$1 UNION ALL SELECT t.id,t.parent_id,p.depth+1 FROM runtime.threads t JOIN parents p ON t.id=p.parent_id) SELECT max(depth) FROM parents`, parentID).Scan(&depth); err != nil {
+		return managedruntime.Thread{}, err
+	}
+	if depth >= maxDepth {
+		return managedruntime.Thread{}, managedruntime.ErrInvalid
 	}
 	if parent.Retention != "active" {
 		return managedruntime.Thread{}, managedruntime.ErrDenied
 	}
 	var id string
-	err = tx.QueryRow(ctx, `INSERT INTO runtime.threads(agent_id,parent_id,kind,name,request_id) VALUES($1,$2,'worker',$3,$4) ON CONFLICT(agent_id,request_id) DO NOTHING RETURNING id`, scope.AgentID, parentID, name, requestID).Scan(&id)
+	err := tx.QueryRow(ctx, `INSERT INTO runtime.threads(agent_id,parent_id,kind,name,request_id) VALUES($1,$2,'worker',$3,$4) ON CONFLICT(agent_id,request_id) DO NOTHING RETURNING id`, scope.AgentID, parentID, name, requestID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(ctx, `SELECT id FROM runtime.threads WHERE agent_id=$1 AND request_id=$2 AND parent_id=$3 AND name=$4`, scope.AgentID, requestID, parentID, name).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -41,11 +69,13 @@ func (s *Store) CreateWorker(ctx context.Context, scope managedruntime.Scope, pa
 	if err != nil {
 		return managedruntime.Thread{}, classify(err)
 	}
-	thread, err := readThread(ctx, tx, scope.AgentID, id)
+	// On an idempotent retry the child already exists. Taking its row lock
+	// after the parent would invert the UUID order used by collaboration.
+	thread, err := scanThread(tx.QueryRow(ctx, `SELECT `+threadColumns+` FROM runtime.threads t WHERE t.agent_id=$1 AND t.id=$2`, scope.AgentID, id))
 	if err != nil {
 		return thread, err
 	}
-	return thread, tx.Commit(ctx)
+	return thread, nil
 }
 
 // Cancellation is a durable user command, independent of an Activation's RAM.
@@ -63,6 +93,16 @@ func (s *Store) CancelThread(ctx context.Context, scope managedruntime.Scope, th
 	thread, err := readThread(ctx, tx, scope.AgentID, threadID)
 	if err != nil {
 		return err
+	}
+	if err := cancelThread(ctx, tx, scope, thread); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelThread(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, thread managedruntime.Thread) error {
+	if thread.Retention != "active" {
+		return managedruntime.ErrDenied
 	}
 	rows, err := tx.Query(ctx, `SELECT id FROM runtime.turns WHERE thread_id=$1 AND state IN ('running','waiting')`, thread.ID)
 	if err != nil {
@@ -82,6 +122,9 @@ func (s *Store) CancelThread(ctx context.Context, scope managedruntime.Scope, th
 		return err
 	}
 	for _, id := range turns {
+		if err := threadResult(ctx, tx, thread.ID, id, "cancelled", ""); err != nil {
+			return err
+		}
 		if err := cancelCompaction(ctx, tx, id); err != nil {
 			return err
 		}
@@ -90,6 +133,9 @@ func (s *Store) CancelThread(ctx context.Context, scope managedruntime.Scope, th
 		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.inputs SET state='cancelled' WHERE thread_id=$1 AND state IN ('queued','active');`, thread.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.thread_subscriptions SET enabled=false,generation=generation+1 WHERE thread_id=$1 AND enabled`, thread.ID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.subscriptions SET enabled=false,generation=generation+1 WHERE thread_id=$1 AND enabled`, thread.ID); err != nil {
@@ -109,7 +155,7 @@ func (s *Store) CancelThread(ctx context.Context, scope managedruntime.Scope, th
 	if err := appendEvent(ctx, tx, thread.ID, "thread.cancelled", map[string]string{"actor_id": scope.ActorID}); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) WorkActive(ctx context.Context, lease managedruntime.Lease, turnID string) (bool, error) {

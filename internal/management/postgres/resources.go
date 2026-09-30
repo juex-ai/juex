@@ -130,13 +130,13 @@ func (d *Directory) ConfigureFleet(ctx context.Context, actorID, tenantID, owner
 	return settings, tx.Commit(ctx)
 }
 
-const agentColumns = `id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch`
+const agentColumns = `id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch,worker_depth`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanAgent(row rowScanner) (management.Agent, error) {
 	var a management.Agent
-	err := row.Scan(&a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch)
+	err := row.Scan(&a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth)
 	return a, classify(err)
 }
 
@@ -156,7 +156,7 @@ func (d *Directory) CreateAgent(ctx context.Context, actorID, tenantID, ownerID 
 	if err := enabledModel(ctx, tx, tenantID, config.ModelID); err != nil {
 		return management.Agent{}, err
 	}
-	agent, err := scanAgent(tx.QueryRow(ctx, `INSERT INTO management.agents(fleet_id,name,instructions,model_id) VALUES($1,$2,$3,NULLIF($4,'')::uuid) RETURNING `+agentColumns, fleet.ID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID))
+	agent, err := scanAgent(tx.QueryRow(ctx, `INSERT INTO management.agents(fleet_id,name,instructions,model_id,worker_depth) VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5) RETURNING `+agentColumns, fleet.ID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, config.EffectiveWorkerDepth()))
 	if err != nil {
 		return agent, err
 	}
@@ -192,7 +192,7 @@ func (d *Directory) ConfigureAgent(ctx context.Context, actorID, tenantID, agent
 	if err := enabledModel(ctx, tx, tenantID, config.ModelID); err != nil {
 		return management.Agent{}, err
 	}
-	agent, err := scanAgent(tx.QueryRow(ctx, `UPDATE management.agents SET name=$2,instructions=$3,model_id=NULLIF($4,'')::uuid,version=version+1,updated_at=clock_timestamp() WHERE id=$1 AND version=$5 AND status='active' RETURNING `+agentColumns, agentID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, version))
+	agent, err := scanAgent(tx.QueryRow(ctx, `UPDATE management.agents SET name=$2,instructions=$3,model_id=NULLIF($4,'')::uuid,worker_depth=$6,version=version+1,updated_at=clock_timestamp() WHERE id=$1 AND version=$5 AND status='active' RETURNING `+agentColumns, agentID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, version, config.EffectiveWorkerDepth()))
 	if errors.Is(err, management.ErrDenied) {
 		return agent, management.ErrConflict
 	}

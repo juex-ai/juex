@@ -5,6 +5,15 @@
 Runtime 拥有 `runtime` PostgreSQL schema。Agent 是持久身份，Activation 是可替换的租约持有者。
 Main 与 Workers 分别保存输入、历史、上下文代际和取消状态。调度器交错处理不同用户，限制活跃 Thread；空闲 Activation 不占用执行槽位。
 
+创建 Worker、接受明确的首条任务及可选结果订阅，在调用工具的租约校验下原子提交；Worker 从独立上下文开始。
+Agent 默认允许一层 Worker，可配置为两层，Turn 固定该策略。parent 只表达拓扑，不拥有取消权限：已接受的任务不因发送方停止而撤销。
+同一 Agent 的结果订阅通过持久、受代际约束的收件箱投递有界的最终文本及 Turn 标识。重新订阅不重放旧结果；普通退订不撤销已接受的输入。
+取消 Thread 会取消其已接受输入并禁用订阅。空闲 Worker 可以归档、恢复，历史保留且旧任务不重放；存在活跃子 Worker 时不能归档。
+
+跨 Agent 协作只向同 Tenant、同所有者、同 Fleet 的其他 Agent Main 发送明确消息；管理员代管也不能越过此边界。
+接受时检查双方权限，接受后由目标 Scope 和原始操作者控制执行；来源身份仅用于溯源，不构成持续依赖。
+发现其他 Agent 只暴露名称和 ID，不开放私有对话或跨 Agent 的上下文引用。
+
 `juex-runtime` 与 `juex-management` 独立运行。Management 通过 Kitex 转发会话请求，Runtime 通过 Management RPC 获取当前权限与模型凭据。
 双向通信都要求部署 CA 签发的对应服务证书，CA 私钥只由运维保管。Runtime 不需要 Management 的加密密钥或数据库 schema。
 

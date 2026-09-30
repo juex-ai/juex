@@ -298,10 +298,10 @@ func prepareRuntimeTool(t *testing.T, f *executionFixture, device string) (manag
 func prepareRuntimeThreadTool(t *testing.T, f *executionFixture, thread, device, requestID string) (managedruntime.Scope, managedruntime.ToolWork) {
 	t.Helper()
 	call := llm.Block{Type: llm.BlockToolUse, ToolUseID: "prepared-call", ToolName: "read", Input: map[string]any{"environment_id": device, "path": "result.txt"}}
-	return prepareRuntimeCall(t, f, thread, requestID, call)
+	return prepareRuntimeCall(t, f.managedRuntimeFixture, thread, requestID, call)
 }
 
-func prepareRuntimeCall(t *testing.T, f *executionFixture, thread, requestID string, call llm.Block) (managedruntime.Scope, managedruntime.ToolWork) {
+func prepareRuntimeCall(t *testing.T, f *managedRuntimeFixture, thread, requestID string, call llm.Block) (managedruntime.Scope, managedruntime.ToolWork) {
 	t.Helper()
 	ctx := context.Background()
 	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)

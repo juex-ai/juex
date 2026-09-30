@@ -18,6 +18,7 @@ import (
 )
 
 type Authority interface {
+	Peers(context.Context, managedruntime.Scope) ([]managedruntime.PeerAgent, error)
 	AuthorizeFleet(context.Context, string, string, string, bool) (management.FleetAuthority, error)
 	Authorize(context.Context, string, string, string, bool) (managedruntime.Scope, error)
 	Snapshot(context.Context, managedruntime.Scope) (managedruntime.TurnConfig, error)
@@ -142,4 +143,24 @@ func (h *runtimeHandler) Compact(ctx context.Context, actor *platform.Actor, thr
 	}
 	v, err := h.service.Compact(ctx, actor.UserID, actor.TenantID, actor.AgentID, thread, managedruntime.CompactionRequest{RequestID: requestID, Focus: focus})
 	return reply(v, err)
+}
+
+func (h *managementHandler) Peers(ctx context.Context, scopeJSON string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "runtime" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	var scope managedruntime.Scope
+	if len(scopeJSON) > 4096 || json.Unmarshal([]byte(scopeJSON), &scope) != nil {
+		return invalid()
+	}
+	result, err := h.authority.Peers(ctx, scope)
+	return reply(result, err)
+}
+
+func (h *runtimeHandler) Archive(ctx context.Context, actor *platform.Actor, thread string, archived bool) (*platform.Reply, error) {
+	if !validActor(actor) || thread == "" {
+		return invalid()
+	}
+	result, err := h.service.Archive(ctx, actor.UserID, actor.TenantID, actor.AgentID, thread, archived)
+	return reply(result, err)
 }

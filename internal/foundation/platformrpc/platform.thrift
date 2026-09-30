@@ -18,6 +18,7 @@ struct Reply {
 service Management {
 	Reply AuthorizeFleet(1: string actorID, 2: string tenantID, 3: string ownerID, 4: bool execute)
   Reply Authorize(1: Actor actor, 2: bool execute)
+  Reply Peers(1: string scopeJSON)
   Reply Snapshot(1: string scopeJSON)
   Reply ModelProfile(1: string scopeJSON, 2: string configJSON)
 }
@@ -28,6 +29,7 @@ service Runtime {
   Reply Threads(1: Actor actor)
   Reply Timeline(1: Actor actor, 2: string threadID, 3: i64 after, 4: i32 limit)
   Reply Compact(1: Actor actor, 2: string threadID, 3: string requestID, 4: string focus)
+  Reply Archive(1: Actor actor, 2: string threadID, 3: bool archived)
   Reply Cancel(1: Actor actor, 2: string threadID)
   Reply CreateWorker(1: Actor actor, 2: string parentID, 3: string requestID, 4: string name)
 }

@@ -13,6 +13,7 @@ import (
 type Client interface {
 	AuthorizeFleet(ctx context.Context, actorID string, tenantID string, ownerID string, execute bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Authorize(ctx context.Context, actor *platform.Actor, execute bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Peers(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Snapshot(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ModelProfile(ctx context.Context, scopeJSON string, configJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 }
@@ -54,6 +55,11 @@ func (p *kManagementClient) AuthorizeFleet(ctx context.Context, actorID string, 
 func (p *kManagementClient) Authorize(ctx context.Context, actor *platform.Actor, execute bool, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Authorize(ctx, actor, execute)
+}
+
+func (p *kManagementClient) Peers(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Peers(ctx, scopeJSON)
 }
 
 func (p *kManagementClient) Snapshot(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

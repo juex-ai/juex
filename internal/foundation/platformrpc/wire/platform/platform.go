@@ -97,6 +97,8 @@ type Management interface {
 
 	Authorize(ctx context.Context, actor *Actor, execute bool) (r *Reply, err error)
 
+	Peers(ctx context.Context, scopeJSON string) (r *Reply, err error)
+
 	Snapshot(ctx context.Context, scopeJSON string) (r *Reply, err error)
 
 	ModelProfile(ctx context.Context, scopeJSON string, configJSON string) (r *Reply, err error)
@@ -281,6 +283,73 @@ var fieldIDToName_ManagementAuthorizeResult = map[int16]string{
 	0: "success",
 }
 
+type ManagementPeersArgs struct {
+	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+}
+
+func NewManagementPeersArgs() *ManagementPeersArgs {
+	return &ManagementPeersArgs{}
+}
+
+func (p *ManagementPeersArgs) InitDefault() {
+}
+
+func (p *ManagementPeersArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+func (p *ManagementPeersArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+
+func (p *ManagementPeersArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementPeersArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementPeersArgs = map[int16]string{
+	1: "scopeJSON",
+}
+
+type ManagementPeersResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementPeersResult() *ManagementPeersResult {
+	return &ManagementPeersResult{}
+}
+
+func (p *ManagementPeersResult) InitDefault() {
+}
+
+var ManagementPeersResult_Success_DEFAULT *Reply
+
+func (p *ManagementPeersResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementPeersResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementPeersResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementPeersResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementPeersResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementPeersResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementPeersResult = map[int16]string{
+	0: "success",
+}
+
 type ManagementSnapshotArgs struct {
 	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
 }
@@ -434,6 +503,8 @@ type Runtime interface {
 	Timeline(ctx context.Context, actor *Actor, threadID string, after int64, limit int32) (r *Reply, err error)
 
 	Compact(ctx context.Context, actor *Actor, threadID string, requestID string, focus string) (r *Reply, err error)
+
+	Archive(ctx context.Context, actor *Actor, threadID string, archived bool) (r *Reply, err error)
 
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
@@ -879,6 +950,100 @@ func (p *RuntimeCompactResult) String() string {
 }
 
 var fieldIDToName_RuntimeCompactResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeArchiveArgs struct {
+	Actor    *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ThreadID string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+	Archived bool   `thrift:"archived,3" frugal:"3,default,bool" json:"archived"`
+}
+
+func NewRuntimeArchiveArgs() *RuntimeArchiveArgs {
+	return &RuntimeArchiveArgs{}
+}
+
+func (p *RuntimeArchiveArgs) InitDefault() {
+}
+
+var RuntimeArchiveArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeArchiveArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeArchiveArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeArchiveArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *RuntimeArchiveArgs) GetArchived() (v bool) {
+	return p.Archived
+}
+func (p *RuntimeArchiveArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeArchiveArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *RuntimeArchiveArgs) SetArchived(val bool) {
+	p.Archived = val
+}
+
+func (p *RuntimeArchiveArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeArchiveArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeArchiveArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeArchiveArgs = map[int16]string{
+	1: "actor",
+	2: "threadID",
+	3: "archived",
+}
+
+type RuntimeArchiveResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeArchiveResult() *RuntimeArchiveResult {
+	return &RuntimeArchiveResult{}
+}
+
+func (p *RuntimeArchiveResult) InitDefault() {
+}
+
+var RuntimeArchiveResult_Success_DEFAULT *Reply
+
+func (p *RuntimeArchiveResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeArchiveResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeArchiveResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeArchiveResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeArchiveResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeArchiveResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeArchiveResult = map[int16]string{
 	0: "success",
 }
 

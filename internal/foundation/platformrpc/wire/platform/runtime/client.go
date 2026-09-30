@@ -16,6 +16,7 @@ type Client interface {
 	Threads(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Timeline(ctx context.Context, actor *platform.Actor, threadID string, after int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Compact(ctx context.Context, actor *platform.Actor, threadID string, requestID string, focus string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Archive(ctx context.Context, actor *platform.Actor, threadID string, archived bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Cancel(ctx context.Context, actor *platform.Actor, threadID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CreateWorker(ctx context.Context, actor *platform.Actor, parentID string, requestID string, name string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 }
@@ -72,6 +73,11 @@ func (p *kRuntimeClient) Timeline(ctx context.Context, actor *platform.Actor, th
 func (p *kRuntimeClient) Compact(ctx context.Context, actor *platform.Actor, threadID string, requestID string, focus string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Compact(ctx, actor, threadID, requestID, focus)
+}
+
+func (p *kRuntimeClient) Archive(ctx context.Context, actor *platform.Actor, threadID string, archived bool, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Archive(ctx, actor, threadID, archived)
 }
 
 func (p *kRuntimeClient) Cancel(ctx context.Context, actor *platform.Actor, threadID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

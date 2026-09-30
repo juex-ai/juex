@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -123,10 +124,17 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 				return work, err
 			}
 		}
+		if work.Source.SenderAgentID != "" {
+			provenance, err := json.Marshal(work.Source)
+			if err != nil {
+				return work, err
+			}
+			text = "Explicit collaboration message; source metadata: " + string(provenance) + "\n\n" + text
+		}
 		message := llm.TextMessage(llm.RoleUser, text)
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
-		if work.Source.Kind == "observation" {
+		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" {
 			message.Kind = llm.MessageKindSystemNotice
 		}
 		if work.Source.Kind != "compaction" {
@@ -420,6 +428,17 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state=CASE WHEN EXISTS(SELECT 1 FROM runtime.inputs WHERE thread_id=$1 AND state='queued') THEN 'queued' WHEN $2='failed' THEN 'failed' ELSE 'idle' END WHERE id=$1`, threadID, state); err != nil {
+		return err
+	}
+	var finalText strings.Builder
+	if failure == "" {
+		for _, block := range response.Message.Blocks {
+			if block.Type == llm.BlockText {
+				finalText.WriteString(block.Text)
+			}
+		}
+	}
+	if err := threadResult(ctx, tx, threadID, turnID, state, finalText.String()); err != nil {
 		return err
 	}
 	if err := appendEvent(ctx, tx, threadID, "turn."+state, map[string]string{"turn_id": turnID, "input_id": inputID, "error": failure}); err != nil {

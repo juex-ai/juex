@@ -48,6 +48,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"Archive": kitex.NewMethodInfo(
+		archiveHandler,
+		newRuntimeArchiveArgs,
+		newRuntimeArchiveResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Cancel": kitex.NewMethodInfo(
 		cancelHandler,
 		newRuntimeCancelArgs,
@@ -218,6 +225,24 @@ func newRuntimeCompactResult() interface{} {
 	return platform.NewRuntimeCompactResult()
 }
 
+func archiveHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeArchiveArgs)
+	realResult := result.(*platform.RuntimeArchiveResult)
+	success, err := handler.(platform.Runtime).Archive(ctx, realArg.Actor, realArg.ThreadID, realArg.Archived)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeArchiveArgs() interface{} {
+	return platform.NewRuntimeArchiveArgs()
+}
+
+func newRuntimeArchiveResult() interface{} {
+	return platform.NewRuntimeArchiveResult()
+}
+
 func cancelHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.RuntimeCancelArgs)
 	realResult := result.(*platform.RuntimeCancelResult)
@@ -317,6 +342,18 @@ func (p *kClient) Compact(ctx context.Context, actor *platform.Actor, threadID s
 	_args.Focus = focus
 	var _result platform.RuntimeCompactResult
 	if err = p.c.Call(ctx, "Compact", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Archive(ctx context.Context, actor *platform.Actor, threadID string, archived bool) (r *platform.Reply, err error) {
+	var _args platform.RuntimeArchiveArgs
+	_args.Actor = actor
+	_args.ThreadID = threadID
+	_args.Archived = archived
+	var _result platform.RuntimeArchiveResult
+	if err = p.c.Call(ctx, "Archive", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

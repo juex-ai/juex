@@ -85,6 +85,7 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 		return nil, ErrInvalid
 	}
 	runner.tools = &toolRunner{store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
+	runner.tools.collaboration, _ = store.(CollaborationStore)
 	if config.Tools != nil {
 		observations, ok := store.(ObservationStore)
 		if !ok {
@@ -297,6 +298,11 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		return err
 	}
 	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation", Tools: runtimeTools()}
+	if r.tools.collaboration != nil {
+		_, peers := r.authority.(AgentDirectory)
+		request.Tools = append(request.Tools, collaborationTools(peers)...)
+		request.System += "\n\nCurrent Agent: " + work.Scope.AgentID + "; current Thread: " + work.ThreadID + "; maximum Worker nesting depth: " + strconv.Itoa(max(work.Config.WorkerDepth, 1)) + ". Each Worker starts with only its explicit task, not the parent conversation. Other Agents receive only explicit messages."
+	}
 	if work.Source.Kind == "observation" {
 		request.Purpose = "observation"
 	}

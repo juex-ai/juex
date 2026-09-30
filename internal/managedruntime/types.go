@@ -23,6 +23,8 @@ var (
 
 // Scope comes from current Management authority, never a browser request body.
 type Scope struct {
+	// WorkerDepth is descriptive policy, not part of the authorization identity.
+	WorkerDepth              int    `json:"worker_depth"`
 	TenantID                 string `json:"tenant_id"`
 	UserID                   string `json:"user_id"`
 	FleetID                  string `json:"fleet_id"`
@@ -93,6 +95,7 @@ type Lease struct {
 }
 
 type TurnConfig struct {
+	WorkerDepth      int           `json:"worker_depth"`
 	AgentVersion     int64         `json:"agent_version"`
 	Instructions     string        `json:"instructions"`
 	RequestedModelID string        `json:"requested_model_id"`

@@ -4,6 +4,7 @@ export type Role = "admin" | "member";
 export type MembershipStatus = "active" | "suspended" | "removed";
 
 export interface Agent {
+  worker_depth: number;
   id: string;
   fleet_id: string;
   name: string;
@@ -16,6 +17,7 @@ export interface Agent {
 }
 
 export interface AgentConfig {
+  worker_depth?: number;
   name: string;
   instructions: string;
   model_id: string;
@@ -30,6 +32,10 @@ export interface AgentDetail {
 
 export interface ArchiveAgentRequest {
   version: number;
+  archived: boolean;
+}
+
+export interface ArchiveThreadRequest {
   archived: boolean;
 }
 
@@ -99,6 +105,7 @@ export interface CompactionRequest {
 }
 
 export interface ConfigureAgentRequest {
+  worker_depth?: number;
   name: string;
   instructions: string;
   model_id: string;

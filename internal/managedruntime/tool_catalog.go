@@ -16,6 +16,9 @@ func executionTools() []llm.ToolSpec {
 	integer := map[string]any{"type": "integer", "minimum": 0}
 	handle := map[string]any{"type": "object", "properties": map[string]any{"environment_id": str("Original environment ID"), "operation_id": str("Original operation ID")}, "required": []string{"environment_id", "operation_id"}, "additionalProperties": false}
 	tool := func(name, description string, properties map[string]any, required ...string) llm.ToolSpec {
+		if required == nil {
+			required = []string{}
+		}
 		return llm.ToolSpec{Name: name, Description: description, Schema: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}
 	}
 	location := func(properties map[string]any) map[string]any {

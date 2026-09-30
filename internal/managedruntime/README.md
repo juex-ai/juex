@@ -7,6 +7,24 @@ an Activation is a replaceable lease holder. Main and Workers have independent
 inputs, history, context generations and cancellation. The scheduler interleaves
 owners and limits active Threads; idle Activations do not consume execution slots.
 
+Worker creation, its explicit first input and optional result subscription commit
+together under the calling tool's fence. Workers start with independent context.
+The Agent's default depth limit is one; it can allow two levels. The Turn freezes
+that policy. A parent describes topology, not ownership of cancellation: accepted
+work survives the sender's stop. Same-Agent result subscriptions deliver bounded
+final text and Turn identities through a durable, generation-fenced inbox.
+Resubscription does not replay previous results; ordinary unsubscribe leaves
+already accepted inputs intact. Cancelling a Thread also cancels its accepted
+inputs and disables its subscriptions. Idle Workers can be archived and restored
+without losing history or replaying work; active descendants prevent archival.
+
+Cross-Agent collaboration sends explicit messages only to a peer's Main in the
+same Tenant, owner and Fleet, including when an administrator acts on behalf of
+the owner. Both participants are authorized at admission. Once accepted, the
+target's scope and original actor govern execution; source identities are
+provenance, not continuing dependencies. Peer discovery exposes names and IDs,
+never private conversations or cross-Agent context references.
+
 `juex-runtime` runs independently of `juex-management`. Management forwards
 conversation requests over Kitex; Runtime obtains current authority and model
 credentials through Management RPC. Both directions require service-specific

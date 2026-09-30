@@ -35,6 +35,9 @@ var modelsSchema string
 //go:embed compaction_schema.sql
 var compactionSchema string
 
+//go:embed collaboration_schema.sql
+var collaborationSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -49,7 +52,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -170,10 +173,6 @@ func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, req
 	if !validScope(scope) || request.RequestID == "" || len(request.RequestID) > 200 {
 		return managedruntime.InputReceipt{}, managedruntime.ErrInvalid
 	}
-	encodedSource, err := json.Marshal(source)
-	if err != nil {
-		return managedruntime.InputReceipt{}, err
-	}
 
 	tx, err := s.begin(ctx)
 	if err != nil {
@@ -184,6 +183,18 @@ func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, req
 		return managedruntime.InputReceipt{}, err
 	}
 	thread, err := readThread(ctx, tx, scope.AgentID, request.ThreadID)
+	if err != nil {
+		return managedruntime.InputReceipt{}, err
+	}
+	result, err := acceptThreadInput(ctx, tx, scope, thread, request, source)
+	if err != nil {
+		return result, err
+	}
+	return result, tx.Commit(ctx)
+}
+
+func acceptThreadInput(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, thread managedruntime.Thread, request managedruntime.InputRequest, source managedruntime.InputSource) (managedruntime.InputReceipt, error) {
+	encodedSource, err := json.Marshal(source)
 	if err != nil {
 		return managedruntime.InputReceipt{}, err
 	}
@@ -215,7 +226,7 @@ func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, req
 		if source.Kind == "compaction" {
 			kind = "context.requested"
 		}
-		if err := appendEvent(ctx, tx, thread.ID, kind, map[string]any{"receipt": result, "text": request.Text}); err != nil {
+		if err := appendEvent(ctx, tx, thread.ID, kind, map[string]any{"receipt": result, "text": request.Text, "source": source}); err != nil {
 			return result, err
 		}
 	}
@@ -224,7 +235,7 @@ func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, req
 	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state=CASE WHEN state IN ('idle','failed') THEN 'queued' ELSE state END,updated_at=clock_timestamp() WHERE id=$1 AND EXISTS(SELECT 1 FROM runtime.inputs WHERE id=$2 AND state='queued')`, thread.ID, result.ID); err != nil {
 		return result, err
 	}
-	return result, tx.Commit(ctx)
+	return result, nil
 }
 
 type scanner interface{ Scan(...any) error }

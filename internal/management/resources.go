@@ -29,6 +29,7 @@ type ModelCandidate struct {
 }
 
 type ModelPlan struct {
+	WorkerDepth                    int
 	AgentVersion                   int64
 	Instructions, RequestedModelID string
 	Candidates                     []ModelCandidate
@@ -41,7 +42,13 @@ const (
 	AgentArchived AgentStatus = "archived"
 )
 
+type PeerAgent struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type Agent struct {
+	WorkerDepth    int         `json:"worker_depth"`
 	ID             string      `json:"id"`
 	FleetID        string      `json:"fleet_id"`
 	Name           string      `json:"name"`
@@ -55,12 +62,16 @@ type Agent struct {
 }
 
 type AgentConfig struct {
+	WorkerDepth  int    `json:"worker_depth,omitempty"`
 	Name         string `json:"name"`
 	Instructions string `json:"instructions"`
 	ModelID      string `json:"model_id"`
 }
 
 func (c AgentConfig) Validate() error {
+	if c.WorkerDepth < 0 || c.WorkerDepth > 2 {
+		return ErrInvalid
+	}
 	if strings.TrimSpace(c.Name) == "" || len([]rune(c.Name)) > 100 || len(c.Instructions) > 64<<10 {
 		return ErrInvalid
 	}
@@ -135,4 +146,11 @@ type AgentDetail struct {
 	OwnerID          string `json:"owner_id"`
 	CanExecute       bool   `json:"can_execute"`
 	EffectiveModelID string `json:"effective_model_id"`
+}
+
+func (c AgentConfig) EffectiveWorkerDepth() int {
+	if c.WorkerDepth == 0 {
+		return 1
+	}
+	return c.WorkerDepth
 }

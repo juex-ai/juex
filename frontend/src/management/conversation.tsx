@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ArrowUp, FolderOpen, GitBranch, LoaderCircle, Minimize2, Square } from 'lucide-react'
+import { Archive, RotateCcw, ArrowLeft, ArrowUp, FolderOpen, GitBranch, LoaderCircle, Minimize2, Square } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,7 +12,7 @@ import { Empty, Failure, Field, Loading, Notice, PageHeading } from './component
 import { useResource } from './use-resource'
 import { projectTranscript } from './timeline'
 import { ArtifactDialog } from './artifacts'
-import type { AgentDetail, CompactionRequest, Event, InputReceipt, InputRequest, Message, TenantAccess, Thread, Timeline, User } from './schema'
+import type { AgentDetail, CompactionRequest, Event, InputReceipt, InputRequest, Message, TenantAccess, Thread, Timeline, User, WorkerRequest } from './schema'
 
 const stateText: Record<string, string> = { idle: '就绪', queued: '排队中', running: '处理中', waiting: '等待工具结果', failed: '本轮失败', blocked: '等待处理' }
 
@@ -25,7 +25,9 @@ export function ConversationPage({ tenant, user }: { tenant: TenantAccess; user:
   const detail = useResource<AgentDetail>(base, revision)
   const threads = useResource<Thread[]>(`${base}/threads`, revision)
   const [workerName, setWorkerName] = useState<string | null>(null)
+  const [workerRequest, setWorkerRequest] = useState<{ parent: string; body: WorkerRequest } | null>(null)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [liveThread, setLiveThread] = useState<Thread | null>(null)
@@ -33,22 +35,31 @@ export function ConversationPage({ tenant, user }: { tenant: TenantAccess; user:
   useEffect(() => { const timer = window.setInterval(refresh, 10_000); return () => window.clearInterval(timer) }, [])
   async function createWorker(event: FormEvent) {
     event.preventDefault(); if (!thread) return
+    const request = workerRequest ?? { parent: thread.id, body: { request_id: nanoid(), name: workerName ?? '' } }
+    setWorkerRequest(request)
     setBusy(true); setError('')
-    try { const worker = await api<Thread>(`${base}/threads/${thread.id}/workers`, { request_id: nanoid(), name: workerName }); setWorkerName(null); refresh(); setSearch({ thread: worker.id }) } catch (err) { setError(errorText(err)) } finally { setBusy(false) }
+    try { const worker = await api<Thread>(`${base}/threads/${request.parent}/workers`, request.body); setWorkerName(null); setWorkerRequest(null); refresh(); setSearch({ thread: worker.id }) } catch (err) { setError(errorText(err)); if (err instanceof APIError && err.status >= 400 && err.status < 500) setWorkerRequest(null) } finally { setBusy(false) }
+  }
+  async function archiveWorker(archived: boolean) {
+    if (!thread) return
+    setBusy(true); setError('')
+    try { await api<Thread>(`${base}/threads/${thread.id}/archive`, { archived }); refresh(); setLiveThread(null); setShowArchived(archived) } catch (err) { setError(err instanceof APIError && err.status === 409 ? archived ? "请先处理此 Worker 未完成的任务、执行操作、结果通知和子 Worker，再归档。" : "请先恢复父 Worker。" : errorText(err)) } finally { setBusy(false) }
   }
   if (detail.error || threads.error) return <Failure message={detail.error ?? threads.error!} retry={refresh} />
   if (!detail.data || !threads.data) return <Loading />
   const value = detail.data
+  const depth = (item: Thread): number => item.parent_id ? 1 + depth(threads.data!.find(parent => parent.id === item.parent_id)!) : 0
+  const canCreate = thread && thread.retention === 'active' && depth(thread) < value.agent.worker_depth
   const back = `/t/${tenant.id}/${value.owner_id === user.id ? 'fleet' : `users/${value.owner_id}`}`
   return <>
     <PageHeading title={value.agent.name} description={value.owner_id !== user.id ? `正在代管此 Agent · 操作者：${user.email}` : 'Main 和 Workers 分别保存对话上下文。'} actions={<><Button variant="outline" onClick={() => setFilesOpen(true)}><FolderOpen />文件与产物</Button><Button variant="outline" asChild><Link to={back}><ArrowLeft />返回 Fleet</Link></Button></>} />
     {filesOpen && <ArtifactDialog key={base} base={base} agent={value.agent.id} writable={value.can_execute} close={() => setFilesOpen(false)} />}
     {!value.can_execute && <Notice>此 Agent 或所属成员已停用，当前仅可查看历史。</Notice>}
     <div className="management-conversation-layout">
-      <aside className="management-thread-list"><div className="management-thread-heading"><strong>对话</strong><Button variant="ghost" size="icon" aria-label="创建 Worker" disabled={!thread || !value.can_execute} onClick={() => { setError(''); setWorkerName('') }}><GitBranch size={16} /></Button></div><nav aria-label="Agent 对话">{threads.data.map(item => { const current = liveThread?.id === item.id && liveThread.sequence >= item.sequence ? liveThread : item; return <button key={item.id} className={item.id === thread?.id ? 'active' : ''} onClick={() => setSearch(item.kind === 'main' ? {} : { thread: item.id })}><span>{item.name}</span><small>{item.kind === 'main' ? 'Main' : 'Worker'} · {stateText[current.state] ?? current.state}</small></button> })}</nav></aside>
-      {thread ? <ThreadConversation key={`${base}:${thread.id}`} base={base} thread={thread} actor={user.id} writable={value.can_execute} onThread={setLiveThread} /> : <Failure message="此对话不存在或已不可访问。" retry={() => setSearch({})} />}
+      <aside className="management-thread-list"><div className="management-thread-heading"><strong>对话</strong><Button variant="ghost" size="icon" aria-label="创建 Worker" disabled={(!canCreate && !workerRequest) || !value.can_execute} onClick={() => { setError(''); setWorkerName('') }}><GitBranch size={16} /></Button></div><nav aria-label="Agent 对话">{threads.data.filter(item => item.kind === 'main' || (showArchived ? item.retention === 'archived' : item.retention === 'active')).map(item => { const current = liveThread?.id === item.id && liveThread.sequence >= item.sequence ? liveThread : item; return <button key={item.id} className={item.id === thread?.id ? 'active' : ''} onClick={() => setSearch(item.kind === 'main' ? {} : { thread: item.id })}><span>{item.name}</span><small>{item.kind === 'main' ? 'Main' : 'Worker'} · {current.retention === 'archived' ? '已归档' : stateText[current.state] ?? current.state}</small></button> })}</nav><label className="management-checkbox"><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />查看已归档 Workers</label>{thread?.kind === 'worker' && value.can_execute && <Button variant="ghost" disabled={busy} onClick={() => void archiveWorker(thread.retention !== 'archived')}>{thread.retention === 'archived' ? <><RotateCcw size={14} />恢复 Worker</> : <><Archive size={14} />归档 Worker</>}</Button>}{error && workerName === null && <Notice error>{error}</Notice>}</aside>
+      {thread ? <ThreadConversation key={`${base}:${thread.id}`} base={base} thread={thread} actor={user.id} writable={value.can_execute && thread.retention === 'active'} onThread={setLiveThread} /> : <Failure message="此对话不存在或已不可访问。" retry={() => setSearch({})} />}
     </div>
-    <Dialog open={workerName !== null} onOpenChange={open => { if (!open) setWorkerName(null) }}><DialogContent><DialogHeader><DialogTitle>创建 Worker</DialogTitle><DialogDescription>创建独立的对话上下文，可以与当前对话同时执行。</DialogDescription></DialogHeader><form onSubmit={createWorker}>{error && <Notice error>{error}</Notice>}<Field label="名称"><Input required maxLength={100} value={workerName ?? ''} onChange={event => setWorkerName(event.target.value)} /></Field><DialogFooter><Button type="button" variant="outline" onClick={() => setWorkerName(null)}>取消</Button><Button disabled={busy || !workerName?.trim()}>创建</Button></DialogFooter></form></DialogContent></Dialog>
+    <Dialog open={workerName !== null} onOpenChange={open => { if (!open) setWorkerName(null) }}><DialogContent><DialogHeader><DialogTitle>创建 Worker</DialogTitle><DialogDescription>创建独立的对话上下文，可以与当前对话同时执行。</DialogDescription></DialogHeader><form onSubmit={createWorker}>{error && <Notice error>{error}</Notice>}{workerRequest && !busy && <Notice>创建结果尚未确认；重试会继续查询同一个 Worker，不会重复创建。</Notice>}<Field label="名称"><Input required maxLength={100} readOnly={workerRequest !== null} value={workerRequest?.body.name ?? workerName ?? ''} onChange={event => setWorkerName(event.target.value)} /></Field><DialogFooter><Button type="button" variant="outline" onClick={() => setWorkerName(null)}>关闭</Button><Button disabled={busy || !(workerRequest?.body.name ?? workerName)?.trim()}>{workerRequest ? '重试' : '创建'}</Button></DialogFooter></form></DialogContent></Dialog>
   </>
 }
 
@@ -59,16 +70,22 @@ function useTimeline(base: string, thread: string, revision: number) {
     let cursor = 0
     let events: Event[] = []
     let timer: number | undefined
+    let failures = 0
     const poll = async () => {
       try {
         const value = await api<Timeline>(`${base}/threads/${thread}/events?after=${cursor}&limit=200`, undefined, undefined, controller.signal)
         if (controller.signal.aborted) return
         cursor = value.next_sequence; events = [...events, ...value.events]
+        failures = 0
         setState({ events, thread: value.thread })
         timer = window.setTimeout(() => void poll(), value.has_more ? 0 : 750)
       } catch (error) {
         if (controller.signal.aborted) return
         setState(previous => ({ ...previous, error: errorText(error) }))
+        if (!(error instanceof APIError) || error.status >= 500 || error.status === 429) {
+          failures += 1
+          timer = window.setTimeout(() => void poll(), Math.min(15_000, 1000 * 2 ** Math.min(failures, 4)))
+        }
       }
     }
     void poll()
@@ -150,7 +167,7 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
 function MessageView({ message, status }: { message: Message; status: string }) {
   if (message.kind === 'tool_result') return <div className="management-message from-agent">{message.blocks.map((block, index) => <details key={index} className="management-tool-row"><summary>{block.is_error ? '执行未完成' : '执行结果'} · {block.tool_name}</summary><pre>{block.content}</pre></details>)}</div>
   if (message.kind === 'compact') return <details className="management-tool-row"><summary>上下文摘要 · 原始对话已保留</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
-  if (message.kind === 'system_notice') return <details className="management-tool-row"><summary>执行环境动态</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
+  if (message.kind === 'system_notice') return <details className="management-tool-row"><summary>{message.blocks.some(block => block.text?.startsWith('Explicit collaboration message')) ? '协作消息与结果' : '执行环境动态'}</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
   const user = message.role === 'user'
   return <article className={`management-message ${user ? 'from-user' : 'from-agent'}`}><div className="management-message-author">{user ? '你' : 'Agent'}</div>{message.blocks.map((block, index) => {
     if (block.type === 'text') return user ? <p key={index} className="management-user-text">{block.text}</p> : <MessageResponse key={index} isAnimating={false}>{block.text ?? ''}</MessageResponse>

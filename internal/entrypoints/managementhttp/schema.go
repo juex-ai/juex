@@ -30,7 +30,7 @@ func GenerateTypeScript() ([]byte, error) {
 		reflect.TypeFor[execution.Artifact](), reflect.TypeFor[execution.ArtifactUpload](), reflect.TypeFor[execprotocol.FileChunk](),
 		reflect.TypeFor[execution.Transfer](), reflect.TypeFor[ExtendTransferRequest](),
 		reflect.TypeFor[management.AgentConfig](), reflect.TypeFor[ConfigureAgentRequest](), reflect.TypeFor[ArchiveAgentRequest](),
-		reflect.TypeFor[managedruntime.Thread](), reflect.TypeFor[managedruntime.Timeline](), reflect.TypeFor[managedruntime.CompactionRequest](), reflect.TypeFor[managedruntime.InputRequest](), reflect.TypeFor[managedruntime.InputReceipt](), reflect.TypeFor[WorkerRequest](), reflect.TypeFor[llm.Message](),
+		reflect.TypeFor[managedruntime.Thread](), reflect.TypeFor[managedruntime.Timeline](), reflect.TypeFor[managedruntime.CompactionRequest](), reflect.TypeFor[managedruntime.InputRequest](), reflect.TypeFor[managedruntime.InputReceipt](), reflect.TypeFor[WorkerRequest](), reflect.TypeFor[ArchiveThreadRequest](), reflect.TypeFor[llm.Message](),
 	} {
 		if _, err := g.render(typ); err != nil {
 			return nil, err

@@ -228,6 +228,9 @@ func fileTools() []llm.ToolSpec {
 	}
 	location := map[string]any{"type": "object", "properties": map[string]any{"environment_id": str("Authorized environment ID. Omit only for the hosted workspace. Offline devices wait; never substitute."), "path": str("File path on this environment"), "working_directory": str("Optional absolute working directory")}, "required": []string{"path"}, "additionalProperties": false}
 	tool := func(name, description string, properties map[string]any, required ...string) llm.ToolSpec {
+		if required == nil {
+			required = []string{}
+		}
 		return llm.ToolSpec{Name: name, Description: description, Schema: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}
 	}
 	metadata := func(properties map[string]any) map[string]any {

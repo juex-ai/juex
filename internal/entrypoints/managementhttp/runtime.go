@@ -10,6 +10,7 @@ import (
 )
 
 type Runtime interface {
+	Archive(context.Context, string, string, string, string, bool) (managedruntime.Thread, error)
 	Compact(context.Context, string, string, string, string, managedruntime.CompactionRequest) (managedruntime.InputReceipt, error)
 	Submit(context.Context, string, string, string, managedruntime.InputRequest) (managedruntime.InputReceipt, error)
 	Threads(context.Context, string, string, string) ([]managedruntime.Thread, error)
@@ -89,4 +90,18 @@ func (s *Server) compactThread(w http.ResponseWriter, r *http.Request, user mana
 	}
 	v, err := s.options.Runtime.Compact(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"), r.PathValue("thread"), body)
 	respond(w, v, err)
+}
+
+type ArchiveThreadRequest struct {
+	Archived bool `json:"archived"`
+}
+
+func (s *Server) archiveThread(w http.ResponseWriter, r *http.Request, user management.User) {
+	var body ArchiveThreadRequest
+	if err := decode(r, &body); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	result, err := s.options.Runtime.Archive(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"), r.PathValue("thread"), body.Archived)
+	respond(w, result, err)
 }

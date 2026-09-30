@@ -152,3 +152,21 @@ func (c *Client) Compact(ctx context.Context, user, tenant, agent, thread string
 	err = platformrpc.Decode(reply, err, &result, decodeError)
 	return result, err
 }
+
+func (a *Authority) Peers(ctx context.Context, scope managedruntime.Scope) ([]managedruntime.PeerAgent, error) {
+	encoded, err := json.Marshal(scope)
+	if err != nil {
+		return nil, err
+	}
+	reply, err := a.client.Peers(ctx, string(encoded))
+	var result []managedruntime.PeerAgent
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}
+
+func (c *Client) Archive(ctx context.Context, user, tenant, agent, thread string, archived bool) (managedruntime.Thread, error) {
+	reply, err := c.client.Archive(ctx, actor(user, tenant, agent), thread, archived)
+	var result managedruntime.Thread
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}

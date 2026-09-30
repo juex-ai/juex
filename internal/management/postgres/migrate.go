@@ -26,6 +26,9 @@ var resourcesSchema string
 //go:embed authority_schema.sql
 var authoritySchema string
 
+//go:embed workers_schema.sql
+var workersSchema string
+
 //go:embed model_policy_schema.sql
 var modelPolicySchema string
 
@@ -44,7 +47,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		CREATE TABLE IF NOT EXISTS management.schema_versions (version integer PRIMARY KEY, checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{initialSchema, authSchema, mailSchema, resourcesSchema, authoritySchema, modelPolicySchema}
+	migrations := []string{initialSchema, authSchema, mailSchema, resourcesSchema, authoritySchema, modelPolicySchema, workersSchema}
 	rows, err := tx.Query(ctx, `SELECT version, checksum FROM management.schema_versions ORDER BY version`)
 	if err != nil {
 		return err

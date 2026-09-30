@@ -27,6 +27,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"Peers": kitex.NewMethodInfo(
+		peersHandler,
+		newManagementPeersArgs,
+		newManagementPeersResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Snapshot": kitex.NewMethodInfo(
 		snapshotHandler,
 		newManagementSnapshotArgs,
@@ -143,6 +150,24 @@ func newManagementAuthorizeResult() interface{} {
 	return platform.NewManagementAuthorizeResult()
 }
 
+func peersHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ManagementPeersArgs)
+	realResult := result.(*platform.ManagementPeersResult)
+	success, err := handler.(platform.Management).Peers(ctx, realArg.ScopeJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newManagementPeersArgs() interface{} {
+	return platform.NewManagementPeersArgs()
+}
+
+func newManagementPeersResult() interface{} {
+	return platform.NewManagementPeersResult()
+}
+
 func snapshotHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.ManagementSnapshotArgs)
 	realResult := result.(*platform.ManagementSnapshotResult)
@@ -208,6 +233,16 @@ func (p *kClient) Authorize(ctx context.Context, actor *platform.Actor, execute 
 	_args.Execute = execute
 	var _result platform.ManagementAuthorizeResult
 	if err = p.c.Call(ctx, "Authorize", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Peers(ctx context.Context, scopeJSON string) (r *platform.Reply, err error) {
+	var _args platform.ManagementPeersArgs
+	_args.ScopeJSON = scopeJSON
+	var _result platform.ManagementPeersResult
+	if err = p.c.Call(ctx, "Peers", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

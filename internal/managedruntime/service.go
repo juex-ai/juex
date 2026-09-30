@@ -15,6 +15,7 @@ type Authority interface {
 }
 
 type ConversationStore interface {
+	SetThreadArchived(context.Context, Scope, string, bool) (Thread, error)
 	EnsureAgent(context.Context, Scope) (Thread, error)
 	AcceptCompaction(context.Context, Scope, string, CompactionRequest) (InputReceipt, error)
 	AcceptInput(context.Context, Scope, InputRequest) (InputReceipt, error)
@@ -90,4 +91,12 @@ func (s *Service) Compact(ctx context.Context, actor, tenant, agent, thread stri
 		return InputReceipt{}, err
 	}
 	return s.Store.AcceptCompaction(ctx, scope, thread, request)
+}
+
+func (s *Service) Archive(ctx context.Context, actor, tenant, agent, thread string, archived bool) (Thread, error) {
+	scope, err := s.scope(ctx, actor, tenant, agent, true)
+	if err != nil {
+		return Thread{}, err
+	}
+	return s.Store.SetThreadArchived(ctx, scope, thread, archived)
 }

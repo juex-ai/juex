@@ -92,6 +92,12 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	if _, err := executorAuthority.Snapshot(ctx, executorScope); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Execution obtained Runtime-only configuration", err)
 	}
+	if _, err := executorAuthority.Peers(ctx, executorScope); !errors.Is(err, managedruntime.ErrDenied) {
+		t.Fatal("Execution obtained Runtime peer directory", err)
+	}
+	if peers, err := authority.Peers(ctx, executorScope); err != nil || len(peers) != 0 {
+		t.Fatal(peers, err)
+	}
 	if _, err := executorAuthority.Provider(ctx, executorScope, managedruntime.ModelConfig{}); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Execution obtained model credentials", err)
 	}
@@ -117,6 +123,12 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	}
 	if err := client.Cancel(ctx, f.actor, f.tenant, f.agent.ID, worker.ID); err != nil {
 		t.Fatal(err)
+	}
+	if archived, err := client.Archive(ctx, f.actor, f.tenant, f.agent.ID, worker.ID, true); err != nil || archived.Retention != "archived" {
+		t.Fatal(archived, err)
+	}
+	if restored, err := client.Archive(ctx, f.actor, f.tenant, f.agent.ID, worker.ID, false); err != nil || restored.Retention != "active" {
+		t.Fatal(restored, err)
 	}
 	if _, err := client.Threads(ctx, "00000000-0000-4000-8000-000000000001", f.tenant, f.agent.ID); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("RPC authority missing", err)

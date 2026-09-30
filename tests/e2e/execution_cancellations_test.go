@@ -49,7 +49,7 @@ func TestExecutionPreparedCancellationWinsAgainstTimedOutRPCAdmission(t *testing
 			if file {
 				call.ToolName, call.Input = "publish_file", map[string]any{"source": map[string]any{"environment_id": device.ID, "path": "source.bin"}}
 			}
-			scope, job := prepareRuntimeCall(t, f, f.main.ID, "prepared-input", call)
+			scope, job := prepareRuntimeCall(t, f.managedRuntimeFixture, f.main.ID, "prepared-input", call)
 			request := execprotocol.Request{Version: execprotocol.Version, ID: job.ID, AgentID: f.agent.ID, Kind: "write", Arguments: json.RawMessage(`{"path":"must-not-exist","content":"late write"}`)}
 			if file {
 				request.Kind, request.Arguments = "publish_file", json.RawMessage(`{}`)

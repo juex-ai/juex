@@ -15,18 +15,22 @@ import (
 )
 
 type toolRunner struct {
-	context      ContextStore
-	observations ObservationStore
-	store        ToolStore
-	gateway      ToolGateway
-	files        FileGateway
-	authority    Authority
+	collaboration CollaborationStore
+	context       ContextStore
+	observations  ObservationStore
+	store         ToolStore
+	gateway       ToolGateway
+	files         FileGateway
+	authority     Authority
 }
 
 func (r toolRunner) run(ctx context.Context) {
 	var workers sync.WaitGroup
 	for range 3 {
 		workers.Go(func() { r.deliver(ctx) })
+	}
+	if r.collaboration != nil {
+		workers.Go(func() { r.deliverThreadResults(ctx) })
 	}
 	if r.gateway != nil {
 		workers.Go(func() { r.receive(ctx) })
@@ -117,6 +121,9 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 		return toolResult(work.Call, map[string]string{"error": "authority_changed"}, true)
 	}
 	if outcome, handled := r.contextTool(ctx, *work); handled {
+		return outcome
+	}
+	if outcome, handled := r.collaborationTool(ctx, *work); handled {
 		return outcome
 	}
 	if r.gateway == nil {
