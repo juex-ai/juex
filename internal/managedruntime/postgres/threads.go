@@ -82,6 +82,9 @@ func (s *Store) CancelThread(ctx context.Context, scope managedruntime.Scope, th
 		return err
 	}
 	for _, id := range turns {
+		if err := cancelCompaction(ctx, tx, id); err != nil {
+			return err
+		}
 		if err := consumeToolResults(ctx, tx, id, thread.ID, true); err != nil {
 			return err
 		}

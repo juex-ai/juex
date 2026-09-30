@@ -433,6 +433,8 @@ type Runtime interface {
 
 	Timeline(ctx context.Context, actor *Actor, threadID string, after int64, limit int32) (r *Reply, err error)
 
+	Compact(ctx context.Context, actor *Actor, threadID string, requestID string, focus string) (r *Reply, err error)
+
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
 	CreateWorker(ctx context.Context, actor *Actor, parentID string, requestID string, name string) (r *Reply, err error)
@@ -774,6 +776,109 @@ func (p *RuntimeTimelineResult) String() string {
 }
 
 var fieldIDToName_RuntimeTimelineResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeCompactArgs struct {
+	Actor     *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ThreadID  string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+	RequestID string `thrift:"requestID,3" frugal:"3,default,string" json:"requestID"`
+	Focus     string `thrift:"focus,4" frugal:"4,default,string" json:"focus"`
+}
+
+func NewRuntimeCompactArgs() *RuntimeCompactArgs {
+	return &RuntimeCompactArgs{}
+}
+
+func (p *RuntimeCompactArgs) InitDefault() {
+}
+
+var RuntimeCompactArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeCompactArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeCompactArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeCompactArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *RuntimeCompactArgs) GetRequestID() (v string) {
+	return p.RequestID
+}
+
+func (p *RuntimeCompactArgs) GetFocus() (v string) {
+	return p.Focus
+}
+func (p *RuntimeCompactArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeCompactArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *RuntimeCompactArgs) SetRequestID(val string) {
+	p.RequestID = val
+}
+func (p *RuntimeCompactArgs) SetFocus(val string) {
+	p.Focus = val
+}
+
+func (p *RuntimeCompactArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeCompactArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeCompactArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeCompactArgs = map[int16]string{
+	1: "actor",
+	2: "threadID",
+	3: "requestID",
+	4: "focus",
+}
+
+type RuntimeCompactResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeCompactResult() *RuntimeCompactResult {
+	return &RuntimeCompactResult{}
+}
+
+func (p *RuntimeCompactResult) InitDefault() {
+}
+
+var RuntimeCompactResult_Success_DEFAULT *Reply
+
+func (p *RuntimeCompactResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeCompactResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeCompactResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeCompactResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeCompactResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeCompactResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeCompactResult = map[int16]string{
 	0: "success",
 }
 

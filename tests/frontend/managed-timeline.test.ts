@@ -37,3 +37,16 @@ test('model fallback and context exhaustion show distinct durable outcomes', () 
   if (rows[0].kind === 'message') assert.match(rows[0].status, /上下文/)
   if (rows[1].kind === 'notice') assert.match(rows[1].text, /授权已变更.*operator:backup/)
 })
+
+test('compaction control and failures stay separate from user messages', () => {
+  const rows = projectTranscript([
+    event(1, 'context.requested', { receipt: { id: 'control' }, text: '' }),
+    event(2, 'context.compacting', {}),
+    event(3, 'input.held', { input_id: 'control', reason: 'compaction_failed' }),
+    event(4, 'context.unchanged', {}),
+  ])
+  assert.equal(rows.length, 4)
+  assert.ok(rows.every(row => row.kind === 'notice'))
+  if (rows[2].kind === 'notice') assert.match(rows[2].text, /未完成.*原始内容保留/)
+  if (rows[3].kind === 'notice') assert.match(rows[3].text, /无需压缩/)
+})

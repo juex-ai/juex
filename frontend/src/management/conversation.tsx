@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ArrowUp, GitBranch, LoaderCircle, Square } from 'lucide-react'
+import { ArrowLeft, ArrowUp, GitBranch, LoaderCircle, Minimize2, Square } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,7 +11,7 @@ import { APIError, api, errorText } from './api'
 import { Empty, Failure, Field, Loading, Notice, PageHeading } from './components'
 import { useResource } from './use-resource'
 import { projectTranscript } from './timeline'
-import type { AgentDetail, Event, InputReceipt, InputRequest, Message, TenantAccess, Thread, Timeline, User } from './schema'
+import type { AgentDetail, CompactionRequest, Event, InputReceipt, InputRequest, Message, TenantAccess, Thread, Timeline, User } from './schema'
 
 const stateText: Record<string, string> = { idle: '就绪', queued: '排队中', running: '处理中', waiting: '等待工具结果', failed: '本轮失败', blocked: '等待处理' }
 
@@ -85,6 +85,8 @@ function saveSubmission(key: string, request: InputRequest | null) {
 function ThreadConversation({ base, thread, actor, writable, onThread }: { base: string; thread: Thread; actor: string; writable: boolean; onThread: (thread: Thread) => void }) {
   const storageKey = `juex.pending:${actor}:${base}:${thread.id}`
   const [submission, setSubmission] = useState<InputRequest | null>(() => storedSubmission(storageKey))
+  const [compactFocus, setCompactFocus] = useState<string | null>(null)
+  const [compactRequest, setCompactRequest] = useState<CompactionRequest | null>(null)
   const [draft, setDraft] = useState(() => storedSubmission(storageKey)?.text ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -115,12 +117,21 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
       if (err instanceof APIError && err.status >= 400 && err.status < 500) { setSubmission(null); saveSubmission(storageKey, null) }
     } finally { setBusy(false) }
   }
+  async function compact(event: FormEvent) {
+    event.preventDefault(); if (busy) return
+    const request = compactRequest ?? { request_id: nanoid(), focus: compactFocus ?? '' }
+    setBusy(true); setError(''); setCompactRequest(request)
+    try { await api<InputReceipt>(`${base}/threads/${thread.id}/compact`, request); setCompactFocus(null); setCompactRequest(null) } catch (err) {
+      setError(errorText(err))
+      if (err instanceof APIError && err.status >= 400 && err.status < 500) setCompactRequest(null)
+    } finally { setBusy(false) }
+  }
   async function cancel() {
     setError(''); setBusy(true)
     try { await api(`${base}/threads/${thread.id}/cancel`, {}) } catch (err) { setError(errorText(err)) } finally { setBusy(false) }
   }
   return <section className="management-conversation" aria-label={`${thread.name} 对话`}>
-    <div className="management-conversation-heading"><strong>{thread.name}</strong><span>{running && <LoaderCircle size={13} className="animate-spin" />}{stateText[current.state] ?? current.state}</span></div>
+    <div className="management-conversation-heading"><strong>{thread.name}</strong><Button size="sm" variant="ghost" disabled={!writable || busy} onClick={() => { setError(''); setCompactFocus(compactRequest?.focus ?? '') }}><Minimize2 size={14} />压缩上下文</Button><span>{running && <LoaderCircle size={13} className="animate-spin" />}{stateText[current.state] ?? current.state}</span></div>
     <div className="management-transcript" ref={scroll} onScroll={event => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
       {!timeline.thread ? <Loading /> : rows.length === 0 ? <Empty title="从一条消息开始">说明你要完成的事，Agent 会在这里持续处理。</Empty> : rows.map(row => row.kind === 'notice' ? <p className="management-turn-notice" key={row.id}>{row.text}</p> : <MessageView key={row.id} message={row.message} status={row.status} />)}
       {current.state === 'running' && <div className="management-working" role="status"><LoaderCircle size={14} className="animate-spin" />正在处理…</div>}
@@ -129,11 +140,13 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
       {submission && !busy && <Notice>发送结果尚未确认。重试会使用同一个请求编号，避免重复执行。</Notice>}
       <form className="management-composer" onSubmit={send}><Textarea aria-label="消息" rows={3} maxLength={32000} value={draft} readOnly={submission !== null} disabled={!writable} onChange={event => setDraft(event.target.value)} placeholder={writable ? '告诉 Agent 你想完成什么…' : '当前只能查看历史'} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /><div><small>Enter 发送 · Shift + Enter 换行</small><span>{running && writable && <Button type="button" variant="outline" disabled={busy} onClick={() => void cancel()}><Square size={13} />停止</Button>}<Button type="submit" disabled={!writable || busy || !draft.trim()} aria-label={submission ? '重试发送' : '发送消息'}>{busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}{submission ? '重试' : '发送'}</Button></span></div></form>
     </div>
+    <Dialog open={compactFocus !== null} onOpenChange={open => { if (!open && !busy) setCompactFocus(null) }}><DialogContent><DialogHeader><DialogTitle>压缩上下文</DialogTitle><DialogDescription>为后续任务整理摘要，完整对话历史仍会保留。当前任务正在运行时，压缩会按提交顺序等待执行。</DialogDescription></DialogHeader><form onSubmit={compact}>{error && <Notice error>{error}</Notice>}{compactRequest && <Notice>结果尚未确认，重试会使用同一个请求编号。</Notice>}<Field label="需要重点保留的内容（可选）"><Textarea value={compactFocus ?? ''} maxLength={1000} readOnly={compactRequest !== null} onChange={event => setCompactFocus(event.target.value)} placeholder="例如：关键决策、文件路径和未完成事项" /></Field><DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={() => setCompactFocus(null)}>关闭</Button><Button disabled={busy}>{busy ? '提交中…' : compactRequest ? '重试' : '开始压缩'}</Button></DialogFooter></form></DialogContent></Dialog>
   </section>
 }
 
 function MessageView({ message, status }: { message: Message; status: string }) {
   if (message.kind === 'tool_result') return <div className="management-message from-agent">{message.blocks.map((block, index) => <details key={index} className="management-tool-row"><summary>{block.is_error ? '执行未完成' : '执行结果'} · {block.tool_name}</summary><pre>{block.content}</pre></details>)}</div>
+  if (message.kind === 'compact') return <details className="management-tool-row"><summary>上下文摘要 · 原始对话已保留</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
   if (message.kind === 'system_notice') return <details className="management-tool-row"><summary>执行环境动态</summary>{message.blocks.map((block, index) => <pre key={index}>{block.text}</pre>)}</details>
   const user = message.role === 'user'
   return <article className={`management-message ${user ? 'from-user' : 'from-agent'}`}><div className="management-message-author">{user ? '你' : 'Agent'}</div>{message.blocks.map((block, index) => {

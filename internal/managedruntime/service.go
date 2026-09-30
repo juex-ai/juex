@@ -16,6 +16,7 @@ type Authority interface {
 
 type ConversationStore interface {
 	EnsureAgent(context.Context, Scope) (Thread, error)
+	AcceptCompaction(context.Context, Scope, string, CompactionRequest) (InputReceipt, error)
 	AcceptInput(context.Context, Scope, InputRequest) (InputReceipt, error)
 	Threads(context.Context, Scope) ([]Thread, error)
 	Timeline(context.Context, Scope, string, int64, int) (Timeline, error)
@@ -78,4 +79,15 @@ func (s *Service) Worker(ctx context.Context, actor, tenant, agent, parent, requ
 		return Thread{}, err
 	}
 	return s.Store.CreateWorker(ctx, scope, parent, requestID, name)
+}
+
+func (s *Service) Compact(ctx context.Context, actor, tenant, agent, thread string, request CompactionRequest) (InputReceipt, error) {
+	scope, err := s.scope(ctx, actor, tenant, agent, true)
+	if err != nil {
+		return InputReceipt{}, err
+	}
+	if _, err := s.Authority.Snapshot(ctx, scope); err != nil {
+		return InputReceipt{}, err
+	}
+	return s.Store.AcceptCompaction(ctx, scope, thread, request)
 }

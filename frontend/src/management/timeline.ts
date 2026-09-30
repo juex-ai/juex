@@ -23,7 +23,17 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
       }
     } else if (event.kind === 'input.held' && data.input_id) {
       const row = messages.get(data.input_id)
-      if (row) row.status = data.reason === 'context_limit' ? '上下文超出可用模型容量，本轮已暂停' : data.reason === 'model_unavailable' ? '模型不可用，已暂停；配置后请重新提交' : '授权已改变，未继续执行'
+      const status = data.reason === 'compaction_failed' ? '上下文压缩未完成，本轮已暂停；原始内容保留' : data.reason === 'context_limit' ? '上下文超出可用模型容量，本轮已暂停' : data.reason === 'model_unavailable' ? '模型不可用，已暂停；配置后请重新提交' : '授权已改变，未继续执行'
+      if (row) row.status = status
+      else rows.push({ kind: 'notice', id: event.id, text: status })
+    } else if (event.kind === 'context.requested') {
+      rows.push({ kind: 'notice', id: event.id, text: '上下文压缩请求已接收，将按顺序执行。' })
+    } else if (event.kind === 'context.compacting') {
+      rows.push({ kind: 'notice', id: event.id, text: '正在整理上下文摘要…' })
+    } else if (event.kind === 'context.compacted') {
+      rows.push({ kind: 'notice', id: event.id, text: '上下文已压缩，完整历史仍然保留。' })
+    } else if (event.kind === 'context.unchanged') {
+      rows.push({ kind: 'notice', id: event.id, text: '当前上下文较短，无需压缩。' })
     } else if (event.kind === 'model.fallback') {
       const reason = data.reason === 'context_limit' ? '上下文超出模型容量' : data.reason === 'model_unavailable' ? '模型已不可用或授权已变更' : '模型请求失败'
       rows.push({ kind: 'notice', id: event.id, text: `${reason}，已切换到预设备用模型${data.to_model ? ` ${data.to_model}` : ''}。` })

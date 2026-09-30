@@ -112,6 +112,9 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.Compact(ctx, f.actor, f.tenant, f.agent.ID, worker.ID, managedruntime.CompactionRequest{RequestID: "rpc-compact"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := client.Cancel(ctx, f.actor, f.tenant, f.agent.ID, worker.ID); err != nil {
 		t.Fatal(err)
 	}

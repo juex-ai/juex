@@ -235,6 +235,37 @@ func TestManagedRuntimeFallbackAfterToolWaitRechecksTenantAccess(t *testing.T) {
 	assertRuntimeTranscript(t, f)
 }
 
+func TestManagedRuntimeContextFallbackDoesNotLeaveUnusableCompaction(t *testing.T) {
+	var calls atomic.Int32
+	f := managedRuntimeHTTP(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		streamManagedReply(w, "Larger authorized model completed")
+	})
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("undersized candidate called provider")
+		http.Error(w, "unexpected", 500)
+	}))
+	t.Cleanup(primary.Close)
+	ctx := context.Background()
+	model, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "small", Name: "tiny", Protocol: llm.ProtocolOpenAIChat, Endpoint: primary.URL, APIKey: "fixture", ContextWindow: 2048, MaxOutput: 512, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.directory.SetModelFallbacks(ctx, model.ID, []string{f.agent.ModelID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: model.ID, Instructions: strings.Repeat("fixed instruction ", 1000)}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t, "large-fallback", f.main.ID, "Hello")
+	f.run(t)
+	runtimeEventually(t, func() bool { return f.timeline(t, f.main.ID).Thread.State == "idle" && calls.Load() == 1 })
+	var jobs int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.compactions`).Scan(&jobs); err != nil || jobs != 0 {
+		t.Fatal("unusable summary blocked a larger candidate", jobs, err)
+	}
+}
+
 func TestManagedRuntimeFallbackContextLimitHoldsWithoutRequest(t *testing.T) {
 	var calls atomic.Int32
 	f := managedRuntimeHTTP(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1); http.Error(w, "temporary", 503) })

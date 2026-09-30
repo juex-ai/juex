@@ -145,3 +145,10 @@ func (a *Authority) Provider(ctx context.Context, scope managedruntime.Scope, co
 	}
 	return a.factory(profile)
 }
+
+func (c *Client) Compact(ctx context.Context, user, tenant, agent, thread string, request managedruntime.CompactionRequest) (managedruntime.InputReceipt, error) {
+	reply, err := c.client.Compact(ctx, actor(user, tenant, agent), thread, request.RequestID, request.Focus)
+	var result managedruntime.InputReceipt
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}

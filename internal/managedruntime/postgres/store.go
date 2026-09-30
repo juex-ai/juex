@@ -32,6 +32,9 @@ var observationsSchema string
 //go:embed models_schema.sql
 var modelsSchema string
 
+//go:embed compaction_schema.sql
+var compactionSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -46,7 +49,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -150,9 +153,28 @@ func checkScope(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope) erro
 }
 
 func (s *Store) AcceptInput(ctx context.Context, scope managedruntime.Scope, request managedruntime.InputRequest) (managedruntime.InputReceipt, error) {
-	if !validScope(scope) || request.RequestID == "" || len(request.RequestID) > 200 || strings.TrimSpace(request.Text) == "" || len(request.Text) > 256<<10 {
+	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 256<<10 {
 		return managedruntime.InputReceipt{}, managedruntime.ErrInvalid
 	}
+	return s.acceptInput(ctx, scope, request, managedruntime.InputSource{})
+}
+
+func (s *Store) AcceptCompaction(ctx context.Context, scope managedruntime.Scope, thread string, request managedruntime.CompactionRequest) (managedruntime.InputReceipt, error) {
+	if len(request.Focus) > 4096 {
+		return managedruntime.InputReceipt{}, managedruntime.ErrInvalid
+	}
+	return s.acceptInput(ctx, scope, managedruntime.InputRequest{RequestID: request.RequestID, ThreadID: thread}, managedruntime.InputSource{Kind: "compaction", Focus: strings.TrimSpace(request.Focus)})
+}
+
+func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, request managedruntime.InputRequest, source managedruntime.InputSource) (managedruntime.InputReceipt, error) {
+	if !validScope(scope) || request.RequestID == "" || len(request.RequestID) > 200 {
+		return managedruntime.InputReceipt{}, managedruntime.ErrInvalid
+	}
+	encodedSource, err := json.Marshal(source)
+	if err != nil {
+		return managedruntime.InputReceipt{}, err
+	}
+
 	tx, err := s.begin(ctx)
 	if err != nil {
 		return managedruntime.InputReceipt{}, err
@@ -170,21 +192,30 @@ func (s *Store) AcceptInput(ctx context.Context, scope managedruntime.Scope, req
 	}
 	var result managedruntime.InputReceipt
 	var storedText, actor string
-	err = tx.QueryRow(ctx, `INSERT INTO runtime.inputs(request_id,thread_id,actor_id,membership_version,text,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+	var storedSource []byte
+	err = tx.QueryRow(ctx, `INSERT INTO runtime.inputs(request_id,thread_id,actor_id,membership_version,text,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch,source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
 	ON CONFLICT(thread_id,request_id) DO NOTHING
-	RETURNING id,request_id,thread_id,state,accepted_at,text,actor_id`, request.RequestID, thread.ID, scope.ActorID, scope.MembershipVersion, request.Text, scope.MembershipExecutionEpoch, scope.AgentExecutionEpoch, scope.ActorAuthorizationEpoch).Scan(&result.ID, &result.RequestID, &result.ThreadID, &result.State, &result.AcceptedAt, &storedText, &actor)
+	RETURNING id,request_id,thread_id,state,accepted_at,text,actor_id,source`, request.RequestID, thread.ID, scope.ActorID, scope.MembershipVersion, request.Text, scope.MembershipExecutionEpoch, scope.AgentExecutionEpoch, scope.ActorAuthorizationEpoch, encodedSource).Scan(&result.ID, &result.RequestID, &result.ThreadID, &result.State, &result.AcceptedAt, &storedText, &actor, &storedSource)
 	created := err == nil
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `SELECT id,request_id,thread_id,state,accepted_at,text,actor_id FROM runtime.inputs WHERE thread_id=$1 AND request_id=$2`, thread.ID, request.RequestID).Scan(&result.ID, &result.RequestID, &result.ThreadID, &result.State, &result.AcceptedAt, &storedText, &actor)
+		err = tx.QueryRow(ctx, `SELECT id,request_id,thread_id,state,accepted_at,text,actor_id,source FROM runtime.inputs WHERE thread_id=$1 AND request_id=$2`, thread.ID, request.RequestID).Scan(&result.ID, &result.RequestID, &result.ThreadID, &result.State, &result.AcceptedAt, &storedText, &actor, &storedSource)
 	}
 	if err != nil {
 		return result, classify(err)
 	}
-	if storedText != request.Text || actor != scope.ActorID {
+	var origin managedruntime.InputSource
+	if err := json.Unmarshal(storedSource, &origin); err != nil {
+		return result, err
+	}
+	if storedText != request.Text || actor != scope.ActorID || origin != source {
 		return result, managedruntime.ErrConflict
 	}
 	if created {
-		if err := appendEvent(ctx, tx, thread.ID, "input.accepted", map[string]any{"receipt": result, "text": request.Text}); err != nil {
+		kind := "input.accepted"
+		if source.Kind == "compaction" {
+			kind = "context.requested"
+		}
+		if err := appendEvent(ctx, tx, thread.ID, kind, map[string]any{"receipt": result, "text": request.Text}); err != nil {
 			return result, err
 		}
 	}

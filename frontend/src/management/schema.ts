@@ -63,6 +63,11 @@ export interface CompactionMetadata {
   summary_model?: string;
 }
 
+export interface CompactionRequest {
+  request_id: string;
+  focus: string;
+}
+
 export interface ConfigureAgentRequest {
   name: string;
   instructions: string;

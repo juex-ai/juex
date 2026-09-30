@@ -41,6 +41,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"Compact": kitex.NewMethodInfo(
+		compactHandler,
+		newRuntimeCompactArgs,
+		newRuntimeCompactResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Cancel": kitex.NewMethodInfo(
 		cancelHandler,
 		newRuntimeCancelArgs,
@@ -193,6 +200,24 @@ func newRuntimeTimelineResult() interface{} {
 	return platform.NewRuntimeTimelineResult()
 }
 
+func compactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeCompactArgs)
+	realResult := result.(*platform.RuntimeCompactResult)
+	success, err := handler.(platform.Runtime).Compact(ctx, realArg.Actor, realArg.ThreadID, realArg.RequestID, realArg.Focus)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeCompactArgs() interface{} {
+	return platform.NewRuntimeCompactArgs()
+}
+
+func newRuntimeCompactResult() interface{} {
+	return platform.NewRuntimeCompactResult()
+}
+
 func cancelHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.RuntimeCancelArgs)
 	realResult := result.(*platform.RuntimeCancelResult)
@@ -279,6 +304,19 @@ func (p *kClient) Timeline(ctx context.Context, actor *platform.Actor, threadID 
 	_args.Limit = limit
 	var _result platform.RuntimeTimelineResult
 	if err = p.c.Call(ctx, "Timeline", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Compact(ctx context.Context, actor *platform.Actor, threadID string, requestID string, focus string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeCompactArgs
+	_args.Actor = actor
+	_args.ThreadID = threadID
+	_args.RequestID = requestID
+	_args.Focus = focus
+	var _result platform.RuntimeCompactResult
+	if err = p.c.Call(ctx, "Compact", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

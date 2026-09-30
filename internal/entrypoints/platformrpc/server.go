@@ -135,3 +135,11 @@ func (h *runtimeHandler) CreateWorker(ctx context.Context, actor *platform.Actor
 	v, err := h.service.Worker(ctx, actor.UserID, actor.TenantID, actor.AgentID, parentID, requestID, name)
 	return reply(v, err)
 }
+
+func (h *runtimeHandler) Compact(ctx context.Context, actor *platform.Actor, thread, requestID, focus string) (*platform.Reply, error) {
+	if !validActor(actor) {
+		return invalid()
+	}
+	v, err := h.service.Compact(ctx, actor.UserID, actor.TenantID, actor.AgentID, thread, managedruntime.CompactionRequest{RequestID: requestID, Focus: focus})
+	return reply(v, err)
+}

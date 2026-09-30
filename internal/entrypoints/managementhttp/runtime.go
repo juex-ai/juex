@@ -10,6 +10,7 @@ import (
 )
 
 type Runtime interface {
+	Compact(context.Context, string, string, string, string, managedruntime.CompactionRequest) (managedruntime.InputReceipt, error)
 	Submit(context.Context, string, string, string, managedruntime.InputRequest) (managedruntime.InputReceipt, error)
 	Threads(context.Context, string, string, string) ([]managedruntime.Thread, error)
 	Events(context.Context, string, string, string, string, int64, int) (managedruntime.Timeline, error)
@@ -77,5 +78,15 @@ func (s *Server) createWorker(w http.ResponseWriter, r *http.Request, user manag
 		return
 	}
 	v, err := s.options.Runtime.Worker(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"), r.PathValue("thread"), body.RequestID, body.Name)
+	respond(w, v, err)
+}
+
+func (s *Server) compactThread(w http.ResponseWriter, r *http.Request, user management.User) {
+	var body managedruntime.CompactionRequest
+	if err := decode(r, &body); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	v, err := s.options.Runtime.Compact(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"), r.PathValue("thread"), body)
 	respond(w, v, err)
 }

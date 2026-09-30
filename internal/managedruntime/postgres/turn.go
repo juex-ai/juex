@@ -129,16 +129,29 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		if work.Source.Kind == "observation" {
 			message.Kind = llm.MessageKindSystemNotice
 		}
-		if err := appendEvent(ctx, tx, thread.ID, "message.appended", message); err != nil {
-			return work, err
+		if work.Source.Kind != "compaction" {
+			if err := appendEvent(ctx, tx, thread.ID, "message.appended", message); err != nil {
+				return work, err
+			}
 		}
 	default:
 		return work, managedruntime.ErrConflict
 	}
-	if thread.Kind == "main" {
+	work.Compaction, err = readCompaction(ctx, tx, work.TurnID)
+	if err != nil {
+		return work, err
+	}
+	if thread.Kind == "main" && work.Compaction == nil {
 		if err := consumeObservations(ctx, tx, scope.AgentID, thread.ID); err != nil {
 			return work, err
 		}
+	}
+	work.ContextSequence, err = contextSequence(ctx, tx, thread.ID)
+	if err != nil {
+		return work, err
+	}
+	if work.Generation != thread.Generation || work.Compaction != nil && (work.Compaction.SourceGeneration != work.Generation || work.Compaction.SourceSequence != work.ContextSequence) {
+		return work, managedruntime.ErrConflict
 	}
 	work.History, err = history(ctx, tx, thread.ID, work.Generation)
 	if err != nil {
@@ -152,24 +165,56 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 }
 
 func history(ctx context.Context, tx pgx.Tx, threadID string, generation int64) ([]llm.Message, error) {
-	rows, err := tx.Query(ctx, `SELECT data FROM runtime.events WHERE thread_id=$1 AND generation=$2 AND kind='message.appended' ORDER BY sequence`, threadID, generation)
+	var summaryID string
+	var retainedIDs []string
+	err := tx.QueryRow(ctx, `SELECT summary_id,retained_ids FROM runtime.context_checkpoints WHERE thread_id=$1 AND generation=$2`, threadID, generation).Scan(&summaryID, &retainedIDs)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT data,generation FROM runtime.events WHERE thread_id=$1 AND kind='message.appended' AND (generation=$2 OR data->>'id'=ANY($3::text[])) ORDER BY sequence`, threadID, generation, retainedIDs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := []llm.Message{}
+	retained := map[string]llm.Message{}
+	current := []llm.Message{}
+	var summary llm.Message
 	for rows.Next() {
 		var encoded []byte
-		if err := rows.Scan(&encoded); err != nil {
+		var gen int64
+		if err := rows.Scan(&encoded, &gen); err != nil {
 			return nil, err
 		}
 		var message llm.Message
 		if err := json.Unmarshal(encoded, &message); err != nil {
 			return nil, err
 		}
+		if message.ID == summaryID {
+			summary = message
+		} else if gen == generation {
+			current = append(current, message)
+		} else {
+			retained[message.ID] = message
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if summaryID == "" {
+		return current, nil
+	}
+	if summary.ID == "" {
+		return nil, managedruntime.ErrConflict
+	}
+	result := []llm.Message{summary}
+	for _, id := range retainedIDs {
+		message, ok := retained[id]
+		if !ok {
+			return nil, managedruntime.ErrConflict
+		}
 		result = append(result, message)
 	}
-	return result, rows.Err()
+	return append(result, current...), nil
 }
 
 func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, turnID string, request managedruntime.ModelRequest) (managedruntime.Attempt, error) {
@@ -190,7 +235,8 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 		return managedruntime.Attempt{}, err
 	}
 	var inputID string
-	if err := tx.QueryRow(ctx, `SELECT input_id FROM runtime.turns WHERE id=$1`, turnID).Scan(&inputID); err != nil {
+	var generation int64
+	if err := tx.QueryRow(ctx, `SELECT input_id,generation FROM runtime.turns WHERE id=$1`, turnID).Scan(&inputID, &generation); err != nil {
 		return managedruntime.Attempt{}, err
 	}
 	if err := observationInputActive(ctx, tx, inputID); err != nil {
@@ -212,6 +258,21 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	}
 	if request.Model != plan.Models[index] {
 		return managedruntime.Attempt{}, managedruntime.ErrConflict
+	}
+	if request.Generation == 0 {
+		request.Generation = generation
+	}
+	if request.Generation != generation {
+		return managedruntime.Attempt{}, managedruntime.ErrConflict
+	}
+	if request.MaxOutputTokens == 0 {
+		request.MaxOutputTokens = request.Model.MaxOutput
+	}
+	if request.MaxOutputTokens < 1 || request.MaxOutputTokens > request.Model.MaxOutput {
+		return managedruntime.Attempt{}, managedruntime.ErrInvalid
+	}
+	if err := admitCompactionAttempt(ctx, tx, turnID, request); err != nil {
+		return managedruntime.Attempt{}, err
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
@@ -251,10 +312,10 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 		return err
 	}
 	var turnID, threadID, inputID, attemptState, turnState string
-	var encodedConfig, encodedModel []byte
+	var encodedConfig, encodedRequest []byte
 	var modelIndex int
-	err = tx.QueryRow(ctx, `SELECT a.turn_id,t.thread_id,t.input_id,a.state,t.config,t.state,a.request->'model',t.model_index FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id JOIN runtime.threads th ON th.id=t.thread_id
-	WHERE a.id=$1 AND th.agent_id=$2 AND t.activation_epoch=$3 AND t.state IN ('running','cancelled')`, attemptID, lease.AgentID, lease.Epoch).Scan(&turnID, &threadID, &inputID, &attemptState, &encodedConfig, &turnState, &encodedModel, &modelIndex)
+	err = tx.QueryRow(ctx, `SELECT a.turn_id,t.thread_id,t.input_id,a.state,t.config,t.state,a.request,t.model_index FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id JOIN runtime.threads th ON th.id=t.thread_id
+	WHERE a.id=$1 AND th.agent_id=$2 AND t.activation_epoch=$3 AND t.state IN ('running','cancelled')`, attemptID, lease.AgentID, lease.Epoch).Scan(&turnID, &threadID, &inputID, &attemptState, &encodedConfig, &turnState, &encodedRequest, &modelIndex)
 	if err != nil {
 		return classify(err)
 	}
@@ -275,9 +336,15 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 	if err := json.Unmarshal(encodedConfig, &config); err != nil {
 		return err
 	}
-	var model managedruntime.ModelConfig
-	if err := json.Unmarshal(encodedModel, &model); err != nil {
+	var request managedruntime.ModelRequest
+	if err := json.Unmarshal(encodedRequest, &request); err != nil {
 		return err
+	}
+	model := request.Model
+	if failure == "" && request.Compaction != nil {
+		if err := managedruntime.ValidateCompactionSummary(request, response); err != nil {
+			failure = "invalid_response"
+		}
 	}
 	response.Message.ID = attemptID
 	response.Message.Model = model.Provider + ":" + model.Model
@@ -303,6 +370,9 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 		return err
 	}
 	if turnState == "cancelled" {
+		if err := cancelCompaction(ctx, tx, turnID); err != nil {
+			return err
+		}
 		return tx.Commit(ctx)
 	}
 	if failure == "provider_fallback" && modelIndex+1 < len(config.Models) {
@@ -313,6 +383,12 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 			return err
 		}
 		if err := appendEvent(ctx, tx, threadID, "model.fallback", map[string]any{"turn_id": turnID, "from_model_id": model.ModelID, "to_model_id": config.Models[modelIndex+1].ModelID, "to_model": config.Models[modelIndex+1].Provider + ":" + config.Models[modelIndex+1].Model, "reason": "provider_error"}); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	if request.Compaction != nil {
+		if err := finishCompaction(ctx, tx, turnID, threadID, inputID, request, response, failure); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)
@@ -355,7 +431,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 // HoldInput prevents revoked work from automatically running after a later
 // membership/Agent restore. Releasing it requires a new authorized user action.
 func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, inputID, reason string) error {
-	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" {
+	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" {
 		return managedruntime.ErrInvalid
 	}
 	tx, err := s.begin(ctx)
@@ -387,6 +463,9 @@ func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, input
 		return err
 	}
 	if turnID != "" {
+		if err := cancelCompaction(ctx, tx, turnID); err != nil {
+			return err
+		}
 		if err := consumeToolResults(ctx, tx, turnID, threadID, true); err != nil {
 			return err
 		}

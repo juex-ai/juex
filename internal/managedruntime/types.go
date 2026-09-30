@@ -16,6 +16,8 @@ var (
 	ErrFence            = errors.New("activation lease is no longer current")
 	ErrNoWork           = errors.New("no runnable work")
 	ErrModelUnavailable = errors.New("selected model unavailable")
+	ErrNoCompaction     = errors.New("context is already compact")
+	ErrCompactionFailed = errors.New("context compaction could not complete")
 	ErrContextLimit     = errors.New("configured models cannot fit this context")
 )
 
@@ -51,6 +53,11 @@ type InputRequest struct {
 	RequestID string `json:"request_id"`
 	ThreadID  string `json:"thread_id"`
 	Text      string `json:"text"`
+}
+
+type CompactionRequest struct {
+	RequestID string `json:"request_id"`
+	Focus     string `json:"focus"`
 }
 
 type InputReceipt struct {
@@ -105,16 +112,18 @@ type ModelConfig struct {
 }
 
 type Work struct {
-	Source       InputSource
-	Scope        Scope
-	ThreadID     string
-	InputID      string
-	TurnID       string
-	Generation   int64
-	Config       TurnConfig
-	History      []llm.Message
-	ModelIndex   int
-	ModelOrigins map[string]ModelConfig
+	ContextSequence int64
+	Compaction      *CompactionJob
+	Source          InputSource
+	Scope           Scope
+	ThreadID        string
+	InputID         string
+	TurnID          string
+	Generation      int64
+	Config          TurnConfig
+	History         []llm.Message
+	ModelIndex      int
+	ModelOrigins    map[string]ModelConfig
 }
 
 type PendingWork struct {
@@ -137,9 +146,12 @@ type Attempt struct {
 }
 
 type ModelRequest struct {
-	Model    ModelConfig    `json:"model"`
-	System   string         `json:"system"`
-	Messages []llm.Message  `json:"messages"`
-	Tools    []llm.ToolSpec `json:"tools"`
-	Purpose  string         `json:"purpose"`
+	Generation      int64            `json:"generation"`
+	MaxOutputTokens int              `json:"max_output_tokens"`
+	Compaction      *CompactionDraft `json:"compaction,omitempty"`
+	Model           ModelConfig      `json:"model"`
+	System          string           `json:"system"`
+	Messages        []llm.Message    `json:"messages"`
+	Tools           []llm.ToolSpec   `json:"tools"`
+	Purpose         string           `json:"purpose"`
 }
