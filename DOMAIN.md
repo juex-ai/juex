@@ -24,8 +24,11 @@ execution grant. Membership lifecycle events preserve monotonic versions and
 durable intent, not proof that remote work has stopped. Re-enabling must not
 erase earlier cancellation intent or replay old work.
 
-The directory is not yet connected to public authentication or Runtime. The
-remaining sections describe current runtime contracts until platform cutover.
+The directory authorizes the authenticated Web and the managed conversation
+Runtime. An execution epoch survives suspend/restore transitions; restoring
+access does not authorize an old queued input. Main and Workers retain separate
+contexts and cancellation state. The remaining sections describe the existing
+runtime contracts until full platform cutover.
 
 ## Ownership
 

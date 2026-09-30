@@ -20,7 +20,8 @@ Management 已实现的 directory 包含全局 User、Tenant Membership，以及
 读取权限不代表执行许可。成员生命周期事件保存单调版本与持久意图，不证明远端任务已经停止。
 重新启用不能抹去之前的取消意图，也不能重放历史工作。
 
-directory 尚未接入公开认证和 Runtime。平台切换前，下文仍描述现有 Runtime 契约。
+directory 为登录 Web 和托管会话 Runtime 授权。执行代际保留停用／恢复的变化，恢复访问不授予旧队列输入执行权。
+Main 和 Workers 分别保存上下文和取消状态。完整平台切换前，下文仍描述现有 Runtime 契约。
 
 ## 所有权
 

@@ -1,0 +1,121 @@
+.management-shell,.management-auth,.management-start { min-height: 100dvh; color: var(--juex-ink-900); background: var(--juex-cream-50); }
+.management-shell { display: grid; grid-template-columns: 240px minmax(0,1fr); }
+.management-sidebar { position: sticky; top: 0; height: 100dvh; padding: 32px 20px 20px; display: flex; flex-direction: column; color: var(--juex-cream-50); background: var(--juex-forest-900); }
+.management-wordmark { display: block; color: inherit; font-family: var(--juex-font-serif); font-size: 34px; line-height: 1; text-decoration: none; }
+.management-wordmark span { display: block; margin-top: 9px; font-family: var(--juex-font-sans); font-size: 10px; letter-spacing: .13em; text-transform: uppercase; opacity: .7; }
+.management-tenant { margin: 40px 0 26px; display: grid; gap: 8px; }
+.management-tenant>span { font-size: 11px; color: var(--juex-forest-300); }
+.management-tenant strong { font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
+.management-tenant select { min-width: 0; width: 100%; padding: 8px; background: var(--juex-forest-800); border: 1px solid var(--juex-forest-600); border-radius: 4px; color: var(--juex-cream-50); }
+.management-sidebar nav { display: grid; gap: 6px; }
+.management-sidebar nav a { padding: 11px 12px; display: flex; align-items: center; gap: 10px; border-radius: 4px; color: var(--juex-forest-200); text-decoration: none; font-size: 14px; }
+.management-sidebar nav a.active { background: var(--juex-forest-800); color: var(--juex-gold-300); box-shadow: inset 2px 0 var(--juex-gold-500); }
+.management-sidebar nav a:hover { background: var(--juex-forest-800); }
+.management-profile { margin-top: auto; padding-top: 20px; display: grid; gap: 10px; border-top: 1px solid var(--juex-forest-700); font-size: 12px; }
+.management-profile strong { overflow: hidden; text-overflow: ellipsis; font-weight: 400; }
+.management-profile-role { display: flex; align-items: center; gap: 6px; color: var(--juex-forest-300); }
+.management-profile button { justify-content: flex-start; color: var(--juex-forest-200); width: fit-content; }
+.management-main { min-width: 0; }
+.management-topline { height: 60px; padding: 0 40px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--juex-cream-200); color: var(--juex-ink-600); font-size: 12px; }
+.management-topline span:last-child { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.management-content { max-width: 1420px; padding: 40px; margin: 0 auto; }
+.management-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 28px; }
+.management-heading h1 { font-family: var(--juex-font-serif); font-size: 30px; font-weight: 500; line-height: 1.3; }
+.management-heading p { margin-top: 9px; font-size: 13px; color: var(--juex-ink-600); line-height: 1.8; }
+.management-actions,.management-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.management-actions { flex-shrink: 0; }
+.management-panel { border: 1px solid var(--juex-cream-200); border-radius: 6px; background: var(--card); margin-bottom: 24px; overflow: hidden; }
+.management-panel-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--juex-cream-200); }
+.management-panel-heading h2 { font-size: 15px; font-weight: 600; }
+.management-panel-heading>span { font-size: 12px; color: var(--juex-ink-600); }
+.management-table-wrap { overflow-x: auto; }
+.management-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.management-table th { font-weight: 500; padding: 12px 22px; color: var(--juex-ink-600); background: var(--juex-cream-50); font-size: 11px; white-space: nowrap; }
+.management-table td { padding: 18px 22px; border-top: 1px solid var(--juex-cream-200); vertical-align: middle; }
+.management-table td>small { display: block; margin-top: 5px; color: var(--juex-ink-600); font-size: 11px; }
+.management-row-link { display: inline-flex; align-items: center; gap: 5px; color: var(--juex-forest-700); overflow-wrap: anywhere; }
+.management-status { display: inline-block; border-radius: 3px; padding: 3px 7px; font-size: 11px; white-space: nowrap; color: var(--juex-ink-600); background: var(--juex-cream-100); }
+.management-status.status-active,.management-status.status-admin { background: var(--juex-forest-50); color: var(--juex-forest-700); }
+.management-status.status-invited,.management-status.status-suspended { background: var(--juex-gold-50); color: var(--juex-gold-900); }
+.management-invite { padding: 20px 22px; border-bottom: 1px solid var(--juex-cream-200); }
+.management-invite:last-child { border-bottom: 0; }
+.management-invite-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 13px; }
+.management-invite-header strong { overflow-wrap: anywhere; font-weight: 500; }
+.management-link-copy { display: flex; gap: 8px; align-items: center; }
+.management-link-copy input { font-size: 11px; font-family: var(--juex-font-mono); }
+.management-invite>small { display: block; margin-top: 9px; color: var(--juex-ink-600); font-size: 11px; line-height: 1.8; }
+.management-notice { margin-bottom: 18px; padding: 12px 14px; display: flex; gap: 8px; align-items: flex-start; background: var(--juex-forest-50); border: 1px solid var(--juex-forest-200); border-radius: 4px; color: var(--juex-forest-700); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.management-notice.is-error { background: var(--juex-error-bg); border-color: var(--juex-error); color: var(--juex-error); }
+.management-notice>svg { flex-shrink: 0; margin-top: 3px; }
+.management-loading { padding: 40px; display: flex; gap: 10px; align-items: center; justify-content: center; font-size: 13px; color: var(--juex-ink-600); }
+.management-empty { text-align: center; padding: 44px 24px; }
+.management-empty h2 { font-size: 15px; font-weight: 500; }
+.management-empty p { margin-top: 8px; font-size: 12px; color: var(--juex-ink-600); line-height: 1.8; }
+.management-field { display: grid; gap: 7px; margin-bottom: 18px; font-size: 13px; }
+.management-field>span { font-weight: 500; }
+.management-field input { height: 38px; }
+.management-field select { height: 38px; padding: 0 10px; background: var(--card); border: 1px solid var(--input); border-radius: 4px; }
+.management-field small,.management-muted { color: var(--juex-ink-600); font-size: 11px; line-height: 1.7; }
+.management-details { padding: 22px; display: grid; gap: 20px; }
+.management-details div { display: grid; grid-template-columns: 120px minmax(0,1fr); font-size: 13px; gap: 16px; }
+.management-details dt { color: var(--juex-ink-600); }
+.management-details dd { overflow-wrap: anywhere; }
+.management-start { display: grid; align-content: center; justify-items: center; padding: 24px; }
+.management-auth { display: grid; grid-template-columns: 1fr 1fr; }
+.management-auth-story { padding: 48px 64px; background: var(--juex-forest-900); color: var(--juex-cream-50); display: flex; flex-direction: column; justify-content: space-between; gap: 60px; }
+.management-auth-story h1 { font-family: var(--juex-font-serif); font-size: clamp(32px,3.4vw,52px); line-height: 1.6; margin: 18px 0; font-weight: 400; }
+.management-auth-story p { color: var(--juex-forest-300); font-size: 14px; line-height: 2; max-width: 340px; }
+.management-auth-story>small { color: var(--juex-forest-300); font-size: 11px; }
+.management-eyebrow { color: var(--juex-gold-700); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; }
+.management-auth-form { display: flex; justify-content: center; align-items: center; padding: 48px; }
+.management-auth-card { width: 100%; max-width: 380px; }
+.management-auth-card h1 { margin-top: 14px; font-family: var(--juex-font-serif); font-size: 30px; }
+.management-auth-card>p { font-size: 13px; line-height: 1.9; color: var(--juex-ink-600); margin: 12px 0 30px; overflow-wrap: anywhere; }
+.management-primary-action { width: 100%; margin-top: 6px; }
+.management-auth-links { margin: 22px 0; font-size: 12px; color: var(--juex-forest-700); display: flex; align-items: center; justify-content: space-between; }
+.management-fleet-summary { display: flex; flex-wrap: wrap; gap: 28px; margin: 0 0 26px; padding-bottom: 24px; border-bottom: 1px solid var(--juex-cream-200); }
+.management-fleet-summary div { display: grid; gap: 7px; }
+.management-fleet-summary span { font-size: 11px; color: var(--juex-ink-600); }
+.management-fleet-summary strong { font-size: 13px; font-weight: 500; }
+.management-tabs { display: flex; gap: 6px; }
+.management-agent-row { display: flex; gap: 16px; align-items: center; padding: 22px; border-bottom: 1px solid var(--juex-cream-200); }
+.management-agent-row:last-child { border-bottom: 0; }
+.management-agent-mark { flex-shrink: 0; display: grid; place-items: center; width: 42px; height: 42px; background: var(--juex-forest-50); color: var(--juex-forest-700); border-radius: 5px; }
+.management-agent-info { flex: 1; min-width: 0; }
+.management-agent-info h2 { font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
+.management-agent-info p { font-size: 12px; color: var(--juex-ink-600); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 5px 0; }
+.management-agent-info small { font-size: 11px; color: var(--juex-ink-600); }
+.management-checkbox { display: flex; gap: 10px; align-items: center; margin: 18px 0; font-size: 13px; }
+.management-conversation-layout { display: grid; grid-template-columns: 180px minmax(0,1fr); gap: 24px; }
+.management-thread-list { min-width: 0; }
+.management-thread-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 12px; }
+.management-thread-list nav { display: grid; gap: 6px; }
+.management-thread-list nav button { display: grid; gap: 5px; padding: 12px; border-radius: 5px; text-align: left; min-width: 0; font-size: 13px; }
+.management-thread-list nav button.active { background: var(--juex-forest-50); box-shadow: inset 2px 0 var(--juex-forest-500); }
+.management-thread-list nav button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.management-thread-list small { color: var(--juex-ink-600); font-size: 10px; }
+.management-conversation { min-width: 0; height: calc(100dvh - 230px); min-height: 440px; display: flex; flex-direction: column; }
+.management-conversation-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 0 16px; border-bottom: 1px solid var(--juex-cream-200); font-size: 13px; }
+.management-conversation-heading span { display: flex; align-items: center; gap: 6px; color: var(--juex-ink-600); font-size: 11px; }
+.management-transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 8px 24px 0; scrollbar-width: thin; }
+.management-message { margin: 0 0 30px; max-width: 100%; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.management-message-author { font-size: 11px; font-weight: 600; margin-bottom: 8px; color: var(--juex-forest-700); }
+.management-message.from-user { padding: 16px 18px; background: var(--juex-cream-100); border-radius: 6px; }
+.management-user-text { white-space: pre-wrap; }
+.management-message-status { display: block; margin-top: 8px; font-size: 10px; color: var(--juex-ink-600); }
+.management-turn-notice,.management-working { margin: 16px 0; font-size: 12px; color: var(--juex-ink-600); }
+.management-working { display: flex; gap: 8px; align-items: center; }
+.management-tool-row { font-size: 12px; color: var(--juex-ink-600); padding: 7px 0; border-top: 1px solid var(--juex-cream-200); }
+.management-tool-row summary { cursor: pointer; }
+.management-tool-row p,.management-tool-row pre { margin: 10px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.management-composer-wrap { padding-top: 12px; }
+.management-composer { border: 1px solid var(--juex-cream-300); background: var(--card); padding: 12px; border-radius: 8px; }
+.management-composer textarea { border: 0; box-shadow: none; resize: none; background: transparent; padding: 2px; }
+.management-composer>div { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.management-composer small { font-size: 10px; color: var(--juex-ink-600); }
+.management-composer span { display: flex; gap: 6px; }
+@media(max-width:1000px) { .management-conversation-layout { grid-template-columns: 140px minmax(0,1fr); gap: 16px; } }
+@media(max-width:700px) { .management-conversation-layout { display: block; }.management-thread-list nav { display: flex; overflow-x: auto; margin-bottom: 18px; }.management-thread-list nav button { flex: 0 0 135px; }.management-conversation { height: 70dvh; }.management-composer small { display: none; }.management-composer>div { justify-content: flex-end; } }
+@media(max-width:700px) { .management-agent-row { flex-wrap: wrap; padding: 18px; }.management-agent-row .management-row-actions { width: 100%; padding-left: 58px; } }
+@media (max-width: 1000px) { .management-shell { grid-template-columns: 200px minmax(0,1fr); }.management-content { padding: 28px 22px; }.management-topline { padding: 0 22px; }.management-table td,.management-table th { padding-left: 14px; padding-right: 14px; }.management-auth-story { padding: 40px; } }
+@media (max-width: 700px) { .management-shell { display: block; }.management-sidebar { position: static; height: auto; padding: 18px; gap: 18px; }.management-sidebar .management-wordmark { font-size: 28px; }.management-sidebar .management-wordmark span { display: none; }.management-tenant { margin: 0; }.management-sidebar nav { display: flex; flex-wrap: wrap; }.management-sidebar nav a { padding: 8px 12px; }.management-profile { padding-top: 12px; margin: 0; grid-template-columns: minmax(0,1fr) auto; gap: 6px; }.management-profile-role { grid-column: 1; }.management-profile strong { grid-column: 1; }.management-profile button { grid-column: 2; grid-row: 1 / 3; align-self: center; }.management-topline { display: none; }.management-content { padding: 26px 16px; }.management-heading { align-items: flex-start; flex-wrap: wrap; }.management-heading h1 { font-size: 26px; }.management-table { min-width: 670px; }.management-auth { display: block; }.management-auth-story { padding: 24px; gap: 0; }.management-auth-story>div,.management-auth-story>small { display: none; }.management-auth-story .management-wordmark { font-size: 26px; }.management-auth-form { padding: 44px 24px; }.management-link-copy { flex-wrap: wrap; }.management-link-copy input { width: 100%; }.management-details div { grid-template-columns: 1fr; gap: 5px; } }

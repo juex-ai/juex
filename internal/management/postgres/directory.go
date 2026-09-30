@@ -12,14 +12,26 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/juex-ai/juex/internal/foundation/secrets"
 	"github.com/juex-ai/juex/internal/management"
 )
 
 // Directory owns Management transactions. Actor IDs must come from a verified
 // session, never a request body. Operator/identity methods have no public route.
-type Directory struct{ pool *pgxpool.Pool }
+type Config struct {
+	Secrets     *secrets.Box
+	PublicURL   string
+	MailEnabled bool
+}
 
-func NewDirectory(pool *pgxpool.Pool) *Directory { return &Directory{pool: pool} }
+type Directory struct {
+	pool   *pgxpool.Pool
+	config Config
+}
+
+func NewDirectory(pool *pgxpool.Pool, config Config) *Directory {
+	return &Directory{pool: pool, config: config}
+}
 
 // CreateUser is an identity-provisioning primitive, not a public signup flow.
 // Credentials and proof of email ownership are separate from the stable user.
@@ -37,21 +49,32 @@ func (d *Directory) CreateUser(ctx context.Context, email string) (management.Us
 // CreateTenant is for the deployment operator, never a tenant administrator.
 // It atomically creates the tenant, first membership and its only Fleet.
 func (d *Directory) CreateTenant(ctx context.Context, name, adminID string) (management.Tenant, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || len([]rune(name)) > 200 {
-		return management.Tenant{}, management.ErrInvalid
-	}
 	tx, err := d.begin(ctx)
 	if err != nil {
 		return management.Tenant{}, err
 	}
 	defer rollback(tx)
-	var tenant management.Tenant
-	err = tx.QueryRow(ctx, `INSERT INTO management.tenants (name) VALUES ($1) RETURNING id, name`, name).Scan(&tenant.ID, &tenant.Name)
+	tenant, err := createTenant(ctx, tx, name, adminID)
 	if err != nil {
 		return management.Tenant{}, err
 	}
-	member := management.Membership{TenantID: tenant.ID, UserID: adminID, Role: management.Admin, Status: management.Active, Version: 1}
+	if err := tx.Commit(ctx); err != nil {
+		return management.Tenant{}, err
+	}
+	return tenant, nil
+}
+
+func createTenant(ctx context.Context, tx pgx.Tx, name, adminID string) (management.Tenant, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 200 {
+		return management.Tenant{}, management.ErrInvalid
+	}
+	var tenant management.Tenant
+	err := tx.QueryRow(ctx, `INSERT INTO management.tenants (name) VALUES ($1) RETURNING id, name`, name).Scan(&tenant.ID, &tenant.Name)
+	if err != nil {
+		return management.Tenant{}, err
+	}
+	member := management.Membership{TenantID: tenant.ID, UserID: adminID, Role: management.Admin, Status: management.Active, Version: 1, ExecutionEpoch: 1}
 	if _, err = tx.Exec(ctx, `INSERT INTO management.memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`, tenant.ID, adminID); err != nil {
 		return management.Tenant{}, classify(err)
 	}
@@ -60,9 +83,6 @@ func (d *Directory) CreateTenant(ctx context.Context, name, adminID string) (man
 		return management.Tenant{}, err
 	}
 	if err := record(ctx, tx, adminID, fleet, "membership.created", management.Membership{}, member, true); err != nil {
-		return management.Tenant{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return management.Tenant{}, err
 	}
 	return tenant, nil
@@ -99,12 +119,16 @@ func (d *Directory) Invite(ctx context.Context, actorID, tenantID, email string,
 	}
 	token := hex.EncodeToString(secret[:])
 	hash := sha256.Sum256([]byte(token))
+	cipher, err := d.config.Secrets.Seal("invitation:"+tenantID+":"+email, []byte(token))
+	if err != nil {
+		return management.Invitation{}, "", err
+	}
 	var invitation management.Invitation
-	err = tx.QueryRow(ctx, `INSERT INTO management.invitations (tenant_id, email, role, token_hash, expires_at)
-		VALUES ($1, $2, $3, $4, clock_timestamp()+make_interval(secs => $5))
+	err = tx.QueryRow(ctx, `INSERT INTO management.invitations (tenant_id, email, role, token_hash, expires_at, token_cipher)
+		VALUES ($1, $2, $3, $4, clock_timestamp()+make_interval(secs => $5), $6)
 		ON CONFLICT (tenant_id, email) DO UPDATE SET role=EXCLUDED.role, token_hash=EXCLUDED.token_hash,
-		expires_at=EXCLUDED.expires_at, consumed_at=NULL
-		RETURNING id, tenant_id, email, role, expires_at`, tenantID, email, role, hash[:], ttl.Seconds()).Scan(
+		expires_at=EXCLUDED.expires_at, token_cipher=EXCLUDED.token_cipher, consumed_at=NULL
+		RETURNING id, tenant_id, email, role, expires_at`, tenantID, email, role, hash[:], ttl.Seconds(), cipher).Scan(
 		&invitation.ID, &invitation.TenantID, &invitation.Email, &invitation.Role, &invitation.ExpiresAt)
 	if err != nil {
 		return management.Invitation{}, "", err
@@ -117,6 +141,11 @@ func (d *Directory) Invite(ctx context.Context, actorID, tenantID, email string,
 		tenantID, actorID, email, invitation.ID, role); err != nil {
 		return management.Invitation{}, "", err
 	}
+	if d.config.MailEnabled {
+		if err := d.queueMail(ctx, tx, email, "Join your JueX tenant", d.config.PublicURL+"/join#token="+token, invitation.ID); err != nil {
+			return management.Invitation{}, "", err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return management.Invitation{}, "", err
 	}
@@ -126,14 +155,25 @@ func (d *Directory) Invite(ctx context.Context, actorID, tenantID, email string,
 // AcceptInvitation accepts only for the authenticated, matching global account.
 // An invitation grants membership; it neither verifies email nor changes login.
 func (d *Directory) AcceptInvitation(ctx context.Context, actorID, token string) (management.Fleet, error) {
-	hash := sha256.Sum256([]byte(token))
 	tx, err := d.begin(ctx)
 	if err != nil {
 		return management.Fleet{}, err
 	}
 	defer rollback(tx)
+	fleet, err := acceptInvitation(ctx, tx, actorID, token)
+	if err != nil {
+		return management.Fleet{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return management.Fleet{}, err
+	}
+	return fleet, nil
+}
+
+func acceptInvitation(ctx context.Context, tx pgx.Tx, actorID, token string) (management.Fleet, error) {
+	hash := sha256.Sum256([]byte(token))
 	var tenantID string
-	err = tx.QueryRow(ctx, `SELECT tenant_id FROM management.invitations WHERE token_hash=$1`, hash[:]).Scan(&tenantID)
+	err := tx.QueryRow(ctx, `SELECT tenant_id FROM management.invitations WHERE token_hash=$1`, hash[:]).Scan(&tenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return management.Fleet{}, management.ErrInvitation
 	}
@@ -166,7 +206,7 @@ func (d *Directory) AcceptInvitation(ctx context.Context, actorID, token string)
 	after := management.Membership{TenantID: tenantID, UserID: actorID, Role: role, Status: management.Active}
 	err = tx.QueryRow(ctx, `INSERT INTO management.memberships (tenant_id, user_id, role, status) VALUES ($1,$2,$3,'active')
 		ON CONFLICT (tenant_id, user_id) DO UPDATE SET role=EXCLUDED.role, status='active', version=management.memberships.version+1
-		RETURNING version`, tenantID, actorID, role).Scan(&after.Version)
+		RETURNING version,execution_epoch`, tenantID, actorID, role).Scan(&after.Version, &after.ExecutionEpoch)
 	if err != nil {
 		return management.Fleet{}, err
 	}
@@ -178,9 +218,6 @@ func (d *Directory) AcceptInvitation(ctx context.Context, actorID, token string)
 		return management.Fleet{}, err
 	}
 	if err := record(ctx, tx, actorID, fleet, "membership.joined", before, after, true); err != nil {
-		return management.Fleet{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return management.Fleet{}, err
 	}
 	return fleet, nil
@@ -219,7 +256,10 @@ func (d *Directory) ChangeMember(ctx context.Context, actorID, tenantID, ownerID
 	}
 	after := before
 	after.Role, after.Status, after.Version = role, status, before.Version+1
-	if _, err := tx.Exec(ctx, `UPDATE management.memberships SET role=$3, status=$4, version=version+1 WHERE tenant_id=$1 AND user_id=$2`, tenantID, ownerID, role, status); err != nil {
+	if before.Status == management.Active && status != management.Active {
+		after.ExecutionEpoch++
+	}
+	if _, err := tx.Exec(ctx, `UPDATE management.memberships SET role=$3, status=$4, version=version+1,execution_epoch=$5 WHERE tenant_id=$1 AND user_id=$2`, tenantID, ownerID, role, status, after.ExecutionEpoch); err != nil {
 		return management.Membership{}, err
 	}
 	fleet, err := fleetFor(ctx, tx, tenantID, ownerID)
@@ -285,7 +325,7 @@ func (d *Directory) begin(ctx context.Context) (pgx.Tx, error) {
 
 func membership(ctx context.Context, tx pgx.Tx, tenantID, userID string) (management.Membership, error) {
 	m := management.Membership{TenantID: tenantID, UserID: userID}
-	err := tx.QueryRow(ctx, `SELECT role, status, version FROM management.memberships WHERE tenant_id=$1 AND user_id=$2`, tenantID, userID).Scan(&m.Role, &m.Status, &m.Version)
+	err := tx.QueryRow(ctx, `SELECT role, status, version,execution_epoch FROM management.memberships WHERE tenant_id=$1 AND user_id=$2`, tenantID, userID).Scan(&m.Role, &m.Status, &m.Version, &m.ExecutionEpoch)
 	return m, classify(err)
 }
 
@@ -310,7 +350,12 @@ func ensureFleet(ctx context.Context, tx pgx.Tx, m management.Membership) (manag
 	if _, err := tx.Exec(ctx, `INSERT INTO management.fleets (tenant_id, user_id) VALUES ($1, $2) ON CONFLICT (tenant_id, user_id) DO NOTHING`, m.TenantID, m.UserID); err != nil {
 		return management.Fleet{}, err
 	}
-	return fleetFor(ctx, tx, m.TenantID, m.UserID)
+	f, err := fleetFor(ctx, tx, m.TenantID, m.UserID)
+	if err != nil {
+		return f, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO management.fleet_settings(fleet_id) VALUES($1) ON CONFLICT DO NOTHING`, f.ID)
+	return f, err
 }
 
 func record(ctx context.Context, tx pgx.Tx, actorID string, f management.Fleet, action string, before, after management.Membership, publish bool) error {

@@ -10,8 +10,9 @@ Juex 是 Agent Runtime，不是 RPC 或 Workflow Engine。发送 Input 表示该
 Input 被 Thread 持久接受，并不意味着下一条 Assistant 消息与它一一对应。
 
 已批准的 [Managed Agent 平台](docs/adr/0003-managed-agent-platform.zh.md)正在重构中。
-首批 [Management directory](internal/management/README.zh.md) 以数据库持有租户身份与权限。
-下列命令仍描述现有 Runtime；新平台的登录、Web 与执行链路尚未接入。
+[Management](internal/management/README.zh.md) 已提供登录 Web、租户身份、模型选择与 Agent 管理。
+[Managed Runtime](internal/managedruntime/README.zh.md) 通过 PostgreSQL 持久化会话输入、Main/Worker 历史与模型请求。
+下列命令仍描述现有 Runtime；完整执行和应用链路尚待切换。
 
 ## 快速开始
 

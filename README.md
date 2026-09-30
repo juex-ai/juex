@@ -11,9 +11,11 @@ durable acceptance into a Thread; it does not imply that the next Assistant
 message is a one-to-one response.
 
 The approved [Managed Agent platform](docs/adr/0003-managed-agent-platform.md)
-refactor is in progress. Its first [Management directory](internal/management/README.md)
-owns database-backed tenant identities and permissions. The commands below still
-describe the existing runtime; platform login, Web and execution are not yet wired.
+refactor is in progress. [Management](internal/management/README.md) now provides
+authenticated Web access, tenant identities, model selection and Agent management.
+[Managed Runtime](internal/managedruntime/README.md) persists conversation inputs,
+Main/Worker history and model attempts in PostgreSQL. The commands below still
+describe the existing runtime; the full execution and application cutover is pending.
 
 ## Quick Start
 

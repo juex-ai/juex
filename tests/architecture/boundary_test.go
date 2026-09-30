@@ -16,15 +16,16 @@ const modulePath = "github.com/juex-ai/juex"
 // Every production package is classified by its owning group, including files
 // for other operating systems. New top-level groups require an explicit rule.
 var dependencies = map[string]map[string]bool{
-	"foundation":  {"foundation": true},
-	"framework":   {"foundation": true, "framework": true},
-	"features":    {"foundation": true, "framework": true, "features": true},
-	"providers":   {"foundation": true, "providers": true},
-	"fleet":       {"foundation": true, "framework": true, "fleet": true},
-	"management":  {"foundation": true, "management": true},
-	"app":         {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "app": true},
-	"entrypoints": {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "app": true, "entrypoints": true},
-	"cmd":         {"foundation": true, "entrypoints": true},
+	"foundation":     {"foundation": true},
+	"framework":      {"foundation": true, "framework": true},
+	"features":       {"foundation": true, "framework": true, "features": true},
+	"providers":      {"foundation": true, "providers": true},
+	"fleet":          {"foundation": true, "framework": true, "fleet": true},
+	"management":     {"foundation": true, "management": true},
+	"managedruntime": {"foundation": true, "managedruntime": true},
+	"app":            {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "app": true},
+	"entrypoints":    {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "management": true, "managedruntime": true, "app": true, "entrypoints": true},
+	"cmd":            {"foundation": true, "entrypoints": true},
 }
 
 func packageGroup(path string) string {

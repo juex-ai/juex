@@ -8,8 +8,8 @@ PostgreSQL adapter owns the `management` schema; other services use its business
 interfaces, never direct writes to these tables. App owns database connections
 and composition. Management does not import the Home-based Fleet supervisor.
 
-The current directory is the first platform foundation. It is not yet wired to
-public HTTP, authentication, Web, or Runtime. `CreateUser` is an identity
+The authenticated Management HTTP service and Web use this directory.
+`CreateUser` is an identity
 provisioning primitive and `CreateTenant` is an operator operation; neither is a
 public registration endpoint. Adapters must obtain actor IDs from authenticated
 sessions. Roles supplied to membership operations are desired changes, not
@@ -25,14 +25,26 @@ merely because a newer version re-enables access.
 Invitation consumption requires the matching authenticated account and does not
 verify email. Tokens are single-use, expiring, hashed, and replaced on reissue.
 Only accepting a new invitation can restore a removed membership; its retained
-Fleet is reused. Invitation creation returns its secret to the caller. The
-future dashboard's persistent copy-link view requires encrypted secret storage;
-the digest is not a recoverable invitation link.
+Fleet is reused. Invitation creation returns its secret to the caller. Its
+encrypted copy backs the persistent copy-link view; the digest cannot recover it.
+
+Passwords use bounded Argon2id hashing; human sessions and capability tokens are
+stored as digests. Invitation registration cannot reset an existing account.
+Bootstrap and operator recovery have no public HTTP route. Password recovery
+revokes human sessions independently of device credentials and Agent execution.
+Invitation acceptance is not email verification; SMTP recovery requires a
+separately verified email address.
+
+Mail is transactionally queued with an encrypted body. The worker records SMTP
+acceptance separately from invitation status. Retries retain the message ID;
+SMTP cannot guarantee exactly-once delivery after an ambiguous disconnect.
+Confirmed delivery erases the queued capability body. Public API responses never
+contain password hashes, provider keys or the platform encryption key.
 
 `Fleet` authorizes a read only. Active tenant administrators can read retained
 data for removed or suspended members; that read does not grant configuration
 or execution rights. Delegated reads record both actor and owner. Execution and
-device-grant authorization remain distinct future operations.
+device-grant authorization are distinct operations.
 
 Schema setup is explicit through `postgres.Migrate`, transactionally serialized
 and checksum-verified. Unknown or modified versions fail instead of being

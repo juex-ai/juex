@@ -92,7 +92,7 @@ jobs:
       - name: Verify Management transactions against PostgreSQL
         env:
           JUEX_TEST_POSTGRES_URL: postgres://postgres:juex-ci-only@localhost:5432/postgres?sslmode=disable
-        run: go test -race -tags postgres ./tests/e2e -run '^TestManagement' -count=1 -timeout=120s
+        run: go test -race -tags postgres ./tests/e2e -run '^Test(Management|ManagedRuntime)' -count=1 -timeout=120s
 
   test:
     runs-on: ${{ matrix.os }}

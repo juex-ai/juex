@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/juex-ai/juex/internal/foundation/secrets"
 	"github.com/juex-ai/juex/internal/management"
 	"github.com/juex-ai/juex/internal/management/postgres"
 )
@@ -58,7 +59,11 @@ func managementDatabase(t *testing.T) (*pgxpool.Pool, *postgres.Directory) {
 	if err := postgres.Migrate(ctx, pool); err != nil {
 		t.Fatal("repeat migration:", err)
 	}
-	return pool, postgres.NewDirectory(pool)
+	box, err := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pool, postgres.NewDirectory(pool, postgres.Config{Secrets: box, PublicURL: "http://localhost:8680"})
 }
 
 func TestManagementTenantIsolationAndRejoin(t *testing.T) {

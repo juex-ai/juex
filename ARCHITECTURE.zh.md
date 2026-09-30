@@ -11,9 +11,11 @@
 业务操作在事务内根据当前成员状态授权，Tenant 行锁串行化成员变更。
 审计和 outbox 事实与生命周期修改一起提交。该边界不依赖 Home 发现或现有 Fleet 进程管理器。
 
-App 负责组装。公开认证、HTTP/Kitex 适配和 Runtime 连接仍是后续接入工作，directory
-尚未作为服务公开。[ADR-0003](docs/adr/0003-managed-agent-platform.zh.md) 定义已接受的目标。
-下文 Runtime／存储章节描述现有实现。
+App 组装已认证的 HTTP/Web 服务与基于 PostgreSQL 的 [Managed Runtime](internal/managedruntime/README.zh.md)。
+Runtime 只依赖自身和 Foundation；App 注入 Management 授权和 Provider 工厂。
+它拥有持久输入、事件、Activation 租约和模型请求，不依赖 Home 存储。
+[ADR-0003](docs/adr/0003-managed-agent-platform.zh.md) 定义已接受的目标。
+下文 Runtime／存储章节描述等待完整执行和应用切换的现有实现。
 
 ## Runtime 结构
 

@@ -14,6 +14,15 @@ import (
 //go:embed schema.sql
 var initialSchema string
 
+//go:embed auth_schema.sql
+var authSchema string
+
+//go:embed mail_schema.sql
+var mailSchema string
+
+//go:embed resources_schema.sql
+var resourcesSchema string
+
 // Migrate runs explicit, transactional Management migrations. Runtime startup
 // must not infer a business schema from files or silently rewrite old versions.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -29,12 +38,12 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		CREATE TABLE IF NOT EXISTS management.schema_versions (version integer PRIMARY KEY, checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(initialSchema)))
+	migrations := []string{initialSchema, authSchema, mailSchema, resourcesSchema}
 	rows, err := tx.Query(ctx, `SELECT version, checksum FROM management.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
 	}
-	installed := false
+	installed := 0
 	for rows.Next() {
 		var version int
 		var stored string
@@ -42,21 +51,21 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			rows.Close()
 			return err
 		}
-		if version != 1 || stored != checksum {
+		if version != installed+1 || version > len(migrations) || stored != fmt.Sprintf("%x", sha256.Sum256([]byte(migrations[version-1]))) {
 			rows.Close()
 			return fmt.Errorf("unsupported or modified Management schema version %d", version)
 		}
-		installed = true
+		installed++
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if !installed {
-		if _, err := tx.Exec(ctx, initialSchema); err != nil {
+	for i := installed; i < len(migrations); i++ {
+		if _, err := tx.Exec(ctx, migrations[i]); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO management.schema_versions (version, checksum) VALUES (1, $1)`, checksum); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO management.schema_versions (version, checksum) VALUES ($1, $2)`, i+1, fmt.Sprintf("%x", sha256.Sum256([]byte(migrations[i])))); err != nil {
 			return err
 		}
 	}

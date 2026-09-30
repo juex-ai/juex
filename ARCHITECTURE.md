@@ -14,10 +14,13 @@ inside their transaction; Tenant locks serialize membership changes. Audit and
 outbox facts commit with lifecycle mutations. This boundary has no dependency
 on Home discovery or the existing Fleet process supervisor.
 
-App owns composition. Public authentication, HTTP/Kitex adapters and the Runtime
-connection are subsequent integration work; the directory is not an exposed
-service yet. [ADR-0003](docs/adr/0003-managed-agent-platform.md) defines the accepted
-target. The runtime/storage sections below describe the existing implementation.
+App composes the authenticated HTTP/Web service and the PostgreSQL-backed
+[Managed Runtime](internal/managedruntime/README.md). Runtime depends only on its
+own packages and Foundation; Management authorization and provider construction
+are injected by App. It owns durable inputs, events, activation leases and model
+attempts without Home-based storage. [ADR-0003](docs/adr/0003-managed-agent-platform.md)
+defines the accepted target. The runtime/storage sections below describe the
+existing implementation awaiting full execution and application cutover.
 
 ## Runtime Shape
 

@@ -61,6 +61,9 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 		return llm.Response{}, err
 	}
 	requestOptions := make([]option.RequestOption, 0, len(headers))
+	if opts.SingleAttempt {
+		requestOptions = append(requestOptions, option.WithMaxRetries(0))
+	}
 	for name, value := range headers {
 		requestOptions = append(requestOptions, option.WithHeader(name, value))
 	}
@@ -117,8 +120,11 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 		if err == nil {
 			return resp, nil
 		}
-		if !idleExpired {
-			return llm.Response{}, err
+		if !idleExpired || opts.SingleAttempt {
+			if idleExpired {
+				err = protocolsupport.NewStreamIdleTimeoutError("openai responses stream", idleTimeout, err)
+			}
+			return resp, err
 		}
 		if ctx.Err() != nil {
 			return llm.Response{}, ctx.Err()
@@ -156,9 +162,9 @@ func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, 
 			return llm.Response{}, fmt.Errorf("openai responses stream error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON())), false
 		case "response.failed":
 			if msg := responseErrorMessage(event.Response); msg != "" {
-				return llm.Response{}, fmt.Errorf("openai responses: %s", msg), false
+				return p.responseFromResponses(&event.Response), fmt.Errorf("openai responses: %s", msg), false
 			}
-			return llm.Response{}, fmt.Errorf("openai responses failed"), false
+			return p.responseFromResponses(&event.Response), fmt.Errorf("openai responses failed"), false
 		case "response.output_item.done":
 			items = append(items, event.Item)
 		case "response.done", "response.completed", "response.incomplete":
@@ -262,8 +268,9 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 		stop = llm.StopMaxTokens
 	}
 	return llm.Response{
-		Message:    out,
-		StopReason: stop,
+		Message:     out,
+		StopReason:  stop,
+		UsageStatus: llm.ReportedUsageStatus(resp.Usage.JSON.InputTokens.Valid(), resp.Usage.JSON.OutputTokens.Valid(), true),
 		Usage: llm.CanonicalUsage(
 			int(resp.Usage.InputTokens),
 			int(resp.Usage.OutputTokens),

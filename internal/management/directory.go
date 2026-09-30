@@ -9,11 +9,16 @@ import (
 )
 
 var (
-	ErrInvalid    = errors.New("invalid management request")
-	ErrDenied     = errors.New("resource unavailable or access denied")
-	ErrConflict   = errors.New("management resource already exists")
-	ErrLastAdmin  = errors.New("tenant must retain an active administrator")
-	ErrInvitation = errors.New("invitation unavailable")
+	ErrInvalid         = errors.New("invalid management request")
+	ErrDenied          = errors.New("resource unavailable or access denied")
+	ErrConflict        = errors.New("management resource already exists")
+	ErrLastAdmin       = errors.New("tenant must retain an active administrator")
+	ErrInvitation      = errors.New("invitation unavailable")
+	ErrCredentials     = errors.New("invalid email or password")
+	ErrSession         = errors.New("authentication required")
+	ErrLoginRequired   = errors.New("account already exists; sign in to accept the invitation")
+	ErrRateLimit       = errors.New("too many attempts; try again later")
+	ErrMailUnavailable = errors.New("email delivery is not configured")
 )
 
 type Role string
@@ -34,36 +39,67 @@ const (
 )
 
 type User struct {
-	ID            string
-	Email         string
-	EmailVerified bool
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
 }
 
 type Tenant struct {
-	ID   string
-	Name string
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type Membership struct {
-	TenantID string
-	UserID   string
-	Role     Role
-	Status   MembershipStatus
-	Version  int64
+	TenantID       string           `json:"tenant_id"`
+	UserID         string           `json:"user_id"`
+	Role           Role             `json:"role"`
+	Status         MembershipStatus `json:"status"`
+	Version        int64            `json:"version"`
+	ExecutionEpoch int64            `json:"-"`
 }
 
 type Fleet struct {
-	ID       string
-	TenantID string
-	UserID   string
+	ID       string `json:"id"`
+	TenantID string `json:"tenant_id"`
+	UserID   string `json:"user_id"`
 }
 
 type Invitation struct {
-	ID        string
-	TenantID  string
-	Email     string
-	Role      Role
-	ExpiresAt time.Time
+	ID        string    `json:"id"`
+	TenantID  string    `json:"tenant_id"`
+	Email     string    `json:"email"`
+	Role      Role      `json:"role"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type Session struct {
+	User      User      `json:"user"`
+	Token     string    `json:"-"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type TenantAccess struct {
+	Tenant
+	Role    Role   `json:"role"`
+	FleetID string `json:"fleet_id"`
+}
+
+type MemberView struct {
+	User
+	Membership
+	FleetID string `json:"fleet_id"`
+}
+
+type InvitationView struct {
+	Invitation
+	Link           string `json:"link"`
+	DeliveryStatus string `json:"delivery_status"`
+}
+
+type InvitationPreview struct {
+	Invitation
+	TenantName    string `json:"tenant_name"`
+	RequiresLogin bool   `json:"requires_login"`
 }
 
 // NormalizeEmail defines account equality without provider-specific alias rules.
