@@ -75,12 +75,15 @@ func (e *Engine) command(ctx context.Context, operation *operation) (*int, error
 	if err != nil {
 		return nil, err
 	}
-	environment, err := processEnvironment(args.Environment)
+	environment, err := e.processEnvironment(args.Environment)
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", args.Command)
 	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
+	if err := configureProcessUser(cmd, e.config.ProcessUser); err != nil {
+		return nil, err
+	}
 	writer := outputWriter{engine: e, operation: operation}
 	var input io.WriteCloser
 	var outputDone <-chan struct{}

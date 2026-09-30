@@ -43,8 +43,21 @@ func New(ctx context.Context, service *execution.Service) *Server {
 	mux.HandleFunc("POST /device/pair", s.begin)
 	mux.HandleFunc("POST /device/pair/poll", s.poll)
 	mux.HandleFunc("POST /device/pair/confirm", s.confirm)
-	mux.HandleFunc("GET /device/connect", s.connect)
-	s.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /device/connect", func(w http.ResponseWriter, r *http.Request) { s.connect(w, r, false) })
+	s.handler = s.guard(mux)
+	return s
+}
+
+// HostedHandler is mounted on the only endpoint allowed through the hosted
+// network policy. It exposes no pairing, Management or private service APIs.
+func (s *Server) HostedHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /device/connect", func(w http.ResponseWriter, r *http.Request) { s.connect(w, r, true) })
+	return s.guard(mux)
+}
+
+func (s *Server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -58,9 +71,8 @@ func New(ctx context.Context, service *execution.Service) *Server {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		mux.ServeHTTP(w, r)
+		next.ServeHTTP(w, r)
 	})
-	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }
@@ -177,7 +189,7 @@ func (s *Server) confirm(w http.ResponseWriter, r *http.Request) {
 	respond(w, value, err)
 }
 
-func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
+func (s *Server) connect(w http.ResponseWriter, r *http.Request, hostedOnly bool) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -201,6 +213,10 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	authCancel()
 	if err != nil {
 		respond(w, nil, err)
+		return
+	}
+	if hostedOnly && device.Kind != "hosted" {
+		respond(w, nil, execprotocol.ErrDenied)
 		return
 	}
 	connection, err := websocket.Accept(w, r, nil)

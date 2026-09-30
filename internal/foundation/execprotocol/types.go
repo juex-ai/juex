@@ -114,4 +114,6 @@ type Environment struct {
 	Capabilities     []Capability `json:"capabilities"`
 	WorkingDirectory string       `json:"working_directory"`
 	PermissionMode   string       `json:"permission_mode"`
+	Availability     string       `json:"availability,omitempty"`
+	Error            string       `json:"error,omitempty"`
 }

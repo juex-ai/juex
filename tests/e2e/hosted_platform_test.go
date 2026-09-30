@@ -1,0 +1,186 @@
+//go:build linux && hosted && postgres
+
+package e2e
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/juex-ai/juex/internal/app/managed"
+	"github.com/juex-ai/juex/internal/entrypoints/executionhttp"
+	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
+	"github.com/juex-ai/juex/internal/execution"
+	"github.com/juex-ai/juex/internal/execution/hosted"
+	"github.com/juex-ai/juex/internal/execution/native"
+	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
+	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/platformrpc"
+)
+
+func TestHostedPlatformContainerLifecycle(t *testing.T) {
+	f := executionDatabase(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	managementListener := platformListener(t)
+	managementServer, err := serverrpc.NewManagement(managementListener, platformrpc.CredentialsAt(f.credentials, "management"), f.authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPlatformRPC(t, managementServer)
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	_, portText, _ := net.SplitHostPort(listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	address := netip.MustParseAddr(os.Getenv("JUEX_HOSTED_TEST_IP"))
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(t.TempDir(), "enrollment.key")
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	if err := os.WriteFile(keyFile, key, 0600); err != nil {
+		t.Fatal(err)
+	}
+	configuration := managed.HostedConfiguration{KeyFile: keyFile, IdleSeconds: 1, Memory: 512 << 20, NanoCPUs: 1000000000, Backend: hosted.Config{Socket: os.Getenv("JUEX_DOCKER_SOCKET"), Root: root, GuestBinary: os.Getenv("JUEX_GUEST_BINARY"), Image: os.Getenv("JUEX_HOSTED_IMAGE"), Pool: netip.MustParsePrefix("172.30.0.0/16"), Control: netip.AddrPortFrom(address, uint16(port)), Server: "https://execution:" + portText, DNS: []netip.Addr{netip.MustParseAddr("10.0.2.3")}, Protected: []netip.Prefix{netip.MustParsePrefix("172.19.0.0/16")}}}
+	data, _ := json.Marshal(configuration)
+	configPath := filepath.Join(t.TempDir(), "hosted.json")
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	identity := platformrpc.CredentialsAt(f.credentials, "execution")
+	databaseURL, err := url.Parse(os.Getenv("JUEX_TEST_POSTGRES_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	databaseURL.Path = "/" + f.pool.Config().ConnConfig.Database
+	app, err := managed.OpenExecution(ctx, managed.ExecutionConfig{DatabaseURL: databaseURL.String(), ManagementAddress: managementListener.Addr().String(), Credentials: identity, HostedConfiguration: configPath, HostedListen: listener.Addr().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	f.execution = app.Service
+	deviceHTTP := executionhttp.New(ctx, app.Service)
+	server := &http.Server{Handler: deviceHTTP.HostedHandler(), ReadHeaderTimeout: 5 * time.Second}
+	pair, err := tls.LoadX509KeyPair(identity.Certificate, identity.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpDone, appDone := make(chan error, 1), make(chan struct{})
+	go func() {
+		httpDone <- server.Serve(tls.NewListener(listener, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pair}}))
+	}()
+	go func() { defer close(appDone); app.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		stop, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		_ = deviceHTTP.Shutdown(stop)
+		_ = server.Shutdown(stop)
+		<-httpDone
+		<-appDone
+	})
+	rpcListener := platformListener(t)
+	rpcServer, err := serverrpc.NewExecution(rpcListener, identity, app.Service, app.Pool.Ping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPlatformRPC(t, rpcServer)
+	client, err := executionrpc.NewClient(rpcListener.Addr().String(), platformrpc.CredentialsAt(f.credentials, "runtime"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs, err := client.Environments(ctx, f.actor, f.tenant, f.agent.ID)
+	if err != nil || len(envs) != 1 {
+		t.Fatal(envs, err)
+	}
+	environment := envs[0]
+	scope, err := app.Service.Authority.Agent(ctx, f.actor, f.tenant, f.agent.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence := execprotocol.AuthorityFence{ActorEpoch: scope.ActorAuthorizationEpoch, MembershipEpoch: scope.MembershipExecutionEpoch, AgentEpoch: scope.AgentExecutionEpoch}
+	cleanupBackend, err := hosted.New(configuration.Backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stop, done := context.WithTimeout(context.Background(), 30*time.Second)
+		defer done()
+		cancel()
+		<-appDone
+		spec := hosted.Spec{EnvironmentID: environment.ID, AgentID: f.agent.ID, TenantID: f.tenant, UserID: f.actor, Slot: 0, Memory: configuration.Memory, NanoCPUs: configuration.NanoCPUs}
+		if err := cleanupBackend.Stop(stop, spec); err != nil {
+			t.Error(err)
+		}
+		if err := cleanupBackend.RemoveContainer(stop, spec); err != nil {
+			t.Error(err)
+		}
+		_ = cleanupBackend.Close()
+	})
+	submit := func(id, command string) execution.Operation {
+		t.Helper()
+		request := nativeRequest(t, id, "exec_command", native.CommandArguments{Command: command})
+		request.AgentID = f.agent.ID
+		op, err := client.SubmitFenced(ctx, f.actor, f.tenant, environment.ID, request, 0, fence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return op
+	}
+	submit("once", "printf once >> /workspace/counter; printf ready")
+	op := executionEventually(t, f, environment.ID, "once", func(op execution.Operation) bool { return op.Acknowledged })
+	if op.State != "completed" || op.Snapshot.Text() != "ready" {
+		t.Fatal(op)
+	}
+	submit("background", "printf started; sleep 60")
+	executionEventually(t, f, environment.ID, "background", func(op execution.Operation) bool { return op.State == "running" })
+	if _, err := f.pool.Exec(ctx, `UPDATE execution.hosted SET last_activity=clock_timestamp()-interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Second)
+	device, err := f.executionStore.Device(ctx, environment.ID)
+	if err != nil || !device.Online {
+		t.Fatal("live process reclaimed", device, err)
+	}
+	if err := client.Cancel(ctx, f.actor, f.tenant, f.agent.ID, environment.ID, "background"); err != nil {
+		t.Fatal(err)
+	}
+	executionEventually(t, f, environment.ID, "background", func(op execution.Operation) bool { return op.Acknowledged })
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		device, err = f.executionStore.Device(ctx, environment.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !device.Online {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if device.Online {
+		t.Fatal("idle container did not sleep")
+	}
+	submit("read-after-sleep", "cat /workspace/counter")
+	op = executionEventually(t, f, environment.ID, "read-after-sleep", func(op execution.Operation) bool { return op.Acknowledged })
+	if op.State != "completed" || op.Snapshot.Text() != "once" {
+		t.Fatal("wake lost workspace", op)
+	}
+	if op := submit("once", "printf once >> /workspace/counter; printf ready"); op.State != "completed" {
+		t.Fatal("old operation replayed", op)
+	}
+}

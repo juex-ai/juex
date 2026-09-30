@@ -25,6 +25,25 @@ Linux 需要可用的用户服务管理器；CLI 不自动启用 lingering 或�
 原生引擎以当前 Linux/macOS 用户运行，默认工作目录不是沙箱。Shell 和 stdio MCP 可使用该用户的操作系统权限；能力开关选择暴露哪些操作，不代表独立的操作系统安全边界。
 托管隔离由经过验证的容器后端负责。子进程不继承平台模型和服务凭据。
 
+托管执行通过 Docker API 使用固定 Linux 镜像、cgroup v2 与 gVisor `runsc`；缺少隔离能力时启动失败。
+每个 Agent 拥有一个持久环境身份、网络子网、Workspace 与 Home。列出环境不会启动容器，待执行操作按需启动它；
+未完成进程、MCP 连接和未确认结果阻止空闲回收。默认空闲五分钟后回收，环境行锁将回收与新操作接纳串行化。
+用户重新加入 Tenant 后保留其 Workspace，但不会重新授权较早代际的操作。
+
+可信 guest 控制进程以 root 运行，所有文件工具、Shell、PTY 和 MCP 子进程均使用 UID/GID 1000。
+该用户不能访问私有绑定凭据与恢复状态。根文件系统只读，Workspace 与 Home 持久保存，临时目录限制容量。
+guest 不获得平台数据库、模型、RPC 或 Docker 凭据。Execution 使用独立的 32 字节私有密钥派生绑定凭据，PostgreSQL 仅保存摘要。
+
+`juex-execution serve --hosted-config /absolute/operator-config.json` 启用托管后端。
+运维配置描述 Docker socket、固定镜像、guest 二进制、私有存储根、IPv4 地址池、DNS、受保护的平台网络和精确内网例外。
+专用托管 TLS 监听器使用 Execution 服务证书，仅在 `/device/connect` 接受托管连接；配置中的控制端点例外必须匹配该监听器。
+这个入口不提供配对或 Management API。
+
+网络策略先安装，随后才启动 guest。默认允许公网 IPv4；阻断宿主地址、元数据、私有／保留网段、平台网段和其他 Agent 子网。
+内网例外明确 IPv4 地址、传输协议和端口，不能覆盖平台／Agent 保护；IPv6 被阻断。
+只读 resolver 文件替代 gVisor 无法访问的 Docker 内嵌 loopback DNS，配置的 DNS 仅获得 TCP/UDP 53 访问许可。
+后端只管理自己命名的网桥规则，不修改宿主机默认策略。
+
 私有且排他锁定的日志目录属于一个环境绑定。操作先提交身份和请求，再开始执行；重复投递返回原操作，身份冲突则拒绝。
 重启将未完成操作标为 unknown，不重复外部副作用。单纯断网不会取消命令。取消先记录意图再发送信号，实际终态与取消请求分别处理。
 

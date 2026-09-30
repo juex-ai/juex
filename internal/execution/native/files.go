@@ -32,9 +32,21 @@ func (e *Engine) fileOperation(ctx context.Context, operation *operation) error 
 	if err := decodeArguments(operation.record.Request.Arguments, &args); err != nil {
 		return err
 	}
+	if e.config.ProcessUser != nil {
+		return e.fileWorker(ctx, operation)
+	}
 	directory, err := e.workingDirectory(args.WorkingDirectory)
 	if err != nil {
 		return err
+	}
+	return RunFileOperation(ctx, directory, operation.record.Request.Kind, args, outputWriter{engine: e, operation: operation})
+}
+
+// RunFileOperation executes under its caller's OS identity. Hosted execution
+// invokes it in a separate unprivileged process, never in the control process.
+func RunFileOperation(ctx context.Context, directory, kind string, args FileArguments, writer io.Writer) error {
+	if !filepath.IsAbs(directory) {
+		return execprotocol.ErrInvalid
 	}
 	path := args.Path
 	if path == "" {
@@ -49,11 +61,10 @@ func (e *Engine) fileOperation(ctx context.Context, operation *operation) error 
 	if args.Limit == 0 {
 		args.Limit = 64 << 10
 	}
-	writer := outputWriter{engine: e, operation: operation}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	switch operation.record.Request.Kind {
+	switch kind {
 	case "read":
 		file, err := openRegular(path, os.O_RDONLY, 0)
 		if err != nil {
@@ -121,7 +132,7 @@ func (e *Engine) fileOperation(ctx context.Context, operation *operation) error 
 		_, err = fmt.Fprint(writer, "Edited ", path)
 		return err
 	case "glob", "grep":
-		return searchFiles(ctx, path, operation.record.Request.Kind, args.Pattern, args.Limit, writer)
+		return searchFiles(ctx, path, kind, args.Pattern, args.Limit, writer)
 	default:
 		return execprotocol.ErrInvalid
 	}

@@ -22,6 +22,11 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 	if err != nil {
 		return nil, err
 	}
+	if s.Hosted != nil {
+		if err := s.Hosted.Ensure(ctx, scope); err != nil {
+			return nil, err
+		}
+	}
 	devices, err := s.Store.Devices(ctx, scope.OwnerScope)
 	if err != nil {
 		return nil, err
@@ -143,6 +148,9 @@ func (s *Service) EffectiveGrants(ctx context.Context, device Device) (map[strin
 		return nil, err
 	}
 	if owner.RemovalEpoch != device.RemovalEpoch || owner.FleetID != device.FleetID {
+		if device.Kind == "hosted" {
+			return grants, nil
+		}
 		return grants, s.Store.Revoke(ctx, device.ID, device.UserID)
 	}
 	for agent, capabilities := range device.Grants {

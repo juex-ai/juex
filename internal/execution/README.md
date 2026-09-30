@@ -46,6 +46,38 @@ security boundaries. Hosted isolation is the responsibility of the verified
 container backend. Platform model and service credentials are not inherited by
 child processes.
 
+Hosted execution uses Docker's API with a pinned Linux image, cgroup v2 and
+gVisor `runsc`; missing isolation fails startup. Each Agent has one durable
+environment identity, network subnet, Workspace and Home. Listing environments
+does not start containers. Pending operations start them on demand; unfinished
+processes, MCP connections and unacknowledged results prevent idle reclamation.
+The default idle timeout is five minutes. Environment row locks serialize
+reclamation with new operation admission. Rejoining a Tenant preserves the
+owned Workspace but never reauthorizes operations from an earlier epoch.
+
+The trusted guest control process runs as root; every file tool, shell, PTY and
+MCP child runs as UID/GID 1000. Private enrollment and recovery state are outside
+that user's access. The root filesystem is read-only, with persistent Workspace
+and Home and a bounded temporary directory. The guest receives no platform
+database, provider, RPC or Docker credentials. Execution derives its enrollment
+credential from a separate 32-byte private key; PostgreSQL stores only its hash.
+
+`juex-execution serve --hosted-config /absolute/operator-config.json` enables the
+backend. The operator configuration describes the Docker socket, pinned image,
+guest binary, private storage root, IPv4 address pool, DNS resolvers, protected
+platform networks and exact LAN endpoint exceptions. The dedicated hosted TLS
+listener accepts only hosted connections at `/device/connect`, using the
+Execution service certificate; its configured control exception must match
+that listener. Pairing and Management APIs are not exposed there.
+
+Network policy is installed before starting a guest. Public IPv4 egress is
+allowed; host addresses, metadata, private/reserved networks, platform networks
+and other Agent subnets are denied. LAN exceptions name an IPv4 address,
+transport and port and cannot override platform/Agent protection. IPv6 is
+blocked. A read-only resolver file avoids Docker's embedded loopback DNS,
+which is unreachable from gVisor; configured resolvers receive only TCP/UDP 53.
+The backend owns only its named bridge rules, never the host's default policy.
+
 A private, exclusively locked journal belongs to one environment enrollment.
 An operation commits its identity and request before starting. Retransmission
 returns that operation; conflicting reuse is rejected. Restart marks unfinished

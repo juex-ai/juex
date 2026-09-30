@@ -25,6 +25,7 @@ type Config struct {
 	OutputLimit      int64
 	StorageLimit     int64
 	Retention        time.Duration
+	ProcessUser      *ProcessUser
 }
 
 type operation struct {
@@ -57,6 +58,13 @@ func (e *Engine) Identity() (environment, journal string) {
 func Open(config Config) (*Engine, error) {
 	if !filepath.IsAbs(config.StateDirectory) || config.EnvironmentID == "" {
 		return nil, execprotocol.ErrInvalid
+	}
+	if config.ProcessUser != nil {
+		copy := *config.ProcessUser
+		if err := validateProcessUser(copy); err != nil {
+			return nil, err
+		}
+		config.ProcessUser = &copy
 	}
 	if config.WorkingDirectory == "" {
 		var err error

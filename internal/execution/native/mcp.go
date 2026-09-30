@@ -46,12 +46,15 @@ func (e *Engine) connectMCP(ctx context.Context, op *operation) error {
 	if err != nil {
 		return err
 	}
-	environment, err := processEnvironment(args.Environment)
+	environment, err := e.processEnvironment(args.Environment)
 	if err != nil {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, args.Command, args.Args...)
 	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
+	if err := configureProcessUser(cmd, e.config.ProcessUser); err != nil {
+		return err
+	}
 	command.ConfigureContext(cmd)
 	writer := outputWriter{engine: e, operation: op}
 	cmd.Stderr = mcpStderr{writer: writer}
