@@ -34,6 +34,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"AcknowledgeOutput": kitex.NewMethodInfo(
+		acknowledgeOutputHandler,
+		newExecutionAcknowledgeOutputArgs,
+		newExecutionAcknowledgeOutputResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"PreviewPair": kitex.NewMethodInfo(
 		previewPairHandler,
 		newExecutionPreviewPairArgs,
@@ -229,6 +236,24 @@ func newExecutionAcknowledgeEventsArgs() interface{} {
 
 func newExecutionAcknowledgeEventsResult() interface{} {
 	return platform.NewExecutionAcknowledgeEventsResult()
+}
+
+func acknowledgeOutputHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionAcknowledgeOutputArgs)
+	realResult := result.(*platform.ExecutionAcknowledgeOutputResult)
+	success, err := handler.(platform.Execution).AcknowledgeOutput(ctx, realArg.Actor, realArg.EnvironmentID, realArg.OperationID, realArg.Cursor)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionAcknowledgeOutputArgs() interface{} {
+	return platform.NewExecutionAcknowledgeOutputArgs()
+}
+
+func newExecutionAcknowledgeOutputResult() interface{} {
+	return platform.NewExecutionAcknowledgeOutputResult()
 }
 
 func previewPairHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -463,6 +488,19 @@ func (p *kClient) AcknowledgeEvents(ctx context.Context, eventIDs []string) (r *
 	_args.EventIDs = eventIDs
 	var _result platform.ExecutionAcknowledgeEventsResult
 	if err = p.c.Call(ctx, "AcknowledgeEvents", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) AcknowledgeOutput(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, cursor int64) (r *platform.Reply, err error) {
+	var _args platform.ExecutionAcknowledgeOutputArgs
+	_args.Actor = actor
+	_args.EnvironmentID = environmentID
+	_args.OperationID = operationID
+	_args.Cursor = cursor
+	var _result platform.ExecutionAcknowledgeOutputResult
+	if err = p.c.Call(ctx, "AcknowledgeOutput", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

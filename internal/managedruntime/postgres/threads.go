@@ -89,6 +89,9 @@ func (s *Store) CancelThread(ctx context.Context, scope managedruntime.Scope, th
 	if _, err := tx.Exec(ctx, `UPDATE runtime.inputs SET state='cancelled' WHERE thread_id=$1 AND state IN ('queued','active');`, thread.ID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.subscriptions SET enabled=false,generation=generation+1 WHERE thread_id=$1 AND enabled`, thread.ID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET state='cancelled',completed_at=clock_timestamp() WHERE thread_id=$1 AND state IN ('running','waiting')`, thread.ID); err != nil {
 		return err
 	}

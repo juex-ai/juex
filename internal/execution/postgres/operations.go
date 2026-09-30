@@ -21,7 +21,7 @@ func scanOperation(row pgx.Row) (execution.Operation, error) {
 	return operation, classify(err)
 }
 
-func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope execution.Scope, request execprotocol.Request, wait time.Duration) (execution.Operation, error) {
+func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope execution.Scope, request execprotocol.Request, wait time.Duration, hold bool) (execution.Operation, error) {
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return execution.Operation{}, err
@@ -35,7 +35,8 @@ func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope exec
 	hash, err := execution.CanonicalHash(struct {
 		Scope   execution.Scope
 		Request execprotocol.Request
-	}{identity, request})
+		Hold    bool
+	}{identity, request, hold})
 	if err != nil {
 		return execution.Operation{}, err
 	}
@@ -78,7 +79,7 @@ func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope exec
 	if reserved+8<<20 > 512<<20 {
 		return execution.Operation{}, execprotocol.ErrQuota
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO execution.operations(environment_id,id,scope,request,request_hash,wait_until,snapshot) VALUES($1,$2,$3,$4,$5,clock_timestamp()+$6*interval '1 millisecond',$7) ON CONFLICT(environment_id,id) DO NOTHING`, device.ID, request.ID, owner, encoded, hash, wait.Milliseconds(), snapshot); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO execution.operations(environment_id,id,scope,request,request_hash,wait_until,snapshot,output_hold) VALUES($1,$2,$3,$4,$5,clock_timestamp()+$6*interval '1 millisecond',$7,$8) ON CONFLICT(environment_id,id) DO NOTHING`, device.ID, request.ID, owner, encoded, hash, wait.Milliseconds(), snapshot, hold); err != nil {
 		return execution.Operation{}, classify(err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO execution.audit(tenant_id,owner_id,actor_id,environment_id,agent_id,operation_id,action,version) VALUES($1,$2,$3,$4,$5,$6,'operation.accepted',1)`, scope.TenantID, scope.UserID, scope.ActorID, device.ID, scope.AgentID, request.ID); err != nil {
@@ -335,7 +336,7 @@ func (s *Store) ExpireWaiting(ctx context.Context) error {
 	}
 	// Acknowledged output can expire; operation identities and unknown outcomes
 	// remain durable so restoring an old caller cannot repeat an external effect.
-	_, err = s.pool.Exec(ctx, `UPDATE execution.operations SET output='',snapshot=jsonb_set(snapshot,'{output_expired}','true') WHERE acknowledged AND state IN ('completed','failed','cancelled') AND updated_at<clock_timestamp()-interval '7 days' AND octet_length(output)>0`)
+	_, err = s.pool.Exec(ctx, `UPDATE execution.operations SET output='',snapshot=jsonb_set(snapshot,'{output_expired}','true') WHERE acknowledged AND state IN ('completed','failed','cancelled') AND greatest(updated_at,observed_at)<clock_timestamp()-interval '7 days' AND octet_length(output)>0 AND (NOT output_hold OR observed_bytes>=octet_length(output))`)
 	if err != nil {
 		return err
 	}

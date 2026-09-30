@@ -115,6 +115,10 @@ func (c *Client) AcknowledgeEvents(ctx context.Context, ids []string) error {
 	reply, err := c.client.AcknowledgeEvents(ctx, ids)
 	return decode(reply, err, nil)
 }
+func (c *Client) AcknowledgeOutput(ctx context.Context, user, tenant, agent, environment, id string, cursor int64) error {
+	reply, err := c.client.AcknowledgeOutput(ctx, actor(user, tenant, agent), environment, id, cursor)
+	return decode(reply, err, nil)
+}
 func (c *Client) Operation(ctx context.Context, user, tenant, agent, environment, id string, cursor int64, limit int) (execution.Operation, error) {
 	if limit < 1 || limit > 256<<10 {
 		return execution.Operation{}, execprotocol.ErrInvalid

@@ -34,3 +34,7 @@ func (g RuntimeTools) Events(ctx context.Context, limit int) ([]execprotocol.Eve
 func (g RuntimeTools) AcknowledgeEvents(ctx context.Context, ids []string) error {
 	return g.Client.AcknowledgeEvents(ctx, ids)
 }
+
+func (g RuntimeTools) AcknowledgeOutput(ctx context.Context, scope managedruntime.Scope, environment, operation string, cursor int64) error {
+	return g.Client.AcknowledgeOutput(ctx, scope.ActorID, scope.TenantID, scope.AgentID, environment, operation, cursor)
+}

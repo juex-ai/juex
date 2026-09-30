@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
@@ -98,6 +97,11 @@ func (s *Store) PrepareTool(ctx context.Context, work managedruntime.ToolWork, e
 	if result.RowsAffected() != 1 {
 		return managedruntime.ErrFence
 	}
+	if request.Kind == "mcp_connect" || request.Kind == "exec_command" {
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.observation_sources(id,thread_id,agent_id,scope,environment_id,operation_id,kind) SELECT j.id,t.thread_id,th.agent_id,j.scope,j.environment_id,j.id::text,j.request->>'kind' FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id JOIN runtime.threads th ON th.id=t.thread_id WHERE j.id=$1 ON CONFLICT DO NOTHING`, work.ID); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 
@@ -169,6 +173,9 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 			continue
 		}
 		if event.OperationID != "" {
+			if _, err := tx.Exec(ctx, `UPDATE runtime.observation_sources SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE environment_id=$1 AND operation_id=$2 AND scope->>'tenant_id'=$3 AND scope->>'user_id'=$4 AND NOT closed`, event.EnvironmentID, event.OperationID, event.TenantID, event.UserID); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `UPDATE runtime.tools SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE id::text=$1 AND environment_id=$2 AND scope->>'tenant_id'=$3 AND scope->>'user_id'=$4`, event.OperationID, event.EnvironmentID, event.TenantID, event.UserID); err != nil {
 				return err
 			}
@@ -180,7 +187,10 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 			if _, err := tx.Exec(ctx, `UPDATE runtime.tools SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE environment_id=$1 AND scope->>'tenant_id'=$2 AND scope->>'user_id'=$3 AND scope->>'agent_id'=ANY($4::text[]) AND state='waiting'`, event.EnvironmentID, event.TenantID, event.UserID, event.AgentIDs); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO runtime.observations(event_id,agent_id,kind,data,created_at) SELECT $1,id,$2,$3,$4 FROM runtime.agents WHERE tenant_id=$5 AND user_id=$6 AND id::text=ANY($7::text[]) ON CONFLICT DO NOTHING`, event.ID, event.Kind, observationData, event.CreatedAt, event.TenantID, event.UserID, event.AgentIDs); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO runtime.observations(event_id,agent_id,kind,data,created_at,environment_id) SELECT $1,id,$2,$3,$4,$8 FROM runtime.agents WHERE tenant_id=$5 AND user_id=$6 AND id::text=ANY($7::text[]) ON CONFLICT DO NOTHING`, event.ID, event.Kind, observationData, event.CreatedAt, event.TenantID, event.UserID, event.AgentIDs, event.EnvironmentID); err != nil {
+				return err
+			}
+			if err := enqueueObservationDeliveries(ctx, tx, event.ID); err != nil {
 				return err
 			}
 		}
@@ -238,22 +248,27 @@ func consumeToolResults(ctx context.Context, tx pgx.Tx, turnID, threadID string,
 }
 
 func consumeObservations(ctx context.Context, tx pgx.Tx, agent, thread string) error {
-	rows, err := tx.Query(ctx, `SELECT event_id,kind,data,created_at FROM runtime.observations WHERE agent_id=$1 AND consumed_at IS NULL ORDER BY created_at,event_id LIMIT 50 FOR UPDATE`, agent)
+	rows, err := tx.Query(ctx, `SELECT event_id,kind,data,created_at,environment_id,operation_id,source_offset FROM runtime.observations WHERE agent_id=$1 AND consumed_at IS NULL ORDER BY created_at,event_id LIMIT 50 FOR UPDATE`, agent)
 	if err != nil {
 		return err
 	}
-	var facts []map[string]any
+	var facts []string
+	budget := 64 << 10
 	ids := []string{}
 	for rows.Next() {
-		var id, kind string
-		var data json.RawMessage
-		var created time.Time
-		if err := rows.Scan(&id, &kind, &data, &created); err != nil {
+		var fact managedruntime.Observation
+		if err := rows.Scan(&fact.ID, &fact.Kind, &fact.Data, &fact.CreatedAt, &fact.EnvironmentID, &fact.OperationID, &fact.Offset); err != nil {
 			rows.Close()
 			return err
 		}
-		ids = append(ids, id)
-		facts = append(facts, map[string]any{"id": id, "kind": kind, "data": data, "created_at": created})
+		notice := managedruntime.ObservationNotice(fact)
+		encoded, _ := json.Marshal(notice)
+		if len(encoded)+2 > budget {
+			break
+		}
+		budget -= len(encoded) + 2
+		ids = append(ids, fact.ID)
+		facts = append(facts, notice)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {

@@ -146,6 +146,9 @@ func writeMCPEvent(writer outputWriter, event any) error {
 	if err != nil {
 		return err
 	}
+	if len(data)+1 > execprotocol.MaxMCPEventBytes {
+		return errors.New("MCP notification record exceeds 1 MiB")
+	}
 	_, err = writer.write(append(data, '\n'), true)
 	return err
 }

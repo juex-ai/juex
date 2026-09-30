@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// MaxMCPEventBytes bounds a complete JSONL record, including its newline.
+const MaxMCPEventBytes = 1 << 20
+
 const Version = 1
 
 // AuthorityFence binds an external operation to the human/Agent authority of
@@ -105,15 +108,16 @@ func (s Snapshot) Text() string { return string(s.Output) }
 
 // Environment is descriptive context, not authority supplied by the model.
 type Environment struct {
-	ID               string       `json:"id"`
-	JournalID        string       `json:"journal_id"`
-	Name             string       `json:"name"`
-	Kind             string       `json:"kind"`
-	OS               string       `json:"os"`
-	Online           bool         `json:"online"`
-	Capabilities     []Capability `json:"capabilities"`
-	WorkingDirectory string       `json:"working_directory"`
-	PermissionMode   string       `json:"permission_mode"`
-	Availability     string       `json:"availability,omitempty"`
-	Error            string       `json:"error,omitempty"`
+	ID                   string       `json:"id"`
+	JournalID            string       `json:"journal_id"`
+	Name                 string       `json:"name"`
+	Kind                 string       `json:"kind"`
+	OS                   string       `json:"os"`
+	Online               bool         `json:"online"`
+	Capabilities         []Capability `json:"capabilities"`
+	WorkingDirectory     string       `json:"working_directory"`
+	PermissionMode       string       `json:"permission_mode"`
+	AuthorizationVersion int64        `json:"authorization_version"`
+	Availability         string       `json:"availability,omitempty"`
+	Error                string       `json:"error,omitempty"`
 }

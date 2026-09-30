@@ -37,6 +37,7 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 			continue
 		}
 		environment := device.Environment
+		environment.AuthorizationVersion = device.Version
 		environment.Capabilities = slices.Clone(device.Grants[agent])
 		environment.JournalID = ""
 		environments = append(environments, environment)
@@ -85,7 +86,19 @@ func (s *Service) submit(ctx context.Context, actor, tenant, environment string,
 	if !permits(device, scope, request.Kind) {
 		return Operation{}, execprotocol.ErrDenied
 	}
-	return s.Store.Enqueue(ctx, device, scope, request, wait)
+	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && request.Kind == "mcp_connect")
+}
+
+// AcknowledgeOutput transfers responsibility for persisted notifications to
+// Runtime. Device acknowledgment alone only confirms transport into Execution.
+func (s *Service) AcknowledgeOutput(ctx context.Context, actor, tenant, agent, environment, id string, cursor int64) error {
+	if cursor < 0 {
+		return execprotocol.ErrInvalid
+	}
+	if _, err := s.Operation(ctx, actor, tenant, agent, environment, id, 0, 1); err != nil {
+		return err
+	}
+	return s.Store.AcknowledgeOutput(ctx, environment, id, cursor)
 }
 
 func (s *Service) Operation(ctx context.Context, actor, tenant, agent, environment, id string, cursor int64, limit int) (Operation, error) {

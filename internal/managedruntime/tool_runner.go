@@ -15,9 +15,10 @@ import (
 )
 
 type toolRunner struct {
-	store     ToolStore
-	gateway   ToolGateway
-	authority Authority
+	observations ObservationStore
+	store        ToolStore
+	gateway      ToolGateway
+	authority    Authority
 }
 
 func (r toolRunner) run(ctx context.Context) {
@@ -26,6 +27,9 @@ func (r toolRunner) run(ctx context.Context) {
 		workers.Go(func() { r.deliver(ctx) })
 	}
 	workers.Go(func() { r.receive(ctx) })
+	workers.Go(func() { r.observe(ctx) })
+	workers.Go(func() { r.deliverObservations(ctx) })
+	workers.Go(func() { r.acknowledgeObservations(ctx) })
 	workers.Wait()
 }
 
@@ -103,6 +107,9 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 		return toolResult(work.Call, map[string]string{"error": "authority_changed"}, true)
 	}
 	newlyPrepared := false
+	if outcome, handled := r.observationTool(ctx, *work); handled {
+		return outcome
+	}
 	if work.Request.ID == "" {
 		environments, err := r.gateway.Environments(ctx, work.Scope)
 		if err != nil {

@@ -171,6 +171,9 @@ func TestExecutionCLIWebPairingAndPrivateRPC(t *testing.T) {
 	if _, err := client.Events(ctx, 100); !errors.Is(err, execprotocol.ErrDenied) {
 		t.Fatal("management consumed execution events", err)
 	}
+	if err := client.AcknowledgeOutput(ctx, f.actor, f.tenant, f.agent.ID, devices[0].ID, request.ID, 0); !errors.Is(err, execprotocol.ErrDenied) {
+		t.Fatal("management acknowledged Runtime consumption", err)
+	}
 	events, err := runtimeClient.Events(ctx, 100)
 	if err != nil || len(events) == 0 {
 		t.Fatal("runtime missing execution facts", events, err)

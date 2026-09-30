@@ -290,12 +290,17 @@ func TestManagedRuntimeCancelCompletedTurnStopsItsBackgroundOperations(t *testin
 
 func prepareRuntimeTool(t *testing.T, f *executionFixture, device string) (managedruntime.Scope, managedruntime.ToolWork) {
 	t.Helper()
+	return prepareRuntimeThreadTool(t, f, f.main.ID, device, "prepared-input")
+}
+
+func prepareRuntimeThreadTool(t *testing.T, f *executionFixture, thread, device, requestID string) (managedruntime.Scope, managedruntime.ToolWork) {
+	t.Helper()
 	ctx := context.Background()
 	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := f.store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: "prepared-input", ThreadID: f.main.ID, Text: "Read the device file"})
+	receipt, err := f.store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: requestID, ThreadID: thread, Text: "Read the device file"})
 	if err != nil {
 		t.Fatal(err)
 	}

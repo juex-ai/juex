@@ -234,21 +234,21 @@ func TestExecutionResultReservationsAndRetention(t *testing.T) {
 	request.AgentID = f.agent.ID
 	for index := range 64 {
 		request.ID = fmt.Sprintf("reserved-%d", index)
-		if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour); err != nil {
+		if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour, false); err != nil {
 			t.Fatal(index, err)
 		}
 	}
-	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour); err != nil {
+	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour, false); err != nil {
 		t.Fatal("quota blocked an existing operation's receipt", err)
 	}
 	request.ID = "excess"
-	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour); !errors.Is(err, execprotocol.ErrQuota) {
+	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour, false); !errors.Is(err, execprotocol.ErrQuota) {
 		t.Fatal("unbounded result reservations", err)
 	}
 	if err := f.executionStore.CancelOperation(ctx, device.ID, "reserved-0"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour); err != nil {
+	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour, false); err != nil {
 		t.Fatal("cancelled pre-dispatch work retained a reservation", err)
 	}
 	connected, err := f.executionStore.Connect(ctx, device.ID, rand.Text())
@@ -285,11 +285,11 @@ func TestExecutionResultReservationsAndRetention(t *testing.T) {
 	if err != nil || !operation.Snapshot.OutputExpired || len(operation.Snapshot.Output) != 0 {
 		t.Fatal("expired output not explicit", operation, err)
 	}
-	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour); err != nil {
+	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour, false); err != nil {
 		t.Fatal("retention discarded deduplication identity", err)
 	}
 	request.ID = "empty-output"
-	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour); err != nil {
+	if _, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.executionStore.Dispatch(ctx, device.ID, connected.ConnectionEpoch, request.ID); err != nil {
@@ -304,6 +304,83 @@ func TestExecutionResultReservationsAndRetention(t *testing.T) {
 	}
 	if err := f.executionStore.Acknowledge(ctx, device.ID, connected.ConnectionEpoch, request.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExecutionObservedOutputWaitsForRuntimeConsumption(t *testing.T) {
+	f := executionDatabase(t)
+	ctx := context.Background()
+	device, _ := f.pairDevice(t, execprotocol.MCP)
+	gateway := runtimeExecutionGateway(t, f)
+	scope, err := f.execution.Authority.Agent(ctx, f.actor, f.tenant, f.agent.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := nativeRequest(t, "observed-notifications", "mcp_connect", native.MCPArguments{Command: "fixture"})
+	request.AgentID = f.agent.ID
+	fence := execprotocol.AuthorityFence{ActorEpoch: scope.ActorAuthorizationEpoch, MembershipEpoch: scope.MembershipExecutionEpoch, AgentEpoch: scope.AgentExecutionEpoch}
+	if _, err := f.execution.SubmitFenced(ctx, f.actor, f.tenant, device.ID, request, time.Hour, fence); err != nil {
+		t.Fatal(err)
+	}
+	connected, err := f.executionStore.Connect(ctx, device.ID, rand.Text())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.executionStore.Dispatch(ctx, device.ID, connected.ConnectionEpoch, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := execprotocol.Snapshot{Version: execprotocol.Version, EnvironmentID: device.ID, ID: request.ID, AgentID: f.agent.ID, Kind: request.Kind, State: execprotocol.Completed, Output: []byte("retained"), NextCursor: 8, OutputBytes: 8}
+	if err := f.executionStore.Observe(ctx, device.ID, connected.ConnectionEpoch, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.executionStore.Acknowledge(ctx, device.ID, connected.ConnectionEpoch, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE execution.operations SET updated_at=clock_timestamp()-interval '8 days' WHERE id=$1`, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.executionStore.ExpireWaiting(ctx); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := f.executionStore.Operation(ctx, device.ID, request.ID, 0, 100)
+	if err != nil || operation.Snapshot.Text() != "retained" {
+		t.Fatal("unconsumed notifications expired", operation, err)
+	}
+	if err := gateway.Client.AcknowledgeOutput(ctx, f.actor, f.tenant, f.agent.ID, device.ID, request.ID, 9); !errors.Is(err, execprotocol.ErrInvalid) {
+		t.Fatal("acknowledged nonexistent bytes", err)
+	}
+	if err := gateway.Client.AcknowledgeOutput(ctx, f.actor, f.tenant, f.agent.ID, device.ID, request.ID, 4); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.executionStore.ExpireWaiting(ctx); err != nil {
+		t.Fatal(err)
+	}
+	operation, err = f.executionStore.Operation(ctx, device.ID, request.ID, 0, 100)
+	if err != nil || operation.Snapshot.Text() != "retained" {
+		t.Fatal("partial observer confirmation released remaining bytes", operation, err)
+	}
+	if err := gateway.Client.AcknowledgeOutput(ctx, f.actor, f.tenant, f.agent.ID, device.ID, request.ID, 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.executionStore.ExpireWaiting(ctx); err != nil {
+		t.Fatal(err)
+	}
+	operation, err = f.executionStore.Operation(ctx, device.ID, request.ID, 0, 100)
+	if err != nil || operation.Snapshot.Text() != "retained" {
+		t.Fatal("retention did not start after consumer handoff", operation, err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE execution.operations SET observed_at=clock_timestamp()-interval '8 days' WHERE id=$1`, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.executionStore.ExpireWaiting(ctx); err != nil {
+		t.Fatal(err)
+	}
+	operation, err = f.executionStore.Operation(ctx, device.ID, request.ID, 8, 100)
+	if err != nil || !operation.Snapshot.OutputExpired {
+		t.Fatal("consumed output did not expire", operation, err)
+	}
+	if err := gateway.Client.AcknowledgeOutput(ctx, f.actor, f.tenant, f.agent.ID, device.ID, request.ID, 8); err != nil {
+		t.Fatal("idempotent consumed confirmation", err)
 	}
 }
 

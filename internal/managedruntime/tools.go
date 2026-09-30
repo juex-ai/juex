@@ -34,6 +34,7 @@ type ToolGateway interface {
 	Cancel(context.Context, Scope, string, string) error
 	Events(context.Context, int) ([]execprotocol.Event, error)
 	AcknowledgeEvents(context.Context, []string) error
+	AcknowledgeOutput(context.Context, Scope, string, string, int64) error
 }
 
 type ToolStore interface {

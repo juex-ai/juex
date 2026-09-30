@@ -59,21 +59,22 @@ func executionDatabaseWithProvider(t *testing.T, provider http.HandlerFunc) *exe
 	return &executionFixture{managedRuntimeFixture: f, executionStore: store, credentials: certificates, execution: &execution.Service{Store: store, Authority: authority}}
 }
 
-func (f *executionFixture) beginPair(t *testing.T) (execution.PairRequest, execution.PairConfirmation) {
+func (f *executionFixture) beginPair(t *testing.T, additional ...execprotocol.Capability) (execution.PairRequest, execution.PairConfirmation) {
 	t.Helper()
 	proof := execution.PairConfirmation{ID: rand.Text(), Secret: rand.Text() + rand.Text(), Credential: rand.Text() + rand.Text()}
 	request := execution.PairRequest{ID: proof.ID, Name: "Personal laptop", OS: "darwin", WorkingDirectory: "/Users/test", PairSecretHash: execution.Digest(proof.Secret), CredentialHash: execution.Digest(proof.Credential), Capabilities: []execprotocol.Capability{execprotocol.Files, execprotocol.Shell}}
+	request.Capabilities = append(request.Capabilities, additional...)
 	if _, err := f.execution.BeginPair(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	return request, proof
 }
 
-func (f *executionFixture) pairDevice(t *testing.T) (execution.Device, string) {
+func (f *executionFixture) pairDevice(t *testing.T, additional ...execprotocol.Capability) (execution.Device, string) {
 	t.Helper()
-	_, proof := f.beginPair(t)
+	request, proof := f.beginPair(t, additional...)
 	ctx := context.Background()
-	if _, err := f.execution.ApprovePair(ctx, f.actor, f.tenant, proof.ID, map[string][]execprotocol.Capability{f.agent.ID: {execprotocol.Files, execprotocol.Shell}}); err != nil {
+	if _, err := f.execution.ApprovePair(ctx, f.actor, f.tenant, proof.ID, map[string][]execprotocol.Capability{f.agent.ID: request.Capabilities}); err != nil {
 		t.Fatal(err)
 	}
 	pair, err := f.execution.PollPair(ctx, proof.ID, proof.Secret)

@@ -35,6 +35,7 @@ service Execution {
   Reply Health()
   Reply Events(1: i32 limit)
   Reply AcknowledgeEvents(1: list<string> eventIDs)
+  Reply AcknowledgeOutput(1: Actor actor, 2: string environmentID, 3: string operationID, 4: i64 cursor)
   Reply PreviewPair(1: string actorID, 2: string tenantID, 3: string pairID)
   Reply ApprovePair(1: string actorID, 2: string tenantID, 3: string pairID, 4: string grantsJSON)
   Reply Devices(1: string actorID, 2: string tenantID, 3: string ownerID)

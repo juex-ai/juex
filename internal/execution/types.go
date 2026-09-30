@@ -105,7 +105,7 @@ type Repository interface {
 	AuthenticateDevice(context.Context, string) (Device, error)
 	Connect(context.Context, string, string) (Device, error)
 	Touch(context.Context, string, int64, bool) error
-	Enqueue(context.Context, Device, Scope, execprotocol.Request, time.Duration) (Operation, error)
+	Enqueue(context.Context, Device, Scope, execprotocol.Request, time.Duration, bool) (Operation, error)
 	Operation(context.Context, string, string, int64, int) (Operation, error)
 	Pending(context.Context, string, int) ([]Operation, error)
 	Dispatch(context.Context, string, int64, string) (Operation, error)
@@ -118,6 +118,7 @@ type Repository interface {
 	ExpireWaiting(context.Context) error
 	Events(context.Context, int) ([]execprotocol.Event, error)
 	AcknowledgeEvents(context.Context, []string) error
+	AcknowledgeOutput(context.Context, string, string, int64) error
 	ExpirePresence(context.Context) error
 }
 

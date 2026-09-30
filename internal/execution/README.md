@@ -109,6 +109,11 @@ period, while operation identity remains to prevent replay.
 The platform retains acknowledged settled output for seven days and reserves
 up to 512 MiB per environment for results; saturation rejects new operations.
 Output is transported as bytes, preserving offsets even for non-UTF-8 content.
+For Runtime-owned MCP connections, retention also waits for Runtime's durable
+consumption cursor. Partial consumption cannot expire the remaining notification
+output; the seven-day retention starts after complete consumption and settlement.
+Individual MCP notification records are bounded at 1 MiB, including the newline;
+oversized records close the connection with a visible error.
 
 The outbound connector negotiates the protocol over TLS and rejects incompatible
 versions. Reconnection preserves the engine. Platform grants can restrict the

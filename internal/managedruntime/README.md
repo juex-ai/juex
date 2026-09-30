@@ -40,9 +40,17 @@ ordering. Unknown external outcomes block the Thread for a human decision.
 
 The model receives authorized environments and selects a location only for file,
 process and MCP tools. Handles retain their original environment. Device presence
-changes update waiting work; other observations are included in the next Turn.
+changes update waiting work. Independent observers read durable MCP notification
+and process output cursors without holding an Activation or reconnecting a server.
+An event's identity includes its source byte offset; identical content at a later
+offset is a distinct event. Bounded Main digests do not wake the model by default.
+Explicit per-Thread subscriptions create deduplicated inputs with external-event
+provenance. Presence delivery compares current state, coalescing stale outbox facts.
+Cancelling or replacing a subscription fences queued and late deliveries; every
+wakeup rechecks the original actor, Agent and device grant. Runtime acknowledges
+source bytes only after both parsed events and partial records are durable.
 Cancelling a Thread closes its tool transcript and persists external cancellation
 delivery, including live handles from its already completed Turns. Completed
 conversation history and other Threads remain unchanged. A late result cannot
-restart it. Context compaction, subscriptions and
+restart it. Context compaction and
 independent application integrations remain separate platform work.

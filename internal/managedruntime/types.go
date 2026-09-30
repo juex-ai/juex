@@ -97,6 +97,7 @@ type TurnConfig struct {
 }
 
 type Work struct {
+	Source     InputSource
 	Scope      Scope
 	ThreadID   string
 	InputID    string

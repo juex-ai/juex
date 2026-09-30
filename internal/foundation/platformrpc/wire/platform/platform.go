@@ -972,6 +972,8 @@ type Execution interface {
 
 	AcknowledgeEvents(ctx context.Context, eventIDs []string) (r *Reply, err error)
 
+	AcknowledgeOutput(ctx context.Context, actor *Actor, environmentID string, operationID string, cursor int64) (r *Reply, err error)
+
 	PreviewPair(ctx context.Context, actorID string, tenantID string, pairID string) (r *Reply, err error)
 
 	ApprovePair(ctx context.Context, actorID string, tenantID string, pairID string, grantsJSON string) (r *Reply, err error)
@@ -1183,6 +1185,109 @@ func (p *ExecutionAcknowledgeEventsResult) String() string {
 }
 
 var fieldIDToName_ExecutionAcknowledgeEventsResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionAcknowledgeOutputArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	EnvironmentID string `thrift:"environmentID,2" frugal:"2,default,string" json:"environmentID"`
+	OperationID   string `thrift:"operationID,3" frugal:"3,default,string" json:"operationID"`
+	Cursor        int64  `thrift:"cursor,4" frugal:"4,default,i64" json:"cursor"`
+}
+
+func NewExecutionAcknowledgeOutputArgs() *ExecutionAcknowledgeOutputArgs {
+	return &ExecutionAcknowledgeOutputArgs{}
+}
+
+func (p *ExecutionAcknowledgeOutputArgs) InitDefault() {
+}
+
+var ExecutionAcknowledgeOutputArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionAcknowledgeOutputArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionAcknowledgeOutputArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionAcknowledgeOutputArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionAcknowledgeOutputArgs) GetOperationID() (v string) {
+	return p.OperationID
+}
+
+func (p *ExecutionAcknowledgeOutputArgs) GetCursor() (v int64) {
+	return p.Cursor
+}
+func (p *ExecutionAcknowledgeOutputArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionAcknowledgeOutputArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionAcknowledgeOutputArgs) SetOperationID(val string) {
+	p.OperationID = val
+}
+func (p *ExecutionAcknowledgeOutputArgs) SetCursor(val int64) {
+	p.Cursor = val
+}
+
+func (p *ExecutionAcknowledgeOutputArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionAcknowledgeOutputArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionAcknowledgeOutputArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionAcknowledgeOutputArgs = map[int16]string{
+	1: "actor",
+	2: "environmentID",
+	3: "operationID",
+	4: "cursor",
+}
+
+type ExecutionAcknowledgeOutputResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionAcknowledgeOutputResult() *ExecutionAcknowledgeOutputResult {
+	return &ExecutionAcknowledgeOutputResult{}
+}
+
+func (p *ExecutionAcknowledgeOutputResult) InitDefault() {
+}
+
+var ExecutionAcknowledgeOutputResult_Success_DEFAULT *Reply
+
+func (p *ExecutionAcknowledgeOutputResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionAcknowledgeOutputResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionAcknowledgeOutputResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionAcknowledgeOutputResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionAcknowledgeOutputResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionAcknowledgeOutputResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionAcknowledgeOutputResult = map[int16]string{
 	0: "success",
 }
 

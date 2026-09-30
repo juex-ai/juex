@@ -39,13 +39,20 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		return work, managedruntime.ErrDenied
 	}
 	var text, actor, state string
+	var source []byte
 	var memberEpoch, agentEpoch, actorEpoch int64
-	err = tx.QueryRow(ctx, `SELECT text,actor_id,state,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch FROM runtime.inputs WHERE id=$1 FOR UPDATE`, inputID).Scan(&text, &actor, &state, &memberEpoch, &agentEpoch, &actorEpoch)
+	err = tx.QueryRow(ctx, `SELECT text,actor_id,state,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch,source FROM runtime.inputs WHERE id=$1 FOR UPDATE`, inputID).Scan(&text, &actor, &state, &memberEpoch, &agentEpoch, &actorEpoch, &source)
 	if err != nil {
 		return work, err
 	}
 	if actor != scope.ActorID || memberEpoch != scope.MembershipExecutionEpoch || agentEpoch != scope.AgentExecutionEpoch || actorEpoch != scope.ActorAuthorizationEpoch {
 		return work, managedruntime.ErrDenied
+	}
+	if err := json.Unmarshal(source, &work.Source); err != nil {
+		return work, err
+	}
+	if err := observationInputActive(ctx, tx, inputID); err != nil {
+		return work, err
 	}
 	work.ThreadID, work.Generation = thread.ID, thread.Generation
 	switch state {
@@ -114,6 +121,9 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		message := llm.TextMessage(llm.RoleUser, text)
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
+		if work.Source.Kind == "observation" {
+			message.Kind = llm.MessageKindSystemNotice
+		}
 		if err := appendEvent(ctx, tx, thread.ID, "message.appended", message); err != nil {
 			return work, err
 		}
@@ -168,6 +178,13 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 		return managedruntime.Attempt{}, classify(err)
 	}
 	if _, err := readThread(ctx, tx, lease.AgentID, threadID); err != nil {
+		return managedruntime.Attempt{}, err
+	}
+	var inputID string
+	if err := tx.QueryRow(ctx, `SELECT input_id FROM runtime.turns WHERE id=$1`, turnID).Scan(&inputID); err != nil {
+		return managedruntime.Attempt{}, err
+	}
+	if err := observationInputActive(ctx, tx, inputID); err != nil {
 		return managedruntime.Attempt{}, err
 	}
 	var active bool

@@ -74,7 +74,11 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 		if !ok {
 			return nil, ErrInvalid
 		}
-		runner.tools = &toolRunner{store: toolStore, gateway: config.Tools, authority: authority}
+		observations, ok := store.(ObservationStore)
+		if !ok {
+			return nil, ErrInvalid
+		}
+		runner.tools = &toolRunner{store: toolStore, observations: observations, gateway: config.Tools, authority: authority}
 	}
 	return runner, nil
 }
@@ -274,6 +278,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 	}
 	work, err := r.store.BeginTurn(ctx, lease, scope, pending.InputID, config)
+	if errors.Is(err, ErrDenied) {
+		return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
+	}
 	if err != nil {
 		return err
 	}
@@ -288,15 +295,24 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		return err
 	}
 	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation"}
+	if work.Source.Kind == "observation" {
+		request.Purpose = "observation"
+	}
 	if r.tools != nil {
 		environments, err := r.tools.gateway.Environments(ctx, scope)
 		if err != nil {
 			return err
 		}
+		if work.Source.Kind == "observation" && !observationGrant(environments, work.Source.EnvironmentID, work.Source.AuthorizationVersion, work.Source.Capability) {
+			return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
+		}
 		request.System += executionContext(environments)
 		request.Tools = executionTools()
 	}
 	attempt, err := r.store.BeginAttempt(ctx, lease, work.TurnID, request)
+	if errors.Is(err, ErrDenied) {
+		return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
+	}
 	if err != nil {
 		return err
 	}

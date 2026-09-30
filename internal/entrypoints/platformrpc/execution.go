@@ -125,6 +125,15 @@ func (h *executionHandler) AcknowledgeEvents(ctx context.Context, ids []string) 
 	}
 	return executionReply(nil, h.service.Store.AcknowledgeEvents(ctx, ids))
 }
+func (h *executionHandler) AcknowledgeOutput(ctx context.Context, actor *platform.Actor, environment, id string, cursor int64) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "runtime" {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
+	if !validActor(actor) || cursor < 0 {
+		return executionReply(nil, execprotocol.ErrInvalid)
+	}
+	return executionReply(nil, h.service.AcknowledgeOutput(ctx, actor.UserID, actor.TenantID, actor.AgentID, environment, id, cursor))
+}
 func (h *executionHandler) Operation(ctx context.Context, actor *platform.Actor, environment, id string, cursor int64, limit int32) (*platform.Reply, error) {
 	if !validActor(actor) {
 		return executionReply(nil, execprotocol.ErrInvalid)

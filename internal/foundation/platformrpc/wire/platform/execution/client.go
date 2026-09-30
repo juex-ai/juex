@@ -14,6 +14,7 @@ type Client interface {
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Events(ctx context.Context, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AcknowledgeEvents(ctx context.Context, eventIDs []string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	AcknowledgeOutput(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, cursor int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	PreviewPair(ctx context.Context, actorID string, tenantID string, pairID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ApprovePair(ctx context.Context, actorID string, tenantID string, pairID string, grantsJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Devices(ctx context.Context, actorID string, tenantID string, ownerID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -69,6 +70,11 @@ func (p *kExecutionClient) Events(ctx context.Context, limit int32, callOptions 
 func (p *kExecutionClient) AcknowledgeEvents(ctx context.Context, eventIDs []string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.AcknowledgeEvents(ctx, eventIDs)
+}
+
+func (p *kExecutionClient) AcknowledgeOutput(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, cursor int64, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.AcknowledgeOutput(ctx, actor, environmentID, operationID, cursor)
 }
 
 func (p *kExecutionClient) PreviewPair(ctx context.Context, actorID string, tenantID string, pairID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
