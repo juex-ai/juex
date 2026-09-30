@@ -19,12 +19,12 @@ type Selection struct {
 }
 
 func SelectInput(history []llm.Message, policy Policy) Selection {
-	return SelectInputWithEstimator(history, policy, EstimateMessageTokens)
+	return SelectInputWithEstimator(history, policy, llm.EstimateMessageTokens)
 }
 
 func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMessages func([]llm.Message) int) Selection {
 	if estimateMessages == nil {
-		estimateMessages = EstimateMessageTokens
+		estimateMessages = llm.EstimateMessageTokens
 	}
 	latestCompact := -1
 	for i := range history {

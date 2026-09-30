@@ -12,7 +12,6 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/events"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 )
 
 type projectionStats struct {
@@ -82,7 +81,7 @@ func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compa
 			block.Artifact = &artifact
 			stats.UserInputsExternalized++
 			stats.BytesExternalized += artifact.OriginalBytes
-		case block.Type == llm.BlockToolResult && contextbudget.TextExceedsBudget(block.Content, toolOutput.ContentMaxTokens, toolOutput.InlineMaxBytes):
+		case block.Type == llm.BlockToolResult && llm.TextExceedsBudget(block.Content, toolOutput.ContentMaxTokens, toolOutput.InlineMaxBytes):
 			if clonedBlocks == nil {
 				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
 				copy(clonedBlocks, msg.Blocks[:i])
@@ -114,7 +113,7 @@ func (e *Engine) projectMessagesForProviderLocked(ctx context.Context, msgs []ll
 	toolOutput := effectiveToolOutputPolicy(e.ToolOutput, policy.ContextWindow)
 	msgs, err := runtimemodule.ProjectProviderHistory(ctx, msgs, runtimemodule.ProviderHistoryBudget{
 		MaxBytes: toolOutput.InlineMaxBytes, MaxTokens: toolOutput.ContentMaxTokens,
-		EstimateTokens: contextbudget.EstimateTextTokens,
+		EstimateTokens: llm.EstimateTextTokens,
 	}, e.policySets()...)
 	if err != nil {
 		return nil, projectionStats{}, err
@@ -451,10 +450,10 @@ func (e *Engine) writeProjectedArtifactWithPreview(sourceKind, messageID string,
 
 func toolResultPreview(content string, policy effectiveToolOutput) (string, string) {
 	if policy.InlineMaxBytes > 0 {
-		preview := contextbudget.PreviewTextWithByteAllocation(content, policy.ContentMaxTokens, policy.PreviewHeadBytes, policy.PreviewTailBytes)
+		preview := llm.PreviewTextWithByteAllocation(content, policy.ContentMaxTokens, policy.PreviewHeadBytes, policy.PreviewTailBytes)
 		return preview.Head, preview.Tail
 	}
-	preview := contextbudget.PreviewText(content, policy.ContentMaxTokens, 0)
+	preview := llm.PreviewText(content, policy.ContentMaxTokens, 0)
 	return preview.Head, preview.Tail
 }
 

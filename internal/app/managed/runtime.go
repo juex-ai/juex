@@ -25,6 +25,9 @@ func runtimeScope(a management.AgentAuthority) managedruntime.Scope {
 }
 
 func runtimeError(err error) error {
+	if errors.Is(err, management.ErrModelUnavailable) {
+		return managedruntime.ErrModelUnavailable
+	}
 	if errors.Is(err, management.ErrDenied) {
 		return managedruntime.ErrDenied
 	}
@@ -46,27 +49,18 @@ func (a RuntimeAuthority) Authorize(ctx context.Context, actor, tenant, agent st
 }
 
 func (a RuntimeAuthority) Snapshot(ctx context.Context, scope managedruntime.Scope) (managedruntime.TurnConfig, error) {
-	authority, err := a.Directory.AuthorizeAgent(ctx, scope.ActorID, scope.TenantID, scope.AgentID)
+	plan, err := a.Directory.SnapshotPlan(ctx, modelScope(scope))
 	if err != nil {
 		return managedruntime.TurnConfig{}, runtimeError(err)
 	}
-	if !scope.SameAuthority(runtimeScope(authority)) {
-		return managedruntime.TurnConfig{}, managedruntime.ErrDenied
+	config := managedruntime.TurnConfig{AgentVersion: plan.AgentVersion, Instructions: plan.Instructions, RequestedModelID: plan.RequestedModelID}
+	for _, candidate := range plan.Candidates {
+		config.Models = append(config.Models, managedruntime.ModelConfig(candidate))
 	}
-	if authority.ModelID == "" {
-		return managedruntime.TurnConfig{}, managedruntime.ErrModelUnavailable
-	}
-	model, err := a.Directory.ResolveModel(ctx, authority.ModelID)
-	if errors.Is(err, management.ErrDenied) {
-		return managedruntime.TurnConfig{}, managedruntime.ErrModelUnavailable
-	}
-	if err != nil {
-		return managedruntime.TurnConfig{}, err
-	}
-	return managedruntime.TurnConfig{AgentVersion: authority.Agent.Version, Instructions: authority.Agent.Instructions, ModelID: model.Model.ID, Provider: model.Model.Provider, Model: model.Model.Name, Protocol: model.Model.Protocol, Endpoint: model.Endpoint, ContextWindow: model.Model.ContextWindow, MaxOutput: model.Model.MaxOutput}, nil
+	return config, nil
 }
 
-func (a RuntimeAuthority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.TurnConfig) (llm.Provider, error) {
+func (a RuntimeAuthority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.ModelConfig) (llm.Provider, error) {
 	profile, err := a.Profile(ctx, scope, config)
 	if err != nil {
 		return nil, err
@@ -74,29 +68,18 @@ func (a RuntimeAuthority) Provider(ctx context.Context, scope managedruntime.Sco
 	return providers.NewProvider(profile)
 }
 
-func (a RuntimeAuthority) Profile(ctx context.Context, scope managedruntime.Scope, config managedruntime.TurnConfig) (llm.ProviderProfile, error) {
-	fresh, err := a.Authorize(ctx, scope.ActorID, scope.TenantID, scope.AgentID, true)
+func (a RuntimeAuthority) Profile(ctx context.Context, scope managedruntime.Scope, config managedruntime.ModelConfig) (llm.ProviderProfile, error) {
+	key, err := a.Directory.ResolveCandidate(ctx, modelScope(scope), management.ModelCandidate(config))
 	if err != nil {
-		return llm.ProviderProfile{}, err
+		return llm.ProviderProfile{}, runtimeError(err)
 	}
-	if !scope.SameAuthority(fresh) {
-		return llm.ProviderProfile{}, managedruntime.ErrDenied
-	}
-	resolved, err := a.Directory.ResolveModel(ctx, config.ModelID)
-	if errors.Is(err, management.ErrDenied) {
-		return llm.ProviderProfile{}, managedruntime.ErrModelUnavailable
-	}
-	if err != nil {
-		return llm.ProviderProfile{}, err
-	}
-	// Never send a rotated credential to an old endpoint after an operator
-	// changes routing. The next explicitly submitted Turn takes a new snapshot.
-	if resolved.Endpoint != config.Endpoint || resolved.Model.Protocol != config.Protocol || resolved.Model.Provider != config.Provider || resolved.Model.Name != config.Model {
-		return llm.ProviderProfile{}, managedruntime.ErrModelUnavailable
-	}
-	profile, err := providerprofile.ResolveProfile(providerprofile.Config{ID: "managed-" + config.ModelID, Protocol: string(config.Protocol), BaseURL: config.Endpoint, APIKey: resolved.APIKey, Model: config.Model})
+	profile, err := providerprofile.ResolveProfile(providerprofile.Config{ID: "managed-" + config.ModelID, Protocol: string(config.Protocol), BaseURL: config.Endpoint, APIKey: key, Model: config.Model})
 	if err != nil {
 		return llm.ProviderProfile{}, managedruntime.ErrModelUnavailable
 	}
 	return profile, nil
+}
+
+func modelScope(scope managedruntime.Scope) management.ModelCallScope {
+	return management.ModelCallScope{ActorID: scope.ActorID, TenantID: scope.TenantID, AgentID: scope.AgentID, UserID: scope.UserID, FleetID: scope.FleetID, ActorAuthorizationEpoch: scope.ActorAuthorizationEpoch, MembershipExecutionEpoch: scope.MembershipExecutionEpoch, AgentExecutionEpoch: scope.AgentExecutionEpoch}
 }

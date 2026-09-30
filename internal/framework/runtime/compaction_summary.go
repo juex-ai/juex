@@ -59,7 +59,7 @@ func (e *Engine) compactionSummaryStateLocked(ctx context.Context, policy compac
 	contributions, err := runtimemodule.CollectCompactionContributions(ctx, runtimemodule.CompactionBudget{
 		MaxBytes:       provenance.MaxInlineSnapshotBytes,
 		MaxTokens:      policy.SummaryRequestTokens,
-		EstimateTokens: contextbudget.EstimateTextTokens,
+		EstimateTokens: llm.EstimateTextTokens,
 	}, e.policySets()...)
 	return compactionSummaryState{Contributions: contributions}, err
 }

@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"strings"
 	"testing"
 
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/framework/module"
-	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 )
 
 type pagingAPI struct {
@@ -47,7 +47,7 @@ func TestMemoryResultPagesAreExactBoundedAndInputScoped(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(part) > resultPageBytes || contextbudget.EstimateTextTokens(part) > 500 {
+				if len(part) > resultPageBytes || llm.EstimateTextTokens(part) > 500 {
 					t.Fatalf("part exceeds runtime budget: %d bytes", len(part))
 				}
 				var page resultPart
@@ -117,7 +117,7 @@ func TestMemoryPageArgumentsAndImmediateReceipt(t *testing.T) {
 		receipt.EntryIDs = append(receipt.EntryIDs, strings.Repeat("a", 64))
 	}
 	text, err := receiptResult(receipt, nil)
-	if err != nil || contextbudget.EstimateTextTokens(text) > 500 {
+	if err != nil || llm.EstimateTextTokens(text) > 500 {
 		t.Fatalf("receipt budget: %s %v", text, err)
 	}
 	var got mc.Receipt

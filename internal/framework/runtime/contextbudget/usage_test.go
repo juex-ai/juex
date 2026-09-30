@@ -44,25 +44,6 @@ func TestContextUsageSnapshotFallsBackToEstimatedInputWhenProviderOmitsInput(t *
 	}
 }
 
-func TestEstimateTextTokensClassifiesCJKRunes(t *testing.T) {
-	ascii := strings.Repeat("a", 24)
-	cjk := strings.Repeat("界", 24)
-	mixed := "hello世界"
-
-	if got := EstimateTextTokens(ascii); got != 6 {
-		t.Fatalf("ASCII estimate = %d, want 6", got)
-	}
-	if got := EstimateTextTokens(cjk); got != 24 {
-		t.Fatalf("CJK estimate = %d, want one token per rune", got)
-	}
-	if got := EstimateTextTokens(mixed); got != 4 {
-		t.Fatalf("mixed estimate = %d, want ASCII bucket plus CJK runes", got)
-	}
-	if EstimateTextTokens(cjk) <= EstimateTextTokens(ascii)*2 {
-		t.Fatalf("CJK estimate should be materially higher than same-length ASCII")
-	}
-}
-
 func TestTokenEstimateCalibrationClampsAndSmooths(t *testing.T) {
 	var calibration TokenEstimateCalibration
 
@@ -103,41 +84,19 @@ func TestContextUsageSnapshotDoesNotDoubleCountCompactAndArtifactMessages(t *tes
 	got := ContextUsageSnapshot("mock", 64000, 200000, llm.Usage{}, nil, nil, history)
 	parts := contextPartsByKey(got.Breakdown)
 
-	if parts["compact_summary"].Tokens != EstimateMessageTokens([]llm.Message{compact}) {
+	if parts["compact_summary"].Tokens != llm.EstimateMessageTokens([]llm.Message{compact}) {
 		t.Fatalf("compact summary tokens = %d", parts["compact_summary"].Tokens)
 	}
-	if parts["context_artifacts"].Tokens != EstimateCharsAsTokens(len(artifactText)) {
+	if parts["context_artifacts"].Tokens != llm.EstimateCharsAsTokens(len(artifactText)) {
 		t.Fatalf("artifact tokens = %d", parts["context_artifacts"].Tokens)
 	}
 	artifactEnvelope := artifact
 	artifactEnvelope.Blocks = nil
-	if want := EstimateMessageTokens([]llm.Message{artifactEnvelope, ordinary}); parts["messages"].Tokens != want {
+	if want := llm.EstimateMessageTokens([]llm.Message{artifactEnvelope, ordinary}); parts["messages"].Tokens != want {
 		t.Fatalf("ordinary message tokens = %d, want %d", parts["messages"].Tokens, want)
 	}
-	if all := EstimateMessageTokens(history); parts["messages"].Tokens >= all {
+	if all := llm.EstimateMessageTokens(history); parts["messages"].Tokens >= all {
 		t.Fatalf("messages tokens = %d should be less than all-history tokens %d", parts["messages"].Tokens, all)
-	}
-}
-
-func TestEstimateMessageTokensIncludesImageFootprint(t *testing.T) {
-	history := []llm.Message{{
-		Role: llm.RoleUser,
-		Blocks: []llm.Block{{
-			Type: llm.BlockImage,
-			Media: &llm.MediaRef{
-				ArtifactPath:  "threads/s/media/image.png",
-				MediaType:     "image/png",
-				SHA256:        strings.Repeat("a", 64),
-				OriginalBytes: 1000,
-				Width:         1000,
-				Height:        1000,
-			},
-		}},
-	}}
-
-	got := EstimateMessageTokens(history)
-	if got < 1333 {
-		t.Fatalf("image token estimate = %d, want at least pixel-derived footprint", got)
 	}
 }
 

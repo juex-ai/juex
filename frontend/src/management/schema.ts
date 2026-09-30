@@ -93,6 +93,9 @@ export interface Device {
   capabilities: Array<string>;
   working_directory: string;
   permission_mode: string;
+  authorization_version: number;
+  availability?: string;
+  error?: string;
   tenant_id: string;
   user_id: string;
   fleet_id: string;
@@ -125,6 +128,7 @@ export interface FleetOverview {
   id: string;
   tenant_id: string;
   user_id: string;
+  platform_default_model_id: string;
   owner: User;
   membership: Membership;
   settings: FleetSettings;

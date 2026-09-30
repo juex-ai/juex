@@ -21,7 +21,7 @@ type Authority interface {
 	AuthorizeFleet(context.Context, string, string, string, bool) (management.FleetAuthority, error)
 	Authorize(context.Context, string, string, string, bool) (managedruntime.Scope, error)
 	Snapshot(context.Context, managedruntime.Scope) (managedruntime.TurnConfig, error)
-	Profile(context.Context, managedruntime.Scope, managedruntime.TurnConfig) (llm.ProviderProfile, error)
+	Profile(context.Context, managedruntime.Scope, managedruntime.ModelConfig) (llm.ProviderProfile, error)
 }
 
 func NewManagement(listener net.Listener, credentials transport.Credentials, authority Authority) (server.Server, error) {
@@ -74,7 +74,7 @@ func (h *managementHandler) ModelProfile(ctx context.Context, scopeJSON, configJ
 		return reply(nil, managedruntime.ErrDenied)
 	}
 	var scope managedruntime.Scope
-	var config managedruntime.TurnConfig
+	var config managedruntime.ModelConfig
 	if len(scopeJSON) > 4096 || len(configJSON) > 256<<10 || json.Unmarshal([]byte(scopeJSON), &scope) != nil || json.Unmarshal([]byte(configJSON), &config) != nil {
 		return invalid()
 	}

@@ -26,6 +26,15 @@ unknown. Provider adapters perform one wire attempt per durable attempt;
 complete, partial and missing usage remain distinct. A model call's result is
 not permission to replay an external tool operation.
 
+The Turn freezes an ordered, authorized model plan. Fallback only advances to a
+configured candidate; its position survives tool rounds and Activation recovery.
+Each attempt stores its actual model, context/output limits and reported usage.
+Failed responses never execute tools. Every candidate is admitted again before
+calling its Provider. Context must fit that candidate; exhaustion holds the input
+with an explicit reason. The provider history projection strips incompatible
+reasoning signatures and IDs on model changes while preserving canonical messages
+and tool pairs. External unknown outcomes never trigger a model fallback.
+
 Membership, delegated-actor and Agent execution epochs prevent revoke/restore
 from reviving queued work. A human cancellation is durable and affects only its
 Thread. Late provider usage may settle a cancelled attempt, but cannot append an

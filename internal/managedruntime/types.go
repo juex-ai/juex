@@ -16,6 +16,7 @@ var (
 	ErrFence            = errors.New("activation lease is no longer current")
 	ErrNoWork           = errors.New("no runnable work")
 	ErrModelUnavailable = errors.New("selected model unavailable")
+	ErrContextLimit     = errors.New("configured models cannot fit this context")
 )
 
 // Scope comes from current Management authority, never a browser request body.
@@ -85,26 +86,35 @@ type Lease struct {
 }
 
 type TurnConfig struct {
-	AgentVersion  int64        `json:"agent_version"`
-	Instructions  string       `json:"instructions"`
-	ModelID       string       `json:"model_id"`
-	Provider      string       `json:"provider"`
-	Model         string       `json:"model"`
-	Protocol      llm.Protocol `json:"protocol"`
-	Endpoint      string       `json:"endpoint"`
-	ContextWindow int          `json:"context_window"`
-	MaxOutput     int          `json:"max_output"`
+	AgentVersion     int64         `json:"agent_version"`
+	Instructions     string        `json:"instructions"`
+	RequestedModelID string        `json:"requested_model_id"`
+	Models           []ModelConfig `json:"models"`
+}
+
+type ModelConfig struct {
+	ModelID                 string       `json:"model_id"`
+	Provider                string       `json:"provider"`
+	Model                   string       `json:"model"`
+	Protocol                llm.Protocol `json:"protocol"`
+	Endpoint                string       `json:"endpoint"`
+	ContextWindow           int          `json:"context_window"`
+	MaxOutput               int          `json:"max_output"`
+	ModelAuthorizationEpoch int64        `json:"model_authorization_epoch"`
+	TenantAccessEpoch       int64        `json:"tenant_access_epoch"`
 }
 
 type Work struct {
-	Source     InputSource
-	Scope      Scope
-	ThreadID   string
-	InputID    string
-	TurnID     string
-	Generation int64
-	Config     TurnConfig
-	History    []llm.Message
+	Source       InputSource
+	Scope        Scope
+	ThreadID     string
+	InputID      string
+	TurnID       string
+	Generation   int64
+	Config       TurnConfig
+	History      []llm.Message
+	ModelIndex   int
+	ModelOrigins map[string]ModelConfig
 }
 
 type PendingWork struct {
@@ -127,6 +137,7 @@ type Attempt struct {
 }
 
 type ModelRequest struct {
+	Model    ModelConfig    `json:"model"`
 	System   string         `json:"system"`
 	Messages []llm.Message  `json:"messages"`
 	Tools    []llm.ToolSpec `json:"tools"`

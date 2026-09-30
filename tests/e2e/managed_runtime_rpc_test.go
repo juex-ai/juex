@@ -92,7 +92,7 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	if _, err := executorAuthority.Snapshot(ctx, executorScope); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Execution obtained Runtime-only configuration", err)
 	}
-	if _, err := executorAuthority.Provider(ctx, executorScope, managedruntime.TurnConfig{}); !errors.Is(err, managedruntime.ErrDenied) {
+	if _, err := executorAuthority.Provider(ctx, executorScope, managedruntime.ModelConfig{}); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Execution obtained model credentials", err)
 	}
 	threads, err := client.Threads(ctx, f.actor, f.tenant, f.agent.ID)

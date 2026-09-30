@@ -53,6 +53,10 @@ func (d *Directory) FleetOverview(ctx context.Context, actorID, tenantID, ownerI
 	if err != nil {
 		return result, err
 	}
+	result.PlatformDefaultModelID, err = platformModel(ctx, tx)
+	if err != nil {
+		return result, err
+	}
 	rows, err := tx.Query(ctx, `SELECT `+agentColumns+` FROM management.agents WHERE fleet_id=$1 ORDER BY created_at,id`, fleet.ID)
 	if err != nil {
 		return result, err
@@ -83,12 +87,12 @@ func fleetSettings(ctx context.Context, tx pgx.Tx, fleetID string) (management.F
 	return settings, err
 }
 
-func enabledModel(ctx context.Context, tx pgx.Tx, modelID string) error {
+func enabledModel(ctx context.Context, tx pgx.Tx, tenantID, modelID string) error {
 	if modelID == "" {
 		return nil
 	}
 	var enabled bool
-	err := tx.QueryRow(ctx, `SELECT enabled FROM management.models WHERE id=$1`, modelID).Scan(&enabled)
+	err := tx.QueryRow(ctx, `SELECT m.enabled FROM management.models m WHERE m.id=$2 AND `+modelVisible, tenantID, modelID).Scan(&enabled)
 	if err != nil {
 		return classify(err)
 	}
@@ -108,7 +112,7 @@ func (d *Directory) ConfigureFleet(ctx context.Context, actorID, tenantID, owner
 	if err != nil {
 		return settings, err
 	}
-	if err := enabledModel(ctx, tx, settings.DefaultModelID); err != nil {
+	if err := enabledModel(ctx, tx, tenantID, settings.DefaultModelID); err != nil {
 		return settings, err
 	}
 	var version int64
@@ -149,7 +153,7 @@ func (d *Directory) CreateAgent(ctx context.Context, actorID, tenantID, ownerID 
 	if err != nil {
 		return management.Agent{}, err
 	}
-	if err := enabledModel(ctx, tx, config.ModelID); err != nil {
+	if err := enabledModel(ctx, tx, tenantID, config.ModelID); err != nil {
 		return management.Agent{}, err
 	}
 	agent, err := scanAgent(tx.QueryRow(ctx, `INSERT INTO management.agents(fleet_id,name,instructions,model_id) VALUES($1,$2,$3,NULLIF($4,'')::uuid) RETURNING `+agentColumns, fleet.ID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID))
@@ -185,7 +189,7 @@ func (d *Directory) ConfigureAgent(ctx context.Context, actorID, tenantID, agent
 	if err != nil {
 		return management.Agent{}, err
 	}
-	if err := enabledModel(ctx, tx, config.ModelID); err != nil {
+	if err := enabledModel(ctx, tx, tenantID, config.ModelID); err != nil {
 		return management.Agent{}, err
 	}
 	agent, err := scanAgent(tx.QueryRow(ctx, `UPDATE management.agents SET name=$2,instructions=$3,model_id=NULLIF($4,'')::uuid,version=version+1,updated_at=clock_timestamp() WHERE id=$1 AND version=$5 AND status='active' RETURNING `+agentColumns, agentID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, version))
@@ -246,6 +250,14 @@ func (d *Directory) agentAuthority(ctx context.Context, actorID, tenantID, agent
 		return management.AgentAuthority{}, err
 	}
 	defer rollback(tx)
+	result, err := agentAuthority(ctx, tx, actorID, tenantID, agentID, execute)
+	if err != nil {
+		return result, err
+	}
+	return result, tx.Commit(ctx)
+}
+
+func agentAuthority(ctx context.Context, tx pgx.Tx, actorID, tenantID, agentID string, execute bool) (management.AgentAuthority, error) {
 	owner, err := agentOwner(ctx, tx, tenantID, agentID)
 	if err != nil {
 		return management.AgentAuthority{}, err
@@ -269,6 +281,12 @@ func (d *Directory) agentAuthority(ctx context.Context, actorID, tenantID, agent
 		}
 		modelID = settings.DefaultModelID
 	}
+	if modelID == "" {
+		modelID, err = platformModel(ctx, tx)
+		if err != nil {
+			return management.AgentAuthority{}, err
+		}
+	}
 	result := management.AgentAuthority{Agent: agent, Fleet: fleet, ActorID: actorID, MembershipVersion: member.Version, MembershipExecutionEpoch: member.ExecutionEpoch, ModelID: modelID}
 	result.CanExecute = member.Status == management.Active && agent.Status == management.AgentActive
 	result.ActorAuthorizationEpoch = member.ExecutionEpoch
@@ -284,7 +302,7 @@ func (d *Directory) agentAuthority(ctx context.Context, actorID, tenantID, agent
 			}
 		}
 	}
-	return result, tx.Commit(ctx)
+	return result, nil
 }
 
 func recordResource(ctx context.Context, tx pgx.Tx, actorID string, fleet management.Fleet, member management.Membership, action, agentID string, version int64) error {
@@ -318,7 +336,7 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 		return management.Model{}, err
 	}
 	model, err := scanModel(tx.QueryRow(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-	ON CONFLICT(id) DO UPDATE SET protocol=EXCLUDED.protocol,endpoint=EXCLUDED.endpoint,key_cipher=EXCLUDED.key_cipher,context_window=EXCLUDED.context_window,max_output=EXCLUDED.max_output,enabled=EXCLUDED.enabled
+	ON CONFLICT(id) DO UPDATE SET protocol=EXCLUDED.protocol,endpoint=EXCLUDED.endpoint,key_cipher=EXCLUDED.key_cipher,context_window=EXCLUDED.context_window,max_output=EXCLUDED.max_output,authorization_epoch=models.authorization_epoch+CASE WHEN models.enabled<>EXCLUDED.enabled THEN 1 ELSE 0 END,enabled=EXCLUDED.enabled
 	RETURNING `+modelColumns, id, config.Provider, config.Name, config.Protocol, config.Endpoint, cipher, config.ContextWindow, config.MaxOutput, config.Enabled))
 	if err != nil {
 		return model, err
@@ -337,7 +355,7 @@ func (d *Directory) SetModelEnabled(ctx context.Context, id string, enabled bool
 		return err
 	}
 	defer rollback(tx)
-	result, err := tx.Exec(ctx, `UPDATE management.models SET enabled=$2 WHERE id=$1`, id, enabled)
+	result, err := tx.Exec(ctx, `UPDATE management.models SET authorization_epoch=authorization_epoch+CASE WHEN enabled<>$2 THEN 1 ELSE 0 END,enabled=$2 WHERE id=$1`, id, enabled)
 	if err != nil {
 		return classify(err)
 	}
@@ -376,7 +394,7 @@ func (d *Directory) Models(ctx context.Context, actorID, tenantID string) ([]man
 	if member.Status != management.Active {
 		return nil, management.ErrDenied
 	}
-	rows, err := tx.Query(ctx, `SELECT `+modelColumns+` FROM management.models WHERE enabled ORDER BY provider,name`)
+	rows, err := tx.Query(ctx, `SELECT `+modelColumns+` FROM management.models m WHERE enabled AND `+modelVisible+` ORDER BY provider,name`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -394,22 +412,4 @@ func (d *Directory) Models(ctx context.Context, actorID, tenantID string) ([]man
 		return nil, err
 	}
 	return result, tx.Commit(ctx)
-}
-
-// ResolveModel is an internal service/operator operation, never a public route.
-// A Turn stores the selected ID; every subsequent call resolves it again so
-// revocation blocks new requests even during an existing Turn.
-func (d *Directory) ResolveModel(ctx context.Context, id string) (management.ResolvedModel, error) {
-	var result management.ResolvedModel
-	var cipher []byte
-	err := d.pool.QueryRow(ctx, `SELECT `+modelColumns+`,endpoint,key_cipher FROM management.models WHERE id=$1 AND enabled`, id).Scan(&result.Model.ID, &result.Model.Provider, &result.Model.Name, &result.Model.Protocol, &result.Model.ContextWindow, &result.Model.MaxOutput, &result.Model.Enabled, &result.Endpoint, &cipher)
-	if err != nil {
-		return result, classify(err)
-	}
-	key, err := d.config.Secrets.Open("model:"+id, cipher)
-	if err != nil {
-		return result, err
-	}
-	result.APIKey = string(key)
-	return result, nil
 }

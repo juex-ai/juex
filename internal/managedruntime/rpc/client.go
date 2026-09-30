@@ -129,7 +129,7 @@ func (a *Authority) Snapshot(ctx context.Context, scope managedruntime.Scope) (m
 	err = platformrpc.Decode(reply, err, &result, decodeError)
 	return result, err
 }
-func (a *Authority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.TurnConfig) (llm.Provider, error) {
+func (a *Authority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.ModelConfig) (llm.Provider, error) {
 	encodedScope, err := json.Marshal(scope)
 	if err != nil {
 		return nil, err

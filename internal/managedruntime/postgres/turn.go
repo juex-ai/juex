@@ -60,7 +60,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		var encoded []byte
 		var oldEpoch int64
 		var turnState string
-		err = tx.QueryRow(ctx, `SELECT id,config,generation,activation_epoch,state FROM runtime.turns WHERE input_id=$1 AND state IN ('running','waiting')`, inputID).Scan(&work.TurnID, &encoded, &work.Generation, &oldEpoch, &turnState)
+		err = tx.QueryRow(ctx, `SELECT id,config,generation,activation_epoch,state,model_index FROM runtime.turns WHERE input_id=$1 AND state IN ('running','waiting')`, inputID).Scan(&work.TurnID, &encoded, &work.Generation, &oldEpoch, &turnState, &work.ModelIndex)
 		if err != nil {
 			return work, classify(err)
 		}
@@ -97,7 +97,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 			return work, err
 		}
 	case "queued":
-		if config.ModelID == "" || config.Model == "" || config.Provider == "" {
+		if !validModelPlan(config) {
 			return work, managedruntime.ErrInvalid
 		}
 		encoded, err := json.Marshal(config)
@@ -118,6 +118,11 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		if err := appendEvent(ctx, tx, thread.ID, "turn.started", map[string]string{"turn_id": work.TurnID, "input_id": inputID}); err != nil {
 			return work, err
 		}
+		if config.RequestedModelID != "" && config.Models[0].ModelID != config.RequestedModelID {
+			if err := appendEvent(ctx, tx, thread.ID, "model.fallback", map[string]any{"turn_id": work.TurnID, "from_model_id": config.RequestedModelID, "to_model_id": config.Models[0].ModelID, "to_model": config.Models[0].Provider + ":" + config.Models[0].Model, "reason": "model_unavailable"}); err != nil {
+				return work, err
+			}
+		}
 		message := llm.TextMessage(llm.RoleUser, text)
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
@@ -136,6 +141,10 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		}
 	}
 	work.History, err = history(ctx, tx, thread.ID, work.Generation)
+	if err != nil {
+		return work, err
+	}
+	work.ModelOrigins, err = modelOrigins(ctx, tx, work.History)
 	if err != nil {
 		return work, err
 	}
@@ -194,6 +203,16 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	if active {
 		return managedruntime.Attempt{}, managedruntime.ErrConflict
 	}
+	plan, index, err := activeModelPlan(ctx, tx, turnID, lease.Epoch)
+	if err != nil {
+		return managedruntime.Attempt{}, err
+	}
+	if request.Model.ModelID == "" {
+		request.Model = plan.Models[index]
+	}
+	if request.Model != plan.Models[index] {
+		return managedruntime.Attempt{}, managedruntime.ErrConflict
+	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return managedruntime.Attempt{}, err
@@ -203,7 +222,7 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	if err != nil {
 		return attempt, err
 	}
-	if err := appendEvent(ctx, tx, threadID, "model.started", map[string]any{"attempt_id": attempt.ID, "turn_id": turnID, "ordinal": attempt.Ordinal}); err != nil {
+	if err := appendEvent(ctx, tx, threadID, "model.started", map[string]any{"attempt_id": attempt.ID, "turn_id": turnID, "ordinal": attempt.Ordinal, "model_id": request.Model.ModelID, "model": request.Model.Provider + ":" + request.Model.Model}); err != nil {
 		return attempt, err
 	}
 	return attempt, tx.Commit(ctx)
@@ -213,7 +232,7 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 // errors are classifications supplied by the runtime, not raw credential-bearing
 // transport errors. A missing usage report remains explicitly unknown.
 func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, attemptID string, response llm.Response, failure string) error {
-	if failure != "" && failure != "provider_error" && failure != "cancelled" && failure != "invalid_response" {
+	if failure != "" && failure != "provider_error" && failure != "provider_fallback" && failure != "cancelled" && failure != "invalid_response" {
 		return managedruntime.ErrInvalid
 	}
 	switch response.UsageStatus {
@@ -232,9 +251,10 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 		return err
 	}
 	var turnID, threadID, inputID, attemptState, turnState string
-	var encodedConfig []byte
-	err = tx.QueryRow(ctx, `SELECT a.turn_id,t.thread_id,t.input_id,a.state,t.config,t.state FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id JOIN runtime.threads th ON th.id=t.thread_id
-	WHERE a.id=$1 AND th.agent_id=$2 AND t.activation_epoch=$3 AND t.state IN ('running','cancelled')`, attemptID, lease.AgentID, lease.Epoch).Scan(&turnID, &threadID, &inputID, &attemptState, &encodedConfig, &turnState)
+	var encodedConfig, encodedModel []byte
+	var modelIndex int
+	err = tx.QueryRow(ctx, `SELECT a.turn_id,t.thread_id,t.input_id,a.state,t.config,t.state,a.request->'model',t.model_index FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id JOIN runtime.threads th ON th.id=t.thread_id
+	WHERE a.id=$1 AND th.agent_id=$2 AND t.activation_epoch=$3 AND t.state IN ('running','cancelled')`, attemptID, lease.AgentID, lease.Epoch).Scan(&turnID, &threadID, &inputID, &attemptState, &encodedConfig, &turnState, &encodedModel, &modelIndex)
 	if err != nil {
 		return classify(err)
 	}
@@ -255,8 +275,12 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 	if err := json.Unmarshal(encodedConfig, &config); err != nil {
 		return err
 	}
+	var model managedruntime.ModelConfig
+	if err := json.Unmarshal(encodedModel, &model); err != nil {
+		return err
+	}
 	response.Message.ID = attemptID
-	response.Message.Model = config.Provider + ":" + config.Model
+	response.Message.Model = model.Provider + ":" + model.Model
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return err
@@ -279,6 +303,18 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 		return err
 	}
 	if turnState == "cancelled" {
+		return tx.Commit(ctx)
+	}
+	if failure == "provider_fallback" && modelIndex+1 < len(config.Models) {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET model_index=model_index+1 WHERE id=$1`, turnID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state='queued' WHERE id=$1`, threadID); err != nil {
+			return err
+		}
+		if err := appendEvent(ctx, tx, threadID, "model.fallback", map[string]any{"turn_id": turnID, "from_model_id": model.ModelID, "to_model_id": config.Models[modelIndex+1].ModelID, "to_model": config.Models[modelIndex+1].Provider + ":" + config.Models[modelIndex+1].Model, "reason": "provider_error"}); err != nil {
+			return err
+		}
 		return tx.Commit(ctx)
 	}
 	if failure == "cancelled" {
@@ -319,7 +355,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 // HoldInput prevents revoked work from automatically running after a later
 // membership/Agent restore. Releasing it requires a new authorized user action.
 func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, inputID, reason string) error {
-	if reason != "authority_changed" && reason != "model_unavailable" {
+	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" {
 		return managedruntime.ErrInvalid
 	}
 	tx, err := s.begin(ctx)

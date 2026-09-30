@@ -26,3 +26,14 @@ test('held and cancelled queued inputs keep the original user text and explicit 
   if (cancelled[0].kind === 'message') assert.equal(cancelled[0].status, '已取消')
   assert.equal(cancelled[1].kind, 'notice')
 })
+
+test('model fallback and context exhaustion show distinct durable outcomes', () => {
+  const rows = projectTranscript([
+    event(1, 'input.accepted', { receipt: { id: 'input' }, text: 'work' }),
+    event(2, 'model.fallback', { reason: 'model_unavailable', to_model: 'operator:backup' }),
+    event(3, 'input.held', { input_id: 'input', reason: 'context_limit' }),
+  ])
+  assert.equal(rows.length, 2)
+  if (rows[0].kind === 'message') assert.match(rows[0].status, /上下文/)
+  if (rows[1].kind === 'notice') assert.match(rows[1].text, /授权已变更.*operator:backup/)
+})

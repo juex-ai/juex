@@ -21,6 +21,7 @@ type ExecutionStore interface {
 	NextInputs(context.Context, Lease, []string, int) ([]PendingWork, error)
 	BeginTurn(context.Context, Lease, Scope, string, TurnConfig) (Work, error)
 	BeginAttempt(context.Context, Lease, string, ModelRequest) (Attempt, error)
+	AdvanceModel(context.Context, Lease, string, int, string) error
 	FinishAttempt(context.Context, Lease, string, llm.Response, string) error
 	HoldInput(context.Context, Lease, string, string) error
 	WorkActive(context.Context, Lease, string) (bool, error)
@@ -284,16 +285,6 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if err != nil {
 		return err
 	}
-	provider, err := r.authority.Provider(ctx, scope, work.Config)
-	if errors.Is(err, ErrDenied) {
-		return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
-	}
-	if errors.Is(err, ErrModelUnavailable) {
-		return r.store.HoldInput(ctx, lease, pending.InputID, "model_unavailable")
-	}
-	if err != nil {
-		return err
-	}
 	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation"}
 	if work.Source.Kind == "observation" {
 		request.Purpose = "observation"
@@ -309,6 +300,19 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		request.System += executionContext(environments)
 		request.Tools = executionTools()
 	}
+	provider, request, err := r.selectModel(ctx, lease, work, request)
+	if errors.Is(err, ErrContextLimit) {
+		return r.store.HoldInput(ctx, lease, pending.InputID, "context_limit")
+	}
+	if errors.Is(err, ErrDenied) {
+		return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
+	}
+	if errors.Is(err, ErrModelUnavailable) {
+		return r.store.HoldInput(ctx, lease, pending.InputID, "model_unavailable")
+	}
+	if err != nil {
+		return err
+	}
 	attempt, err := r.store.BeginAttempt(ctx, lease, work.TurnID, request)
 	if errors.Is(err, ErrDenied) {
 		return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
@@ -322,7 +326,7 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	defer cancel(nil)
 	watchDone := make(chan struct{})
 	go func() { defer close(watchDone); r.watch(callCtx, cancel, lease, work) }()
-	response, callErr := llm.CompleteWithOptions(callCtx, provider, request.System, request.Messages, request.Tools, llm.CompleteOptions{SingleAttempt: true, MaxOutputTokens: work.Config.MaxOutput, Purpose: request.Purpose,
+	response, callErr := llm.CompleteWithOptions(callCtx, provider, request.System, request.Messages, request.Tools, llm.CompleteOptions{SingleAttempt: true, MaxOutputTokens: request.Model.MaxOutput, Purpose: request.Purpose,
 		Identity: llm.RequestIdentity{AgentID: scope.AgentID, ThreadID: work.ThreadID, GenerationID: strconv.FormatInt(work.Generation, 10), ContextScopeID: work.TurnID}})
 	// Shutdown or lease loss preserves recovery authority. The next Activation
 	// records an unacknowledged attempt as unknown before continuing the Turn.
@@ -340,6 +344,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	failure := ""
 	if callErr != nil {
 		failure = "provider_error"
+		if _, allowed := llm.ClassifyFallbackError(callErr); allowed {
+			failure = "provider_fallback"
+		}
 	}
 	if errors.Is(cause, ErrDenied) || errors.Is(cause, ErrConflict) {
 		failure = "cancelled"

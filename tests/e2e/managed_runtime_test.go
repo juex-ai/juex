@@ -53,7 +53,7 @@ func runtimeDatabase(t *testing.T) (*pgxpool.Pool, *runtimepg.Store, managedrunt
 }
 
 func runtimeConfig() managedruntime.TurnConfig {
-	return managedruntime.TurnConfig{AgentVersion: 1, Instructions: "Be precise", ModelID: "00000000-0000-4000-8000-000000000001", Provider: "fixture", Model: "small", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", ContextWindow: 32768, MaxOutput: 4096}
+	return managedruntime.TurnConfig{AgentVersion: 1, Instructions: "Be precise", Models: []managedruntime.ModelConfig{{ModelID: "00000000-0000-4000-8000-000000000001", Provider: "fixture", Model: "small", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", ContextWindow: 32768, MaxOutput: 4096}}}
 }
 
 func TestManagedRuntimeDurableInputAndFencing(t *testing.T) {
@@ -122,12 +122,12 @@ func TestManagedRuntimeDurableInputAndFencing(t *testing.T) {
 		t.Fatal("old writer renewed", err)
 	}
 	newConfig := runtimeConfig()
-	newConfig.Model = "changed mid-turn"
+	newConfig.Models[0].Model = "changed mid-turn"
 	recovered, err := store.BeginTurn(ctx, replacement, scope, receipt.ID, newConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.TurnID != work.TurnID || recovered.Config.Model != "small" || len(recovered.History) != 1 {
+	if recovered.TurnID != work.TurnID || recovered.Config.Models[0].Model != "small" || len(recovered.History) != 1 {
 		t.Fatal("recovery changed Turn identity/config/history", recovered)
 	}
 	var state string

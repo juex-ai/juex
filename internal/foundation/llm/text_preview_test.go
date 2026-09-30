@@ -1,4 +1,4 @@
-package contextbudget
+package llm
 
 import (
 	"strings"

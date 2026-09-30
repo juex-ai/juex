@@ -68,14 +68,14 @@ func TestBuildCompactionSummaryRequestUsesTokenBudgetForMixedToolResult(t *testi
 
 	_, history := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxTokens: 20}, "")
 	body := history[0].FirstText()
-	preview := PreviewText(content, 20, 0)
+	preview := llm.PreviewText(content, 20, 0)
 	marker := fmt.Sprintf("...[%d characters omitted]...", preview.OmittedCharacters)
 	for _, want := range []string{preview.Head, marker, preview.Tail} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary body missing token-bounded preview part %q:\n%s", want, body)
 		}
 	}
-	if got := EstimateTextTokens(preview.Head) + EstimateTextTokens(preview.Tail); got > 20 {
+	if got := llm.EstimateTextTokens(preview.Head) + llm.EstimateTextTokens(preview.Tail); got > 20 {
 		t.Fatalf("retained summary Tool Result tokens = %d, want <= 20", got)
 	}
 }
@@ -212,7 +212,7 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 	sys, hist := BuildCompactionSummaryRequest("base", llm.Message{}, input, SummaryState{}, policy, "")
 
 	limit := policy.TriggerTokens - policy.SummaryMaxTokens
-	if got := EstimateContextTokens(sys, nil, hist); got > limit {
+	if got := llm.EstimateContextTokens(sys, nil, hist); got > limit {
 		t.Fatalf("summary request tokens = %d, want <= %d", got, limit)
 	}
 	body := hist[0].FirstText()
@@ -265,7 +265,7 @@ func TestBuildCompactionSummaryRequest_PreservesModuleStateWhenTranscriptIsOmitt
 	if !strings.Contains(body, "messages omitted") || strings.Contains(body, "tool-call-00") || !strings.Contains(body, "user-request") {
 		t.Fatalf("wrong input omission: %s", body)
 	}
-	if tokens := EstimateContextTokens(sys, nil, history); tokens > policy.TriggerTokens-policy.SummaryMaxTokens {
+	if tokens := llm.EstimateContextTokens(sys, nil, history); tokens > policy.TriggerTokens-policy.SummaryMaxTokens {
 		t.Fatalf("request tokens %d exceed budget", tokens)
 	}
 }
@@ -289,7 +289,7 @@ func TestFitCompactionSummaryInputDropsOldestClosedExchange(t *testing.T) {
 	sys := "summary system"
 	policy := Policy{ToolResultMaxChars: 500}
 	want := append([]llm.Message{user}, second...)
-	limit := EstimateContextTokens(sys, nil, []llm.Message{
+	limit := llm.EstimateContextTokens(sys, nil, []llm.Message{
 		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, want, SummaryState{}, SummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 2)),
 	})
 	if CompactionSummaryFits(sys, llm.Message{}, input, SummaryState{}, SummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 0, limit) {
@@ -328,7 +328,7 @@ func TestFitCompactionSummaryInputDropsOldestClosedToolExchangeBeforeUserMessage
 	sys := "summary system"
 	policy := Policy{ToolResultMaxChars: 2000}
 	want := []llm.Message{userBefore, userAfter}
-	limit := EstimateContextTokens(sys, nil, []llm.Message{
+	limit := llm.EstimateContextTokens(sys, nil, []llm.Message{
 		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, want, SummaryState{}, SummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 2)),
 	})
 	if CompactionSummaryFits(sys, llm.Message{}, input, SummaryState{}, SummaryToolBudget{MaxChars: policy.ToolResultMaxChars}, 0, limit) {

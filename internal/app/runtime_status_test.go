@@ -34,7 +34,6 @@ import (
 	runtimemodule "github.com/juex-ai/juex/internal/framework/module"
 
 	juexruntime "github.com/juex-ai/juex/internal/framework/runtime"
-	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 )
 
 type runtimeStatusTestModule struct {
@@ -197,7 +196,7 @@ func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 	if len(specs) != 18 {
 		t.Fatalf("Tier 2 tool count = %d, want 18", len(specs))
 	}
-	if got := contextbudget.EstimateToolTokens(specs); got > 2100 {
+	if got := llm.EstimateToolTokens(specs); got > 2100 {
 		t.Fatalf("Tier 2 tool estimate = %d tokens, want <= 2100 for eighteen tools", got)
 	}
 }

@@ -3,12 +3,12 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"github.com/juex-ai/juex/internal/foundation/llm"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/foundation/cancellation"
 	"github.com/juex-ai/juex/internal/foundation/markdown"
-	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 )
 
 type compactionSummaryBudgetError struct{ Tokens, Limit int }
@@ -87,8 +87,8 @@ func reconcileCompactionSummary(ctx context.Context, summary string, state compa
 	if !utf8.ValidString(summary) || strings.TrimSpace(summary) == "" {
 		return "", fmt.Errorf("compaction summary is empty or invalid UTF-8")
 	}
-	if maxTokens <= 0 || contextbudget.EstimateTextTokens(summary) > maxTokens {
-		return "", &compactionSummaryBudgetError{Tokens: contextbudget.EstimateTextTokens(summary), Limit: maxTokens}
+	if maxTokens <= 0 || llm.EstimateTextTokens(summary) > maxTokens {
+		return "", &compactionSummaryBudgetError{Tokens: llm.EstimateTextTokens(summary), Limit: maxTokens}
 	}
 	return summary, cancellation.ContextError(ctx)
 }

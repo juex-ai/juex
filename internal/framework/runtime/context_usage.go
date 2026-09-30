@@ -47,19 +47,19 @@ func estimatedInputTokens(parts []llm.ContextUsagePart) int {
 }
 
 func EstimateTextTokens(text string) int {
-	return contextbudget.EstimateTextTokens(text)
+	return llm.EstimateTextTokens(text)
 }
 
 func EstimateCharsAsTokens(chars int) int {
-	return contextbudget.EstimateCharsAsTokens(chars)
+	return llm.EstimateCharsAsTokens(chars)
 }
 
 func estimateMessageTokens(history []llm.Message) int {
-	return contextbudget.EstimateMessageTokens(history)
+	return llm.EstimateMessageTokens(history)
 }
 
 func estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
-	return contextbudget.EstimateContextTokens(systemPrompt, tools, history)
+	return llm.EstimateContextTokens(systemPrompt, tools, history)
 }
 
 func (e *Engine) updateTokenEstimateCalibration(realTokens, estimatedTokens int) {

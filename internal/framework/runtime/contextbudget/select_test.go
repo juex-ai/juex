@@ -14,7 +14,7 @@ func TestSelectCompactionInput_KeepsRecentRealInputByTokenBudget(t *testing.T) {
 		testMsg("m3", llm.RoleUser, "recent question"),
 		testMsg("m4", llm.RoleAssistant, "recent answer"),
 	}
-	sel := SelectInput(h, Policy{KeepRecentTokens: EstimateMessageTokens(h[2:3])})
+	sel := SelectInput(h, Policy{KeepRecentTokens: llm.EstimateMessageTokens(h[2:3])})
 	if len(sel.SummaryInput) != 3 {
 		t.Fatalf("summary len = %d, want 3", len(sel.SummaryInput))
 	}
@@ -46,7 +46,7 @@ func TestSelectCompactionInput_IgnoresRuntimeContextAsTailTurnStart(t *testing.T
 		runtimeContext,
 	}
 
-	sel := SelectInput(h, Policy{KeepRecentTokens: EstimateMessageTokens(h[2:3])})
+	sel := SelectInput(h, Policy{KeepRecentTokens: llm.EstimateMessageTokens(h[2:3])})
 	if len(sel.RetainedTail) != 1 || sel.RetainedTail[0].ID != "m3" {
 		t.Fatalf("tail = %+v, want only recent real input", sel.RetainedTail)
 	}
@@ -58,12 +58,12 @@ func TestSelectCompactionInputUsesEstimatorForTailBudget(t *testing.T) {
 		testMsg("m2", llm.RoleAssistant, "old answer"),
 		testMsg("m3", llm.RoleUser, "recent question"),
 	}
-	baseRecentTokens := EstimateMessageTokens(h[2:3])
+	baseRecentTokens := llm.EstimateMessageTokens(h[2:3])
 	estimator := func(msgs []llm.Message) int {
 		if len(msgs) == 1 && msgs[0].ID == "m3" {
 			return baseRecentTokens + 2
 		}
-		return EstimateMessageTokens(msgs)
+		return llm.EstimateMessageTokens(msgs)
 	}
 
 	sel := SelectInputWithEstimator(h, Policy{KeepRecentTokens: baseRecentTokens + 2}, estimator)
@@ -78,7 +78,7 @@ func TestSelectCompactionInputSummarizesNewestRealInputWhenItExceedsBudget(t *te
 		testMsg("direct-1", llm.RoleUser, strings.Repeat("important context ", 200)),
 	}
 	h[0].Kind = llm.MessageKindDirect
-	budget := EstimateMessageTokens(h) - 1
+	budget := llm.EstimateMessageTokens(h) - 1
 
 	sel := SelectInput(h, Policy{KeepRecentTokens: budget})
 
@@ -129,7 +129,7 @@ func TestSelectCompactionInputNoticesDoNotDisplaceRealInputs(t *testing.T) {
 		h = append(h, notice)
 	}
 	h = append(h, second)
-	budget := EstimateMessageTokens([]llm.Message{first, second})
+	budget := llm.EstimateMessageTokens([]llm.Message{first, second})
 
 	sel := SelectInput(h, Policy{KeepRecentTokens: budget})
 	if got := sel.RetainedMessageIDs; len(got) != 2 || got[0] != "direct-1" || got[1] != "event-1" {
@@ -150,7 +150,7 @@ func TestSelectCompactionInputOmitsPolicyBlockedMessages(t *testing.T) {
 	blocked.PolicyBlocked = true
 	history := []llm.Message{allowed, blocked, testMsg("assistant-1", llm.RoleAssistant, "answer")}
 
-	selection := SelectInput(history, Policy{KeepRecentTokens: EstimateMessageTokens(history)})
+	selection := SelectInput(history, Policy{KeepRecentTokens: llm.EstimateMessageTokens(history)})
 	for _, message := range append(append([]llm.Message(nil), selection.SummaryInput...), selection.RetainedTail...) {
 		if message.ID == blocked.ID {
 			t.Fatalf("policy-blocked input survived compaction selection: %+v", selection)
@@ -164,7 +164,7 @@ func TestSelectCompactionInputTreatsSideThreadResultAsRealInput(t *testing.T) {
 	side := testMsg("side-1", llm.RoleUser, "Side Thread result")
 	side.Kind = llm.MessageKindWorkerThread
 	history := []llm.Message{direct, testMsg("assistant-1", llm.RoleAssistant, "waiting"), side}
-	budget := EstimateMessageTokens([]llm.Message{direct, side})
+	budget := llm.EstimateMessageTokens([]llm.Message{direct, side})
 
 	selection := SelectInput(history, Policy{KeepRecentTokens: budget})
 	if got := selection.RetainedMessageIDs; len(got) != 2 || got[0] != "direct-1" || got[1] != "side-1" {
@@ -181,7 +181,7 @@ func TestSelectCompactionInputKeepsActiveToolProtocolClosed(t *testing.T) {
 		{ID: "tool-result-1", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "call-1", Content: "contents"}}},
 	}
 
-	sel := SelectInput(h, Policy{KeepRecentTokens: EstimateMessageTokens(h[:1])})
+	sel := SelectInput(h, Policy{KeepRecentTokens: llm.EstimateMessageTokens(h[:1])})
 	if got := sel.RetainedMessageIDs; len(got) != 3 || got[0] != "direct-1" || got[1] != "tool-use-1" || got[2] != "tool-result-1" {
 		t.Fatalf("retained protocol ids = %v", got)
 	}

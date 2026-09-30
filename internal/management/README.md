@@ -46,6 +46,17 @@ data for removed or suspended members; that read does not grant configuration
 or execution rights. Delegated reads record both actor and owner. Execution and
 device-grant authorization are distinct operations.
 
+Models are deployment-owned. Tenant catalogs inherit by default or use an
+explicit allowlist; an empty allowlist grants nothing. Fleet defaults inherit
+the platform default, and Agents may override them. Operators configure flat,
+ordered fallback lists. Snapshot admission and each credential resolution check
+current resource authority in one Management transaction. Per-model and tenant
+access epochs prevent revoke/restore from reviving an old Turn's grant; unchanged
+candidates remain usable. Credentials may rotate without changing the frozen
+route. A changed endpoint or protocol cannot receive credentials via an old
+route snapshot. Admission ends before the external request: revocation blocks
+later admissions, not an already dispatched request.
+
 Schema setup is explicit through `postgres.Migrate`, transactionally serialized
 and checksum-verified. Unknown or modified versions fail instead of being
 silently repaired. Database integration cases in `tests/e2e` use the `postgres`

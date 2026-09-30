@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 )
 
 func TestProjectedContentStoreUsesThreadSpool(t *testing.T) {
@@ -196,7 +195,7 @@ func TestProjectMessageLockedUsesTokenBudgetForMixedToolResultPreview(t *testing
 	artifact := projected.Blocks[0].Artifact
 	head := original[:artifact.HeadBytes]
 	tail := original[len(original)-artifact.TailBytes:]
-	if got := contextbudget.EstimateTextTokens(head) + contextbudget.EstimateTextTokens(tail); got > 500 {
+	if got := llm.EstimateTextTokens(head) + llm.EstimateTextTokens(tail); got > 500 {
 		t.Fatalf("preview content tokens = %d, want <= 500", got)
 	}
 	omittedCharacters := utf8.RuneCountInString(original) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)

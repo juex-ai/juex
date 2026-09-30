@@ -332,7 +332,7 @@ func CompactionSummaryFits(sys string, previous llm.Message, input []llm.Message
 func compactionSummaryFitsWithConstraint(sys string, previous llm.Message, input []llm.Message, state SummaryState, toolBudget SummaryToolBudget, omitted, limit int, constraint SummaryMessageConstraint) (bool, error) {
 	body := BuildCompactionSummaryBody(previous, input, state, toolBudget, omitted)
 	message := llm.TextMessage(llm.RoleUser, body)
-	if limit > 0 && EstimateContextTokens(sys, nil, []llm.Message{message}) > limit {
+	if limit > 0 && llm.EstimateContextTokens(sys, nil, []llm.Message{message}) > limit {
 		return false, nil
 	}
 	if constraint != nil {
@@ -399,7 +399,7 @@ func serializeMessageForSummary(msg llm.Message, toolBudget SummaryToolBudget) s
 }
 
 func truncateToolTextForSummary(text string, budget SummaryToolBudget) (string, bool) {
-	preview := PreviewText(text, budget.MaxTokens, budget.MaxChars)
+	preview := llm.PreviewText(text, budget.MaxTokens, budget.MaxChars)
 	if preview.OmittedBytes <= 0 {
 		return text, false
 	}

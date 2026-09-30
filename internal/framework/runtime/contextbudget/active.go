@@ -22,7 +22,7 @@ func AssembleActiveContext(history []llm.Message, incoming []llm.Message) Active
 	if latestCompact < 0 {
 		out = append(out, history...)
 		out = append(out, incoming...)
-		return ActiveContextSnapshot{Messages: out, EstimatedTokens: EstimateMessageTokens(out)}
+		return ActiveContextSnapshot{Messages: out, EstimatedTokens: llm.EstimateMessageTokens(out)}
 	}
 
 	compact := history[latestCompact]
@@ -44,7 +44,7 @@ func AssembleActiveContext(history []llm.Message, incoming []llm.Message) Active
 	}
 	out = append(out, history[latestCompact+1:]...)
 	out = append(out, incoming...)
-	return ActiveContextSnapshot{Messages: out, EstimatedTokens: EstimateMessageTokens(out)}
+	return ActiveContextSnapshot{Messages: out, EstimatedTokens: llm.EstimateMessageTokens(out)}
 }
 
 func ActiveContextFromHistory(history []llm.Message, incoming ...llm.Message) ActiveContextSnapshot {

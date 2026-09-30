@@ -1,11 +1,38 @@
 package management
 
 import (
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
+
+var ErrModelUnavailable = errors.New("configured model is unavailable or no longer authorized")
+
+type ModelCallScope struct {
+	ActorID, TenantID, AgentID, UserID, FleetID                            string
+	ActorAuthorizationEpoch, MembershipExecutionEpoch, AgentExecutionEpoch int64
+}
+
+// ModelCandidate freezes routing and permissions without carrying a credential.
+type ModelCandidate struct {
+	ModelID                 string       `json:"model_id"`
+	Provider                string       `json:"provider"`
+	Model                   string       `json:"model"`
+	Protocol                llm.Protocol `json:"protocol"`
+	Endpoint                string       `json:"endpoint"`
+	ContextWindow           int          `json:"context_window"`
+	MaxOutput               int          `json:"max_output"`
+	ModelAuthorizationEpoch int64        `json:"model_authorization_epoch"`
+	TenantAccessEpoch       int64        `json:"tenant_access_epoch"`
+}
+
+type ModelPlan struct {
+	AgentVersion                   int64
+	Instructions, RequestedModelID string
+	Candidates                     []ModelCandidate
+}
 
 type AgentStatus string
 
@@ -68,10 +95,11 @@ type FleetSettings struct {
 
 type FleetOverview struct {
 	Fleet
-	Owner      User          `json:"owner"`
-	Membership Membership    `json:"membership"`
-	Settings   FleetSettings `json:"settings"`
-	Agents     []Agent       `json:"agents"`
+	PlatformDefaultModelID string        `json:"platform_default_model_id"`
+	Owner                  User          `json:"owner"`
+	Membership             Membership    `json:"membership"`
+	Settings               FleetSettings `json:"settings"`
+	Agents                 []Agent       `json:"agents"`
 }
 
 // FleetAuthority is a current authorization snapshot for private services.
@@ -107,10 +135,4 @@ type AgentDetail struct {
 	OwnerID          string `json:"owner_id"`
 	CanExecute       bool   `json:"can_execute"`
 	EffectiveModelID string `json:"effective_model_id"`
-}
-
-type ResolvedModel struct {
-	Model    Model
-	Endpoint string
-	APIKey   string
 }

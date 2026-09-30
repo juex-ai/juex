@@ -11,7 +11,7 @@ import (
 type Authority interface {
 	Authorize(context.Context, string, string, string, bool) (Scope, error)
 	Snapshot(context.Context, Scope) (TurnConfig, error)
-	Provider(context.Context, Scope, TurnConfig) (llm.Provider, error)
+	Provider(context.Context, Scope, ModelConfig) (llm.Provider, error)
 }
 
 type ConversationStore interface {

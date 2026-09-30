@@ -91,11 +91,20 @@ func TestManagementAgentOwnershipModelsAndLifecycle(t *testing.T) {
 	if _, err := d.SetAgentArchived(ctx, admin.ID, tenant.ID, agent.ID, archived.Version, false); err != nil {
 		t.Fatal(err)
 	}
+	authority, err = d.AuthorizeAgent(ctx, member.ID, tenant.ID, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callScope := modelCallScope(authority)
+	plan, err := d.SnapshotPlan(ctx, callScope)
+	if err != nil {
+		t.Fatal(err)
+	}
 	config.Enabled = false
 	if _, err := d.ConfigureModel(ctx, config); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.ResolveModel(ctx, model.ID); !errors.Is(err, management.ErrDenied) {
+	if _, err := d.ResolveCandidate(ctx, callScope, plan.Candidates[0]); !errors.Is(err, management.ErrModelUnavailable) {
 		t.Fatal("disabled model still callable", err)
 	}
 	if _, err := d.ChangeMember(ctx, admin.ID, tenant.ID, member.ID, management.Member, management.Suspended); err != nil {

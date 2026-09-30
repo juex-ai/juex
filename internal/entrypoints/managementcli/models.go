@@ -2,6 +2,7 @@ package managementcli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 
@@ -35,6 +36,47 @@ func modelCommand(open func(*cobra.Command) (*managed.Management, error), out io
 	put.Flags().IntVar(&contextWindow, "context-window", 32768, "Model context window in tokens")
 	put.Flags().IntVar(&maxOutput, "max-output", 4096, "Maximum output tokens per request")
 	root.AddCommand(put)
+	root.AddCommand(&cobra.Command{Use: "default <model-id>", Short: "Set the deployment default inherited by Fleets", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		app, err := open(cmd)
+		if err != nil {
+			return err
+		}
+		defer app.Close()
+		if err := app.Directory.SetPlatformModel(cmd.Context(), args[0]); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(map[string]string{"default_model_id": args[0]})
+	}})
+	var inherit bool
+	var allowed []string
+	access := &cobra.Command{Use: "access <tenant-id>", Short: "Set tenant model access; an empty allow list denies all models", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if inherit == cmd.Flags().Changed("allow") {
+			return errors.New("choose --inherit or --allow; --allow='' denies all models")
+		}
+		app, err := open(cmd)
+		if err != nil {
+			return err
+		}
+		defer app.Close()
+		if err := app.Directory.SetTenantModels(cmd.Context(), args[0], inherit, allowed); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"tenant_id": args[0], "inherit": inherit, "allowed_model_ids": allowed})
+	}}
+	access.Flags().BoolVar(&inherit, "inherit", false, "Inherit the deployment model catalog")
+	access.Flags().StringSliceVar(&allowed, "allow", nil, "Comma-separated permitted model IDs; empty denies all")
+	root.AddCommand(access)
+	root.AddCommand(&cobra.Command{Use: "fallback <model-id> [fallback-model-id...]", Short: "Set an ordered fallback list (at most four); omit candidates to clear it", Args: cobra.RangeArgs(1, 5), RunE: func(cmd *cobra.Command, args []string) error {
+		app, err := open(cmd)
+		if err != nil {
+			return err
+		}
+		defer app.Close()
+		if err := app.Directory.SetModelFallbacks(cmd.Context(), args[0], args[1:]); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"model_id": args[0], "fallback_model_ids": args[1:]})
+	}})
 	for _, enabled := range []bool{true, false} {
 		use := "disable"
 		if enabled {

@@ -17,7 +17,6 @@ import (
 	workerthreadsmodule "github.com/juex-ai/juex/internal/features/workerthreads"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/framework/agentstate"
-	"github.com/juex-ai/juex/internal/framework/runtime/contextbudget"
 	"github.com/juex-ai/juex/internal/framework/thread"
 )
 
@@ -43,7 +42,7 @@ func (p *measuredModuleProvider) Complete(ctx context.Context, system string, hi
 	if err != nil {
 		return llm.Response{}, err
 	}
-	budget := moduleRequestBudget{SystemBytes: len(system), ToolSchemaBytes: len(encoded), EstimatedTokens: contextbudget.EstimateContextTokens(system, specs, history)}
+	budget := moduleRequestBudget{SystemBytes: len(system), ToolSchemaBytes: len(encoded), EstimatedTokens: llm.EstimateContextTokens(system, specs, history)}
 	for _, message := range history {
 		if message.Kind == llm.MessageKindRuntimeContext {
 			encoded, err := json.Marshal(message)
