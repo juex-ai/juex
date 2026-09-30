@@ -46,6 +46,10 @@ data for removed or suspended members; that read does not grant configuration
 or execution rights. Delegated reads record both actor and owner. Execution and
 device-grant authorization are distinct operations.
 
+Fleet settings own model defaults. Memory and Calendar own their application
+enablement and execution epochs; the dashboard reads and configures each service
+through its authenticated API instead of maintaining duplicate flags.
+
 Models are deployment-owned. Tenant catalogs inherit by default or use an
 explicit allowlist; an empty allowlist grants nothing. Fleet defaults inherit
 the platform default, and Agents may override them. Operators configure flat,

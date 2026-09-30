@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -13,7 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/memory/knowledge"
 )
 
-func invalid(reason string) error { return fmt.Errorf("%w: %s", application.ErrInvalid, reason) }
+func invalid(reason string) error { return &application.ValidationError{Reason: reason} }
 
 func (s *State) validateEntry(fleet string, e mc.Entry, allowed []mc.Source, human bool) error {
 	if err := mc.ValidateEntryID(e.ID); err != nil {

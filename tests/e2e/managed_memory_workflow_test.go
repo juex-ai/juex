@@ -74,7 +74,12 @@ func TestManagedMemoryRuntimeWorkerWorkflow(t *testing.T) {
 		if len(proposal.Evidence) != 1 || proposal.Evidence[0].Kind != "user" || proposal.Evidence[0].Text != "Please remember that I prefer concise replies." {
 			t.Error("original evidence", proposal)
 		}
-		data, _ := json.Marshal(memoryDecision("concise-replies", proposal))
+		decision := memoryDecision("concise-replies", proposal)
+		entry := decision.Changes[0].Entry
+		entry.Entities = []mc.Entity{{ID: "fixture-user", Name: "User", Kind: "person"}}
+		fact := mc.Fact{ID: "concise-preference", Domain: "preferences", Subject: "fixture-user", Predicate: "prefers", Value: "concise replies", Status: "valid", SourceType: "user_statement", Sources: proposal.Sources, RecordedAt: proposal.Evidence[0].RecordedAt, Reason: "explicit user request"}
+		toolDecision := memory.DecisionInput{Outcome: "applied", Reason: decision.Reason, Changes: []memory.ChangeInput{{Entry: memory.EntryInput{Entry: entry, Facts: []memory.FactInput{{Fact: fact, Qualifiers: []memory.QualifierInput{{Key: "context", Value: "replies"}}}}}}}}
+		data, _ := json.Marshal(toolDecision)
 		var args map[string]any
 		_ = json.Unmarshal(data, &args)
 		streamManagedTool(w, "memory_decide", args)
@@ -160,6 +165,10 @@ func TestManagedMemoryRuntimeWorkerWorkflow(t *testing.T) {
 	page, err := svc.Search(ctx, access, mc.Query{Text: "concise"})
 	if err != nil || len(page.Entries) != 1 {
 		t.Fatal(page, err)
+	}
+	stored, err := svc.Read(ctx, access, mc.ReadRequest{ID: "concise-replies"})
+	if err != nil || len(stored.Facts) != 1 || stored.Facts[0].Qualifiers["context"] != "replies" {
+		t.Fatal("model qualifier conversion", stored, err)
 	}
 	var count int
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.application_jobs WHERE application='memory' AND job_id=$1`, job.ID).Scan(&count); err != nil || count != 1 {

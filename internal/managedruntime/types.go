@@ -37,6 +37,7 @@ type Scope struct {
 }
 
 type Thread struct {
+	Application   string    `json:"application,omitempty"`
 	ID            string    `json:"id"`
 	AgentID       string    `json:"agent_id"`
 	ParentID      string    `json:"parent_id"`

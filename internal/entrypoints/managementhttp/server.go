@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
@@ -52,6 +53,7 @@ type Options struct {
 	Directory    Directory
 	Runtime      Runtime
 	Execution    Execution
+	Memory       Memory
 	PublicURL    string
 	InsecureHTTP bool
 	MailEnabled  bool
@@ -107,6 +109,17 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}", s.signedIn(s.configureAgent))
 	mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}", s.signedIn(s.agentDetail))
 	mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/archive", s.signedIn(s.archiveAgent))
+	if options.Memory != nil {
+		base := "/api/tenants/{tenant}/users/{owner}/memory"
+		mux.HandleFunc("GET "+base, s.signedIn(s.memoryStatus))
+		mux.HandleFunc("PUT "+base, s.signedIn(s.memoryConfigure))
+		mux.HandleFunc("GET "+base+"/entries", s.signedIn(s.memorySearch))
+		mux.HandleFunc("GET "+base+"/entries/{entry}", s.signedIn(s.memoryRead))
+		mux.HandleFunc("GET "+base+"/facts", s.signedIn(s.memoryFacts))
+		mux.HandleFunc("GET "+base+"/reviews", s.signedIn(s.memoryReviews))
+		mux.HandleFunc("GET "+base+"/storage-rules", s.signedIn(s.memoryRules))
+		mux.HandleFunc("POST "+base+"/administer", s.signedIn(s.memoryAdminister))
+	}
 	if options.Runtime != nil {
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads", s.signedIn(s.threads))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/inputs", s.signedIn(s.submitInput))
@@ -268,15 +281,15 @@ func respond(w http.ResponseWriter, value any, err error) {
 	if err != nil {
 		status, code, message := http.StatusInternalServerError, "internal_error", "Request could not be completed"
 		switch {
-		case errors.Is(err, management.ErrInvalid), errors.Is(err, managedruntime.ErrInvalid), errors.Is(err, execprotocol.ErrInvalid):
+		case errors.Is(err, application.ErrInvalid), errors.Is(err, management.ErrInvalid), errors.Is(err, managedruntime.ErrInvalid), errors.Is(err, execprotocol.ErrInvalid):
 			status, code, message = 400, "invalid_request", err.Error()
 		case errors.Is(err, management.ErrCredentials), errors.Is(err, management.ErrSession):
 			status, code, message = 401, "authentication_required", err.Error()
-		case errors.Is(err, management.ErrDenied), errors.Is(err, managedruntime.ErrDenied), errors.Is(err, execprotocol.ErrDenied):
+		case errors.Is(err, application.ErrDenied), errors.Is(err, management.ErrDenied), errors.Is(err, managedruntime.ErrDenied), errors.Is(err, execprotocol.ErrDenied):
 			status, code, message = 403, "access_denied", err.Error()
 		case errors.Is(err, management.ErrInvitation):
 			status, code, message = 400, "invitation_unavailable", err.Error()
-		case errors.Is(err, management.ErrConflict), errors.Is(err, management.ErrLoginRequired), errors.Is(err, management.ErrLastAdmin), errors.Is(err, managedruntime.ErrConflict), errors.Is(err, execprotocol.ErrConflict):
+		case errors.Is(err, application.ErrDisabled), errors.Is(err, application.ErrConflict), errors.Is(err, management.ErrConflict), errors.Is(err, management.ErrLoginRequired), errors.Is(err, management.ErrLastAdmin), errors.Is(err, managedruntime.ErrConflict), errors.Is(err, execprotocol.ErrConflict):
 			status, code, message = 409, "conflict", err.Error()
 		case errors.Is(err, management.ErrRateLimit):
 			status, code, message = 429, "rate_limited", err.Error()

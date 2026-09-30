@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 
 	"github.com/juex-ai/juex/internal/foundation/application"
-	"github.com/juex-ai/juex/internal/foundation/llm"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/memory"
@@ -43,7 +43,7 @@ func appRuntimeError(err error) error {
 	case errors.Is(err, application.ErrDenied), errors.Is(err, application.ErrDisabled):
 		return managedruntime.ErrDenied
 	case errors.Is(err, application.ErrInvalid):
-		return managedruntime.ErrInvalid
+		return fmt.Errorf("%w: %s", managedruntime.ErrInvalid, err.Error())
 	case errors.Is(err, application.ErrConflict):
 		return managedruntime.ErrConflict
 	default:
@@ -64,21 +64,25 @@ func (a RuntimeApplications) Check(ctx context.Context, scope managedruntime.Sco
 	}
 	return appRuntimeError(err)
 }
-func (a RuntimeApplications) Tools(ctx context.Context, scope managedruntime.Scope, job *managedruntime.ApplicationJob) ([]llm.ToolSpec, error) {
+func (a RuntimeApplications) Tools(ctx context.Context, scope managedruntime.Scope, job *managedruntime.ApplicationJob) (managedruntime.ApplicationTools, error) {
 	if a.Memory == nil {
-		return nil, nil
+		return managedruntime.ApplicationTools{}, nil
 	}
 	if job != nil && job.Application != "memory" {
-		return nil, nil
+		return managedruntime.ApplicationTools{}, nil
 	}
 	_, err := a.Memory.Status(ctx, appScope(scope).Access)
 	if errors.Is(err, application.ErrDisabled) {
-		return nil, nil
+		return managedruntime.ApplicationTools{}, nil
 	}
 	if err != nil {
-		return nil, appRuntimeError(err)
+		return managedruntime.ApplicationTools{}, appRuntimeError(err)
 	}
-	return memory.Tools(job != nil), nil
+	catalog := managedruntime.ApplicationTools{Tools: memory.Tools(job != nil)}
+	if job == nil {
+		catalog.Instructions = memory.AgentGuidance
+	}
+	return catalog, nil
 }
 func decodeAppTool(input map[string]any, target any) error {
 	data, err := json.Marshal(input)
@@ -88,7 +92,11 @@ func decodeAppTool(input map[string]any, target any) error {
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if err := d.Decode(target); err != nil {
-		return managedruntime.ErrInvalid
+		message := err.Error()
+		if len(message) > 256 {
+			message = "invalid tool JSON"
+		}
+		return fmt.Errorf("%w: %s", managedruntime.ErrInvalid, message)
 	}
 	if d.Decode(new(any)) != io.EOF {
 		return managedruntime.ErrInvalid
@@ -146,8 +154,12 @@ func (a RuntimeApplications) Call(ctx context.Context, work managedruntime.ToolW
 		if job == nil || job.Application != "memory" {
 			return nil, managedruntime.ErrDenied
 		}
-		var q mc.Decision
-		if err = decodeAppTool(work.Call.Input, &q); err != nil {
+		var input memory.DecisionInput
+		if err = decodeAppTool(work.Call.Input, &input); err != nil {
+			return nil, err
+		}
+		q, err := input.Decision()
+		if err != nil {
 			return nil, err
 		}
 		return a.Memory.Decide(ctx, scope, binding(*job), q, work.ID)

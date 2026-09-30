@@ -39,3 +39,9 @@ Runtime injects bounded original human evidence from the current input; peer,
 application and observation messages cannot be presented as human statements.
 Tool command IDs order cancellation against acceptance across service restarts.
 Stopping the source conversation does not retract an already accepted review.
+
+Management proxies authenticated human operations to this service: knowledge,
+review receipts, storage suppression and versioned application configuration.
+These views remain readable when disabled. Human administration is unavailable
+to Runtime callers. Validation replies expose bounded business reasons so a
+review Worker can correct its proposal without receiving internal diagnostics.

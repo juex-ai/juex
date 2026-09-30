@@ -98,10 +98,8 @@ type ModelConfiguration struct {
 }
 
 type FleetSettings struct {
-	DefaultModelID  string `json:"default_model_id"`
-	MemoryEnabled   bool   `json:"memory_enabled"`
-	CalendarEnabled bool   `json:"calendar_enabled"`
-	Version         int64  `json:"version"`
+	DefaultModelID string `json:"default_model_id"`
+	Version        int64  `json:"version"`
 }
 
 type FleetOverview struct {

@@ -58,7 +58,18 @@ func (s *Service) Search(ctx context.Context, access application.Access, query m
 
 func (s *Service) Read(ctx context.Context, access application.Access, request mc.ReadRequest) (mc.Entry, error) {
 	var value mc.Entry
-	err := s.transact(ctx, access, false, func(state *State, _ application.Scope) (err error) {
+	err := s.transact(ctx, access, false, func(state *State, scope application.Scope) (err error) {
+		if request.View == "stored" {
+			if scope.AgentID != "" {
+				return application.ErrDenied
+			}
+			var exists bool
+			value, exists = state.Entries[request.ID]
+			if !exists {
+				return application.ErrDenied
+			}
+			return nil
+		}
 		value, err = state.Read(request, time.Now())
 		return
 	})

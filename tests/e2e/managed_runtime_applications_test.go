@@ -107,8 +107,8 @@ func (g *runtimeApplicationGateway) Check(context.Context, managedruntime.Scope,
 	}
 	return nil
 }
-func (g *runtimeApplicationGateway) Tools(context.Context, managedruntime.Scope, *managedruntime.ApplicationJob) ([]llm.ToolSpec, error) {
-	return []llm.ToolSpec{{Name: "memory_search", Description: "Read bounded knowledge", Schema: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}}}, nil
+func (g *runtimeApplicationGateway) Tools(context.Context, managedruntime.Scope, *managedruntime.ApplicationJob) (managedruntime.ApplicationTools, error) {
+	return managedruntime.ApplicationTools{Tools: []llm.ToolSpec{{Name: "memory_search", Description: "Read bounded knowledge", Schema: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}}}}, nil
 }
 func (g *runtimeApplicationGateway) Call(context.Context, managedruntime.ToolWork, *managedruntime.ApplicationJob) (any, error) {
 	g.Calls.Add(1)

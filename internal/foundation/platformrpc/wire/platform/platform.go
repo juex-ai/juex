@@ -572,6 +572,10 @@ var fieldIDToName_ManagementModelProfileResult = map[int16]string{
 }
 
 type Memory interface {
+	Reviews(ctx context.Context, accessJSON string, offset int32, limit int32) (r *Reply, err error)
+
+	StorageRules(ctx context.Context, accessJSON string, offset int32, limit int32) (r *Reply, err error)
+
 	Health(ctx context.Context) (r *Reply, err error)
 
 	Status(ctx context.Context, accessJSON string) (r *Reply, err error)
@@ -597,6 +601,176 @@ type Memory interface {
 	ReviewResult_(ctx context.Context, accessJSON string, threadID string, reviewID string) (r *Reply, err error)
 
 	Administer(ctx context.Context, accessJSON string, requestJSON string) (r *Reply, err error)
+}
+
+type MemoryReviewsArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	Offset     int32  `thrift:"offset,2" frugal:"2,default,i32" json:"offset"`
+	Limit      int32  `thrift:"limit,3" frugal:"3,default,i32" json:"limit"`
+}
+
+func NewMemoryReviewsArgs() *MemoryReviewsArgs {
+	return &MemoryReviewsArgs{}
+}
+
+func (p *MemoryReviewsArgs) InitDefault() {
+}
+
+func (p *MemoryReviewsArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryReviewsArgs) GetOffset() (v int32) {
+	return p.Offset
+}
+
+func (p *MemoryReviewsArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *MemoryReviewsArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryReviewsArgs) SetOffset(val int32) {
+	p.Offset = val
+}
+func (p *MemoryReviewsArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *MemoryReviewsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryReviewsArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryReviewsArgs = map[int16]string{
+	1: "accessJSON",
+	2: "offset",
+	3: "limit",
+}
+
+type MemoryReviewsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryReviewsResult() *MemoryReviewsResult {
+	return &MemoryReviewsResult{}
+}
+
+func (p *MemoryReviewsResult) InitDefault() {
+}
+
+var MemoryReviewsResult_Success_DEFAULT *Reply
+
+func (p *MemoryReviewsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryReviewsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryReviewsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryReviewsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryReviewsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryReviewsResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryReviewsResult = map[int16]string{
+	0: "success",
+}
+
+type MemoryStorageRulesArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	Offset     int32  `thrift:"offset,2" frugal:"2,default,i32" json:"offset"`
+	Limit      int32  `thrift:"limit,3" frugal:"3,default,i32" json:"limit"`
+}
+
+func NewMemoryStorageRulesArgs() *MemoryStorageRulesArgs {
+	return &MemoryStorageRulesArgs{}
+}
+
+func (p *MemoryStorageRulesArgs) InitDefault() {
+}
+
+func (p *MemoryStorageRulesArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *MemoryStorageRulesArgs) GetOffset() (v int32) {
+	return p.Offset
+}
+
+func (p *MemoryStorageRulesArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *MemoryStorageRulesArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *MemoryStorageRulesArgs) SetOffset(val int32) {
+	p.Offset = val
+}
+func (p *MemoryStorageRulesArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *MemoryStorageRulesArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryStorageRulesArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryStorageRulesArgs = map[int16]string{
+	1: "accessJSON",
+	2: "offset",
+	3: "limit",
+}
+
+type MemoryStorageRulesResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryStorageRulesResult() *MemoryStorageRulesResult {
+	return &MemoryStorageRulesResult{}
+}
+
+func (p *MemoryStorageRulesResult) InitDefault() {
+}
+
+var MemoryStorageRulesResult_Success_DEFAULT *Reply
+
+func (p *MemoryStorageRulesResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryStorageRulesResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryStorageRulesResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryStorageRulesResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryStorageRulesResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryStorageRulesResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryStorageRulesResult = map[int16]string{
+	0: "success",
 }
 
 type MemoryHealthArgs struct {

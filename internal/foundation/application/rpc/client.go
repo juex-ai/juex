@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
@@ -37,6 +39,17 @@ func (a *Authority) AuthorizeApplication(ctx context.Context, access application
 }
 
 func ErrorCode(err error) string {
+	var validation *application.ValidationError
+	if errors.As(err, &validation) {
+		reason := validation.Reason
+		if len(reason) > 1024 {
+			reason = reason[:1024]
+			for !utf8.ValidString(reason) {
+				reason = reason[:len(reason)-1]
+			}
+		}
+		return "invalid:" + reason
+	}
 	switch {
 	case err == nil:
 		return ""
@@ -54,6 +67,9 @@ func ErrorCode(err error) string {
 }
 
 func DecodeError(code string) error {
+	if reason, ok := strings.CutPrefix(code, "invalid:"); ok {
+		return &application.ValidationError{Reason: reason}
+	}
 	switch code {
 	case "denied":
 		return application.ErrDenied

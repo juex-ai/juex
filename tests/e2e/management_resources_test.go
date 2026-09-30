@@ -48,7 +48,7 @@ func TestManagementAgentOwnershipModelsAndLifecycle(t *testing.T) {
 		t.Fatal("provider key not encrypted", err)
 	}
 	overview, err := d.FleetOverview(ctx, member.ID, tenant.ID, member.ID)
-	if err != nil || overview.Settings.Version != 1 || !overview.Settings.MemoryEnabled || !overview.Settings.CalendarEnabled {
+	if err != nil || overview.Settings.Version != 1 {
 		t.Fatal(overview, err)
 	}
 	settings := overview.Settings

@@ -55,6 +55,15 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 	if err != nil || !status.Enabled {
 		t.Fatal(status, err)
 	}
+	if _, err := runtime.Reviews(ctx, f.scope.Access, 0, 20); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("Runtime read human review overview", err)
+	}
+	if _, err := runtime.StorageRules(ctx, f.scope.Access, 0, 20); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("Runtime read human suppression rules", err)
+	}
+	if rules, err := client.StorageRules(ctx, f.human, 0, 20); err != nil || len(rules.Entries)+len(rules.Sources) != 0 {
+		t.Fatal(rules, err)
+	}
 	proposal := f.proposal("rpc")
 	if _, err := client.Propose(ctx, f.scope, f.thread, proposal, false, proposal.Key); !errors.Is(err, application.ErrDenied) {
 		t.Fatal("Management invented original Runtime evidence", err)
@@ -90,11 +99,18 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 		t.Fatal(domains, err)
 	}
 	decision := memoryDecision("rpc-entry", proposal)
+	invalid := memoryDecision("bad entry ID", proposal)
+	if _, err := runtime.Decide(ctx, f.scope, binding, invalid, "bad-then-correct"); !errors.Is(err, application.ErrInvalid) || err.Error() == application.ErrInvalid.Error() {
+		t.Fatal("business validation detail lost over RPC", err)
+	}
 	if result, err := runtime.Decide(ctx, f.scope, binding, decision, "decide-"+binding.ReviewID); err != nil || !result.Committed {
 		t.Fatal(result, err)
 	}
 	if result, err := client.Result(ctx, f.human, "", receipt.ID); err != nil || !result.Committed {
 		t.Fatal(result, err)
+	}
+	if reviews, err := client.Reviews(ctx, f.human, 0, 20); err != nil || len(reviews.Reviews) != 1 || !reviews.Reviews[0].Committed {
+		t.Fatal(reviews, err)
 	}
 	if page, err := client.Search(ctx, f.human, mc.Query{}); err != nil || len(page.Entries) != 1 {
 		t.Fatal(page, err)

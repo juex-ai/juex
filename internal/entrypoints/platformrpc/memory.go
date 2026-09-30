@@ -31,6 +31,23 @@ type memoryHandler struct {
 	health  func(context.Context) error
 }
 
+func (h *memoryHandler) Reviews(ctx context.Context, accessJSON string, offset, limit int32) (*platform.Reply, error) {
+	access, ok := memoryAccess(ctx, accessJSON)
+	if !ok || transport.CallerRole(ctx) != "management" {
+		return appReply(nil, application.ErrDenied)
+	}
+	value, err := h.service.Reviews(ctx, access, int(offset), int(limit))
+	return appReply(value, err)
+}
+func (h *memoryHandler) StorageRules(ctx context.Context, accessJSON string, offset, limit int32) (*platform.Reply, error) {
+	access, ok := memoryAccess(ctx, accessJSON)
+	if !ok || transport.CallerRole(ctx) != "management" {
+		return appReply(nil, application.ErrDenied)
+	}
+	value, err := h.service.StorageRules(ctx, access, int(offset), int(limit))
+	return appReply(value, err)
+}
+
 func appReply(value any, err error) (*platform.Reply, error) {
 	return transport.Reply(value, appwire.ErrorCode(err)), nil
 }

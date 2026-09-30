@@ -25,6 +25,8 @@ service Management {
 }
 
 service Memory {
+	Reply Reviews(1: string accessJSON, 2: i32 offset, 3: i32 limit)
+	Reply StorageRules(1: string accessJSON, 2: i32 offset, 3: i32 limit)
   Reply Health()
   Reply Status(1: string accessJSON)
   Reply Configure(1: string accessJSON, 2: i64 version, 3: bool enabled, 4: string strategy)

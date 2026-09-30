@@ -14,6 +14,25 @@ import (
 
 type Client struct{ client wire.Client }
 
+func (c *Client) Reviews(ctx context.Context, access application.Access, offset, limit int) (memory.ReviewPage, error) {
+	if offset < 0 || offset > 1<<30 || limit < 1 || limit > 50 {
+		return memory.ReviewPage{}, application.ErrInvalid
+	}
+	reply, err := c.client.Reviews(ctx, encode(access), int32(offset), int32(limit))
+	var value memory.ReviewPage
+	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
+	return value, err
+}
+func (c *Client) StorageRules(ctx context.Context, access application.Access, offset, limit int) (memory.StorageRules, error) {
+	if offset < 0 || offset > 1<<30 || limit < 1 || limit > 50 {
+		return memory.StorageRules{}, application.ErrInvalid
+	}
+	reply, err := c.client.StorageRules(ctx, encode(access), int32(offset), int32(limit))
+	var value memory.StorageRules
+	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
+	return value, err
+}
+
 func NewClient(address string, credentials platformrpc.Credentials) (*Client, error) {
 	options, err := platformrpc.ClientOptions(address, "memory", credentials)
 	if err != nil {

@@ -83,7 +83,7 @@ func (d *Directory) FleetOverview(ctx context.Context, actorID, tenantID, ownerI
 
 func fleetSettings(ctx context.Context, tx pgx.Tx, fleetID string) (management.FleetSettings, error) {
 	var settings management.FleetSettings
-	err := tx.QueryRow(ctx, `SELECT COALESCE(default_model_id::text,''),memory_enabled,calendar_enabled,version FROM management.fleet_settings WHERE fleet_id=$1`, fleetID).Scan(&settings.DefaultModelID, &settings.MemoryEnabled, &settings.CalendarEnabled, &settings.Version)
+	err := tx.QueryRow(ctx, `SELECT COALESCE(default_model_id::text,''),version FROM management.fleet_settings WHERE fleet_id=$1`, fleetID).Scan(&settings.DefaultModelID, &settings.Version)
 	return settings, err
 }
 
@@ -116,7 +116,7 @@ func (d *Directory) ConfigureFleet(ctx context.Context, actorID, tenantID, owner
 		return settings, err
 	}
 	var version int64
-	err = tx.QueryRow(ctx, `UPDATE management.fleet_settings SET default_model_id=NULLIF($2,'')::uuid,memory_enabled=$3,calendar_enabled=$4,version=version+1 WHERE fleet_id=$1 AND version=$5 RETURNING version`, fleet.ID, settings.DefaultModelID, settings.MemoryEnabled, settings.CalendarEnabled, settings.Version).Scan(&version)
+	err = tx.QueryRow(ctx, `UPDATE management.fleet_settings SET default_model_id=NULLIF($2,'')::uuid,version=version+1 WHERE fleet_id=$1 AND version=$3 RETURNING version`, fleet.ID, settings.DefaultModelID, settings.Version).Scan(&version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return settings, management.ErrConflict
 	}

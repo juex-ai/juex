@@ -16,12 +16,13 @@ import (
 	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	runtimerpc "github.com/juex-ai/juex/internal/managedruntime/rpc"
+	memoryrpc "github.com/juex-ai/juex/internal/memory/rpc"
 )
 
 type serveConfig struct {
-	HTTPAddress, RPCAddress, RuntimeAddress, ExecutionAddress, PublicURL string
-	Credentials                                                          platformrpc.Credentials
-	InsecureHTTP                                                         bool
+	HTTPAddress, RPCAddress, RuntimeAddress, ExecutionAddress, MemoryAddress, PublicURL string
+	Credentials                                                                         platformrpc.Credentials
+	InsecureHTTP                                                                        bool
 }
 
 func serveManagement(ctx context.Context, app *managed.Management, config serveConfig, out io.Writer) error {
@@ -36,7 +37,14 @@ func serveManagement(ctx context.Context, app *managed.Management, config serveC
 			return err
 		}
 	}
-	handler, err := managementhttp.New(managementhttp.Options{Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, PublicURL: config.PublicURL, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
+	var memory managementhttp.Memory
+	if config.MemoryAddress != "" {
+		memory, err = memoryrpc.NewClient(config.MemoryAddress, config.Credentials)
+		if err != nil {
+			return err
+		}
+	}
+	handler, err := managementhttp.New(managementhttp.Options{Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, PublicURL: config.PublicURL, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
 	if err != nil {
 		return err
 	}

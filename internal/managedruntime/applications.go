@@ -58,9 +58,14 @@ type ApplicationStore interface {
 
 type ApplicationGateway interface {
 	Check(context.Context, Scope, ApplicationJob) error
-	Tools(context.Context, Scope, *ApplicationJob) ([]llm.ToolSpec, error)
+	Tools(context.Context, Scope, *ApplicationJob) (ApplicationTools, error)
 	Call(context.Context, ToolWork, *ApplicationJob) (any, error)
 	Cancel(context.Context, ToolWork) error
+}
+
+type ApplicationTools struct {
+	Tools        []llm.ToolSpec
+	Instructions string
 }
 
 func (s *Service) AdmitApplication(ctx context.Context, original Scope, job ApplicationJob) (ApplicationReceipt, error) {

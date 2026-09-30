@@ -216,8 +216,6 @@ export interface FleetOverview {
 
 export interface FleetSettings {
   default_model_id: string;
-  memory_enabled: boolean;
-  calendar_enabled: boolean;
   version: number;
 }
 
@@ -282,6 +280,140 @@ export interface Membership {
   role: Role;
   status: MembershipStatus;
   version: number;
+}
+
+export interface MemoryAdminRequest {
+  key: string;
+  action: string;
+  changes?: Array<MemoryChange>;
+  sources?: Array<MemorySource>;
+  entry_ids?: Array<string>;
+}
+
+export interface MemoryChange {
+  entry: MemoryEntry;
+  expected_revision: number;
+  delete?: boolean;
+}
+
+export interface MemoryConfiguration {
+  version: number;
+  enabled: boolean;
+  strategy: string;
+}
+
+export interface MemoryEntity {
+  id: string;
+  name: string;
+  kind: string;
+}
+
+export interface MemoryEntry {
+  id: string;
+  revision: number;
+  name: string;
+  summary: string;
+  type: string;
+  scope: MemoryScope;
+  body: string;
+  sources: Array<MemorySource>;
+  entities?: Array<MemoryEntity>;
+  facts?: Array<MemoryFact>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryFact {
+  id: string;
+  domain: string;
+  qualifiers?: Record<string, string>;
+  reason: string;
+  replaces?: Array<string>;
+  due_at?: string | null;
+  time_note?: string;
+  subject: string;
+  predicate: string;
+  value?: string;
+  object?: string;
+  status: string;
+  source_type: string;
+  sources: Array<MemorySource>;
+  recorded_at: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
+}
+
+export interface MemoryFactPage {
+  facts: Array<MemoryFactView>;
+  next: number;
+  total: number;
+  domain_total: number;
+  fence: number;
+}
+
+export interface MemoryFactView {
+  entry_id: string;
+  revision: number;
+  scope: MemoryScope;
+  fact: MemoryFact;
+  subject: MemoryEntity;
+  object?: MemoryEntity | null;
+  lifecycle: string;
+}
+
+export interface MemoryPage {
+  entries: Array<MemoryEntry>;
+  next: number;
+  fence: number;
+}
+
+export interface MemoryReviewPage {
+  reviews: Array<MemoryReviewSummary>;
+  next: number;
+}
+
+export interface MemoryReviewSummary {
+  id: string;
+  state: string;
+  reason?: string;
+  committed: boolean;
+  index_ready: boolean;
+  entry_ids?: Array<string>;
+  attempts: number;
+  updated_at: string;
+  agent_id: string;
+  thread_id: string;
+  worker_id?: string;
+}
+
+export interface MemoryScope {
+  workspace?: string;
+  project?: string;
+}
+
+export interface MemorySource {
+  fleet_id: string;
+  agent_id: string;
+  thread_id: string;
+  generation_id: string;
+  from: number;
+  through: number;
+}
+
+export interface MemoryStatus {
+  enabled: boolean;
+  epoch: number;
+  version: number;
+  strategy: string;
+  fence: number;
+  entries: number;
+  pending: number;
+}
+
+export interface MemoryStorageRules {
+  entries: Array<string>;
+  sources: Array<MemorySource>;
+  next: number;
 }
 
 export interface Message {
@@ -365,6 +497,7 @@ export interface TenantAccess {
 }
 
 export interface Thread {
+  application?: string;
   id: string;
   agent_id: string;
   parent_id: string;

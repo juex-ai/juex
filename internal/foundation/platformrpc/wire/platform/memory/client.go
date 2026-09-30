@@ -11,6 +11,8 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	Reviews(ctx context.Context, accessJSON string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	StorageRules(ctx context.Context, accessJSON string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Status(ctx context.Context, accessJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Configure(ctx context.Context, accessJSON string, version int64, enabled bool, strategy string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -53,6 +55,16 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kMemoryClient struct {
 	*kClient
+}
+
+func (p *kMemoryClient) Reviews(ctx context.Context, accessJSON string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Reviews(ctx, accessJSON, offset, limit)
+}
+
+func (p *kMemoryClient) StorageRules(ctx context.Context, accessJSON string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.StorageRules(ctx, accessJSON, offset, limit)
 }
 
 func (p *kMemoryClient) Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error) {

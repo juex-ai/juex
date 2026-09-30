@@ -325,7 +325,10 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		if err != nil {
 			return err
 		}
-		for _, tool := range catalog {
+		if catalog.Instructions != "" {
+			request.System += "\n\n" + catalog.Instructions
+		}
+		for _, tool := range catalog.Tools {
 			if job == nil || job.AllowsTool(tool.Name) {
 				request.Tools = append(request.Tools, tool)
 			}
@@ -401,9 +404,18 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	failure := ""
 	if callErr != nil {
 		failure = "provider_error"
-		if _, allowed := llm.ClassifyFallbackError(callErr); allowed {
+		reason, allowed := llm.ClassifyFallbackError(callErr)
+		if allowed {
 			failure = "provider_fallback"
 		}
+		// Provider bodies may echo credentials or private prompts. Log only
+		// classified failure metadata so operators can diagnose failed attempts.
+		var status interface{ HTTPStatusCode() int }
+		code := 0
+		if errors.As(callErr, &status) {
+			code = status.HTTPStatusCode()
+		}
+		slog.Warn("model attempt failed", "attempt_id", attempt.ID, "model_id", request.Model.ModelID, "category", reason, "http_status", code, "deadline", errors.Is(callErr, context.DeadlineExceeded))
 	}
 	if errors.Is(cause, ErrDenied) || errors.Is(cause, ErrConflict) {
 		failure = "cancelled"

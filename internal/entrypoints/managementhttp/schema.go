@@ -11,14 +11,17 @@ import (
 	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
+	"github.com/juex-ai/juex/internal/memory"
 )
 
 // GenerateTypeScript keeps the public JSON response types shared with the Web.
 func GenerateTypeScript() ([]byte, error) {
 	g := typeGenerator{types: map[string]reflect.Type{}}
 	for _, typ := range []reflect.Type{
+		reflect.TypeFor[memory.Status](), reflect.TypeFor[MemoryConfiguration](), reflect.TypeFor[memory.ReviewPage](), reflect.TypeFor[memory.StorageRules](), reflect.TypeFor[mc.Page](), reflect.TypeFor[mc.FactPage](), reflect.TypeFor[mc.AdminRequest](),
 		reflect.TypeFor[management.User](), reflect.TypeFor[management.Session](),
 		reflect.TypeFor[management.TenantAccess](), reflect.TypeFor[management.MemberView](),
 		reflect.TypeFor[management.InvitationView](), reflect.TypeFor[management.InvitationPreview](),
@@ -130,17 +133,21 @@ func (g *typeGenerator) render(typ reflect.Type) (string, error) {
 		return "string", nil
 	case reflect.Bool:
 		return "boolean", nil
-	case reflect.Int, reflect.Int32, reflect.Int64, reflect.Float64:
+	case reflect.Int, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint64, reflect.Float64:
 		return "number", nil
 	case reflect.Slice:
 		inner, err := g.render(typ.Elem())
 		return "Array<" + inner + ">", err
 	case reflect.Struct:
-		if existing, exists := g.types[typ.Name()]; exists && existing != typ {
+		name := typ.Name()
+		if typ.PkgPath() == "github.com/juex-ai/juex/internal/memory" || typ.PkgPath() == "github.com/juex-ai/juex/internal/foundation/memoryclient" {
+			name = "Memory" + name
+		}
+		if existing, exists := g.types[name]; exists && existing != typ {
 			return "", fmt.Errorf("conflicting JSON type %s", typ)
 		}
-		g.types[typ.Name()] = typ
-		return typ.Name(), nil
+		g.types[name] = typ
+		return name, nil
 	default:
 		return "", fmt.Errorf("unsupported JSON type %s", typ)
 	}

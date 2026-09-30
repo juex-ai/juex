@@ -13,6 +13,20 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"Reviews": kitex.NewMethodInfo(
+		reviewsHandler,
+		newMemoryReviewsArgs,
+		newMemoryReviewsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"StorageRules": kitex.NewMethodInfo(
+		storageRulesHandler,
+		newMemoryStorageRulesArgs,
+		newMemoryStorageRulesResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Health": kitex.NewMethodInfo(
 		healthHandler,
 		newMemoryHealthArgs,
@@ -168,6 +182,42 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func reviewsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.MemoryReviewsArgs)
+	realResult := result.(*platform.MemoryReviewsResult)
+	success, err := handler.(platform.Memory).Reviews(ctx, realArg.AccessJSON, realArg.Offset, realArg.Limit)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newMemoryReviewsArgs() interface{} {
+	return platform.NewMemoryReviewsArgs()
+}
+
+func newMemoryReviewsResult() interface{} {
+	return platform.NewMemoryReviewsResult()
+}
+
+func storageRulesHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.MemoryStorageRulesArgs)
+	realResult := result.(*platform.MemoryStorageRulesResult)
+	success, err := handler.(platform.Memory).StorageRules(ctx, realArg.AccessJSON, realArg.Offset, realArg.Limit)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newMemoryStorageRulesArgs() interface{} {
+	return platform.NewMemoryStorageRulesArgs()
+}
+
+func newMemoryStorageRulesResult() interface{} {
+	return platform.NewMemoryStorageRulesResult()
 }
 
 func healthHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -412,6 +462,30 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) Reviews(ctx context.Context, accessJSON string, offset int32, limit int32) (r *platform.Reply, err error) {
+	var _args platform.MemoryReviewsArgs
+	_args.AccessJSON = accessJSON
+	_args.Offset = offset
+	_args.Limit = limit
+	var _result platform.MemoryReviewsResult
+	if err = p.c.Call(ctx, "Reviews", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) StorageRules(ctx context.Context, accessJSON string, offset int32, limit int32) (r *platform.Reply, err error) {
+	var _args platform.MemoryStorageRulesArgs
+	_args.AccessJSON = accessJSON
+	_args.Offset = offset
+	_args.Limit = limit
+	var _result platform.MemoryStorageRulesResult
+	if err = p.c.Call(ctx, "StorageRules", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) Health(ctx context.Context) (r *platform.Reply, err error) {
