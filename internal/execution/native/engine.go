@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/execution/blob"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -24,16 +25,18 @@ type Config struct {
 	Concurrency      int
 	OutputLimit      int64
 	StorageLimit     int64
+	FileStorageLimit int64
 	Retention        time.Duration
 	ProcessUser      *ProcessUser
 }
 
 type operation struct {
-	record  record
-	cancel  context.CancelFunc
-	stdin   io.WriteCloser
-	stdinMu sync.Mutex
-	session *mcp.ClientSession
+	record    record
+	cancel    context.CancelFunc
+	stdin     io.WriteCloser
+	stdinMu   sync.Mutex
+	session   *mcp.ClientSession
+	fileReady chan struct{}
 }
 
 type Engine struct {
@@ -49,6 +52,7 @@ type Engine struct {
 	fault       error
 	allowed     map[string][]execprotocol.Capability
 	identity    stateIdentity
+	files       *blob.Store
 }
 
 func (e *Engine) Identity() (environment, journal string) {
@@ -88,10 +92,13 @@ func Open(config Config) (*Engine, error) {
 	if config.StorageLimit == 0 {
 		config.StorageLimit = 512 << 20
 	}
+	if config.FileStorageLimit == 0 {
+		config.FileStorageLimit = 1 << 30
+	}
 	if config.Retention == 0 {
 		config.Retention = 7 * 24 * time.Hour
 	}
-	if config.Concurrency < 1 || config.Concurrency > 100 || config.OutputLimit < 1024 || config.StorageLimit < config.OutputLimit || config.Retention < 0 {
+	if config.Concurrency < 1 || config.Concurrency > 100 || config.OutputLimit < 1024 || config.StorageLimit < config.OutputLimit || config.FileStorageLimit < 1 || config.Retention < 0 {
 		return nil, execprotocol.ErrInvalid
 	}
 	grants := make(map[string][]execprotocol.Capability, len(config.Grants))
@@ -116,8 +123,15 @@ func Open(config Config) (*Engine, error) {
 		_ = lock.Close()
 		return nil, err
 	}
+	e.files, err = blob.Open(filepath.Join(config.StateDirectory, "files"))
+	if err != nil {
+		cancel()
+		_ = lock.Close()
+		return nil, err
+	}
 	if err := e.load(); err != nil {
 		cancel()
+		_ = e.files.Close()
 		_ = lock.Close()
 		return nil, err
 	}
@@ -134,7 +148,7 @@ func (e *Engine) Close() error {
 	if e.lock == nil {
 		return nil
 	}
-	err := e.lock.Close()
+	err := errors.Join(e.files.Close(), e.lock.Close())
 	e.lock = nil
 	return err
 }
@@ -154,6 +168,10 @@ func (e *Engine) Submit(request execprotocol.Request) (execprotocol.Snapshot, er
 	if err != nil {
 		return execprotocol.Snapshot{}, execprotocol.ErrInvalid
 	}
+	fileStatus, fileReserve, err := fileAdmission(request)
+	if err != nil {
+		return execprotocol.Snapshot{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.ctx.Err() != nil || e.fault != nil {
@@ -171,6 +189,9 @@ func (e *Engine) Submit(request execprotocol.Request) (execprotocol.Snapshot, er
 	if e.reservedBytes()+int64(len(encoded))+4096+e.config.OutputLimit > e.config.StorageLimit {
 		return execprotocol.Snapshot{}, execprotocol.ErrQuota
 	}
+	if fileReserve > e.config.FileStorageLimit-e.reservedFileBytes() {
+		return execprotocol.Snapshot{}, execprotocol.ErrQuota
+	}
 	output, err := os.OpenFile(e.path(request.ID, ".output"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return execprotocol.Snapshot{}, execprotocol.ErrUnavailable
@@ -178,11 +199,20 @@ func (e *Engine) Submit(request execprotocol.Request) (execprotocol.Snapshot, er
 	if err := output.Close(); err != nil {
 		return execprotocol.Snapshot{}, execprotocol.ErrUnavailable
 	}
-	op := &operation{record: record{Request: request, Hash: digest(encoded), State: execprotocol.Accepted, CreatedAt: time.Now().UTC()}}
+	op := &operation{record: record{Request: request, Hash: digest(encoded), State: execprotocol.Accepted, CreatedAt: time.Now().UTC(), File: fileStatus, FileReserved: fileReserve}}
 	if err := e.save(&op.record); err != nil {
 		return execprotocol.Snapshot{}, err
 	}
 	e.operations[request.ID] = op
+	if request.Kind == "import_file" {
+		op.fileReady = make(chan struct{})
+		if _, err := e.files.Begin(e.fileID(request.ID), fileStatus.Manifest); err != nil {
+			op.record.State = execprotocol.Failed
+			op.record.Error = err.Error()
+			_ = e.save(&op.record)
+			return e.snapshotLocked(op, 0, 64<<10)
+		}
+	}
 	e.workers.Add(1)
 	go func() { defer e.workers.Done(); e.execute(op) }()
 	return e.snapshotLocked(op, 0, 64<<10)
@@ -238,6 +268,11 @@ func (e *Engine) snapshotLocked(operation *operation, cursor int64, limit int) (
 		return execprotocol.Snapshot{}, execprotocol.ErrInvalid
 	}
 	snapshot := execprotocol.Snapshot{Version: execprotocol.Version, EnvironmentID: e.config.EnvironmentID, ID: r.Request.ID, AgentID: r.Request.AgentID, Kind: r.Request.Kind, State: r.State, NextCursor: cursor, OutputBytes: r.OutputBytes, Truncated: r.Truncated, OutputExpired: r.OutputExpired, ExitCode: r.ExitCode, Error: r.Error, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+	if r.File != nil {
+		status := *r.File
+		snapshot.File = &status
+		snapshot.FileExpired = r.FileExpired
+	}
 	if r.OutputExpired {
 		return snapshot, nil
 	}
@@ -271,6 +306,9 @@ func (e *Engine) Acknowledge(agent, id string, cursor int64) error {
 	if op.record.AcknowledgedAt == nil {
 		now := time.Now().UTC()
 		op.record.AcknowledgedAt = &now
+		if op.record.Request.Kind == "import_file" || op.record.Request.Kind == "export_file" && op.record.State != execprotocol.Completed && op.record.State != execprotocol.Unknown {
+			op.record.FileAcknowledgedAt = &now
+		}
 		return e.save(&op.record)
 	}
 	return nil
@@ -306,6 +344,23 @@ func (e *Engine) Cancel(agent, id string) error {
 }
 
 func (e *Engine) execute(op *operation) {
+	if op.fileReady != nil {
+		ctx, cancel := context.WithCancel(e.ctx)
+		defer cancel()
+		e.mu.Lock()
+		if op.record.State != execprotocol.Accepted || op.record.CancelRequested {
+			e.mu.Unlock()
+			return
+		}
+		op.cancel = cancel
+		e.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			e.finish(op, nil, ctx.Err())
+			return
+		case <-op.fileReady:
+		}
+	}
 	// Stdin must not queue behind the command waiting to consume it.
 	if op.record.Request.Kind != "write_stdin" && op.record.Request.Kind != "mcp_connect" && op.record.Request.Kind != "mcp_close" {
 		select {
@@ -343,6 +398,8 @@ func (e *Engine) execute(op *operation) {
 		err = e.connectMCP(ctx, op)
 	case "mcp_call", "mcp_list", "mcp_close":
 		err = e.useMCP(ctx, op)
+	case "export_file", "import_file":
+		err = e.transferFile(ctx, op)
 	default:
 		err = e.fileOperation(ctx, op)
 	}

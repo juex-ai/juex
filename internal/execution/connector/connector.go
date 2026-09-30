@@ -174,6 +174,28 @@ func serve(ctx context.Context, connection *websocket.Conn, config Config, ready
 			err = execprotocol.ErrInvalid
 		} else {
 			switch request.Type {
+			case "file_read":
+				chunk, readErr := config.Engine.ReadFile(request.AgentID, request.OperationID, request.Cursor, request.Limit)
+				err = readErr
+				reply.FileChunk = &chunk
+			case "file_write":
+				if request.FileChunk == nil {
+					err = execprotocol.ErrInvalid
+				} else {
+					status, writeErr := config.Engine.WriteFile(request.AgentID, request.OperationID, *request.FileChunk)
+					err = writeErr
+					reply.FileStatus = &status
+				}
+			case "file_commit":
+				status, commitErr := config.Engine.CommitFile(request.AgentID, request.OperationID)
+				err = commitErr
+				reply.FileStatus = &status
+			case "file_ack":
+				if request.FileManifest == nil {
+					err = execprotocol.ErrInvalid
+				} else {
+					err = config.Engine.AcknowledgeFile(request.AgentID, request.OperationID, *request.FileManifest)
+				}
 			case "submit":
 				if request.Request == nil {
 					err = execprotocol.ErrInvalid
@@ -208,6 +230,7 @@ func serve(ctx context.Context, connection *websocket.Conn, config Config, ready
 		reply.Error = execprotocol.ErrorCode(err)
 		if err != nil {
 			reply.Snapshot = nil
+			reply.FileChunk, reply.FileStatus = nil, nil
 		}
 		writeCtx, stop := context.WithTimeout(ctx, 10*time.Second)
 		writeErr := wsjson.Write(writeCtx, connection, reply)

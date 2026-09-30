@@ -19,12 +19,6 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
-type Status struct {
-	Manifest execprotocol.FileManifest `json:"manifest"`
-	Cursor   int64                     `json:"cursor"`
-	Ready    bool                      `json:"ready"`
-}
-
 type Store struct {
 	mu   sync.Mutex
 	root *os.Root
@@ -94,8 +88,8 @@ func (s *Store) object(id string) (*os.Root, error) {
 	return s.root.OpenRoot(id)
 }
 
-func readStatus(root *os.Root) (Status, error) {
-	var status Status
+func readStatus(root *os.Root) (execprotocol.FileStatus, error) {
+	var status execprotocol.FileStatus
 	file, err := regular(root, "meta", os.O_RDONLY)
 	if err != nil {
 		return status, err
@@ -131,7 +125,7 @@ func syncRoot(root *os.Root) error {
 	return err
 }
 
-func saveStatus(root *os.Root, status Status) error {
+func saveStatus(root *os.Root, status execprotocol.FileStatus) error {
 	data, err := json.Marshal(status)
 	if err != nil {
 		return err
@@ -158,10 +152,10 @@ func saveStatus(root *os.Root, status Status) error {
 }
 
 // Begin is idempotent only for the same object identity and expected bytes.
-func (s *Store) Begin(id string, manifest execprotocol.FileManifest) (Status, error) {
+func (s *Store) Begin(id string, manifest execprotocol.FileManifest) (execprotocol.FileStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	status := Status{Manifest: manifest}
+	status := execprotocol.FileStatus{Manifest: manifest}
 	if !validID(id) || manifest.Validate() != nil {
 		return status, execprotocol.ErrInvalid
 	}
@@ -236,7 +230,7 @@ func (s *Store) Begin(id string, manifest execprotocol.FileManifest) (Status, er
 
 // dataFile returns the selected filename after checking durability. A rename
 // may have reached disk before the ready metadata did; Commit verifies it.
-func dataFile(root *os.Root, status Status, flags int) (*os.File, string, error) {
+func dataFile(root *os.Root, status execprotocol.FileStatus, flags int) (*os.File, string, error) {
 	name := "part"
 	if status.Ready {
 		name = "data"
@@ -257,12 +251,12 @@ func dataFile(root *os.Root, status Status, flags int) (*os.File, string, error)
 	return file, name, nil
 }
 
-func (s *Store) Status(id string) (Status, error) {
+func (s *Store) Status(id string) (execprotocol.FileStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	root, err := s.object(id)
 	if err != nil {
-		return Status{}, err
+		return execprotocol.FileStatus{}, err
 	}
 	defer func() { _ = root.Close() }()
 	status, err := readStatus(root)
@@ -276,15 +270,15 @@ func (s *Store) Status(id string) (Status, error) {
 	return status, err
 }
 
-func (s *Store) Write(id string, chunk execprotocol.FileChunk) (Status, error) {
+func (s *Store) Write(id string, chunk execprotocol.FileChunk) (execprotocol.FileStatus, error) {
 	if chunk.Validate() != nil || len(chunk.Data) == 0 {
-		return Status{}, execprotocol.ErrInvalid
+		return execprotocol.FileStatus{}, execprotocol.ErrInvalid
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	root, err := s.object(id)
 	if err != nil {
-		return Status{}, err
+		return execprotocol.FileStatus{}, err
 	}
 	defer func() { _ = root.Close() }()
 	status, err := readStatus(root)
@@ -334,12 +328,12 @@ func (s *Store) Write(id string, chunk execprotocol.FileChunk) (Status, error) {
 	return status, saveStatus(root, status)
 }
 
-func (s *Store) Commit(id string) (Status, error) {
+func (s *Store) Commit(id string) (execprotocol.FileStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	root, err := s.object(id)
 	if err != nil {
-		return Status{}, err
+		return execprotocol.FileStatus{}, err
 	}
 	defer func() { _ = root.Close() }()
 	status, err := readStatus(root)

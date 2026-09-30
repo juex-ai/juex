@@ -42,7 +42,7 @@ const (
 
 func RequiredCapability(kind string) Capability {
 	switch kind {
-	case "read", "write", "edit", "glob", "grep":
+	case "read", "write", "edit", "glob", "grep", "export_file", "import_file":
 		return Files
 	case "exec_command", "write_stdin":
 		return Shell
@@ -87,21 +87,23 @@ func (s State) Terminal() bool {
 }
 
 type Snapshot struct {
-	Version       int       `json:"version"`
-	EnvironmentID string    `json:"environment_id"`
-	ID            string    `json:"id"`
-	AgentID       string    `json:"agent_id"`
-	Kind          string    `json:"kind"`
-	State         State     `json:"state"`
-	Output        []byte    `json:"output"`
-	NextCursor    int64     `json:"next_cursor"`
-	OutputBytes   int64     `json:"output_bytes"`
-	Truncated     bool      `json:"truncated"`
-	OutputExpired bool      `json:"output_expired"`
-	ExitCode      *int      `json:"exit_code"`
-	Error         string    `json:"error"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	Version       int         `json:"version"`
+	EnvironmentID string      `json:"environment_id"`
+	ID            string      `json:"id"`
+	AgentID       string      `json:"agent_id"`
+	Kind          string      `json:"kind"`
+	State         State       `json:"state"`
+	Output        []byte      `json:"output"`
+	NextCursor    int64       `json:"next_cursor"`
+	OutputBytes   int64       `json:"output_bytes"`
+	Truncated     bool        `json:"truncated"`
+	OutputExpired bool        `json:"output_expired"`
+	ExitCode      *int        `json:"exit_code"`
+	Error         string      `json:"error"`
+	CreatedAt     time.Time   `json:"created_at"`
+	UpdatedAt     time.Time   `json:"updated_at"`
+	File          *FileStatus `json:"file,omitempty"`
+	FileExpired   bool        `json:"file_expired,omitempty"`
 }
 
 func (s Snapshot) Text() string { return string(s.Output) }

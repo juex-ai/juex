@@ -58,6 +58,15 @@ security boundaries. Hosted isolation is the responsibility of the verified
 container backend. Platform model and service credentials are not inherited by
 child processes.
 
+Binary transfer uses a private immutable source capture and a separately staged
+destination. Chunks retain durable cursors across connection loss; command slots
+are used only for capture or final import, not while receiving bytes. Imports
+verify the complete size and SHA-256 before atomic publication and never replace
+an existing path. File bytes have a separate 1 GiB device reservation pool and
+never become command output. Source captures expire only after separate file
+acknowledgment; acknowledging the small operation result does not release them.
+An executor restart leaves unfinished transfers unknown without replay.
+
 Hosted execution uses Docker's API with a pinned Linux image, cgroup v2 and
 gVisor `runsc`; missing isolation fails startup. Each Agent has one durable
 environment identity, network subnet, Workspace and Home. Listing environments

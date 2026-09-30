@@ -17,20 +17,24 @@ import (
 )
 
 type record struct {
-	Request         execprotocol.Request `json:"request"`
-	Hash            string               `json:"hash"`
-	State           execprotocol.State   `json:"state"`
-	OutputBytes     int64                `json:"output_bytes"`
-	Truncated       bool                 `json:"truncated"`
-	OutputExpired   bool                 `json:"output_expired"`
-	ExitCode        *int                 `json:"exit_code"`
-	Error           string               `json:"error"`
-	PID             int                  `json:"pid"`
-	ProcessIdentity string               `json:"process_identity"`
-	CreatedAt       time.Time            `json:"created_at"`
-	UpdatedAt       time.Time            `json:"updated_at"`
-	AcknowledgedAt  *time.Time           `json:"acknowledged_at"`
-	CancelRequested bool                 `json:"cancel_requested"`
+	Request            execprotocol.Request     `json:"request"`
+	Hash               string                   `json:"hash"`
+	State              execprotocol.State       `json:"state"`
+	OutputBytes        int64                    `json:"output_bytes"`
+	Truncated          bool                     `json:"truncated"`
+	OutputExpired      bool                     `json:"output_expired"`
+	ExitCode           *int                     `json:"exit_code"`
+	Error              string                   `json:"error"`
+	PID                int                      `json:"pid"`
+	ProcessIdentity    string                   `json:"process_identity"`
+	CreatedAt          time.Time                `json:"created_at"`
+	UpdatedAt          time.Time                `json:"updated_at"`
+	AcknowledgedAt     *time.Time               `json:"acknowledged_at"`
+	CancelRequested    bool                     `json:"cancel_requested"`
+	File               *execprotocol.FileStatus `json:"file,omitempty"`
+	FileReserved       int64                    `json:"file_reserved,omitempty"`
+	FileExpired        bool                     `json:"file_expired,omitempty"`
+	FileAcknowledgedAt *time.Time               `json:"file_acknowledged_at,omitempty"`
 }
 
 type stateIdentity struct {
@@ -152,6 +156,15 @@ func (e *Engine) load() error {
 				return err
 			}
 		}
+		if r.FileReserved < 0 || r.FileReserved > execprotocol.MaxFileBytes+4096 || r.File != nil && (r.File.Manifest.Validate() != nil || r.File.Cursor < 0 || r.File.Cursor > r.File.Manifest.Size) {
+			return errors.New("invalid durable file transfer record")
+		}
+		if r.State == execprotocol.Completed && r.File != nil && !r.FileExpired {
+			status, err := e.files.Status(e.fileID(r.Request.ID))
+			if err != nil || status.Manifest != r.File.Manifest || !status.Ready {
+				return errors.New("durable transferred file missing or incomplete")
+			}
+		}
 		e.operations[r.Request.ID] = &operation{record: r}
 	}
 	return nil
@@ -189,6 +202,19 @@ func (e *Engine) Prune(now time.Time) error {
 		}
 		if err := os.Remove(e.path(r.Request.ID, ".output")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
+		}
+		if r.FileAcknowledgedAt != nil && now.Sub(*r.FileAcknowledgedAt) >= e.config.Retention && r.FileReserved > 0 {
+			r.FileExpired = true
+			if err := e.save(r); err != nil {
+				return err
+			}
+			if err := e.files.Remove(e.fileID(r.Request.ID)); err != nil {
+				return err
+			}
+			r.FileReserved = 0
+			if err := e.save(r); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

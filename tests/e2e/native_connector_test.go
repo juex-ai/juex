@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -38,6 +39,7 @@ func TestNativeConnectorDisconnectRejoinsOriginalOperationAndRevokes(t *testing.
 			return
 		}
 		defer func() { _ = connection.CloseNow() }()
+		connection.SetReadLimit(3 << 20)
 		var hello execprotocol.Envelope
 		if err := wsjson.Read(ctx, connection, &hello); err != nil {
 			errorsCh <- err
@@ -128,6 +130,69 @@ func TestNativeConnectorDisconnectRejoinsOriginalOperationAndRevokes(t *testing.
 	data, err := os.ReadFile(filepath.Join(config.WorkingDirectory, "counter"))
 	if err != nil || string(data) != "x" {
 		t.Fatal("reconnection repeated side effect", string(data), err)
+	}
+	binary := bytes.Repeat([]byte{0, 255, 128, 13}, (execprotocol.FileChunkBytes+32)/4)
+	if err := os.WriteFile(filepath.Join(config.WorkingDirectory, "binary-source"), binary, 0600); err != nil {
+		t.Fatal(err)
+	}
+	export := nativeRequest(t, "connector-export", "export_file", execprotocol.FileTransferArguments{Path: "binary-source"})
+	if reply := call(second, execprotocol.Envelope{ID: "capture", Type: "submit", Request: &export}); reply.Error != "" {
+		t.Fatal(reply)
+	}
+	captured := nativeEventually(t, engine, export.ID, func(snapshot execprotocol.Snapshot) bool { return snapshot.State.Terminal() })
+	if captured.File == nil || captured.State != execprotocol.Completed {
+		t.Fatal(captured)
+	}
+	manifest := captured.File.Manifest
+	firstPage := call(second, execprotocol.Envelope{ID: "read-file", Type: "file_read", AgentID: export.AgentID, OperationID: export.ID, Limit: execprotocol.FileChunkBytes})
+	if firstPage.Error != "" || firstPage.FileChunk == nil || !bytes.Equal(firstPage.FileChunk.Data, binary[:execprotocol.FileChunkBytes]) {
+		t.Fatal("binary protocol page", firstPage.Error)
+	}
+	importRequest := nativeRequest(t, "connector-import", "import_file", execprotocol.FileTransferArguments{Path: "binary-target", Manifest: &manifest})
+	if reply := call(second, execprotocol.Envelope{ID: "prepare-import", Type: "submit", Request: &importRequest}); reply.Error != "" {
+		t.Fatal(reply)
+	}
+	if reply := call(second, execprotocol.Envelope{ID: "write-first", Type: "file_write", AgentID: importRequest.AgentID, OperationID: importRequest.ID, FileChunk: firstPage.FileChunk}); reply.Error != "" || reply.FileStatus == nil || reply.FileStatus.Cursor != execprotocol.FileChunkBytes {
+		t.Fatal("binary upload cursor", reply.Error)
+	}
+	if err := second.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	second = getConnection()
+	if reply := call(second, execprotocol.Envelope{ID: "resume-import", Type: "query", AgentID: importRequest.AgentID, OperationID: importRequest.ID, Limit: 1024}); reply.Error != "" || reply.Snapshot == nil || reply.Snapshot.File == nil || reply.Snapshot.File.Cursor != execprotocol.FileChunkBytes || reply.Snapshot.State != execprotocol.Accepted {
+		t.Fatal("reconnect lost upload cursor", reply.Error, reply.Snapshot)
+	}
+	if reply := call(second, execprotocol.Envelope{ID: "replay-chunk", Type: "file_write", AgentID: importRequest.AgentID, OperationID: importRequest.ID, FileChunk: firstPage.FileChunk}); reply.Error != "" {
+		t.Fatal("replayed chunk", reply.Error)
+	}
+	lastPage := call(second, execprotocol.Envelope{ID: "read-last", Type: "file_read", AgentID: export.AgentID, OperationID: export.ID, Cursor: execprotocol.FileChunkBytes, Limit: execprotocol.FileChunkBytes})
+	if lastPage.Error != "" || lastPage.FileChunk == nil {
+		t.Fatal(lastPage.Error)
+	}
+	if reply := call(second, execprotocol.Envelope{ID: "write-last", Type: "file_write", AgentID: importRequest.AgentID, OperationID: importRequest.ID, FileChunk: lastPage.FileChunk}); reply.Error != "" {
+		t.Fatal(reply.Error)
+	}
+	// Lose the commit response after the external publication, then query the
+	// same operation on the next connection instead of creating a second import.
+	if err := wsjson.Write(ctx, second, execprotocol.Envelope{Version: execprotocol.Version, ID: "commit-lost-reply", Type: "file_commit", AgentID: importRequest.AgentID, OperationID: importRequest.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if result := nativeEventually(t, engine, importRequest.ID, func(snapshot execprotocol.Snapshot) bool { return snapshot.State.Terminal() }); result.State != execprotocol.Completed {
+		t.Fatal(result)
+	}
+	if err := second.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	second = getConnection()
+	if reply := call(second, execprotocol.Envelope{ID: "query-committed", Type: "submit", Request: &importRequest}); reply.Error != "" || reply.Snapshot == nil || reply.Snapshot.State != execprotocol.Completed {
+		t.Fatal(reply.Error, reply.Snapshot)
+	}
+	got, err := os.ReadFile(filepath.Join(config.WorkingDirectory, "binary-target"))
+	if err != nil || !bytes.Equal(got, binary) {
+		t.Fatal("binary transfer changed bytes", err)
+	}
+	if reply := call(second, execprotocol.Envelope{ID: "file-ack", Type: "file_ack", AgentID: export.AgentID, OperationID: export.ID, FileManifest: &manifest}); reply.Error != "" {
+		t.Fatal(reply.Error)
 	}
 	long := nativeRequest(t, "revoke-running", "exec_command", native.CommandArguments{Command: "printf running; sleep 120"})
 	if reply := call(second, execprotocol.Envelope{ID: "start-long", Type: "submit", Request: &long}); reply.Error != "" {

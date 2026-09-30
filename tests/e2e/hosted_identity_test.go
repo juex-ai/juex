@@ -72,6 +72,49 @@ func TestHostedWorkerIdentityProtectsControlState(t *testing.T) {
 	if info.Sys().(*syscall.Stat_t).Uid != 1000 {
 		t.Fatal("file write ran under control identity")
 	}
+	for _, path := range []string{secret, filepath.Join(work, "secret-link")} {
+		result := nativeRun(t, engine, nativeRequest(t, "export-"+filepath.Base(path), "export_file", execprotocol.FileTransferArguments{Path: path}))
+		if result.State != execprotocol.Failed || strings.Contains(result.Text(), "private-control-token") {
+			t.Fatal("export bypassed worker identity", result)
+		}
+	}
+	capture := nativeRun(t, engine, nativeRequest(t, "export-owned", "export_file", execprotocol.FileTransferArguments{Path: "owned"}))
+	if capture.State != execprotocol.Completed || capture.File == nil {
+		t.Fatal(capture)
+	}
+	chunk, err := engine.ReadFile("agent-one", "export-owned", 0, 100)
+	if err != nil || string(chunk.Data) != "worker" {
+		t.Fatal("unprivileged capture failed", err)
+	}
+	for _, target := range []struct {
+		id, path string
+		state    execprotocol.State
+	}{{"import-owned", "imported", execprotocol.Completed}, {"import-existing", "owned", execprotocol.Failed}, {"import-protected", filepath.Join(control, "forbidden"), execprotocol.Failed}} {
+		request := nativeRequest(t, target.id, "import_file", execprotocol.FileTransferArguments{Path: target.path, Manifest: &capture.File.Manifest})
+		if _, err := engine.Submit(request); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := engine.WriteFile("agent-one", request.ID, chunk); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := engine.CommitFile("agent-one", request.ID); err != nil {
+			t.Fatal(err)
+		}
+		result := nativeEventually(t, engine, request.ID, func(s execprotocol.Snapshot) bool { return s.State.Terminal() })
+		if result.State != target.state {
+			t.Fatal(target.id, result)
+		}
+	}
+	info, err = os.Stat(filepath.Join(work, "imported"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Sys().(*syscall.Stat_t).Uid != 1000 {
+		t.Fatal("import ran under control identity")
+	}
+	if _, err := os.Stat(filepath.Join(control, "forbidden")); !os.IsNotExist(err) {
+		t.Fatal("import exposed control state", err)
+	}
 	for _, tty := range []bool{false, true} {
 		id := "shell"
 		if tty {

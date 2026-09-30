@@ -110,6 +110,34 @@ func Execute(ctx context.Context, args []string, in io.Reader, out io.Writer) er
 		return native.RunFileOperation(cmd.Context(), directory, request.Kind, args, out)
 	}}
 	file.Flags().StringVar(&directory, "working-directory", "/workspace", "Default file tool working directory")
-	root.AddCommand(serve, file)
+	var transferDirectory, transferPath, direction, sha256 string
+	var size int64
+	transfer := &cobra.Command{Use: "transfer-tool", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if os.Geteuid() == 0 {
+			return errors.New("file transfers must run as an unprivileged user")
+		}
+		switch direction {
+		case "export":
+			return native.RunFileExport(cmd.Context(), transferDirectory, transferPath, out)
+		case "import":
+			err := native.RunFileImport(cmd.Context(), transferDirectory, transferPath, execprotocol.FileManifest{Size: size, SHA256: sha256}, in)
+			code := execprotocol.ErrorCode(err)
+			if errors.Is(err, os.ErrPermission) {
+				code = "denied"
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				code = "cancelled"
+			}
+			return json.NewEncoder(out).Encode(native.FileTransferResult{Error: code})
+		default:
+			return execprotocol.ErrInvalid
+		}
+	}}
+	transfer.Flags().StringVar(&transferDirectory, "working-directory", "/workspace", "Default working directory")
+	transfer.Flags().StringVar(&transferPath, "path", "", "Source or new destination file")
+	transfer.Flags().StringVar(&direction, "direction", "", "export or import")
+	transfer.Flags().StringVar(&sha256, "sha256", "", "Expected import SHA-256")
+	transfer.Flags().Int64Var(&size, "size", 0, "Expected import bytes")
+	root.AddCommand(serve, file, transfer)
 	return root.ExecuteContext(ctx)
 }

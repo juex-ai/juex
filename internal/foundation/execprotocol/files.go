@@ -14,6 +14,18 @@ type FileManifest struct {
 	SHA256 string `json:"sha256"`
 }
 
+type FileStatus struct {
+	Manifest FileManifest `json:"manifest"`
+	Cursor   int64        `json:"cursor"`
+	Ready    bool         `json:"ready"`
+}
+
+type FileTransferArguments struct {
+	Path             string        `json:"path"`
+	WorkingDirectory string        `json:"working_directory,omitempty"`
+	Manifest         *FileManifest `json:"manifest,omitempty"`
+}
+
 func FileDigest(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 
 func (m FileManifest) Validate() error {
