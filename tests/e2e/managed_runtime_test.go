@@ -56,6 +56,35 @@ func runtimeConfig() managedruntime.TurnConfig {
 	return managedruntime.TurnConfig{AgentVersion: 1, Instructions: "Be precise", Models: []managedruntime.ModelConfig{{ModelID: "00000000-0000-4000-8000-000000000001", Provider: "fixture", Model: "small", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", ContextWindow: 32768, MaxOutput: 4096}}}
 }
 
+func TestManagedRuntimeActivationAllowsConcurrentForeignKeyChecks(t *testing.T) {
+	pool, store, scope, _ := runtimeDatabase(t)
+	ctx := context.Background()
+	input, err := store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: "pending", Text: "Hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.Claim(ctx, scope.AgentID, "activation", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// Admission's Thread FK checks acquire this lock on the stable Agent ID.
+	// Activation must serialize lease mutations without conflicting with it.
+	if _, err := tx.Exec(ctx, `SELECT id FROM runtime.agents WHERE id=$1 FOR KEY SHARE`, scope.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	work, err := store.BeginTurn(bounded, lease, scope, input.ID, runtimeConfig())
+	if err != nil || work.InputID != input.ID {
+		t.Fatal("foreign key checks blocked Activation", err)
+	}
+}
+
 func TestManagedRuntimeDurableInputAndFencing(t *testing.T) {
 	pool, store, scope, main := runtimeDatabase(t)
 	ctx := context.Background()

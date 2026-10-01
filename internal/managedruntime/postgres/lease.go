@@ -47,9 +47,11 @@ func (s *Store) Release(ctx context.Context, lease managedruntime.Lease) error {
 
 // fence locks the lease row through the whole business transaction. A new
 // activation cannot take ownership while the old writer commits a transition.
+// The Agent ID is immutable: allow child FK checks, which can run with a
+// Thread row already locked, without inverting the Agent/Thread lock order.
 func fence(ctx context.Context, tx pgx.Tx, lease managedruntime.Lease) error {
 	var valid bool
-	err := tx.QueryRow(ctx, `SELECT holder=$2 AND epoch=$3 AND lease_until>clock_timestamp() FROM runtime.agents WHERE id=$1 FOR UPDATE`, lease.AgentID, lease.Holder, lease.Epoch).Scan(&valid)
+	err := tx.QueryRow(ctx, `SELECT holder=$2 AND epoch=$3 AND lease_until>clock_timestamp() FROM runtime.agents WHERE id=$1 FOR NO KEY UPDATE`, lease.AgentID, lease.Holder, lease.Epoch).Scan(&valid)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && !valid {
 		return managedruntime.ErrFence
 	}
