@@ -10,12 +10,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juex-ai/juex/internal/foundation/maildelivery"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 	"github.com/juex-ai/juex/internal/foundation/secrets"
 	"github.com/juex-ai/juex/internal/management"
 	"github.com/juex-ai/juex/internal/management/postgres"
 )
 
 type ManagementConfig struct {
+	Maintenance  maintenance.Gate
 	DatabaseURL  string
 	MasterKey    string
 	PublicURL    string
@@ -25,13 +27,14 @@ type ManagementConfig struct {
 }
 
 type Management struct {
-	Pool      *pgxpool.Pool
-	Directory *postgres.Directory
-	Auth      *postgres.Auth
-	Mailer    *maildelivery.SMTP
-	Authority RuntimeAuthority
-	auditDays int
-	Purger    *management.Purger
+	Maintenance maintenance.Gate
+	Pool        *pgxpool.Pool
+	Directory   *postgres.Directory
+	Auth        *postgres.Auth
+	Mailer      *maildelivery.SMTP
+	Authority   RuntimeAuthority
+	auditDays   int
+	Purger      *management.Purger
 }
 
 func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, error) {
@@ -80,7 +83,7 @@ func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, 
 		return nil, err
 	}
 	ok = true
-	return &Management{Pool: pool, Directory: d, Auth: auth, Mailer: mailer, Authority: RuntimeAuthority{Directory: d}, auditDays: auditDays}, nil
+	return &Management{Maintenance: config.Maintenance, Pool: pool, Directory: d, Auth: auth, Mailer: mailer, Authority: RuntimeAuthority{Directory: d}, auditDays: auditDays}, nil
 }
 
 func (m *Management) Close() { m.Pool.Close() }
@@ -107,9 +110,13 @@ func (m *Management) runPurges(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		pass, cancel := context.WithTimeout(ctx, 35*time.Second)
-		_, err := m.Purger.Reconcile(pass)
+		done, err := m.Maintenance.Enter()
+		if err == nil {
+			_, err = m.Purger.Reconcile(pass)
+			done()
+		}
 		cancel()
-		if err != nil && ctx.Err() == nil {
+		if err != nil && !errors.Is(err, maintenance.ErrDraining) && ctx.Err() == nil {
 			slog.Error("resource cleanup step failed", "error", err)
 		}
 		select {
@@ -126,8 +133,13 @@ func (m *Management) runMail(ctx context.Context) {
 		return
 	}
 	for ctx.Err() == nil {
-		worked, err := m.Directory.DeliverMail(ctx, m.Mailer)
-		if err != nil && ctx.Err() == nil {
+		var worked bool
+		done, err := m.Maintenance.Enter()
+		if err == nil {
+			worked, err = m.Directory.DeliverMail(ctx, m.Mailer)
+			done()
+		}
+		if err != nil && !errors.Is(err, maintenance.ErrDraining) && ctx.Err() == nil {
 			slog.Error("management mail queue unavailable", "error", err)
 		}
 		if worked && err == nil {

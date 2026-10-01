@@ -7,6 +7,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/execution/blob"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
 type ArtifactUpload struct {
@@ -52,6 +53,11 @@ func (s *Service) artifactManager() (*ArtifactManager, error) {
 }
 
 func (s *Service) BeginArtifact(ctx context.Context, actor, tenant, agent string, request ArtifactRequest) (ArtifactUpload, error) {
+	done, err := maintenance.Enter(s.Admission)
+	if err != nil {
+		return ArtifactUpload{}, err
+	}
+	defer done()
 	manager, err := s.artifactManager()
 	if err != nil {
 		return ArtifactUpload{}, err

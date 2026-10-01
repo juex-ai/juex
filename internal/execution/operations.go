@@ -3,10 +3,12 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
 func permits(device Device, scope Scope, kind string) bool {
@@ -19,7 +21,12 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 		return nil, err
 	}
 	if s.Hosted != nil {
-		if err := s.Hosted.Ensure(ctx, scope); err != nil {
+		done, err := maintenance.Enter(s.Admission)
+		if err == nil {
+			err = s.Hosted.Ensure(ctx, scope)
+			done()
+		}
+		if err != nil && !errors.Is(err, maintenance.ErrDraining) {
 			return nil, err
 		}
 	}
@@ -53,6 +60,11 @@ func (s *Service) SubmitFenced(ctx context.Context, actor, tenant, environment s
 }
 
 func (s *Service) submit(ctx context.Context, actor, tenant, environment string, request execprotocol.Request, wait time.Duration, fence *execprotocol.AuthorityFence) (Operation, error) {
+	done, err := maintenance.Enter(s.Admission)
+	if err != nil {
+		return Operation{}, err
+	}
+	defer done()
 	if request.Kind == "export_file" || request.Kind == "import_file" {
 		return Operation{}, execprotocol.ErrInvalid
 	}

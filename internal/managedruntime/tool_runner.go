@@ -14,9 +14,11 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
 type toolRunner struct {
+	admission        maintenance.Admission
 	hooks            HookStore
 	applications     ApplicationGateway
 	applicationStore ApplicationStore
@@ -129,6 +131,14 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			return cancellationOutcome(state)
 		}
 		return ToolOutcome{State: "cancelled"}
+	}
+	// Existing external requests retain their receipt/cancellation path. New
+	// application mutations and unprepared tools wait for admission to reopen.
+	done, admissionErr := maintenance.Enter(r.admission)
+	if admissionErr == nil {
+		defer done()
+	} else if work.Request.ID == "" {
+		return retryTool()
 	}
 	fresh, err := r.authority.Authorize(ctx, work.Scope.ActorID, work.Scope.TenantID, work.Scope.AgentID, true)
 	if err != nil || !work.Scope.SameAuthority(fresh) {

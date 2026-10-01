@@ -10,12 +10,17 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/managed"
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/spf13/cobra"
 )
 
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
+	gate, err := maintenance.Open(os.Getenv("JUEX_MAINTENANCE_DIR"))
+	if err != nil {
+		return err
+	}
 	var listen, managementAddress, executionAddress, memoryAddress, calendarAddress, credentials string
 	var threads int
 	var idle time.Duration
@@ -30,7 +35,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Runtime service identity")
 	serve := &cobra.Command{Use: "serve", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		identity := platformrpc.CredentialsAt(credentials, "runtime")
-		app, err := managed.OpenRuntime(cmd.Context(), managed.RuntimeConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: managementAddress, ExecutionAddress: executionAddress, MemoryAddress: memoryAddress, CalendarAddress: calendarAddress, Credentials: identity, Runner: managedruntime.RunnerConfig{Concurrency: threads, IdleTimeout: idle}})
+		app, err := managed.OpenRuntime(cmd.Context(), managed.RuntimeConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: managementAddress, ExecutionAddress: executionAddress, MemoryAddress: memoryAddress, CalendarAddress: calendarAddress, Credentials: identity, Runner: managedruntime.RunnerConfig{Admission: gate.Enter, Concurrency: threads, IdleTimeout: idle}})
 		if err != nil {
 			return err
 		}

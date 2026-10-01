@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
 func Digest(secret string) string {
@@ -18,6 +19,7 @@ func Digest(secret string) string {
 }
 
 type Service struct {
+	Admission maintenance.Admission
 	Store     Repository
 	Authority Authority
 	Hosted    *HostedManager
@@ -44,6 +46,11 @@ func validCapabilities(capabilities []execprotocol.Capability) bool {
 }
 
 func (s *Service) BeginPair(ctx context.Context, request PairRequest) (Pairing, error) {
+	done, err := maintenance.Enter(s.Admission)
+	if err != nil {
+		return Pairing{}, err
+	}
+	defer done()
 	for _, character := range request.ID {
 		valid := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_'
 		if !valid {
@@ -122,6 +129,11 @@ func (s *Service) ApprovePair(ctx context.Context, actor, tenant, id string, gra
 }
 
 func (s *Service) ConfirmPair(ctx context.Context, confirmation PairConfirmation) (Device, error) {
+	done, err := maintenance.Enter(s.Admission)
+	if err != nil {
+		return Device{}, err
+	}
+	defer done()
 	if len(confirmation.Credential) < 32 || len(confirmation.Credential) > 256 || len(confirmation.ApprovalNonce) < 20 || len(confirmation.ApprovalNonce) > 256 {
 		return Device{}, execprotocol.ErrDenied
 	}

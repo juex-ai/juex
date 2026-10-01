@@ -1,0 +1,12 @@
+[Unit]
+Description=JueX consistent managed platform backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+EnvironmentFile=/etc/juex/backup.env
+ExecStart=/usr/bin/python3 /opt/juex/operator.py --root ${JUEX_DEPLOY_ROOT} backup --destination ${JUEX_BACKUP_DESTINATION} --recovery-destination ${JUEX_RECOVERY_DESTINATION}
+TimeoutStartSec=infinity

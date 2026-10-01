@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
 type ExecutionStore interface {
@@ -31,6 +32,7 @@ type ExecutionStore interface {
 }
 
 type RunnerConfig struct {
+	Admission         maintenance.Admission
 	Notifications     NotificationGateway
 	Applications      ApplicationGateway
 	Tools             ToolGateway
@@ -87,7 +89,7 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 	if !ok {
 		return nil, ErrInvalid
 	}
-	runner.tools = &toolRunner{store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
+	runner.tools = &toolRunner{admission: config.Admission, store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
 	runner.tools.hooks, _ = store.(HookStore)
 	runner.tools.applications = config.Applications
 	runner.tools.applicationStore, _ = store.(ApplicationStore)
@@ -264,6 +266,10 @@ func (r *Runner) Run(ctx context.Context) {
 			})
 			item := candidates[0]
 			candidates = candidates[1:]
+			done, err := maintenance.Enter(r.config.Admission)
+			if err != nil {
+				break
+			}
 			a := item.a
 			serial++
 			a.order = serial
@@ -272,6 +278,7 @@ func (r *Runner) Run(ctx context.Context) {
 			active++
 			lease := a.lease
 			workers.Go(func() {
+				defer done()
 				err := r.execute(a.ctx, lease, item.pending)
 				finished <- finishedWork{agentID: lease.AgentID, threadID: item.pending.ThreadID, err: err}
 			})

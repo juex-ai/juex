@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
 // Exchange is one correlated request/reply on an outbound device connection.
@@ -130,6 +131,11 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 		if terminal {
 			return execprotocol.ErrConflict
 		}
+		done, admissionErr := maintenance.Enter(s.Admission)
+		if admissionErr != nil {
+			return nil
+		}
+		defer done()
 		if operation.State == "waiting" {
 			operation, err = s.Store.Dispatch(ctx, device.ID, device.ConnectionEpoch, operation.ID)
 			if err != nil {

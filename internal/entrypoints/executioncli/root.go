@@ -15,11 +15,16 @@ import (
 	"github.com/juex-ai/juex/internal/app/managed"
 	"github.com/juex-ai/juex/internal/entrypoints/executionhttp"
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/spf13/cobra"
 )
 
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
+	gate, err := maintenance.Open(os.Getenv("JUEX_MAINTENANCE_DIR"))
+	if err != nil {
+		return err
+	}
 	var address, httpAddress, management, credentials, hostedConfiguration, hostedAddress, blobDirectory string
 	var blobCapacity int64
 	var auditDays int
@@ -31,7 +36,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Execution service identity")
 	serve := &cobra.Command{Use: "serve", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		identity := platformrpc.CredentialsAt(credentials, "execution")
-		app, err := managed.OpenExecution(cmd.Context(), managed.ExecutionConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: management, Credentials: identity, HostedConfiguration: hostedConfiguration, HostedListen: hostedAddress, BlobDirectory: blobDirectory, BlobCapacity: blobCapacity, AuditDays: auditDays})
+		app, err := managed.OpenExecution(cmd.Context(), managed.ExecutionConfig{Admission: gate.Enter, DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: management, Credentials: identity, HostedConfiguration: hostedConfiguration, HostedListen: hostedAddress, BlobDirectory: blobDirectory, BlobCapacity: blobCapacity, AuditDays: auditDays})
 		if err != nil {
 			return err
 		}
@@ -129,5 +134,6 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	serve.Flags().IntVar(&auditDays, "audit-days", 90, "Retain operation audit facts for this many days (1–3650)")
 	serve.Flags().Int64Var(&blobCapacity, "blob-capacity", 20<<30, "Maximum reserved platform file bytes")
 	root.AddCommand(serve)
+	root.AddCommand(recoveryCommand(out))
 	return root.ExecuteContext(ctx)
 }

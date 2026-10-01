@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
 func (s *Service) BeginTransfer(ctx context.Context, actor, tenant, agent string, request TransferRequest) (Transfer, error) {
@@ -20,6 +21,11 @@ func (s *Service) BeginTransferFenced(ctx context.Context, actor, tenant, agent 
 }
 
 func (s *Service) beginTransfer(ctx context.Context, actor, tenant, agent string, request TransferRequest, fence *execprotocol.AuthorityFence) (Transfer, error) {
+	done, err := maintenance.Enter(s.Admission)
+	if err != nil {
+		return Transfer{}, err
+	}
+	defer done()
 	if s.Transfers == nil {
 		return Transfer{}, execprotocol.ErrUnavailable
 	}

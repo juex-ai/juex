@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/application"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 )
 
@@ -17,6 +18,7 @@ type Repository interface {
 }
 
 type Service struct {
+	Admission  maintenance.Admission
 	Repository Repository
 	Authority  application.Authority
 	Workers    WorkerGateway

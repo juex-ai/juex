@@ -9,11 +9,16 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/managed"
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/spf13/cobra"
 )
 
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
+	gate, err := maintenance.Open(os.Getenv("JUEX_MAINTENANCE_DIR"))
+	if err != nil {
+		return err
+	}
 	var listen, managementAddress, runtimeAddress, credentials string
 	root := &cobra.Command{Use: "juex-memory", Short: "Run the independent Fleet Memory service", SilenceUsage: true, SilenceErrors: true}
 	root.SetArgs(args)
@@ -24,7 +29,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Memory service identity")
 	serve := &cobra.Command{Use: "serve", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		identity := platformrpc.CredentialsAt(credentials, "memory")
-		app, err := managed.OpenMemory(cmd.Context(), managed.MemoryConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: managementAddress, RuntimeAddress: runtimeAddress, Credentials: identity})
+		app, err := managed.OpenMemory(cmd.Context(), managed.MemoryConfig{Admission: gate.Enter, DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: managementAddress, RuntimeAddress: runtimeAddress, Credentials: identity})
 		if err != nil {
 			return err
 		}

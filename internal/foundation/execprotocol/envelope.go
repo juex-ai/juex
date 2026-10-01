@@ -1,6 +1,9 @@
 package execprotocol
 
-import "errors"
+import (
+	"errors"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
+)
 
 // Envelope request IDs correlate transport replies. Operation IDs remain stable
 // across transport reconnects and are deduplicated by the execution journal.
@@ -27,6 +30,8 @@ func ErrorCode(err error) string {
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, maintenance.ErrDraining):
+		return "maintenance"
 	case errors.Is(err, ErrVersion):
 		return "protocol_version"
 	case errors.Is(err, ErrInvalid):
@@ -50,6 +55,8 @@ func FromErrorCode(code string) error {
 	switch code {
 	case "":
 		return nil
+	case "maintenance":
+		return maintenance.ErrDraining
 	case "protocol_version":
 		return ErrVersion
 	case "invalid":

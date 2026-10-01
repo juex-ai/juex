@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/application"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
 var ErrWorkerMissing = errors.New("application Worker has not been admitted")
@@ -25,6 +26,11 @@ type JobRepository interface {
 // Review delivery is retried with the same identity. Runtime freezes admission
 // atomically, so competing service instances and lost replies cannot fork work.
 func (s *Service) Step(ctx context.Context) error {
+	done, err := maintenance.Enter(s.Admission)
+	if err != nil {
+		return err
+	}
+	defer done()
 	repo, ok := s.Repository.(JobRepository)
 	if !ok || s.Workers == nil {
 		return application.ErrInvalid
@@ -167,7 +173,7 @@ func (s *Service) Run(ctx context.Context) {
 		call, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := s.Step(call)
 		cancel()
-		if err != nil && ctx.Err() == nil {
+		if err != nil && !errors.Is(err, maintenance.ErrDraining) && ctx.Err() == nil {
 			slog.Warn("Memory review delivery delayed", "error", err)
 		}
 	}

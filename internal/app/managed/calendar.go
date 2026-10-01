@@ -7,11 +7,13 @@ import (
 	"github.com/juex-ai/juex/internal/calendar"
 	calendarpg "github.com/juex-ai/juex/internal/calendar/postgres"
 	applicationrpc "github.com/juex-ai/juex/internal/foundation/application/rpc"
+	"github.com/juex-ai/juex/internal/foundation/maintenance"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	runtimerpc "github.com/juex-ai/juex/internal/managedruntime/rpc"
 )
 
 type CalendarConfig struct {
+	Admission         maintenance.Admission
 	DatabaseURL       string
 	ManagementAddress string
 	RuntimeAddress    string
@@ -36,7 +38,7 @@ func OpenCalendar(ctx context.Context, config CalendarConfig) (*Calendar, error)
 		pool.Close()
 		return nil, err
 	}
-	service := &calendar.Service{Repository: calendarpg.New(pool), Authority: authority}
+	service := &calendar.Service{Admission: config.Admission, Repository: calendarpg.New(pool), Authority: authority}
 	client, err := runtimerpc.NewClient(config.RuntimeAddress, config.Credentials)
 	if err != nil {
 		pool.Close()

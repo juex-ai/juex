@@ -1,0 +1,135 @@
+name: juex
+
+x-service: &service
+  image: ${JUEX_PLATFORM_IMAGE:?Set the pinned platform image}
+  runtime: runc
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ['/tmp:size=64m,mode=1777']
+  stop_grace_period: 60s
+  logging: {driver: none}
+  depends_on:
+    postgres: {condition: service_healthy}
+
+services:
+  postgres:
+    image: ${JUEX_POSTGRES_IMAGE:-postgres:18-bookworm}
+    runtime: runc
+    restart: unless-stopped
+    entrypoint: [/usr/local/bin/juex-service-log, --, /usr/local/bin/docker-entrypoint.sh]
+    command: [postgres]
+    environment: {POSTGRES_DB: juex, POSTGRES_USER: juex, POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password}
+    volumes:
+      - ${JUEX_DEPLOY_ROOT}/bin/juex-service-log:/usr/local/bin/juex-service-log:ro
+      - ${JUEX_DEPLOY_ROOT}/logs/postgres:/run/juex/logs
+      - ${JUEX_DEPLOY_ROOT}/postgres:/var/lib/postgresql
+      - ${JUEX_DEPLOY_ROOT}/secrets/postgres-password:/run/secrets/postgres-password:ro
+    networks:
+      platform: {ipv4_address: '${JUEX_PLATFORM_PREFIX:-172.30.0}.2'}
+    healthcheck: {test: [CMD-SHELL, 'pg_isready -U juex -d juex'], interval: 2s, timeout: 2s, retries: 30}
+    logging: {driver: none}
+
+  management:
+    <<: *service
+    command: [juex-service-log, --, juex-management, serve]
+    env_file: ['${JUEX_DEPLOY_ROOT}/secrets/management.env']
+    volumes:
+      - ${JUEX_DEPLOY_ROOT}/logs/management:/run/juex/logs
+      - ${JUEX_DEPLOY_ROOT}/certificates/management:/run/juex/certificates:ro
+      - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
+    networks:
+      platform: {ipv4_address: '${JUEX_PLATFORM_PREFIX:-172.30.0}.10'}
+    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
+
+  operator:
+    <<: *service
+    profiles: [operator]
+    restart: 'no'
+    command: [juex-management, maintenance-report]
+    env_file: ['${JUEX_DEPLOY_ROOT}/secrets/management.env']
+    volumes:
+      - ${JUEX_DEPLOY_ROOT}/certificates/management:/run/juex/certificates:ro
+      - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
+    networks: [platform]
+    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
+
+  runtime:
+    <<: *service
+    command: [juex-service-log, --, juex-runtime, serve, --max-active-threads, '${JUEX_ACTIVE_THREADS:-10}']
+    env_file: ['${JUEX_DEPLOY_ROOT}/secrets/runtime.env']
+    volumes:
+      - ${JUEX_DEPLOY_ROOT}/logs/runtime:/run/juex/logs
+      - ${JUEX_DEPLOY_ROOT}/certificates/runtime:/run/juex/certificates:ro
+      - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
+    networks: [platform]
+    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
+
+  memory:
+    <<: *service
+    command: [juex-service-log, --, juex-memory, serve]
+    env_file: ['${JUEX_DEPLOY_ROOT}/secrets/memory.env']
+    volumes:
+      - ${JUEX_DEPLOY_ROOT}/logs/memory:/run/juex/logs
+      - ${JUEX_DEPLOY_ROOT}/certificates/memory:/run/juex/certificates:ro
+      - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
+    networks: [platform]
+
+  calendar:
+    <<: *service
+    command: [juex-service-log, --, juex-calendar, serve]
+    env_file: ['${JUEX_DEPLOY_ROOT}/secrets/calendar.env']
+    volumes:
+      - ${JUEX_DEPLOY_ROOT}/logs/calendar:/run/juex/logs
+      - ${JUEX_DEPLOY_ROOT}/certificates/calendar:/run/juex/certificates:ro
+      - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
+    networks: [platform]
+
+  execution:
+    <<: *service
+    user: '0:0'
+    # The trusted controller installs per-environment host firewall rules and
+    # validates XFS quotas. Its host paths match Docker bind-source paths.
+    network_mode: host
+    cap_add: [NET_ADMIN, SYS_ADMIN, DAC_OVERRIDE, CHOWN, FOWNER]
+    devices: ['${JUEX_WORKSPACE_DEVICE}:${JUEX_WORKSPACE_DEVICE}:r']
+    command: [juex-service-log, --, juex-execution, serve]
+    env_file: ['${JUEX_DEPLOY_ROOT}/secrets/execution.env']
+    volumes:
+      - ${JUEX_DOCKER_SOCKET:-/var/run/docker.sock}:${JUEX_DOCKER_SOCKET:-/var/run/docker.sock}
+      - ${JUEX_DEPLOY_ROOT}/logs/execution:/run/juex/logs
+      - ${JUEX_DEPLOY_ROOT}/certificates/execution:/run/juex/certificates:ro
+      - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
+      - ${JUEX_DEPLOY_ROOT}/hosted.json:${JUEX_DEPLOY_ROOT}/hosted.json:ro
+      - ${JUEX_DEPLOY_ROOT}/secrets/hosted.key:${JUEX_DEPLOY_ROOT}/secrets/hosted.key:ro
+      - ${JUEX_DEPLOY_ROOT}/bin:${JUEX_DEPLOY_ROOT}/bin:ro
+      - ${JUEX_DEPLOY_ROOT}/blobs:${JUEX_DEPLOY_ROOT}/blobs
+      - ${JUEX_DEPLOY_ROOT}/control:${JUEX_DEPLOY_ROOT}/control
+      - ${JUEX_WORKSPACE_ROOT}:${JUEX_WORKSPACE_ROOT}
+      - /run/xtables.lock:/run/xtables.lock
+
+  gateway:
+    image: ${JUEX_GATEWAY_IMAGE:-nginx:1.28-bookworm}
+    runtime: runc
+    restart: unless-stopped
+    entrypoint: [/usr/local/bin/juex-service-log, --, /docker-entrypoint.sh]
+    command: [nginx, -g, 'daemon off;']
+    ports: ['0.0.0.0:${JUEX_HTTPS_PORT:-443}:443']
+    volumes:
+      - ${JUEX_DEPLOY_ROOT}/bin/juex-service-log:/usr/local/bin/juex-service-log:ro
+      - ${JUEX_DEPLOY_ROOT}/logs/gateway:/run/juex/logs
+      - ${JUEX_DEPLOY_ROOT}/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${JUEX_DEPLOY_ROOT}/tls:/run/juex/tls:ro
+    networks: [platform]
+    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
+    depends_on: [management, execution]
+    logging: {driver: none}
+
+networks:
+  platform:
+    labels: {ai.juex.deployment: '${JUEX_DEPLOY_ROOT}'}
+    driver: bridge
+    ipam:
+      config: [{subnet: '${JUEX_PLATFORM_PREFIX:-172.30.0}.0/24', gateway: '${JUEX_PLATFORM_PREFIX:-172.30.0}.1'}]

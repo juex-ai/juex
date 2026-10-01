@@ -18,8 +18,10 @@ import (
 
 	"github.com/cloudwego/gopkg/bufiox"
 	"github.com/cloudwego/kitex/client"
+	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/remote"
 	"github.com/cloudwego/kitex/pkg/remote/trans/gonet"
+	"github.com/cloudwego/kitex/pkg/rpcinfo"
 	"github.com/cloudwego/kitex/server"
 	"github.com/cloudwego/kitex/transport"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc/wire/platform"
@@ -218,12 +220,25 @@ func ClientOptions(address, service string, credentials Credentials) ([]client.O
 	if address == "" || service == "" {
 		return nil, errors.New("platform service address and identity are required")
 	}
+	if host, port, err := net.SplitHostPort(address); err != nil || host == "" || port == "" {
+		return nil, errors.New("platform service requires a TCP host:port address")
+	}
 	config, err := credentials.load()
 	if err != nil {
 		return nil, err
 	}
 	config.ServerName = service
-	return []client.Option{client.WithHostPorts(address), client.WithDialer(tlsDialer{config: config}), client.WithTransHandlerFactory(gonet.NewCliTransHandlerFactory()), client.WithTransportProtocol(transport.TTHeader), client.WithConnectTimeout(3 * time.Second), client.WithRPCTimeout(10 * time.Second)}, nil
+	// Kitex WithHostPorts eagerly resolves DNS and falls back to Unix sockets
+	// on lookup failure. Containers may start before their peers enter DNS;
+	// retain the TCP hostname and resolve it on each connection instead.
+	resolver := &discovery.SynthesizedResolver{
+		NameFunc:   func() string { return "platform-tcp:" + address },
+		TargetFunc: func(context.Context, rpcinfo.EndpointInfo) string { return address },
+		ResolveFunc: func(context.Context, string) (discovery.Result, error) {
+			return discovery.Result{Cacheable: true, CacheKey: address, Instances: []discovery.Instance{discovery.NewInstance("tcp", address, discovery.DefaultWeight, nil)}}, nil
+		},
+	}
+	return []client.Option{client.WithResolver(resolver), client.WithDialer(tlsDialer{config: config}), client.WithTransHandlerFactory(gonet.NewCliTransHandlerFactory()), client.WithTransportProtocol(transport.TTHeader), client.WithConnectTimeout(3 * time.Second), client.WithRPCTimeout(10 * time.Second)}, nil
 }
 
 func Reply(value any, code string) *platform.Reply {
