@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/app/managed"
-	"github.com/juex-ai/juex/internal/foundation/maildelivery"
 	"github.com/juex-ai/juex/internal/foundation/maintenance"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/spf13/cobra"
@@ -48,9 +47,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Management service identity")
 	open := func(cmd *cobra.Command) (*managed.Management, error) {
 		config := managed.ManagementConfig{Maintenance: gate, DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), MasterKey: os.Getenv("JUEX_MASTER_KEY"), PublicURL: strings.TrimSuffix(publicURL, "/"), InsecureHTTP: insecure, AuditDays: auditDays}
-		if address := os.Getenv("JUEX_SMTP_ADDRESS"); address != "" {
-			config.SMTP = &maildelivery.Config{Address: address, From: os.Getenv("JUEX_SMTP_FROM"), Username: os.Getenv("JUEX_SMTP_USERNAME"), Password: os.Getenv("JUEX_SMTP_PASSWORD"), TLSMode: os.Getenv("JUEX_SMTP_TLS_MODE")}
-		}
+		config.SMTP = os.Getenv("JUEX_SMTP_CONFIG")
 		return managed.OpenManagement(cmd.Context(), config)
 	}
 	root.AddCommand(&cobra.Command{Use: "migrate", Short: "Apply platform schema migrations", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
@@ -106,6 +103,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	tenant.AddCommand(createTenant)
 	root.AddCommand(tenant)
 	root.AddCommand(modelCommand(open, out))
+	root.AddCommand(smtpCommand(out))
 	root.AddCommand(maintenanceCommand(out), recoveryCommand(out))
 	root.AddCommand(usageCommand(&credentials, out))
 	services := &cobra.Command{Use: "services", Short: "Operator private service identities"}

@@ -3,7 +3,6 @@ package managed
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"log/slog"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/juex-ai/juex/internal/foundation/maildelivery"
 	"github.com/juex-ai/juex/internal/foundation/maintenance"
-	"github.com/juex-ai/juex/internal/foundation/secrets"
 	"github.com/juex-ai/juex/internal/management"
 	"github.com/juex-ai/juex/internal/management/postgres"
 )
@@ -21,7 +19,7 @@ type ManagementConfig struct {
 	DatabaseURL  string
 	MasterKey    string
 	PublicURL    string
-	SMTP         *maildelivery.Config
+	SMTP         string
 	InsecureHTTP bool
 	AuditDays    int
 }
@@ -46,23 +44,23 @@ func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, 
 	if err != nil {
 		return nil, err
 	}
-	var mailer *maildelivery.SMTP
-	if config.SMTP != nil {
-		mailer, err = maildelivery.NewSMTP(*config.SMTP)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if config.DatabaseURL == "" {
 		return nil, errors.New("JUEX_DATABASE_URL is required")
 	}
-	key, err := hex.DecodeString(config.MasterKey)
-	if err != nil {
-		return nil, errors.New("JUEX_MASTER_KEY must be 64 hexadecimal characters")
-	}
-	box, err := secrets.New(key)
+	box, err := deploymentSecrets(config.MasterKey)
 	if err != nil {
 		return nil, err
+	}
+	var mailer *maildelivery.SMTP
+	if config.SMTP != "" {
+		smtp, err := openSMTPConfig(box, config.SMTP)
+		if err != nil {
+			return nil, err
+		}
+		mailer, err = maildelivery.NewSMTP(smtp)
+		if err != nil {
+			return nil, err
+		}
 	}
 	pool, err := openDatabase(ctx, config.DatabaseURL)
 	if err != nil {

@@ -29,7 +29,7 @@ func TestManagementOperatorCLIAndHTTP(t *testing.T) {
 	t.Setenv("JUEX_DATABASE_URL", pool.Config().ConnString())
 	t.Setenv("JUEX_MASTER_KEY", hex.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
 	t.Setenv("JUEX_PUBLIC_URL", "http://localhost:8680")
-	t.Setenv("JUEX_SMTP_ADDRESS", "")
+	t.Setenv("JUEX_SMTP_CONFIG", "")
 	ctx := context.Background()
 	command := func(args ...string) []byte {
 		t.Helper()
