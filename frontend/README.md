@@ -1,42 +1,27 @@
-# Juex Frontend
+# JueX Frontend
 
 > English | [中文](README.zh.md)
 
-This React + TypeScript + Vite application is the Fleet UI served by
-`juex fleet serve`. Fleet owns roster and process controls and proxies
-selected-Agent JSON/SSE requests. The server remains the source of truth.
+React/TypeScript/Vite implements the Management dashboard. The server owns
+identity, authorization, conversation and application truth.
 
-## Local Development
-
-From the repository root:
-
-```bash
-make web
-go run ./cmd/juex fleet serve
-pnpm --dir frontend dev
+```sh
+mise exec -- make web
+mise exec -- pnpm --dir frontend dev
 ```
 
-Vite proxies Fleet and selected-Agent API requests to the local Fleet server.
-Production output is copied from `frontend/dist/` into `internal/entrypoints/webassets/dist/`;
-do not edit embedded output directly.
+Run a configured development Management service on port 8680. Vite binds
+`0.0.0.0:5173` and proxies `/api` to that service. Production assets are copied
+from `frontend/dist` to `internal/entrypoints/webassets/dist`; do not edit the
+embedded output. Deployment uses the [platform operator](../deploy/managed/README.md).
 
-The frontend verification gate runs browser interactions against the production
-build and requires a local Chrome executable. Set `CHROME_PATH` when Chrome is
-not installed in its standard platform location.
+`src/management` owns the dashboard, generated contracts, API clients and views.
+`src/components/ui` owns shared primitives; `src/components/ai-elements/message`
+provides conversation rendering. Shared tokens live in `src/index.css`.
+Regenerate Management contracts with `go run ./scripts/gen-management-schema`
+when changing public types; schema parity is checked by server tests.
 
-## Ownership
-
-- `src/pages/` owns route-level Fleet, Thread, and Runtime views.
-- `src/components/` owns reusable presentation and interaction.
-- `src/modules/` owns built-in module renderers and resource adapters. Its static
-  registry resolves server contributions into Thread status and optional file
-  roots; pages do not reinterpret module configuration. File adapters bind an
-  explicit Agent/Thread scope and mount only for the selected root.
-- `src/lib/` owns client-side read models and stream projection.
-- `src/api.ts` is the typed Fleet/Agent transport boundary.
-- `src/index.css` owns production design tokens.
-
-Stable interaction and visual rules are in [DESIGN.md](../DESIGN.md). Exact
-component names and request shapes are owned by code and tests. Verification
-uses the repository-local
-[Juex local-test skill](../.agents/skills/juex-localtest/SKILL.md).
+`make web-check` covers types, unit tests, lint, production build and browser
+interactions. Chrome must be available; set `CHROME_PATH` for a nonstandard path.
+Visible behavior additionally needs a rebuilt live service/browser check.
+See [DESIGN.md](../DESIGN.md) and the [verification skill](../.agents/skills/juex-localtest/SKILL.md).

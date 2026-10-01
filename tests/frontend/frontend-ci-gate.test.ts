@@ -28,16 +28,8 @@ test("CI runs the frontend gate separately without slowing Go jobs", () => {
     ciSource,
     /frontend:\n\s+runs-on: ubuntu-latest[\s\S]*uses: pnpm\/action-setup@v4[\s\S]*version: 11\.6\.0[\s\S]*uses: actions\/setup-node@v4[\s\S]*node-version: 24[\s\S]*cache: pnpm[\s\S]*cache-dependency-path: frontend\/pnpm-lock\.yaml[\s\S]*run: make web-check/,
   );
-  assert.equal(
-    ciSource.match(/Prepare embedded web dist/g)?.length,
-    2,
-    "the existing Go jobs must keep using the lightweight embedded-web stub",
-  );
-  assert.equal(
-    ciSource.match(/run: make web-stub/g)?.length,
-    2,
-    "CI and local candidate verification must share the web-stub target",
-  );
+  assert.match(ciSource, /run: make web-stub/,
+    "Go jobs share the lightweight embedded-web stub target");
 });
 
 test("frontend tool versions and verification authority stay explicit", () => {

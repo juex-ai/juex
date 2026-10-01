@@ -1,130 +1,68 @@
-# Juex
+# JueX
 
 > English | [中文](README.zh.md)
 
-Juex is a long-running, local-first Agent runtime written in Go. An Agent owns
-one permanent Main Thread and may run independent Worker Threads. CLI and Web
-clients use the same durable input and event interfaces.
+JueX is a managed Agent platform. One deployment serves multiple tenants and
+users through a single Management dashboard. Each user has one Fleet per tenant;
+Agents run in a shared durable Runtime and use hosted or explicitly authorized
+remote execution environments. The default deployment has one tenant.
 
-Juex is an agent runtime, not an RPC or workflow engine. Sending an Input means
-durable acceptance into a Thread; it does not imply that the next Assistant
-message is a one-to-one response.
+## Deploy
 
-## Quick Start
+Follow the [Linux deployment guide](deploy/managed/README.md) to initialize
+Docker Compose, PostgreSQL, HTTPS, gVisor and persistent storage. The operator
+creates the first administrator's one-use setup link and provisions model
+credentials. Administrators invite members; users sign in with email/password.
 
-Install a published release:
+Closing the browser does not stop accepted work. Memory and Calendar are
+independent Fleet applications and continue according to their own lifecycle.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.sh | bash
+## Clients
+
+Release archives contain `juex` and `juex-executor` for Linux/macOS, amd64/arm64.
+Download an archive and verify its release checksum, or use the Python 3.11+
+installer from a checked-out release:
+
+```sh
+python3 scripts/install.py --version VERSION
+export JUEX_SERVER=https://juex.example.com
+juex login --email user@example.com --password-stdin
+juex tenant list
+juex fleet show
+juex agent list
 ```
 
-Or build from source:
+The login command reads the password from standard input. Do not place it in
+command arguments. CLI session credentials are private and scoped to the public
+origin. See [client CLI](internal/entrypoints/clientcli/README.md) and command help.
 
-```bash
-make build
+Enroll a remote Linux/macOS device with an explicit private state directory:
+
+```sh
+juex-executor --state /absolute/private/device-state pair --server https://juex.example.com
+juex-executor --state /absolute/private/device-state run
 ```
 
-Initialize and validate configuration:
+Approve the request in the dashboard and confirm the grant locally. Device
+execution uses the current OS user's permissions. See
+[Execution](internal/execution/README.md) for background mode, grants and recovery.
 
-```bash
-juex config init
-juex agent add .
-juex diagnose
-```
+## Develop
 
-Start the managed Agent and send Inputs to its Main Thread:
+Use the versions pinned in `mise.toml`, then `mise exec -- make build`.
+`make build-clients` builds only the two user clients; `make build-go` builds all
+service/client binaries using existing embedded Web assets. `make install-local`
+installs clients without starting or restarting services.
 
-```bash
-juex agent start
-juex agent send "summarize this repository"
-juex agent send --wait "implement the next task"
-```
+Verification follows the [local-test skill](.agents/skills/juex-localtest/SKILL.md).
+Database tests require an isolated PostgreSQL role that can create databases;
+live tests additionally require an explicit private model fixture. Frontend setup
+is in [frontend/README.md](frontend/README.md).
 
-`agent send` returns after durable acceptance. `agent send --wait` follows
-events until the Turn that consumes that Input settles. Start the Fleet UI
-with `juex fleet serve`.
+## Project map
 
-## Mental Model
-
-- An Agent is the long-lived identity and state owner for one Workspace.
-- Main Thread is reserved as id `0` and alias `main`. User Inputs default to
-  Main, and only Main receives external Observations.
-- Workers use the same execution model with independent history, context,
-  state, and subscriptions. A Worker records its parent but not a fixed result
-  destination.
-- `/new` and `/compact` begin new Context Generations. Both retain Thread
-  history, Scratchpad, and unfinished tasks. Both remove done tasks; compact
-  carries a summary and retains Notes, while new clears enabled Notes state.
-- Active and archived Thread storage are separate. Archived Workers are
-  read-only and can be restored or permanently deleted.
-- Token Usage is recorded per Provider call and aggregated per canonical
-  `provider:model` for Thread inspection.
-
-See [DOMAIN.md](DOMAIN.md) for canonical terms and invariants.
-
-## Main Commands
-
-| Command | Purpose |
-| --- | --- |
-| `juex fleet` | Serve and inspect the resident Fleet supervisor. |
-| `juex agent` | Register Agents, control their lifecycle, and send Main Thread Inputs. |
-| `juex thread` | Inspect and manage Worker Threads, including debug bundles. |
-| `juex config` | Initialize Juex configuration. |
-| `juex diagnose` | Validate configuration and local runtime dependencies. |
-
-Command help is authoritative for flags and subcommands.
-
-## Configuration And State
-
-User configuration defaults to `~/.juex/juex.yaml`. Workspace configuration
-lives at `<WorkDir>/.juex/juex.yaml`. Each registered Agent has a sparse
-configuration overlay at `$JUEX_HOME/agents/<agent-id>/juex.yaml`. YAML layers
-load in that order, with a distinct `$JUEX_HOME/juex.yaml` between the user and
-Workspace layers.
-Personal and Workspace MCP definitions live under their respective
-`.agents/mcp.json` files. Saving Agent configuration through Fleet validates
-the complete chain atomically and restarts that Agent.
-
-Editable Observable definitions live at
-`$JUEX_HOME/agents/<agent-id>/observables.json`; they follow the Agent rather
-than appearing in its Workspace.
-
-Module presets and explicit switches are described in
-[Configuration](internal/app/config/README.md).
-
-Generated Agent state lives under `$JUEX_HOME/agents/<agent-id>/`. `agent.json`
-is authoritative for Agent identity, Workspace ownership, and lifecycle
-metadata. The Agent also owns its configuration overlay, the rebuildable
-Thread index, active and archived Threads,
-media, logs, Memory participation state, Observables, and
-Extension state. Each Thread has authoritative
-metadata, Generation-segmented chronological Event history, bounded pending
-Input state, module-owned Tasks and Notes state, Scratchpad, and system-managed
-spool. Current Provider context is reconstructed from the current Generation;
-Thread Explorer lists come from the Agent index.
-
-[Shared Fleet Memory](internal/features/memory/README.md) runs in an independent
-service; participating Agents query it and Supervisor reviews proposed updates.
-
-The exact ownership, storage authority, and runtime data flow are documented
-in [ARCHITECTURE.md](ARCHITECTURE.md). File schemas and CLI/API details remain
-defined by code, command help, and tests.
-
-## Development
-
-Use the repository-local
-[Juex local-test skill](.agents/skills/juex-localtest/SKILL.md) for the staged
-verification workflow. Frontend-specific setup is in
-[frontend/README.md](frontend/README.md).
-
-CI always checks documentation. Changes limited to ordinary Markdown skip
-frontend checks, lint, and Go tests; embedded runtime Markdown, non-Markdown
-files, or an unavailable change comparison run the full CI suite.
-
-## Documentation Map
-
-- [DOMAIN.md](DOMAIN.md): vocabulary, ownership, lifecycles, and invariants.
-- [ARCHITECTURE.md](ARCHITECTURE.md): module boundaries and data flow.
-- [PHILOSOPHY.md](PHILOSOPHY.md): product principles and trade-offs.
-- [DESIGN.md](DESIGN.md): stable Web interaction and visual contract.
-- [docs/adr/](docs/adr): rationale for durable architecture decisions.
+- [DOMAIN.md](DOMAIN.md): identities, ownership, lifecycles and invariants.
+- [ARCHITECTURE.md](ARCHITECTURE.md): service boundaries and persistence.
+- [PHILOSOPHY.md](PHILOSOPHY.md): principles and trade-offs.
+- [DESIGN.md](DESIGN.md): dashboard interactions and visual contract.
+- [Managed platform ADR](docs/adr/0003-managed-agent-platform.md): architecture rationale.

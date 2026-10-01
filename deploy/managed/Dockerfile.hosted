@@ -1,0 +1,12 @@
+ARG NODE_IMAGE=node:24-bookworm
+FROM ${NODE_IMAGE}
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv python3-pip git curl ca-certificates build-essential ripgrep \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /workspace /home/agent \
+ && chown 1000:1000 /workspace /home/agent
+ENV HOME=/home/agent NPM_CONFIG_PREFIX=/home/agent/.local
+ENV PATH=/home/agent/.local/bin:$PATH
+USER 1000:1000
+WORKDIR /workspace

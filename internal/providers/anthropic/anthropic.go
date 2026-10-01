@@ -56,6 +56,9 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		return llm.Response{}, err
 	}
 	requestOptions := make([]option.RequestOption, 0, len(headers))
+	if opts.SingleAttempt {
+		requestOptions = append(requestOptions, option.WithMaxRetries(0))
+	}
 	for name, value := range headers {
 		requestOptions = append(requestOptions, option.WithHeader(name, value))
 	}
@@ -112,26 +115,45 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	streamCtx, resetIdle, stopIdle, idleExpired := protocolsupport.NewStreamIdleContext(ctx, idleTimeout)
 	defer stopIdle()
 	stream := p.client.Messages.NewStreaming(streamCtx, params, append(requestOptions, option.WithMiddleware(streamDiagnostics.middleware))...)
+	defer func() { _ = stream.Close() }()
+	inputReported, outputReported, stopped := false, false, false
 	for stream.Next() {
 		resetIdle()
 		event := stream.Current()
+		switch event.Type {
+		case "message_start":
+			inputReported = event.Message.Usage.JSON.InputTokens.Valid()
+		case "message_delta":
+			inputReported = inputReported || event.Usage.JSON.InputTokens.Valid()
+			outputReported = outputReported || event.Usage.JSON.OutputTokens.Valid()
+		case "message_stop":
+			stopped = true
+		}
 		emitAnthropicStreamDelta(opts.OnDelta, event)
 		deltaUsage.observe(event)
 		if err := msg.Accumulate(event); err != nil {
-			return llm.Response{}, anthropicStreamParseErrorFromEvent(p.Name(), event, err)
+			deltaUsage.applyFallback(&msg)
+			result := p.responseFromMessage(&msg)
+			result.UsageStatus = llm.ReportedUsageStatus(inputReported, outputReported, false)
+			return result, anthropicStreamParseErrorFromEvent(p.Name(), event, err)
 		}
-	}
-	if err := stream.Err(); err != nil {
-		if idleExpired() {
-			return llm.Response{}, protocolsupport.NewStreamIdleTimeoutError("anthropic stream", idleTimeout, err)
-		}
-		if streamErr := anthropicStreamParseErrorFromDiagnostics(p.Name(), streamDiagnostics, err); streamErr != nil {
-			return llm.Response{}, streamErr
-		}
-		return llm.Response{}, fmt.Errorf("anthropic: %w", err)
 	}
 	deltaUsage.applyFallback(&msg)
-	return p.responseFromMessage(&msg), nil
+	result = p.responseFromMessage(&msg)
+	result.UsageStatus = llm.ReportedUsageStatus(inputReported, outputReported, stopped)
+	if err := stream.Err(); err != nil {
+		if idleExpired() {
+			return result, protocolsupport.NewStreamIdleTimeoutError("anthropic stream", idleTimeout, err)
+		}
+		if streamErr := anthropicStreamParseErrorFromDiagnostics(p.Name(), streamDiagnostics, err); streamErr != nil {
+			return result, streamErr
+		}
+		return result, fmt.Errorf("anthropic: %w", err)
+	}
+	if !stopped {
+		return result, fmt.Errorf("anthropic stream closed before message_stop")
+	}
+	return result, nil
 }
 
 type anthropicStreamUsageObservation struct {
@@ -282,8 +304,9 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) llm.Resp
 	}
 
 	return llm.Response{
-		Message:    out,
-		StopReason: mapAnthropicStop(string(msg.StopReason)),
+		Message:     out,
+		StopReason:  mapAnthropicStop(string(msg.StopReason)),
+		UsageStatus: llm.ReportedUsageStatus(msg.Usage.JSON.InputTokens.Valid(), msg.Usage.JSON.OutputTokens.Valid(), true),
 		Usage: llm.CanonicalUsage(
 			int(msg.Usage.InputTokens+msg.Usage.CacheReadInputTokens+msg.Usage.CacheCreationInputTokens),
 			int(msg.Usage.OutputTokens),

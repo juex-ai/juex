@@ -52,8 +52,6 @@ test("the design system uses a restrained radius scale with conversational excep
     )
     .sort();
   assert.deepEqual(oversized, [
-    "components/QueuedInputStack.tsx: rounded-[16px]",
-    "components/ai-elements/prompt-input.tsx: rounded-[16px]",
     "lib/message-rendering.ts: rounded-[16px]",
   ]);
 });

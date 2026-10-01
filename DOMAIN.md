@@ -1,189 +1,86 @@
-# Juex Domain Model
+# JueX Domain Model
 
 > English | [中文](DOMAIN.zh.md)
 
-This document is the canonical vocabulary and invariant set. Package and
-storage implementation belong in [ARCHITECTURE.md](ARCHITECTURE.md).
+This document defines product vocabulary and invariants. Implementation boundaries
+belong in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Identity and authority
+
+A User is a global account with stable identity, independent of login credentials.
+A Tenant has administrator/member Memberships. One User may join multiple Tenants;
+each `(Tenant, User)` owns exactly one retained Fleet and any number of Agents.
+Invitations grant Membership and do not prove mailbox ownership. No concurrent
+mutation may remove, suspend or demote the last active tenant administrator.
+
+An administrator manages resources only inside that Tenant, within the owner's
+existing authority. Actor and resource owner remain distinct in audit and usage.
+Reauthorization does not revive old execution epochs or cancelled work. A human
+login session and a device credential are separate identities.
 
 ## Ownership
 
-| Owner | Responsibility |
+| Owner | Durable responsibility |
 | --- | --- |
-| Fleet | One Home-scoped owner of Agents and independent services; management process lifetime is separate from managed process lifetime. |
-| Independent Service | Its business state, storage recovery, typed API and writer lease; Fleet owns process intent and verified discovery. |
-| Workspace | User-authored project files, workspace configuration, Skills, and Hooks. |
-| Fleet Memory | Shared durable knowledge, requests, receipts, source progress and deletion constraints in an independent service; Supervisor executes model review. |
-| Agent | Long-lived identity, Workspace ownership, configuration overlay, rebuildable Thread list index, active and archived Threads, media, logs, Memory participation/cursor state, Observable definitions and state, and Extension state. |
-| Thread | Identity, topology, lifecycle, Context Generation registry, pending Inputs, Turns, messages, Events, Usage, and spool. |
-| Thread Module | Optional Thread-scoped state such as Tasks, Notes, and Scratchpad, including its resources, context, and Generation lifecycle behavior. |
-| Agent Runtime | Replaceable process resources: Providers, MCP clients, Tools, Observables, schedulers, and live subscriptions. |
+| Management | Accounts, tenants, membership, Fleet/Agent definitions, model policy, encrypted credentials and audit. |
+| Runtime | Inputs, Main/Worker Threads, Turns, context checkpoints, model attempts, events, usage and activation leases. |
+| Execution | Environments, grants, operations, connections, immutable files, explicit transfers and result acknowledgments. |
+| Memory | Fleet knowledge, evidence, proposals, review jobs and deletion constraints. |
+| Calendar | Fleet schedules, trigger jobs and delivery identity. |
 
-An Agent is bound to one Workspace. Replacing its Runtime does not replace its
-durable Agent or Thread state.
+An Agent owns a permanent Main and independent Workers. A Worker records its
+parent; cancellation of that parent does not undo already accepted independent
+work. Application jobs use scoped ordinary Workers. Cross-Agent collaboration
+is explicit and confined to the same owner and Fleet.
 
-`agent.json` is authoritative for that binding and for Agent lifecycle
-metadata. Within one JUEX_HOME, a canonical Workspace belongs to at most one
-Agent. Workspace configuration remains user-authored; an Agent's sparse
-`juex.yaml` can specialize the effective Runtime without changing Workspace
-bytes.
+An Activation is replaceable runtime capacity, not the Agent's identity.
+Inputs commit before acceptance is returned. Request IDs deduplicate admission;
+the next assistant message is not assumed to correspond one-to-one with an Input.
+Context compaction preserves durable history and a checkpoint. Worker archival
+requires idle work and retains readable history.
 
-Committed Fleet Memory is shared across Agents within one JUEX_HOME. Source
-Agent/Thread references and Workspace/project applicability are metadata, not
-implicit access boundaries. Shared knowledge does not grant access to raw Thread
-history; evidence reads and review changes retain their own capabilities.
+## Execution environments
 
-## Main And Worker Threads
+Each Agent has a persistent hosted Workspace/Home. Authorized Linux/macOS devices
+are additional environments, selected by stable IDs for location-dependent tools.
+Process and connection handles remain bound to their original environment. A cwd
+is a default location, not a filesystem permission boundary. Device authorization
+allows the current OS user's capabilities; hosted gVisor enforces separate limits.
 
-Every Agent has exactly one Main Thread:
+A network disconnect does not imply process termination. Offline requests wait
+durably without consuming model slots. Unknown outcomes are visible and never
+silently repeated or redirected. Online revocation rejects new work and requests
+cancellation; offline cancellation remains pending until confirmed. Local process
+memory and arbitrary remote files are not restored from platform backups.
 
-- id is the reserved string `0` and alias is `main`;
-- it has no parent and cannot be renamed, archived, or deleted;
-- direct user Input defaults to Main;
-- only Main accepts `observable.Observation` values.
+File transfer is explicit and records both environments. Immutable Artifact
+references permit sharing within one Fleet; there is no automatic synchronization
+or cross-tenant sharing. Credentials belong only to authorized service/process
+scopes and shared model secrets never enter user execution environments.
 
-A Worker uses the same Thread model:
+## Lifecycle and retention
 
-- id is six lowercase Crockford Base32 characters;
-- alias is Agent-unique and defaults to `worker_#<id>`;
-- `parent_thread_id` is the Thread that created it;
-- history, context, work state, pending Inputs, and subscriptions are independent;
-- it may use shared Agent resources, but it does not receive Observations.
+Suspension blocks execution while preserving data. Agent archive and member
+removal retain readable resources; restoration checks current authority. Removal
+requires reinvitation. Rejoining reuses a retained Fleet; after permanent cleanup,
+a fresh empty Fleet is created. Cleanup has durable stages and explicit failures.
+Platform data removal and remote process-stop confirmation remain distinct.
+Remote user files are never automatically erased.
 
-Agent-level `worker-threads.enabled` controls Worker execution, not Thread
-storage. When disabled, pending Input recovery pauses while history, retention
-management, and host `/new` and `/compact` remain available.
+Memory and Calendar may be disabled without deleting their data. Disabling stops
+new agent/application activity; Calendar does not replay missed disabled triggers.
+Permanent deletion is separate. Usage and minimal audit survive resource cleanup;
+ordinary process logs do not substitute for durable operation receipts.
 
-`worker-threads.max_depth` defaults to 1 and accepts 1 or 2, counting Main as
-depth 0. Creation validates the persisted parent chain, including archived
-ancestors. A Thread at or beyond the limit has no `worker-threads` Module or
-its tools and lifecycle contributions. Its own execution remains available
-when the Agent-level switch is on. Existing deeper Threads retain their history
-and parentage; host interfaces can recover, execute, stop, and manage them
-without restoring their capped parent's Module. Depth limits do not constrain
-the total Worker count or token budget.
+## Models and usage
 
-The creator and result destination are not Worker properties. Any interested
-caller subscribes to the Worker. Parent identity expresses topology, not
-delivery routing.
+The operator supplies models. Fleet defaults and Agent overrides choose from the
+current authorized catalog. Each Turn freezes its model/fallback plan, while every
+new provider call checks current permissions and credential revocation. Fallback
+uses only configured candidates. Actual provider/model attempts own their usage,
+including Workers, application work and compaction. Input plus output is total;
+cached input is a subset, and missing usage is unknown rather than zero.
 
-## Input, Attempt, Turn, And Subscription
-
-An Input is durably accepted before execution. Inputs that still require
-execution or recovery are ordered in bounded pending state. Once admitted to a
-Turn, an Input may be claimed by multiple attempts across retryable failures,
-but remains recoverable until the Turn has an explicit terminal record in its
-Context Generation. An Input that expires before admission, or is explicitly
-cancelled or discarded while pending, leaves current state without requiring a
-Generation terminal record.
-
-A Turn is one Provider/Tool execution episode in one Context Generation. One
-Turn may consume multiple pending Inputs. Main is asynchronous dialogue rather
-than RPC, so no Assistant message is paired with an Input by position alone.
-
-A subscription is an observer-owned replay/live cursor over one continuous
-Thread Event sequence, even when that sequence spans Context Generations. It
-is not inherently attached to an Input, Turn, or client type. Higher-level
-waiters may follow an `input_id` to the Turn that consumes it.
-
-Optional input tracking distinguishes delivery from the model's judgement
-that an input has been handled. Direct user inputs accepted while enabled
-remain unchecked until the model checks them. A settled Turn does not imply
-a checked input, and an unchecked settled input is not a queued execution.
-Failures and compaction preserve unchecked inputs. Disablement retains existing
-records while stopping new registration and reminders; these core input records
-are not disposable Tasks/Notes resources. Host `/new` starts a new work scope,
-while compaction retains it. Checking cannot cancel execution or prove correctness.
-
-## Context Generations And Thread Work State
-
-A Context Generation is one Provider-visible context epoch inside a Thread.
-
-- `/new` starts an empty Generation, removes done tasks, asks the enabled Notes
-  Module to clear its state, and records `context.renewed`.
-- `/compact` starts a Generation from a compact summary, removes done tasks and retains unfinished tasks and Notes, and records `context.compacted`.
-- Both retain chronological Generation history and Scratchpad files. Disabled
-  Modules do not load, inject, or publish state; configuration retirement is
-  independent of Generation changes.
-- Generation boundary records are user-visible system activity, not ordinary
-  Provider dialogue.
-
-Tasks are model-owned work items with stable IDs, titles, descriptions,
-acceptance criteria, status reasons, priorities p0/p1/p2, and per-task continuation
-counts. At a finish boundary, doing precedes todo, then higher priority, then
-creation order. Pending and failed tasks remain inspectable without forcing
-continuation. Only done tasks are pruned on new and compact; unfinished tasks
-survive both. The model may check an input after fully recording its request in
-durable tasks; checking an input does not complete those tasks.
-
-When a task mutation leaves a nonempty list entirely done, that Thread clears
-its existing enabled Notes. Unfinished tasks and empty lists retain Notes;
-later explicit Notes writes can record new work.
-
-Tasks and Notes are disposable Module-owned current state that can cross
-Generation boundaries. Applying a configuration that disables or removes their
-owner retires recorded resources across active and archived Threads. Re-enabling
-starts empty; retained history never restores retired work state. Ordinary
-shutdown with the owner enabled retains state. Preview and rejected configuration
-do not retire resources; interrupted retirement must finish before a new
-composition can be published. Scratchpad is model-managed Thread working storage prepared only by
-its enabled Module. Disabling it preserves existing files without preparing or
-publishing the working directory. Spool is
-system-managed temporary storage for oversized runtime data.
-
-## Token Usage
-
-Every Provider result that reports Usage contributes one durable fact using
-the canonical configured `provider:model`. Input includes cached input, cached
-input is its cache-hit subset, and total tokens means input plus output. Thread
-totals and per-model breakdowns are materialized views of those facts.
-
-## Observables
-
-Observable is the common model for external automated work. MCP Notifications,
-command output, and future producers emit
-`observable.Observation` values. Producers belong to the Agent Runtime;
-durable delivery enters Main through the normal Input/Turn machinery.
-
-Timed work belongs to the Calendar Extension, which emits MCP Notifications.
-
-MCP clients are Agent-scoped and may serve every Thread. Calls still belong to
-the calling Thread, while MCP Notifications route only to Main.
-
-## Retention And Execution
-
-Thread lifecycle has two independent dimensions:
-
-- `retention_state` is `active` or `archived`;
-- `execution_state` is `idle`, `working`, or `failed` for active Threads.
-
-Archive and unarchive operate on a whole idle Worker and do not create a
-Generation. Archived Threads are read-only and have no execution state.
-Unarchive restores the same Thread as `active + idle`.
-
-Permanent delete is allowed only for an archived Worker with no active child
-references. `deleted` is an operation outcome, not a state retained by a
-nonexistent Thread.
-
-## Invariants
-
-1. Main `0` exists exactly once per Agent.
-2. Thread ids and aliases share one Agent-wide identity namespace.
-3. Every Worker has one valid parent.
-4. Thread metadata is authoritative for identity, topology, lifecycle, and the
-   Context Generation registry; the Agent list index is rebuildable from it.
-5. One Event sequence spans all Generation Journals; sequence, not timestamp,
-   defines fact order.
-6. Persisted absolute timestamps use canonical UTC millisecond precision.
-7. Every admitted Input remains recoverable until its consuming Turn has an
-   explicit terminal Generation record.
-8. Durable Generation facts commit before replay/live publication.
-9. Recorded Tool outcomes replay exactly; unknown outcomes are not retried blindly.
-10. Observations route only to Main.
-11. Archive and unarchive do not change Context Generation.
-12. Active Threads have one execution state; archived Threads have none.
-13. Current Provider context is reconstructed from exactly one Context
-    Generation.
-14. Cached input is never added a second time when computing total Token
-    Usage.
-15. Agent identity and Agent configuration are resolved from Agent-owned state;
-    Workspace files are not identity records.
+Usage belongs to the resource's Tenant/User even during delegated administration.
+Daily/monthly aggregates retain their reporting timezone period; changing timezone
+does not reinterpret history. Raw detail defaults to 90 days; aggregates remain.

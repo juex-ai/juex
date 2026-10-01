@@ -1,75 +1,27 @@
-# Juex Philosophy
+# JueX Philosophy
 
 > English | [中文](PHILOSOPHY.zh.md)
 
-Juex is an agent runtime for local, inspectable work. Its design bias is to
-make the agent loop understandable: Tools are explicit contracts, Events are
-observable, and durable state is stored where the user can inspect or delete it.
+JueX makes persistent Agent work accessible through a service, with explicit
+ownership, inspectable events and independently authorized execution.
 
-## Principles
+- Keep the trusted orchestration loop small. User code runs in execution
+  environments; application business policy belongs to its owning service.
+- Bind state to stable identities. Machine paths and process lifetimes are
+  infrastructure, not account, Fleet or Agent identity.
+- Prefer explicit contracts. Durable acceptance, current permission checks,
+  operation handles and unknown outcomes must remain visible to clients.
+- Preserve one canonical model for providers. Adapters retain model-specific
+  reasoning where appropriate without spreading SDK types through the system.
+- Use narrow business interfaces. Shared PostgreSQL does not justify shared
+  ownership or bypassing another service's authorization and lifecycle.
+- Make Web and CLI clients of the same truth. Browser state never confirms
+  completion, cancellation or deletion without a service receipt.
+- Add abstractions for concrete workflows. The first deployment uses one host,
+  PostgreSQL and Compose; additional brokers, identity services and deployment
+  modes are introduced only when a product need justifies them.
 
-### Keep The Runtime Small
-
-The core loop should stay easy to reason about: build a prompt, call a
-provider, execute requested tools, persist history, emit events, and repeat
-until the turn is done. New behavior belongs in the core only when it is needed
-by that loop or by a user-facing workflow already in the product.
-
-### Prefer Explicit Surfaces
-
-Commands, API routes, files, and JSON shapes are contracts. They should be
-stable, documented, testable, and simple enough for another agent to call
-without guessing. Avoid hidden magic when a small command or file makes the
-state visible.
-
-### Bind State To The Agent
-
-The canonical ownership split is defined in [DOMAIN.md](DOMAIN.md). Its
-purpose is to let identity-owned state survive a Workspace move without hiding
-which Workspace owns it: generated state follows the Agent, while user-authored
-configuration, resources, and project files stay with the Workspace.
-
-### Use Providers Behind One Model
-
-Provider SDKs are implementation details. The rest of the runtime works with
-Juex message, block, tool, usage, and stop-reason types. Provider-specific
-features such as reasoning blocks are preserved, but they should not leak into
-unrelated packages.
-
-### Treat Tools As Interfaces
-
-Builtin tools and MCP tools expose small schemas and deterministic names.
-The runtime should favor fewer, clearer tools over broad surfaces that invite
-hallucinated calls. A tool result is part of the conversation contract and must
-be persisted in order.
-
-### Make The Web UI A Control Surface
-
-The web UI exists to inspect Threads, submit Inputs, interrupt work, and manage
-active or archived history. It should stay close to the JSON/SSE API instead of
-becoming a separate app model. React state mirrors server state; the server
-remains the source of truth.
-
-### Defer Until It Hurts
-
-New abstractions and deployment modes are not default scope. Add them when a
-concrete workflow requires them and the implementation can stay small enough
-to test and explain.
-
-## Trade-Offs
-
-- Keep ordinary Agent capabilities in-process. Independent services serve
-  shared ownership and lifecycle needs through explicit typed clients and
-  Fleet management.
-- Standard library first in Go: less dependency drift, at the cost of writing
-  small protocol adapters ourselves.
-- Registry-owned Agent identity and configuration: Workspace files stay
-  shareable while per-Agent state and Runtime choices remain independent, at
-  the cost of consulting JUEX_HOME for Agent discovery.
-- Synchronous turn loop with parallel tool calls: simple ordering and tests,
-  while still allowing independent tool calls inside one model response.
-- Ownership-based Thread stores over one universal Journal: Generation history
-  stays durable and append-friendly, while metadata, pending execution, and
-  optional Module state follow their own lifecycles. This keeps list and
-  current-context reads bounded at the cost of explicit commit ordering and
-  recovery boundaries.
+Shared services reduce idle cost but require fencing and fair scheduling.
+Full OS-user device access is useful but is explicitly different from hosted
+sandbox isolation. Single-host maintenance downtime is acceptable; unverified
+claims of zero data loss, exact external replay or process restoration are not.

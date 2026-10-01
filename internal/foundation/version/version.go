@@ -15,8 +15,7 @@ var (
 	BuildTime = "unknown"
 )
 
-// Info bundles build metadata together with the runtime context selected by
-// the CLI. Runtime-owned storage paths remain behind their owning modules.
+// Info records the immutable identity of a built binary.
 type Info struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
@@ -25,19 +24,8 @@ type Info struct {
 	GoVersion string `json:"go_version"`
 	OS        string `json:"os"`
 	Arch      string `json:"arch"`
-
-	// Runtime context (optional). Each field is independent input — none
-	// of them is derivable from the others.
-	WorkDir    string `json:"work_dir,omitempty"`
-	ConfigFile string `json:"config_file,omitempty"`
-	ProviderID string `json:"provider_id,omitempty"`
-	Protocol   string `json:"protocol,omitempty"`
-	Model      string `json:"model,omitempty"`
-	BaseURL    string `json:"base_url,omitempty"`
 }
 
-// Build returns an Info populated only with build metadata. CLI layer adds
-// runtime fields on top.
 func Build() Info {
 	return Info{
 		Name:      "juex",
@@ -55,30 +43,9 @@ func String() string {
 	return fmt.Sprintf("juex %s", Version)
 }
 
-// Verbose returns the multi-line human-readable form. Empty optional fields
-// are skipped.
+// Verbose returns the build metadata in a human-readable form.
 func (i Info) Verbose() string {
-	out := fmt.Sprintf("juex %s\n  commit:        %s\n  built:         %s\n  go:            %s\n  os/arch:       %s/%s",
-		i.Version, i.Commit, i.BuildTime, i.GoVersion, i.OS, i.Arch)
-	if i.WorkDir != "" {
-		out += "\n  work_dir:      " + i.WorkDir
-	}
-	if i.ConfigFile != "" {
-		out += "\n  config_file:   " + i.ConfigFile
-	}
-	if i.ProviderID != "" {
-		out += "\n  provider_id:   " + i.ProviderID
-	}
-	if i.Protocol != "" {
-		out += "\n  protocol:      " + i.Protocol
-	}
-	if i.Model != "" {
-		out += "\n  model:         " + i.Model
-	}
-	if i.BaseURL != "" {
-		out += "\n  base_url:      " + i.BaseURL
-	}
-	return out
+	return fmt.Sprintf("juex %s\n  commit:        %s\n  built:         %s\n  go:            %s\n  os/arch:       %s/%s", i.Version, i.Commit, i.BuildTime, i.GoVersion, i.OS, i.Arch)
 }
 
 // JSON returns the info as a pretty-printed JSON document.
@@ -87,7 +54,7 @@ func (i Info) JSON() string {
 	return string(b)
 }
 
-// Verbose is a convenience for callers that don't need runtime context.
+// Verbose formats the current build metadata.
 func Verbose() string {
 	return Build().Verbose()
 }

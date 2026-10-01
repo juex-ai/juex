@@ -272,7 +272,28 @@ const (
 )
 
 type Response struct {
-	Message    Message    `json:"message"`
-	StopReason StopReason `json:"stop_reason"`
-	Usage      Usage      `json:"usage"`
+	Message     Message     `json:"message"`
+	StopReason  StopReason  `json:"stop_reason"`
+	Usage       Usage       `json:"usage"`
+	UsageStatus UsageStatus `json:"usage_status,omitempty"`
+}
+
+// UsageStatus distinguishes a provider-reported zero from missing counters.
+// Partial counters are retained, but must not be presented as a complete bill.
+type UsageStatus string
+
+const (
+	UsageUnknown  UsageStatus = "unknown"
+	UsagePartial  UsageStatus = "partial"
+	UsageComplete UsageStatus = "complete"
+)
+
+func ReportedUsageStatus(input, output, final bool) UsageStatus {
+	if input && output && final {
+		return UsageComplete
+	}
+	if input || output {
+		return UsagePartial
+	}
+	return UsageUnknown
 }

@@ -1,4 +1,4 @@
-.PHONY: test race verify-plan verify-focused verify-candidate verify-final docs-check lint build build-go snapshot release-dry integration integration-contracts integration-live provider-smoke development-eval clean help install-local cross web web-stub web-sync web-check web-dev ripgrep
+.PHONY: test race verify-plan verify-focused verify-candidate verify-final docs-check lint build build-go snapshot release-dry integration integration-contracts integration-live provider-smoke development-eval clean help install-local build-clients cross web web-stub web-sync web-check web-dev
 
 VERIFY_CMD := uv run --quiet --project . python -m tests.eval.juex_eval verify
 PLAN_CMD := uv run --quiet --project . python -m tests.eval.juex_eval plan
@@ -54,18 +54,17 @@ help:
 	@echo "  verify-focused PKGS=... or PLANNED=1 [BASE=...]  explicit scope or dirty diff plan"
 	@echo "  verify-candidate [RACE=1] [WEB=1] [BASE=...]  planned commit-bound deterministic PR gate"
 	@echo "  verify-final [RACE=1] [WEB=1] [COMPACTION=1] [BASE=...]  reuse candidate and run planned live gates"
-	@echo "  test          go test ./... (caller environment, auto-provisions ripgrep)"
-	@echo "  race          go test ./... -race (caller environment, auto-provisions ripgrep)"
-	@echo "  ripgrep       ensure a resolvable ripgrep and print its path"
+	@echo "  test          go test ./... (caller environment)"
+	@echo "  race          go test ./... -race (caller environment)"
 	@echo "  lint          golangci-lint run"
-	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
-	@echo "  build-go      produce $(DIST_BIN) from existing embedded frontend assets"
+	@echo "  build         build all clients and services with embedded Web and version metadata"
+	@echo "  build-go      build all clients and services from existing embedded frontend assets"
 	@echo "  web-stub      prepare lightweight embedded assets for Go-only checks"
-	@echo "  install-local install ~/.local/bin/juex (builds via dist/)"
-	@echo "  cross         build all 7 platform archives in dist/ (no goreleaser)"
+	@echo "  install-local install both Linux/macOS clients under ~/.local/bin"
+	@echo "  cross         build Linux/macOS client archives with GoReleaser"
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
-	@echo "  integration   direct runtime with explicit live provider config support"
+	@echo "  integration   managed platform with explicit live provider config"
 	@echo "  provider-smoke live provider:model smoke selected from provider config"
 	@echo "  development-eval standard post-development validation record"
 	@echo "  docs-check    test and enforce bilingual Markdown pairing and links"
@@ -73,10 +72,10 @@ help:
 	@echo "  clean         remove dist/"
 
 test:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test ./...
+	go test ./...
 
 race:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test ./... -race -count=1
+	go test ./... -race -count=1
 
 verify-plan:
 	$(PLAN_CMD) --tier $(or $(TIER),focused) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
@@ -94,24 +93,27 @@ docs-check:
 	uv run --quiet --project . python -m unittest scripts.test_check_bilingual_docs
 	uv run --quiet --project . python scripts/check_bilingual_docs.py
 
-ripgrep:
-	@scripts/ensure-ripgrep.sh
-
 lint:
 	golangci-lint run
 
 build: web
 	$(MAKE) build-go
 
-build-go:
+CLIENTS := juex juex-executor
+SERVICES := juex-management juex-runtime juex-execution juex-memory juex-calendar juex-guest juex-service-log
+
+build-clients:
 	mkdir -p dist
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_BIN) ./cmd/juex
+	@for binary in $(CLIENTS); do CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$binary ./cmd/$$binary || exit $$?; done
+
+build-go: build-clients
+	@for binary in $(SERVICES); do CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$binary ./cmd/$$binary || exit $$?; done
 
 install-local:
-	./scripts/install-local.sh
+	uv run --quiet --project . python scripts/install-local.py
 
 cross:
-	./scripts/build.sh
+	goreleaser release --snapshot --clean
 
 snapshot:
 	goreleaser release --snapshot --clean
@@ -122,13 +124,14 @@ release-dry:
 integration: integration-contracts integration-live
 
 integration-contracts:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test -tags=integration ./tests/e2e/... -skip '^TestLiveConfigs_' -count=1 -v
+	@test -n "$$JUEX_TEST_POSTGRES_URL" || (echo 'JUEX_TEST_POSTGRES_URL is required' >&2; exit 1)
+	go test -race -tags=postgres ./tests/e2e -count=1 -timeout=600s
 
 integration-live:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test -tags=integration ./tests/e2e/... -run '^TestLiveConfigs_' -count=1 -v
+	uv run --quiet --project . python -m tests.eval.juex_eval integration
 
 provider-smoke: build
-	bash tests/eval/provider_model_smoke.sh --juex $(DIST_BIN)
+	bash tests/eval/provider_model_smoke.sh
 
 development-eval:
 	bash tests/eval/development_eval.sh

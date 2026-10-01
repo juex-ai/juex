@@ -66,6 +66,37 @@ jobs:
           version: latest
           args: check
 
+  management-postgres:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: juex-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - run: make web-stub
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+      - name: Verify managed service transactions against PostgreSQL
+        env:
+          JUEX_TEST_POSTGRES_URL: postgres://postgres:juex-ci-only@localhost:5432/postgres?sslmode=disable
+        run: go test -race -tags postgres ./tests/e2e -count=1 -timeout=600s
+
   test:
     runs-on: ${{ matrix.os }}
     needs: changes
@@ -84,91 +115,31 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: latest
-      - name: Install and probe Linux sandbox backend
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # Ubuntu 24.04 AppArmor blocks the user namespace that bwrap needs.
-          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
-            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns >/dev/null
-          fi
-          bwrap --die-with-parent --ro-bind / / --dev /dev -- /bin/true
       - name: Prepare embedded web dist
         run: make web-stub
         shell: bash
-      - name: Prepare pinned ripgrep
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(awk -F= '/^VERSION=/{sub(/\r$/, "", $2); print $2; exit}' CLI_CONFIG)"
-          os_name="$(go env GOOS)"
-          arch="$(go env GOARCH)"
-          scripts/prepare-ripgrep.sh \
-            --target "${os_name}_${arch}" \
-            --juex-version "$version" \
-            --output .tmp/ci-ripgrep
-          rg_dir="$PWD/.tmp/ci-ripgrep/juex-path"
-          printf '%s\n' "$rg_dir" >> "$GITHUB_PATH"
-      - name: Build Juex evaluator binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          juex_bin="$PWD/.tmp/ci-juex$(go env GOEXE)"
-          go build -o "$juex_bin" ./cmd/juex
-          printf 'JUEX_BIN=%s\n' "$juex_bin" >> "$GITHUB_ENV"
       - name: Run Go race tests
         run: go test ./... -race -count=1
         shell: bash
-      - name: Test release installer
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(awk -F= '/^VERSION=/{sub(/\r$/, "", $2); print $2; exit}' CLI_CONFIG)"
-          os_name="$(go env GOOS)"
-          arch="$(go env GOARCH)"
-          work="${RUNNER_TEMP}/juex-install-test"
-          release_dir="${work}/release"
-          payload_dir="${work}/payload"
-          package_root="${payload_dir}/juex_${version}_${os_name}_${arch}"
-          rm -rf "$work"
-          mkdir -p "$release_dir" "$package_root/bin"
+      - name: Verify deployment operator and validation harness
+        run: uv run python -m unittest discover -s deploy/managed
 
-          cp -R .tmp/ci-ripgrep/. "$package_root/"
-          go build -trimpath \
-            -ldflags "-X github.com/juex-ai/juex/internal/foundation/version.Version=${version}" \
-            -o "${package_root}/bin/juex" ./cmd/juex
-          archive="juex_${version}_${os_name}_${arch}.tar.gz"
-          tar -C "$payload_dir" -czf "${release_dir}/${archive}" "$(basename "$package_root")"
-          if command -v sha256sum >/dev/null 2>&1; then
-            (cd "$release_dir" && sha256sum "$archive" > checksums.txt)
-          else
-            (cd "$release_dir" && shasum -a 256 "$archive" > checksums.txt)
-          fi
-
-          JUEX_INSTALL_RELEASE_BASE_URL="file://${release_dir}" \
-            JUEX_INSTALL_VERSION="$version" \
-            JUEX_INSTALL_OS="$os_name" \
-            JUEX_INSTALL_ARCH="$arch" \
-            bash scripts/install.sh
-
-          if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-            export PATH="$HOME/.local/bin:$PATH"
-            printf '%s\n' "$HOME/.local/bin" >> "$GITHUB_PATH"
-          fi
-          juex version
-          juex config init --provider openai --model ci --api-key sk-ci-placeholder --skip-check --yes
-          set +e
-          juex diagnose --format json --offline > "${work}/doctor.json"
-          doctor_status=$?
-          set -e
-          cat "${work}/doctor.json"
-          [[ "$doctor_status" -eq 0 || "$doctor_status" -eq 6 || "$doctor_status" -eq 7 ]]
-          grep -B 8 -A 8 '"name": "ripgrep"' "${work}/doctor.json" |
-            grep -q '"status": "ok"'
-          grep -B 8 -A 8 '"name": "ripgrep"' "${work}/doctor.json" |
-            grep -q '"source": "package"'
-          installed_binary="$(readlink "$HOME/.local/bin/juex")"
-          package_root="$(cd "$(dirname "$installed_binary")/.." && pwd -P)"
-          "$package_root/juex-path/rg" --version
+  platform-image:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/managed/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/managed/Dockerfile.hosted
+          push: false

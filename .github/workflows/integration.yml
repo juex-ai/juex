@@ -12,6 +12,15 @@ jobs:
         provider:
           - anthropic
           - openai
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: juex-ci-only
+        ports: [5432:5432]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      JUEX_TEST_POSTGRES_URL: postgres://postgres:juex-ci-only@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -34,16 +43,6 @@ jobs:
           OPENAI_MODEL:    ${{ secrets.PROVIDER_API_MODEL_OPENAI }}
         run: |
           set -euo pipefail
-          required=(
-            ANTHROPIC_PROTOCOL ANTHROPIC_BASE ANTHROPIC_KEY ANTHROPIC_MODEL
-            OPENAI_PROTOCOL OPENAI_BASE OPENAI_KEY OPENAI_MODEL
-          )
-          for name in "${required[@]}"; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "required integration secret is empty: $name" >&2
-              exit 1
-            fi
-          done
           umask 077
           export JUEX_PROVIDER_CONFIG="$RUNNER_TEMP/juex-integration-${LIVE_PROVIDER}.yaml"
           python3 <<'PY'
@@ -51,27 +50,24 @@ jobs:
           import os
           from pathlib import Path
 
-          providers = [
-              {
-                  "id": "ci-anthropic",
-                  "protocol": os.environ["ANTHROPIC_PROTOCOL"],
-                  "base_url": os.environ["ANTHROPIC_BASE"],
-                  "api_key": os.environ["ANTHROPIC_KEY"],
-                  "models": [{"id": os.environ["ANTHROPIC_MODEL"]}],
-              },
-              {
-                  "id": "ci-openai",
-                  "protocol": os.environ["OPENAI_PROTOCOL"],
-                  "base_url": os.environ["OPENAI_BASE"],
-                  "api_key": os.environ["OPENAI_KEY"],
-                  "models": [{"id": os.environ["OPENAI_MODEL"]}],
-              },
-          ]
           selected = os.environ["LIVE_PROVIDER"]
-          model = os.environ[f"{selected.upper()}_MODEL"]
-          config = {"model": f"ci-{selected}:{model}", "providers": providers}
+          prefix = selected.upper()
+          for field in ("PROTOCOL", "BASE", "KEY", "MODEL"):
+              if not os.environ.get(prefix + "_" + field):
+                  raise SystemExit("missing selected provider secret: " + field)
+          config = {"models": [{
+              "provider": "ci-" + selected,
+              "name": os.environ[prefix + "_MODEL"],
+              "protocol": os.environ[prefix + "_PROTOCOL"],
+              "endpoint": os.environ[prefix + "_BASE"],
+              "api_key": os.environ[prefix + "_KEY"],
+              "context_window": 131072,
+              "max_output": 8192,
+          }]}
           path = Path(os.environ["JUEX_PROVIDER_CONFIG"])
           path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
           PY
           printf 'JUEX_PROVIDER_CONFIG=%s\n' "$JUEX_PROVIDER_CONFIG" >> "$GITHUB_ENV"
-      - run: make integration
+      - run: make web-stub integration
+      - run: bash tests/eval/provider_model_smoke.sh
+      - run: bash tests/eval/compaction_eval.sh

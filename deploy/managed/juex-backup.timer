@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily JueX managed platform backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=juex-backup.service
+
+[Install]
+WantedBy=timers.target

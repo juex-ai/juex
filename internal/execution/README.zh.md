@@ -1,0 +1,115 @@
+# Execution
+
+> [English](README.md) | 中文
+
+显式文件传输可从获准环境发布文件、导入 Artifact，或通过 Artifact 复制到另一个获准环境。传输记录和首个操作在同一事务接纳；目标操作与已发布 Artifact 的关联也在同一事务完成。
+持久请求身份及完成事件在平台重启、响应丢失后保留。每个分块和发布都检查原权限及设备授权版本，撤销再恢复不能复活旧工作。普通操作 API 不能绕过协调器提交二进制传输。
+存储不足时保持可见的持久等待，可取消并延长默认 24 小时的等待期限。活动传输期间不能删除来源 Artifact。取消后的丢弃确认与已接收字节的确认分开记录；已经发布的目标文件不会被静默撤回。
+
+Execution 同时拥有不可变文件对象。PostgreSQL 分配 ID，保存归属、可见范围和容量预留；必填的 `--blob-root` 是部署方拥有的绝对路径私有目录，不承担业务身份。私有附件属于单个 Agent；明确发布的 Fleet 产物可供同一 Tenant/User/Fleet 的其他 Agents 读取。只有文件持久落盘且数据库确认发布后才可共享。单文件上限为 256 MiB，按 256 KiB 分块传输，以 SHA-256 和持久字节游标校验、续传。可配置存储池默认 20 GiB，最多接纳 65,536 个存续对象（包含空文件）。删除在实际清理文件后才释放容量，中断的清理会恢复执行。发布前（包括完整文件校验后）重新检查授权。Dashboard 的上传、下载和引用使用此 API；大文件内容不进入模型工具输出。
+
+Execution 拥有执行环境、外部操作身份和持久结果。Agent Activation 不拥有设备连接或其进程的生命周期。
+依赖位置的请求明确指定执行环境，进程与连接句柄始终绑定原环境和 Agent。
+
+平台服务拥有 PostgreSQL 的 `execution` schema。Management 与 Runtime 通过双向 TLS 调用其 Kitex API；设备管理仅允许 Management 服务身份。
+接收与下发操作前检查当前 Management 授权。成员／Agent 执行代际使旧操作失效；独立的成员移除代际防止用户重新加入 Tenant 后恢复旧设备授权。
+Runtime 提交时还必须携带原 Turn 的授权代际；刷新当前权限不能使撤销前的迟到调用重新获得执行资格。
+环境与操作变化在资源事务内提交持久事件。只有 Runtime 可以消费并按事件 ID 确认它们。
+
+Runtime 可在接纳到达 Execution 前持久取消已准备的请求。取消决策按 Tenant/User/Fleet/Agent 和原环境／请求身份隔离，
+接纳在资源事务内检查该记录；超时、服务重启和重新授权都不能复活旧工作。
+只有经过认证的 Runtime RPC 身份可以预先记录这种取消，公开 Dashboard 取消必须指向已存在的操作或传输。
+确认表示 Execution 已接收投递责任，不表示外部副作用已撤回。
+
+原生设备主动建立加密连接。配对先在 Dashboard 绑定所属用户选择的 Agent／能力，再在本机核对 Tenant 和账号并确认。
+仅 Web 批准不会激活设备凭据。设备凭据独立于人的登录会话；每个 Tenant/User 绑定使用独立私有状态目录。
+
+`juex-execution serve --blob-root /var/lib/juex/execution/blobs` 运行平台服务。`juex-executor --state /absolute/private/directory pair --server https://platform.example` 绑定 Linux/macOS 设备，`run` 维持前台连接。
+HTTPS 反向代理将 `/device/` 路由到 Execution，将 Dashboard/API 路由到 Management。
+
+同一绑定支持 `start`、`stop`、`status`、`logs --tail 200` 和 `autostart enable|disable`。
+后台模式使用 Linux 的 `systemd --user` 或 macOS 的 `launchd`；用户显式启用自启动后在操作系统用户登录时启动。
+Linux 需要可用的用户服务管理器；CLI 不自动启用 lingering 或请求 root 权限。关闭自启动不改变正在运行的执行器。
+可执行文件需要保留在安装时的绝对路径。状态检查核对进程启动标识，停止等待执行引擎关闭；前台运行仍由原终端控制。
+私有服务日志每日或达到 2 MiB 时轮转，最多保留八个文件，七天后过期；操作恢复记录独立保存。
+
+原生引擎以当前 Linux/macOS 用户运行，默认工作目录不是沙箱。Shell 和 stdio MCP 可使用该用户的操作系统权限；能力开关选择暴露哪些操作，不代表独立的操作系统安全边界。
+托管隔离由经过验证的容器后端负责。子进程不继承平台模型和服务凭据。
+
+二进制传输使用私有且不可变的来源快照，以及单独暂存的目标文件。分块游标在连接中断后持久保留；只有快照读取和最终导入占用命令执行槽，接收文件字节时不占用。
+导入会先校验完整大小与 SHA-256，再原子发布，并且绝不替换已有路径。文件字节使用独立的 1 GiB 设备配额池，不进入命令输出。
+来源快照只有在单独的文件确认后才会过期；确认小型操作结果不会释放快照。执行端重启后，未完成的传输保留为未知结果，不自动重放。
+
+托管执行通过 Docker API 使用固定 Linux 镜像、cgroup v2 与 gVisor `runsc`；缺少隔离能力时启动失败。
+每个 Agent 拥有一个持久环境身份、网络子网、Workspace 与 Home。列出环境不会启动容器，待执行操作按需启动它；
+未完成进程、MCP 连接和未确认结果阻止空闲回收。默认空闲五分钟后回收，环境行锁将回收与新操作接纳串行化。
+用户重新加入 Tenant 后保留其 Workspace，但不会重新授权较早代际的操作。
+
+可信 guest 控制进程以 root 运行，所有文件工具、Shell、PTY 和 MCP 子进程均使用 UID/GID 1000。
+该用户不能访问私有绑定凭据与恢复状态。根文件系统只读，Workspace 与 Home 持久保存，临时目录限制容量。
+guest 不获得平台数据库、模型、RPC 或 Docker 凭据。Execution 使用独立的 32 字节私有密钥派生绑定凭据，PostgreSQL 仅保存摘要。
+
+Workspace 与 Home 在独立文件系统上共用 XFS 项目配额，与控制状态分开保存。
+PostgreSQL 管理不可变的存储 UUID、项目编号和硬限额；初始化后的数据丢失不会被静默重建。
+字节数与 inode 数限额在容器替换后仍然有效，后端在启动容器前检查挂载身份、配额执行和继承状态。
+详见[托管部署配方](../../deploy/hosted/README.zh.md)。
+
+`juex-execution serve --hosted-config /absolute/operator-config.json` 启用托管后端。
+运维配置描述 Docker socket、固定镜像、guest 二进制、私有存储根、IPv4 地址池、DNS、受保护的平台网络和精确内网例外。
+专用托管 TLS 监听器使用 Execution 服务证书，仅在 `/device/connect` 接受托管连接；配置中的控制端点例外必须匹配该监听器。
+这个入口不提供配对或 Management API。
+
+网络策略先安装，随后才启动 guest。默认允许公网 IPv4；阻断宿主地址、元数据、私有／保留网段、平台网段和其他 Agent 子网。
+内网例外明确 IPv4 地址、传输协议和端口，不能覆盖平台／Agent 保护；IPv6 被阻断。
+只读 resolver 文件替代 gVisor 无法访问的 Docker 内嵌 loopback DNS，配置的 DNS 仅获得 TCP/UDP 53 访问许可。
+后端只管理自己命名的网桥规则，不修改宿主机默认策略。
+
+私有且排他锁定的日志目录属于一个环境绑定。操作先提交身份和请求，再开始执行；重复投递返回原操作，身份冲突则拒绝。
+重启将未完成操作标为 unknown，不重复外部副作用。单纯断网不会取消命令。取消先记录意图再发送信号，实际终态与取消请求分别处理。
+
+平台队列默认允许离线等待 24 小时，不占 Runtime 执行槽。设备离线时仍持久保存取消意图和等待期限。
+每次重连查询原操作，连接代际阻止旧连接写入。首次连接绑定日志身份；日志被替换时隔离该绑定，并将已下发结果标为 unknown，避免新本地目录重放旧命令。
+已撤销凭据只能接收取消与上传结果，不能接收新任务。
+
+输出持久化后才推进字节游标。超量命令输出明确标记截断。MCP 通知存储耗尽时关闭连接，不继续丢弃通知。
+新操作预留结果容量；未确认结果和 unknown 恢复记录不轮转。已确认且结束的输出按配置的保留期过期，操作身份继续保留以防重放。
+平台保留已确认终态输出七天，每个环境最多预留 512 MiB 结果容量，耗尽时拒绝新操作。
+输出按字节传输，非 UTF-8 内容也保持游标准确。
+Runtime 创建的 MCP 连接还必须等待 Runtime 持久确认消费游标，才进入输出清理流程。
+部分消费不会导致剩余通知过期；完整消费且操作结束后，才开始计算七天保留期。
+单条 MCP 通知记录含换行最多 1 MiB；超限会关闭连接并显示错误。
+
+出站连接通过 TLS 协商协议，拒绝不兼容版本；重连保留执行引擎。平台授权只能收紧设备本地批准的 Agent／能力上限，不能扩大它。
+设备收到撤销后停止相关排队与进行中的操作。
+
+永久清理 Agent 时，会请求取消自身操作和依赖其 Artifact 的传输，包括其他 Agent 环境中的导入。保留原操作身份直到实际结果确认；未知结果继续显示未确认。不删除原生设备上的用户文件。未接收的源快照先明确丢弃，再确认操作结果。托管容器和网络先停止，再删除 Workspace、Home 和私有控制数据；每次重试均校验存储归属与分配身份。私有载荷清理后，保留核验结果所需的最小收据。
+
+操作和 Artifact 审计事实默认保留 90 天，可通过 `--audit-days` 调整。保留策略不删除操作身份、未知结果、取消决策、文件元数据或业务输出。
+
+Hooks 使用 Shell 能力及与其他命令相同的持久操作日志。输入为显式 argv 和有界
+JSON stdin，分别保留 stdout、stderr，并限制执行时间与输出量。退出码二是策略
+结果，不是执行故障。输出超限明确失败；中断或缺失结果绝不解释为允许继续。
+固定的设备授权版本在撤销后同时拦截旧操作的接纳与派发。
+
+## 执行端扩展
+
+在已授权环境的明确目录中放置 `juex.extension.json`，再通过 Agent 的扩展面板读取并选择资源。检查以普通文件操作相同的系统身份，只读取该目录下有大小限制的普通 manifest 和技能文件，不启动命令，也不创建扩展状态。
+
+```json
+{
+  "manifest_version": 2,
+  "name": "example",
+  "version": "1.0.0",
+  "environment": {"CACHE_DIR": "${JUEX_EXT_DATA_DIR}/cache"},
+  "skills": [{"id": "guide", "path": "SKILL.md", "description": "Use the example scripts"}],
+  "observables": [{
+    "id": "watch",
+    "command": ["/bin/sh", "watch.sh"],
+    "options": {"parser": {"type": "jsonl", "content_field": "message"}, "batch": {"interval_seconds": 5}}
+  }]
+}
+```
+
+命令继承声明的默认环境和资源级覆盖；保留变量 `JUEX_EXT_DIR`、`JUEX_EXT_DATA_DIR` 最后注入。声明的环境值（包括 PATH）可以展开这两个占位符。原生数据位于连接器工作目录下的 `.juex-extensions/<environment>/<agent>/<binding>`；托管数据位于持久 Agent Home 下的 `.local/share/juex/extensions/<environment>/<agent>/<binding>`，辅助进程以 UID 1000 创建目录并查找命令。每个绑定都有稳定、独立的数据目录，但原生系统用户权限并不构成沙箱。移除配置不会删除原生文件。
+
+文本观察器直接保存完整 UTF-8 块，无需等待换行。JSONL 每行最多 64 KiB，输出存储池耗尽会明确失败。JSONL 附件字段接受最多 16 个包含 `path`、可选 `name` 和 `media_type` 的对象；路径相对于声明的命令目录解析，仍须通过当前文件权限检查。每个过滤器使用一个 `contains` 或 `regex` 选择条件，可覆盖 kind、severity。退出通知默认 `never`，也可设置 `always` 或 `nonzero`。消费方确认输出已持久化后才开始保留期；Runtime 休眠或重启不会重启观察进程。

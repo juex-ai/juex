@@ -1,0 +1,12 @@
+.git
+.config
+.tmp
+.venv
+dist
+frontend/node_modules
+frontend/dist
+internal/entrypoints/webassets/dist
+*.log
+.env
+.env.*
+**/__pycache__

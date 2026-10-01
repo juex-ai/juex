@@ -1,193 +1,49 @@
-# Juex Web UI 设计
+# JueX Dashboard 设计
 
 > [English](DESIGN.md) | 中文
 
-本文定义 Fleet Web UI 稳定的交互与视觉约束。组件结构和具体 API shape 以
-frontend 与 server 代码为准。
+Dashboard 是普通成员与租户管理员共同的管理及对话界面，以服务端权威记录为准。
 
-## 产品模型
+## 导航与归属
 
-Web 是 Agent JSON/SSE 服务的 client，不维护第二套对话模型，也不把浏览器
-内存当作持久权威。
+恢复上次仍有权访问的租户；只有一个租户时直接进入。多租户账号始终可以切换租户。
+普通用户管理自己的 Fleet 和 Agents；管理员还可以进入成员详情并管理成员 Fleet，
+页面明确展示实际操作者和资源所有者。
 
-- Fleet 选择并管理 Agent。
-- Thread Explorer 展示 active 与 archived Thread。
-- Thread detail 展示跨 Context Generation 的单一时间线。
-- Runtime view 展示健康、配置、日志、Extension 和 Observable。
+Fleet 设置、Agents、设备、Memory、Calendar、用量和 Inbox 使用一致导航。
+应用视图独立于 Agent 选择。设备配对展示允许的 Agents 和能力，并要求本地确认。
+在线状态、授权、执行状态和邮箱验证分别显示。邀请中的成员显示状态、邀请链接和复制按钮。
 
-Command 使用 HTTP，snapshot 与 event stream 提供状态。重连时从权威 snapshot
-重新校准。
+## 对话与操作
 
-## 导航
+Agent 进入永久 Main 或独立 Worker。按时间展示的对话保留上下文边界与服务端事件身份。
+提交只在持久接纳后清除对应草稿。待处理、运行、暂停、失败和取消分别显示。
+重连后重新加载权威状态。
 
-稳定层级是 Fleet、selected Agent、Thread list、Thread detail 和 Runtime view。
-Main Thread 是 Agent 默认目的地。Thread Explorer 同时承载当前工作与归档历史。
+Assistant 正文作为普通对话文本。思考和工具使用紧凑可展开活动行，显示可读请求、
+输出和终态。长 JSON 和输出在各自面板内滚动。未知结果说明应检查原操作，不应重复执行。
 
-侧栏提供一个 Fleet management 入口。顶部导航将 Settings 与 Memory 作为平级
-目录，独立于 Agent 选择。Memory 详情页保持 Memory 选中。两个目录都将 Fleet
-management 入口标记为当前入口，折叠侧栏与手机抽屉中也保持一致。窄屏或 Agent
-列表不可用时，目录导航仍可访问。
+环境选项显示身份和当前许可。文件上传、下载、Artifact 发布和显式传输保留来源及目标。
+传输成功以服务回执为准，路径相同不意味着共享。
 
-当前绑定的 Supervisor 在 Agent 列表中置顶，在侧栏和 Settings 列表中使用专属角色图标和标签。
-无论名称或运行状态如何，折叠侧栏和移动端导航都能识别其角色。普通 Agent 保持原有相对顺序。
+## 管理与应用
 
-Agent 导航栏保持固定高度，上行显示 Agent 名称，下行显示当前 Thread 的
-alias/id 及其自身状态。加载或未知状态不能默认显示 Idle；归档显示 Archived。
-Agent 进程健康独立展示。Explorer 与 Runtime 显示页面上下文，不显示 Thread
-状态标签。长名称截断并可查看完整标题，切换标签始终可用。
+模型选择显示生效的 Fleet 默认值或 Agent 覆盖值。用量显示报表时区、输入输出总量及
+分模型日/月统计；缓存不重复计算，未知调用明确显示。
 
-手机 Agent 抽屉打开时聚焦当前 Agent 或 Fleet management 的导航链接；没有
-选中项时聚焦安全导航链接。关闭后焦点回到打开按钮。生命周期操作放在有文字标签的操作菜单中，
-与导航分离。Stop、Restart、Disable 需要确认，明确 Agent 名称及对运行中工作和
-排队输入的影响，默认聚焦 Cancel。Start 和 Enable 保持直接操作。
+Memory 编辑携带版本，拒绝过期更新并保留失败草稿。Calendar 展示调度与投递状态，
+不将接纳等同于 Agent 工作完成。停用的应用仍可查看。Inbox 持久保存未读状态，
+通知偏好与应用开关分开设置。
 
-具体 route 名称和参数语法属于 router 实现细节。
+归档、成员移除和永久清理解释各自效果。破坏性确认明确目标，默认焦点在取消。
+清理进度区分平台数据删除与远程停止未确认。成功提示不能声称已撤销发生过的外部效果。
 
-## Fleet Memory
+## 共享视觉与无障碍契约
 
-Memory 是独立于 Agent 选择的 Fleet 级入口。搜索和分页预览引导用户查看知识与
-来源。编辑失败时保留草稿，拒绝过时版本；已提交结果与搜索索引就绪状态分别
-呈现。删除确认明确记忆名称、阻止再次提取及保留原始对话的影响，默认聚焦
-Cancel。结果由服务决定，浏览器不从本地状态推断。
+React 组件共享 `frontend/src/components/ui` 中的 Radix/shadcn 基础组件和
+`frontend/src/index.css` 设计变量。森林绿用于主要操作，中性表面承载密集信息，
+状态颜色具有语义。不使用装饰性渐变或与状态无关的动画。
 
-
-Memory 内区分领域结构和持久化知识视图。所有默认领域在无数据时仍可查看。
-有方向的类型/关系图示及可读约束，与真实实体/关系行和事实详情配合展示；
-所有图示交互都有可用键盘操作的文本控件。实体身份跨领域复用。服务端有界筛选
-和分页在返回时保留上下文。当前/历史/按时点视图及生命周期标签来自 Memory 服务；
-逾期义务不能显示为已完成。来源链接可进入所属条目，不可用的原始历史提供可读
-引用和说明。加载、领域空数据、无匹配和服务失败需要清楚区分。
-紧凑的关系图可直接筛选旁边的事实。窄屏上结构可折叠；高级控件收起时仍显示
-已生效的筛选条件。事实行可直接进入所属条目的编辑器，并保留浏览上下文。
-
-## Thread Explorer
-
-标题旁展示当前 Agent 的所有 Active 和 Archived Threads（包含 Main）的累计
-Token Usage，使用与单行相同的详情弹层。
-
-Active 与 Archived 分开展示。每一行无需打开 Thread 就应说明身份和可操作性：
-
-- id 与 alias；
-- retention state，以及 active 时的 execution state；
-- 创建时间与最近活动时间；
-- Turn 与 Context Generation 数量；
-- pending Input 数量与当前 context usage；
-- 一个累计 Token Usage label。
-
-列表行采用紧凑间距，不重复展示身份图标。alias/id 旁的 parent 标记从完整
-列表快照取值；激活后跨区域聚焦并滚动至父行居中，高亮三秒，重复激活重置
-计时，不打开对话。缺失父行显示不可用标记。长名称、键盘导航、窄屏和
-减少动态效果偏好都应得到支持。
-
-Main 的视觉表现与普通 Thread 一致，但不能 rename、archive 或 delete。Idle
-Worker 可以 archive；Archived Worker 可以 restore，或在明确确认后永久删除。
-
-每个区域支持选择 Worker 和全选，Main 的复选框禁用。Active 选中项可批量
-归档；Archived 选中项可在列明 Thread 的确认后批量删除。选中的后代先于
-祖先完成操作。部分失败时保留
-失败项的选择并逐项说明错误，已完成项移出选择。
-
-列表数据来自 Agent index，渲染列表不能打开 Thread metadata 或 Generation
-Journal。激活、hover 或 focus Token Usage label 时，显示总 input、cached input、
-output 和按 input 加 output 排序的 `provider:model` 行。Cached input 是 input 的
-子集，不会在 displayed total 中再次相加。Touch 与 keyboard 用户都能使用该
-disclosure，长模型列表限制在可滚动 panel 内。
-
-## Thread Detail
-
-Transcript 是一条连续时间线。Context 转换显示为系统活动：
-
-- `context.compacted` 可以复制 compact summary；
-- `context.renewed` 只标记边界，没有 Provider 内容或复制操作。
-
-首次加载显示已注册 Generation Journal 中最新的完整 EventStore page。“Load
-older messages”跨 Generation 向前分页，同时保持时间正序展示且不拆分原子
-commit。
-
-Active Thread 显示 composer；Archived Thread 只读。Agent 或 Runtime 不可用时
-可以禁用 mutation，但要保留可读的 last-known content，并明确显示 stale/error。
-
-## Input 与 Transcript
-
-Composer 接受文本、附件或只有附件的 Input。只有持久接受成功后才清空，并把
-accepted/pending 与 Turn execution 区分展示。Stop 只在工作进行中可用；此时输入
-文字或添加附件后，操作变为 Queue message。未发送文字草稿在当前浏览器应用的
-页面导航中保留，按 Agent 和 Thread 隔离。即使已切走，接受成功也只清理对应的
-已提交文字；失败及后续编辑保留草稿。刷新后的持久化和附件草稿不在此范围。
-
-UI 不假设下一条 Assistant 消息就是最新 Input 的回答。Input、message、Tool 与
-Turn identity 都来自持久记录。
-
-Assistant 正文按普通对话展示；运行过程使用紧凑的 progressive-disclosure row：
-
-- reasoning 完成后默认折叠；
-- 连续 reasoning 和 Tool 调用归入工作折叠块，即使开头没有 reasoning 也适用；可见内容或 Turn 边界结束该分组，可见内容保持在折叠块之外；
-- Tool request、streaming output 与 terminal outcome 按 identity 合并；
-- durable terminal content 替换 provisional streaming content；
-- system/policy activity 与 Provider 对话明确区分；
-- replay 与 live record 幂等合并。
-
-## 状态与实时更新
-
-Thread detail 从 metadata、最新 transcript page 和权威 status snapshot 开始，
-再从捕获的 cursor 跟随 event stream。Client 直接替换 server status，不自行
-实现 Runtime state machine。
-
-Agent process health、Thread retention state 与 Thread execution state 是三个
-独立信号。断连与 reconciliation failure 必须明确展示，不能表现为空白或静默冻结。
-
-模块 UI 仅使用 Thread 状态区和可选文件根两个固定插槽，由服务端贡献决定是否
-展示。Tasks 与 Notes 在右侧栏中独立展开详情；启用但为空的模块与禁用模块明确区分。
-未知或失败的 renderer 显示局部不可用状态，不阻断 Thread。Thread 归档或 Agent
-停机后，仍可查看可读的模块内容。
-
-Workspace 是默认文件根。选择模块根后才加载对应资源。移除该根时返回 Workspace，
-并清理请求、订阅和预览。Agent、Thread 或 composition 改变也会重置选择；同一
-composition 内的普通状态更新与重连保留选择。
-只读文件根按需刷新，不建立实时资源订阅。
-
-Thread 侧栏在 Status 中集中展示 Context、模块状态和 Recitation，在 Files 中
-浏览文件。收起时，展开入口以窄小悬浮标签的形式贴在 Agent 导航下方、内容区域
-的右上边缘，可覆盖内容边缘和滚动条，不占用独立列，消息滚动时保持固定。
-展开后，收起按钮位于侧栏
-左上角，排在 Status 和 Files 前面。收起后键盘焦点返回展开入口。输入框仅保留
-消息操作。桌面固定展示侧栏，Pad 和手机使用抽屉。Thread Explorer 保留 Files，
-Runtime 不显示侧栏。点击 Agent 标题进入 Chat。Runtime 和 Threads 在
-两个视图中均可访问，宽屏显示图标与文字，窄屏显示带可访问名称的图标。
-
-Files 和 Runtime 使用一致的轻量当前视图选择器，提供选中标记和键盘操作。
-Files 选择器替代重复的根标题；只有一个根可用时显示普通文字。
-
-文件浏览即使为空，也显示 Workspace 完整路径或模块的 Thread 范围。文件名/路径
-查找覆盖已加载的目录树（包括收起的目录），并提示结果不完整的情况。默认隐藏点号
-开头的条目，提供明确开关；清空查找保留目录展开状态。文件预览只读展示源码或图片，
-提供复制、下载原文件和换行控制。代码包含高亮与行号，大型预览降级为纯文本。
-截断与读取错误明确区分。原文件下载保留原始字节并强制作为附件；预览不执行 HTML。
-关闭预览后焦点返回原文件，若文件已消失则返回查找框。关闭或切换根时，未完成的
-预览请求失效。
-
-Recitation 展示最近一次普通请求准备时记录的有序片段及时间。它是历史证据，
-不是当前预览，也不能证明 Provider 已收到请求。查看时仅读取日志，不收集模块
-上下文。当前 Tasks、Notes 可以与该快照不同。没有请求记录、请求中没有片段和
-读取失败必须明确区分。
-
-## 布局与视觉
-
-- Desktop 使用 Fleet/Agent navigation shell 和易读的居中内容区。
-- Mobile 折叠导航，但保持 composer 可达。
-- Operational JSON 在 disclosure panel 内滚动，而不是让整页横向滚动。
-- Sticky control 为末条消息保留足够底部与 safe-area 空间。
-- Loading、empty、read-only、working、failed、disconnected 状态都明确展示。
-
-视觉语言应直接、平静、紧凑。生产 token 位于 `frontend/src/index.css`。Forest
-是主要 action color，gold 只做克制强调，neutral surface 承载运行信息，status
-color 表达语义。避免装饰性 gradient、夸张 marketing typography，以及与状态
-变化无关的 animation。
-
-## 无障碍
-
-- Keyboard focus 始终可见，tab 顺序符合交互顺序。
-- Icon-only action 有 accessible name。
-- 状态不能只依赖颜色表达。
-- Motion 遵循 `prefers-reduced-motion`。
-- Destructive confirmation 明确写出目标 Thread。
+桌面使用常驻导航和适合阅读的内容宽度。窄屏折叠导航但保留主要操作；表单和操作数据
+不应导致页面整体横向滚动。空、加载、失败、只读和断线明确区分。图标按钮具有名称，
+键盘焦点清晰，对话框恢复焦点，并尊重减少动画的偏好。

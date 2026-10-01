@@ -10,7 +10,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/artifact"
 	"github.com/juex-ai/juex/internal/foundation/llm"
-	eventmedia "github.com/juex-ai/juex/internal/framework/observationmedia"
 )
 
 func TestReadImageBase64RejectsUnsafePathsAndMediaTypes(t *testing.T) {
@@ -48,10 +47,10 @@ func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 	}
 }
 
-func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.T) {
+func TestReadImageBase64UsesImmutableArtifactCopy(t *testing.T) {
 	workDir := t.TempDir()
 	mediaDir := filepath.Join(t.TempDir(), "media")
-	sourcePath := filepath.Join(workDir, ".juex", "inbox", "event.png")
+	sourcePath := filepath.Join(workDir, "event.png")
 	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -62,22 +61,22 @@ func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.
 	if err := os.WriteFile(sourcePath, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	report := eventmedia.ValidateAttachments([]eventmedia.AttachmentRef{{
-		Path:      ".juex/inbox/event.png",
-		MediaType: "image/png",
-	}}, eventmedia.ValidationOptions{WorkDir: workDir, MediaDir: mediaDir})
-	if len(report.Valid) != 1 || len(report.Errors) != 0 {
-		t.Fatalf("event attachment report = %+v", report)
+	store, err := artifact.NewStore(mediaDir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	attachment := report.Valid[0]
+	attachment, err := store.PutContentAddressed("media", ".png", data)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatal(err)
 	}
 	encoded, mediaType, ok := ReadImageBase64(mediaDir, &llm.MediaRef{
-		ArtifactPath:  attachment.ArtifactPath,
-		MediaType:     attachment.MediaType,
+		ArtifactPath:  attachment.Path,
+		MediaType:     "image/png",
 		SHA256:        attachment.SHA256,
-		OriginalBytes: attachment.OriginalBytes,
+		OriginalBytes: len(data),
 	})
 	if !ok || mediaType != "image/png" || encoded == "" {
 		t.Fatalf("readImageBase64 = encoded:%q mediaType:%q ok:%t", encoded, mediaType, ok)

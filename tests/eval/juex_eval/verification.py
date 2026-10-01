@@ -51,8 +51,6 @@ GO_ENV_FINGERPRINT_KEYS = (
 INHERITED_TEST_ENVIRONMENT_KEYS = (
     "HOME",
     "USERPROFILE",
-    "JUEX_HOME",
-    "CODEX_HOME",
     "JUEX_PROVIDER_CONFIG",
 )
 
@@ -188,7 +186,6 @@ def environment_fingerprint(
             if repo_root is not None
             else "unavailable:not-requested"
         ),
-        "ripgrep": executable_fingerprint("rg", test_environment),
         "inherited_test_inputs": inherited_test_inputs(environment, repo_root),
     }
     if web:
@@ -202,32 +199,11 @@ def inherited_test_inputs(
     repo_root: pathlib.Path | None,
 ) -> dict[str, Any]:
     variables = {name: environment.get(name, "") for name in INHERITED_TEST_ENVIRONMENT_KEYS}
-    home_value = (
-        environment.get("USERPROFILE", "") if os.name == "nt" else environment.get("HOME", "")
-    ) or environment.get("HOME", "") or environment.get("USERPROFILE", "")
-    home = environment_path(home_value, environment, repo_root)
-    effective_home = environment_path(environment.get("JUEX_HOME", ""), environment, repo_root)
-    if effective_home is None and home is not None:
-        effective_home = home / ".juex"
-    codex_home = environment_path(environment.get("CODEX_HOME", ""), environment, repo_root)
-    if codex_home is None and home is not None:
-        codex_home = home / ".codex"
     provider_config = environment_path(environment.get("JUEX_PROVIDER_CONFIG", ""), environment, repo_root)
-
-    config_paths: dict[str, pathlib.Path] = {}
-    if home is not None:
-        config_paths["default_juex"] = home / ".juex" / "juex.yaml"
-    if effective_home is not None:
-        config_paths["effective_juex"] = effective_home / "juex.yaml"
-    if provider_config is not None:
-        config_paths["provider"] = provider_config
-    if codex_home is not None:
-        config_paths["codex_config"] = codex_home / "config.toml"
-        config_paths["codex_auth"] = codex_home / "auth.json"
-    if repo_root is not None:
-        config_paths["workspace_juex"] = repo_root / ".juex" / "juex.yaml"
+    config_paths = {"provider": provider_config} if provider_config is not None else {}
     return {
         "environment": variables,
+        "postgres_target": stable_fingerprint(environment.get("JUEX_TEST_POSTGRES_URL", "")),
         "config_files": {name: file_fingerprint(path) for name, path in sorted(config_paths.items())},
     }
 
@@ -272,20 +248,8 @@ def file_fingerprint(path: pathlib.Path) -> dict[str, Any]:
 
 
 def artifact_fingerprints(repo_root: pathlib.Path) -> dict[str, dict[str, Any]]:
-    relative = pathlib.Path("dist") / "juex"
-    path = repo_root / relative
-    if not path.is_file():
-        return {}
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return {
-        relative.as_posix(): {
-            "sha256": "sha256:" + digest.hexdigest(),
-            "size": path.stat().st_size,
-        }
-    }
+    binaries = ("juex", "juex-executor", "juex-management", "juex-runtime", "juex-execution", "juex-memory", "juex-calendar", "juex-guest", "juex-service-log")
+    return {"dist/" + name: file_fingerprint(repo_root / "dist" / name) for name in binaries}
 
 
 def executable_fingerprint(name: str, environment: dict[str, str] | None = None) -> dict[str, Any]:

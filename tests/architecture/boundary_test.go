@@ -16,14 +16,16 @@ const modulePath = "github.com/juex-ai/juex"
 // Every production package is classified by its owning group, including files
 // for other operating systems. New top-level groups require an explicit rule.
 var dependencies = map[string]map[string]bool{
-	"foundation":  {"foundation": true},
-	"framework":   {"foundation": true, "framework": true},
-	"features":    {"foundation": true, "framework": true, "features": true},
-	"providers":   {"foundation": true, "providers": true},
-	"fleet":       {"foundation": true, "framework": true, "fleet": true},
-	"app":         {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "app": true},
-	"entrypoints": {"foundation": true, "framework": true, "features": true, "providers": true, "fleet": true, "app": true, "entrypoints": true},
-	"cmd":         {"foundation": true, "entrypoints": true},
+	"foundation":     {"foundation": true},
+	"providers":      {"foundation": true, "providers": true},
+	"management":     {"foundation": true, "management": true},
+	"managedruntime": {"foundation": true, "managedruntime": true},
+	"execution":      {"foundation": true, "execution": true},
+	"memory":         {"foundation": true, "memory": true},
+	"calendar":       {"foundation": true, "calendar": true},
+	"app":            {"foundation": true, "providers": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "calendar": true, "app": true},
+	"entrypoints":    {"foundation": true, "providers": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "calendar": true, "app": true, "entrypoints": true},
+	"cmd":            {"foundation": true, "entrypoints": true},
 }
 
 func packageGroup(path string) string {
@@ -69,6 +71,9 @@ func TestProductionPackageOwnershipAndDependencies(t *testing.T) {
 				if err != nil {
 					return err
 				}
+				if owner == "entrypoints" && (strings.HasPrefix(imported, modulePath+"/internal/management/postgres") || strings.HasPrefix(imported, modulePath+"/internal/managedruntime/postgres") || strings.HasPrefix(imported, modulePath+"/internal/execution/postgres") || strings.HasPrefix(imported, modulePath+"/internal/memory/postgres") || strings.HasPrefix(imported, modulePath+"/internal/calendar/postgres")) {
+					t.Errorf("entrypoint imports service storage adapter: %s -> %s", relative, imported)
+				}
 				if owner == "foundation" && (strings.HasPrefix(imported, "github.com/openai/") || strings.HasPrefix(imported, "github.com/anthropics/")) {
 					t.Errorf("Foundation imports Provider SDK: %s -> %s", relative, imported)
 				}
@@ -94,17 +99,15 @@ func TestProductionPackageOwnershipAndDependencies(t *testing.T) {
 
 func TestPackageOwnershipClassifiesNestedAndUnknownRoots(t *testing.T) {
 	for path, want := range map[string]string{
-		"internal/foundation/events":                    "foundation",
-		"internal/framework/agent":                      "framework",
-		"internal/features/skills/internal/frontmatter": "features",
-		"internal/providers/internal/protocol":          "providers",
-		"internal/fleet/service":                        "fleet",
-		"internal/app/config":                           "app",
-		"internal/entrypoints/agenthttp":                "entrypoints",
-		"cmd/juex":                                      "cmd",
-		"internal/unclassified":                         "",
-		"internal/cmd":                                  "",
-		"tests/e2e":                                     "",
+		"internal/foundation/execprotocol":     "foundation",
+		"internal/providers/internal/protocol": "providers",
+		"internal/management/postgres":         "management",
+		"internal/app/managed":                 "app",
+		"internal/entrypoints/managementhttp":  "entrypoints",
+		"cmd/juex":                             "cmd",
+		"internal/unclassified":                "",
+		"internal/cmd":                         "",
+		"tests/e2e":                            "",
 	} {
 		if got := packageGroup(path); got != want {
 			t.Errorf("packageGroup(%q)=%q, want %q", path, got, want)
