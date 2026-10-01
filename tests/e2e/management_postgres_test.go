@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -21,12 +22,12 @@ import (
 // An explicitly requested postgres suite fails instead of silently skipping.
 func managementDatabase(t *testing.T) (*pgxpool.Pool, *postgres.Directory) {
 	t.Helper()
-	url := os.Getenv("JUEX_TEST_POSTGRES_URL")
-	if url == "" {
+	databaseURL := os.Getenv("JUEX_TEST_POSTGRES_URL")
+	if databaseURL == "" {
 		t.Fatal("JUEX_TEST_POSTGRES_URL is required for -tags postgres")
 	}
 	ctx := context.Background()
-	admin, err := pgxpool.New(ctx, url)
+	admin, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,11 +41,20 @@ func managementDatabase(t *testing.T) (*pgxpool.Pool, *postgres.Directory) {
 			t.Error(err)
 		}
 	})
-	config, err := pgxpool.ParseConfig(url)
+	address, err := url.Parse(databaseURL)
+	if err != nil || (address.Scheme != "postgres" && address.Scheme != "postgresql") {
+		t.Fatal("JUEX_TEST_POSTGRES_URL must be a PostgreSQL URL")
+	}
+	address.Path = "/" + db
+	query := address.Query()
+	query.Del("dbname")
+	address.RawQuery = query.Encode()
+	// ConnString retains the parsed source, not later Database field changes.
+	// CLI fixtures must reconnect to this same disposable database.
+	config, err := pgxpool.ParseConfig(address.String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.ConnConfig.Database = db
 	// Business transactions must explicitly choose the isolation level required
 	// by their lock protocol, rather than inheriting a deployment default.
 	config.ConnConfig.RuntimeParams["default_transaction_isolation"] = "repeatable read"
