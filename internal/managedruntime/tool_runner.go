@@ -195,6 +195,9 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			return toolResult(work.Call, map[string]string{"error": decision.Reason}, true)
 		}
 	}
+	if outcome, handled := extensionSkill(*work); handled {
+		return outcome
+	}
 	if r.applications != nil && (strings.HasPrefix(work.Call.ToolName, "memory_") || strings.HasPrefix(work.Call.ToolName, "calendar_")) {
 		value, err := r.applications.Call(ctx, *work, job)
 		if err != nil {
@@ -278,7 +281,7 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 	if execprotocol.State(operation.State).Terminal() {
 		return operationResult(*work, operation, work.ID)
 	}
-	if work.Request.Kind == "exec_command" && operation.State == "running" || work.Request.Kind == "mcp_connect" && bytes.Contains(operation.Snapshot.Output, []byte(`"type":"connected"`)) {
+	if (work.Request.Kind == "exec_command" || work.Request.Kind == "observe_command") && operation.State == "running" || work.Request.Kind == "mcp_connect" && bytes.Contains(operation.Snapshot.Output, []byte(`"type":"connected"`)) {
 		return operationResult(*work, operation, work.ID)
 	}
 	return ToolOutcome{State: "waiting", OperationLive: true, WaitReason: executionWaitReason(operation.State)}

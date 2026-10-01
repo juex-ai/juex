@@ -90,3 +90,26 @@ Hooks 使用 Shell 能力及与其他命令相同的持久操作日志。输入�
 JSON stdin，分别保留 stdout、stderr，并限制执行时间与输出量。退出码二是策略
 结果，不是执行故障。输出超限明确失败；中断或缺失结果绝不解释为允许继续。
 固定的设备授权版本在撤销后同时拦截旧操作的接纳与派发。
+
+## 执行端扩展
+
+在已授权环境的明确目录中放置 `juex.extension.json`，再通过 Agent 的扩展面板读取并选择资源。检查以普通文件操作相同的系统身份，只读取该目录下有大小限制的普通 manifest 和技能文件，不启动命令，也不创建扩展状态。
+
+```json
+{
+  "manifest_version": 2,
+  "name": "example",
+  "version": "1.0.0",
+  "environment": {"CACHE_DIR": "${JUEX_EXT_DATA_DIR}/cache"},
+  "skills": [{"id": "guide", "path": "SKILL.md", "description": "Use the example scripts"}],
+  "observables": [{
+    "id": "watch",
+    "command": ["/bin/sh", "watch.sh"],
+    "options": {"parser": {"type": "jsonl", "content_field": "message"}, "batch": {"interval_seconds": 5}}
+  }]
+}
+```
+
+命令继承声明的默认环境和资源级覆盖；保留变量 `JUEX_EXT_DIR`、`JUEX_EXT_DATA_DIR` 最后注入。声明的环境值（包括 PATH）可以展开这两个占位符。原生数据位于连接器工作目录下的 `.juex-extensions/<environment>/<agent>/<binding>`；托管数据位于持久 Agent Home 下的 `.local/share/juex/extensions/<environment>/<agent>/<binding>`，辅助进程以 UID 1000 创建目录并查找命令。每个绑定都有稳定、独立的数据目录，但原生系统用户权限并不构成沙箱。移除配置不会删除原生文件。
+
+文本观察器直接保存完整 UTF-8 块，无需等待换行。JSONL 每行最多 64 KiB，输出存储池耗尽会明确失败。JSONL 附件字段接受最多 16 个包含 `path`、可选 `name` 和 `media_type` 的对象；路径相对于声明的命令目录解析，仍须通过当前文件权限检查。每个过滤器使用一个 `contains` 或 `regex` 选择条件，可覆盖 kind、severity。退出通知默认 `never`，也可设置 `always` 或 `nonzero`。消费方确认输出已持久化后才开始保留期；Runtime 休眠或重启不会重启观察进程。

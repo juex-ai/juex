@@ -366,6 +366,10 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 		request.System += executionContext(environments)
 		request.Tools = append(request.Tools, executionTools()...)
+		if len(work.Config.Extensions) > 0 {
+			request.System += extensionContext(work.Config.Extensions)
+			request.Tools = append(request.Tools, extensionTools()...)
+		}
 		if r.tools.files != nil {
 			request.Tools = append(request.Tools, fileTools()...)
 		}

@@ -31,6 +31,7 @@ func (d *Directory) SnapshotPlan(ctx context.Context, scope management.ModelCall
 	}
 	plan.WorkerDepth = authority.Agent.WorkerDepth
 	plan.Hooks = authority.Agent.Hooks
+	plan.Extensions = authority.Agent.Extensions
 	plan.AgentVersion, plan.Instructions, plan.RequestedModelID = authority.Agent.Version, authority.Agent.Instructions, authority.ModelID
 	rows, err := tx.Query(ctx, `WITH wanted AS (SELECT $2::uuid AS id,0 AS ordinal UNION ALL SELECT fallback_id,ordinal FROM management.model_fallbacks WHERE model_id=$2)
  SELECT m.id,m.provider,m.name,m.protocol,m.endpoint,m.context_window,m.max_output,m.authorization_epoch,COALESCE(e.epoch,1)

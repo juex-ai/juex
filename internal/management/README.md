@@ -80,3 +80,5 @@ link, never application evidence or conversation content. SMTP retries retain th
 message identity but cannot promise exactly-once remote delivery.
 
 Permanent cleanup is a durable, owner-scoped job for an archived Agent or a removed member’s Fleet. Management freezes the target identity, fences every participant before erasing data, and retries each acknowledged phase independently. Service tombstones reject late writes and recreation. Platform data removal and outstanding external stops are separate results. Usage and audit survive; a purged Fleet is replaced only when its owner accepts a new invitation. Historical backups expire under the operator’s retention policy.
+
+Execution-side extensions are Agent-owned configuration snapshots bound to an authorized environment and explicit directory. Import accepts an Execution inspection receipt, never browser-supplied manifest or skill bodies. Current file grants and their version must still match. Configuration writes validate the complete derived Hook set. Resource removal, binding disablement and embedded Hook disablement advance the execution epoch; installed device files remain untouched.

@@ -167,3 +167,7 @@ Waiting releases the model slot. Recovery queries the original operation and
 never repeats a completed tool or committed compaction checkpoint. Cancelling a
 Thread preserves confirmed tool results and cancels original live operations.
 Stop Hooks settle before completion notices and Memory evidence are published.
+
+Extension manifests and skill bodies are frozen with each Turn. Resource selection and original environment grants constrain skill loading, declared MCP connections, observers and extension command context. Scripts and dependencies on the execution device remain editable; the catalog digest does not assert their immutability. MCP and command observers start explicitly through tools and keep their original operation identities across Runtime restarts.
+
+Command observers use independent background slots. UTF-8 text is captured incrementally; JSONL records are bounded and parsed without dropping incomplete pages. Filters select and classify matching units; batches persist with the input cursor before output acknowledgment. Large observations retain full text for scoped reads. File attachments are captured through Execution as private Artifacts with stable per-record identities; pending captures delay acknowledgment and unknown results retain their handles. Subscriptions opt into future batches and optional exit notices. Revocation fences delivery and cancels original processes.

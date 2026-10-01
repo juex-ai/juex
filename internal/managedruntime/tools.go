@@ -3,6 +3,7 @@ package managedruntime
 import (
 	"context"
 	"encoding/json"
+	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
@@ -12,6 +13,7 @@ import (
 // ToolWork is a durable delivery, independent of an Agent Activation. Its ID
 // becomes the external operation ID before any dispatch can occur.
 type ToolWork struct {
+	Extensions                                 []extensionpolicy.Binding
 	DeferredResult                             *ToolOutcome
 	HookContext                                string
 	ID, TurnID, ThreadID, State, EnvironmentID string

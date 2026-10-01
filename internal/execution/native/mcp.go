@@ -18,14 +18,15 @@ import (
 )
 
 type MCPArguments struct {
-	ConnectionID     string            `json:"connection_id"`
-	Command          string            `json:"command"`
-	Args             []string          `json:"args"`
-	WorkingDirectory string            `json:"working_directory"`
-	Environment      map[string]string `json:"environment"`
-	Name             string            `json:"name"`
-	Arguments        map[string]any    `json:"arguments"`
-	Cursor           string            `json:"cursor"`
+	Extension        *execprotocol.ExtensionContext `json:"extension,omitempty"`
+	ConnectionID     string                         `json:"connection_id"`
+	Command          string                         `json:"command"`
+	Args             []string                       `json:"args"`
+	WorkingDirectory string                         `json:"working_directory"`
+	Environment      map[string]string              `json:"environment"`
+	Name             string                         `json:"name"`
+	Arguments        map[string]any                 `json:"arguments"`
+	Cursor           string                         `json:"cursor"`
 }
 
 func (e *Engine) connectMCP(ctx context.Context, op *operation) error {
@@ -52,6 +53,9 @@ func (e *Engine) connectMCP(ctx context.Context, op *operation) error {
 	}
 	cmd := exec.CommandContext(ctx, args.Command, args.Args...)
 	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
+	if err := e.extensionCommand(cmd, op.record.Request.AgentID, args.Extension); err != nil {
+		return err
+	}
 	if err := configureProcessUser(cmd, e.config.ProcessUser); err != nil {
 		return err
 	}

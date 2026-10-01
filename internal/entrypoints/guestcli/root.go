@@ -138,6 +138,6 @@ func Execute(ctx context.Context, args []string, in io.Reader, out io.Writer) er
 	transfer.Flags().StringVar(&direction, "direction", "", "export or import")
 	transfer.Flags().StringVar(&sha256, "sha256", "", "Expected import SHA-256")
 	transfer.Flags().Int64Var(&size, "size", 0, "Expected import bytes")
-	root.AddCommand(serve, file, transfer)
+	root.AddCommand(serve, file, transfer, extensionCommand())
 	return root.ExecuteContext(ctx)
 }

@@ -172,3 +172,26 @@ stderr separately, and enforce time and output limits. Exit two is a policy
 result, not an execution failure. Output overflow fails explicitly; interrupted
 or missing results are never interpreted as permission to continue. A frozen
 device authorization version fences both admission and dispatch after revocation.
+
+## Execution-side extensions
+
+Put `juex.extension.json` in an explicit directory on an authorized environment, then use the Agent's Extensions panel to inspect and select resources. Inspection reads only bounded regular manifest/skill files beneath that directory, under the same OS identity as other file operations. It never launches commands or creates extension state.
+
+```json
+{
+  "manifest_version": 2,
+  "name": "example",
+  "version": "1.0.0",
+  "environment": {"CACHE_DIR": "${JUEX_EXT_DATA_DIR}/cache"},
+  "skills": [{"id": "guide", "path": "SKILL.md", "description": "Use the example scripts"}],
+  "observables": [{
+    "id": "watch",
+    "command": ["/bin/sh", "watch.sh"],
+    "options": {"parser": {"type": "jsonl", "content_field": "message"}, "batch": {"interval_seconds": 5}}
+  }]
+}
+```
+
+Commands inherit declared defaults and resource-specific overrides; reserved `JUEX_EXT_DIR` and `JUEX_EXT_DATA_DIR` are supplied last. Those two placeholders expand in declared environment values, including PATH. Native data lives beneath the connector's working directory in `.juex-extensions/<environment>/<agent>/<binding>`. Hosted data lives in persistent Agent Home under `.local/share/juex/extensions/<environment>/<agent>/<binding>`; its helper prepares directories and resolves commands as UID 1000. Bindings have stable, separate data directories, but native OS-user permissions are not a sandbox. Configuration removal never deletes native files.
+
+Text observers persist complete UTF-8 chunks without waiting for newline. JSONL lines are limited to 64 KiB; output-pool exhaustion fails visibly. A JSONL attachment field accepts at most 16 objects containing `path`, optional `name` and `media_type`. Paths resolve against the declared command directory and still require current file access. Declared filters use one `contains` or `regex` selector and optional kind/severity overrides. Exit notification is `never` by default, or `always` / `nonzero`. Consumers must acknowledge durable output before its retention interval begins; sleeping or restarting Runtime never restarts an observer process.

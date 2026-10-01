@@ -18,6 +18,10 @@ type ObservationSource struct {
 	Pending                                        []byte
 	Discarding                                     bool
 	DeliveryPending                                bool
+	Options                                        execprotocol.ObservableOptions
+	Command                                        CommandObservationBatch
+	WorkingDirectory                               string
+	AuthorizationVersion                           int64
 }
 
 type Observation struct {
@@ -36,6 +40,7 @@ type ObservationBatch struct {
 	Discarding, Closed, More bool
 	RetryAfter               time.Duration
 	Facts                    []Observation
+	Command                  CommandObservationBatch
 }
 
 type ObservationAck struct {

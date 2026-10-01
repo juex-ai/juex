@@ -308,6 +308,12 @@ func TestExecutionResultReservationsAndRetention(t *testing.T) {
 }
 
 func TestExecutionObservedOutputWaitsForRuntimeConsumption(t *testing.T) {
+	for _, kind := range []string{"mcp_connect", "observe_command"} {
+		t.Run(kind, func(t *testing.T) { testObservedOutputRetention(t, kind) })
+	}
+}
+
+func testObservedOutputRetention(t *testing.T, kind string) {
 	f := executionDatabase(t)
 	ctx := context.Background()
 	device, _ := f.pairDevice(t, execprotocol.MCP)
@@ -317,6 +323,9 @@ func TestExecutionObservedOutputWaitsForRuntimeConsumption(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := nativeRequest(t, "observed-notifications", "mcp_connect", native.MCPArguments{Command: "fixture"})
+	if kind == "observe_command" {
+		request = nativeRequest(t, "observed-notifications", kind, execprotocol.ObservableCommand{Command: []string{"fixture"}})
+	}
 	request.AgentID = f.agent.ID
 	fence := execprotocol.AuthorityFence{ActorEpoch: scope.ActorAuthorizationEpoch, MembershipEpoch: scope.MembershipExecutionEpoch, AgentEpoch: scope.AgentExecutionEpoch}
 	if _, err := f.execution.SubmitFenced(ctx, f.actor, f.tenant, device.ID, request, time.Hour, fence); err != nil {

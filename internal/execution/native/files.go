@@ -65,6 +65,8 @@ func RunFileOperation(ctx context.Context, directory, kind string, args FileArgu
 		return err
 	}
 	switch kind {
+	case "inspect_extension":
+		return inspectExtension(ctx, path, writer)
 	case "read":
 		file, err := openRegular(path, os.O_RDONLY, 0)
 		if err != nil {

@@ -51,7 +51,7 @@ func (r toolRunner) observe(ctx context.Context) {
 		if err != nil {
 			return err
 		}
-		batch := ObservationBatch{Cursor: source.Cursor, Pending: source.Pending, Discarding: source.Discarding, RetryAfter: 5 * time.Second}
+		batch := ObservationBatch{Cursor: source.Cursor, Pending: source.Pending, Discarding: source.Discarding, Command: source.Command, RetryAfter: 5 * time.Second}
 		fresh, err := r.authority.Authorize(ctx, source.Scope.ActorID, source.Scope.TenantID, source.Scope.AgentID, true)
 		if errors.Is(err, ErrDenied) || err == nil && !source.Scope.SameAuthority(fresh) {
 			batch.Closed = true
@@ -71,6 +71,13 @@ func (r toolRunner) observe(ctx context.Context) {
 		batch, err = parseObservation(source, operation)
 		if err != nil {
 			return err
+		}
+		ready, err := r.captureObservationAttachments(ctx, source, &batch)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			batch = ObservationBatch{Cursor: source.Cursor, Pending: source.Pending, Discarding: source.Discarding, Command: source.Command, RetryAfter: time.Second}
 		}
 		return r.observations.FinishObservation(ctx, source, batch)
 	})

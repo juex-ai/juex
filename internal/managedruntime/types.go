@@ -4,6 +4,7 @@ package managedruntime
 import (
 	"encoding/json"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
@@ -97,12 +98,13 @@ type Lease struct {
 }
 
 type TurnConfig struct {
-	Hooks            []hookpolicy.Declaration `json:"hooks,omitempty"`
-	WorkerDepth      int                      `json:"worker_depth"`
-	AgentVersion     int64                    `json:"agent_version"`
-	Instructions     string                   `json:"instructions"`
-	RequestedModelID string                   `json:"requested_model_id"`
-	Models           []ModelConfig            `json:"models"`
+	Extensions       []extensionpolicy.Binding `json:"extensions,omitempty"`
+	Hooks            []hookpolicy.Declaration  `json:"hooks,omitempty"`
+	WorkerDepth      int                       `json:"worker_depth"`
+	AgentVersion     int64                     `json:"agent_version"`
+	Instructions     string                    `json:"instructions"`
+	RequestedModelID string                    `json:"requested_model_id"`
+	Models           []ModelConfig             `json:"models"`
 }
 
 type ModelConfig struct {

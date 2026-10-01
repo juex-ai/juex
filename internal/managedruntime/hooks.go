@@ -114,7 +114,7 @@ func (r toolRunner) executeHook(ctx context.Context, work *HookWork) HookOutcome
 		var selected *execprotocol.Environment
 		for i := range environments {
 			env := &environments[i]
-			if (work.Declaration.EnvironmentID == env.ID || work.Declaration.EnvironmentID == "" && env.Kind == "hosted") && slices.Contains(env.Capabilities, execprotocol.Shell) && env.AuthorizationVersion > 0 {
+			if (work.Declaration.EnvironmentID == env.ID || work.Declaration.EnvironmentID == "" && env.Kind == "hosted") && slices.Contains(env.Capabilities, execprotocol.Shell) && env.AuthorizationVersion > 0 && (work.Declaration.AuthorizationVersion == 0 || work.Declaration.AuthorizationVersion == env.AuthorizationVersion) {
 				selected = env
 				break
 			}

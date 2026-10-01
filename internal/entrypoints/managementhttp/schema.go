@@ -33,6 +33,7 @@ func GenerateTypeScript() ([]byte, error) {
 		reflect.TypeFor[management.Fleet](),
 		reflect.TypeFor[management.FleetOverview](), reflect.TypeFor[management.Model](),
 		reflect.TypeFor[management.AgentDetail](),
+		reflect.TypeFor[management.ExtensionInspection](), reflect.TypeFor[management.ExtensionInspectionRequest](), reflect.TypeFor[management.ExtensionChange](),
 		reflect.TypeFor[execution.Device](), reflect.TypeFor[execution.Pairing](),
 		reflect.TypeFor[execprotocol.Environment](),
 		reflect.TypeFor[execution.Artifact](), reflect.TypeFor[execution.ArtifactUpload](), reflect.TypeFor[execprotocol.FileChunk](),

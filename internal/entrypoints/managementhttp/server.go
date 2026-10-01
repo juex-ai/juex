@@ -53,6 +53,7 @@ type Directory interface {
 }
 
 type Options struct {
+	Extensions   ExtensionAPI
 	Auth         Auth
 	Directory    Directory
 	Runtime      Runtime
@@ -88,6 +89,11 @@ func New(options Options) (http.Handler, error) {
 	s := &Server{options: options, origin: origin, attempts: make(map[string]attempts)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	if options.Extensions != nil {
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/extension-inspections", s.signedIn(s.inspectExtension))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/extension-inspections/{environment}/{operation}", s.signedIn(s.extensionInspection))
+		mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/extensions/{binding}", s.signedIn(s.configureExtension))
+	}
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]any{"email_enabled": options.MailEnabled}, nil)
 	})

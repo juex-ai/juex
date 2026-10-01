@@ -42,9 +42,9 @@ const (
 
 func RequiredCapability(kind string) Capability {
 	switch kind {
-	case "read", "write", "edit", "glob", "grep", "export_file", "import_file":
+	case "inspect_extension", "read", "write", "edit", "glob", "grep", "export_file", "import_file":
 		return Files
-	case "exec_command", "write_stdin", "run_hook":
+	case "observe_command", "exec_command", "write_stdin", "run_hook":
 		return Shell
 	case "mcp_connect", "mcp_call", "mcp_list", "mcp_close":
 		return MCP

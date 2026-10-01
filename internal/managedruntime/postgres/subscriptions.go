@@ -65,6 +65,10 @@ func (s *Store) ApplySubscription(ctx context.Context, work managedruntime.ToolW
 		if request.OperationID == "" || capability != execprotocol.MCP {
 			return sub, managedruntime.ErrInvalid
 		}
+	case "command.observation":
+		if request.OperationID == "" || request.Method != "" || capability != execprotocol.Shell {
+			return sub, managedruntime.ErrInvalid
+		}
 	case "operation.terminal":
 		if request.OperationID == "" || request.Method != "" || (capability != execprotocol.MCP && capability != execprotocol.Shell) {
 			return sub, managedruntime.ErrInvalid
@@ -125,7 +129,7 @@ func (s *Store) ApplySubscription(ctx context.Context, work managedruntime.ToolW
 		// The source lock orders registration with observer commits. Facts
 		// captured since the sampled offset cannot fall between both sides.
 		if _, err = tx.Exec(ctx, `INSERT INTO runtime.observation_deliveries(subscription_id,generation,observation_id,agent_id)
- SELECT $1,$2,o.event_id,o.agent_id FROM runtime.observations o WHERE o.agent_id=$3 AND o.environment_id=$4 AND o.operation_id=$5 AND (($6='operation.terminal' AND o.kind='operation.terminal') OR ($6='mcp.notification' AND o.source_offset>$7 AND o.kind IN ('mcp.notification','mcp.invalid_notification') AND ($8='' OR o.data->>'method'=$8 OR o.kind='mcp.invalid_notification'))) ON CONFLICT DO NOTHING`, sub.ID, sub.Generation, work.Scope.AgentID, request.EnvironmentID, request.OperationID, request.Kind, offset, request.Method); err != nil {
+ SELECT $1,$2,o.event_id,o.agent_id FROM runtime.observations o WHERE o.agent_id=$3 AND o.environment_id=$4 AND o.operation_id=$5 AND (($6='operation.terminal' AND o.kind='operation.terminal') OR ($6='mcp.notification' AND o.source_offset>$7 AND o.kind IN ('mcp.notification','mcp.invalid_notification') AND ($8='' OR o.data->>'method'=$8 OR o.kind='mcp.invalid_notification')) OR ($6='command.observation' AND o.source_offset>$7 AND o.kind IN ('command.observation','command.invalid_observation','command.exit','operation.output_expired'))) ON CONFLICT DO NOTHING`, sub.ID, sub.Generation, work.Scope.AgentID, request.EnvironmentID, request.OperationID, request.Kind, offset, request.Method); err != nil {
 			return sub, err
 		}
 	}

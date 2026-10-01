@@ -21,6 +21,9 @@ func parseObservation(source ObservationSource, operation ToolOperation) (Observ
 	if snapshot.NextCursor != source.Cursor+int64(len(snapshot.Output)) || snapshot.OutputBytes < snapshot.NextCursor {
 		return batch, execprotocol.ErrInvalid
 	}
+	if source.Kind == "observe_command" {
+		return parseCommandObservation(source, operation)
+	}
 	emit := func(kind string, offset int64, value any) {
 		data, _ := json.Marshal(value)
 		batch.Facts = append(batch.Facts, Observation{ID: observationID(source, kind, offset), Kind: kind, EnvironmentID: source.EnvironmentID, OperationID: source.OperationID, Offset: offset, Data: data, CreatedAt: time.Now().UTC()})

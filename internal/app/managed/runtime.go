@@ -3,6 +3,7 @@ package managed
 import (
 	"context"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
@@ -57,7 +58,7 @@ func (a RuntimeAuthority) Snapshot(ctx context.Context, scope managedruntime.Sco
 	if err != nil {
 		return managedruntime.TurnConfig{}, runtimeError(err)
 	}
-	config := managedruntime.TurnConfig{Hooks: plan.Hooks, WorkerDepth: plan.WorkerDepth, AgentVersion: plan.AgentVersion, Instructions: plan.Instructions, RequestedModelID: plan.RequestedModelID}
+	config := managedruntime.TurnConfig{Extensions: plan.Extensions, Hooks: append(plan.Hooks, extensionpolicy.Hooks(plan.Extensions)...), WorkerDepth: plan.WorkerDepth, AgentVersion: plan.AgentVersion, Instructions: plan.Instructions, RequestedModelID: plan.RequestedModelID}
 	for _, candidate := range plan.Candidates {
 		config.Models = append(config.Models, managedruntime.ModelConfig(candidate))
 	}

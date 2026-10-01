@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/management"
@@ -151,13 +153,13 @@ func (d *Directory) ConfigureFleet(ctx context.Context, actorID, tenantID, owner
 	return settings, tx.Commit(ctx)
 }
 
-const agentColumns = `id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch,worker_depth,purging,hooks`
+const agentColumns = `extensions,id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch,worker_depth,purging,hooks`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanAgent(row rowScanner) (management.Agent, error) {
 	var a management.Agent
-	err := row.Scan(&a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth, &a.Purging, &a.Hooks)
+	err := row.Scan(&a.Extensions, &a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth, &a.Purging, &a.Hooks)
 	return a, classify(err)
 }
 
@@ -216,6 +218,9 @@ func (d *Directory) ConfigureAgent(ctx context.Context, actorID, tenantID, agent
 	prior, err := scanAgent(tx.QueryRow(ctx, `SELECT `+agentColumns+` FROM management.agents WHERE id=$1`, agentID))
 	if err != nil {
 		return management.Agent{}, err
+	}
+	if hookpolicy.Validate(append(slices.Clone(config.Hooks), extensionpolicy.Hooks(prior.Extensions)...)) != nil {
+		return management.Agent{}, management.ErrInvalid
 	}
 	revoke := hookpolicy.Revokes(prior.Hooks, config.Hooks)
 	agent, err := scanAgent(tx.QueryRow(ctx, `UPDATE management.agents SET name=$2,instructions=$3,model_id=NULLIF($4,'')::uuid,worker_depth=$6,hooks=$7,execution_epoch=execution_epoch+CASE WHEN $8 THEN 1 ELSE 0 END,version=version+1,updated_at=clock_timestamp() WHERE id=$1 AND version=$5 AND status='active' RETURNING `+agentColumns, agentID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, version, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...), revoke))

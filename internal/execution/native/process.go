@@ -18,11 +18,12 @@ import (
 )
 
 type CommandArguments struct {
-	Command          string            `json:"command"`
-	WorkingDirectory string            `json:"working_directory"`
-	TTY              bool              `json:"tty"`
-	TimeoutMS        int64             `json:"timeout_ms"`
-	Environment      map[string]string `json:"environment"`
+	Extension        *execprotocol.ExtensionContext `json:"extension,omitempty"`
+	Command          string                         `json:"command"`
+	WorkingDirectory string                         `json:"working_directory"`
+	TTY              bool                           `json:"tty"`
+	TimeoutMS        int64                          `json:"timeout_ms"`
+	Environment      map[string]string              `json:"environment"`
 }
 
 func (e *Engine) workingDirectory(directory string) (string, error) {
@@ -81,6 +82,9 @@ func (e *Engine) command(ctx context.Context, operation *operation) (*int, error
 	}
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", args.Command)
 	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
+	if err := e.extensionCommand(cmd, operation.record.Request.AgentID, args.Extension); err != nil {
+		return nil, err
+	}
 	if err := configureProcessUser(cmd, e.config.ProcessUser); err != nil {
 		return nil, err
 	}

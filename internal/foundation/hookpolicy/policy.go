@@ -29,17 +29,20 @@ var ErrInvalid = errors.New("invalid hook declaration")
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`)
 
 type Declaration struct {
-	ID               string   `json:"id"`
-	Enabled          bool     `json:"enabled"`
-	Events           []Event  `json:"events"`
-	Tools            []string `json:"tools,omitempty"`
-	EnvironmentID    string   `json:"environment_id,omitempty"`
-	Command          []string `json:"command"`
-	WorkingDirectory string   `json:"working_directory,omitempty"`
-	TimeoutSeconds   int      `json:"timeout_seconds,omitempty"`
-	MaxOutputBytes   int      `json:"max_output_bytes,omitempty"`
-	Required         bool     `json:"required"`
-	Source           string   `json:"source,omitempty"`
+	AuthorizationVersion int64                          `json:"authorization_version,omitempty"`
+	Extension            *execprotocol.ExtensionContext `json:"extension,omitempty"`
+	Environment          map[string]string              `json:"environment,omitempty"`
+	ID                   string                         `json:"id"`
+	Enabled              bool                           `json:"enabled"`
+	Events               []Event                        `json:"events"`
+	Tools                []string                       `json:"tools,omitempty"`
+	EnvironmentID        string                         `json:"environment_id,omitempty"`
+	Command              []string                       `json:"command"`
+	WorkingDirectory     string                         `json:"working_directory,omitempty"`
+	TimeoutSeconds       int                            `json:"timeout_seconds,omitempty"`
+	MaxOutputBytes       int                            `json:"max_output_bytes,omitempty"`
+	Required             bool                           `json:"required"`
+	Source               string                         `json:"source,omitempty"`
 }
 
 func (h Declaration) Matches(event Event, tool string) bool {
@@ -54,7 +57,7 @@ func (h Declaration) Operation(input json.RawMessage) execprotocol.HookCommand {
 	if output == 0 {
 		output = 8192
 	}
-	return execprotocol.HookCommand{Command: slices.Clone(h.Command), Input: input, WorkingDirectory: h.WorkingDirectory, TimeoutMS: timeout * 1000, MaxOutputBytes: output}
+	return execprotocol.HookCommand{Command: slices.Clone(h.Command), Input: input, WorkingDirectory: h.WorkingDirectory, TimeoutMS: timeout * 1000, MaxOutputBytes: output, Extension: h.Extension, Environment: h.Environment}
 }
 
 func Validate(values []Declaration) error {
@@ -67,6 +70,9 @@ func Validate(values []Declaration) error {
 	}
 	seen := map[string]bool{}
 	for _, h := range values {
+		if h.AuthorizationVersion < 0 {
+			return ErrInvalid
+		}
 		if !namePattern.MatchString(h.ID) || seen[h.ID] || len(h.Events) < 1 || len(h.Events) > 7 || len(h.Tools) > 32 || len(h.Source) > 256 || len(h.WorkingDirectory) > 4096 || strings.ContainsRune(h.WorkingDirectory, 0) || h.TimeoutSeconds < 0 || h.TimeoutSeconds > 300 || h.MaxOutputBytes < 0 || h.MaxOutputBytes > 64<<10 {
 			return ErrInvalid
 		}

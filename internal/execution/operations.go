@@ -85,7 +85,7 @@ func (s *Service) submit(ctx context.Context, actor, tenant, environment string,
 	if !permits(device, scope, request.Kind) {
 		return Operation{}, execprotocol.ErrDenied
 	}
-	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && request.Kind == "mcp_connect")
+	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && (request.Kind == "mcp_connect" || request.Kind == "observe_command"))
 }
 
 // AcknowledgeOutput transfers responsibility for persisted notifications to

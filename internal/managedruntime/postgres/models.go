@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,7 +13,7 @@ import (
 )
 
 func validModelPlan(plan managedruntime.TurnConfig) bool {
-	if len(plan.Models) < 1 || len(plan.Models) > 5 || hookpolicy.Validate(plan.Hooks) != nil {
+	if len(plan.Models) < 1 || len(plan.Models) > 5 || hookpolicy.Validate(plan.Hooks) != nil || extensionpolicy.Validate(plan.Extensions) != nil {
 		return false
 	}
 	seen := map[string]bool{}

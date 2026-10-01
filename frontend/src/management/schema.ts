@@ -4,6 +4,7 @@ export type Role = "admin" | "member";
 export type MembershipStatus = "active" | "suspended" | "removed";
 
 export interface Agent {
+  extensions: Array<Binding>;
   hooks: Array<Declaration>;
   purging: boolean;
   worker_depth: number;
@@ -70,6 +71,17 @@ export interface ArtifactSource {
 export interface ArtifactUpload {
   artifact: Artifact;
   cursor: number;
+}
+
+export interface Binding {
+  id: string;
+  enabled: boolean;
+  environment_id: string;
+  authorization_version: number;
+  directory: string;
+  inspection_id: string;
+  resources: Array<string>;
+  catalog: Catalog;
 }
 
 export interface Block {
@@ -191,6 +203,19 @@ export interface CalendarStatus {
   pending: number;
 }
 
+export interface Catalog {
+  manifest: Manifest;
+  skills: Array<SkillContent>;
+  revision: string;
+}
+
+export interface CommandResource {
+  id: string;
+  description?: string;
+  command: Array<string>;
+  environment?: Record<string, string>;
+}
+
 export interface CompactionMetadata {
   auto: boolean;
   reason: string;
@@ -233,6 +258,9 @@ export interface ContextArtifactProjection {
 }
 
 export interface Declaration {
+  authorization_version?: number;
+  extension?: ExtensionContext | null;
+  environment?: Record<string, string>;
   id: string;
   enabled: boolean;
   events: Array<string>;
@@ -298,6 +326,36 @@ export interface Event {
 
 export interface ExtendTransferRequest {
   wait_hours: number;
+}
+
+export interface ExtensionChange {
+  version: number;
+  enabled: boolean;
+  remove?: boolean;
+  inspection_id?: string;
+  environment_id?: string;
+  resources: Array<string>;
+}
+
+export interface ExtensionContext {
+  binding_id: string;
+  directory: string;
+}
+
+export interface ExtensionInspection {
+  operation_id: string;
+  environment_id: string;
+  authorization_version: number;
+  directory: string;
+  state: string;
+  error?: string;
+  catalog?: Catalog | null;
+}
+
+export interface ExtensionInspectionRequest {
+  request_id: string;
+  environment_id: string;
+  directory: string;
 }
 
 export interface FileChunk {
@@ -374,6 +432,18 @@ export interface InvitationView {
   expires_at: string;
   link: string;
   delivery_status: string;
+}
+
+export interface Manifest {
+  manifest_version: number;
+  name: string;
+  version: string;
+  description?: string;
+  environment?: Record<string, string>;
+  skills: Array<SkillResource>;
+  hooks: Array<Declaration>;
+  mcp: Array<CommandResource>;
+  observables: Array<ObservableResource>;
 }
 
 export interface MediaRef {
@@ -588,6 +658,45 @@ export interface NotificationReadRequest {
   read: boolean;
 }
 
+export interface ObservableBatch {
+  interval_seconds?: number;
+  max_chars?: number;
+}
+
+export interface ObservableFilter {
+  contains?: string;
+  regex?: string;
+  kind?: string;
+  severity?: string;
+}
+
+export interface ObservableOptions {
+  streams?: Array<string>;
+  parser: ObservableParser;
+  filters?: Array<ObservableFilter>;
+  batch: ObservableBatch;
+  on_exit?: string;
+  kind?: string;
+  severity?: string;
+}
+
+export interface ObservableParser {
+  type: string;
+  content_field?: string;
+  kind_field?: string;
+  severity_field?: string;
+  time_field?: string;
+  attachments_field?: string;
+}
+
+export interface ObservableResource {
+  id: string;
+  description?: string;
+  command: Array<string>;
+  environment?: Record<string, string>;
+  options: ObservableOptions;
+}
+
 export interface OwnerScope {
   tenant_id: string;
   user_id: string;
@@ -669,6 +778,17 @@ export interface Scope {
 export interface Session {
   user: User;
   expires_at: string;
+}
+
+export interface SkillContent {
+  id: string;
+  content: string;
+}
+
+export interface SkillResource {
+  id: string;
+  description: string;
+  path: string;
 }
 
 export interface TenantAccess {

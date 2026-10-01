@@ -34,8 +34,12 @@ func serveManagement(ctx context.Context, app *managed.Management, config serveC
 		return err
 	}
 	var execution managementhttp.Execution
+	var extensions managementhttp.ExtensionAPI
 	if config.ExecutionAddress != "" {
-		execution, err = executionrpc.NewClient(config.ExecutionAddress, config.Credentials)
+		var client *executionrpc.Client
+		client, err = executionrpc.NewClient(config.ExecutionAddress, config.Credentials)
+		execution = client
+		extensions = managed.ManagementExtensions{Directory: app.Directory, Execution: client}
 		if err != nil {
 			return err
 		}
@@ -61,7 +65,7 @@ func serveManagement(ctx context.Context, app *managed.Management, config serveC
 		}
 	}
 	app.Purger = &management.Purger{Repository: app.Directory, Services: participants}
-	handler, err := managementhttp.New(managementhttp.Options{Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, Calendar: calendar, PublicURL: config.PublicURL, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
+	handler, err := managementhttp.New(managementhttp.Options{Extensions: extensions, Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, Calendar: calendar, PublicURL: config.PublicURL, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
 	if err != nil {
 		return err
 	}

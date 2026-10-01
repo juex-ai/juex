@@ -33,6 +33,9 @@ func (e *Engine) runHook(parent context.Context, op *operation) (*int, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, args.Command[0], args.Command[1:]...)
 	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
+	if err := e.extensionCommand(cmd, op.record.Request.AgentID, args.Extension); err != nil {
+		return nil, err
+	}
 	if err := configureProcessUser(cmd, e.config.ProcessUser); err != nil {
 		return nil, err
 	}

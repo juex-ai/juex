@@ -92,7 +92,7 @@ func (r toolRunner) executeObservationTool(ctx context.Context, work ToolWork) (
 	switch request.Kind {
 	case "environment.presence":
 		baseline = presence(*environment)
-	case "mcp.notification", "operation.terminal":
+	case "mcp.notification", "operation.terminal", "command.observation":
 		if request.OperationID == "" {
 			return nil, ErrInvalid
 		}
@@ -104,7 +104,10 @@ func (r toolRunner) executeObservationTool(ctx context.Context, work ToolWork) (
 		if request.Kind == "mcp.notification" && op.Snapshot.Kind != "mcp_connect" {
 			return nil, ErrInvalid
 		}
-		if op.Snapshot.Kind != "mcp_connect" && op.Snapshot.Kind != "exec_command" {
+		if request.Kind == "command.observation" && op.Snapshot.Kind != "observe_command" {
+			return nil, ErrInvalid
+		}
+		if op.Snapshot.Kind != "mcp_connect" && op.Snapshot.Kind != "exec_command" && op.Snapshot.Kind != "observe_command" {
 			return nil, ErrInvalid
 		}
 		if !slices.Contains(environment.Capabilities, capability) {

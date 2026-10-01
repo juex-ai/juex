@@ -48,6 +48,7 @@ type Engine struct {
 	workers     sync.WaitGroup
 	slots       chan struct{}
 	connections chan struct{}
+	observers   chan struct{}
 	lock        *os.File
 	fault       error
 	allowed     map[string][]execprotocol.Capability
@@ -117,7 +118,7 @@ func Open(config Config) (*Engine, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{config: config, allowed: grants, operations: make(map[string]*operation), ctx: ctx, cancel: cancel, slots: make(chan struct{}, config.Concurrency), connections: make(chan struct{}, 16), lock: lock}
+	e := &Engine{config: config, allowed: grants, operations: make(map[string]*operation), ctx: ctx, cancel: cancel, slots: make(chan struct{}, config.Concurrency), connections: make(chan struct{}, 16), observers: make(chan struct{}, 8), lock: lock}
 	if err := e.checkIdentity(); err != nil {
 		cancel()
 		_ = lock.Close()
@@ -362,7 +363,7 @@ func (e *Engine) execute(op *operation) {
 		}
 	}
 	// Stdin must not queue behind the command waiting to consume it.
-	if op.record.Request.Kind != "write_stdin" && op.record.Request.Kind != "mcp_connect" && op.record.Request.Kind != "mcp_close" {
+	if op.record.Request.Kind != "observe_command" && op.record.Request.Kind != "write_stdin" && op.record.Request.Kind != "mcp_connect" && op.record.Request.Kind != "mcp_close" {
 		select {
 		case e.slots <- struct{}{}:
 			defer func() { <-e.slots }()
@@ -390,6 +391,8 @@ func (e *Engine) execute(op *operation) {
 	}
 	var exit *int
 	switch op.record.Request.Kind {
+	case "observe_command":
+		exit, err = e.observeCommand(ctx, op)
 	case "run_hook":
 		exit, err = e.runHook(ctx, op)
 	case "exec_command":

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/juex-ai/juex/internal/execution/native"
 	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/lifecycle"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 )
@@ -163,6 +165,31 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 	if err := json.Unmarshal(hookResult.Snapshot.Output, &output); err != nil || hookResult.State != "completed" || hookResult.Snapshot.ExitCode == nil || *hookResult.Snapshot.ExitCode != 2 || output.Stdout != "1000\n" || output.Stderr != "correction" {
 		t.Fatal("hosted hook did not run with Agent identity and policy result", hookResult, output, err)
 	}
+	submit("extension-files", `mkdir -p /workspace/example; printf '%s' '{"manifest_version":2,"name":"hosted","version":"1","skills":[{"id":"guide","path":"SKILL.md"}]}' > /workspace/example/juex.extension.json; printf '%s' 'hosted skill' > /workspace/example/SKILL.md`)
+	executionEventually(t, f, environment.ID, "extension-files", func(op execution.Operation) bool { return op.Acknowledged })
+	inspect := nativeRequest(t, "hosted-extension-inspect", "inspect_extension", native.FileArguments{Path: "/workspace/example"})
+	inspect.AgentID = f.agent.ID
+	if _, err := client.SubmitFenced(ctx, f.actor, f.tenant, environment.ID, inspect, 0, fence); err != nil {
+		t.Fatal(err)
+	}
+	inspected := executionEventually(t, f, environment.ID, inspect.ID, func(op execution.Operation) bool { return op.Acknowledged })
+	var catalog extensionpolicy.Catalog
+	if inspected.State != "completed" || json.Unmarshal(inspected.Snapshot.Output, &catalog) != nil || catalog.Validate() != nil || catalog.Skills[0].Content != "hosted skill" {
+		t.Fatal("hosted inspection", inspected)
+	}
+	binding := uuid.NewString()
+	submit("extension-path-command", `mkdir -p /workspace/example/bin; printf '%s\n' '#!/bin/sh' 'test "$(id -u)" = 1000 || exit 1; printf retained > "$JUEX_EXT_DATA_DIR/state"; printf "%s" "$JUEX_EXT_DATA_DIR"' > /workspace/example/bin/extension-probe; chmod 700 /workspace/example/bin/extension-probe`)
+	executionEventually(t, f, environment.ID, "extension-path-command", func(op execution.Operation) bool { return op.Acknowledged })
+	extension := nativeRequest(t, "hosted-extension-data", "run_hook", execprotocol.HookCommand{Command: []string{"extension-probe"}, Environment: map[string]string{"PATH": "${JUEX_EXT_DIR}/bin:/usr/bin:/bin"}, Input: json.RawMessage(`{}`), TimeoutMS: 10000, MaxOutputBytes: 8192, Extension: &execprotocol.ExtensionContext{BindingID: binding, Directory: "/workspace/example"}, WorkingDirectory: "/workspace/example"})
+	extension.AgentID = f.agent.ID
+	if _, err := client.SubmitFenced(ctx, f.actor, f.tenant, environment.ID, extension, 0, fence); err != nil {
+		t.Fatal(err)
+	}
+	extensionResult := executionEventually(t, f, environment.ID, extension.ID, func(op execution.Operation) bool { return op.Acknowledged })
+	var extensionOutput execprotocol.HookOutput
+	if extensionResult.State != "completed" || json.Unmarshal(extensionResult.Snapshot.Output, &extensionOutput) != nil || !strings.HasPrefix(extensionOutput.Stdout, "/home/agent/.local/share/juex/extensions/") {
+		t.Fatal("hosted extension identity/data", extensionResult, extensionOutput)
+	}
 	submit("background", "printf started; sleep 60")
 	executionEventually(t, f, environment.ID, "background", func(op execution.Operation) bool { return op.State == "running" })
 	if _, err := f.pool.Exec(ctx, `UPDATE execution.hosted SET last_activity=clock_timestamp()-interval '1 hour'`); err != nil {
@@ -195,6 +222,11 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 	op = executionEventually(t, f, environment.ID, "read-after-sleep", func(op execution.Operation) bool { return op.Acknowledged })
 	if op.State != "completed" || op.Snapshot.Text() != "once" {
 		t.Fatal("wake lost workspace", op)
+	}
+	submit("extension-after-sleep", "cat "+extensionOutput.Stdout+"/state")
+	retained := executionEventually(t, f, environment.ID, "extension-after-sleep", func(op execution.Operation) bool { return op.Acknowledged })
+	if retained.State != "completed" || retained.Snapshot.Text() != "retained" {
+		t.Fatal("wake lost extension data", retained)
 	}
 	if op := submit("once", "printf once >> /workspace/counter; printf ready"); op.State != "completed" {
 		t.Fatal("old operation replayed", op)
