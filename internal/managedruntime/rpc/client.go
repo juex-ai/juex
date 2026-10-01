@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc/wire/platform"
@@ -53,6 +54,15 @@ func actor(user, tenant, agent string) *platform.Actor {
 }
 
 type Client struct{ client runtimewire.Client }
+
+func (a *Authority) RecordNotification(ctx context.Context, event application.Event) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	reply, err := a.client.RecordNotification(ctx, string(data))
+	return platformrpc.Decode(reply, err, nil, decodeError)
+}
 
 func NewClient(address string, credentials platformrpc.Credentials) (*Client, error) {
 	opts, err := platformrpc.ClientOptions(address, "runtime", credentials)

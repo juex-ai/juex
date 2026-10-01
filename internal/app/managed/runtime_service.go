@@ -35,6 +35,7 @@ func OpenRuntime(ctx context.Context, config RuntimeConfig) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	config.Runner.Notifications = authority
 	pool, err := openDatabase(ctx, config.DatabaseURL)
 	if err != nil {
 		return nil, err

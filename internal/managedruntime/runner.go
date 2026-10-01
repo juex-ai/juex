@@ -31,6 +31,7 @@ type ExecutionStore interface {
 }
 
 type RunnerConfig struct {
+	Notifications     NotificationGateway
 	Applications      ApplicationGateway
 	Tools             ToolGateway
 	Files             FileGateway
@@ -120,6 +121,10 @@ type candidate struct {
 // Run is a shared scheduler. Only active Thread work consumes a slot; dormant
 // Agents and queued inputs have no process or model-call loop of their own.
 func (r *Runner) Run(ctx context.Context) {
+	noticeCtx, stopNotices := context.WithCancel(ctx)
+	noticeDone := make(chan struct{})
+	go func() { defer close(noticeDone); r.deliverNotifications(noticeCtx) }()
+	defer func() { stopNotices(); <-noticeDone }()
 	feedCtx, stopFeed := context.WithCancel(ctx)
 	feedDone := make(chan struct{})
 	go func() { defer close(feedDone); r.deliverEvidence(feedCtx) }()

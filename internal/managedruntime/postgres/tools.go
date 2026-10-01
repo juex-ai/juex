@@ -125,14 +125,17 @@ func (s *Store) FinishTool(ctx context.Context, work managedruntime.ToolWork, ou
 		return err
 	}
 	background := work.State == "ready" && work.OperationLive && !work.Cancelled
-	result, err := tx.Exec(ctx, `UPDATE runtime.tools SET state=$3,result=CASE WHEN $8 THEN result ELSE $4::jsonb END,operation_live=$5,lease_until='-infinity',lease_holder='',
+	result, err := tx.Exec(ctx, `UPDATE runtime.tools SET state=$3,result=CASE WHEN $8 THEN result ELSE $4::jsonb END,operation_live=$5,lease_until='-infinity',lease_holder='',waiting_reason=CASE WHEN $3<>'waiting' THEN '' WHEN $9<>'' THEN $9 ELSE waiting_reason END,
  next_check=CASE WHEN wake_version<>$6 THEN clock_timestamp() WHEN $7::double precision>0 THEN clock_timestamp()+make_interval(secs=>$7) ELSE 'infinity'::timestamptz END
- WHERE id=$1 AND lease_epoch=$2 AND lease_until>clock_timestamp()`, work.ID, work.LeaseEpoch, outcome.State, encoded, outcome.OperationLive, work.WakeVersion, outcome.RetryAfter.Seconds(), background && outcome.State == "ready")
+ WHERE id=$1 AND lease_epoch=$2 AND lease_until>clock_timestamp()`, work.ID, work.LeaseEpoch, outcome.State, encoded, outcome.OperationLive, work.WakeVersion, outcome.RetryAfter.Seconds(), background && outcome.State == "ready", outcome.WaitReason)
 	if err != nil {
 		return err
 	}
 	if result.RowsAffected() != 1 {
 		return managedruntime.ErrFence
+	}
+	if err := toolWaitNotification(ctx, tx, work, outcome); err != nil {
+		return err
 	}
 	if (!background && outcome.State == "ready") || outcome.State == "unknown" {
 		if err := appendEvent(ctx, tx, work.ThreadID, "tool."+outcome.State, map[string]any{"id": work.ID, "turn_id": work.TurnID, "environment_id": work.EnvironmentID, "call": work.Call, "result": block}); err != nil {

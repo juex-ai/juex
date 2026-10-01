@@ -655,6 +655,7 @@ export interface Transfer {
   scope: Scope;
   request: TransferRequest;
   state: string;
+  wait_reason?: string;
   artifact_id: string;
   cancel_requested: boolean;
   error: string;

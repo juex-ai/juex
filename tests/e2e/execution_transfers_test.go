@@ -74,7 +74,7 @@ func TestExecutionTransferCopiesBinaryThroughDurableArtifact(t *testing.T) {
 	}
 	request := execution.TransferRequest{RequestID: "copy-between-two-devices", Source: &execution.FileLocation{EnvironmentID: source.ID, AuthorizationVersion: source.Version, Path: "source.bin"}, Target: &execution.FileLocation{EnvironmentID: target.ID, AuthorizationVersion: target.Version, Path: "target.bin"}, Name: "published.bin", MediaType: "application/octet-stream", Visibility: "fleet"}
 	transfer, err := f.execution.BeginTransfer(ctx, f.actor, f.tenant, f.agent.ID, request)
-	if err != nil || transfer.State != execprotocol.Accepted {
+	if err != nil || transfer.State != execprotocol.Accepted || transfer.WaitReason != "environment" {
 		t.Fatal(transfer, err)
 	}
 	if transfer.ID != execution.TransferID(f.agent.ID, request.RequestID) {
@@ -91,9 +91,13 @@ func TestExecutionTransferCopiesBinaryThroughDurableArtifact(t *testing.T) {
 	}
 	sourceEngine, targetEngine := openNative(t, sourceConfig), openNative(t, targetConfig)
 	connectExecutionDevice(t, f, source, sourceToken, sourceEngine)
+	waitingTarget := transferEventually(t, f, transfer.ID, func(tr execution.Transfer) bool { return tr.ArtifactID != "" })
+	if waitingTarget.State != execprotocol.Accepted || waitingTarget.WaitReason != "environment" {
+		t.Fatal("offline destination was not exposed after source capture", waitingTarget)
+	}
 	connectExecutionDevice(t, f, target, targetToken, targetEngine)
 	result := transferEventually(t, f, transfer.ID, func(tr execution.Transfer) bool { return tr.State.Terminal() })
-	if result.State != execprotocol.Completed || result.ArtifactID == "" {
+	if result.State != execprotocol.Completed || result.ArtifactID == "" || result.WaitReason != "" {
 		t.Fatal(result)
 	}
 	events, err := f.executionStore.Events(ctx, 500)
@@ -389,8 +393,12 @@ func TestExecutionTransferHTTPAndRPCEnforceTurnFence(t *testing.T) {
 	fence.AgentEpoch--
 	request.RequestID = "fenced-transfer"
 	fenced, err := runtimeClient.BeginTransferFenced(ctx, f.actor, f.tenant, f.agent.ID, request, fence)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || fenced.WaitReason != "environment" {
+		t.Fatal("private RPC lost the actual offline source wait reason", fenced, err)
+	}
+	queried, err := runtimeClient.Transfer(ctx, f.actor, f.tenant, f.agent.ID, fenced.ID)
+	if err != nil || queried.WaitReason != "environment" {
+		t.Fatal("private RPC recovery lost the wait reason", queried, err)
 	}
 	if err := runtimeClient.CancelTransfer(ctx, f.actor, f.tenant, f.agent.ID, fenced.ID); err != nil {
 		t.Fatal(err)

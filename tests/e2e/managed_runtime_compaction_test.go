@@ -206,6 +206,17 @@ func TestManagedRuntimeCompactionInvalidSummaryAndCancellationKeepGeneration(t *
 					t.Fatal("lost failed summary usage", status, err)
 				}
 			}
+			var attention int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.notification_outbox WHERE event->>'kind'='attention'`).Scan(&attention); err != nil {
+				t.Fatal(err)
+			}
+			wantAttention := 1
+			if name == "cancelled" || name == "source_changed" {
+				wantAttention = 0
+			}
+			if attention != wantAttention {
+				t.Fatal("compaction failure notification count", attention, wantAttention)
+			}
 		})
 	}
 }

@@ -34,6 +34,7 @@ type FileTransferSpec struct {
 type FileTransferResult struct {
 	ID              string             `json:"transfer_id"`
 	State           execprotocol.State `json:"state"`
+	WaitReason      string             `json:"wait_reason,omitempty"`
 	ArtifactID      string             `json:"artifact_id,omitempty"`
 	Error           string             `json:"error,omitempty"`
 	CancelRequested bool               `json:"cancel_requested"`
@@ -206,7 +207,11 @@ func (r toolRunner) fileTool(ctx context.Context, work *ToolWork) (ToolOutcome, 
 	if result.State.Terminal() {
 		return toolResult(work.Call, result, result.State != execprotocol.Completed), true
 	}
-	return ToolOutcome{State: "waiting", OperationLive: true}, true
+	reason := "execution"
+	if result.WaitReason == "environment" {
+		reason = "environment"
+	}
+	return ToolOutcome{State: "waiting", OperationLive: true, WaitReason: reason}, true
 }
 
 func (r toolRunner) cancelFileWork(ctx context.Context, work ToolWork) ToolOutcome {

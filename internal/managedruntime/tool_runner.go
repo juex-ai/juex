@@ -252,7 +252,14 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 	if work.Request.Kind == "exec_command" && operation.State == "running" || work.Request.Kind == "mcp_connect" && bytes.Contains(operation.Snapshot.Output, []byte(`"type":"connected"`)) {
 		return operationResult(*work, operation, work.ID)
 	}
-	return ToolOutcome{State: "waiting", OperationLive: true}
+	return ToolOutcome{State: "waiting", OperationLive: true, WaitReason: executionWaitReason(operation.State)}
+}
+
+func executionWaitReason(state string) string {
+	if state == "waiting" {
+		return "environment"
+	}
+	return "execution"
 }
 
 func (r toolRunner) applicationRevoked(ctx context.Context, work *ToolWork) ToolOutcome {

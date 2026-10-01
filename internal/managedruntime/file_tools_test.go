@@ -58,6 +58,30 @@ type cancellationToolGateway struct {
 	state execprotocol.State
 }
 
+type waitingFileGateway struct {
+	FileGateway
+	reason string
+}
+
+func (g waitingFileGateway) StartFileTransfer(context.Context, Scope, string, FileTransferSpec) (FileTransferResult, error) {
+	return FileTransferResult{ID: "transfer", State: execprotocol.Accepted, WaitReason: g.reason}, nil
+}
+
+func TestFileToolUsesCurrentTransferStageWaitReason(t *testing.T) {
+	for _, reason := range []string{"environment", "execution", ""} {
+		runner := toolRunner{files: waitingFileGateway{reason: reason}}
+		work := ToolWork{ID: "prepared-work", Request: execprotocol.Request{ID: "prepared-work", Arguments: json.RawMessage(`{"source":{"path":"file"}}`)}, Call: llm.Block{ToolName: "copy_file"}}
+		outcome, handled := runner.fileTool(context.Background(), &work)
+		want := "execution"
+		if reason == "environment" {
+			want = reason
+		}
+		if !handled || outcome.State != "waiting" || !outcome.OperationLive || outcome.WaitReason != want {
+			t.Fatal("accepted transfer inferred a wait reason from its aggregate state", reason, outcome)
+		}
+	}
+}
+
 func (g cancellationToolGateway) CancelPrepared(context.Context, Scope, string, string) (execprotocol.State, error) {
 	return g.state, g.err
 }

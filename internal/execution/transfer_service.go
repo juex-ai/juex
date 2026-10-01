@@ -51,10 +51,22 @@ func (s *Service) beginTransfer(ctx context.Context, actor, tenant, agent string
 		}
 		artifact = &value
 	}
-	return s.Transfers.AdmitTransfer(ctx, scope, request, artifact)
+	admitted, err := s.Transfers.AdmitTransfer(ctx, scope, request, artifact)
+	if err != nil {
+		return Transfer{}, err
+	}
+	return s.transferProgress(ctx, admitted)
 }
 
 func (s *Service) Transfer(ctx context.Context, actor, tenant, agent, id string) (Transfer, error) {
+	transfer, err := s.authorizedTransfer(ctx, actor, tenant, agent, id)
+	if err != nil {
+		return Transfer{}, err
+	}
+	return s.transferProgress(ctx, transfer)
+}
+
+func (s *Service) authorizedTransfer(ctx context.Context, actor, tenant, agent, id string) (Transfer, error) {
 	if s.Transfers == nil {
 		return Transfer{}, execprotocol.ErrUnavailable
 	}
@@ -72,8 +84,33 @@ func (s *Service) Transfer(ctx context.Context, actor, tenant, agent, id string)
 	return transfer, nil
 }
 
+func (s *Service) transferProgress(ctx context.Context, transfer Transfer) (Transfer, error) {
+	if transfer.State.Terminal() || transfer.CancelRequested {
+		return transfer, nil
+	}
+	// Accepted covers both source capture and destination import. Only the
+	// current durable operation tells us whether a device is still awaited.
+	source := transfer.Request.Target == nil || transfer.ArtifactID == ""
+	location := transfer.Request.Target
+	if source {
+		location = transfer.Request.Source
+	}
+	if location == nil {
+		return Transfer{}, execprotocol.ErrInvalid
+	}
+	operation, err := s.Store.Operation(ctx, location.EnvironmentID, transfer.FileOperation(source, nil).ID, 0, 1)
+	if err != nil {
+		return Transfer{}, err
+	}
+	transfer.WaitReason = "execution"
+	if operation.State == "waiting" && !operation.CancelRequested {
+		transfer.WaitReason = "environment"
+	}
+	return transfer, nil
+}
+
 func (s *Service) CancelTransfer(ctx context.Context, actor, tenant, agent, id string) error {
-	if _, err := s.Transfer(ctx, actor, tenant, agent, id); err != nil {
+	if _, err := s.authorizedTransfer(ctx, actor, tenant, agent, id); err != nil {
 		return err
 	}
 	return s.Transfers.CancelTransfer(ctx, id)
@@ -87,14 +124,24 @@ func (s *Service) ListTransfers(ctx context.Context, actor, tenant, agent, after
 	if err != nil {
 		return nil, err
 	}
-	return s.Transfers.ListTransfers(ctx, scope, after, limit)
+	transfers, err := s.Transfers.ListTransfers(ctx, scope, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range transfers {
+		transfers[i], err = s.transferProgress(ctx, transfers[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return transfers, nil
 }
 
 func (s *Service) ExtendTransfer(ctx context.Context, actor, tenant, agent, id string, wait time.Duration) error {
 	if wait < time.Minute || wait > 30*24*time.Hour {
 		return execprotocol.ErrInvalid
 	}
-	transfer, err := s.Transfer(ctx, actor, tenant, agent, id)
+	transfer, err := s.authorizedTransfer(ctx, actor, tenant, agent, id)
 	if err != nil {
 		return err
 	}

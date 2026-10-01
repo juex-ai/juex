@@ -89,8 +89,9 @@ freeze both authorized locations before admission. Their durable transfer IDs
 and completion events resume the original tool call without polling the model.
 File metadata and Artifact references enter context; binary contents do not.
 Omitting a location selects only the hosted workspace, never another device.
-External cancellation stays pending until Execution durably accepts responsibility,
-including cancellation arriving before a timed-out admission request.
+External cancellation stays pending until Execution confirms the original operation
+has settled; accepting the cancellation request alone is not settlement. Cancellation
+arriving before a timed-out admission request prevents that request from executing.
 
 The model receives authorized environments and selects a location only for file,
 process and MCP tools. Handles retain their original environment. Device presence
@@ -128,3 +129,14 @@ a bounded batch, rechecking the original execution authority and application
 epoch/fence before appending system observations. Revoked notices are skipped;
 unavailable application checks defer fairly without blocking ordinary dialogue.
 Application facts cannot become original human Memory evidence.
+
+Runtime freezes bounded completion, failure, held-input and unknown-operation
+notifications in the same transaction as the original state change. Application
+Workers retain their application-owned terminal notices. Confirmed environment
+waits become notification candidates after 30 seconds, including application
+Workers; delivery rechecks the original Tool, Turn, input and cancellation state.
+Transient query failures preserve the prior waiting reason, not a new offline claim.
+The outbox retries a frozen identity and payload independently of model slots and
+never creates an input. Management owns personal Inbox visibility, preferences
+and verified-email delivery. Notifications link the original Thread and contain
+neither raw model/provider content nor tool arguments or output.

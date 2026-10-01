@@ -53,6 +53,9 @@ var noticesSchema string
 //go:embed notice_attempts_schema.sql
 var noticeAttemptsSchema string
 
+//go:embed notifications_schema.sql
+var notificationsSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -67,7 +70,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -280,7 +283,10 @@ func appendEvent(ctx context.Context, tx pgx.Tx, threadID, kind string, data any
 	}
 	_, err = tx.Exec(ctx, `WITH next AS(UPDATE runtime.threads SET sequence=sequence+1,updated_at=clock_timestamp() WHERE id=$1 RETURNING sequence,generation)
 	INSERT INTO runtime.events(thread_id,sequence,generation,kind,data) SELECT $1,sequence,generation,$2,$3 FROM next`, threadID, kind, encoded)
-	return err
+	if err != nil {
+		return err
+	}
+	return stageEventNotification(ctx, tx, threadID, kind, encoded)
 }
 
 func (s *Store) Threads(ctx context.Context, scope managedruntime.Scope) ([]managedruntime.Thread, error) {

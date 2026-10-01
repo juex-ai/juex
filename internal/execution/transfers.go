@@ -57,6 +57,7 @@ type Transfer struct {
 	Scope           Scope              `json:"scope"`
 	Request         TransferRequest    `json:"request"`
 	State           execprotocol.State `json:"state"`
+	WaitReason      string             `json:"wait_reason,omitempty"`
 	ArtifactID      string             `json:"artifact_id"`
 	CancelRequested bool               `json:"cancel_requested"`
 	Error           string             `json:"error"`

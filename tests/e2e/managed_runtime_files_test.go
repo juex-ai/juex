@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/execution/blob"
 	"github.com/juex-ai/juex/internal/execution/native"
+	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
 
@@ -94,4 +96,71 @@ func TestManagedRuntimeFileTransferWaitsWithoutModelSpinAndResumes(t *testing.T)
 		t.Fatal("transfer replayed", transfers, operations)
 	}
 	assertRuntimeTranscript(t, f)
+}
+
+func TestManagedRuntimeTransferDestinationResumeSuppressesWaitNotice(t *testing.T) {
+	var sourceID, targetID string
+	var calls atomic.Int32
+	f := executionDatabaseWithProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		streamManagedTool(w, "copy_file", map[string]any{"source": map[string]any{"environment_id": sourceID, "path": "source.bin"}, "target": map[string]any{"environment_id": targetID, "path": "target.bin"}})
+	})
+	ctx := context.Background()
+	objects, err := blob.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = objects.Close() })
+	f.execution.Blobs = &execution.ArtifactManager{Store: f.executionStore, Objects: objects, Capacity: 32 << 20}
+	f.execution.Transfers = f.executionStore
+	source, token := f.pairDevice(t)
+	target, _ := f.pairDevice(t)
+	sourceID, targetID = source.ID, target.ID
+	gateway := runtimeExecutionGateway(t, f)
+	runRuntimeTools(t, f, gateway)
+	f.submit(t, "copy", f.main.ID, "Copy between my devices")
+	runtimeEventually(t, func() bool {
+		var count int
+		return f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.tools WHERE waiting_reason='environment' AND next_check='infinity'`).Scan(&count) == nil && count == 1
+	})
+	config := native.Config{StateDirectory: filepath.Join(t.TempDir(), "state"), WorkingDirectory: t.TempDir(), EnvironmentID: source.ID, Grants: source.Ceiling}
+	if err := os.WriteFile(filepath.Join(config.WorkingDirectory, "source.bin"), []byte("copy data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	connectExecutionDevice(t, f, source, token, openNative(t, config))
+	var transfer execution.Transfer
+	runtimeEventually(t, func() bool {
+		if err := f.execution.Reconcile(ctx); err != nil {
+			t.Error(err)
+			return false
+		}
+		values, err := f.execution.ListTransfers(ctx, f.actor, f.tenant, f.agent.ID, "", 10)
+		if err != nil || len(values) != 1 || values[0].ArtifactID == "" {
+			return false
+		}
+		transfer = values[0]
+		var count int
+		return f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.tools WHERE waiting_reason='environment' AND next_check='infinity'`).Scan(&count) == nil && count == 1
+	})
+	if transfer.State != execprotocol.Accepted {
+		t.Fatal(transfer)
+	}
+	// Simulate a slow destination import after reconnect. The committed operation
+	// event must refresh Runtime while the aggregate transfer remains accepted.
+	if _, err := f.pool.Exec(ctx, `UPDATE execution.operations SET state='running',snapshot=jsonb_set(snapshot,'{state}','"running"') WHERE environment_id=$1 AND id=$2`, target.ID, transfer.FileOperation(false, nil).ID); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEventually(t, func() bool {
+		var count int
+		return f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.tools WHERE state='waiting' AND waiting_reason='execution' AND next_check='infinity'`).Scan(&count) == nil && count == 1
+	})
+	if _, err := f.pool.Exec(ctx, `UPDATE runtime.notification_outbox SET not_before='-infinity'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.ClaimNotification(ctx); !errors.Is(err, managedruntime.ErrNoWork) {
+		t.Fatal("recovered destination generated an obsolete device reminder", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("transfer progress woke the model", calls.Load())
+	}
 }

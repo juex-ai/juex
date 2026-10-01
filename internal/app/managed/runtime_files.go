@@ -10,7 +10,7 @@ import (
 )
 
 func fileTransferResult(transfer execution.Transfer) managedruntime.FileTransferResult {
-	return managedruntime.FileTransferResult{ID: transfer.ID, State: transfer.State, ArtifactID: transfer.ArtifactID, Error: transfer.Error, CancelRequested: transfer.CancelRequested, WaitUntil: transfer.WaitUntil}
+	return managedruntime.FileTransferResult{ID: transfer.ID, State: transfer.State, WaitReason: transfer.WaitReason, ArtifactID: transfer.ArtifactID, Error: transfer.Error, CancelRequested: transfer.CancelRequested, WaitUntil: transfer.WaitUntil}
 }
 
 func (g RuntimeTools) StartFileTransfer(ctx context.Context, scope managedruntime.Scope, requestID string, spec managedruntime.FileTransferSpec) (managedruntime.FileTransferResult, error) {

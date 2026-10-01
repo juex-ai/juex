@@ -84,6 +84,10 @@ func TestManagedRuntimeProviderFallbackUsesActualModel(t *testing.T) {
 			if switches != int(wantCalls) {
 				t.Fatal("fallback not visible", switches)
 			}
+			var notices, attention int
+			if err := f.pool.QueryRow(context.Background(), `SELECT count(*),count(*) FILTER(WHERE event->>'kind'='attention') FROM runtime.notification_outbox`).Scan(&notices, &attention); err != nil || notices != 1 || attention != 1-int(wantCalls) {
+				t.Fatal("fallback intermediate failure created a notification", notices, attention, err)
+			}
 		})
 	}
 }

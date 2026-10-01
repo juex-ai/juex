@@ -46,6 +46,7 @@ type ToolStore interface {
 }
 
 type ToolOutcome struct {
+	WaitReason             string
 	State                  string
 	Content                string
 	IsError, OperationLive bool
