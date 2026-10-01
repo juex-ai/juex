@@ -46,6 +46,7 @@ func observationLoop(ctx context.Context, label string, tick func(context.Contex
 
 func (r toolRunner) observe(ctx context.Context) {
 	holder := rand.Text()
+	defer r.releaseObservationClaims(holder)
 	observationLoop(ctx, "execution observation delayed", func(ctx context.Context) error {
 		source, err := r.observations.ClaimObservation(ctx, holder)
 		if err != nil {
@@ -85,6 +86,7 @@ func (r toolRunner) observe(ctx context.Context) {
 
 func (r toolRunner) deliverObservations(ctx context.Context) {
 	holder := rand.Text()
+	defer r.releaseObservationClaims(holder)
 	observationLoop(ctx, "observation wakeup delayed", func(ctx context.Context) error {
 		delivery, err := r.observations.ClaimObservationDelivery(ctx, holder)
 		if err != nil {
@@ -113,6 +115,16 @@ func (r toolRunner) deliverObservations(ctx context.Context) {
 		}
 		return r.observations.FinishObservationDelivery(ctx, delivery, valid, baseline)
 	})
+}
+
+func (r toolRunner) releaseObservationClaims(holder string) {
+	// A cancelled claim can have committed even when its response was lost.
+	// Release by worker identity after its loop ends, including that case.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := r.observations.ReleaseObservationClaims(ctx, holder); err != nil {
+		slog.Warn("observation shutdown release delayed", "error", err)
+	}
 }
 
 func (r toolRunner) acknowledgeObservations(ctx context.Context) {

@@ -114,6 +114,8 @@ provenance. Presence delivery compares current state, coalescing stale outbox fa
 Cancelling or replacing a subscription fences queued and late deliveries; every
 wakeup rechecks the original actor, Agent and device grant. Runtime acknowledges
 source bytes only after both parsed events and partial records are durable.
+Graceful observer shutdown releases only that worker's read and delivery leases;
+old completions are fenced. A crashed worker is recovered after lease expiry.
 Cancelling a Thread closes its tool transcript and persists external cancellation
 delivery, including live handles from its already completed Turns. Completed
 conversation history and other Threads remain unchanged. A late result cannot

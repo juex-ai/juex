@@ -9,6 +9,16 @@ import (
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
 
+func (s *Store) ReleaseObservationClaims(ctx context.Context, holder string) error {
+	if holder == "" {
+		return managedruntime.ErrInvalid
+	}
+	_, err := s.pool.Exec(ctx, `WITH sources AS (
+ UPDATE runtime.observation_sources SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1)
+ UPDATE runtime.observation_deliveries SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity' WHERE lease_holder=$1`, holder)
+	return err
+}
+
 func (s *Store) ClaimObservation(ctx context.Context, holder string) (managedruntime.ObservationSource, error) {
 	var source managedruntime.ObservationSource
 	if holder == "" {

@@ -52,9 +52,14 @@ func runtimeExecutionGateway(t *testing.T, f *executionFixture) managed.RuntimeT
 
 func runRuntimeTools(t *testing.T, f *executionFixture, gateway managedruntime.ToolGateway) func() {
 	t.Helper()
+	return runRuntimeToolsStore(t, f, gateway, f.store)
+}
+
+func runRuntimeToolsStore(t *testing.T, f *executionFixture, gateway managedruntime.ToolGateway, store managedruntime.ExecutionStore) func() {
+	t.Helper()
 	t.Cleanup(func() {
 		if t.Failed() {
-			for _, table := range []string{"threads", "attempts", "tools"} {
+			for _, table := range []string{"threads", "attempts", "tools", "observation_sources", "observation_deliveries"} {
 				var data []byte
 				if err := f.pool.QueryRow(context.Background(), `SELECT COALESCE(jsonb_agg(to_jsonb(v)-'request'),'[]') FROM runtime.`+table+` v`).Scan(&data); err == nil {
 					t.Log(table, string(data))
@@ -64,7 +69,7 @@ func runRuntimeTools(t *testing.T, f *executionFixture, gateway managedruntime.T
 	})
 	config := managedruntime.RunnerConfig{Concurrency: 1, PollInterval: 20 * time.Millisecond, AuthorityInterval: 20 * time.Millisecond, IdleTimeout: 100 * time.Millisecond, Tools: gateway}
 	config.Files, _ = gateway.(managedruntime.FileGateway)
-	runner, err := managedruntime.NewRunner(f.store, f.authority, config)
+	runner, err := managedruntime.NewRunner(store, f.authority, config)
 	if err != nil {
 		t.Fatal(err)
 	}

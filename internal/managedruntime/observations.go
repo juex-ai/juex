@@ -96,6 +96,7 @@ type InputSource struct {
 }
 
 type ObservationStore interface {
+	ReleaseObservationClaims(context.Context, string) error
 	ClaimObservation(context.Context, string) (ObservationSource, error)
 	FinishObservation(context.Context, ObservationSource, ObservationBatch) error
 	ObservationAcks(context.Context, int) ([]ObservationAck, error)

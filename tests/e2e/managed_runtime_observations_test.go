@@ -20,6 +20,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
+	runtimepg "github.com/juex-ai/juex/internal/managedruntime/postgres"
 )
 
 func TestManagedRuntimeMCPObservationsOutliveActivationAndRestart(t *testing.T) {
@@ -55,7 +56,8 @@ func TestManagedRuntimeMCPObservationsOutliveActivationAndRestart(t *testing.T) 
 	engine := openNative(t, native.Config{StateDirectory: filepath.Join(t.TempDir(), "state"), WorkingDirectory: workdir, EnvironmentID: device.ID, Grants: device.Ceiling})
 	connectExecutionDevice(t, f, device, token, engine)
 	gateway := runtimeExecutionGateway(t, f)
-	stop := runRuntimeTools(t, f, gateway)
+	interrupted := &interruptedObservationStore{Store: f.store, claimed: make(chan struct{})}
+	stop := runRuntimeToolsStore(t, f, gateway, interrupted)
 	f.submit(t, "connect", f.main.ID, "Connect to the MCP server")
 	runtimeEventually(t, func() bool { return calls.Load() == 2 && f.timeline(t, f.main.ID).Thread.State == "idle" })
 	var id string
@@ -82,6 +84,17 @@ func TestManagedRuntimeMCPObservationsOutliveActivationAndRestart(t *testing.T) 
 			var got int
 			return f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.observations WHERE kind='mcp.notification'`).Scan(&got) == nil && got == count
 		})
+	}
+	// Stop after PostgreSQL has acquired a source lease but before the worker
+	// receives its result. Restart must not wait for that graceful owner's TTL.
+	interrupted.armed.Store(true)
+	if err := f.store.ReceiveExecutionEvents(ctx, []execprotocol.Event{{ID: uuid.NewString(), Kind: "operation.updated", TenantID: f.tenant, UserID: f.actor, EnvironmentID: device.ID, OperationID: id, CreatedAt: time.Now()}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-interrupted.claimed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("observation worker did not acquire the interrupted lease")
 	}
 	stop()
 	emit("no-subscription")
@@ -156,6 +169,58 @@ func TestManagedRuntimeMCPObservationsOutliveActivationAndRestart(t *testing.T) 
 		t.Fatal("replayed wakeup or MCP connection", inputs, connections)
 	}
 	assertRuntimeTranscript(t, f)
+}
+
+type interruptedObservationStore struct {
+	*runtimepg.Store
+	armed   atomic.Bool
+	claimed chan struct{}
+}
+
+func (s *interruptedObservationStore) ClaimObservation(ctx context.Context, holder string) (managedruntime.ObservationSource, error) {
+	source, err := s.Store.ClaimObservation(ctx, holder)
+	if err == nil && s.armed.CompareAndSwap(true, false) {
+		close(s.claimed)
+		<-ctx.Done()
+		return source, ctx.Err()
+	}
+	return source, err
+}
+
+func TestManagedRuntimeObservationLeaseHandoffFencesPreviousOwner(t *testing.T) {
+	f := executionDatabase(t)
+	ctx := context.Background()
+	device, _ := f.pairDevice(t)
+	_, job := prepareRuntimeTool(t, f, device.ID)
+	if _, err := f.store.ApplySubscription(ctx, job, managedruntime.SubscriptionRequest{Kind: "environment.presence", EnvironmentID: device.ID}, device.Version, 0, "", json.RawMessage(`{"online":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := f.store.ClaimObservationDelivery(ctx, "previous-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.ReleaseObservationClaims(ctx, ""); !errors.Is(err, managedruntime.ErrInvalid) {
+		t.Fatal("empty owner must not release idle rows", err)
+	}
+	if err := f.store.ReleaseObservationClaims(ctx, "another-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.ClaimObservationDelivery(ctx, "new-owner"); !errors.Is(err, managedruntime.ErrNoWork) {
+		t.Fatal("released another worker's claim", err)
+	}
+	if err := f.store.ReleaseObservationClaims(ctx, "previous-owner"); err != nil {
+		t.Fatal(err)
+	}
+	current, err := f.store.ClaimObservationDelivery(ctx, "new-owner")
+	if err != nil || current.ID != previous.ID {
+		t.Fatal("pending notification was not reclaimed", current.ID, err)
+	}
+	if err := f.store.FinishObservationDelivery(ctx, previous, true, json.RawMessage(`{"online":true}`)); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("previous owner completed the reclaimed notification", err)
+	}
+	if err := f.store.FinishObservationDelivery(ctx, current, true, json.RawMessage(`{"online":true}`)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestManagedRuntimeObservationCancellationFencesClaimedDelivery(t *testing.T) {
