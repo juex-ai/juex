@@ -109,8 +109,15 @@ func prepareExecution(work ToolWork, environments []execprotocol.Environment) (s
 			return "", execprotocol.Request{}, execprotocol.ErrDenied
 		}
 	}
+	var version int64
+	for _, candidate := range environments {
+		if candidate.ID == environment {
+			version = candidate.AuthorizationVersion
+			break
+		}
+	}
 	encoded, err := json.Marshal(arguments)
-	return environment, execprotocol.Request{Version: execprotocol.Version, ID: work.ID, AgentID: work.Scope.AgentID, Kind: work.Call.ToolName, Arguments: encoded}, err
+	return environment, execprotocol.Request{Version: execprotocol.Version, ID: work.ID, AgentID: work.Scope.AgentID, Kind: work.Call.ToolName, Arguments: encoded, AuthorizationVersion: version}, err
 }
 
 func validToolResponse(message llm.Message, available []llm.ToolSpec) bool {

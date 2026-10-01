@@ -390,6 +390,8 @@ func (e *Engine) execute(op *operation) {
 	}
 	var exit *int
 	switch op.record.Request.Kind {
+	case "run_hook":
+		exit, err = e.runHook(ctx, op)
 	case "exec_command":
 		exit, err = e.command(ctx, op)
 	case "write_stdin":

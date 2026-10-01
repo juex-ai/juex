@@ -56,6 +56,7 @@ func setThreadArchived(ctx context.Context, tx pgx.Tx, scope managedruntime.Scop
  EXISTS(SELECT 1 FROM runtime.inputs WHERE thread_id=$1 AND state IN ('queued','active')) OR
  EXISTS(SELECT 1 FROM runtime.turns WHERE thread_id=$1 AND state IN ('running','waiting')) OR
  EXISTS(SELECT 1 FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id WHERE t.thread_id=$1 AND (j.state IN ('pending','waiting','unknown') OR j.operation_live)) OR
+ EXISTS(SELECT 1 FROM runtime.hooks WHERE thread_id=$1 AND state IN ('pending','waiting','unknown')) OR
  EXISTS(SELECT 1 FROM runtime.threads WHERE parent_id=$1 AND retention='active') OR
  EXISTS(SELECT 1 FROM runtime.thread_deliveries d JOIN runtime.thread_subscriptions s ON s.id=d.subscription_id WHERE s.worker_id=$1 AND d.state='pending' AND s.enabled AND s.generation=d.generation)`, id).Scan(&busy); err != nil {
 			return thread, err

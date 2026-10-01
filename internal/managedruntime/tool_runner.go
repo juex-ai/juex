@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
 type toolRunner struct {
+	hooks            HookStore
 	applications     ApplicationGateway
 	applicationStore ApplicationStore
 	collaboration    CollaborationStore
@@ -31,6 +33,11 @@ func (r toolRunner) run(ctx context.Context) {
 	var workers sync.WaitGroup
 	for range 3 {
 		workers.Go(func() { r.deliver(ctx) })
+	}
+	if r.hooks != nil {
+		for range 2 {
+			workers.Go(func() { r.deliverHooks(ctx) })
+		}
 	}
 	if r.collaboration != nil {
 		workers.Go(func() { r.deliverThreadResults(ctx) })
@@ -86,6 +93,9 @@ func (r toolRunner) deliver(ctx context.Context) {
 		work, err := r.store.ClaimTool(call, holder)
 		if err == nil {
 			outcome := r.execute(call, &work)
+			if r.hooks != nil && outcome.State == "ready" && !work.Cancelled && work.State != "ready" {
+				outcome = r.afterToolHooks(call, &work, outcome)
+			}
 			if call.Err() == nil {
 				err = r.store.FinishTool(call, work, outcome)
 			}
@@ -164,6 +174,25 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 				return retryTool()
 			}
 			return r.applicationRevoked(ctx, work)
+		}
+	}
+	if work.DeferredResult != nil {
+		return *work.DeferredResult
+	}
+	if r.hooks != nil {
+		decision, err := r.hooks.ToolHooks(ctx, *work, hookpolicy.PreToolUse, nil)
+		if err != nil {
+			return retryTool()
+		}
+		if decision.Unknown {
+			return ToolOutcome{State: "unknown", Content: decision.Reason, IsError: true}
+		}
+		if !decision.Ready {
+			return ToolOutcome{State: "waiting", WaitReason: "hook"}
+		}
+		work.HookContext = decision.Context
+		if decision.Reject {
+			return toolResult(work.Call, map[string]string{"error": decision.Reason}, true)
 		}
 	}
 	if r.applications != nil && (strings.HasPrefix(work.Call.ToolName, "memory_") || strings.HasPrefix(work.Call.ToolName, "calendar_")) {

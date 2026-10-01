@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
@@ -144,6 +145,18 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		}
 	default:
 		return work, managedruntime.ErrConflict
+	}
+	if deferred, err := resumeHookFinish(ctx, tx, &work); err != nil {
+		return work, err
+	} else if deferred {
+		work.Deferred = true
+		return work, tx.Commit(ctx)
+	}
+	if deferred, err := beginTurnHooks(ctx, tx, work, text); err != nil {
+		return work, err
+	} else if deferred {
+		work.Deferred = true
+		return work, tx.Commit(ctx)
 	}
 	work.Compaction, err = readCompaction(ctx, tx, work.TurnID)
 	if err != nil {
@@ -424,15 +437,6 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 			return tx.Commit(ctx)
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET state=$2,completed_at=clock_timestamp() WHERE id=$1`, turnID, state); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE runtime.inputs SET state=$2 WHERE id=$1`, inputID, state); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state=CASE WHEN EXISTS(SELECT 1 FROM runtime.inputs WHERE thread_id=$1 AND state='queued') THEN 'queued' WHEN $2='failed' THEN 'failed' ELSE 'idle' END WHERE id=$1`, threadID, state); err != nil {
-		return err
-	}
 	var finalText strings.Builder
 	if failure == "" {
 		for _, block := range response.Message.Blocks {
@@ -441,16 +445,27 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 			}
 		}
 	}
-	if err := threadResult(ctx, tx, threadID, turnID, state, finalText.String()); err != nil {
-		return err
-	}
-	if err := appendEvent(ctx, tx, threadID, "turn."+state, map[string]string{"turn_id": turnID, "input_id": inputID, "error": failure}); err != nil {
-		return err
-	}
-	if state == "completed" {
-		if _, err := tx.Exec(ctx, `INSERT INTO runtime.memory_evidence(input_id) SELECT id FROM runtime.inputs WHERE id=$1 AND COALESCE(source->>'kind','')='' ON CONFLICT DO NOTHING`, inputID); err != nil {
+	if failure == "" {
+		var text string
+		if err := tx.QueryRow(ctx, `SELECT text FROM runtime.inputs WHERE id=$1`, inputID).Scan(&text); err != nil {
 			return err
 		}
+		if err := enqueueHooks(ctx, tx, turnID, hookpolicy.Stop, attemptID, managedruntime.HookInput{UserInput: managedruntime.HookText(text, 16<<10)}); err != nil {
+			return err
+		}
+		decision, err := hookDecision(ctx, tx, turnID, hookpolicy.Stop, attemptID)
+		if err != nil {
+			return err
+		}
+		if !decision.Ready {
+			if err := deferHookFinish(ctx, tx, turnID, threadID, hookFinish{Event: hookpolicy.Stop, Anchor: attemptID, FinalText: finalText.String()}); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		}
+	}
+	if err := completeTurn(ctx, tx, threadID, turnID, inputID, state, finalText.String(), failure); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -490,6 +505,9 @@ func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, input
 		return err
 	}
 	if turnID != "" {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 WHERE turn_id=$1 AND state IN ('pending','waiting','unknown')`, turnID); err != nil {
+			return err
+		}
 		if err := cancelCompaction(ctx, tx, turnID); err != nil {
 			return err
 		}

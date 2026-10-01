@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -29,6 +30,7 @@ type ModelCandidate struct {
 }
 
 type ModelPlan struct {
+	Hooks                          []hookpolicy.Declaration
 	WorkerDepth                    int
 	AgentVersion                   int64
 	Instructions, RequestedModelID string
@@ -48,28 +50,33 @@ type PeerAgent struct {
 }
 
 type Agent struct {
-	Purging        bool        `json:"purging"`
-	WorkerDepth    int         `json:"worker_depth"`
-	ID             string      `json:"id"`
-	FleetID        string      `json:"fleet_id"`
-	Name           string      `json:"name"`
-	Instructions   string      `json:"instructions"`
-	ModelID        string      `json:"model_id"`
-	Status         AgentStatus `json:"status"`
-	Version        int64       `json:"version"`
-	ExecutionEpoch int64       `json:"-"`
-	CreatedAt      time.Time   `json:"created_at"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	Hooks          []hookpolicy.Declaration `json:"hooks"`
+	Purging        bool                     `json:"purging"`
+	WorkerDepth    int                      `json:"worker_depth"`
+	ID             string                   `json:"id"`
+	FleetID        string                   `json:"fleet_id"`
+	Name           string                   `json:"name"`
+	Instructions   string                   `json:"instructions"`
+	ModelID        string                   `json:"model_id"`
+	Status         AgentStatus              `json:"status"`
+	Version        int64                    `json:"version"`
+	ExecutionEpoch int64                    `json:"-"`
+	CreatedAt      time.Time                `json:"created_at"`
+	UpdatedAt      time.Time                `json:"updated_at"`
 }
 
 type AgentConfig struct {
-	WorkerDepth  int    `json:"worker_depth,omitempty"`
-	Name         string `json:"name"`
-	Instructions string `json:"instructions"`
-	ModelID      string `json:"model_id"`
+	Hooks        []hookpolicy.Declaration `json:"hooks,omitempty"`
+	WorkerDepth  int                      `json:"worker_depth,omitempty"`
+	Name         string                   `json:"name"`
+	Instructions string                   `json:"instructions"`
+	ModelID      string                   `json:"model_id"`
 }
 
 func (c AgentConfig) Validate() error {
+	if hookpolicy.Validate(c.Hooks) != nil {
+		return ErrInvalid
+	}
 	if c.WorkerDepth < 0 || c.WorkerDepth > 2 {
 		return ErrInvalid
 	}

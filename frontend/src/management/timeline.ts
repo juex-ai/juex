@@ -1,11 +1,12 @@
 import type { Event, InputReceipt, Message } from './schema'
 
-export type TranscriptRow = { kind: 'message'; id: string; message: Message; status: string } | { kind: 'notice'; id: string; text: string }
+export type TranscriptRow = { kind: 'message'; id: string; message: Message; status: string } | { kind: 'notice'; id: string; text: string } | { kind: 'hook'; id: string; hook: string; event: string; state: string; detail: string }
 
 export function projectTranscript(events: Event[]): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   const messages = new Map<string, Extract<TranscriptRow, { kind: 'message' }>>()
   const seen = new Set<string>()
+  const hooks = new Map<string, Extract<TranscriptRow, { kind: 'hook' }>>()
   for (const event of events) {
     if (seen.has(event.id)) continue
     seen.add(event.id)
@@ -21,6 +22,12 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
         const row: Extract<TranscriptRow, { kind: 'message' }> = { kind: 'message', id, message, status: '' }
         rows.push(row); messages.set(id, row)
       }
+    } else if (event.kind.startsWith('hook.')) {
+      const hook = event.data as { id: string; hook_id: string; event: string; result?: { output?: { stdout: string; stderr: string }; error: string } }
+      const row: Extract<TranscriptRow, { kind: 'hook' }> = { kind: 'hook', id: hook.id, hook: hook.hook_id, event: hook.event, state: event.kind.slice(5), detail: [hook.result?.output?.stdout, hook.result?.output?.stderr, hook.result?.error].filter(Boolean).join('\n') }
+      const existing = hooks.get(hook.id)
+      if (existing) Object.assign(existing, row)
+      else { hooks.set(hook.id, row); rows.push(row) }
     } else if (event.kind === 'input.held' && data.input_id) {
       const row = messages.get(data.input_id)
       const status = data.reason === 'compaction_failed' ? '上下文压缩未完成，本轮已暂停；原始内容保留' : data.reason === 'context_limit' ? '上下文超出可用模型容量，本轮已暂停' : data.reason === 'model_unavailable' ? '模型不可用，已暂停；配置后请重新提交' : '授权已改变，未继续执行'
@@ -38,7 +45,7 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
       const reason = data.reason === 'context_limit' ? '上下文超出模型容量' : data.reason === 'model_unavailable' ? '模型已不可用或授权已变更' : '模型请求失败'
       rows.push({ kind: 'notice', id: event.id, text: `${reason}，已切换到预设备用模型${data.to_model ? ` ${data.to_model}` : ''}。` })
     } else if (event.kind === 'turn.failed') {
-      rows.push({ kind: 'notice', id: event.id, text: data.error === 'invalid_response' ? '模型返回了无法处理的响应。请检查模型配置后重试。' : '模型请求失败，本轮已停止。已接收的输入和历史仍然保留。' })
+      rows.push({ kind: 'notice', id: event.id, text: data.error === 'invalid_response' ? '模型返回了无法处理的响应。请检查模型配置后重试。' : data.error?.toLowerCase().includes('hook') ? `Hook 阻止了本轮继续：${data.error}` : '模型请求失败，本轮已停止。已接收的输入和历史仍然保留。' })
     } else if (event.kind === 'thread.cancelled' || event.kind === 'turn.cancelled') {
       for (const row of messages.values()) if (row.status === '已接收，等待执行') row.status = '已取消'
       rows.push({ kind: 'notice', id: event.id, text: '已取消本次对话。已经开始的外部操作可能仍在结束中。' })

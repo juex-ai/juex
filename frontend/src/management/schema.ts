@@ -4,6 +4,7 @@ export type Role = "admin" | "member";
 export type MembershipStatus = "active" | "suspended" | "removed";
 
 export interface Agent {
+  hooks: Array<Declaration>;
   purging: boolean;
   worker_depth: number;
   id: string;
@@ -18,6 +19,7 @@ export interface Agent {
 }
 
 export interface AgentConfig {
+  hooks?: Array<Declaration>;
   worker_depth?: number;
   name: string;
   instructions: string;
@@ -209,6 +211,7 @@ export interface CompactionRequest {
 }
 
 export interface ConfigureAgentRequest {
+  hooks?: Array<Declaration>;
   worker_depth?: number;
   name: string;
   instructions: string;
@@ -227,6 +230,20 @@ export interface ContextArtifactProjection {
   head_bytes: number;
   tail_bytes: number;
   truncated: boolean;
+}
+
+export interface Declaration {
+  id: string;
+  enabled: boolean;
+  events: Array<string>;
+  tools?: Array<string>;
+  environment_id?: string;
+  command: Array<string>;
+  working_directory?: string;
+  timeout_seconds?: number;
+  max_output_bytes?: number;
+  required: boolean;
+  source?: string;
 }
 
 export interface Device {

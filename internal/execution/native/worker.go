@@ -61,9 +61,13 @@ func (e *Engine) fileWorker(ctx context.Context, op *operation) error {
 	return nil
 }
 
-type workerError struct{ bytes.Buffer }
+type workerError struct{ buffer bytes.Buffer }
 
 func (w *workerError) Write(p []byte) (int, error) {
-	_, _ = w.Buffer.Write(p[:min(len(p), max(0, 8192-w.Len()))])
+	_, _ = w.buffer.Write(p[:min(len(p), max(0, 8192-w.buffer.Len()))])
 	return len(p), nil
 }
+
+func (w *workerError) String() string { return w.buffer.String() }
+
+func (w *workerError) Bytes() []byte { return w.buffer.Bytes() }

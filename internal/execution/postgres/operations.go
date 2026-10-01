@@ -65,7 +65,7 @@ func (s *Store) enqueue(ctx context.Context, tx pgx.Tx, device execution.Device,
 	if err != nil {
 		return execution.Operation{}, err
 	}
-	if current.Status != "active" || current.Version != device.Version {
+	if current.Status != "active" || current.Version != device.Version || request.AuthorizationVersion > 0 && request.AuthorizationVersion != current.Version {
 		return execution.Operation{}, execprotocol.ErrDenied
 	}
 	var storedHash string
@@ -185,7 +185,8 @@ func (s *Store) Dispatch(ctx context.Context, environment string, epoch int64, i
 	if err := fence(ctx, tx, environment, epoch); err != nil {
 		return execution.Operation{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE execution.operations SET state='dispatched',updated_at=clock_timestamp() WHERE environment_id=$1 AND id=$2 AND state='waiting' AND NOT cancel_requested AND wait_until>clock_timestamp()`, environment, id); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE execution.operations SET state='dispatched',updated_at=clock_timestamp() WHERE environment_id=$1 AND id=$2 AND state='waiting' AND NOT cancel_requested AND wait_until>clock_timestamp()
+ AND (COALESCE((request->>'authorization_version')::bigint,0)=0 OR (request->>'authorization_version')::bigint=(SELECT version FROM execution.environments WHERE id=$1))`, environment, id); err != nil {
 		return execution.Operation{}, err
 	}
 	operation, err := scanOperation(tx.QueryRow(ctx, `SELECT `+operationColumns+` FROM execution.operations WHERE environment_id=$1 AND id=$2`, environment, id))

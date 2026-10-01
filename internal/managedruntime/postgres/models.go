@@ -6,12 +6,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
 
 func validModelPlan(plan managedruntime.TurnConfig) bool {
-	if len(plan.Models) < 1 || len(plan.Models) > 5 {
+	if len(plan.Models) < 1 || len(plan.Models) > 5 || hookpolicy.Validate(plan.Hooks) != nil {
 		return false
 	}
 	seen := map[string]bool{}

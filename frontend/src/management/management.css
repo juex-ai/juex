@@ -187,3 +187,12 @@
 .management-usage-pages { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 16px; }
 .management-usage-policy { padding: 20px; }
 .management-usage-policy summary { cursor: pointer; }
+
+.management-hooks-editor { display: grid; gap: 12px; font-size: 13px; }
+.management-hooks-editor summary, .management-hook-log summary { cursor: pointer; }
+.management-hooks-editor p { margin: 12px 0; color: var(--juex-forest-700); line-height: 1.6; }
+.management-hook-settings { margin: 12px 0; padding: 14px; display: grid; gap: 12px; border: 1px solid var(--juex-forest-200); border-radius: 12px; min-width: 0; }
+.management-hook-events { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.management-hook-settings .management-checkbox { margin: 0; }
+.management-hook-log { color: var(--juex-forest-700); font-size: 12px; margin: 10px 0; }
+.management-hook-log pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; padding: 10px; }

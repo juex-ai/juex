@@ -59,6 +59,7 @@ func (s *Store) Purge(ctx context.Context, request lifecycle.Request) (lifecycle
 		// Explicit order preserves other Agents' already accepted messages. In
 		// particular only the cross-Agent action receipt is removed, not its input.
 		queries := []string{
+			`DELETE FROM runtime.hooks WHERE thread_id IN (SELECT id FROM threads)`,
 			`DELETE FROM runtime.execution_inbox WHERE jsonb_array_length(event->'agent_ids')>0 AND event->'agent_ids' <@ to_jsonb($3::text[])`,
 			`UPDATE runtime.execution_inbox SET event=jsonb_set(event,'{agent_ids}',(SELECT jsonb_agg(a) FROM jsonb_array_elements_text(event->'agent_ids') a WHERE NOT a=ANY($3::text[]))) WHERE event->'agent_ids' ?| $3::text[]`,
 			`DELETE FROM runtime.thread_deliveries WHERE subscription_id IN (SELECT id FROM runtime.thread_subscriptions WHERE agent_id IN (SELECT id FROM doomed))`,

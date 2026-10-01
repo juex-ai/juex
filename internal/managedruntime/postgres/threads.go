@@ -156,6 +156,9 @@ func cancelThread(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, th
 	if _, err := tx.Exec(ctx, `UPDATE runtime.tools j SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 FROM runtime.turns t WHERE t.id=j.turn_id AND t.thread_id=$1 AND (j.state IN ('pending','waiting') OR j.operation_live)`, thread.ID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 WHERE thread_id=$1 AND state IN ('pending','waiting','unknown')`, thread.ID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state='idle' WHERE id=$1`, thread.ID); err != nil {
 		return err
 	}

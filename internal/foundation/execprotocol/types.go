@@ -44,7 +44,7 @@ func RequiredCapability(kind string) Capability {
 	switch kind {
 	case "read", "write", "edit", "glob", "grep", "export_file", "import_file":
 		return Files
-	case "exec_command", "write_stdin":
+	case "exec_command", "write_stdin", "run_hook":
 		return Shell
 	case "mcp_connect", "mcp_call", "mcp_list", "mcp_close":
 		return MCP
@@ -54,18 +54,19 @@ func RequiredCapability(kind string) Capability {
 }
 
 type Request struct {
-	Version   int             `json:"version"`
-	ID        string          `json:"id"`
-	AgentID   string          `json:"agent_id"`
-	Kind      string          `json:"kind"`
-	Arguments json.RawMessage `json:"arguments"`
+	AuthorizationVersion int64           `json:"authorization_version,omitempty"`
+	Version              int             `json:"version"`
+	ID                   string          `json:"id"`
+	AgentID              string          `json:"agent_id"`
+	Kind                 string          `json:"kind"`
+	Arguments            json.RawMessage `json:"arguments"`
 }
 
 func (r Request) Validate() error {
 	if r.Version != Version {
 		return ErrVersion
 	}
-	if r.ID == "" || len(r.ID) > 256 || r.AgentID == "" || len(r.AgentID) > 128 || RequiredCapability(r.Kind) == "" || len(r.Arguments) > 2<<20 || !json.Valid(r.Arguments) {
+	if r.AuthorizationVersion < 0 || r.ID == "" || len(r.ID) > 256 || r.AgentID == "" || len(r.AgentID) > 128 || RequiredCapability(r.Kind) == "" || len(r.Arguments) > 2<<20 || !json.Valid(r.Arguments) {
 		return ErrInvalid
 	}
 	return nil

@@ -152,3 +152,18 @@ and verified-email delivery. Notifications link the original Thread and contain
 neither raw model/provider content nor tool arguments or output.
 
 Permanent cleanup fences Activation leases and all transaction writers before removing private conversations and jobs. Unfinished model attempts become unknown usage records before their context is erased. Already delivered peer messages remain the recipient’s history. Execution inbox recipients are scrubbed, and persistent tombstones reject late arrivals and attempts to recreate the removed Agent.
+
+Agent Hooks are ordered declarations frozen with the Turn. Thread start, direct
+user input, tool admission/results, compaction and completion have independent
+durable Hook operations. Runtime supplies bounded JSON input; only the selected
+Execution environment runs user commands. Memory review Workers never inherit
+process Hooks. Every dispatch checks current actor, application and device grants.
+
+Exit zero adds context. Exit two can reject input or a tool before execution,
+add corrective context after a tool, or request a bounded Stop continuation.
+Stop continuation and corrective text fall back to stderr when stdout is empty.
+Required failures stop the action; unknown outcomes block even optional Hooks.
+Waiting releases the model slot. Recovery queries the original operation and
+never repeats a completed tool or committed compaction checkpoint. Cancelling a
+Thread preserves confirmed tool results and cancels original live operations.
+Stop Hooks settle before completion notices and Memory evidence are published.

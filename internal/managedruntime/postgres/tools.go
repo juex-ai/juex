@@ -55,7 +55,7 @@ func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.To
  ORDER BY j.next_check,j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1)
  UPDATE runtime.tools j SET lease_epoch=j.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds'
  FROM candidate c,runtime.turns t WHERE j.id=c.id AND t.id=j.turn_id
- RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live`, holder).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive)
+ RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live,j.deferred_result,j.hook_context`, holder).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive, &work.DeferredResult, &work.HookContext)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return work, managedruntime.ErrNoWork
 	}
@@ -164,6 +164,29 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 		return err
 	}
 	defer rollback(tx)
+	// Cancellation and Hook settlement lock their Thread before its operations.
+	// A batch can wake both Hooks and tools; use that same order before touching
+	// either table so a presence event cannot deadlock a concurrent cancellation.
+	operations, environments := []string{}, []string{}
+	for _, event := range events {
+		if event.OperationID != "" {
+			operations = append(operations, event.OperationID)
+		} else {
+			environments = append(environments, event.EnvironmentID)
+		}
+	}
+	locked, err := tx.Query(ctx, `SELECT th.id FROM runtime.threads th WHERE th.id IN (
+ SELECT t.thread_id FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id WHERE j.id::text=ANY($1::text[]) OR j.environment_id=ANY($2::text[])
+ UNION SELECT h.thread_id FROM runtime.hooks h WHERE h.id::text=ANY($1::text[]) OR h.environment_id=ANY($2::text[])) ORDER BY th.id FOR UPDATE OF th`, operations, environments)
+	if err != nil {
+		return err
+	}
+	for locked.Next() {
+	}
+	locked.Close()
+	if err := locked.Err(); err != nil {
+		return err
+	}
 	for _, event := range events {
 		if len(event.AgentIDs) > 0 {
 			var recipients []string
@@ -187,6 +210,9 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 			continue
 		}
 		if event.OperationID != "" {
+			if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE id::text=$1 AND environment_id=$2 AND scope->>'tenant_id'=$3 AND scope->>'user_id'=$4 AND state IN ('pending','waiting')`, event.OperationID, event.EnvironmentID, event.TenantID, event.UserID); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `UPDATE runtime.observation_sources SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE environment_id=$1 AND operation_id=$2 AND scope->>'tenant_id'=$3 AND scope->>'user_id'=$4 AND NOT closed`, event.EnvironmentID, event.OperationID, event.TenantID, event.UserID); err != nil {
 				return err
 			}
@@ -194,6 +220,9 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 				return err
 			}
 		} else {
+			if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE environment_id=$1 AND scope->>'tenant_id'=$2 AND scope->>'user_id'=$3 AND scope->>'agent_id'=ANY($4::text[]) AND state IN ('pending','waiting')`, event.EnvironmentID, event.TenantID, event.UserID, event.AgentIDs); err != nil {
+				return err
+			}
 			observationData, err := json.Marshal(map[string]any{"environment_id": event.EnvironmentID, "state": event.Data})
 			if err != nil {
 				return err
@@ -213,7 +242,7 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 }
 
 func consumeToolResults(ctx context.Context, tx pgx.Tx, turnID, threadID string, cancelled bool) error {
-	rows, err := tx.Query(ctx, `SELECT j.id,j.call,j.result,j.state FROM runtime.tools j JOIN runtime.attempts a ON a.id=j.attempt_id WHERE j.turn_id=$1 AND NOT j.consumed ORDER BY a.ordinal,j.ordinal FOR UPDATE OF j`, turnID)
+	rows, err := tx.Query(ctx, `SELECT j.id,j.call,j.result,j.state,j.deferred_result FROM runtime.tools j JOIN runtime.attempts a ON a.id=j.attempt_id WHERE j.turn_id=$1 AND NOT j.consumed ORDER BY a.ordinal,j.ordinal FOR UPDATE OF j`, turnID)
 	if err != nil {
 		return err
 	}
@@ -222,7 +251,8 @@ func consumeToolResults(ctx context.Context, tx pgx.Tx, turnID, threadID string,
 	for rows.Next() {
 		var id, state string
 		var call, result []byte
-		if err := rows.Scan(&id, &call, &result, &state); err != nil {
+		var deferred *managedruntime.ToolOutcome
+		if err := rows.Scan(&id, &call, &result, &state, &deferred); err != nil {
 			rows.Close()
 			return err
 		}
@@ -242,6 +272,10 @@ func consumeToolResults(ctx context.Context, tx pgx.Tx, turnID, threadID string,
 				return err
 			}
 			block = llm.Block{Type: llm.BlockToolResult, ToolUseID: block.ToolUseID, ToolName: block.ToolName, Content: "Thread cancelled; external cancellation may still be pending. Do not repeat this operation.", IsError: true}
+			if deferred != nil {
+				block.Content = deferred.Content + "\n\nThread cancelled while awaiting PostToolUse hooks; the original result above remains valid. Hook or external cancellation may still be pending. Do not repeat this operation."
+				block.IsError = deferred.IsError
+			}
 		}
 		ids = append(ids, id)
 		message.Blocks = append(message.Blocks, block)

@@ -165,3 +165,10 @@ stops related queued and running operations when received by the device.
 Permanent Agent cleanup cancels owned operations and transfers depending on its Artifacts, including imports running in another Agent’s environment. Their original identities remain until real settlement; unknown results stay unresolved. Native user files are never removed. Unreceived source captures are explicitly discarded before result acknowledgment. Hosted containers and networks stop before Workspace, Home and private control data are removed; storage ownership and allocation are verified on every retry. Minimal outcome receipts remain after private payloads are erased.
 
 Operation and Artifact audit facts default to 90 days, configurable through `--audit-days`. Retention does not delete operation identities, unknown outcomes, cancellation decisions, file metadata or business output.
+
+Hooks use the Shell capability and the same durable operation journal as other
+commands. They accept explicit argv and bounded JSON stdin, retain stdout and
+stderr separately, and enforce time and output limits. Exit two is a policy
+result, not an execution failure. Output overflow fails explicitly; interrupted
+or missing results are never interpreted as permission to continue. A frozen
+device authorization version fences both admission and dispatch after revocation.

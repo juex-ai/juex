@@ -88,6 +88,7 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 		return nil, ErrInvalid
 	}
 	runner.tools = &toolRunner{store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
+	runner.tools.hooks, _ = store.(HookStore)
 	runner.tools.applications = config.Applications
 	runner.tools.applicationStore, _ = store.(ApplicationStore)
 	runner.tools.collaboration, _ = store.(CollaborationStore)
@@ -321,6 +322,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if err != nil {
 		return err
 	}
+	if work.Deferred {
+		return nil
+	}
 	if job == nil {
 		if err := r.applicationNotices(ctx, lease, &work); err != nil {
 			return err
@@ -389,6 +393,19 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	}
 	if err != nil {
 		return err
+	}
+	if r.tools.hooks != nil && request.Compaction != nil {
+		decision, err := r.tools.hooks.ModelHooks(ctx, lease, work, request)
+		if err != nil {
+			return err
+		}
+		if !decision.Ready || decision.Unknown || decision.Reject {
+			return nil
+		}
+		request.System += decision.Context
+		if llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+request.MaxOutputTokens+contextSafety(request.Model) > request.Model.ContextWindow {
+			return r.store.HoldInput(ctx, lease, pending.InputID, "context_limit")
+		}
 	}
 	attempt, err := r.store.BeginAttempt(ctx, lease, work.TurnID, request)
 	if errors.Is(err, ErrApplicationBudget) {

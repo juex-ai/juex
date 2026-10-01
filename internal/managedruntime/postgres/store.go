@@ -62,6 +62,9 @@ var usageSchema string
 //go:embed purge_schema.sql
 var purgeSchema string
 
+//go:embed hooks_schema.sql
+var hooksSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -76,7 +79,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err

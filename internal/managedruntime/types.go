@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -96,11 +97,12 @@ type Lease struct {
 }
 
 type TurnConfig struct {
-	WorkerDepth      int           `json:"worker_depth"`
-	AgentVersion     int64         `json:"agent_version"`
-	Instructions     string        `json:"instructions"`
-	RequestedModelID string        `json:"requested_model_id"`
-	Models           []ModelConfig `json:"models"`
+	Hooks            []hookpolicy.Declaration `json:"hooks,omitempty"`
+	WorkerDepth      int                      `json:"worker_depth"`
+	AgentVersion     int64                    `json:"agent_version"`
+	Instructions     string                   `json:"instructions"`
+	RequestedModelID string                   `json:"requested_model_id"`
+	Models           []ModelConfig            `json:"models"`
 }
 
 type ModelConfig struct {
@@ -116,6 +118,7 @@ type ModelConfig struct {
 }
 
 type Work struct {
+	Deferred        bool
 	ContextSequence int64
 	Compaction      *CompactionJob
 	Source          InputSource

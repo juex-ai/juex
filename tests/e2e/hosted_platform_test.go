@@ -152,6 +152,17 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 	if op.State != "completed" || op.Snapshot.Text() != "ready" {
 		t.Fatal(op)
 	}
+	hook := nativeRequest(t, "hosted-hook", "run_hook", execprotocol.HookCommand{Command: []string{"/bin/sh", "-c", "cat > /workspace/hook-input; id -u; printf correction >&2; exit 2"}, Input: json.RawMessage(`{"event_name":"PostToolUse"}`), TimeoutMS: 10000, MaxOutputBytes: 8192})
+	hook.AgentID = f.agent.ID
+	hook.AuthorizationVersion = environment.AuthorizationVersion
+	if _, err := client.SubmitFenced(ctx, f.actor, f.tenant, environment.ID, hook, 0, fence); err != nil {
+		t.Fatal(err)
+	}
+	hookResult := executionEventually(t, f, environment.ID, hook.ID, func(op execution.Operation) bool { return op.Acknowledged })
+	var output execprotocol.HookOutput
+	if err := json.Unmarshal(hookResult.Snapshot.Output, &output); err != nil || hookResult.State != "completed" || hookResult.Snapshot.ExitCode == nil || *hookResult.Snapshot.ExitCode != 2 || output.Stdout != "1000\n" || output.Stderr != "correction" {
+		t.Fatal("hosted hook did not run with Agent identity and policy result", hookResult, output, err)
+	}
 	submit("background", "printf started; sleep 60")
 	executionEventually(t, f, environment.ID, "background", func(op execution.Operation) bool { return op.State == "running" })
 	if _, err := f.pool.Exec(ctx, `UPDATE execution.hosted SET last_activity=clock_timestamp()-interval '1 hour'`); err != nil {

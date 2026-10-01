@@ -99,3 +99,30 @@ func TestApplicationRevocationRetainsPreparedOperationUntilSettled(t *testing.T)
 		})
 	}
 }
+
+func TestHookApplicationRevocationPreventsAdmissionAndPreservesOriginalCancellation(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before_preparation", true: "original_prepared_operation"}[prepared], func(t *testing.T) {
+			app := revokedToolApplication{entered: make(chan struct{}), release: make(chan struct{})}
+			scope := Scope{ActorID: "owner", TenantID: "tenant", AgentID: "agent"}
+			gateway := &unknownBackgroundGateway{}
+			runner := toolRunner{authority: toolAuthority{scope: scope}, applicationStore: toolApplicationStore{}, applications: app, gateway: gateway}
+			work := HookWork{ID: "original", ThreadID: "calendar-worker", Scope: scope, EnvironmentID: "device"}
+			if prepared {
+				work.Request.ID = work.ID
+			}
+			done := make(chan HookOutcome, 1)
+			go func() { done <- runner.executeHook(context.Background(), &work) }()
+			<-app.entered
+			close(app.release)
+			result := <-done
+			wantState, wantCancellations := "cancelled", 0
+			if prepared {
+				wantState, wantCancellations = "unknown", 1
+			}
+			if result.State != wantState || !work.Cancelled || gateway.submissions != 0 || gateway.cancellations != wantCancellations {
+				t.Fatal("hook escaped revoked application or forgot its operation", result, work, gateway)
+			}
+		})
+	}
+}

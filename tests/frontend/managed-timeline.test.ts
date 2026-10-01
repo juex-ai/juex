@@ -7,6 +7,17 @@ function event(sequence: number, kind: string, data: unknown): Event {
   return { id: `event-${sequence}`, thread_id: 'thread', sequence, generation: 1, kind, data, created_at: '2026-09-30T00:00:00Z' }
 }
 
+test('hook completion replaces its pending log while preserving an unknown result', () => {
+  const rows = projectTranscript([
+    event(1, 'hook.started', { id: 'hook-operation', hook_id: 'guard', event: 'PreToolUse' }),
+    event(2, 'hook.unknown', { id: 'hook-operation', hook_id: 'guard', event: 'PreToolUse', result: { error: 'Do not repeat', output: { stdout: 'partial', stderr: '' } } }),
+  ])
+  assert.equal(rows.length, 1)
+  if (rows[0].kind !== 'hook') assert.fail('missing hook log')
+  assert.equal(rows[0].state, 'unknown')
+  assert.equal(rows[0].detail, 'partial\nDo not repeat')
+})
+
 test('optional Memory failure is a notice and leaves user input intact', () => {
   const rows = projectTranscript([
     event(1, 'input.accepted', { receipt: { id: 'input' }, text: 'continue' }),

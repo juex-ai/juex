@@ -11,10 +11,11 @@ import { APIError, api, errorText } from './api'
 import { Empty, Failure, Field, Loading, Notice, PageHeading } from './components'
 import { useResource } from './use-resource'
 import { projectTranscript } from './timeline'
+import { hookEvents } from './hooks'
 import { ArtifactDialog } from './artifacts'
 import type { AgentDetail, CompactionRequest, Event, InputReceipt, InputRequest, Message, TenantAccess, Thread, Timeline, User, WorkerRequest } from './schema'
 
-const stateText: Record<string, string> = { idle: '就绪', queued: '排队中', running: '处理中', waiting: '等待工具结果', failed: '本轮失败', blocked: '等待处理' }
+const stateText: Record<string, string> = { idle: '就绪', queued: '排队中', running: '处理中', waiting: '等待执行结果', failed: '本轮失败', blocked: '等待处理' }
 
 export function ConversationPage({ tenant, user }: { tenant: TenantAccess; user: User }) {
   const { agentId } = useParams()
@@ -154,7 +155,7 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
   return <section className="management-conversation" aria-label={`${thread.name} 对话`}>
     <div className="management-conversation-heading"><strong>{thread.name}</strong><Button size="sm" variant="ghost" disabled={!inputWritable || busy} onClick={() => { setError(''); setCompactFocus(compactRequest?.focus ?? '') }}><Minimize2 size={14} />压缩上下文</Button><span>{running && <LoaderCircle size={13} className="animate-spin" />}{stateText[current.state] ?? current.state}</span></div>
     <div className="management-transcript" ref={scroll} onScroll={event => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
-      {!timeline.thread ? <Loading /> : rows.length === 0 ? <Empty title="从一条消息开始">说明你要完成的事，Agent 会在这里持续处理。</Empty> : rows.map(row => row.kind === 'notice' ? <p className="management-turn-notice" key={row.id}>{row.text}</p> : <MessageView key={row.id} message={row.message} status={row.status} application={current.application} />)}
+      {!timeline.thread ? <Loading /> : rows.length === 0 ? <Empty title="从一条消息开始">说明你要完成的事，Agent 会在这里持续处理。</Empty> : rows.map(row => row.kind === 'notice' ? <p className="management-turn-notice" key={row.id}>{row.text}</p> : row.kind === 'hook' ? <details className="management-hook-log" key={row.id}><summary>Hook · {row.hook} · {hookEvents[row.event] ?? row.event} · {{ started: '等待执行结果', completed: '已完成', failed: '失败', cancelled: '已取消', unknown: '结果未知，请先核对设备状态' }[row.state] ?? row.state}</summary>{row.detail && <pre>{row.detail}</pre>}</details>: <MessageView key={row.id} message={row.message} status={row.status} application={current.application} />)}
       {current.state === 'running' && <div className="management-working" role="status"><LoaderCircle size={14} className="animate-spin" />正在处理…</div>}
     </div>
     <div className="management-composer-wrap">{timeline.error && <Failure message={timeline.error} retry={() => setRevision(value => value + 1)} />}{error && <Notice error>{error}</Notice>}

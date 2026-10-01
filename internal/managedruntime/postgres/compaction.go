@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
@@ -186,6 +187,19 @@ func finishCompaction(ctx context.Context, tx pgx.Tx, turn, thread, input string
 	if err := json.Unmarshal(source, &origin); err != nil {
 		return err
 	}
+	if err := appendEvent(ctx, tx, thread, "context.compacted", map[string]any{"job_id": job.ID, "turn_id": turn, "generation": generation, "tokens_before": draft.BeforeTokens, "tokens_after": summary.Compaction.TokensAfter}); err != nil {
+		return err
+	}
+	if err := enqueueHooks(ctx, tx, turn, hookpolicy.PostCompact, job.ID, managedruntime.HookInput{CompactReason: job.Reason, CompactAuto: job.Reason == "automatic"}); err != nil {
+		return err
+	}
+	decision, err := hookDecision(ctx, tx, turn, hookpolicy.PostCompact, job.ID)
+	if err != nil {
+		return err
+	}
+	if !decision.Ready {
+		return deferHookFinish(ctx, tx, turn, thread, hookFinish{Event: hookpolicy.PostCompact, Anchor: job.ID, Resume: origin.Kind != "compaction"})
+	}
 	if origin.Kind == "compaction" {
 		if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET state='completed',completed_at=clock_timestamp() WHERE id=$1`, turn); err != nil {
 			return err
@@ -197,7 +211,7 @@ func finishCompaction(ctx context.Context, tx pgx.Tx, turn, thread, input string
 			return err
 		}
 	}
-	return appendEvent(ctx, tx, thread, "context.compacted", map[string]any{"job_id": job.ID, "turn_id": turn, "generation": generation, "tokens_before": draft.BeforeTokens, "tokens_after": summary.Compaction.TokensAfter})
+	return nil
 }
 
 func cancelCompaction(ctx context.Context, tx pgx.Tx, turn string) error {

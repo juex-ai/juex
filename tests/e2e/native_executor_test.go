@@ -329,28 +329,35 @@ func TestNativeExecutorLocalGrantAndCredentialBoundary(t *testing.T) {
 }
 
 func TestNativeExecutorCrashNeverReplaysUnknownSideEffect(t *testing.T) {
-	config := nativeConfig(t)
-	command := exec.Command(os.Args[0], "-test.run=^TestNativeExecutorCrashHelper$")
-	command.Env = append(os.Environ(), "JUEX_NATIVE_CRASH_STATE="+config.StateDirectory, "JUEX_NATIVE_CRASH_WORK="+config.WorkingDirectory)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatal(err, string(output))
-	}
-	engine := openNative(t, config)
-	request := crashRequest(t, config.WorkingDirectory)
-	result, err := engine.Submit(request)
-	if err != nil || result.State != execprotocol.Unknown {
-		t.Fatal(result, err)
-	}
-	if err := engine.Prune(time.Now().Add(30 * 24 * time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	marker, err := os.ReadFile(filepath.Join(config.WorkingDirectory, "marker"))
-	if err != nil || string(marker) != "once" {
-		t.Fatal("unknown side effect replayed", string(marker), err)
+	for _, kind := range []string{"exec_command", "run_hook"} {
+		t.Run(kind, func(t *testing.T) {
+			config := nativeConfig(t)
+			command := exec.Command(os.Args[0], "-test.run=^TestNativeExecutorCrashHelper$")
+			command.Env = append(os.Environ(), "JUEX_NATIVE_CRASH_STATE="+config.StateDirectory, "JUEX_NATIVE_CRASH_WORK="+config.WorkingDirectory, "JUEX_NATIVE_CRASH_KIND="+kind)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatal(err, string(output))
+			}
+			engine := openNative(t, config)
+			request := crashRequest(t, config.WorkingDirectory, kind)
+			result, err := engine.Submit(request)
+			if err != nil || result.State != execprotocol.Unknown {
+				t.Fatal(result, err)
+			}
+			if err := engine.Prune(time.Now().Add(30 * 24 * time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			marker, err := os.ReadFile(filepath.Join(config.WorkingDirectory, "marker"))
+			if err != nil || string(marker) != "once" {
+				t.Fatal("unknown side effect replayed", string(marker), err)
+			}
+		})
 	}
 }
 
-func crashRequest(t *testing.T, directory string) execprotocol.Request {
+func crashRequest(t *testing.T, directory, kind string) execprotocol.Request {
+	if kind == "run_hook" {
+		return nativeRequest(t, "crash-operation", kind, execprotocol.HookCommand{Command: []string{"/bin/sh", "-c", "printf once >> marker; sleep 2; printf finished"}, Input: json.RawMessage(`{}`), TimeoutMS: 10000, MaxOutputBytes: 8192})
+	}
 	return nativeRequest(t, "crash-operation", "exec_command", native.CommandArguments{Command: "printf once >> \"$MARKER\"; sleep 2; printf finished", Environment: map[string]string{"MARKER": filepath.Join(directory, "marker")}})
 }
 
@@ -364,7 +371,7 @@ func TestNativeExecutorCrashHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(crashRequest(t, work)); err != nil {
+	if _, err := engine.Submit(crashRequest(t, work, os.Getenv("JUEX_NATIVE_CRASH_KIND"))); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
