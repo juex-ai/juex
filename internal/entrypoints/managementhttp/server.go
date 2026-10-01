@@ -31,6 +31,10 @@ type Auth interface {
 }
 
 type Directory interface {
+	Notifications(context.Context, string, string, int64, int) (management.NotificationPage, error)
+	MarkNotification(context.Context, string, string, string, bool) error
+	NotificationPreferences(context.Context, string, string) (management.NotificationPreferences, error)
+	ConfigureNotifications(context.Context, string, string, management.NotificationPreferences) (management.NotificationPreferences, error)
 	Tenants(context.Context, string) ([]management.TenantAccess, error)
 	Members(context.Context, string, string) ([]management.MemberView, error)
 	Invitations(context.Context, string, string) ([]management.InvitationView, error)
@@ -96,6 +100,10 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("GET /api/auth/session", s.signedIn(s.session))
 	mux.HandleFunc("POST /api/auth/request-verification", s.signedIn(s.requestVerification))
 	mux.HandleFunc("GET /api/tenants", s.signedIn(s.tenants))
+	mux.HandleFunc("GET /api/tenants/{tenant}/notifications", s.signedIn(s.notifications))
+	mux.HandleFunc("PUT /api/tenants/{tenant}/notifications/{notification}", s.signedIn(s.markNotification))
+	mux.HandleFunc("GET /api/tenants/{tenant}/notification-preferences", s.signedIn(s.notificationPreferences))
+	mux.HandleFunc("PUT /api/tenants/{tenant}/notification-preferences", s.signedIn(s.configureNotifications))
 	mux.HandleFunc("GET /api/tenants/{tenant}/members", s.signedIn(s.members))
 	mux.HandleFunc("PATCH /api/tenants/{tenant}/members/{owner}", s.signedIn(s.changeMember))
 	mux.HandleFunc("GET /api/tenants/{tenant}/invitations", s.signedIn(s.invitations))

@@ -11,6 +11,7 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	RecordApplicationNotice(ctx context.Context, eventJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ApplicationReceipt(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CancelApplication(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -51,6 +52,11 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kRuntimeClient struct {
 	*kClient
+}
+
+func (p *kRuntimeClient) RecordApplicationNotice(ctx context.Context, eventJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.RecordApplicationNotice(ctx, eventJSON)
 }
 
 func (p *kRuntimeClient) AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

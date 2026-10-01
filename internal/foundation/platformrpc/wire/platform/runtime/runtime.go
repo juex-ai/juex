@@ -13,6 +13,13 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"RecordApplicationNotice": kitex.NewMethodInfo(
+		recordApplicationNoticeHandler,
+		newRuntimeRecordApplicationNoticeArgs,
+		newRuntimeRecordApplicationNoticeResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"AdmitApplication": kitex.NewMethodInfo(
 		admitApplicationHandler,
 		newRuntimeAdmitApplicationArgs,
@@ -154,6 +161,24 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func recordApplicationNoticeHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeRecordApplicationNoticeArgs)
+	realResult := result.(*platform.RuntimeRecordApplicationNoticeResult)
+	success, err := handler.(platform.Runtime).RecordApplicationNotice(ctx, realArg.EventJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeRecordApplicationNoticeArgs() interface{} {
+	return platform.NewRuntimeRecordApplicationNoticeArgs()
+}
+
+func newRuntimeRecordApplicationNoticeResult() interface{} {
+	return platform.NewRuntimeRecordApplicationNoticeResult()
 }
 
 func admitApplicationHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -362,6 +387,16 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) RecordApplicationNotice(ctx context.Context, eventJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeRecordApplicationNoticeArgs
+	_args.EventJSON = eventJSON
+	var _result platform.RuntimeRecordApplicationNoticeResult
+	if err = p.c.Call(ctx, "RecordApplicationNotice", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string) (r *platform.Reply, err error) {

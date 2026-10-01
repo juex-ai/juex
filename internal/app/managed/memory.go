@@ -43,6 +43,7 @@ func OpenMemory(ctx context.Context, config MemoryConfig) (*Memory, error) {
 		return nil, err
 	}
 	service.Workers = MemoryWorkers{Runtime: client}
+	service.Notifier = ApplicationNotifications{Runtime: client, Management: authority}
 	return &Memory{Pool: pool, Service: service}, nil
 }
 

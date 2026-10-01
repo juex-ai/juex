@@ -13,6 +13,13 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"RecordNotification": kitex.NewMethodInfo(
+		recordNotificationHandler,
+		newManagementRecordNotificationArgs,
+		newManagementRecordNotificationResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"ApplicationAuthority": kitex.NewMethodInfo(
 		applicationAuthorityHandler,
 		newManagementApplicationAuthorityArgs,
@@ -119,6 +126,24 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func recordNotificationHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ManagementRecordNotificationArgs)
+	realResult := result.(*platform.ManagementRecordNotificationResult)
+	success, err := handler.(platform.Management).RecordNotification(ctx, realArg.EventJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newManagementRecordNotificationArgs() interface{} {
+	return platform.NewManagementRecordNotificationArgs()
+}
+
+func newManagementRecordNotificationResult() interface{} {
+	return platform.NewManagementRecordNotificationResult()
 }
 
 func applicationAuthorityHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -237,6 +262,16 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) RecordNotification(ctx context.Context, eventJSON string) (r *platform.Reply, err error) {
+	var _args platform.ManagementRecordNotificationArgs
+	_args.EventJSON = eventJSON
+	var _result platform.ManagementRecordNotificationResult
+	if err = p.c.Call(ctx, "RecordNotification", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) ApplicationAuthority(ctx context.Context, accessJSON string, execute bool) (r *platform.Reply, err error) {

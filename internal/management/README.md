@@ -67,3 +67,13 @@ silently repaired. Database integration cases in `tests/e2e` use the `postgres`
 build tag and require `JUEX_TEST_POSTGRES_URL` pointing to a disposable test
 server with database creation permission. Each case creates and drops its own
 database. CI exercises these cases with PostgreSQL 18.
+
+The persistent Inbox belongs to the resource owner within each Tenant. Only that
+signed-in user may read its notifications, change read state or configure delivery;
+delegated Fleet administration does not grant personal Inbox access. Application,
+Fleet and event identity deduplicate frozen payloads. Completion notifications are
+opt-in; reminders and attention events are visible by default. Preferences affect
+future notifications. Each business email attempt checks current membership,
+verified current address and preferences. It contains only an authenticated Inbox
+link, never application evidence or conversation content. SMTP retries retain their
+message identity but cannot promise exactly-once remote delivery.

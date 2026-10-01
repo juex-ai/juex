@@ -15,6 +15,15 @@ import (
 
 type Authority struct{ client wire.Client }
 
+func (a *Authority) RecordNotification(ctx context.Context, event application.Event) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	reply, err := a.client.RecordNotification(ctx, string(data))
+	return platformrpc.Decode(reply, err, nil, DecodeError)
+}
+
 func NewAuthority(address string, credentials platformrpc.Credentials) (*Authority, error) {
 	options, err := platformrpc.ClientOptions(address, "management", credentials)
 	if err != nil {

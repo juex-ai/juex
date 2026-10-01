@@ -21,6 +21,7 @@ import (
 func GenerateTypeScript() ([]byte, error) {
 	g := typeGenerator{types: map[string]reflect.Type{}}
 	for _, typ := range []reflect.Type{
+		reflect.TypeFor[management.NotificationPage](), reflect.TypeFor[management.NotificationPreferences](), reflect.TypeFor[NotificationReadRequest](),
 		reflect.TypeFor[memory.Status](), reflect.TypeFor[MemoryConfiguration](), reflect.TypeFor[memory.ReviewPage](), reflect.TypeFor[memory.StorageRules](), reflect.TypeFor[mc.Page](), reflect.TypeFor[mc.FactPage](), reflect.TypeFor[mc.AdminRequest](),
 		reflect.TypeFor[management.User](), reflect.TypeFor[management.Session](),
 		reflect.TypeFor[management.TenantAccess](), reflect.TypeFor[management.MemberView](),

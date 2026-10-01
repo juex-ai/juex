@@ -312,6 +312,11 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if err != nil {
 		return err
 	}
+	if job == nil {
+		if err := r.applicationNotices(ctx, lease, &work); err != nil {
+			return err
+		}
+	}
 	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation", Tools: runtimeTools()}
 	if r.tools.collaboration != nil && (job == nil || job.Application != "memory") {
 		_, peers := r.authority.(AgentDirectory)

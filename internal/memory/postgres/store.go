@@ -105,6 +105,7 @@ func (s *Store) transaction(ctx context.Context, scope application.Scope, write 
 		return err
 	}
 	if write {
+		state.StageNotifications()
 		data, err = json.Marshal(state)
 		if err != nil {
 			return err

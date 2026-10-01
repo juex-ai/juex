@@ -40,6 +40,23 @@ func NewManagement(listener net.Listener, credentials transport.Credentials, aut
 
 type managementHandler struct{ authority Authority }
 
+func (h *managementHandler) RecordNotification(ctx context.Context, eventJSON string) (*platform.Reply, error) {
+	var event application.Event
+	if len(eventJSON) > 16<<10 || !appDecode(eventJSON, &event) || !event.Valid() {
+		return invalid()
+	}
+	if transport.CallerRole(ctx) != event.Application {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	receiver, ok := h.authority.(interface {
+		RecordNotification(context.Context, application.Event) error
+	})
+	if !ok {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	return transport.Reply(nil, applicationrpc.ErrorCode(receiver.RecordNotification(ctx, event))), nil
+}
+
 func (h *managementHandler) ApplicationAuthority(ctx context.Context, accessJSON string, execute bool) (*platform.Reply, error) {
 	var access application.Access
 	if len(accessJSON) > 4096 || json.Unmarshal([]byte(accessJSON), &access) != nil {

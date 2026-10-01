@@ -2,11 +2,23 @@ package platformrpc
 
 import (
 	"context"
+	"github.com/juex-ai/juex/internal/foundation/application"
 
 	transport "github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc/wire/platform"
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
+
+func (h *runtimeHandler) RecordApplicationNotice(ctx context.Context, eventJSON string) (*platform.Reply, error) {
+	var event application.Event
+	if len(eventJSON) > 16<<10 || !appDecode(eventJSON, &event) || !event.Valid() {
+		return invalid()
+	}
+	if !applicationCaller(ctx, event.Application) {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	return reply(nil, h.service.RecordApplicationNotice(ctx, event))
+}
 
 func applicationCaller(ctx context.Context, application string) bool {
 	return (application == "memory" || application == "calendar") && transport.CallerRole(ctx) == application

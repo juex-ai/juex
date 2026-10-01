@@ -16,6 +16,7 @@ struct Reply {
 }
 
 service Management {
+	Reply RecordNotification(1: string eventJSON)
 	Reply ApplicationAuthority(1: string accessJSON, 2: bool execute)
 	Reply AuthorizeFleet(1: string actorID, 2: string tenantID, 3: string ownerID, 4: bool execute)
   Reply Authorize(1: Actor actor, 2: bool execute)
@@ -46,6 +47,7 @@ service Memory {
 }
 
 service Runtime {
+	Reply RecordApplicationNotice(1: string eventJSON)
 	Reply AdmitApplication(1: string scopeJSON, 2: string jobJSON)
 	Reply ApplicationReceipt(1: string scopeJSON, 2: string application, 3: string jobID)
 	Reply CancelApplication(1: string scopeJSON, 2: string application, 3: string jobID)

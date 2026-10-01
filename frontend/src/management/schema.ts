@@ -436,6 +436,35 @@ export interface Model {
   enabled: boolean;
 }
 
+export interface Notification {
+  id: string;
+  sequence: number;
+  application: string;
+  resource_id: string;
+  agent_id?: string;
+  kind: string;
+  title: string;
+  summary: string;
+  created_at: string;
+  read: boolean;
+}
+
+export interface NotificationPage {
+  items: Array<Notification>;
+  next: number;
+  unread: number;
+}
+
+export interface NotificationPreferences {
+  version: number;
+  completions: boolean;
+  email: boolean;
+}
+
+export interface NotificationReadRequest {
+  read: boolean;
+}
+
 export interface OwnerScope {
   tenant_id: string;
   user_id: string;

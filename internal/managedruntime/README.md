@@ -106,7 +106,7 @@ source bytes only after both parsed events and partial records are durable.
 Cancelling a Thread closes its tool transcript and persists external cancellation
 delivery, including live handles from its already completed Turns. Completed
 conversation history and other Threads remain unchanged. A late result cannot
-restart it. Independent application integrations remain separate platform work.
+restart it.
 
 Context compaction is a durable Runtime job inside the original Turn. It shares
 normal model slots and the frozen fallback plan, while disabling tools and using
@@ -121,3 +121,10 @@ their source message boundary across restarts, excluding later queued inputs and
 model bookkeeping events. Invalid, truncated or non-reducing summaries leave the
 old context intact and hold the input; recovery attempts are bounded. Independent
 background processes, MCP connections and observation subscriptions continue.
+
+Built-in applications submit immutable result notices through their own RPC
+identity. Notices never queue model work. The next authorized Main Turn consumes
+a bounded batch, rechecking the original execution authority and application
+epoch/fence before appending system observations. Revoked notices are skipped;
+unavailable application checks defer fairly without blocking ordinary dialogue.
+Application facts cannot become original human Memory evidence.

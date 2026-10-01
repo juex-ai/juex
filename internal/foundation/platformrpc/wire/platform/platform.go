@@ -93,6 +93,8 @@ var fieldIDToName_Reply = map[int16]string{
 }
 
 type Management interface {
+	RecordNotification(ctx context.Context, eventJSON string) (r *Reply, err error)
+
 	ApplicationAuthority(ctx context.Context, accessJSON string, execute bool) (r *Reply, err error)
 
 	AuthorizeFleet(ctx context.Context, actorID string, tenantID string, ownerID string, execute bool) (r *Reply, err error)
@@ -104,6 +106,73 @@ type Management interface {
 	Snapshot(ctx context.Context, scopeJSON string) (r *Reply, err error)
 
 	ModelProfile(ctx context.Context, scopeJSON string, configJSON string) (r *Reply, err error)
+}
+
+type ManagementRecordNotificationArgs struct {
+	EventJSON string `thrift:"eventJSON,1" frugal:"1,default,string" json:"eventJSON"`
+}
+
+func NewManagementRecordNotificationArgs() *ManagementRecordNotificationArgs {
+	return &ManagementRecordNotificationArgs{}
+}
+
+func (p *ManagementRecordNotificationArgs) InitDefault() {
+}
+
+func (p *ManagementRecordNotificationArgs) GetEventJSON() (v string) {
+	return p.EventJSON
+}
+func (p *ManagementRecordNotificationArgs) SetEventJSON(val string) {
+	p.EventJSON = val
+}
+
+func (p *ManagementRecordNotificationArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementRecordNotificationArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementRecordNotificationArgs = map[int16]string{
+	1: "eventJSON",
+}
+
+type ManagementRecordNotificationResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementRecordNotificationResult() *ManagementRecordNotificationResult {
+	return &ManagementRecordNotificationResult{}
+}
+
+func (p *ManagementRecordNotificationResult) InitDefault() {
+}
+
+var ManagementRecordNotificationResult_Success_DEFAULT *Reply
+
+func (p *ManagementRecordNotificationResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementRecordNotificationResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementRecordNotificationResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementRecordNotificationResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementRecordNotificationResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementRecordNotificationResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementRecordNotificationResult = map[int16]string{
+	0: "success",
 }
 
 type ManagementApplicationAuthorityArgs struct {
@@ -2058,6 +2127,8 @@ var fieldIDToName_MemoryAdministerResult = map[int16]string{
 }
 
 type Runtime interface {
+	RecordApplicationNotice(ctx context.Context, eventJSON string) (r *Reply, err error)
+
 	AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string) (r *Reply, err error)
 
 	ApplicationReceipt(ctx context.Context, scopeJSON string, application string, jobID string) (r *Reply, err error)
@@ -2079,6 +2150,73 @@ type Runtime interface {
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
 	CreateWorker(ctx context.Context, actor *Actor, parentID string, requestID string, name string) (r *Reply, err error)
+}
+
+type RuntimeRecordApplicationNoticeArgs struct {
+	EventJSON string `thrift:"eventJSON,1" frugal:"1,default,string" json:"eventJSON"`
+}
+
+func NewRuntimeRecordApplicationNoticeArgs() *RuntimeRecordApplicationNoticeArgs {
+	return &RuntimeRecordApplicationNoticeArgs{}
+}
+
+func (p *RuntimeRecordApplicationNoticeArgs) InitDefault() {
+}
+
+func (p *RuntimeRecordApplicationNoticeArgs) GetEventJSON() (v string) {
+	return p.EventJSON
+}
+func (p *RuntimeRecordApplicationNoticeArgs) SetEventJSON(val string) {
+	p.EventJSON = val
+}
+
+func (p *RuntimeRecordApplicationNoticeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeRecordApplicationNoticeArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeRecordApplicationNoticeArgs = map[int16]string{
+	1: "eventJSON",
+}
+
+type RuntimeRecordApplicationNoticeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeRecordApplicationNoticeResult() *RuntimeRecordApplicationNoticeResult {
+	return &RuntimeRecordApplicationNoticeResult{}
+}
+
+func (p *RuntimeRecordApplicationNoticeResult) InitDefault() {
+}
+
+var RuntimeRecordApplicationNoticeResult_Success_DEFAULT *Reply
+
+func (p *RuntimeRecordApplicationNoticeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeRecordApplicationNoticeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeRecordApplicationNoticeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeRecordApplicationNoticeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeRecordApplicationNoticeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeRecordApplicationNoticeResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeRecordApplicationNoticeResult = map[int16]string{
+	0: "success",
 }
 
 type RuntimeAdmitApplicationArgs struct {

@@ -20,9 +20,11 @@ type Service struct {
 	Repository Repository
 	Authority  application.Authority
 	Workers    WorkerGateway
+	Notifier   Notifier
 }
 
 type Review struct {
+	Notification   *Notification     `json:"notification,omitempty"`
 	SourceThrough  uint64            `json:"source_through,omitempty"`
 	ID             string            `json:"id"`
 	Scope          application.Scope `json:"scope"`

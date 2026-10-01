@@ -8,6 +8,10 @@ import (
 	"github.com/juex-ai/juex/internal/management"
 )
 
+func (a RuntimeAuthority) RecordNotification(ctx context.Context, event application.Event) error {
+	return applicationError(a.Directory.RecordNotification(ctx, event))
+}
+
 func (a RuntimeAuthority) AuthorizeApplication(ctx context.Context, access application.Access, execute bool) (application.Scope, error) {
 	var scope application.Scope
 	if access.AgentID != "" {

@@ -29,6 +29,9 @@ func (s *Service) Step(ctx context.Context) error {
 	if !ok || s.Workers == nil {
 		return application.ErrInvalid
 	}
+	notificationCtx, stopNotifications := context.WithTimeout(ctx, 3*time.Second)
+	notificationErr := s.notify(notificationCtx)
+	stopNotifications()
 	if err := s.pruneEvidence(ctx); err != nil {
 		return err
 	}
@@ -40,6 +43,9 @@ func (s *Service) Step(ctx context.Context) error {
 		return err
 	}
 	var failures []error
+	if notificationErr != nil {
+		failures = append(failures, notificationErr)
+	}
 	for _, job := range jobs {
 		if ctx.Err() != nil {
 			break

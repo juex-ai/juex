@@ -3,10 +3,20 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"github.com/juex-ai/juex/internal/foundation/application"
 
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
+
+func (c *Client) RecordApplicationNotice(ctx context.Context, event application.Event) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	reply, err := c.client.RecordApplicationNotice(ctx, string(data))
+	return platformrpc.Decode(reply, err, nil, decodeError)
+}
 
 func (c *Client) AdmitApplication(ctx context.Context, scope managedruntime.Scope, job managedruntime.ApplicationJob) (managedruntime.ApplicationReceipt, error) {
 	scopeJSON, _ := json.Marshal(scope)

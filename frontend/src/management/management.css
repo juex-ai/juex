@@ -150,3 +150,11 @@
  .management-memory-fact { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--border); }
  .management-memory-fact small { color: var(--muted-foreground); }
  .management-memory-sources { display: grid; gap: 8px; font-size: 13px; }
+
+.management-unread-count { margin-left: auto; background: var(--primary); color: var(--primary-foreground); border-radius: 999px; padding: 1px 7px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.management-notification-preferences { padding: 20px 24px; display: grid; gap: 12px; margin-bottom: 20px; }
+.management-notification-preferences h2 { font-size: 15px; font-weight: 600; }
+.management-notification-preferences label { display: flex; align-items: center; gap: 9px; font-size: 14px; }
+.management-notification-preferences p { color: var(--muted-foreground); font-size: 12px; }
+.management-notification-row.is-unread { background: color-mix(in srgb, var(--primary) 4%, transparent); }
+.management-notification-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; background: var(--primary); vertical-align: middle; }

@@ -31,6 +31,20 @@ type RuntimeMemory interface {
 	CancelCommand(context.Context, application.Scope, string) error
 }
 
+func (a RuntimeApplications) NoticeValid(ctx context.Context, event application.Event) error {
+	if event.Application != "memory" || a.Memory == nil {
+		return managedruntime.ErrDenied
+	}
+	status, err := a.Memory.Status(ctx, event.Scope.Access)
+	if err != nil {
+		return appRuntimeError(err)
+	}
+	if !status.Enabled || status.Epoch != event.Epoch || status.Fence != event.Fence {
+		return managedruntime.ErrDenied
+	}
+	return nil
+}
+
 func (a RuntimeApplications) Recall(ctx context.Context, scope managedruntime.Scope, text string) (managedruntime.RecallSnapshot, error) {
 	if a.Memory == nil {
 		return managedruntime.RecallSnapshot{}, nil

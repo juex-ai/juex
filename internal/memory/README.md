@@ -67,3 +67,9 @@ iterations never repeat retrieval. Injection verifies the current application
 epoch and human-control fence, fits the selected model's context, and remains
 optional reference data outside durable conversation history and compaction.
 An unavailable Memory service does not block ordinary conversation.
+
+Business decisions atomically freeze a result notice. Runtime Main and Management
+Inbox deliveries have independent acknowledgements and bounded retries. Notices
+contain outcome summaries, not original evidence or model-written reasons. A
+Worker failure after a committed decision cannot change the business result.
+Notification outages do not stop review processing.

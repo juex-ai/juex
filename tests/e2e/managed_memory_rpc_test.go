@@ -5,8 +5,10 @@ package e2e
 import (
 	"context"
 	"errors"
+	"github.com/google/uuid"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/app/managed"
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
@@ -51,6 +53,20 @@ func TestManagedMemoryIndependentKitexServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimeEventually(t, func() bool { return client.Health(ctx) == nil })
+	notice := application.Event{ID: uuid.NewString(), Application: "memory", ResourceID: "review", Kind: "attention", Title: "Memory review requires attention", Scope: f.scope, Epoch: 1, CreatedAt: time.Now()}
+	if err := authority.RecordNotification(ctx, notice); err != nil {
+		t.Fatal(err)
+	}
+	wrongApp, err := applicationrpc.NewAuthority(managementListener.Addr().String(), platformrpc.CredentialsAt(pki, "runtime"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wrongApp.RecordNotification(ctx, notice); !errors.Is(err, application.ErrDenied) {
+		t.Fatal("Runtime forged Memory notification", err)
+	}
+	if page, err := f.directory.Notifications(ctx, f.scope.UserID, f.scope.TenantID, 0, 20); err != nil || len(page.Items) != 1 {
+		t.Fatal(page, err)
+	}
 	status, err := client.Status(ctx, f.human)
 	if err != nil || !status.Enabled {
 		t.Fatal(status, err)
