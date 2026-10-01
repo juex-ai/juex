@@ -11,6 +11,7 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	AuthorizeUsage(ctx context.Context, actorID string, tenantID string, ownerID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	RecordNotification(ctx context.Context, eventJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ApplicationAuthority(ctx context.Context, accessJSON string, execute bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AuthorizeFleet(ctx context.Context, actorID string, tenantID string, ownerID string, execute bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -47,6 +48,11 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kManagementClient struct {
 	*kClient
+}
+
+func (p *kManagementClient) AuthorizeUsage(ctx context.Context, actorID string, tenantID string, ownerID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.AuthorizeUsage(ctx, actorID, tenantID, ownerID)
 }
 
 func (p *kManagementClient) RecordNotification(ctx context.Context, eventJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

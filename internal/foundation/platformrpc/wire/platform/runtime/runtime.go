@@ -13,6 +13,27 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"Usage": kitex.NewMethodInfo(
+		usageHandler,
+		newRuntimeUsageArgs,
+		newRuntimeUsageResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"OperatorUsage": kitex.NewMethodInfo(
+		operatorUsageHandler,
+		newRuntimeOperatorUsageArgs,
+		newRuntimeOperatorUsageResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ConfigureUsage": kitex.NewMethodInfo(
+		configureUsageHandler,
+		newRuntimeConfigureUsageArgs,
+		newRuntimeConfigureUsageResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"RecordApplicationNotice": kitex.NewMethodInfo(
 		recordApplicationNoticeHandler,
 		newRuntimeRecordApplicationNoticeArgs,
@@ -161,6 +182,60 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func usageHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeUsageArgs)
+	realResult := result.(*platform.RuntimeUsageResult)
+	success, err := handler.(platform.Runtime).Usage(ctx, realArg.ActorID, realArg.QueryJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeUsageArgs() interface{} {
+	return platform.NewRuntimeUsageArgs()
+}
+
+func newRuntimeUsageResult() interface{} {
+	return platform.NewRuntimeUsageResult()
+}
+
+func operatorUsageHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeOperatorUsageArgs)
+	realResult := result.(*platform.RuntimeOperatorUsageResult)
+	success, err := handler.(platform.Runtime).OperatorUsage(ctx, realArg.QueryJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeOperatorUsageArgs() interface{} {
+	return platform.NewRuntimeOperatorUsageArgs()
+}
+
+func newRuntimeOperatorUsageResult() interface{} {
+	return platform.NewRuntimeOperatorUsageResult()
+}
+
+func configureUsageHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeConfigureUsageArgs)
+	realResult := result.(*platform.RuntimeConfigureUsageResult)
+	success, err := handler.(platform.Runtime).ConfigureUsage(ctx, realArg.PolicyJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeConfigureUsageArgs() interface{} {
+	return platform.NewRuntimeConfigureUsageArgs()
+}
+
+func newRuntimeConfigureUsageResult() interface{} {
+	return platform.NewRuntimeConfigureUsageResult()
 }
 
 func recordApplicationNoticeHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -387,6 +462,37 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) Usage(ctx context.Context, actorID string, queryJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeUsageArgs
+	_args.ActorID = actorID
+	_args.QueryJSON = queryJSON
+	var _result platform.RuntimeUsageResult
+	if err = p.c.Call(ctx, "Usage", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) OperatorUsage(ctx context.Context, queryJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeOperatorUsageArgs
+	_args.QueryJSON = queryJSON
+	var _result platform.RuntimeOperatorUsageResult
+	if err = p.c.Call(ctx, "OperatorUsage", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ConfigureUsage(ctx context.Context, policyJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeConfigureUsageArgs
+	_args.PolicyJSON = policyJSON
+	var _result platform.RuntimeConfigureUsageResult
+	if err = p.c.Call(ctx, "ConfigureUsage", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) RecordApplicationNotice(ctx context.Context, eventJSON string) (r *platform.Reply, err error) {

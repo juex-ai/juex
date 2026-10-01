@@ -186,6 +186,9 @@ func TestManagedRuntimeApplicationToolsAndPersistentBudget(t *testing.T) {
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE t.thread_id=$1`, receipt.ThreadID).Scan(&attempts); err != nil || attempts != 2 {
 		t.Fatal(attempts, err)
 	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.usage_records WHERE kind=$1 AND user_id=$2 AND agent_id=$3`, job.Application, scope.UserID, scope.AgentID).Scan(&attempts); err != nil || attempts != 2 {
+		t.Fatal("application work omitted from owner usage", attempts, err)
+	}
 	if err := f.pool.QueryRow(ctx, `SELECT data->>'reason' FROM runtime.events WHERE thread_id=$1 AND kind='input.held'`, receipt.ThreadID).Scan(&reason); err != nil || reason != "application_budget_exhausted" {
 		t.Fatal(reason, err)
 	}

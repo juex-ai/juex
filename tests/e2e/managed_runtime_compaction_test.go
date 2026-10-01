@@ -382,6 +382,10 @@ func TestManagedRuntimeCompactionFallbackRetainsJobAndActualUsage(t *testing.T) 
 	if err := pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE request->'model'->>'model'='small' AND usage_status='partial'),count(*) FILTER(WHERE request->'model'->>'model'='backup' AND usage_status='complete') FROM runtime.attempts WHERE turn_id=$1`, work.TurnID).Scan(&partial, &complete); err != nil || partial != 1 || complete != 1 {
 		t.Fatal("fallback usage attributed incorrectly", partial, complete, err)
 	}
+	var calls, tokens int
+	if err := pool.QueryRow(ctx, `SELECT count(*),sum(input_tokens+output_tokens) FROM runtime.usage_records WHERE kind='compaction'`).Scan(&calls, &tokens); err != nil || calls != 2 || tokens != 237 {
+		t.Fatal("compaction fallback missing from usage ledger", calls, tokens, err)
+	}
 }
 
 func TestManagedRuntimeCompactionRecoveryAttemptsAreBounded(t *testing.T) {

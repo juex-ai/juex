@@ -673,6 +673,62 @@ export interface TransferRequest {
   visibility?: string;
 }
 
+export interface UsageCounts {
+  attempts: number;
+  reported: number;
+  partial: number;
+  unknown: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+}
+
+export interface UsagePeriod {
+  id: number;
+  timezone: string;
+  effective_from: string;
+  effective_until: string | null;
+}
+
+export interface UsageQuery {
+  tenant_id: string;
+  user_id?: string;
+  from: string;
+  until: string;
+  group: string;
+  offset: number;
+  limit: number;
+}
+
+export interface UsageReport {
+  query: UsageQuery;
+  totals: UsageCounts;
+  periods: Array<UsagePeriod>;
+  rows: Array<UsageRow>;
+  has_more: boolean;
+  detail_days: number;
+}
+
+export interface UsageRow {
+  attempts: number;
+  reported: number;
+  partial: number;
+  unknown: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+  period_id: number;
+  bucket: string;
+  tenant_id: string;
+  user_id: string;
+  model_id: string;
+  provider: string;
+  model: string;
+  kind: string;
+}
+
 export interface User {
   id: string;
   email: string;

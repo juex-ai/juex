@@ -146,6 +146,10 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 		return err == nil && timeline.Thread.State == "idle" && timeline.Thread.PendingInputs == 0
 	})
 	wrongRole, err := runtimeclient.NewClient(runtimeListener.Addr().String(), platformrpc.CredentialsAt(directory, "execution"))
+	usage, usageErr := client.Usage(ctx, f.actor, usageQuery(f.tenant, f.actor))
+	if usageErr != nil || usage.Totals.Attempts != 1 || usage.Totals.TotalTokens != 16 {
+		t.Fatal("usage did not cross Runtime and Management authority RPCs", usage, usageErr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

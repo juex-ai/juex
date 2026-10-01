@@ -85,6 +85,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	tenant.AddCommand(createTenant)
 	root.AddCommand(tenant)
 	root.AddCommand(modelCommand(open, out))
+	root.AddCommand(usageCommand(&credentials, out))
 	services := &cobra.Command{Use: "services", Short: "Operator private service identities"}
 	var directory string
 	initialize := &cobra.Command{Use: "init", Short: "Create the platform CA and private service certificates in a new directory", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {

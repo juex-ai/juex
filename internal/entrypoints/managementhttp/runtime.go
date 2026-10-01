@@ -10,6 +10,7 @@ import (
 )
 
 type Runtime interface {
+	Usage(context.Context, string, managedruntime.UsageQuery) (managedruntime.UsageReport, error)
 	Archive(context.Context, string, string, string, string, bool) (managedruntime.Thread, error)
 	Compact(context.Context, string, string, string, string, managedruntime.CompactionRequest) (managedruntime.InputReceipt, error)
 	Submit(context.Context, string, string, string, managedruntime.InputRequest) (managedruntime.InputReceipt, error)

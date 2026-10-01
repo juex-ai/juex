@@ -72,6 +72,16 @@ with an explicit reason. The provider history projection strips incompatible
 reasoning signatures and IDs on model changes while preserving canonical messages
 and tool pairs. External unknown outcomes never trigger a model fallback.
 
+Usage accounting commits with each attempt and its settlement. Independent owner
+records retain the actual model, actor and Main/Worker/application/compaction
+purpose without storing conversation content or credentials. Cached tokens are
+already included in input; unknown and partial reports remain explicit. Daily
+totals survive both detail retention (90 days by default) and Agent erasure;
+monthly reports sum those days. Reporting timezone changes start a new effective
+period without reinterpreting prior days. Management authorizes member reports
+and tenant administration; its private operator CLI supports cross-tenant reports
+and prospective policy changes. HTTP exposes no operator reporting bypass.
+
 Membership, delegated-actor and Agent execution epochs prevent revoke/restore
 from reviving queued work. A human cancellation is durable and affects only its
 Thread. Late provider usage may settle a cancelled attempt, but cannot append an

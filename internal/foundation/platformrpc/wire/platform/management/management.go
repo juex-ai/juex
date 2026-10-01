@@ -13,6 +13,13 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"AuthorizeUsage": kitex.NewMethodInfo(
+		authorizeUsageHandler,
+		newManagementAuthorizeUsageArgs,
+		newManagementAuthorizeUsageResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"RecordNotification": kitex.NewMethodInfo(
 		recordNotificationHandler,
 		newManagementRecordNotificationArgs,
@@ -126,6 +133,24 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func authorizeUsageHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ManagementAuthorizeUsageArgs)
+	realResult := result.(*platform.ManagementAuthorizeUsageResult)
+	success, err := handler.(platform.Management).AuthorizeUsage(ctx, realArg.ActorID, realArg.TenantID, realArg.OwnerID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newManagementAuthorizeUsageArgs() interface{} {
+	return platform.NewManagementAuthorizeUsageArgs()
+}
+
+func newManagementAuthorizeUsageResult() interface{} {
+	return platform.NewManagementAuthorizeUsageResult()
 }
 
 func recordNotificationHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -262,6 +287,18 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) AuthorizeUsage(ctx context.Context, actorID string, tenantID string, ownerID string) (r *platform.Reply, err error) {
+	var _args platform.ManagementAuthorizeUsageArgs
+	_args.ActorID = actorID
+	_args.TenantID = tenantID
+	_args.OwnerID = ownerID
+	var _result platform.ManagementAuthorizeUsageResult
+	if err = p.c.Call(ctx, "AuthorizeUsage", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) RecordNotification(ctx context.Context, eventJSON string) (r *platform.Reply, err error) {

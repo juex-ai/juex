@@ -16,6 +16,7 @@ struct Reply {
 }
 
 service Management {
+	Reply AuthorizeUsage(1: string actorID, 2: string tenantID, 3: string ownerID)
 	Reply RecordNotification(1: string eventJSON)
 	Reply ApplicationAuthority(1: string accessJSON, 2: bool execute)
 	Reply AuthorizeFleet(1: string actorID, 2: string tenantID, 3: string ownerID, 4: bool execute)
@@ -58,6 +59,9 @@ service Calendar {
 }
 
 service Runtime {
+	Reply Usage(1: string actorID, 2: string queryJSON)
+	Reply OperatorUsage(1: string queryJSON)
+	Reply ConfigureUsage(1: string policyJSON)
 	Reply RecordApplicationNotice(1: string eventJSON)
 	Reply AdmitApplication(1: string scopeJSON, 2: string jobJSON)
 	Reply ApplicationReceipt(1: string scopeJSON, 2: string application, 3: string jobID)

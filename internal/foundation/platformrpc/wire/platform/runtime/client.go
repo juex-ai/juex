@@ -11,6 +11,9 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	Usage(ctx context.Context, actorID string, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	OperatorUsage(ctx context.Context, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ConfigureUsage(ctx context.Context, policyJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	RecordApplicationNotice(ctx context.Context, eventJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ApplicationReceipt(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -52,6 +55,21 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kRuntimeClient struct {
 	*kClient
+}
+
+func (p *kRuntimeClient) Usage(ctx context.Context, actorID string, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Usage(ctx, actorID, queryJSON)
+}
+
+func (p *kRuntimeClient) OperatorUsage(ctx context.Context, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.OperatorUsage(ctx, queryJSON)
+}
+
+func (p *kRuntimeClient) ConfigureUsage(ctx context.Context, policyJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ConfigureUsage(ctx, policyJSON)
 }
 
 func (p *kRuntimeClient) RecordApplicationNotice(ctx context.Context, eventJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

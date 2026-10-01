@@ -93,6 +93,8 @@ var fieldIDToName_Reply = map[int16]string{
 }
 
 type Management interface {
+	AuthorizeUsage(ctx context.Context, actorID string, tenantID string, ownerID string) (r *Reply, err error)
+
 	RecordNotification(ctx context.Context, eventJSON string) (r *Reply, err error)
 
 	ApplicationAuthority(ctx context.Context, accessJSON string, execute bool) (r *Reply, err error)
@@ -106,6 +108,91 @@ type Management interface {
 	Snapshot(ctx context.Context, scopeJSON string) (r *Reply, err error)
 
 	ModelProfile(ctx context.Context, scopeJSON string, configJSON string) (r *Reply, err error)
+}
+
+type ManagementAuthorizeUsageArgs struct {
+	ActorID  string `thrift:"actorID,1" frugal:"1,default,string" json:"actorID"`
+	TenantID string `thrift:"tenantID,2" frugal:"2,default,string" json:"tenantID"`
+	OwnerID  string `thrift:"ownerID,3" frugal:"3,default,string" json:"ownerID"`
+}
+
+func NewManagementAuthorizeUsageArgs() *ManagementAuthorizeUsageArgs {
+	return &ManagementAuthorizeUsageArgs{}
+}
+
+func (p *ManagementAuthorizeUsageArgs) InitDefault() {
+}
+
+func (p *ManagementAuthorizeUsageArgs) GetActorID() (v string) {
+	return p.ActorID
+}
+
+func (p *ManagementAuthorizeUsageArgs) GetTenantID() (v string) {
+	return p.TenantID
+}
+
+func (p *ManagementAuthorizeUsageArgs) GetOwnerID() (v string) {
+	return p.OwnerID
+}
+func (p *ManagementAuthorizeUsageArgs) SetActorID(val string) {
+	p.ActorID = val
+}
+func (p *ManagementAuthorizeUsageArgs) SetTenantID(val string) {
+	p.TenantID = val
+}
+func (p *ManagementAuthorizeUsageArgs) SetOwnerID(val string) {
+	p.OwnerID = val
+}
+
+func (p *ManagementAuthorizeUsageArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementAuthorizeUsageArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementAuthorizeUsageArgs = map[int16]string{
+	1: "actorID",
+	2: "tenantID",
+	3: "ownerID",
+}
+
+type ManagementAuthorizeUsageResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementAuthorizeUsageResult() *ManagementAuthorizeUsageResult {
+	return &ManagementAuthorizeUsageResult{}
+}
+
+func (p *ManagementAuthorizeUsageResult) InitDefault() {
+}
+
+var ManagementAuthorizeUsageResult_Success_DEFAULT *Reply
+
+func (p *ManagementAuthorizeUsageResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementAuthorizeUsageResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementAuthorizeUsageResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementAuthorizeUsageResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementAuthorizeUsageResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementAuthorizeUsageResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementAuthorizeUsageResult = map[int16]string{
+	0: "success",
 }
 
 type ManagementRecordNotificationArgs struct {
@@ -2788,6 +2875,12 @@ var fieldIDToName_CalendarCancelCommandResult = map[int16]string{
 }
 
 type Runtime interface {
+	Usage(ctx context.Context, actorID string, queryJSON string) (r *Reply, err error)
+
+	OperatorUsage(ctx context.Context, queryJSON string) (r *Reply, err error)
+
+	ConfigureUsage(ctx context.Context, policyJSON string) (r *Reply, err error)
+
 	RecordApplicationNotice(ctx context.Context, eventJSON string) (r *Reply, err error)
 
 	AdmitApplication(ctx context.Context, scopeJSON string, jobJSON string) (r *Reply, err error)
@@ -2811,6 +2904,216 @@ type Runtime interface {
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
 	CreateWorker(ctx context.Context, actor *Actor, parentID string, requestID string, name string) (r *Reply, err error)
+}
+
+type RuntimeUsageArgs struct {
+	ActorID   string `thrift:"actorID,1" frugal:"1,default,string" json:"actorID"`
+	QueryJSON string `thrift:"queryJSON,2" frugal:"2,default,string" json:"queryJSON"`
+}
+
+func NewRuntimeUsageArgs() *RuntimeUsageArgs {
+	return &RuntimeUsageArgs{}
+}
+
+func (p *RuntimeUsageArgs) InitDefault() {
+}
+
+func (p *RuntimeUsageArgs) GetActorID() (v string) {
+	return p.ActorID
+}
+
+func (p *RuntimeUsageArgs) GetQueryJSON() (v string) {
+	return p.QueryJSON
+}
+func (p *RuntimeUsageArgs) SetActorID(val string) {
+	p.ActorID = val
+}
+func (p *RuntimeUsageArgs) SetQueryJSON(val string) {
+	p.QueryJSON = val
+}
+
+func (p *RuntimeUsageArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeUsageArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeUsageArgs = map[int16]string{
+	1: "actorID",
+	2: "queryJSON",
+}
+
+type RuntimeUsageResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeUsageResult() *RuntimeUsageResult {
+	return &RuntimeUsageResult{}
+}
+
+func (p *RuntimeUsageResult) InitDefault() {
+}
+
+var RuntimeUsageResult_Success_DEFAULT *Reply
+
+func (p *RuntimeUsageResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeUsageResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeUsageResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeUsageResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeUsageResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeUsageResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeUsageResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeOperatorUsageArgs struct {
+	QueryJSON string `thrift:"queryJSON,1" frugal:"1,default,string" json:"queryJSON"`
+}
+
+func NewRuntimeOperatorUsageArgs() *RuntimeOperatorUsageArgs {
+	return &RuntimeOperatorUsageArgs{}
+}
+
+func (p *RuntimeOperatorUsageArgs) InitDefault() {
+}
+
+func (p *RuntimeOperatorUsageArgs) GetQueryJSON() (v string) {
+	return p.QueryJSON
+}
+func (p *RuntimeOperatorUsageArgs) SetQueryJSON(val string) {
+	p.QueryJSON = val
+}
+
+func (p *RuntimeOperatorUsageArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeOperatorUsageArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeOperatorUsageArgs = map[int16]string{
+	1: "queryJSON",
+}
+
+type RuntimeOperatorUsageResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeOperatorUsageResult() *RuntimeOperatorUsageResult {
+	return &RuntimeOperatorUsageResult{}
+}
+
+func (p *RuntimeOperatorUsageResult) InitDefault() {
+}
+
+var RuntimeOperatorUsageResult_Success_DEFAULT *Reply
+
+func (p *RuntimeOperatorUsageResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeOperatorUsageResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeOperatorUsageResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeOperatorUsageResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeOperatorUsageResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeOperatorUsageResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeOperatorUsageResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeConfigureUsageArgs struct {
+	PolicyJSON string `thrift:"policyJSON,1" frugal:"1,default,string" json:"policyJSON"`
+}
+
+func NewRuntimeConfigureUsageArgs() *RuntimeConfigureUsageArgs {
+	return &RuntimeConfigureUsageArgs{}
+}
+
+func (p *RuntimeConfigureUsageArgs) InitDefault() {
+}
+
+func (p *RuntimeConfigureUsageArgs) GetPolicyJSON() (v string) {
+	return p.PolicyJSON
+}
+func (p *RuntimeConfigureUsageArgs) SetPolicyJSON(val string) {
+	p.PolicyJSON = val
+}
+
+func (p *RuntimeConfigureUsageArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeConfigureUsageArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeConfigureUsageArgs = map[int16]string{
+	1: "policyJSON",
+}
+
+type RuntimeConfigureUsageResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeConfigureUsageResult() *RuntimeConfigureUsageResult {
+	return &RuntimeConfigureUsageResult{}
+}
+
+func (p *RuntimeConfigureUsageResult) InitDefault() {
+}
+
+var RuntimeConfigureUsageResult_Success_DEFAULT *Reply
+
+func (p *RuntimeConfigureUsageResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeConfigureUsageResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeConfigureUsageResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeConfigureUsageResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeConfigureUsageResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeConfigureUsageResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeConfigureUsageResult = map[int16]string{
+	0: "success",
 }
 
 type RuntimeRecordApplicationNoticeArgs struct {

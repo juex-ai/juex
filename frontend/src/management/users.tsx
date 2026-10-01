@@ -54,7 +54,7 @@ export function UsersPage({ tenant, onAccessChanged }: { tenant: TenantAccess; o
       <div className="management-table-wrap"><table className="management-table"><thead><tr><th>用户</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody>{members.data.map(member => <tr key={member.id}>
         <td><Link className="management-row-link" to={`/t/${tenant.id}/users/${member.user_id}`}>{member.email}<ArrowUpRight size={14} /></Link><small>{member.email_verified ? '邮箱已验证' : '邮箱未验证'}</small></td>
         <td><Status status={member.role} /></td><td><Status status={member.status} /></td>
-        <td><div className="management-row-actions"><Button variant="ghost" size="sm" asChild><Link to={`/t/${tenant.id}/users/${member.user_id}`}>查看 Fleet</Link></Button>{member.status !== 'removed' && <>
+        <td><div className="management-row-actions"><Button variant="ghost" size="sm" asChild><Link to={`/t/${tenant.id}/users/${member.user_id}/usage`}>查看用量</Link></Button><Button variant="ghost" size="sm" asChild><Link to={`/t/${tenant.id}/users/${member.user_id}`}>查看 Fleet</Link></Button>{member.status !== 'removed' && <>
           <Button variant="ghost" size="sm" onClick={() => { setError(''); setChange({ member, role: member.role === 'admin' ? 'member' : 'admin', status: member.status }) }}>{member.role === 'admin' ? '设为普通用户' : '设为管理员'}</Button>
           <Button variant="ghost" size="sm" onClick={() => { setError(''); setChange({ member, role: member.role, status: member.status === 'suspended' ? 'active' : 'suspended' }) }}>{member.status === 'suspended' ? '重新启用' : '停用'}</Button>
           <Button variant="destructive" size="sm" onClick={() => { setError(''); setChange({ member, role: member.role, status: 'removed' }) }}>移除</Button>

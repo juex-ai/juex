@@ -14,6 +14,10 @@ import (
 
 type RuntimeAuthority struct{ Directory *postgres.Directory }
 
+func (a RuntimeAuthority) AuthorizeUsage(ctx context.Context, actor, tenant, owner string) error {
+	return runtimeError(a.Directory.AuthorizeUsage(ctx, actor, tenant, owner))
+}
+
 func (a RuntimeAuthority) AuthorizeFleet(ctx context.Context, actor, tenant, owner string, execute bool) (management.FleetAuthority, error) {
 	value, err := a.Directory.AuthorizeFleet(ctx, actor, tenant, owner, execute)
 	return value, runtimeError(err)

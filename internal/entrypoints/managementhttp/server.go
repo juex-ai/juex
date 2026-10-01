@@ -138,6 +138,8 @@ func New(options Options) (http.Handler, error) {
 		mux.HandleFunc("POST "+base+"/changes", s.signedIn(s.calendarChange))
 	}
 	if options.Runtime != nil {
+		mux.HandleFunc("GET /api/tenants/{tenant}/usage", s.signedIn(s.usage))
+		mux.HandleFunc("GET /api/tenants/{tenant}/users/{owner}/usage", s.signedIn(s.usage))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads", s.signedIn(s.threads))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/inputs", s.signedIn(s.submitInput))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads/{thread}/events", s.signedIn(s.threadEvents))
