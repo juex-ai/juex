@@ -88,7 +88,7 @@ func RecoverStorage(ctx context.Context, config Config, spec Spec, previous stri
 			return err
 		}
 		mappingName := mapping.Name()
-		defer os.Remove(mappingName)
+		defer func() { _ = os.Remove(mappingName) }()
 		_, err = fmt.Fprintf(mapping, "%d:%s\n", spec.ProjectID, path)
 		err = errors.Join(err, mapping.Close())
 		if err != nil {

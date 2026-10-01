@@ -25,8 +25,13 @@ func TestHostedXFSRecoveryPreservesPartialAllocationAndQuota(t *testing.T) {
 			source := Config{Root: t.TempDir(), WorkspaceRoot: oldRoot, StorageIdentity: oldID}
 			target := Config{Root: t.TempDir(), WorkspaceRoot: newRoot, StorageIdentity: newID}
 			spec := Spec{EnvironmentID: uuid.NewString(), ProjectID: 3911, StorageIdentity: oldID, WorkspaceBytes: 32 << 20, WorkspaceInodes: 128}
-			defer os.RemoveAll(filepath.Join(oldRoot, spec.EnvironmentID))
-			defer os.RemoveAll(filepath.Join(newRoot, spec.EnvironmentID))
+			t.Cleanup(func() {
+				for _, root := range []string{oldRoot, newRoot} {
+					if err := os.RemoveAll(filepath.Join(root, spec.EnvironmentID)); err != nil {
+						t.Error(err)
+					}
+				}
+			})
 			if err := prepareStorage(ctx, source, spec); err != nil {
 				t.Fatal(err)
 			}
