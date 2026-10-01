@@ -9,7 +9,7 @@
 
 [Management](internal/management/README.zh.md) 拥有新平台 directory 及其 PostgreSQL schema。
 业务操作在事务内根据当前成员状态授权，Tenant 行锁串行化成员变更。
-审计和 outbox 事实与生命周期修改一起提交。该边界不依赖 Home 发现或现有 Fleet 进程管理器。
+审计和权限代际与生命周期修改一起提交。该边界不依赖 Home 发现或现有 Fleet 进程管理器。
 
 App 组装已认证的 HTTP/Web 服务与基于 PostgreSQL 的 [Managed Runtime](internal/managedruntime/README.zh.md)。
 Runtime 只依赖自身和 Foundation；App 注入 Management 授权和 Provider 工厂。
@@ -57,7 +57,7 @@ App 从所属 Home 加载定义，共享 endpoint 和类型化控制辅助位于
 | `internal/app` | 产品装配、显式 Module 清单与预设、分层配置、资源选择、进程共享服务、Provider 工厂与 API/status 投影。 |
 | `internal/entrypoints` | CLI、Agent/Fleet HTTP 适配、请求/SSE 生命周期、wire DTO 与唯一共享 Web 资源 handler。 |
 | `internal/fleet` | 已注册 Agent 与独立服务的进程生命周期、验证后的 endpoint 选择、生命周期锁、重启续接与平台服务集成。 |
-| `internal/management` | 全局用户、租户成员、Fleet 归属、授权事务、审计与生命周期 outbox。 |
+| `internal/management` | 全局用户、租户成员、Fleet 归属、授权事务、审计与权限代际。 |
 | `internal/framework` | Agent 执行与 Worker 编排、Thread/Generation 存储、Module 契约、输入接纳、恢复、Provider 循环、上下文控制与被动生命周期操作。 |
 | `internal/features` | 具体 Module 的 Tool、context、policy、Observation producer、作用域状态与资源实现。 |
 | `internal/providers` | Provider 构造、厂商协议/SDK、传输适配与 Provider profile 默认值。 |

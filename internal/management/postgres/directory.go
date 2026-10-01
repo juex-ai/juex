@@ -82,7 +82,7 @@ func createTenant(ctx context.Context, tx pgx.Tx, name, adminID string) (managem
 	if err != nil {
 		return management.Tenant{}, err
 	}
-	if err := record(ctx, tx, adminID, fleet, "membership.created", management.Membership{}, member, true); err != nil {
+	if err := record(ctx, tx, adminID, fleet, "membership.created", management.Membership{}, member); err != nil {
 		return management.Tenant{}, err
 	}
 	return tenant, nil
@@ -217,7 +217,7 @@ func acceptInvitation(ctx context.Context, tx pgx.Tx, actorID, token string) (ma
 	if _, err := tx.Exec(ctx, `UPDATE management.invitations SET consumed_at=clock_timestamp() WHERE id=$1`, invitationID); err != nil {
 		return management.Fleet{}, err
 	}
-	if err := record(ctx, tx, actorID, fleet, "membership.joined", before, after, true); err != nil {
+	if err := record(ctx, tx, actorID, fleet, "membership.joined", before, after); err != nil {
 		return management.Fleet{}, err
 	}
 	return fleet, nil
@@ -266,7 +266,7 @@ func (d *Directory) ChangeMember(ctx context.Context, actorID, tenantID, ownerID
 	if err != nil {
 		return management.Membership{}, err
 	}
-	if err := record(ctx, tx, actorID, fleet, "membership.changed", before, after, true); err != nil {
+	if err := record(ctx, tx, actorID, fleet, "membership.changed", before, after); err != nil {
 		return management.Membership{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -302,7 +302,7 @@ func (d *Directory) Fleet(ctx context.Context, actorID, tenantID, ownerID string
 		return management.Fleet{}, err
 	}
 	if actorID != ownerID {
-		if err := record(ctx, tx, actorID, fleet, "fleet.read", owner, owner, false); err != nil {
+		if err := record(ctx, tx, actorID, fleet, "fleet.read", owner, owner); err != nil {
 			return management.Fleet{}, err
 		}
 	}
@@ -365,17 +365,10 @@ func ensureFleet(ctx context.Context, tx pgx.Tx, m management.Membership) (manag
 	return f, err
 }
 
-func record(ctx context.Context, tx pgx.Tx, actorID string, f management.Fleet, action string, before, after management.Membership, publish bool) error {
-	var eventID string
-	err := tx.QueryRow(ctx, `INSERT INTO management.audit (tenant_id, actor_id, owner_id, fleet_id, action, membership_version,
-		before_role, before_status, after_role, after_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-		f.TenantID, actorID, f.UserID, f.ID, action, after.Version, before.Role, before.Status, after.Role, after.Status).Scan(&eventID)
-	if err != nil {
-		return err
-	}
-	if publish {
-		_, err = tx.Exec(ctx, `INSERT INTO management.outbox (event_id) VALUES ($1)`, eventID)
-	}
+func record(ctx context.Context, tx pgx.Tx, actorID string, f management.Fleet, action string, before, after management.Membership) error {
+	_, err := tx.Exec(ctx, `INSERT INTO management.audit (tenant_id, actor_id, owner_id, fleet_id, action, membership_version,
+        before_role, before_status, after_role, after_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		f.TenantID, actorID, f.UserID, f.ID, action, after.Version, before.Role, before.Status, after.Role, after.Status)
 	return err
 }
 

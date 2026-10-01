@@ -22,6 +22,7 @@ type ExecutionConfig struct {
 	HostedListen                   string
 	BlobDirectory                  string
 	BlobCapacity                   int64
+	AuditDays                      int
 }
 type Execution struct {
 	Pool          *pgxpool.Pool
@@ -29,9 +30,15 @@ type Execution struct {
 	hosted        *hosted.Docker
 	blobs         *blob.Store
 	blobDirectory string
+	auditDays     int
+	store         *executionpg.Store
 }
 
 func OpenExecution(ctx context.Context, config ExecutionConfig) (*Execution, error) {
+	auditDays, err := auditRetentionDays(config.AuditDays)
+	if err != nil {
+		return nil, err
+	}
 	if !filepath.IsAbs(config.BlobDirectory) || config.BlobCapacity < 0 {
 		return nil, errors.New("Execution requires an absolute blob directory and positive capacity")
 	}
@@ -51,7 +58,7 @@ func OpenExecution(ctx context.Context, config ExecutionConfig) (*Execution, err
 		return nil, err
 	}
 	store := executionpg.New(pool)
-	app := &Execution{Pool: pool, Service: &execution.Service{Store: store, Authority: authority, Transfers: store}, blobDirectory: config.BlobDirectory}
+	app := &Execution{Pool: pool, Service: &execution.Service{Store: store, Authority: authority, Transfers: store}, blobDirectory: config.BlobDirectory, auditDays: auditDays, store: store}
 	app.blobs, err = blob.Open(config.BlobDirectory)
 	if err != nil {
 		app.Close()
@@ -76,6 +83,9 @@ func (e *Execution) Close() {
 	e.Pool.Close()
 }
 func (e *Execution) Run(ctx context.Context) {
+	retained := make(chan struct{})
+	go func() { defer close(retained); runAuditRetention(ctx, "execution", e.auditDays, e.store.PruneAudit) }()
+	defer func() { <-retained }()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {

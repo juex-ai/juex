@@ -17,10 +17,11 @@ proof of the caller's authority.
 
 Every membership writer locks the Tenant row before reading current permissions
 and checking the last active administrator. Membership changes, actor/owner
-audit facts and outbox entries commit together. Per-membership versions preserve
-the order of suspend/resume transitions. Outbox persistence records intent; it
-does not prove downstream cancellation. Consumers must not discard a suspension
-merely because a newer version re-enables access.
+audit facts and execution epochs commit together. Restoring access never rolls
+back an epoch; Runtime, Execution and applications recheck it to invalidate old
+work even when suspension and restoration occur between their checks. Audit
+facts default to 90 days, configurable by the operator with `--audit-days`.
+Retention never removes authority epochs, business history or recovery receipts.
 
 Invitation consumption requires the matching authenticated account and does not
 verify email. Tokens are single-use, expiring, hashed, and replaced on reissue.

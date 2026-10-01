@@ -21,6 +21,7 @@ type ManagementConfig struct {
 	PublicURL    string
 	SMTP         *maildelivery.Config
 	InsecureHTTP bool
+	AuditDays    int
 }
 
 type Management struct {
@@ -29,10 +30,15 @@ type Management struct {
 	Auth      *postgres.Auth
 	Mailer    *maildelivery.SMTP
 	Authority RuntimeAuthority
+	auditDays int
 	Purger    *management.Purger
 }
 
 func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, error) {
+	auditDays, err := auditRetentionDays(config.AuditDays)
+	if err != nil {
+		return nil, err
+	}
 	origin, err := management.PublicOrigin(config.PublicURL, config.InsecureHTTP)
 	if err != nil {
 		return nil, err
@@ -74,12 +80,18 @@ func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, 
 		return nil, err
 	}
 	ok = true
-	return &Management{Pool: pool, Directory: d, Auth: auth, Mailer: mailer, Authority: RuntimeAuthority{Directory: d}}, nil
+	return &Management{Pool: pool, Directory: d, Auth: auth, Mailer: mailer, Authority: RuntimeAuthority{Directory: d}, auditDays: auditDays}, nil
 }
 
 func (m *Management) Close() { m.Pool.Close() }
 
 func (m *Management) RunBackground(ctx context.Context) {
+	retained := make(chan struct{})
+	go func() {
+		defer close(retained)
+		runAuditRetention(ctx, "management", m.auditDays, m.Directory.PruneAudit)
+	}()
+	defer func() { <-retained }()
 	done := make(chan struct{})
 	go func() { defer close(done); m.runPurges(ctx) }()
 	defer func() { <-done }()

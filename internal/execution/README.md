@@ -163,3 +163,5 @@ locally approved Agent/capability ceiling; they cannot expand it. Revocation
 stops related queued and running operations when received by the device.
 
 Permanent Agent cleanup cancels owned operations and transfers depending on its Artifacts, including imports running in another Agent’s environment. Their original identities remain until real settlement; unknown results stay unresolved. Native user files are never removed. Unreceived source captures are explicitly discarded before result acknowledgment. Hosted containers and networks stop before Workspace, Home and private control data are removed; storage ownership and allocation are verified on every retry. Minimal outcome receipts remain after private payloads are erased.
+
+Operation and Artifact audit facts default to 90 days, configurable through `--audit-days`. Retention does not delete operation identities, unknown outcomes, cancellation decisions, file metadata or business output.

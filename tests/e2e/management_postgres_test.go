@@ -156,12 +156,9 @@ func TestManagementTenantIsolationAndRejoin(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM management.fleets WHERE tenant_id=$1 AND user_id=$2", one.ID, user.ID).Scan(&count); err != nil || count != 1 {
 		t.Fatal(count, err)
 	}
-	var audits, outbox int
+	var audits int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM management.audit WHERE tenant_id=$1 AND actor_id=$2 AND owner_id=$3 AND action='membership.changed'", one.ID, admin.ID, user.ID).Scan(&audits); err != nil || audits != 2 {
 		t.Fatal("actor/owner audit", audits, err)
-	}
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM management.outbox o JOIN management.audit a ON a.id=o.event_id WHERE a.tenant_id=$1 AND a.action='membership.changed'", one.ID).Scan(&outbox); err != nil || outbox != 2 {
-		t.Fatal("transactional lifecycle events", outbox, err)
 	}
 }
 
@@ -282,7 +279,7 @@ func TestManagementInvitationExpiryAndConcurrentConsumption(t *testing.T) {
 	}
 }
 
-func TestManagementRollbackIncludesInvitationFleetAndOutbox(t *testing.T) {
+func TestManagementRollbackIncludesInvitationFleetAndAudit(t *testing.T) {
 	pool, d := managementDatabase(t)
 	ctx := context.Background()
 	admin, err := d.CreateUser(ctx, "admin@example.com")
@@ -308,7 +305,7 @@ func TestManagementRollbackIncludesInvitationFleetAndOutbox(t *testing.T) {
 	if _, err := d.AcceptInvitation(ctx, user.ID, token); err == nil {
 		t.Fatal("injected transaction failure not observed")
 	}
-	var members, fleets, outbox int
+	var members, fleets, audits int
 	var consumed bool
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM management.memberships WHERE user_id=$1`, user.ID).Scan(&members); err != nil {
 		t.Fatal(err)
@@ -319,11 +316,11 @@ func TestManagementRollbackIncludesInvitationFleetAndOutbox(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT consumed_at IS NOT NULL FROM management.invitations WHERE id=$1`, invitation.ID).Scan(&consumed); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM management.outbox`).Scan(&outbox); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM management.audit WHERE action='membership.joined'`).Scan(&audits); err != nil {
 		t.Fatal(err)
 	}
-	if members != 0 || fleets != 0 || consumed || outbox != 1 {
-		t.Fatalf("partial transaction: memberships=%d fleets=%d consumed=%v outbox=%d", members, fleets, consumed, outbox)
+	if members != 0 || fleets != 0 || consumed || audits != 0 {
+		t.Fatalf("partial transaction: memberships=%d fleets=%d consumed=%v audits=%d", members, fleets, consumed, audits)
 	}
 	if _, err := pool.Exec(ctx, `ALTER TABLE management.audit DROP CONSTRAINT reject_join`); err != nil {
 		t.Fatal(err)
@@ -389,7 +386,7 @@ func TestManagementLastAdminAndRevokedAuthority(t *testing.T) {
 	if _, err := d.ChangeMember(ctx, admin.ID, tenant.ID, other.ID, management.Admin, management.Active); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := pool.Query(ctx, `SELECT a.membership_version, a.after_status FROM management.outbox o JOIN management.audit a ON a.id=o.event_id
+	rows, err := pool.Query(ctx, `SELECT a.membership_version, a.after_status FROM management.audit a
 		WHERE a.owner_id=$1 AND a.action='membership.changed' ORDER BY a.membership_version`, other.ID)
 	if err != nil {
 		t.Fatal(err)

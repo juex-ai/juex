@@ -94,7 +94,7 @@ func (d *Directory) FleetOverview(ctx context.Context, actorID, tenantID, ownerI
 		return result, err
 	}
 	if actorID != ownerID {
-		if err := record(ctx, tx, actorID, fleet, "fleet.read", member, member, false); err != nil {
+	if err := record(ctx, tx, actorID, fleet, "fleet.read", member, member); err != nil {
 			return result, err
 		}
 	}
@@ -332,8 +332,8 @@ func agentAuthority(ctx context.Context, tx pgx.Tx, actorID, tenantID, agentID s
 }
 
 func recordResource(ctx context.Context, tx pgx.Tx, actorID string, fleet management.Fleet, member management.Membership, action, agentID string, version int64) error {
-	_, err := tx.Exec(ctx, `WITH event AS (INSERT INTO management.audit(tenant_id,actor_id,owner_id,fleet_id,agent_id,action,membership_version,before_role,before_status,after_role,after_status,resource_version)
-	VALUES($1,$2,$3,$4,NULLIF($5,'')::uuid,$6,$7,$8,$9,$8,$9,$10) RETURNING id) INSERT INTO management.outbox(event_id) SELECT id FROM event`, fleet.TenantID, actorID, fleet.UserID, fleet.ID, agentID, action, member.Version, member.Role, member.Status, version)
+	_, err := tx.Exec(ctx, `INSERT INTO management.audit(tenant_id,actor_id,owner_id,fleet_id,agent_id,action,membership_version,before_role,before_status,after_role,after_status,resource_version)
+	VALUES($1,$2,$3,$4,NULLIF($5,'')::uuid,$6,$7,$8,$9,$8,$9,$10)`, fleet.TenantID, actorID, fleet.UserID, fleet.ID, agentID, action, member.Version, member.Role, member.Status, version)
 	return err
 }
 

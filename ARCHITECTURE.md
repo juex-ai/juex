@@ -11,7 +11,7 @@ flags, and file schemas are owned by code and tests.
 [Management](internal/management/README.md) owns the new platform directory and
 its PostgreSQL schema. Business operations authorize against current membership
 inside their transaction; Tenant locks serialize membership changes. Audit and
-outbox facts commit with lifecycle mutations. This boundary has no dependency
+authority epochs commit with lifecycle mutations. This boundary has no dependency
 on Home discovery or the existing Fleet process supervisor.
 
 App composes the authenticated HTTP/Web service and the PostgreSQL-backed
@@ -69,7 +69,7 @@ production package under `internal` belongs to one of these eight groups:
 | `internal/app` | Product composition, explicit Module inventory/presets, layered configuration, resource selection, process-shared services, Provider factories, and API/status projections. |
 | `internal/entrypoints` | CLI and Agent/Fleet HTTP adapters, request/SSE lifetimes, wire DTOs, and one shared Web asset handler. |
 | `internal/fleet` | Registered Agent and independent service process lifecycles, verified endpoint selection, lifecycle locks, restart continuation, and platform service integration. |
-| `internal/management` | Global users, tenant memberships, Fleet ownership, authorization transactions, audit and lifecycle outbox. |
+| `internal/management` | Global users, tenant memberships, Fleet ownership, authorization transactions, audit and authority epochs. |
 | `internal/framework` | Agent execution and Worker orchestration, Thread/Generation storage, Module contracts, input admission, recovery, Provider loops, context control, and passive lifecycle operations. |
 | `internal/features` | Concrete Module Tools, context, policy, observation producers, scoped state, and resource implementations. |
 | `internal/providers` | Provider construction, vendor protocols/SDKs, transport adaptation, and Provider profile defaults. |

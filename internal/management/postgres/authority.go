@@ -31,7 +31,7 @@ func (d *Directory) AuthorizeFleet(ctx context.Context, actor, tenant, owner str
 		}
 		result.ActorAuthorizationEpoch = acting.Version
 		if !execute {
-			if err := record(ctx, tx, actor, fleet, "fleet.read", member, member, false); err != nil {
+			if err := record(ctx, tx, actor, fleet, "fleet.read", member, member); err != nil {
 				return result, err
 			}
 		}

@@ -18,15 +18,17 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	var publicURL, listen, email, name string
 	var credentials, rpcListen, runtimeAddress, executionAddress, memoryAddress, calendarAddress string
 	var insecure bool
+	var auditDays int
 	root := &cobra.Command{Use: "juex-management", Short: "Run and administer the JueX management service", SilenceUsage: true, SilenceErrors: true}
 	root.SetArgs(args)
 	root.SetOut(out)
 	root.SetErr(errOut)
+	root.PersistentFlags().IntVar(&auditDays, "audit-days", 90, "Retain operation audit facts for this many days (1–3650)")
 	root.PersistentFlags().StringVar(&publicURL, "public-url", os.Getenv("JUEX_PUBLIC_URL"), "Public HTTPS origin")
 	root.PersistentFlags().BoolVar(&insecure, "insecure-http", false, "Allow HTTP for a local development deployment")
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Management service identity")
 	open := func(cmd *cobra.Command) (*managed.Management, error) {
-		config := managed.ManagementConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), MasterKey: os.Getenv("JUEX_MASTER_KEY"), PublicURL: strings.TrimSuffix(publicURL, "/"), InsecureHTTP: insecure}
+		config := managed.ManagementConfig{DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), MasterKey: os.Getenv("JUEX_MASTER_KEY"), PublicURL: strings.TrimSuffix(publicURL, "/"), InsecureHTTP: insecure, AuditDays: auditDays}
 		if address := os.Getenv("JUEX_SMTP_ADDRESS"); address != "" {
 			config.SMTP = &maildelivery.Config{Address: address, From: os.Getenv("JUEX_SMTP_FROM"), Username: os.Getenv("JUEX_SMTP_USERNAME"), Password: os.Getenv("JUEX_SMTP_PASSWORD"), TLSMode: os.Getenv("JUEX_SMTP_TLS_MODE")}
 		}
