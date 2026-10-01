@@ -157,7 +157,25 @@ func (s *Store) CancelApplication(ctx context.Context, scope managedruntime.Scop
 
 func applicationReceipt(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, app, id string) (managedruntime.ApplicationReceipt, error) {
 	value := managedruntime.ApplicationReceipt{Application: app, ID: id}
-	err := tx.QueryRow(ctx, `SELECT COALESCE(j.thread_id::text,''),COALESCE(j.input_id::text,''),CASE WHEN j.cancelled THEN 'cancelled' ELSE COALESCE(i.state,'pending') END FROM runtime.application_jobs j LEFT JOIN runtime.inputs i ON i.id=j.input_id WHERE j.application=$1 AND j.fleet_id=$2 AND j.job_id=$3 AND j.agent_id=$4`, app, scope.FleetID, id, scope.AgentID).Scan(&value.ThreadID, &value.InputID, &value.State)
+	var operations []byte
+	// Cancellation revokes future work immediately, but cannot assert that an
+	// external process has stopped before the executor acknowledges its outcome.
+	err := tx.QueryRow(ctx, `SELECT COALESCE(j.thread_id::text,''),COALESCE(j.input_id::text,''),
+ CASE WHEN tools.unknown THEN 'outcome_unknown'
+ WHEN j.cancelled AND tools.unsettled THEN 'cancel_requested'
+ WHEN j.cancelled THEN 'cancelled' ELSE COALESCE(i.state,'pending') END,
+ COALESCE(tools.operations,'[]'::jsonb)
+ FROM runtime.application_jobs j LEFT JOIN runtime.inputs i ON i.id=j.input_id
+ LEFT JOIN LATERAL (
+ SELECT bool_or(k.state='unknown') AS unknown,
+ bool_or(k.state IN ('pending','waiting') OR k.operation_live) AS unsettled,
+ jsonb_agg(k.id::text ORDER BY k.id) FILTER (WHERE k.state IN ('pending','waiting','unknown') OR k.operation_live) AS operations
+ FROM runtime.tools k JOIN runtime.turns t ON t.id=k.turn_id WHERE t.input_id=j.input_id
+ ) tools ON true
+ WHERE j.application=$1 AND j.fleet_id=$2 AND j.job_id=$3 AND j.agent_id=$4`, app, scope.FleetID, id, scope.AgentID).Scan(&value.ThreadID, &value.InputID, &value.State, &operations)
+	if err == nil {
+		err = json.Unmarshal(operations, &value.Operations)
+	}
 	return value, classify(err)
 }
 

@@ -24,35 +24,40 @@ func cancelledBeforeAdmission(ctx context.Context, tx pgx.Tx, scope execution.Sc
 	return cancelled, err
 }
 
-func (s *Store) CancelPreparedOperation(ctx context.Context, scope execution.Scope, environment, id string) error {
+func (s *Store) CancelPreparedOperation(ctx context.Context, scope execution.Scope, environment, id string) (execprotocol.State, error) {
 	tx, err := s.begin(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer rollback(tx)
 	device, err := scanDevice(tx.QueryRow(ctx, `SELECT `+deviceColumns+` FROM execution.environments WHERE id=$1 FOR UPDATE`, environment))
 	if err != nil {
-		return err
+		return "", err
 	}
 	if device.TenantID != scope.TenantID || device.UserID != scope.UserID || device.FleetID != scope.FleetID {
-		return execprotocol.ErrDenied
+		return "", execprotocol.ErrDenied
 	}
 	operation, err := scanOperation(tx.QueryRow(ctx, `SELECT `+operationColumns+` FROM execution.operations WHERE environment_id=$1 AND id=$2`, environment, id))
 	if err != nil && !errors.Is(err, execprotocol.ErrDenied) {
-		return err
+		return "", err
 	}
+	state := execprotocol.Cancelled
 	if err == nil {
+		state = execprotocol.State(operation.State)
+		if state == "waiting" {
+			state = execprotocol.Cancelled
+		}
 		if !sameCancellationOwner(operation.Scope, scope) {
-			return execprotocol.ErrDenied
+			return "", execprotocol.ErrDenied
 		}
 		if err := cancelOperation(ctx, tx, environment, id); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if err := recordCancellation(ctx, tx, scope, "operation", environment, id); err != nil {
-		return err
+		return "", err
 	}
-	return tx.Commit(ctx)
+	return state, tx.Commit(ctx)
 }
 
 func lockTransfer(ctx context.Context, tx pgx.Tx, id string) error {
@@ -60,32 +65,36 @@ func lockTransfer(ctx context.Context, tx pgx.Tx, id string) error {
 	return err
 }
 
-func (s *Store) CancelPreparedTransfer(ctx context.Context, scope execution.Scope, id string) error {
+func (s *Store) CancelPreparedTransfer(ctx context.Context, scope execution.Scope, id string) (execprotocol.State, error) {
 	tx, err := s.begin(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer rollback(tx)
 	if err := lockTransfer(ctx, tx, id); err != nil {
-		return err
+		return "", err
 	}
 	prior, err := scanTransfer(tx.QueryRow(ctx, `SELECT `+transferColumns+` FROM execution.transfers WHERE id=$1`, id))
 	if errors.Is(err, execprotocol.ErrDenied) {
 		if err := recordCancellation(ctx, tx, scope, "transfer", "", id); err != nil {
-			return err
+			return "", err
 		}
-		return tx.Commit(ctx)
+		return execprotocol.Cancelled, tx.Commit(ctx)
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !sameCancellationOwner(prior.Scope, scope) {
-		return execprotocol.ErrDenied
+		return "", execprotocol.ErrDenied
 	}
 	// Admission takes environment locks before the transfer lock. Release the
 	// lookup lock before following that order for an existing transfer.
 	if err := tx.Commit(ctx); err != nil {
-		return err
+		return "", err
 	}
-	return s.cancelTransfer(ctx, prior, &scope)
+	if err := s.cancelTransfer(ctx, prior, &scope); err != nil {
+		return "", err
+	}
+	current, err := s.Transfer(ctx, id)
+	return current.State, err
 }

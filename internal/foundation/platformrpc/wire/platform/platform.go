@@ -2126,6 +2126,667 @@ var fieldIDToName_MemoryAdministerResult = map[int16]string{
 	0: "success",
 }
 
+type Calendar interface {
+	Health(ctx context.Context) (r *Reply, err error)
+
+	Status(ctx context.Context, accessJSON string) (r *Reply, err error)
+
+	Configure(ctx context.Context, accessJSON string, version int64, enabled bool) (r *Reply, err error)
+
+	Schedules(ctx context.Context, accessJSON string, offset int32, limit int32) (r *Reply, err error)
+
+	Occurrences(ctx context.Context, accessJSON string, scheduleID string, offset int32, limit int32) (r *Reply, err error)
+
+	Change(ctx context.Context, accessJSON string, scopeJSON string, commandID string, changeJSON string) (r *Reply, err error)
+
+	Assignment(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64) (r *Reply, err error)
+
+	CancelCommand(ctx context.Context, scopeJSON string, commandID string) (r *Reply, err error)
+}
+
+type CalendarHealthArgs struct {
+}
+
+func NewCalendarHealthArgs() *CalendarHealthArgs {
+	return &CalendarHealthArgs{}
+}
+
+func (p *CalendarHealthArgs) InitDefault() {
+}
+
+func (p *CalendarHealthArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarHealthArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarHealthArgs = map[int16]string{}
+
+type CalendarHealthResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarHealthResult() *CalendarHealthResult {
+	return &CalendarHealthResult{}
+}
+
+func (p *CalendarHealthResult) InitDefault() {
+}
+
+var CalendarHealthResult_Success_DEFAULT *Reply
+
+func (p *CalendarHealthResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarHealthResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarHealthResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarHealthResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarHealthResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarHealthResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarHealthResult = map[int16]string{
+	0: "success",
+}
+
+type CalendarStatusArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+}
+
+func NewCalendarStatusArgs() *CalendarStatusArgs {
+	return &CalendarStatusArgs{}
+}
+
+func (p *CalendarStatusArgs) InitDefault() {
+}
+
+func (p *CalendarStatusArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+func (p *CalendarStatusArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+
+func (p *CalendarStatusArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarStatusArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarStatusArgs = map[int16]string{
+	1: "accessJSON",
+}
+
+type CalendarStatusResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarStatusResult() *CalendarStatusResult {
+	return &CalendarStatusResult{}
+}
+
+func (p *CalendarStatusResult) InitDefault() {
+}
+
+var CalendarStatusResult_Success_DEFAULT *Reply
+
+func (p *CalendarStatusResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarStatusResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarStatusResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarStatusResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarStatusResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarStatusResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarStatusResult = map[int16]string{
+	0: "success",
+}
+
+type CalendarConfigureArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	Version    int64  `thrift:"version,2" frugal:"2,default,i64" json:"version"`
+	Enabled    bool   `thrift:"enabled,3" frugal:"3,default,bool" json:"enabled"`
+}
+
+func NewCalendarConfigureArgs() *CalendarConfigureArgs {
+	return &CalendarConfigureArgs{}
+}
+
+func (p *CalendarConfigureArgs) InitDefault() {
+}
+
+func (p *CalendarConfigureArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *CalendarConfigureArgs) GetVersion() (v int64) {
+	return p.Version
+}
+
+func (p *CalendarConfigureArgs) GetEnabled() (v bool) {
+	return p.Enabled
+}
+func (p *CalendarConfigureArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *CalendarConfigureArgs) SetVersion(val int64) {
+	p.Version = val
+}
+func (p *CalendarConfigureArgs) SetEnabled(val bool) {
+	p.Enabled = val
+}
+
+func (p *CalendarConfigureArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarConfigureArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarConfigureArgs = map[int16]string{
+	1: "accessJSON",
+	2: "version",
+	3: "enabled",
+}
+
+type CalendarConfigureResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarConfigureResult() *CalendarConfigureResult {
+	return &CalendarConfigureResult{}
+}
+
+func (p *CalendarConfigureResult) InitDefault() {
+}
+
+var CalendarConfigureResult_Success_DEFAULT *Reply
+
+func (p *CalendarConfigureResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarConfigureResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarConfigureResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarConfigureResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarConfigureResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarConfigureResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarConfigureResult = map[int16]string{
+	0: "success",
+}
+
+type CalendarSchedulesArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	Offset     int32  `thrift:"offset,2" frugal:"2,default,i32" json:"offset"`
+	Limit      int32  `thrift:"limit,3" frugal:"3,default,i32" json:"limit"`
+}
+
+func NewCalendarSchedulesArgs() *CalendarSchedulesArgs {
+	return &CalendarSchedulesArgs{}
+}
+
+func (p *CalendarSchedulesArgs) InitDefault() {
+}
+
+func (p *CalendarSchedulesArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *CalendarSchedulesArgs) GetOffset() (v int32) {
+	return p.Offset
+}
+
+func (p *CalendarSchedulesArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *CalendarSchedulesArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *CalendarSchedulesArgs) SetOffset(val int32) {
+	p.Offset = val
+}
+func (p *CalendarSchedulesArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *CalendarSchedulesArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarSchedulesArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarSchedulesArgs = map[int16]string{
+	1: "accessJSON",
+	2: "offset",
+	3: "limit",
+}
+
+type CalendarSchedulesResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarSchedulesResult() *CalendarSchedulesResult {
+	return &CalendarSchedulesResult{}
+}
+
+func (p *CalendarSchedulesResult) InitDefault() {
+}
+
+var CalendarSchedulesResult_Success_DEFAULT *Reply
+
+func (p *CalendarSchedulesResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarSchedulesResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarSchedulesResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarSchedulesResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarSchedulesResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarSchedulesResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarSchedulesResult = map[int16]string{
+	0: "success",
+}
+
+type CalendarOccurrencesArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	ScheduleID string `thrift:"scheduleID,2" frugal:"2,default,string" json:"scheduleID"`
+	Offset     int32  `thrift:"offset,3" frugal:"3,default,i32" json:"offset"`
+	Limit      int32  `thrift:"limit,4" frugal:"4,default,i32" json:"limit"`
+}
+
+func NewCalendarOccurrencesArgs() *CalendarOccurrencesArgs {
+	return &CalendarOccurrencesArgs{}
+}
+
+func (p *CalendarOccurrencesArgs) InitDefault() {
+}
+
+func (p *CalendarOccurrencesArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *CalendarOccurrencesArgs) GetScheduleID() (v string) {
+	return p.ScheduleID
+}
+
+func (p *CalendarOccurrencesArgs) GetOffset() (v int32) {
+	return p.Offset
+}
+
+func (p *CalendarOccurrencesArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *CalendarOccurrencesArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *CalendarOccurrencesArgs) SetScheduleID(val string) {
+	p.ScheduleID = val
+}
+func (p *CalendarOccurrencesArgs) SetOffset(val int32) {
+	p.Offset = val
+}
+func (p *CalendarOccurrencesArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *CalendarOccurrencesArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarOccurrencesArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarOccurrencesArgs = map[int16]string{
+	1: "accessJSON",
+	2: "scheduleID",
+	3: "offset",
+	4: "limit",
+}
+
+type CalendarOccurrencesResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarOccurrencesResult() *CalendarOccurrencesResult {
+	return &CalendarOccurrencesResult{}
+}
+
+func (p *CalendarOccurrencesResult) InitDefault() {
+}
+
+var CalendarOccurrencesResult_Success_DEFAULT *Reply
+
+func (p *CalendarOccurrencesResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarOccurrencesResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarOccurrencesResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarOccurrencesResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarOccurrencesResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarOccurrencesResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarOccurrencesResult = map[int16]string{
+	0: "success",
+}
+
+type CalendarChangeArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+	ScopeJSON  string `thrift:"scopeJSON,2" frugal:"2,default,string" json:"scopeJSON"`
+	CommandID  string `thrift:"commandID,3" frugal:"3,default,string" json:"commandID"`
+	ChangeJSON string `thrift:"changeJSON,4" frugal:"4,default,string" json:"changeJSON"`
+}
+
+func NewCalendarChangeArgs() *CalendarChangeArgs {
+	return &CalendarChangeArgs{}
+}
+
+func (p *CalendarChangeArgs) InitDefault() {
+}
+
+func (p *CalendarChangeArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+
+func (p *CalendarChangeArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *CalendarChangeArgs) GetCommandID() (v string) {
+	return p.CommandID
+}
+
+func (p *CalendarChangeArgs) GetChangeJSON() (v string) {
+	return p.ChangeJSON
+}
+func (p *CalendarChangeArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+func (p *CalendarChangeArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *CalendarChangeArgs) SetCommandID(val string) {
+	p.CommandID = val
+}
+func (p *CalendarChangeArgs) SetChangeJSON(val string) {
+	p.ChangeJSON = val
+}
+
+func (p *CalendarChangeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarChangeArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarChangeArgs = map[int16]string{
+	1: "accessJSON",
+	2: "scopeJSON",
+	3: "commandID",
+	4: "changeJSON",
+}
+
+type CalendarChangeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarChangeResult() *CalendarChangeResult {
+	return &CalendarChangeResult{}
+}
+
+func (p *CalendarChangeResult) InitDefault() {
+}
+
+var CalendarChangeResult_Success_DEFAULT *Reply
+
+func (p *CalendarChangeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarChangeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarChangeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarChangeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarChangeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarChangeResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarChangeResult = map[int16]string{
+	0: "success",
+}
+
+type CalendarAssignmentArgs struct {
+	ScopeJSON    string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	OccurrenceID string `thrift:"occurrenceID,2" frugal:"2,default,string" json:"occurrenceID"`
+	Epoch        int64  `thrift:"epoch,3" frugal:"3,default,i64" json:"epoch"`
+}
+
+func NewCalendarAssignmentArgs() *CalendarAssignmentArgs {
+	return &CalendarAssignmentArgs{}
+}
+
+func (p *CalendarAssignmentArgs) InitDefault() {
+}
+
+func (p *CalendarAssignmentArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *CalendarAssignmentArgs) GetOccurrenceID() (v string) {
+	return p.OccurrenceID
+}
+
+func (p *CalendarAssignmentArgs) GetEpoch() (v int64) {
+	return p.Epoch
+}
+func (p *CalendarAssignmentArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *CalendarAssignmentArgs) SetOccurrenceID(val string) {
+	p.OccurrenceID = val
+}
+func (p *CalendarAssignmentArgs) SetEpoch(val int64) {
+	p.Epoch = val
+}
+
+func (p *CalendarAssignmentArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarAssignmentArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarAssignmentArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "occurrenceID",
+	3: "epoch",
+}
+
+type CalendarAssignmentResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarAssignmentResult() *CalendarAssignmentResult {
+	return &CalendarAssignmentResult{}
+}
+
+func (p *CalendarAssignmentResult) InitDefault() {
+}
+
+var CalendarAssignmentResult_Success_DEFAULT *Reply
+
+func (p *CalendarAssignmentResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarAssignmentResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarAssignmentResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarAssignmentResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarAssignmentResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarAssignmentResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarAssignmentResult = map[int16]string{
+	0: "success",
+}
+
+type CalendarCancelCommandArgs struct {
+	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	CommandID string `thrift:"commandID,2" frugal:"2,default,string" json:"commandID"`
+}
+
+func NewCalendarCancelCommandArgs() *CalendarCancelCommandArgs {
+	return &CalendarCancelCommandArgs{}
+}
+
+func (p *CalendarCancelCommandArgs) InitDefault() {
+}
+
+func (p *CalendarCancelCommandArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *CalendarCancelCommandArgs) GetCommandID() (v string) {
+	return p.CommandID
+}
+func (p *CalendarCancelCommandArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *CalendarCancelCommandArgs) SetCommandID(val string) {
+	p.CommandID = val
+}
+
+func (p *CalendarCancelCommandArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarCancelCommandArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarCancelCommandArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "commandID",
+}
+
+type CalendarCancelCommandResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarCancelCommandResult() *CalendarCancelCommandResult {
+	return &CalendarCancelCommandResult{}
+}
+
+func (p *CalendarCancelCommandResult) InitDefault() {
+}
+
+var CalendarCancelCommandResult_Success_DEFAULT *Reply
+
+func (p *CalendarCancelCommandResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarCancelCommandResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarCancelCommandResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarCancelCommandResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarCancelCommandResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarCancelCommandResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarCancelCommandResult = map[int16]string{
+	0: "success",
+}
+
 type Runtime interface {
 	RecordApplicationNotice(ctx context.Context, eventJSON string) (r *Reply, err error)
 

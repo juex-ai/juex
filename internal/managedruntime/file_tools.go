@@ -54,7 +54,7 @@ type FileGateway interface {
 	StartFileTransfer(context.Context, Scope, string, FileTransferSpec) (FileTransferResult, error)
 	FileTransfer(context.Context, Scope, string) (FileTransferResult, error)
 	CancelFileTransfer(context.Context, Scope, string) error
-	CancelFileRequest(context.Context, Scope, string) error
+	CancelFileRequest(context.Context, Scope, string) (execprotocol.State, error)
 	FileArtifacts(context.Context, Scope, string, int) ([]FileArtifact, error)
 }
 
@@ -214,10 +214,11 @@ func (r toolRunner) cancelFileWork(ctx context.Context, work ToolWork) ToolOutco
 		if r.files == nil {
 			return retryTool()
 		}
-		err := r.files.CancelFileRequest(ctx, work.Scope, work.ID)
+		state, err := r.files.CancelFileRequest(ctx, work.Scope, work.ID)
 		if err != nil {
 			return retryTool()
 		}
+		return cancellationOutcome(state)
 	}
 	return ToolOutcome{State: "cancelled"}
 }

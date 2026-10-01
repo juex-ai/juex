@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/application"
@@ -32,6 +33,16 @@ type RuntimeMemory interface {
 }
 
 func (a RuntimeApplications) NoticeValid(ctx context.Context, event application.Event) error {
+	if event.Application == "calendar" && a.Calendar != nil {
+		status, err := a.Calendar.Status(ctx, event.Scope.Access)
+		if err != nil {
+			return appRuntimeError(err)
+		}
+		if !status.Enabled || status.Epoch != event.Epoch {
+			return managedruntime.ErrDenied
+		}
+		return nil
+	}
 	if event.Application != "memory" || a.Memory == nil {
 		return managedruntime.ErrDenied
 	}
@@ -83,6 +94,7 @@ func (a RuntimeApplications) Contribute(ctx context.Context, item managedruntime
 
 type RuntimeApplications struct {
 	Memory   RuntimeMemory
+	Calendar RuntimeCalendar
 	Evidence managedruntime.EvidenceStore
 }
 
@@ -109,6 +121,10 @@ func binding(j managedruntime.ApplicationJob) memory.Binding {
 }
 
 func (a RuntimeApplications) Check(ctx context.Context, scope managedruntime.Scope, job managedruntime.ApplicationJob) error {
+	if job.Application == "calendar" && a.Calendar != nil {
+		_, err := a.Calendar.Assignment(ctx, appScope(scope), job.ID, job.Epoch)
+		return appRuntimeError(err)
+	}
 	if job.Application != "memory" || a.Memory == nil {
 		return managedruntime.ErrDenied
 	}
@@ -118,11 +134,8 @@ func (a RuntimeApplications) Check(ctx context.Context, scope managedruntime.Sco
 	}
 	return appRuntimeError(err)
 }
-func (a RuntimeApplications) Tools(ctx context.Context, scope managedruntime.Scope, job *managedruntime.ApplicationJob) (managedruntime.ApplicationTools, error) {
+func (a RuntimeApplications) memoryTools(ctx context.Context, scope managedruntime.Scope, job *managedruntime.ApplicationJob) (managedruntime.ApplicationTools, error) {
 	if a.Memory == nil {
-		return managedruntime.ApplicationTools{}, nil
-	}
-	if job != nil && job.Application != "memory" {
 		return managedruntime.ApplicationTools{}, nil
 	}
 	call, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
@@ -131,10 +144,13 @@ func (a RuntimeApplications) Tools(ctx context.Context, scope managedruntime.Sco
 	if errors.Is(err, application.ErrDisabled) {
 		return managedruntime.ApplicationTools{}, nil
 	}
-	if err != nil && (job != nil || errors.Is(err, application.ErrDenied)) {
+	if err != nil && (job != nil && job.Application == "memory" || errors.Is(err, application.ErrDenied)) {
 		return managedruntime.ApplicationTools{}, appRuntimeError(err)
 	}
 	catalog := managedruntime.ApplicationTools{Tools: memory.Tools(job != nil)}
+	if job != nil && job.Application != "memory" {
+		catalog.Tools = catalog.Tools[:len(catalog.Tools)-1]
+	}
 	if job == nil {
 		catalog.Instructions = memory.AgentGuidance
 		if status.Strategy == mc.Advanced {
@@ -164,6 +180,12 @@ func decodeAppTool(input map[string]any, target any) error {
 }
 func (a RuntimeApplications) Call(ctx context.Context, work managedruntime.ToolWork, job *managedruntime.ApplicationJob) (value any, err error) {
 	defer func() { err = appRuntimeError(err) }()
+	if strings.HasPrefix(work.Call.ToolName, "calendar_") {
+		if job != nil && job.Application == "memory" {
+			return nil, managedruntime.ErrDenied
+		}
+		return a.calendarCall(ctx, work)
+	}
 	if a.Memory == nil {
 		return nil, managedruntime.ErrDenied
 	}
@@ -242,6 +264,11 @@ func (a RuntimeApplications) Call(ctx context.Context, work managedruntime.ToolW
 }
 func (a RuntimeApplications) Cancel(ctx context.Context, work managedruntime.ToolWork) error {
 	switch work.Call.ToolName {
+	case "calendar_change":
+		if a.Calendar == nil {
+			return managedruntime.ErrDenied
+		}
+		return appRuntimeError(a.Calendar.CancelCommand(ctx, appScope(work.Scope), work.ID))
 	case "memory_propose", "memory_decide", "memory_maintain":
 		if a.Memory == nil {
 			return managedruntime.ErrDenied

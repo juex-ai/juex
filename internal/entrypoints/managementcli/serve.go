@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/managed"
+	calendarrpc "github.com/juex-ai/juex/internal/calendar/rpc"
 	"github.com/juex-ai/juex/internal/entrypoints/managementhttp"
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
 	"github.com/juex-ai/juex/internal/entrypoints/webassets"
@@ -20,9 +21,9 @@ import (
 )
 
 type serveConfig struct {
-	HTTPAddress, RPCAddress, RuntimeAddress, ExecutionAddress, MemoryAddress, PublicURL string
-	Credentials                                                                         platformrpc.Credentials
-	InsecureHTTP                                                                        bool
+	HTTPAddress, RPCAddress, RuntimeAddress, ExecutionAddress, MemoryAddress, CalendarAddress, PublicURL string
+	Credentials                                                                                          platformrpc.Credentials
+	InsecureHTTP                                                                                         bool
 }
 
 func serveManagement(ctx context.Context, app *managed.Management, config serveConfig, out io.Writer) error {
@@ -44,7 +45,14 @@ func serveManagement(ctx context.Context, app *managed.Management, config serveC
 			return err
 		}
 	}
-	handler, err := managementhttp.New(managementhttp.Options{Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, PublicURL: config.PublicURL, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
+	var calendar managementhttp.Calendar
+	if config.CalendarAddress != "" {
+		calendar, err = calendarrpc.NewClient(config.CalendarAddress, config.Credentials)
+		if err != nil {
+			return err
+		}
+	}
+	handler, err := managementhttp.New(managementhttp.Options{Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, Calendar: calendar, PublicURL: config.PublicURL, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
 	if err != nil {
 		return err
 	}

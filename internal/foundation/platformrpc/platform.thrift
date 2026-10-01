@@ -46,6 +46,17 @@ service Memory {
   Reply Administer(1: string accessJSON, 2: string requestJSON)
 }
 
+service Calendar {
+  Reply Health()
+  Reply Status(1: string accessJSON)
+  Reply Configure(1: string accessJSON, 2: i64 version, 3: bool enabled)
+  Reply Schedules(1: string accessJSON, 2: i32 offset, 3: i32 limit)
+  Reply Occurrences(1: string accessJSON, 2: string scheduleID, 3: i32 offset, 4: i32 limit)
+  Reply Change(1: string accessJSON, 2: string scopeJSON, 3: string commandID, 4: string changeJSON)
+  Reply Assignment(1: string scopeJSON, 2: string occurrenceID, 3: i64 epoch)
+  Reply CancelCommand(1: string scopeJSON, 2: string commandID)
+}
+
 service Runtime {
 	Reply RecordApplicationNotice(1: string eventJSON)
 	Reply AdmitApplication(1: string scopeJSON, 2: string jobJSON)

@@ -44,7 +44,7 @@ func (g RuntimeTools) CancelFileTransfer(ctx context.Context, scope managedrunti
 	return g.Client.CancelTransfer(ctx, scope.ActorID, scope.TenantID, scope.AgentID, id)
 }
 
-func (g RuntimeTools) CancelFileRequest(ctx context.Context, scope managedruntime.Scope, requestID string) error {
+func (g RuntimeTools) CancelFileRequest(ctx context.Context, scope managedruntime.Scope, requestID string) (execprotocol.State, error) {
 	return g.Client.CancelPreparedTransfer(ctx, scope.ActorID, scope.TenantID, scope.AgentID, requestID)
 }
 

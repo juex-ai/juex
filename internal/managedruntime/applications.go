@@ -44,11 +44,12 @@ func (j ApplicationJob) AllowsTool(name string) bool {
 }
 
 type ApplicationReceipt struct {
-	Application string `json:"application"`
-	ID          string `json:"id"`
-	ThreadID    string `json:"thread_id,omitempty"`
-	InputID     string `json:"input_id,omitempty"`
-	State       string `json:"state"`
+	Application string   `json:"application"`
+	ID          string   `json:"id"`
+	ThreadID    string   `json:"thread_id,omitempty"`
+	InputID     string   `json:"input_id,omitempty"`
+	State       string   `json:"state"`
+	Operations  []string `json:"operations,omitempty"`
 }
 
 type ApplicationStore interface {
@@ -94,6 +95,9 @@ func (s *Service) AdmitApplication(ctx context.Context, original Scope, job Appl
 		return ApplicationReceipt{}, err
 	}
 	if _, err := s.Authority.Snapshot(ctx, scope); err != nil {
+		return ApplicationReceipt{}, err
+	}
+	if _, err := s.Store.EnsureAgent(ctx, scope); err != nil {
 		return ApplicationReceipt{}, err
 	}
 	return store.AdmitApplication(ctx, scope, job)

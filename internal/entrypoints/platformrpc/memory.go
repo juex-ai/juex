@@ -1,18 +1,14 @@
 package platformrpc
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"github.com/cloudwego/kitex/server"
 	"github.com/juex-ai/juex/internal/foundation/application"
-	appwire "github.com/juex-ai/juex/internal/foundation/application/rpc"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	transport "github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc/wire/platform"
 	wire "github.com/juex-ai/juex/internal/foundation/platformrpc/wire/platform/memory"
 	"github.com/juex-ai/juex/internal/memory"
-	"io"
 	"net"
 )
 
@@ -32,7 +28,7 @@ type memoryHandler struct {
 }
 
 func (h *memoryHandler) Recall(ctx context.Context, accessJSON, query string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok || transport.CallerRole(ctx) != "runtime" {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -65,7 +61,7 @@ func (h *memoryHandler) Contribute(ctx context.Context, scopeJSON, contributionJ
 }
 
 func (h *memoryHandler) Reviews(ctx context.Context, accessJSON string, offset, limit int32) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok || transport.CallerRole(ctx) != "management" {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -73,7 +69,7 @@ func (h *memoryHandler) Reviews(ctx context.Context, accessJSON string, offset, 
 	return appReply(value, err)
 }
 func (h *memoryHandler) StorageRules(ctx context.Context, accessJSON string, offset, limit int32) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok || transport.CallerRole(ctx) != "management" {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -81,30 +77,11 @@ func (h *memoryHandler) StorageRules(ctx context.Context, accessJSON string, off
 	return appReply(value, err)
 }
 
-func appReply(value any, err error) (*platform.Reply, error) {
-	return transport.Reply(value, appwire.ErrorCode(err)), nil
-}
-func appDecode(text string, value any) bool {
-	if len(text) > 512<<10 {
-		return false
-	}
-	decoder := json.NewDecoder(bytes.NewBufferString(text))
-	decoder.DisallowUnknownFields()
-	return decoder.Decode(value) == nil && decoder.Decode(new(any)) == io.EOF
-}
-func memoryAccess(ctx context.Context, text string) (application.Access, bool) {
-	var access application.Access
-	if !appDecode(text, &access) {
-		return access, false
-	}
-	role := transport.CallerRole(ctx)
-	return access, (role == "management" && access.AgentID == "") || (role == "runtime" && access.AgentID != "")
-}
 func (h *memoryHandler) Health(ctx context.Context) (*platform.Reply, error) {
 	return appReply(map[string]int{"protocol_version": 1}, h.health(ctx))
 }
 func (h *memoryHandler) Status(ctx context.Context, accessJSON string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -112,7 +89,7 @@ func (h *memoryHandler) Status(ctx context.Context, accessJSON string) (*platfor
 	return appReply(value, err)
 }
 func (h *memoryHandler) Search(ctx context.Context, accessJSON string, queryJSON string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -124,7 +101,7 @@ func (h *memoryHandler) Search(ctx context.Context, accessJSON string, queryJSON
 	return appReply(value, err)
 }
 func (h *memoryHandler) Read(ctx context.Context, accessJSON string, requestJSON string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -136,7 +113,7 @@ func (h *memoryHandler) Read(ctx context.Context, accessJSON string, requestJSON
 	return appReply(value, err)
 }
 func (h *memoryHandler) Facts(ctx context.Context, accessJSON string, queryJSON string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -148,7 +125,7 @@ func (h *memoryHandler) Facts(ctx context.Context, accessJSON string, queryJSON 
 	return appReply(value, err)
 }
 func (h *memoryHandler) Domains(ctx context.Context, accessJSON string, requestJSON string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -160,7 +137,7 @@ func (h *memoryHandler) Domains(ctx context.Context, accessJSON string, requestJ
 	return appReply(value, err)
 }
 func (h *memoryHandler) Administer(ctx context.Context, accessJSON string, requestJSON string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -175,7 +152,7 @@ func (h *memoryHandler) Administer(ctx context.Context, accessJSON string, reque
 	return appReply(value, err)
 }
 func (h *memoryHandler) Configure(ctx context.Context, accessJSON string, version int64, enabled bool, strategy string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok || transport.CallerRole(ctx) != "management" {
 		return appReply(nil, application.ErrDenied)
 	}
@@ -183,7 +160,7 @@ func (h *memoryHandler) Configure(ctx context.Context, accessJSON string, versio
 	return appReply(value, err)
 }
 func (h *memoryHandler) ReviewResult_(ctx context.Context, accessJSON, thread, id string) (*platform.Reply, error) {
-	access, ok := memoryAccess(ctx, accessJSON)
+	access, ok := applicationAccess(ctx, accessJSON)
 	if !ok {
 		return appReply(nil, application.ErrDenied)
 	}

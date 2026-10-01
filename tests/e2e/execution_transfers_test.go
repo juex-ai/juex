@@ -364,10 +364,10 @@ func TestExecutionTransferHTTPAndRPCEnforceTurnFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimeEventually(t, func() bool { return client.Health(ctx) == nil })
-	if err := client.CancelPreparedOperation(ctx, f.actor, f.tenant, f.agent.ID, device.ID, uuid.NewString()); !errors.Is(err, execprotocol.ErrDenied) {
+	if _, err := client.CancelPreparedOperation(ctx, f.actor, f.tenant, f.agent.ID, device.ID, uuid.NewString()); !errors.Is(err, execprotocol.ErrDenied) {
 		t.Fatal("Management can cancel unknown Runtime requests", err)
 	}
-	if err := client.CancelPreparedTransfer(ctx, f.actor, f.tenant, f.agent.ID, uuid.NewString()); !errors.Is(err, execprotocol.ErrDenied) {
+	if _, err := client.CancelPreparedTransfer(ctx, f.actor, f.tenant, f.agent.ID, uuid.NewString()); !errors.Is(err, execprotocol.ErrDenied) {
 		t.Fatal("Management can reserve unknown transfer identities", err)
 	}
 	runtimeClient, err := executionrpc.NewClient(listener.Addr().String(), platformrpc.CredentialsAt(f.credentials, "runtime"))

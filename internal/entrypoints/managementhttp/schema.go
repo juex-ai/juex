@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/calendar"
 	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -22,6 +23,7 @@ func GenerateTypeScript() ([]byte, error) {
 	g := typeGenerator{types: map[string]reflect.Type{}}
 	for _, typ := range []reflect.Type{
 		reflect.TypeFor[management.NotificationPage](), reflect.TypeFor[management.NotificationPreferences](), reflect.TypeFor[NotificationReadRequest](),
+		reflect.TypeFor[calendar.Status](), reflect.TypeFor[calendar.SchedulePage](), reflect.TypeFor[calendar.OccurrencePage](), reflect.TypeFor[calendar.Receipt](), reflect.TypeFor[CalendarConfiguration](), reflect.TypeFor[CalendarChange](),
 		reflect.TypeFor[memory.Status](), reflect.TypeFor[MemoryConfiguration](), reflect.TypeFor[memory.ReviewPage](), reflect.TypeFor[memory.StorageRules](), reflect.TypeFor[mc.Page](), reflect.TypeFor[mc.FactPage](), reflect.TypeFor[mc.AdminRequest](),
 		reflect.TypeFor[management.User](), reflect.TypeFor[management.Session](),
 		reflect.TypeFor[management.TenantAccess](), reflect.TypeFor[management.MemberView](),
@@ -143,6 +145,9 @@ func (g *typeGenerator) render(typ reflect.Type) (string, error) {
 		name := typ.Name()
 		if typ.PkgPath() == "github.com/juex-ai/juex/internal/memory" || typ.PkgPath() == "github.com/juex-ai/juex/internal/foundation/memoryclient" {
 			name = "Memory" + name
+		}
+		if typ.PkgPath() == "github.com/juex-ai/juex/internal/calendar" || typ.PkgPath() == "github.com/juex-ai/juex/internal/calendar/recurrence" {
+			name = "Calendar" + name
 		}
 		if existing, exists := g.types[name]; exists && existing != typ {
 			return "", fmt.Errorf("conflicting JSON type %s", typ)

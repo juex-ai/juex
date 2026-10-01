@@ -290,6 +290,38 @@ func TestManagedRuntimeCancelCompletedTurnStopsItsBackgroundOperations(t *testin
 	assertRuntimeTranscript(t, f)
 }
 
+func TestManagedRuntimeBackgroundProcessSettlesWithoutAnotherModelCall(t *testing.T) {
+	var deviceID string
+	var calls atomic.Int32
+	workdir := t.TempDir()
+	f := executionDatabaseWithProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			streamManagedTool(w, "exec_command", map[string]any{"environment_id": deviceID, "command": "while [ ! -f finish ]; do sleep 0.1; done; printf finished"})
+			return
+		}
+		streamManagedReply(w, "Background process started")
+	})
+	ctx := context.Background()
+	device, token := f.pairDevice(t)
+	deviceID = device.ID
+	engine := openNative(t, native.Config{StateDirectory: filepath.Join(t.TempDir(), "state"), WorkingDirectory: workdir, EnvironmentID: device.ID, Grants: device.Ceiling})
+	connectExecutionDevice(t, f, device, token, engine)
+	runRuntimeTools(t, f, runtimeExecutionGateway(t, f))
+	f.submit(t, "background-natural-completion", f.main.ID, "Run a background process")
+	runtimeEventually(t, func() bool { return calls.Load() == 2 && f.timeline(t, f.main.ID).Thread.State == "idle" })
+	if err := os.WriteFile(filepath.Join(workdir, "finish"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	runtimeEventually(t, func() bool {
+		var settled bool
+		return f.pool.QueryRow(ctx, `SELECT o.state='completed' AND j.state='ready' AND j.consumed AND NOT j.operation_live FROM execution.operations o JOIN runtime.tools j ON j.id::text=o.id JOIN runtime.turns t ON t.id=j.turn_id WHERE t.thread_id=$1`, f.main.ID).Scan(&settled) == nil && settled
+	})
+	if calls.Load() != 2 || f.timeline(t, f.main.ID).Thread.State != "idle" {
+		t.Fatal("settlement woke model", calls.Load())
+	}
+	assertRuntimeTranscript(t, f)
+}
+
 func prepareRuntimeTool(t *testing.T, f *executionFixture, device string) (managedruntime.Scope, managedruntime.ToolWork) {
 	t.Helper()
 	return prepareRuntimeThreadTool(t, f, f.main.ID, device, "prepared-input")

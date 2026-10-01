@@ -32,7 +32,7 @@ type ToolGateway interface {
 	Submit(context.Context, Scope, string, execprotocol.Request) (ToolOperation, error)
 	Operation(context.Context, Scope, string, string, int64) (ToolOperation, error)
 	Cancel(context.Context, Scope, string, string) error
-	CancelPrepared(context.Context, Scope, string, string) error
+	CancelPrepared(context.Context, Scope, string, string) (execprotocol.State, error)
 	Events(context.Context, int) ([]execprotocol.Event, error)
 	AcknowledgeEvents(context.Context, []string) error
 	AcknowledgeOutput(context.Context, Scope, string, string, int64) error

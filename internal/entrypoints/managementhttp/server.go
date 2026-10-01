@@ -58,6 +58,7 @@ type Options struct {
 	Runtime      Runtime
 	Execution    Execution
 	Memory       Memory
+	Calendar     Calendar
 	PublicURL    string
 	InsecureHTTP bool
 	MailEnabled  bool
@@ -127,6 +128,14 @@ func New(options Options) (http.Handler, error) {
 		mux.HandleFunc("GET "+base+"/reviews", s.signedIn(s.memoryReviews))
 		mux.HandleFunc("GET "+base+"/storage-rules", s.signedIn(s.memoryRules))
 		mux.HandleFunc("POST "+base+"/administer", s.signedIn(s.memoryAdminister))
+	}
+	if options.Calendar != nil {
+		base := "/api/tenants/{tenant}/users/{owner}/calendar"
+		mux.HandleFunc("GET "+base, s.signedIn(s.calendarStatus))
+		mux.HandleFunc("PUT "+base, s.signedIn(s.calendarConfigure))
+		mux.HandleFunc("GET "+base+"/schedules", s.signedIn(s.calendarSchedules))
+		mux.HandleFunc("GET "+base+"/occurrences", s.signedIn(s.calendarOccurrences))
+		mux.HandleFunc("POST "+base+"/changes", s.signedIn(s.calendarChange))
 	}
 	if options.Runtime != nil {
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads", s.signedIn(s.threads))

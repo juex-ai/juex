@@ -85,6 +85,108 @@ export interface Block {
   result_fact?: ResultFact | null;
 }
 
+export interface CalendarChange {
+  request_id: string;
+  id: string;
+  version: number;
+  action: string;
+  definition?: CalendarDefinition | null;
+  occurrence_id?: string;
+}
+
+export interface CalendarConfiguration {
+  version: number;
+  enabled: boolean;
+}
+
+export interface CalendarDefinition {
+  name: string;
+  content: string;
+  mode: string;
+  agent_id?: string;
+  rule: CalendarRule;
+  max_lateness_minutes: number;
+}
+
+export interface CalendarLunarOptions {
+  leap_month?: string;
+}
+
+export interface CalendarOccurrence {
+  external_pending: boolean;
+  cancel_requested: boolean;
+  id: string;
+  schedule_id: string;
+  schedule_version: number;
+  name: string;
+  content: string;
+  mode: string;
+  agent_id?: string;
+  rule: CalendarRule;
+  max_lateness_minutes: number;
+  scheduled_at: string;
+  state: string;
+  worker_id?: string;
+  operations?: Array<string>;
+  updated_at: string;
+}
+
+export interface CalendarOccurrencePage {
+  occurrences: Array<CalendarOccurrence>;
+  next: number;
+}
+
+export interface CalendarReceipt {
+  schedule_id: string;
+  version: number;
+  state: string;
+  occurrence_id?: string;
+}
+
+export interface CalendarRule {
+  frequency: string;
+  timezone?: string;
+  at?: string;
+  year?: number;
+  month?: number;
+  day?: number;
+  time?: string;
+  months?: Array<number>;
+  days?: Array<number>;
+  times?: Array<string>;
+  weekdays?: Array<string>;
+  every_seconds?: number;
+  lunar?: CalendarLunarOptions | null;
+}
+
+export interface CalendarSchedule {
+  id: string;
+  name: string;
+  content: string;
+  mode: string;
+  agent_id?: string;
+  rule: CalendarRule;
+  max_lateness_minutes: number;
+  version: number;
+  status: string;
+  pause_reason?: string;
+  next_at?: string;
+  updated_at: string;
+}
+
+export interface CalendarSchedulePage {
+  schedules: Array<CalendarSchedule>;
+  next: number;
+}
+
+export interface CalendarStatus {
+  enabled: boolean;
+  epoch: number;
+  version: number;
+  schedules: number;
+  pending: number;
+}
+
 export interface CompactionMetadata {
   auto: boolean;
   reason: string;

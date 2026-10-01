@@ -3,6 +3,7 @@ module github.com/juex-ai/juex
 go 1.25.4
 
 require (
+	github.com/6tail/lunar-go v1.4.6
 	github.com/anthropics/anthropic-sdk-go v1.38.0
 	github.com/cloudwego/gopkg v0.2.0
 	github.com/cloudwego/kitex v0.16.3

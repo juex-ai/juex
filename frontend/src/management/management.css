@@ -158,3 +158,16 @@
 .management-notification-preferences p { color: var(--muted-foreground); font-size: 12px; }
 .management-notification-row.is-unread { background: color-mix(in srgb, var(--primary) 4%, transparent); }
 .management-notification-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; background: var(--primary); vertical-align: middle; }
+
+.management-calendar-control { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px; margin-bottom: 20px; }
+.management-calendar-control h2 { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.management-calendar-control p { color: var(--muted-foreground); margin-top: 8px; font-size: 13px; }
+.management-calendar-dialog { max-height: 90dvh; overflow-y: auto; }
+.management-calendar-fields { display: grid; gap: 16px; min-width: 0; }
+.management-calendar-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.management-calendar-weekdays { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; }
+.management-calendar-weekdays label, .management-calendar-check { display: flex; align-items: center; gap: 6px; }
+.management-calendar-row details { font-size: 13px; margin-top: 8px; overflow-wrap: anywhere; }
+.management-calendar-row details code { display: block; padding-top: 5px; }
+.management-calendar-content { white-space: pre-wrap; }
+@media (max-width: 640px) { .management-calendar-control { align-items: flex-start; flex-direction: column; } .management-calendar-row { align-items: stretch; flex-direction: column; } }

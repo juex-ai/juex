@@ -54,26 +54,28 @@ func TestFileToolFreezesAuthorizedLocations(t *testing.T) {
 
 type cancellationToolGateway struct {
 	ToolGateway
-	err error
+	err   error
+	state execprotocol.State
 }
 
-func (g cancellationToolGateway) CancelPrepared(context.Context, Scope, string, string) error {
-	return g.err
+func (g cancellationToolGateway) CancelPrepared(context.Context, Scope, string, string) (execprotocol.State, error) {
+	return g.state, g.err
 }
 
 type cancellationFileGateway struct {
 	FileGateway
-	err error
+	err   error
+	state execprotocol.State
 }
 
-func (g cancellationFileGateway) CancelFileRequest(context.Context, Scope, string) error {
-	return g.err
+func (g cancellationFileGateway) CancelFileRequest(context.Context, Scope, string) (execprotocol.State, error) {
+	return g.state, g.err
 }
 
-func TestCancellationRetainsResponsibilityUntilDurablyAccepted(t *testing.T) {
+func TestCancellationRetainsResponsibilityUntilExecutionSettles(t *testing.T) {
 	for _, kind := range []string{"write", "copy_file"} {
 		for _, err := range []error{execprotocol.ErrNotFound, execprotocol.ErrDenied, execprotocol.ErrUnavailable, nil} {
-			runner := toolRunner{gateway: cancellationToolGateway{err: err}, files: cancellationFileGateway{err: err}}
+			runner := toolRunner{gateway: cancellationToolGateway{err: err, state: execprotocol.Cancelled}, files: cancellationFileGateway{err: err, state: execprotocol.Cancelled}}
 			work := ToolWork{ID: "prepared-work", EnvironmentID: "environment", Request: execprotocol.Request{ID: "prepared-work"}, Call: llm.Block{ToolName: kind}, Cancelled: true}
 			outcome := runner.execute(context.Background(), &work)
 			if err == nil {
@@ -82,6 +84,18 @@ func TestCancellationRetainsResponsibilityUntilDurablyAccepted(t *testing.T) {
 				}
 			} else if !outcome.OperationLive || outcome.RetryAfter <= 0 || outcome.State != "waiting" {
 				t.Fatal("unaccepted cancellation responsibility lost", kind, err, outcome)
+			}
+		}
+		for _, state := range []execprotocol.State{execprotocol.Running, "dispatched", execprotocol.Unknown} {
+			runner := toolRunner{gateway: cancellationToolGateway{state: state}, files: cancellationFileGateway{state: state}}
+			work := ToolWork{ID: "original", EnvironmentID: "environment", Request: execprotocol.Request{ID: "original"}, Call: llm.Block{ToolName: kind}, Cancelled: true}
+			outcome := runner.execute(context.Background(), &work)
+			if state == execprotocol.Unknown {
+				if outcome.State != "unknown" || !outcome.IsError {
+					t.Fatal("unknown cancellation was called successful", outcome)
+				}
+			} else if outcome.State != "waiting" || !outcome.OperationLive || outcome.RetryAfter <= 0 {
+				t.Fatal("cancel acknowledgment was confused with process termination", outcome)
 			}
 		}
 	}

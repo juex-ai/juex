@@ -15,7 +15,8 @@ func (h *executionHandler) CancelPreparedOperation(ctx context.Context, actor *p
 	if !validActor(actor) {
 		return executionReply(nil, execprotocol.ErrInvalid)
 	}
-	return executionReply(nil, h.service.CancelPreparedOperation(ctx, actor.UserID, actor.TenantID, actor.AgentID, environment, request))
+	state, err := h.service.CancelPreparedOperation(ctx, actor.UserID, actor.TenantID, actor.AgentID, environment, request)
+	return executionReply(state, err)
 }
 
 func (h *executionHandler) CancelPreparedTransfer(ctx context.Context, actor *platform.Actor, request string) (*platform.Reply, error) {
@@ -25,5 +26,6 @@ func (h *executionHandler) CancelPreparedTransfer(ctx context.Context, actor *pl
 	if !validActor(actor) {
 		return executionReply(nil, execprotocol.ErrInvalid)
 	}
-	return executionReply(nil, h.service.CancelPreparedTransfer(ctx, actor.UserID, actor.TenantID, actor.AgentID, request))
+	state, err := h.service.CancelPreparedTransfer(ctx, actor.UserID, actor.TenantID, actor.AgentID, request)
+	return executionReply(state, err)
 }

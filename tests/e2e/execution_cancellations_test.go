@@ -134,18 +134,18 @@ func TestExecutionPreparedCancellationIsScopedAndIdempotent(t *testing.T) {
 	request := execprotocol.Request{Version: execprotocol.Version, ID: uuid.NewString(), AgentID: f.agent.ID, Kind: "read", Arguments: json.RawMessage(`{"path":"safe"}`)}
 	other := scope
 	other.AgentID = uuid.NewString()
-	if err := f.executionStore.CancelPreparedOperation(ctx, other, device.ID, request.ID); err != nil {
+	if _, err := f.executionStore.CancelPreparedOperation(ctx, other, device.ID, request.ID); err != nil {
 		t.Fatal(err)
 	}
 	operation, err := f.execution.Submit(ctx, f.actor, f.tenant, device.ID, request, time.Hour)
 	if err != nil || operation.State != "waiting" {
 		t.Fatal("another Agent pre-cancelled this operation", operation, err)
 	}
-	if err := f.executionStore.CancelPreparedOperation(ctx, other, device.ID, request.ID); !errors.Is(err, execprotocol.ErrDenied) {
+	if _, err := f.executionStore.CancelPreparedOperation(ctx, other, device.ID, request.ID); !errors.Is(err, execprotocol.ErrDenied) {
 		t.Fatal("another Agent cancelled admitted operation", err)
 	}
 	for range 2 {
-		if err := f.execution.CancelPreparedOperation(ctx, f.actor, f.tenant, f.agent.ID, device.ID, request.ID); err != nil {
+		if _, err := f.execution.CancelPreparedOperation(ctx, f.actor, f.tenant, f.agent.ID, device.ID, request.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -154,12 +154,12 @@ func TestExecutionPreparedCancellationIsScopedAndIdempotent(t *testing.T) {
 		t.Fatal("cancel retry revived the operation", operation, err)
 	}
 	other.TenantID = uuid.NewString()
-	if err := f.executionStore.CancelPreparedOperation(ctx, other, device.ID, uuid.NewString()); !errors.Is(err, execprotocol.ErrDenied) {
+	if _, err := f.executionStore.CancelPreparedOperation(ctx, other, device.ID, uuid.NewString()); !errors.Is(err, execprotocol.ErrDenied) {
 		t.Fatal("cross-tenant cancellation admitted", err)
 	}
 	transferRequest := execution.TransferRequest{RequestID: uuid.NewString(), Source: &execution.FileLocation{EnvironmentID: device.ID, AuthorizationVersion: device.Version, Path: "source.bin"}, Name: "source.bin", MediaType: "application/octet-stream", Visibility: "agent"}
 	for range 2 {
-		if err := f.execution.CancelPreparedTransfer(ctx, f.actor, f.tenant, f.agent.ID, transferRequest.RequestID); err != nil {
+		if _, err := f.execution.CancelPreparedTransfer(ctx, f.actor, f.tenant, f.agent.ID, transferRequest.RequestID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -171,7 +171,42 @@ func TestExecutionPreparedCancellationIsScopedAndIdempotent(t *testing.T) {
 	if _, err := f.execution.BeginTransfer(ctx, f.actor, f.tenant, f.agent.ID, transferRequest); !errors.Is(err, execprotocol.ErrConflict) {
 		t.Fatal("cancelled identity accepted a different request", err)
 	}
-	if err := f.execution.CancelPreparedTransfer(ctx, f.actor, f.tenant, f.agent.ID, transferRequest.RequestID); err != nil {
+	if _, err := f.execution.CancelPreparedTransfer(ctx, f.actor, f.tenant, f.agent.ID, transferRequest.RequestID); err != nil {
 		t.Fatal("cannot retry cancellation after terminal admission", err)
+	}
+}
+
+func TestExecutionPreparedCancellationReturnsActualUnsettledState(t *testing.T) {
+	f := transferFixture(t)
+	ctx := context.Background()
+	device, _ := f.pairDevice(t)
+	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := execprotocol.Request{Version: execprotocol.Version, ID: uuid.NewString(), AgentID: f.agent.ID, Kind: "read", Arguments: json.RawMessage(`{"path":"file"}`)}
+	if _, err := f.execution.Submit(ctx, f.actor, f.tenant, device.ID, request, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	connected, err := f.executionStore.Connect(ctx, device.ID, uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.executionStore.Dispatch(ctx, device.ID, connected.ConnectionEpoch, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	gateway := runtimeExecutionGateway(t, f)
+	if state, err := gateway.CancelPrepared(ctx, scope, device.ID, request.ID); err != nil || state != "dispatched" {
+		t.Fatal("RPC cancellation acknowledgment fabricated settlement", state, err)
+	}
+	operation, err := f.executionStore.Operation(ctx, device.ID, request.ID, 0, 1)
+	if err != nil || !operation.CancelRequested || operation.State != "dispatched" {
+		t.Fatal(operation, err)
+	}
+	if err := f.executionStore.Settle(ctx, device.ID, connected.ConnectionEpoch, request.ID, execprotocol.Unknown, "device lost original outcome"); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := gateway.CancelPrepared(ctx, scope, device.ID, request.ID); err != nil || state != execprotocol.Unknown {
+		t.Fatal("unknown cancellation claimed success", state, err)
 	}
 }

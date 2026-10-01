@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	calendarrpc "github.com/juex-ai/juex/internal/calendar/rpc"
 	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/managedruntime"
@@ -18,6 +19,7 @@ type RuntimeConfig struct {
 	ManagementAddress string
 	ExecutionAddress  string
 	MemoryAddress     string
+	CalendarAddress   string
 	Credentials       platformrpc.Credentials
 	Runner            managedruntime.RunnerConfig
 }
@@ -47,12 +49,23 @@ func OpenRuntime(ctx context.Context, config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 	store := runtimepg.New(pool)
+	applications := RuntimeApplications{Evidence: store}
 	if config.MemoryAddress != "" {
 		client, err := memoryrpc.NewClient(config.MemoryAddress, config.Credentials)
 		if err != nil {
 			return nil, err
 		}
-		config.Runner.Applications = RuntimeApplications{Memory: client, Evidence: store}
+		applications.Memory = client
+	}
+	if config.CalendarAddress != "" {
+		client, err := calendarrpc.NewClient(config.CalendarAddress, config.Credentials)
+		if err != nil {
+			return nil, err
+		}
+		applications.Calendar = client
+	}
+	if config.MemoryAddress != "" || config.CalendarAddress != "" {
+		config.Runner.Applications = applications
 	}
 	if config.ExecutionAddress != "" {
 		client, err := executionrpc.NewClient(config.ExecutionAddress, config.Credentials)

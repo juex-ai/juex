@@ -51,7 +51,7 @@ func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.To
 	err = tx.QueryRow(ctx, `WITH candidate AS (
  SELECT j.id FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id
  WHERE j.lease_until<=clock_timestamp() AND j.next_check<=clock_timestamp()
- AND (j.state IN ('pending','waiting') OR ((t.state='cancelled' OR j.cancel_requested) AND j.operation_live))
+ AND (j.state IN ('pending','waiting') OR (j.operation_live AND (j.state='ready' OR t.state='cancelled' OR j.cancel_requested)))
  ORDER BY j.next_check,j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1)
  UPDATE runtime.tools j SET lease_epoch=j.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds'
  FROM candidate c,runtime.turns t WHERE j.id=c.id AND t.id=j.turn_id
@@ -124,16 +124,17 @@ func (s *Store) FinishTool(ctx context.Context, work managedruntime.ToolWork, ou
 	if err != nil {
 		return err
 	}
-	result, err := tx.Exec(ctx, `UPDATE runtime.tools SET state=$3,result=$4,operation_live=$5,lease_until='-infinity',lease_holder='',
+	background := work.State == "ready" && work.OperationLive && !work.Cancelled
+	result, err := tx.Exec(ctx, `UPDATE runtime.tools SET state=$3,result=CASE WHEN $8 THEN result ELSE $4::jsonb END,operation_live=$5,lease_until='-infinity',lease_holder='',
  next_check=CASE WHEN wake_version<>$6 THEN clock_timestamp() WHEN $7::double precision>0 THEN clock_timestamp()+make_interval(secs=>$7) ELSE 'infinity'::timestamptz END
- WHERE id=$1 AND lease_epoch=$2 AND lease_until>clock_timestamp()`, work.ID, work.LeaseEpoch, outcome.State, encoded, outcome.OperationLive, work.WakeVersion, outcome.RetryAfter.Seconds())
+ WHERE id=$1 AND lease_epoch=$2 AND lease_until>clock_timestamp()`, work.ID, work.LeaseEpoch, outcome.State, encoded, outcome.OperationLive, work.WakeVersion, outcome.RetryAfter.Seconds(), background && outcome.State == "ready")
 	if err != nil {
 		return err
 	}
 	if result.RowsAffected() != 1 {
 		return managedruntime.ErrFence
 	}
-	if outcome.State == "ready" || outcome.State == "unknown" {
+	if (!background && outcome.State == "ready") || outcome.State == "unknown" {
 		if err := appendEvent(ctx, tx, work.ThreadID, "tool."+outcome.State, map[string]any{"id": work.ID, "turn_id": work.TurnID, "environment_id": work.EnvironmentID, "call": work.Call, "result": block}); err != nil {
 			return err
 		}

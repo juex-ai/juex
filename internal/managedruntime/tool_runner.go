@@ -112,10 +112,11 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			if r.gateway == nil {
 				return retryTool()
 			}
-			err := r.gateway.CancelPrepared(ctx, work.Scope, work.EnvironmentID, work.ID)
+			state, err := r.gateway.CancelPrepared(ctx, work.Scope, work.EnvironmentID, work.ID)
 			if err != nil {
 				return retryTool()
 			}
+			return cancellationOutcome(state)
 		}
 		return ToolOutcome{State: "cancelled"}
 	}
@@ -129,6 +130,21 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 		}
 		return toolResult(work.Call, map[string]string{"error": "authority_changed"}, true)
 	}
+	if work.State == "ready" && work.OperationLive {
+		// A model receipt can finish before its background process. Query only
+		// the original handle, even after the application's model work ends.
+		operation, err := r.gateway.Operation(ctx, work.Scope, work.EnvironmentID, work.ID, 0)
+		if errors.Is(err, execprotocol.ErrDenied) || errors.Is(err, execprotocol.ErrNotFound) {
+			return ToolOutcome{State: "unknown", OperationLive: true, IsError: true, Content: "The original background operation can no longer be inspected. Do not repeat it."}
+		}
+		if err != nil {
+			return ToolOutcome{State: "ready", OperationLive: true, RetryAfter: 15 * time.Second}
+		}
+		if operation.State == "unknown" {
+			return ToolOutcome{State: "unknown", OperationLive: true, IsError: true, Content: "The original background operation outcome is unknown. Do not repeat it."}
+		}
+		return operationResult(*work, operation, work.ID)
+	}
 	var job *ApplicationJob
 	if r.applicationStore != nil {
 		job, err = r.applicationStore.ThreadApplication(ctx, work.Scope, work.ThreadID)
@@ -136,7 +152,7 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			return retryTool()
 		}
 		if errors.Is(err, ErrDenied) {
-			return toolResult(work.Call, map[string]string{"error": "application_revoked"}, true)
+			return r.applicationRevoked(ctx, work)
 		}
 	}
 	if job != nil {
@@ -147,7 +163,7 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			if !errors.Is(err, ErrDenied) {
 				return retryTool()
 			}
-			return toolResult(work.Call, map[string]string{"error": "application_revoked"}, true)
+			return r.applicationRevoked(ctx, work)
 		}
 	}
 	if r.applications != nil && (strings.HasPrefix(work.Call.ToolName, "memory_") || strings.HasPrefix(work.Call.ToolName, "calendar_")) {
@@ -239,8 +255,26 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 	return ToolOutcome{State: "waiting", OperationLive: true}
 }
 
+func (r toolRunner) applicationRevoked(ctx context.Context, work *ToolWork) ToolOutcome {
+	if work.Request.ID != "" {
+		work.Cancelled = true
+		return r.execute(ctx, work)
+	}
+	return toolResult(work.Call, map[string]string{"error": "application_revoked"}, true)
+}
+
 func retryTool() ToolOutcome {
 	return ToolOutcome{State: "waiting", RetryAfter: 5 * time.Second, OperationLive: true}
+}
+
+func cancellationOutcome(state execprotocol.State) ToolOutcome {
+	if state == execprotocol.Unknown {
+		return ToolOutcome{State: "unknown", IsError: true, Content: "Cancellation was requested, but the original operation outcome is unknown. Do not repeat it."}
+	}
+	if !state.Terminal() {
+		return retryTool()
+	}
+	return ToolOutcome{State: "cancelled", Content: "Original operation settled as " + string(state) + "; completed effects are not undone."}
 }
 
 func executionFailure(err error) ToolOutcome {
@@ -257,5 +291,8 @@ func operationResult(work ToolWork, operation ToolOperation, id string) ToolOutc
 	snapshot := operation.Snapshot
 	outcome := toolResult(work.Call, map[string]any{"handle": map[string]string{"environment_id": work.EnvironmentID, "operation_id": id}, "state": operation.State, "output": snapshot.Text(), "next_cursor": snapshot.NextCursor, "output_bytes": snapshot.OutputBytes, "truncated": snapshot.Truncated, "output_expired": snapshot.OutputExpired, "exit_code": snapshot.ExitCode, "error": snapshot.Error, "cancel_requested": operation.CancelRequested}, operation.State == "failed" || operation.State == "cancelled" || operation.State == "unknown")
 	outcome.OperationLive = !execprotocol.State(operation.State).Terminal()
+	if outcome.OperationLive {
+		outcome.RetryAfter = 15 * time.Second
+	}
 	return outcome
 }

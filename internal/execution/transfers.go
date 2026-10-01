@@ -86,7 +86,7 @@ type TransferRepository interface {
 	ActiveTransfers(context.Context, int) ([]Transfer, error)
 	AttachTransferArtifact(context.Context, Transfer, Artifact) (Transfer, error)
 	CancelTransfer(context.Context, string) error
-	CancelPreparedTransfer(context.Context, Scope, string) error
+	CancelPreparedTransfer(context.Context, Scope, string) (execprotocol.State, error)
 	FinishTransfer(context.Context, string, execprotocol.State, string) error
 	SetTransferNotice(context.Context, string, string) error
 	ExtendTransfer(context.Context, string, time.Duration) error

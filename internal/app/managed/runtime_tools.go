@@ -29,7 +29,7 @@ func (g RuntimeTools) Cancel(ctx context.Context, scope managedruntime.Scope, en
 	return g.Client.Cancel(ctx, scope.ActorID, scope.TenantID, scope.AgentID, environment, id)
 }
 
-func (g RuntimeTools) CancelPrepared(ctx context.Context, scope managedruntime.Scope, environment, id string) error {
+func (g RuntimeTools) CancelPrepared(ctx context.Context, scope managedruntime.Scope, environment, id string) (execprotocol.State, error) {
 	return g.Client.CancelPreparedOperation(ctx, scope.ActorID, scope.TenantID, scope.AgentID, environment, id)
 }
 func (g RuntimeTools) Events(ctx context.Context, limit int) ([]execprotocol.Event, error) {
