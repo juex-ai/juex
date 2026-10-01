@@ -1,49 +1,18 @@
-# Juex 哲学
+# JueX 产品原则
 
 > [English](PHILOSOPHY.md) | 中文
 
-Juex 是用于本地、可检查工作的 Agent Runtime。它的设计倾向是让 Agent loop
-容易理解：Tool 是显式契约，Event 可观察，持久状态存放在用户可以检查或删除的位置。
+JueX 通过服务承载持续的 Agent 工作，明确数据归属、可检查事件和独立执行授权。
 
-## 原则
+- 保持可信编排循环精简。用户代码在执行环境中运行，应用业务策略属于其服务。
+- 状态绑定稳定身份。机器路径和进程生命周期是基础设施，不是账号、Fleet 或 Agent 身份。
+- 优先显式契约。持久接纳、当前权限检查、操作句柄和未知结果必须对客户端可见。
+- Provider 使用统一模型。适配器适当保留模型专属推理信息，不向系统扩散 SDK 类型。
+- 使用窄业务接口。共享 PostgreSQL 不代表共享所有权，更不能绕过其他服务的授权和生命周期。
+- Web 和 CLI 读取同一事实。没有服务回执，浏览器不能自行确认完成、取消或删除。
+- 为具体需求增加抽象。首版采用单机、PostgreSQL 和 Compose；只有产品需求足以支撑时，
+  才引入额外消息设施、身份服务和部署模式。
 
-### 保持 Runtime 小巧
-
-核心 loop 应始终易于推理：构建 prompt、调用 Provider、执行请求的工具、持久化历史、发出事件，并重复直至 Turn 完成。只有当新行为是该 loop 或产品已有用户工作流所必需时，它才应进入核心。
-
-### 优先使用显式界面
-
-命令、API 路由、文件和 JSON shape 都是契约。它们应稳定、有文档、可测试，并且足够简单，让另一个 Agent 无需猜测即可调用。当一个小命令或文件能够让状态可见时，应避免隐藏的魔法行为。
-
-### 将状态绑定到 Agent
-
-规范的所有权划分定义在 [DOMAIN.zh.md](DOMAIN.zh.md) 中。其目的是让身份自有状态
-在 Workspace 移动后仍能保留，同时不隐藏哪个 Workspace 拥有它：生成状态跟随
-Agent，而用户编写的配置、资源和项目文件保留在 Workspace 中。
-
-### 在统一模型后使用 Provider
-
-Provider SDK 是实现细节。Runtime 的其他部分使用 Juex message、block、tool、usage 和 stop-reason 类型。reasoning block 等 Provider 特定能力会被保留，但不应泄漏到无关 package。
-
-### 把 Tool 当作接口
-
-Builtin Tool 和 MCP Tool 暴露小型 schema 与确定性名称。Runtime 应优先提供更少、更清晰的工具，而不是容易诱发幻觉调用的宽泛界面。Tool result 是对话契约的一部分，必须按顺序持久化。
-
-### 让 Web UI 成为控制界面
-
-Web UI 用于检查 Thread、提交 Input、中断工作及管理活跃或归档历史。它应紧贴 JSON/SSE API，而不是形成独立的应用模型。React state 镜像 server state；server 始终是事实来源。
-
-### 等到真正痛时再做
-
-新的抽象和部署模式都不是默认范围。仅在具体工作流确实需要，且实现仍足够小、
-可测试、可解释时才加入。
-
-## 权衡
-
-- 普通 Agent 能力保持进程内运行。独立服务通过明确的类型化客户端和 Fleet
-  管理满足共享所有权与生命周期需求。
-- Go 标准库优先：依赖漂移更少，但需要自行编写小型协议适配器。
-- Registry 自有的 Agent 身份与配置：Workspace 文件保持可共享，Agent 状态与
-  Runtime 选择彼此独立，代价是发现 Agent 时需要查询 JUEX_HOME。
-- 同步 Turn loop 配合并行 Tool Call：顺序和测试简单，同时仍允许一个模型 response 内的独立 Tool Call 并发执行。
-- 基于所有权的 Thread store 优于一个 universal Journal：Generation 历史仍然持久且便于追加，metadata、pending execution 与可选 Module 状态则遵循各自生命周期。这样能让列表和当前 context 读取保持有界，代价是需要显式的 commit 顺序与 recovery boundary。
+共享服务降低空闲成本，也要求代际隔离和公平调度。完整 OS 用户权限的设备接入很有用，
+但必须与托管沙箱隔离明确区分。可以接受单机维护停机，不能未经验证便承诺零数据丢失、
+准确重放外部效果或恢复进程内存。

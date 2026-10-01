@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/foundation/version"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +18,10 @@ type action func(*cobra.Command, *client, []string) (any, error)
 func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
 	var o options
 	root := &cobra.Command{Use: "juex", Short: "Manage Agents on a JueX platform", SilenceUsage: true, SilenceErrors: true}
+	root.Version = version.Version
+	root.AddCommand(&cobra.Command{Use: "version", Short: "Print build metadata", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+		return json.NewEncoder(out).Encode(version.Build())
+	}})
 	root.SetArgs(args)
 	root.SetIn(in)
 	root.SetOut(out)

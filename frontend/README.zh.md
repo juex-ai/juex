@@ -1,38 +1,26 @@
-# Juex Frontend
+# JueX 前端
 
 > [English](README.md) | 中文
 
-本 React + TypeScript + Vite 应用是 `juex fleet serve` 提供的 Fleet UI。
-Fleet 管理 roster 与进程控制，并代理 selected-Agent JSON/SSE 请求。Server
-始终是事实来源。
+React/TypeScript/Vite 实现 Management Dashboard。身份、授权、对话和应用事实均由服务端持有。
 
-## 本地开发
-
-在仓库根目录运行：
-
-```bash
-make web
-go run ./cmd/juex fleet serve
-pnpm --dir frontend dev
+```sh
+mise exec -- make web
+mise exec -- pnpm --dir frontend dev
 ```
 
-Vite 把 Fleet 与 selected-Agent API 请求代理到本地 Fleet server。生产输出
-从 `frontend/dist/` 复制到 `internal/entrypoints/webassets/dist/`，不要直接编辑 embedded output。
+在 8680 端口运行完成配置的开发 Management 服务。Vite 绑定 `0.0.0.0:5173`，
+将 `/api` 代理到该服务。生产资源从 `frontend/dist` 复制到
+`internal/entrypoints/webassets/dist`，不要直接编辑内嵌产物。
+部署使用 [平台运维工具](../deploy/managed/README.zh.md)。
 
-前端验证门禁会针对生产构建运行浏览器交互测试，因此需要本地 Chrome 可执行文件。
-如果 Chrome 不在平台标准位置，请设置 `CHROME_PATH`。
+`src/management` 拥有 Dashboard、生成契约、API 客户端及视图；
+`src/components/ui` 保存共享基础组件，`src/components/ai-elements/message`
+提供对话渲染。共享设计变量位于 `src/index.css`。
+修改公共类型时执行 `go run ./scripts/gen-management-schema` 更新契约；
+服务端测试检查 schema 一致性。
 
-## 所有权
-
-- `src/pages/` 负责 route 级 Fleet、Thread 和 Runtime view。
-- `src/components/` 负责可复用展示与交互。
-- `src/modules/` 负责内置模块 renderer 和 resource adapter。静态注册表把服务端
-  贡献解析到 Thread 状态区和可选文件根，页面不重新解释模块配置。文件 adapter
-  绑定明确的 Agent/Thread 范围，仅在对应根被选中时挂载。
-- `src/lib/` 负责 client read model 与 stream projection。
-- `src/api.ts` 是类型化 Fleet/Agent transport 边界。
-- `src/index.css` 负责生产 design token。
-
-稳定交互与视觉规则见 [DESIGN.zh.md](../DESIGN.zh.md)。具体 component name 和
-request shape 以代码与测试为准。验证流程使用仓库内
-[Juex local-test skill](../.agents/skills/juex-localtest/SKILL.zh.md)。
+`make web-check` 覆盖类型、单测、lint、生产构建和浏览器交互。
+必须有 Chrome，非默认路径通过 `CHROME_PATH` 指定。
+可见行为还需使用重新构建的运行服务进行浏览器检查。
+详见 [DESIGN.zh.md](../DESIGN.zh.md) 和 [验收 Skill](../.agents/skills/juex-localtest/SKILL.zh.md)。

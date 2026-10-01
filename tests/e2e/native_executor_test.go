@@ -232,8 +232,15 @@ func TestNativeExecutorPTYStdinCursorAndCancellation(t *testing.T) {
 	}
 	ready := nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return strings.Contains(snapshot.Text(), "ready") })
 	input := nativeRequest(t, "stdin-once", "write_stdin", native.StdinArguments{OperationID: request.ID, Chars: "hello\n", After: ready.NextCursor, YieldTimeMS: 100})
-	if result := nativeRun(t, engine, input); result.State != execprotocol.Completed {
+	result := nativeRun(t, engine, input)
+	if result.State != execprotocol.Completed {
 		t.Fatal(result)
+	}
+	var receipt struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(result.Output, &receipt); err != nil || !strings.Contains(receipt.Output, "answer=hello") {
+		t.Fatalf("stdin receipt must expose readable process output: %s, %v", result.Output, err)
 	}
 	complete := nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return snapshot.State.Terminal() })
 	if complete.State != execprotocol.Completed || !strings.Contains(complete.Text(), "answer=hello") {

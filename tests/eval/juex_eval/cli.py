@@ -18,7 +18,6 @@ from . import compaction, helper, outcomes, selection, validation_plan, verifica
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-ENSURE_RIPGREP = (REPO_ROOT / "scripts" / "ensure-ripgrep.sh").as_posix()
 
 
 def windows_bash_from_git(git_executable: str | None) -> str | None:
@@ -50,13 +49,6 @@ class VerificationStep:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] in {
-        "write-model-config",
-        "run-timeout",
-        "append-command",
-        "write-development-record",
-    }:
-        return helper.main_with_args(argv)
     parser = argparse.ArgumentParser(prog="juex-eval", description="JueX local evaluation commands.")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -73,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     add_development_args(development_parser)
 
+    integration_parser = sub.add_parser("integration", help="Run a real model through the managed public API.")
+    add_provider_args(integration_parser)
     provider_parser = sub.add_parser("provider-smoke", help="Run live provider:model smoke tests.")
     add_provider_args(provider_parser)
 
@@ -87,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_verify(parsed)
         if parsed.command == "development":
             return run_development(parsed)
+        if parsed.command == "integration":
+            return helper.run_live(parsed, "integration")
         if parsed.command == "provider-smoke":
             return run_provider_smoke(parsed)
         if parsed.command == "compaction":
@@ -126,7 +122,7 @@ def add_verify_args(parser: argparse.ArgumentParser) -> None:
     add_commit_verification_record_args(final, "final")
     final.add_argument(
         "--config",
-        default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"),
+        default=os.environ.get("JUEX_PROVIDER_CONFIG", ""),
     )
     final.add_argument(
         "--selection-seed",
@@ -289,12 +285,10 @@ def candidate_verification_steps(*, race: bool, web: bool) -> list[VerificationS
 
 def final_provider_smoke_command(args: argparse.Namespace) -> list[str]:
     command = module_command("provider-smoke")
-    append_value(command, "--juex", "./dist/juex")
     append_value(command, "--config", args.config)
     append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--run-id", args.run_id)
     append_value(command, "--timeout", args.provider_timeout)
-    append_value(command, "--retries", 0)
     report_dir = getattr(args, "verification_report_dir", "")
     append_value(command, "--report-dir", pathlib.Path(report_dir) / "provider-model-smoke" if report_dir else "")
     return command
@@ -302,7 +296,6 @@ def final_provider_smoke_command(args: argparse.Namespace) -> list[str]:
 
 def final_compaction_command(args: argparse.Namespace) -> list[str]:
     command = module_command("compaction")
-    append_value(command, "--juex", "./dist/juex")
     append_value(command, "--config", args.config)
     append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--run-id", args.run_id)
@@ -352,7 +345,7 @@ def run_verify(args: argparse.Namespace) -> int:
     plan = plan_with_cli_overrides(args, plan)
     apply_validation_plan(args, plan)
     if args.tier == "final":
-        args.config = str(selection.resolved_path(args.config))
+        args.config = str(selection.resolved_path(args.config)) if args.config else ""
     candidate_steps = candidate_verification_steps(race=args.race, web=args.web)
     candidate_plan_fingerprint = verification.stable_fingerprint(
         {
@@ -502,32 +495,7 @@ def require_clean_worktree() -> verification.RepositorySnapshot:
 
 
 def go_test_environment() -> dict[str, str]:
-    existing_ripgrep = shutil.which("rg")
-    if existing_ripgrep:
-        ripgrep_dir = os.path.dirname(os.path.abspath(existing_ripgrep))
-    else:
-        ripgrep_dir = provisioned_ripgrep_directory()
-    env = os.environ.copy()
-    env["PATH"] = ripgrep_dir + os.pathsep + env.get("PATH", "")
-    return env
-
-
-def provisioned_ripgrep_directory() -> str:
-    completed = subprocess.run(
-        bash_script_command(ENSURE_RIPGREP),
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    ripgrep_dir = completed.stdout.strip()
-    if completed.returncode != 0 or not ripgrep_dir:
-        detail = completed.stderr.strip()
-        suffix = f": {detail}" if detail else ""
-        raise ValueError(f"failed to provision ripgrep for Go tests{suffix}")
-    if os.name == "nt":
-        return str(REPO_ROOT / ".tmp" / "dev-ripgrep" / "juex-path")
-    return ripgrep_dir
+    return dict(os.environ)
 
 
 def bash_script_command(script: str, *args: str) -> list[str]:
@@ -740,7 +708,7 @@ def add_development_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--config",
-        default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"),
+        default=os.environ.get("JUEX_PROVIDER_CONFIG", ""),
         help="Provider config used by live evaluation steps.",
     )
     parser.add_argument(
@@ -765,10 +733,9 @@ def add_development_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_provider_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--juex", default=os.environ.get("JUEX_BIN") or helper.default_juex_bin())
     parser.add_argument(
         "--config",
-        default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"),
+        default=os.environ.get("JUEX_PROVIDER_CONFIG", ""),
     )
     parser.add_argument(
         "--selection-seed",
@@ -797,18 +764,12 @@ def add_provider_args(parser: argparse.ArgumentParser) -> None:
         help="Run exactly one eligible provider:model ref.",
     )
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
-    parser.add_argument(
-        "--retries",
-        type=int,
-        choices=(0, 1),
-        default=int(os.environ.get("JUEX_PROVIDER_SMOKE_RETRIES") or "1"),
-    )
-    parser.add_argument("--keep", action="store_true", default=truthy(os.environ.get("JUEX_PROVIDER_SMOKE_KEEP")))
+
 
 
 def run_development(args: argparse.Namespace) -> int:
     validate_development_args(args)
-    args.config = str(selection.resolved_path(args.config))
+    args.config = str(selection.resolved_path(args.config)) if args.config else ""
 
     report_dir = pathlib.Path(args.report_dir or helper.default_report_dir("development-validation", args.run_id))
     command_logs = report_dir / "command-logs"
@@ -887,13 +848,11 @@ def development_steps(args: argparse.Namespace, report_dir: pathlib.Path) -> tup
 
 def provider_smoke_development_command(args: argparse.Namespace, report_dir: pathlib.Path) -> list[str]:
     command = module_command("provider-smoke")
-    append_value(command, "--juex", "./dist/juex")
     append_value(command, "--config", args.config)
     append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--report-dir", report_dir)
     append_value(command, "--run-id", args.run_id)
     append_value(command, "--timeout", args.provider_timeout)
-    append_value(command, "--retries", 0)
     append_value(command, "--only", args.provider_only)
     append_flag(command, "--all-models", args.provider_all_models)
     return command
@@ -901,13 +860,12 @@ def provider_smoke_development_command(args: argparse.Namespace, report_dir: pat
 
 def compaction_development_command(args: argparse.Namespace, report_dir: pathlib.Path) -> list[str]:
     command = module_command("compaction")
-    append_value(command, "--juex", "./dist/juex")
     append_value(command, "--config", args.config)
     append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--report-dir", report_dir)
     append_value(command, "--run-id", args.run_id)
     append_flag(command, "--all-models", args.compaction_all_models)
-    append_repeated(command, "--only", args.compaction_only)
+    append_value(command, "--only", ",".join(args.compaction_only))
     return command
 
 
@@ -963,24 +921,19 @@ def run_provider_smoke(args: argparse.Namespace) -> int:
 
 def provider_helper_args(args: argparse.Namespace) -> list[str]:
     out = [
-        "--juex",
-        args.juex,
         "--config",
-        str(selection.resolved_path(args.config)),
+        args.config,
         "--selection-seed",
         args.selection_seed,
         "--run-id",
         args.run_id,
         "--timeout",
         str(args.timeout),
-        "--retries",
-        str(args.retries),
     ]
     append_value(out, "--work-root", args.work_root)
     append_value(out, "--report-dir", args.report_dir)
     append_value(out, "--only", args.only)
     append_flag(out, "--all-models", args.all_models)
-    append_flag(out, "--keep", args.keep)
     return out
 
 

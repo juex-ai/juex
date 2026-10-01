@@ -18,11 +18,11 @@ Linux 部署采用 Docker Compose。托管 Agent 执行使用 OCI/gVisor，不�
 
 内置邮箱密码认证，稳定 User 身份与凭据分离。邀请授予成员资格，不证明邮箱归属。模型与共享凭据由部署方提供；用量归属 Tenant/User 及实际 Provider/模型，管理员代执行也按资源所有者计量。
 
-新平台全新初始化，按需人工迁入选定数据。不提供旧 Home、API 或配置兼容层。实施分阶段推进；已批准的目标不表示现有入口已经使用新平台。Management directory 是第一批实现的边界。
+新平台全新初始化，按需人工迁入选定数据。不提供旧 Home、API 或配置兼容层。所有公共入口均使用这些 Managed 服务边界。
 
 ## 替代方案与影响
 
-- 在 Home 范围的 Fleet supervisor 中追加功能会延续路径身份，并混合进程管理与租户权威。Management 是独立代码组，由 App 组装，Framework、Features 不向上依赖。
+- 在 Home 范围的 Fleet supervisor 中追加功能会延续路径身份，并混合进程管理与租户权威。Management 是独立代码组，由 App 组装，业务服务不向上依赖。
 - 新建仓库会丢弃有价值的 Provider、Thread、工具、UI 与测试积累。monorepo 保留这些资产，同时替换持久化和部署边界；服务仍可独立构建。
 - 每 Agent 一个服务进程、提前建设通用 Repository/RBAC 框架，都会在必要边界跑通前增加成本。共享可信服务与窄业务操作使所有权明确；用户代码在执行环境运行。
 - 接受单机短暂停机。恢复依赖持久状态和旧实例 fencing，不承诺恢复进程内存。容量、gVisor 负载兼容性和完整备份恢复需要实测证据。

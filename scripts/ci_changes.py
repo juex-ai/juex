@@ -10,7 +10,6 @@ import sys
 
 # These Markdown files are runtime resources, not just documentation.
 RUNTIME_PATHS = (
-    b"internal/features/skills/builtin/",
     b"internal/entrypoints/webassets/dist/",
 )
 

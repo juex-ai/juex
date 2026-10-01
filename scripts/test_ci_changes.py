@@ -55,8 +55,6 @@ class CIChangesTest(unittest.TestCase):
             "main.go", "frontend/src/app.tsx", "go.mod", "Makefile",
             ".github/workflows/ci.yml", "scripts/check.py",
             "docs/bilingual-whitelist.txt",
-            "internal/features/skills/builtin/example/SKILL.md",
-            "internal/features/skills/builtin/example/SKILL.zh.md",
             "internal/entrypoints/webassets/dist/example.md",
         ]:
             with self.subTest(path=path):

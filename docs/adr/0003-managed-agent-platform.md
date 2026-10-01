@@ -44,15 +44,13 @@ their secrets come from the deployment operator; usage belongs to Tenant/User
 and the actual provider/model, including administrator delegation.
 
 The new platform starts with fresh state and selected manual data transfer.
-There is no old Home, API or configuration compatibility layer. Implementation
-is staged; this accepted target is not a claim that existing entrypoints already
-use the new platform. The Management directory is the first implemented boundary.
+There is no old Home, API or configuration compatibility layer. All public entrypoints use these managed service boundaries.
 
 ## Alternatives and consequences
 
 - Extending the Home-scoped Fleet supervisor would retain path-based identity
   and mix process management with tenant authority. Management is a separate
-  group; App composes it without upward dependencies from Framework or Features.
+  group; App composes it without upward dependencies from the domain services.
 - A new repository would discard useful Provider, Thread, tool, UI and test
   assets. The monorepo retains those assets while replacing their persistence
   and deployment boundaries. Services remain independently buildable.

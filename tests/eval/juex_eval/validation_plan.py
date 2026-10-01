@@ -16,22 +16,10 @@ FINAL_FLAGS = ("compaction", "integration", "provider-smoke")
 CONSERVATIVE_PACKAGES = ("./...",)
 CONSERVATIVE_CANDIDATE_FLAGS = CANDIDATE_FLAGS
 CONSERVATIVE_FINAL_FLAGS = FINAL_FLAGS
-COMPACTION_PREFIXES = (
-    "internal/app/",
-    "internal/features/hooks/",
-    "internal/features/tasks/",
-    "internal/features/notes/",
-    "internal/features/contextcontrol/",
-    "internal/features/chunkedwrite/",
-    "internal/framework/agent/",
-    "internal/framework/module/",
-    "internal/framework/runtime/",
-    "internal/framework/thread/",
-)
+COMPACTION_PREFIXES = ("internal/app/managed/", "internal/managedruntime/")
 COMPACTION_EXACT_PATHS = {
     "internal/foundation/llm/history.go",
     "internal/foundation/llm/provider_projection.go",
-    "internal/features/chunkedwrite/projection.go",
     "internal/foundation/llm/types.go",
 }
 
@@ -127,53 +115,12 @@ RULE_DESCRIPTIONS = {
 }
 
 CROSS_BOUNDARY_PREFIXES = (
-    "cmd/juex/",
-    "internal/app/",
-    "internal/entrypoints/",
-    "internal/features/",
-    "internal/fleet/",
-    "internal/framework/",
-    "internal/providers/",
-    "internal/foundation/command/",
-    "internal/foundation/events/",
-    "internal/foundation/llm/",
-    "internal/foundation/sandbox/",
-    "internal/foundation/toolevents/",
-    "internal/foundation/tools/",
-    "tests/e2e/",
-    "tests/toolcontracts/",
+    "cmd/", "internal/app/", "internal/entrypoints/", "internal/providers/",
+    "internal/management/", "internal/managedruntime/", "internal/execution/",
+    "internal/memory/", "internal/calendar/", "internal/foundation/", "tests/e2e/",
 )
-
-RACE_PREFIXES = (
-    "internal/app/",
-    "internal/entrypoints/agenthttp/",
-    "internal/entrypoints/fleethttp/",
-    "internal/features/",
-    "internal/fleet/",
-    "internal/framework/",
-    "internal/providers/",
-    "internal/foundation/command/",
-    "internal/foundation/events/",
-    "internal/foundation/homestore/",
-    "internal/foundation/llm/",
-    "internal/foundation/statusstream/",
-    "internal/foundation/tools/",
-)
-
-LIVE_PREFIXES = (
-    "cmd/juex/",
-    "frontend/",
-    "internal/app/",
-    "internal/entrypoints/",
-    "internal/features/",
-    "internal/framework/",
-    "internal/providers/",
-    "internal/foundation/command/",
-    "internal/foundation/llm/",
-    "internal/foundation/tools/",
-    "tests/e2e/",
-    "tests/toolcontracts/",
-)
+RACE_PREFIXES = CROSS_BOUNDARY_PREFIXES
+LIVE_PREFIXES = CROSS_BOUNDARY_PREFIXES + ("frontend/",)
 
 CONSERVATIVE_EXACT_PATHS = {
     ".golangci.yml",
@@ -189,7 +136,7 @@ CONSERVATIVE_EXACT_PATHS = {
 
 CONSERVATIVE_PREFIXES = (
     ".github/workflows/",
-    "release/",
+    "deploy/",
     "scripts/",
     "tests/eval/",
 )
@@ -238,11 +185,11 @@ def plan_for_changes(
             add("frontend", changed, candidate=("web",), final=("integration", "provider-smoke"))
             matched = True
 
-        if any(path.startswith(("internal/entrypoints/agenthttp/", "internal/entrypoints/webassets/")) for path in paths):
+        if any(path.startswith(("internal/entrypoints/managementhttp/", "internal/entrypoints/webassets/")) for path in paths):
             add(
                 "embedded-web",
                 changed,
-                packages=("./internal/entrypoints/agenthttp", "./internal/entrypoints/fleethttp", "./tests/e2e"),
+                packages=("./internal/entrypoints/managementhttp", "./internal/entrypoints/executionhttp", "./tests/e2e"),
                 candidate=("race", "web"),
                 final=("integration", "provider-smoke"),
             )

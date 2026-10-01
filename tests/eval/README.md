@@ -1,36 +1,36 @@
-# Evaluation Harness
+# Managed platform evaluation
 
 > English | [中文](README.zh.md)
 
-This directory owns repository verification planning, durable reports, and
-tests that need real Providers or longer quality evaluation. The authoritative
-operator workflow is
-[`juex-localtest`](../../.agents/skills/juex-localtest/SKILL.md); do not copy
-its tier and flag instructions here.
+The Python module `tests.eval.juex_eval` plans commit-bound candidate/final gates.
+The [local-test skill](../../.agents/skills/juex-localtest/SKILL.md) is authoritative.
+Records contain the commit, clean-tree status, commands, environment fingerprints,
+all service/client artifact identities and redacted live evidence. Reuse requires
+matching candidate identity; failed or missing evidence cannot become success.
 
-## Ownership
+Live tests use the actual Runtime, isolated PostgreSQL databases, authenticated
+public/RPC APIs and a native executor. Set `JUEX_TEST_POSTGRES_URL` to a disposable
+test instance whose role can create databases, and `JUEX_PROVIDER_CONFIG` to a
+private JSON/YAML file with this shape:
 
-- `juex_eval/validation_plan.py` maps a Git change set to required gates.
-- `juex_eval/verification.py` executes planned gates and writes records.
-- `capability_harness.go` and `contract_oracle.go` provide deterministic,
-  credential-free capability checks.
-- Provider smoke validates one resolved Provider/model against the runtime
-  contract.
-- Compaction evaluation measures long-Thread context quality.
-- Shell files in this directory are thin wrappers around the Python module.
+```json
+{"models":[{"provider":"example","name":"MODEL","protocol":"openai/chat","endpoint":"https://provider.example/v1","api_key":"TEST_SECRET","context_window":131072,"max_output":8192}]}
+```
 
-Exact CLI options, report schemas, selection rules, and retry classification
-are implementation contracts owned by command help and tests.
+No personal runtime configuration is discovered automatically. Keep credentials
+outside Git with mode 0600. Reports redact selected API keys; temporary selected
+model files are deleted after every outcome. Selection is seeded and reproducible;
+`--only provider:model` and `--all-models` make the scope explicit.
 
-## Boundaries
+```sh
+mise exec -- uv run python -m tests.eval.juex_eval integration
+mise exec -- bash tests/eval/provider_model_smoke.sh --only example:MODEL
+mise exec -- bash tests/eval/compaction_eval.sh --only example:MODEL
+```
 
-- Deterministic cross-package product behavior belongs in `tests/e2e`.
-- Live tests use explicitly selected local configuration and never persist
-  credentials in repository artifacts.
-- Generated plans and reports live under `.tmp/reports/` and are not source
-  documentation.
-- A failed quality or live gate must retain its report and classification; do
-  not hide it by silently selecting another Provider.
-
-Use `uv run --project . python -m tests.eval.juex_eval --help` when invoking
-lower-level harness commands directly.
+Integration verifies a real assistant response through the public conversation
+API. Provider smoke requires read/write/edit/grep and one real PTY/stdin workflow,
+with completed operation evidence. Compaction requires a durable checkpoint,
+Runtime restart and retained facts. Go success alone is insufficient: the live
+evidence marker must exist. Missing configuration fails explicitly, never skips.
+The harness tests under `tests/eval` verify these failure and secret boundaries.

@@ -1,176 +1,68 @@
-# Juex 领域模型
+# JueX 领域模型
 
 > [English](DOMAIN.md) | 中文
 
-本文是规范词汇和不变量的唯一来源。模块和存储实现见
-[ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)。
+本文定义产品术语和不变量，实现边界见 [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)。
 
-## Managed 平台身份
+## 身份与权限
 
-已接受的平台方向见 [ADR-0003](docs/adr/0003-managed-agent-platform.zh.md)。
-Management 已实现的 directory 包含全局 User、Tenant Membership，以及每个
-`(Tenant, User)` 的唯一 Fleet。凭据和邮箱验证不定义 User 身份，邀请授予成员资格，
-不证明邮箱归属。
+User 是具有稳定身份的全局账号，与登录凭据分离。Tenant 通过 Membership 定义
+管理员和普通成员。一个 User 可以加入多个 Tenant；每个 `(Tenant, User)`
+恰有一个保留的 Fleet，可包含多个 Agent。邀请授予成员资格，不证明邮箱归属。
+任何并发修改都不能移除、停用或降级租户最后一位有效管理员。
 
-只有有效租户管理员可以管理成员。并发修改也不能移除、停用或降级最后一位有效管理员。
-成员停用或移除只撤销当前租户的访问。停用后重新启用保留 Fleet；移除后必须接受新邀请。
-重新加入恢复保留的 Fleet，角色按本次邀请授予。
-
-有效管理员可以读取同租户其他成员保留的 Fleet，审计分别记录 actor 与 owner。
-读取权限不代表执行许可。成员生命周期事件保存单调版本与持久意图，不证明远端任务已经停止。
-重新启用不能抹去之前的取消意图，也不能重放历史工作。
-
-directory 为登录 Web 和托管会话 Runtime 授权。执行代际保留停用／恢复的变化，恢复访问不授予旧队列输入执行权。
-Main 和 Workers 分别保存上下文和取消状态。完整平台切换前，下文仍描述现有 Runtime 契约。
+管理员只能在该租户内、资源所有者已有许可范围内管理资源。审计和用量分别记录
+实际操作者与资源所有者。重新授权不能恢复旧执行代际或已取消工作。
+人类登录会话与设备凭据是独立身份。
 
 ## 所有权
 
-| 所有者 | 职责 |
+| 所有者 | 持久责任 |
 | --- | --- |
-| Fleet | 一个 Home 范围内 Agent 与独立服务的所有者；管理进程与受管进程的生命周期独立。 |
-| 独立服务 | 自有业务状态、存储恢复、类型化 API 与 writer lease；Fleet 拥有进程期望状态和经验证的发现。 |
-| Workspace | 用户维护的项目文件、Workspace 配置、Skill 和 Hook。 |
-| Fleet Memory | 独立服务拥有的共享持久知识、请求、回执、源进度和删除约束；Supervisor 执行模型审阅。 |
-| Agent | 长期身份、Workspace 所有权、配置覆盖、可重建的 Thread 列表 index、active 与 archived Thread、media、日志、Memory 参与/游标状态、Observable 定义与状态，以及 Extension 状态。 |
-| Thread | 身份、拓扑、lifecycle、Context Generation registry、pending Input、Turn、消息、Event、Usage 和 spool。 |
-| Thread Module | 可选的 Thread scope 状态，例如 Tasks、Notes 与 Scratchpad，以及其资源、context 和 Generation lifecycle 行为。 |
-| Agent Runtime | 可替换的进程资源：Provider、MCP client、Tool、Observable、scheduler 和实时订阅。 |
+| Management | 账号、租户、成员、Fleet/Agent 定义、模型策略、加密凭据与审计。 |
+| Runtime | 输入、Main/Worker、Turn、上下文检查点、模型调用、事件、用量和激活租约。 |
+| Execution | 环境、授权、操作、连接、不可变文件、显式传输和结果确认。 |
+| Memory | Fleet 知识、证据、提案、审核任务和删除约束。 |
+| Calendar | Fleet 日程、触发任务和投递身份。 |
 
-Agent 绑定一个 Workspace。替换 Runtime 不会替换持久 Agent 或 Thread 状态。
+Agent 拥有永久 Main 和独立 Worker。Worker 记录父线程，但父线程取消不会撤销已经
+接纳的独立工作。应用任务使用限定范围的普通 Worker。跨 Agent 协作必须显式进行，
+且限定在同一所有者和 Fleet。
 
-`agent.json` 是该绑定及 Agent lifecycle metadata 的权威来源。在同一个
-JUEX_HOME 内，一个规范 Workspace 最多属于一个 Agent。Workspace 配置仍由用户
-维护；Agent 自有的稀疏 `juex.yaml` 可以特化有效 Runtime，且不会改写 Workspace
-字节。
+Activation 是可替换的运行容量，不是 Agent 身份。输入先持久提交，再返回接纳回执。
+请求 ID 对接纳去重，不能假设下一条 assistant 消息与某条 Input 一一对应。
+上下文压缩保留持久历史和检查点。Worker 归档要求工作空闲，并保留可读历史。
 
-同一 JUEX_HOME 内已提交的 Fleet Memory 在 Agent 之间共享。来源 Agent/Thread
-引用与 Workspace/项目适用语境都是元数据，不构成隐式访问边界。共享知识不授予
-原始 Thread 历史访问权限；证据读取和审阅修改仍受各自的能力约束。
+## 执行环境
 
-## Main 与 Worker
+每个 Agent 拥有持久的托管 Workspace/Home。授权的 Linux/macOS 设备是附加环境，
+位置相关工具通过稳定 ID 选择环境。进程和连接句柄绑定原始环境。cwd 是默认位置，
+不是文件系统权限边界。设备授权使用当前 OS 用户的能力；托管 gVisor 提供独立限额。
 
-每个 Agent 恰好有一个 Main Thread：
+断网不代表进程结束。离线请求持久等待，不占模型槽位。未知结果明确可见，不静默重放
+或改派。在线撤销拒绝新工作并请求取消；离线取消在收到确认前保持待处理。
+平台备份不能恢复进程内存或任意远程文件。
 
-- id 是保留字符串 `0`，alias 是 `main`；
-- 没有 parent，不能 rename、archive 或 delete；
-- 用户 Input 默认发往 Main；
-- 只有 Main 接收 `observable.Observation`。
+文件传递必须显式记录两个环境。不可变 Artifact 引用允许同 Fleet 共享，没有自动
+同步或跨租户共享。凭据仅属于授权服务或进程范围，共享模型密钥不进入用户执行环境。
 
-Worker 使用相同的 Thread 模型：
+## 生命周期与保留
 
-- id 是六位小写 Crockford Base32；
-- alias 在 Agent 内唯一，默认是 `worker_#<id>`；
-- `parent_thread_id` 是创建它的 Thread；
-- 历史、上下文、工作状态、pending Input 和订阅相互独立；
-- 可以使用 Agent 共享资源，但不接收 Observation。
+停用禁止执行并保留数据。Agent 归档和成员移除保留可读资源；恢复检查当前权限。
+移除后必须重新邀请。再次加入复用保留的 Fleet；永久清理后创建全新空 Fleet。
+清理具有持久阶段和明确失败状态。平台数据删除与远端停止确认分开显示。
+远程用户文件不会被自动删除。
 
-Agent 级 `worker-threads.enabled` 控制 Worker 执行，不控制 Thread 存储。禁用时暂停
-pending Input 恢复，仍可读取历史、管理保留状态，并执行宿主 `/new` 与 `/compact`。
+Memory 和 Calendar 可停用且不删除数据。停用停止新的 Agent/应用活动，Calendar
+不会补跑停用期间错过的触发。永久删除是独立操作。用量和最小审计在资源清理后保留；
+普通进程日志不能替代持久操作回执。
 
-`worker-threads.max_depth` 默认 1，只接受 1 或 2，Main 深度为 0。创建时校验
-持久父链，归档祖先也计入深度。达到或超过上限的 Thread 完全不装配
-`worker-threads` Module、工具及生命周期贡献；Agent 级开关启用时，该 Thread
-自身仍可执行。已有深层 Thread 保留历史和 parent，宿主接口可以恢复、执行、
-停止和管理它们，无需为已达上限的父 Thread 恢复模块。深度限制不约束 Worker
-总数或 token 预算。
+## 模型与用量
 
-创建者和结果目的地不是 Worker 属性。任何关注结果的调用方都自行订阅。
-Parent 只表达拓扑，不表示投递路由。
+部署方提供模型。Fleet 默认值和 Agent 覆盖值从当前授权目录中选择。Turn 固定其
+模型及 fallback 计划，但每次新调用仍检查当前权限和凭据撤销。Fallback 只使用
+已配置候选。实际 Provider/模型调用拥有其用量，覆盖 Worker、应用任务和压缩。
+总量为输入加输出，缓存属于输入子集；未报告用量标为未知，不能填零。
 
-## Input、Attempt、Turn 与订阅
-
-Input 在执行前先被持久接受。仍需执行或恢复的 Input 按顺序保存在有界 pending
-状态中。Input 一旦被 admission 到 Turn，可能在可重试失败后被多次 attempt
-claim，但在 Turn 于所属 Context Generation 中形成显式 terminal record 前始终
-保持可恢复。若 Input 在 admission 前过期，或仍处于 pending 时被显式取消或
-丢弃，则可以离开当前状态，无需 Generation terminal record。
-
-Turn 是一个 Context Generation 内的一次 Provider/Tool 执行过程，一个 Turn
-可以消费多条 pending Input。Main 是异步对话而不是 RPC，不能仅按位置将
-Assistant 消息与 Input 配对。
-
-订阅是订阅者持有 cursor 的单 Thread replay/live 观察；即使跨越 Context
-Generation，也使用一条连续的 Thread Event sequence。它不天然绑定 Input、Turn
-或 client 类型。更高层 waiter 可以从 `input_id` 跟随到消费它的 Turn。
-
-可选的输入跟踪将投递与模型“已处理”的判断分开。启用期间接收的直接用户输入保持未勾选，直到模型主动勾选。Turn 结束不代表输入已勾选，已结束但未勾选的输入也不属于待投递队列。失败和 compaction 保留未勾选输入。关闭开关保留已有记录，但停止新登记和提醒；这些核心输入记录不是 Tasks/Notes 的可退休资源。用户 `/new` 开始新的工作范围，compaction 保持原范围。勾选不能取消执行，也不证明结果正确。
-
-## Context Generation 与 Thread 工作状态
-
-Context Generation 是 Thread 内的一代 Provider 可见上下文。
-
-- `/new` 创建空 Generation，删除 done 任务，并要求已启用的 Notes Module 清除自己的状态，
-  并记录 `context.renewed`。
-- `/compact` 从 compact summary 创建新 Generation，删除 done 任务并保留未完成任务与 Notes，
-  并记录 `context.compacted`。
-- 两者都保留按时间顺序排列的 Generation 历史与 Scratchpad 文件。Disabled
-  Module 不加载、注入或发布状态；配置退休独立于 Generation 切换。
-- Generation 边界是用户可见的系统活动，不是普通 Provider 对话。
-
-Tasks 是模型维护的工作项，具有稳定 ID、标题、描述、验收条件、状态原因、
-p0/p1/p2 优先级和各自的续跑次数。结束 Turn 时先选 doing，再选 todo，同状态内
-按优先级、创建顺序选择。pending 和 failed 保留可查看，但不强制续跑。new 和
-compact 都只清理 done，保留其余任务。模型把输入要求完整记录到持久化任务后，
-可以勾选输入；勾选输入并不代表任务完成。
-
-任务变更后，若非空列表中的任务全部为 done，该 Thread 会清除当前启用的 Notes。
-仍有未完成任务或空列表时保留 Notes；之后显式写入 Notes 可以记录新工作。
-
-Tasks 与 Notes 是由 Module 拥有、可以跨 Generation 的可丢弃当前工作状态。应用
-禁用或移除 owner 的配置时，会清理 active 与 archived Thread 中已登记的资源；
-重新启用从空状态开始，不从保留的历史恢复已退休状态。owner 仍启用时，正常退出
-保留状态。预览和被拒绝的配置不清理资源；中断的退休必须在新组合发布前完成。
-Scratchpad
-是模型管理的 Thread 工作存储，只由启用的 Module 准备；关闭时保留已有文件，
-不准备或发布工作目录。spool 是系统管理的超长 Runtime 数据临时目录。
-
-## Token Usage
-
-每个报告 Usage 的 Provider 结果都使用规范配置的 `provider:model` 形成一条持久
-fact。Input 包含 cached input，cached input 是其中命中缓存的子集，total token
-等于 input 加 output。Thread 总量和按模型 breakdown 都是这些 fact 的物化视图。
-
-## Observable
-
-Observable 是外部自动化工作的统一模型。MCP Notification、
-command output 和未来生产者都产生 `observable.Observation`。生产者属于
-Agent Runtime，持久投递通过正常 Input/Turn 机制进入 Main。
-
-定时工作属于 Calendar Extension，由它发出 MCP Notification。
-
-MCP client 属于 Agent，可服务所有 Thread。调用仍属于发起调用的 Thread，
-MCP Notification 则只路由 Main。
-
-## 保留与执行
-
-Thread lifecycle 有两个独立维度：
-
-- `retention_state` 为 `active` 或 `archived`；
-- `execution_state` 只属于 active Thread，为 `idle`、`working` 或 `failed`。
-
-Archive/unarchive 针对整个 idle Worker，不创建 Generation。Archived Thread
-只读且没有执行态；unarchive 恢复同一个 Thread，并初始化为 `active + idle`。
-
-永久 delete 只允许作用于没有 active child 引用的 archived Worker。
-`deleted` 是操作结果，不是一个已经不存在的 Thread 继续保存的状态。
-
-## 不变量
-
-1. 每个 Agent 恰好存在一个 Main `0`。
-2. Thread id 与 alias 共用一个 Agent 级身份命名空间。
-3. 每个 Worker 都有一个有效 parent。
-4. Thread metadata 是身份、拓扑、lifecycle 与 Context Generation registry
-   的权威；Agent 列表 index 可从中重建。
-5. 一条 Event sequence 跨越所有 Generation Journal；Fact 顺序由 sequence
-   决定，而不是 timestamp。
-6. 持久绝对时间统一使用 UTC 毫秒精度。
-7. 每条已 admission 的 Input 都保持可恢复，直到消费它的 Turn 形成显式
-   terminal Generation record。
-8. 持久 Generation fact 先 commit，再发布 replay/live。
-9. 已记录 Tool outcome 精确重放；未知 outcome 不盲目重试。
-10. Observation 只路由 Main。
-11. Archive/unarchive 不改变 Context Generation。
-12. Active Thread 有一个执行态；Archived Thread 没有执行态。
-13. 当前 Provider context 只从一个 Context Generation 重建。
-14. 计算 Token Usage total 时，cached input 不会被再次相加。
-15. Agent 身份与 Agent 配置从 Agent 自有状态解析；Workspace 文件不是身份记录。
+管理员代执行的用量仍属于资源的 Tenant/User。日/月聚合保留其报表时区区间，
+变更时区不重新解释历史。原始明细默认保留 90 天，聚合持续保留。

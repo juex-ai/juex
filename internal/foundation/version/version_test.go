@@ -20,48 +20,16 @@ func TestVerbose_BuildOnly(t *testing.T) {
 			t.Errorf("Verbose() missing %q. full:\n%s", want, out)
 		}
 	}
-	// Optional fields should not appear when empty.
-	for _, mustNot := range []string{"work_dir:", "config_file:"} {
-		if strings.Contains(out, mustNot) {
-			t.Errorf("Verbose() should not contain %q with empty Info; got:\n%s", mustNot, out)
-		}
-	}
-}
-
-func TestVerbose_WithRuntimeContext(t *testing.T) {
-	info := Build()
-	info.WorkDir = "/tmp/x"
-	info.ConfigFile = "/tmp/juex.yaml"
-	info.ProviderID = "openai"
-	info.Protocol = "openai/responses"
-	info.Model = "gpt-test"
-	info.BaseURL = "https://x"
-
-	out := info.Verbose()
-	for _, want := range []string{
-		"work_dir:      /tmp/x",
-		"config_file:   /tmp/juex.yaml",
-		"provider_id:   openai",
-		"protocol:      openai/responses",
-		"model:         gpt-test",
-		"base_url:      https://x",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("Verbose() missing %q in:\n%s", want, out)
-		}
-	}
 }
 
 func TestJSON_RoundTrip(t *testing.T) {
 	in := Build()
-	in.WorkDir = "/tmp/x"
-	in.Protocol = "openai/responses"
 	js := in.JSON()
 	var out Info
 	if err := json.Unmarshal([]byte(js), &out); err != nil {
 		t.Fatalf("unmarshal: %v: %s", err, js)
 	}
-	if out.WorkDir != "/tmp/x" || out.Protocol != "openai/responses" || out.Name != "juex" {
+	if out != in {
 		t.Fatalf("round-trip mismatch: %+v", out)
 	}
 }

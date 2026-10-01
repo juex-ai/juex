@@ -1,124 +1,62 @@
-# Juex
+# JueX
 
 > [English](README.md) | 中文
 
-Juex 是一个使用 Go 编写、长期运行、local-first 的 Agent Runtime。一个
-Agent 拥有一个永久 Main Thread，也可以运行多个独立 Worker Thread。CLI
-与 Web client 使用同一套持久 Input 和 Event 接口。
+JueX 是服务化的 Managed Agent 平台。一次部署通过一个 Management Dashboard
+服务多个租户和用户。每个用户在每个租户中拥有一个 Fleet；Agents 在共享的持久
+Runtime 中运行，使用托管环境或明确授权的远程执行环境。部署默认使用单租户。
 
-Juex 是 Agent Runtime，不是 RPC 或 Workflow Engine。发送 Input 表示该
-Input 被 Thread 持久接受，并不意味着下一条 Assistant 消息与它一一对应。
+## 部署
 
-已批准的 [Managed Agent 平台](docs/adr/0003-managed-agent-platform.zh.md)正在重构中。
-[Management](internal/management/README.zh.md) 已提供登录 Web、租户身份、模型选择与 Agent 管理。
-[Managed Runtime](internal/managedruntime/README.zh.md) 通过 PostgreSQL 持久化会话输入、Main/Worker 历史与模型请求。
-下列命令仍描述现有 Runtime；完整执行和应用链路尚待切换。
+按照 [Linux 部署指南](deploy/managed/README.zh.md) 初始化 Docker Compose、
+PostgreSQL、HTTPS、gVisor 和持久存储。部署方生成首位管理员的一次性初始化链接，
+配置模型凭据。管理员邀请成员，用户通过邮箱和密码登录。
 
-## 快速开始
+关闭浏览器不会停止已接纳的工作。Memory 和 Calendar 是独立的 Fleet 应用，
+按各自生命周期持续工作。
 
-安装已发布版本：
+## 客户端
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.sh | bash
+发布归档包含 Linux/macOS、amd64/arm64 的 `juex` 和 `juex-executor`。
+下载归档并校验发布校验和，或在检出的发布版本中使用 Python 3.11+ 安装器：
+
+```sh
+python3 scripts/install.py --version VERSION
+export JUEX_SERVER=https://juex.example.com
+juex login --email user@example.com --password-stdin
+juex tenant list
+juex fleet show
+juex agent list
 ```
 
-或从源码构建：
+登录命令从标准输入读取密码，不要将密码放进命令参数。CLI 会话凭据以私密文件保存，
+作用域绑定平台公开 origin。详见 [客户端 CLI](internal/entrypoints/clientcli/README.zh.md)
+及命令帮助。
 
-```bash
-make build
+通过明确的私密状态目录接入远程 Linux/macOS 设备：
+
+```sh
+juex-executor --state /absolute/private/device-state pair --server https://juex.example.com
+juex-executor --state /absolute/private/device-state run
 ```
 
-初始化并校验配置：
-
-```bash
-juex config init
-juex agent add .
-juex diagnose
-```
-
-启动受管 Agent，并向其 Main Thread 发送 Input：
-
-```bash
-juex agent start
-juex agent send "summarize this repository"
-juex agent send --wait "implement the next task"
-```
-
-`agent send` 在持久接受后返回；`agent send --wait` 持续跟随 Event，直到消费
-该 Input 的 Turn 结束。使用 `juex fleet serve` 启动 Fleet UI。
-
-## 核心模型
-
-- Agent 是绑定一个 Workspace 的长期身份与状态所有者。
-- Main Thread 固定使用 id `0` 和 alias `main`。用户 Input 默认发往
-  Main，只有 Main 接收外部 Observation。
-- Worker 使用相同执行模型，但拥有独立的历史、上下文、状态和订阅。它记录
-  parent，但不记录固定的结果目的地。
-- `/new` 与 `/compact` 都会开始新的 Context Generation。两者都保留
-  Thread 历史、Scratchpad 和未完成任务；两者都删除 done 任务。compact 携带
-  summary 并保留 Notes，new 则要求已启用的 Notes Module 清除自己的状态。
-- Active 与 archived Thread 分开存储。Archived Worker 只读，可以恢复或永久删除。
-- Token Usage 按每次 Provider 调用记录，并使用规范的 `provider:model` 按模型聚合，
-  供 Thread 检查。
-
-规范词汇与不变量见 [DOMAIN.zh.md](DOMAIN.zh.md)。
-
-## 主要命令
-
-| 命令 | 用途 |
-| --- | --- |
-| `juex fleet` | 启动并检查常驻 Fleet supervisor。 |
-| `juex agent` | 注册 Agent、控制 lifecycle，并向 Main Thread 发送 Input。 |
-| `juex thread` | 查看和管理 Worker Thread，包括创建诊断包。 |
-| `juex config` | 初始化 Juex 配置。 |
-| `juex diagnose` | 校验配置与本地 Runtime 依赖。 |
-
-具体 flag 和 subcommand 以命令帮助为准。
-
-## 配置与状态
-
-用户配置默认位于 `~/.juex/juex.yaml`，Workspace 配置位于
-`<WorkDir>/.juex/juex.yaml`。每个已注册 Agent 都有一层稀疏配置，位于
-`$JUEX_HOME/agents/<agent-id>/juex.yaml`。YAML 按此顺序加载；当
-`$JUEX_HOME` 与默认 Home 不同时，其 `juex.yaml` 位于用户层与 Workspace 层
-之间。个人与 Workspace MCP 定义分别
-位于对应的 `.agents/mcp.json`。通过 Fleet 保存 Agent 配置时会原子校验完整
-配置链并重启该 Agent。
-
-可编辑的 Observable 定义位于
-`$JUEX_HOME/agents/<agent-id>/observables.json`；它随 Agent 保存，不出现在
-Workspace 中。
-
-模块预设与显式开关见[配置说明](internal/app/config/README.zh.md)。
-
-生成的 Agent 状态位于 `$JUEX_HOME/agents/<agent-id>/`。`agent.json` 是 Agent
-身份、Workspace 所有权与 lifecycle metadata 的权威来源。Agent 还拥有配置
-覆盖、可重建的 Thread index、active 与 archived Thread、media、日志、Observable、
-Memory 参与状态与 Extension 状态。每个 Thread 包含权威 metadata、按 Generation 分段的连续 Event
-历史、有界 pending Input 状态、由 Module 拥有的 Tasks 与 Notes 状态、Scratchpad
-和系统管理的 spool。当前 Provider context 只从当前 Generation 重建；Thread
-Explorer 列表来自 Agent index。
-
-[共享 Fleet Memory](internal/features/memory/README.zh.md) 运行在独立服务中；
-参与的 Agent 查询知识，Supervisor 审阅更新提案。
-
-具体所有权、存储权威和 Runtime 数据流见
-[ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)。文件 schema、CLI/API 细节以代码、
-命令帮助和测试为准。
+在 Dashboard 批准配对，并在设备本地确认授权。设备执行使用当前 OS 用户权限。
+后台模式、授权和恢复说明见 [Execution](internal/execution/README.zh.md)。
 
 ## 开发
 
-分层验证流程以仓库内的
-[Juex local-test skill](.agents/skills/juex-localtest/SKILL.zh.md) 为准。
-前端开发说明见 [frontend/README.zh.md](frontend/README.zh.md)。
+使用 `mise.toml` 固定的版本，执行 `mise exec -- make build`。
+`make build-clients` 仅构建两个用户客户端；`make build-go` 使用已有内嵌 Web 资源
+构建全部服务和客户端。`make install-local` 安装客户端，不启动或重启服务。
 
-CI 始终检查文档。仅修改普通 Markdown 时，跳过前端检查、lint 和 Go 测试；
-修改内嵌运行时 Markdown、非 Markdown 文件，或无法确定改动范围时，运行完整 CI。
+验收遵循 [本地测试 Skill](.agents/skills/juex-localtest/SKILL.zh.md)。
+数据库测试要求能够创建数据库的隔离 PostgreSQL 测试角色；真实模型测试还需要明确的
+私密模型配置。前端开发见 [frontend/README.zh.md](frontend/README.zh.md)。
 
-## 文档地图
+## 项目导航
 
-- [DOMAIN.zh.md](DOMAIN.zh.md)：词汇、所有权、生命周期和不变量。
-- [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)：模块边界与数据流。
-- [PHILOSOPHY.zh.md](PHILOSOPHY.zh.md)：产品原则与取舍。
-- [DESIGN.zh.md](DESIGN.zh.md)：稳定的 Web 交互与视觉规范。
-- [docs/adr/](docs/adr)：持久架构决策的原因。
+- [DOMAIN.zh.md](DOMAIN.zh.md)：身份、所有权、生命周期和不变量。
+- [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)：服务边界和持久化。
+- [PHILOSOPHY.zh.md](PHILOSOPHY.zh.md)：原则及取舍。
+- [DESIGN.zh.md](DESIGN.zh.md)：Dashboard 交互和视觉契约。
+- [Managed 平台 ADR](docs/adr/0003-managed-agent-platform.zh.md)：架构决策理由。

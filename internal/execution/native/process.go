@@ -211,7 +211,10 @@ func (e *Engine) writeStdin(ctx context.Context, operation *operation) error {
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(snapshot)
+	data, err := json.Marshal(struct {
+		execprotocol.Snapshot
+		Output string `json:"output"`
+	}{Snapshot: snapshot, Output: snapshot.Text()})
 	if err != nil {
 		return err
 	}

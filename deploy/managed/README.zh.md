@@ -8,7 +8,7 @@
 
 安装 Docker Engine、Compose、`runsc`、Python 3.11+、GNU tar、`iptables`、`findmnt` 和 `xfsprogs`。准备开启 `prjquota,nosuid,nodev` 的**独立 XFS 文件系统**，由 root 持有且权限为 0700，并与部署目录分开。运维工具不会格式化磁盘。提供匹配公开 HTTPS 域名的 TLS 证书和私钥、已有的 Hosted 基础镜像、两个未占用的私有 IPv4 网段，以及 Hosted 容器能够访问的主机地址。必须明确配置 Hosted DNS。存储目录不能由用户控制。
 
-执行 `docker build -f deploy/managed/Dockerfile -t juex-platform:VERSION .` 构建平台镜像。基础镜像参数允许使用部署者控制的镜像源。初始化前拉取 PostgreSQL、网关和 Hosted 镜像；初始化会记录不可变的本地镜像 ID。保留这些镜像用于回滚。将本目录复制到 `/opt/juex`。
+执行 `docker build -f deploy/managed/Dockerfile -t juex-platform:VERSION .` 构建平台镜像。基础镜像参数允许使用部署者控制的镜像源。执行 `docker build -f deploy/managed/Dockerfile.hosted -t juex-hosted:VERSION .` 构建支持 Python/Node 的 Hosted 镜像。用户依赖安装到持久 Home/Workspace，系统包放入版本化镜像配方。初始化前拉取 PostgreSQL 和网关镜像；初始化会记录不可变的本地镜像 ID。保留这些镜像用于回滚。将本目录复制到 `/opt/juex`。
 
 ```sh
 sudo python3 /opt/juex/operator.py --root /var/lib/juex-management init \

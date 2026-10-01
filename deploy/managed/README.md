@@ -13,14 +13,17 @@ Use Docker Engine with Compose, installed `runsc`, Python 3.11+, GNU tar,
 `iptables`, `findmnt`, and `xfsprogs`. Prepare a **dedicated XFS filesystem**
 mounted with `prjquota,nosuid,nodev`, owned by root with mode 0700. It must be
 separate from the deployment directory. The operator never formats disks.
-Provide a TLS certificate/key valid for the public HTTPS hostname, an existing
+Provide a TLS certificate/key valid for the public HTTPS hostname, a
 Hosted base image, two unused private IPv4 ranges, and an address reachable
 from Hosted containers. Hosted DNS must be explicit. Choose storage outside
 user-controlled directories.
 
 Build the platform image with `docker build -f deploy/managed/Dockerfile -t
 juex-platform:VERSION .`. Base-image arguments permit an operator-controlled
-registry mirror. Pull the PostgreSQL, gateway and Hosted images before setup;
+registry mirror. Build the supported Python/Node Hosted image with
+`docker build -f deploy/managed/Dockerfile.hosted -t juex-hosted:VERSION .`.
+Install user dependencies under persistent Home/Workspace; system packages belong
+in a versioned image recipe. Pull PostgreSQL and gateway images before setup;
 initialization records immutable local image IDs. Keep those exact images for
 rollback. Copy this directory to `/opt/juex`.
 

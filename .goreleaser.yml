@@ -1,58 +1,35 @@
 project_name: juex
 version: 2
 
-before:
-  hooks:
-    - make web
-    - go mod tidy
-    - ./scripts/prepare-ripgrep.sh --target darwin_amd64 --juex-version {{ .Version }} --output .tmp/release/darwin_amd64
-    - ./scripts/prepare-ripgrep.sh --target darwin_arm64 --juex-version {{ .Version }} --output .tmp/release/darwin_arm64
-    - ./scripts/prepare-ripgrep.sh --target linux_amd64 --juex-version {{ .Version }} --output .tmp/release/linux_amd64
-    - ./scripts/prepare-ripgrep.sh --target linux_arm64 --juex-version {{ .Version }} --output .tmp/release/linux_arm64
-    - ./scripts/prepare-ripgrep.sh --target linux_armv7 --juex-version {{ .Version }} --output .tmp/release/linux_armv7
-    - ./scripts/prepare-ripgrep.sh --target windows_amd64 --juex-version {{ .Version }} --output .tmp/release/windows_amd64
-    - ./scripts/prepare-ripgrep.sh --target windows_arm64 --juex-version {{ .Version }} --output .tmp/release/windows_arm64
-
 builds:
   - id: juex
     main: ./cmd/juex
     binary: bin/juex
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
-    ldflags:
+    ldflags: &metadata
       - -s -w
       - -X github.com/juex-ai/juex/internal/foundation/version.Version={{.Version}}
       - -X github.com/juex-ai/juex/internal/foundation/version.Commit={{.ShortCommit}}
       - -X github.com/juex-ai/juex/internal/foundation/version.BuildTime={{.Date}}
-    goos: [darwin, linux, windows]
-    goarch: [amd64, arm64, arm]
-    goarm: ["7"]
-    ignore:
-      # 32-bit arm only ships on linux; darwin and windows have no
-      # consumer hardware target for it.
-      - goos: darwin
-        goarch: arm
-      - goos: windows
-        goarch: arm
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+  - id: juex-executor
+    main: ./cmd/juex-executor
+    binary: bin/juex-executor
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: *metadata
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
 
 archives:
-  - id: juex
-    # `{{ .Arm }}` resolves to the GOARM number on arm builds (empty
-    # otherwise), so a v7 archive becomes juex_X.Y.Z_linux_armv7.tar.gz.
-    # This makes the ABI explicit so users on ARMv6 devices know to skip it.
-    name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}"
+  - id: clients
+    ids: [juex, juex-executor]
+    name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}_{{.Arch}}"
     formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     wrap_in_directory: true
-    files:
-      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-package.json
-        dst: juex-package.json
-      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-path/*
-        dst: juex-path
-      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-resources/licenses/ripgrep/*
-        dst: juex-resources/licenses/ripgrep
+    files: [README.md, README.zh.md]
 
 checksum:
   name_template: "checksums.txt"

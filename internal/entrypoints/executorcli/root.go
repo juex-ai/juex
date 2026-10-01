@@ -23,6 +23,7 @@ import (
 	"github.com/juex-ai/juex/internal/execution/hostservice"
 	"github.com/juex-ai/juex/internal/execution/native"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/version"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +43,7 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	var state, server, name, workingDirectory string
 	var insecure, restart, background bool
 	root := &cobra.Command{Use: "juex-executor", Short: "Connect this Linux or macOS user account as an Agent execution environment", SilenceUsage: true, SilenceErrors: true}
+	root.Version = version.Version
 	root.SetArgs(args)
 	root.SetIn(in)
 	root.SetOut(out)

@@ -1,237 +1,65 @@
-# Juex Web UI Design
+# JueX Dashboard Design
 
 > English | [中文](DESIGN.zh.md)
 
-This document defines the stable interaction and visual contract for the Fleet
-Web UI. Component structure and exact API shapes belong to frontend and server
-code.
+The dashboard is the common management and conversation interface for ordinary
+members and tenant administrators. It follows authoritative service records.
 
-## Product Model
+## Navigation and ownership
 
-Web is a client of Agent JSON/SSE services. It does not own a second
-conversation model or infer durable truth from browser memory.
+Restore the last authorized tenant; enter directly when there is only one.
+Keep tenant switching available for multi-membership accounts. Ordinary users
+manage their own Fleet and Agents. Administrators additionally navigate members
+and open a member's Fleet with an explicit actor/owner banner.
 
-- Fleet selects and manages an Agent.
-- Thread Explorer shows active and archived Threads.
-- Thread detail shows one chronological transcript across Context Generations.
-- Runtime views expose health, configuration, logs, Extensions, and Observables.
+Fleet settings, Agents, devices, Memory, Calendar, usage and Inbox are coherent
+destinations. Application views remain accessible independently of Agent selection.
+Device pairing shows granted Agents/capabilities and requires local confirmation.
+Presence, authorization, execution state and mailbox verification are separate.
+Invited members show their status, invitation link and a copy action.
 
-Commands use HTTP. Snapshots and event streams provide state. Reconnection
-recalibrates from an authoritative snapshot.
+## Conversation and operations
 
-## Navigation
+An Agent opens its permanent Main or an independent Worker. The chronological
+transcript retains context boundaries and server event identities. Submit clears
+the matching draft only after durable acceptance. Pending, running, held, failed
+and cancelled work remain distinct. Reconnection reloads authoritative state.
 
-The stable route hierarchy is Fleet, selected Agent, Thread list, Thread
-detail, and Runtime views. Main Thread is the default Agent destination.
-Thread Explorer owns both current work and archived history.
+Assistant prose renders as ordinary conversation text. Reasoning and tools use
+compact expandable activity rows, including readable requests, output and terminal
+state. Long JSON and output scroll within their own panels. Unknown outcomes
+explain that the original operation must be inspected rather than repeated.
 
-The sidebar has one Fleet management entry. Its top navigation exposes Settings
-and Memory as peer sections, independent of Agent selection. Memory details keep
-Memory selected. Both sections mark the Fleet management entry active, including
-in the collapsed sidebar and mobile drawer. Section links remain accessible on
-narrow screens and when the Agent roster is unavailable.
+Environment choices show their identity and current grants. File upload, download,
+Artifact publication and explicit transfer retain source/destination context.
+A successful transfer has a service receipt; path names alone imply no sharing.
 
-The current bound Supervisor appears first in Agent lists, with a distinct role
-icon and label in the sidebar and Settings roster. Its role remains recognizable
-in collapsed and mobile navigation, independently of its name or runtime state.
-Ordinary Agents retain their relative order.
+## Administration and applications
 
-The fixed-height Agent navigation shows the Agent name above the viewed
-Thread's alias/id and its own status. Loading or unknown state never implies
-Idle; archived Threads show Archived. Agent process health remains separate.
-Explorer and Runtime show their page context without a Thread status badge.
-Long identities truncate with their full title available; tabs stay usable.
+Model choices show the effective Fleet default or Agent override. Usage presents
+the reporting timezone, total input/output and per-model daily/monthly rows;
+cached tokens are not counted twice and unknown attempts remain visible.
 
-The mobile Agent drawer initially focuses the selected Agent or Fleet management
-navigation link, or a safe navigation link when none is selected. Closing it returns focus to
-its opener. Lifecycle actions live in a labeled action menu, separate from
-navigation. Stop, Restart, and Disable require confirmation naming the Agent
-and explaining the effect on active work and pending inputs; Cancel receives
-initial focus. Start and Enable remain direct actions.
+Memory edits carry revisions, reject stale updates and preserve failed drafts.
+Calendar shows scheduling and delivery state without equating acceptance to a
+completed Agent action. Disabled applications remain readable. Inbox preserves
+unread state and separates notification preferences from application enablement.
 
-Route names and parameter syntax are implementation details owned by the
-router.
+Archive, member removal and permanent cleanup explain their distinct effects.
+Destructive confirmation identifies the target and defaults focus to Cancel.
+Cleanup progress distinguishes platform removal from unconfirmed remote stops.
+No success toast may claim that already-performed external effects were undone.
 
-## Fleet Memory
+## Shared visual and accessibility contract
 
-Memory is a Fleet-level destination independent of Agent selection. Search and
-paged previews lead to readable knowledge and provenance. Editing preserves
-drafts on failure and rejects stale revisions. Confirmed commits are distinct
-from search-index readiness. Deletion names the memory, explains suppression of
-relearning and the retained original conversations, and initially focuses Cancel.
-The service owns these outcomes; the browser does not infer them from local state.
+React components share the Radix/shadcn primitives in `frontend/src/components/ui`
+and tokens in `frontend/src/index.css`. Forest is the primary action color,
+neutral surfaces carry dense content, and status colors have semantic meaning.
+Avoid decorative gradients and animation unrelated to state.
 
-
-Domain structure and persisted knowledge are distinct views within Memory. Every
-default domain remains inspectable when empty. Directed type/relation diagrams
-and readable constraints accompany actual entity/relation rows and fact details;
-all graph interactions have keyboard-accessible text controls. Entity identity
-spans domains. Server-bounded filters and pagination preserve context on return.
-Current/history/as-of views and lifecycle labels come from the Memory service;
-expired obligations are not presented as completed. Provenance links reach the
-owning entry; unavailable raw history has a readable reference and explanation.
-Loading, empty domains, no matches and service failure are visibly distinct.
-Compact relation maps filter the adjacent facts directly. On narrow screens,
-structure is collapsible; active filters remain visible even when advanced
-controls are closed. Fact rows lead directly to the owning entry editor while
-retaining the browsing context.
-
-## Thread Explorer
-
-The heading shows cumulative Token Usage across the selected Agent's active
-and archived Threads, including Main, with the same disclosure as each row.
-
-Active and Archived are separate sections. A row should make identity and
-operability understandable without opening the Thread:
-
-- id and alias;
-- retention state and, when active, execution state;
-- created and last-active time;
-- Turn and Context Generation counts;
-- pending Input count and current context usage;
-- one cumulative Token Usage label.
-
-Rows use compact spacing without repeated identity icons. A parent marker
-beside the alias/id uses the complete list snapshot. Activating it focuses and
-centers the parent row, including across sections, with a three-second
-highlight that restarts on repeat activation. It does not open a conversation.
-Missing parents have an unavailable marker. Long names, keyboard navigation,
-narrow screens, and reduced-motion preferences remain supported.
-
-Main appears like a normal Thread but cannot be renamed, archived, or deleted.
-An idle Worker can be archived. An archived Worker can be restored or
-permanently deleted after explicit confirmation.
-
-Each section supports Worker selection and select-all, with Main's checkbox
-disabled. Active selection can be archived; archived selection can be deleted
-after a confirmation naming the Threads. Selected descendants finish before
-their ancestors. Partial failures retain the failed
-selection and explain each error, while completed items leave the selection.
-
-List data comes from the Agent index. Rendering the list must not open Thread
-metadata or Generation Journals. Activating, hovering, or focusing the Token
-Usage label reveals total input, cached input, output, and per-`provider:model`
-rows sorted by input plus output. Cached input is a subset of input and is not
-added again to the displayed total. The disclosure remains available to touch
-and keyboard users and bounds long model lists inside a scrollable panel.
-
-## Thread Detail
-
-The transcript is one continuous chronological history. Context transitions
-appear as system activity rows:
-
-- `context.compacted` exposes its compact summary for copying;
-- `context.renewed` marks the boundary without Provider content or copy action.
-
-The first load shows the latest complete EventStore page from the registered
-Generation Journals. “Load older messages” pages backward across Generations
-while preserving chronological display order and atomic commit boundaries.
-
-Active Threads expose the composer. Archived Threads are read-only. Agent or
-Runtime unavailability may disable mutation while preserving readable
-last-known content with an explicit stale/error state.
-
-## Input And Transcript Behavior
-
-The composer accepts text, attachments, or attachment-only Input. It clears
-only after durable acceptance and distinguishes accepted/pending state from
-Turn execution. Stop is available only for active work; entering text or adding
-attachments changes that action to Queue message while work is active.
-Unsent text drafts survive in-app navigation within the mounted browser app,
-isolated by Agent and Thread. Acceptance clears only the matching submitted
-text, including when the user has navigated away; failures and newer edits
-preserve the draft. Reload persistence and attachment drafts are not included.
-
-The UI never assumes that the next Assistant message is the response to the
-latest Input. Input, message, Tool, and Turn identities come from durable
-records.
-
-Assistant prose is ordinary conversation content. Operational work uses
-compact progressive-disclosure rows:
-
-- reasoning collapses after completion;
-- consecutive reasoning and Tool calls form a work disclosure even without
-  initial reasoning; visible content or a Turn boundary completes that group,
-  and visible content remains outside the disclosure;
-- Tool request, streaming output, and terminal outcome join by identity;
-- durable terminal content replaces provisional streaming content;
-- system/policy activity is distinct from Provider dialogue;
-- replayed and live records merge idempotently.
-
-## Status And Live Updates
-
-Thread detail starts from metadata, the latest transcript page, and an
-authoritative status snapshot, then follows the event stream from its captured
-cursor. The client replaces server status rather than reimplementing the
-runtime state machine.
-
-Agent process health, Thread retention state, and Thread execution state are
-separate signals. Disconnection and reconciliation failures are visible, not
-represented by blank or silently frozen panels.
-
-Module UI uses two fixed insertion points: Thread status and optional file
-roots. Server contributions determine presence. Tasks and Notes expose independent
-inline disclosures in the right sidebar; an enabled empty module remains distinct from a disabled one.
-Unknown or failed renderers show a local unavailable state without blocking the
-Thread. Readable module views remain available for archived Threads or stopped Agents.
-
-Workspace is the default file root. Selecting a module root loads its resources
-on demand. Removing it returns to Workspace and clears its requests, subscription,
-and preview. Agent, Thread, or composition changes also reset that selection;
-ordinary state updates and reconnects within the same composition preserve it.
-Read-only file roots refresh on demand without a live resource subscription.
-
-The Thread sidebar groups Context, module status and Recitation under Status,
-with file browsing under Files. When closed, its opener sits at the upper-right
-edge of the content area below Agent navigation as a narrow floating tab. It
-overlays the content edge and scrollbar without reserving a column, and stays
-fixed while messages scroll. The open panel
-places its close button at the upper-left before Status and Files. Closing
-returns keyboard focus to the opener. The composer contains message actions.
-Desktop docks the panel; tablet and phone use a drawer. Thread Explorer retains
-Files; Runtime has no sidebar. The Agent title opens Chat. Runtime and Threads remain
-available across both views, with icons and labels on wide screens and accessible
-icons on narrow screens.
-
-Files and Runtime use the same lightweight current-view selector with checked
-options and keyboard navigation. The Files selector replaces a repeated root
-heading; a single available root appears as plain text.
-
-File browsing shows the Workspace path or module Thread scope even when empty.
-Filename/path search covers the loaded tree, including collapsed folders, and
-reports incomplete results. Dotfiles are hidden by default with an explicit
-toggle. Clearing search preserves directory expansion. File previews are
-read-only source or images, with copy, original download, and a wrap control;
-code has highlighting and line numbers, with a plain-text fallback for large
-previews. Truncation and read errors are explicit. Original downloads preserve
-bytes and use attachment delivery; HTML is never executed in the preview.
-Closing a preview returns focus to its file, or to search if that file vanished.
-Closing or switching roots invalidates outstanding preview requests.
-
-Recitation shows the latest recorded normal request preparation with its time and
-ordered fragments. It is historical evidence, not a current preview or proof of
-provider delivery. Inspection reads journals without collecting module context.
-Current Tasks and Notes can differ from this snapshot. No recorded request, an
-empty recorded request, and a read failure are distinct states.
-
-## Layout And Visual Language
-
-- Desktop uses a Fleet/Agent navigation shell and readable centered content.
-- Mobile collapses navigation while keeping the composer reachable.
-- Operational JSON scrolls inside its disclosure panel, not the whole page.
-- Sticky controls leave enough bottom and safe-area space for the final message.
-- Loading, empty, read-only, working, failed, and disconnected states are explicit.
-
-The visual language is direct, calm, and compact. Production tokens live in
-`frontend/src/index.css`. Forest is the primary action color, gold is a
-restrained accent, and neutral surfaces carry operational density. Status
-colors are semantic. Avoid decorative gradients, oversized marketing
-typography, and animation unrelated to state change.
-
-## Accessibility
-
-- Keyboard focus is always visible and tab order follows the interaction.
-- Icon-only actions have accessible names.
-- Status is not communicated by color alone.
-- Motion respects `prefers-reduced-motion`.
-- Destructive confirmation names the affected Thread.
+Desktop uses persistent navigation and readable content widths. Narrow layouts
+collapse navigation without hiding primary actions; no page-wide horizontal
+scrolling is needed for forms or operational data. Empty, loading, failed,
+read-only and disconnected states are visibly distinct. Icon buttons have names,
+keyboard focus remains visible, dialogs restore focus and reduced-motion
+preferences are respected.
