@@ -9,7 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/application"
 )
 
-var ErrWorkerMissing = errors.New("Calendar occurrence has not been admitted")
+var ErrWorkerMissing = errors.New("calendar occurrence has not been admitted")
 
 type WorkerState struct {
 	ID, State  string

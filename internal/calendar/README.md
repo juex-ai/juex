@@ -43,3 +43,5 @@ does not read a user's local filesystem or execute user code.
 Completion, reminder and attention notices use independent Main and Inbox
 acknowledgements. Main notices are context for the next input, not a new wake.
 Notification preferences and verified-email delivery belong to Management.
+
+Agent cleanup pauses its schedules and preserves shared definitions and occurrence history. Undelivered work is fenced; uncertain external effects stay explicitly unresolved. New and resumed schedules check their target against cleanup tombstones inside the Fleet transaction. Whole-Fleet cleanup erases Calendar state and prevents late initialization.

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/juex-ai/juex/internal/app/managed"
 	"github.com/juex-ai/juex/internal/entrypoints/executionhttp"
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
@@ -25,6 +26,7 @@ import (
 	"github.com/juex-ai/juex/internal/execution/native"
 	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/lifecycle"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 )
 
@@ -185,5 +187,36 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 	}
 	if op := submit("once", "printf once >> /workspace/counter; printf ready"); op.State != "completed" {
 		t.Fatal("old operation replayed", op)
+	}
+	if _, err := f.directory.SetAgentArchived(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, true); err != nil {
+		t.Fatal(err)
+	}
+	request := lifecycle.Request{Target: lifecycle.Target{ID: uuid.NewString(), TenantID: f.tenant, UserID: f.actor, FleetID: scope.FleetID, AgentIDs: []string{f.agent.ID}}, Phase: lifecycle.Fence}
+	if _, err := app.Service.Purge(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	request.Phase = lifecycle.Erase
+	deadline = time.Now().Add(30 * time.Second)
+	var receipt lifecycle.Receipt
+	for time.Now().Before(deadline) {
+		receipt, err = app.Service.Purge(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if receipt.DataRemoved {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !receipt.DataRemoved || receipt.HostedPending != 0 {
+		t.Fatal("hosted cleanup did not settle", receipt)
+	}
+	for _, root := range []string{configuration.Backend.Root, configuration.Backend.WorkspaceRoot} {
+		if _, err := os.Stat(filepath.Join(root, environment.ID)); !os.IsNotExist(err) {
+			t.Fatal("hosted cleanup retained data", root, err)
+		}
+	}
+	if _, err := client.Environments(ctx, f.actor, f.tenant, f.agent.ID); err == nil {
+		t.Fatal("archived Agent recreated purged environment")
 	}
 }

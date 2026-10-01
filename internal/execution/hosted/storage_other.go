@@ -14,3 +14,7 @@ func storageMount(context.Context, Config) (*os.File, error) {
 func prepareStorage(context.Context, Config, Spec) error {
 	return errors.New("hosted storage requires Linux")
 }
+
+func purgeStorage(context.Context, Config, Spec) error {
+	return errors.New("hosted storage requires Linux")
+}

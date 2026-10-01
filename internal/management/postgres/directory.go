@@ -347,6 +347,13 @@ func fleetFor(ctx context.Context, tx pgx.Tx, tenantID, userID string) (manageme
 }
 
 func ensureFleet(ctx context.Context, tx pgx.Tx, m management.Membership) (management.Fleet, error) {
+	var busy bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM management.purges WHERE tenant_id=$1 AND user_id=$2 AND whole_fleet AND state!='completed')`, m.TenantID, m.UserID).Scan(&busy); err != nil {
+		return management.Fleet{}, err
+	}
+	if busy {
+		return management.Fleet{}, management.ErrConflict
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO management.fleets (tenant_id, user_id) VALUES ($1, $2) ON CONFLICT (tenant_id, user_id) DO NOTHING`, m.TenantID, m.UserID); err != nil {
 		return management.Fleet{}, err
 	}

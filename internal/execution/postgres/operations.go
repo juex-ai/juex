@@ -13,11 +13,11 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
-const operationColumns = `id,environment_id,scope,request,state,wait_until,cancel_requested,snapshot,octet_length(output),acknowledged,created_at`
+const operationColumns = `id,environment_id,scope,request,state,wait_until,cancel_requested,snapshot,CASE WHEN purged THEN COALESCE((snapshot->>'next_cursor')::bigint,0) ELSE octet_length(output) END,acknowledged,created_at,purged`
 
 func scanOperation(row pgx.Row) (execution.Operation, error) {
 	var operation execution.Operation
-	err := row.Scan(&operation.ID, &operation.EnvironmentID, &operation.Scope, &operation.Request, &operation.State, &operation.WaitUntil, &operation.CancelRequested, &operation.Snapshot, &operation.ResultCursor, &operation.Acknowledged, &operation.CreatedAt)
+	err := row.Scan(&operation.ID, &operation.EnvironmentID, &operation.Scope, &operation.Request, &operation.State, &operation.WaitUntil, &operation.CancelRequested, &operation.Snapshot, &operation.ResultCursor, &operation.Acknowledged, &operation.CreatedAt, &operation.Purged)
 	return operation, classify(err)
 }
 
@@ -35,6 +35,9 @@ func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope exec
 }
 
 func (s *Store) enqueue(ctx context.Context, tx pgx.Tx, device execution.Device, scope execution.Scope, request execprotocol.Request, wait time.Duration, hold bool) (execution.Operation, error) {
+	if err := purgeGate(ctx, tx, scope.FleetID, scope.AgentID); err != nil {
+		return execution.Operation{}, err
+	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return execution.Operation{}, err
@@ -268,6 +271,21 @@ func (s *Store) Observe(ctx context.Context, environment string, epoch int64, sn
 	if snapshot.AgentID != operation.Request.AgentID || snapshot.Kind != operation.Request.Kind {
 		return execprotocol.ErrDenied
 	}
+	if operation.Purged {
+		if snapshot.NextCursor < operation.ResultCursor {
+			return execprotocol.ErrConflict
+		}
+		clean := execprotocol.Snapshot{Version: snapshot.Version, EnvironmentID: environment, ID: snapshot.ID, AgentID: snapshot.AgentID, Kind: snapshot.Kind, State: snapshot.State, NextCursor: snapshot.NextCursor, OutputBytes: snapshot.OutputBytes, OutputExpired: true}
+		if snapshot.Kind == "export_file" {
+			clean.File = snapshot.File
+			clean.FileExpired = snapshot.FileExpired
+		}
+		encoded, _ := json.Marshal(clean)
+		if _, err = tx.Exec(ctx, `UPDATE execution.operations SET state=$3,snapshot=$4,updated_at=clock_timestamp() WHERE environment_id=$1 AND id=$2`, environment, snapshot.ID, snapshot.State, encoded); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
 	start := snapshot.NextCursor - int64(len(snapshot.Output))
 	if start > operation.ResultCursor {
 		return execprotocol.ErrConflict
@@ -325,7 +343,7 @@ func (s *Store) Acknowledge(ctx context.Context, environment string, epoch int64
 	if err := fence(ctx, tx, environment, epoch); err != nil {
 		return err
 	}
-	result, err := tx.Exec(ctx, `UPDATE execution.operations SET acknowledged=true,updated_at=clock_timestamp() WHERE environment_id=$1 AND id=$2 AND state IN ('completed','failed','cancelled','unknown') AND octet_length(output)=(snapshot->>'output_bytes')::bigint`, environment, id)
+	result, err := tx.Exec(ctx, `UPDATE execution.operations SET acknowledged=true,snapshot=CASE WHEN purged THEN snapshot-'file' ELSE snapshot END,updated_at=clock_timestamp() WHERE environment_id=$1 AND id=$2 AND state IN ('completed','failed','cancelled','unknown') AND (CASE WHEN purged THEN (snapshot->>'next_cursor')::bigint ELSE octet_length(output) END)=(snapshot->>'output_bytes')::bigint`, environment, id)
 	if err != nil {
 		return err
 	}

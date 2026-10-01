@@ -20,6 +20,9 @@ import (
 //go:embed schema.sql
 var schema string
 
+//go:embed purge_schema.sql
+var purgeSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -39,27 +42,30 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.memory.migrations')); CREATE SCHEMA IF NOT EXISTS memory; CREATE TABLE IF NOT EXISTS memory.schema_versions(version integer PRIMARY KEY, checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(schema)))
-	var stored string
-	err = tx.QueryRow(ctx, `SELECT checksum FROM memory.schema_versions WHERE version=1`).Scan(&stored)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, err = tx.Exec(ctx, schema); err != nil {
+	migrations := []string{schema, purgeSchema}
+	for i, migration := range migrations {
+		checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(migration)))
+		var stored string
+		err = tx.QueryRow(ctx, `SELECT checksum FROM memory.schema_versions WHERE version=$1`, i+1).Scan(&stored)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if _, err = tx.Exec(ctx, migration); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO memory.schema_versions VALUES($1,$2)`, i+1, checksum); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
+		} else if stored != checksum {
+			return errors.New("modified memory schema")
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO memory.schema_versions VALUES(1,$1)`, checksum); err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	} else if stored != checksum {
-		return errors.New("modified Memory schema")
 	}
 	var count int
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM memory.schema_versions`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 1 {
-		return errors.New("unsupported Memory schema")
+	if count != len(migrations) {
+		return errors.New("unsupported memory schema")
 	}
 	return tx.Commit(ctx)
 }
@@ -80,6 +86,9 @@ func (s *Store) transaction(ctx context.Context, scope application.Scope, write 
 		return err
 	}
 	defer rollback(tx)
+	if err = purgeGate(ctx, tx, scope); err != nil {
+		return err
+	}
 	initial, err := json.Marshal(memory.NewState())
 	if err != nil {
 		return err

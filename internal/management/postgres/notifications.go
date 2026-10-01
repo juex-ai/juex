@@ -98,6 +98,9 @@ func (d *Directory) RecordNotification(ctx context.Context, event application.Ev
 	if err := lockTenant(ctx, tx, event.Scope.TenantID); err != nil {
 		return err
 	}
+	if err := purgeGate(ctx, tx, event.Scope.FleetID, event.Scope.AgentID); err != nil {
+		return err
+	}
 	var fleet string
 	if err := tx.QueryRow(ctx, `SELECT id FROM management.fleets WHERE id=$1 AND tenant_id=$2 AND user_id=$3`, event.Scope.FleetID, event.Scope.TenantID, event.Scope.UserID).Scan(&fleet); err != nil {
 		return classify(err)

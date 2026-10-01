@@ -11,6 +11,7 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	Purge(ctx context.Context, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CancelPreparedOperation(ctx context.Context, actor *platform.Actor, environmentID string, requestID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CancelPreparedTransfer(ctx context.Context, actor *platform.Actor, requestID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -70,6 +71,11 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kExecutionClient struct {
 	*kClient
+}
+
+func (p *kExecutionClient) Purge(ctx context.Context, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Purge(ctx, requestJSON)
 }
 
 func (p *kExecutionClient) Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error) {

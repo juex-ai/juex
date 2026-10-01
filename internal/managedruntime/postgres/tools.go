@@ -165,6 +165,16 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 	}
 	defer rollback(tx)
 	for _, event := range events {
+		if len(event.AgentIDs) > 0 {
+			var recipients []string
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(a),ARRAY[]::text[]) FROM unnest($1::text[]) a WHERE NOT EXISTS(SELECT 1 FROM runtime.purges p WHERE a::uuid=ANY(p.agent_ids))`, event.AgentIDs).Scan(&recipients); err != nil {
+				return err
+			}
+			if len(recipients) == 0 {
+				continue
+			}
+			event.AgentIDs = recipients
+		}
 		encoded, err := json.Marshal(event)
 		if err != nil {
 			return err

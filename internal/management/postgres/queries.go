@@ -40,9 +40,9 @@ func (d *Directory) Members(ctx context.Context, actorID, tenantID string) ([]ma
 	if err := requireAdmin(ctx, tx, tenantID, actorID); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT u.id,u.email,u.email_verified,m.tenant_id,m.user_id,m.role,m.status,m.version,f.id
+	rows, err := tx.Query(ctx, `SELECT u.id,u.email,u.email_verified,m.tenant_id,m.user_id,m.role,m.status,m.version,COALESCE(f.id::text,'')
 	FROM management.memberships m JOIN management.users u ON u.id=m.user_id
-	JOIN management.fleets f ON f.tenant_id=m.tenant_id AND f.user_id=m.user_id WHERE m.tenant_id=$1 ORDER BY u.email`, tenantID)
+	LEFT JOIN management.fleets f ON f.tenant_id=m.tenant_id AND f.user_id=m.user_id WHERE m.tenant_id=$1 ORDER BY u.email`, tenantID)
 	if err != nil {
 		return nil, err
 	}

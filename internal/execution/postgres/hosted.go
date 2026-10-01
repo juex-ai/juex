@@ -10,11 +10,11 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
-const hostedColumns = `h.environment_id,h.agent_id,e.tenant_id,e.user_id,e.credential_hash,h.slot,h.memory_bytes,h.nano_cpus,h.running,h.last_activity,COALESCE(e.online_until>clock_timestamp(),false),EXISTS(SELECT 1 FROM execution.operations o WHERE o.environment_id=e.id AND (NOT o.acknowledged OR o.state IN ('waiting','dispatched','accepted','running'))),h.storage_identity,h.project_id,h.workspace_bytes,h.workspace_inodes,h.provisioned`
+const hostedColumns = `h.environment_id,h.agent_id,e.tenant_id,e.user_id,e.credential_hash,h.slot,h.memory_bytes,h.nano_cpus,h.running,h.last_activity,COALESCE(e.online_until>clock_timestamp(),false),EXISTS(SELECT 1 FROM execution.operations o WHERE o.environment_id=e.id AND (NOT o.acknowledged OR o.state IN ('waiting','dispatched','accepted','running'))),h.storage_identity,h.project_id,h.workspace_bytes,h.workspace_inodes,h.provisioned,h.purging,h.purge_data`
 
 func scanHosted(row pgx.Row) (execution.HostedResource, error) {
 	var h execution.HostedResource
-	err := row.Scan(&h.EnvironmentID, &h.AgentID, &h.TenantID, &h.UserID, &h.CredentialHash, &h.Slot, &h.Memory, &h.NanoCPUs, &h.Running, &h.LastActivity, &h.Online, &h.Busy, &h.StorageIdentity, &h.ProjectID, &h.WorkspaceBytes, &h.WorkspaceInodes, &h.Provisioned)
+	err := row.Scan(&h.EnvironmentID, &h.AgentID, &h.TenantID, &h.UserID, &h.CredentialHash, &h.Slot, &h.Memory, &h.NanoCPUs, &h.Running, &h.LastActivity, &h.Online, &h.Busy, &h.StorageIdentity, &h.ProjectID, &h.WorkspaceBytes, &h.WorkspaceInodes, &h.Provisioned, &h.Purging, &h.PurgeData)
 	return h, err
 }
 
@@ -24,6 +24,9 @@ func (s *Store) EnsureHosted(ctx context.Context, scope execution.Scope, candida
 		return execution.HostedResource{}, err
 	}
 	defer rollback(tx)
+	if err := purgeGate(ctx, tx, scope.FleetID, scope.AgentID); err != nil {
+		return execution.HostedResource{}, err
+	}
 	// Slot allocation and one-environment-per-Agent are one transaction.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.hosted.allocate'))`); err != nil {
 		return execution.HostedResource{}, err
@@ -96,12 +99,32 @@ func (s *Store) LockHosted(ctx context.Context, id string, action func(execution
 		return err
 	}
 	h, err := scanHosted(tx.QueryRow(ctx, `SELECT `+hostedColumns+` FROM execution.hosted h JOIN execution.environments e ON e.id=h.environment_id WHERE e.id=$1 FOR UPDATE OF h`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A concurrent reconciler may have finished permanent cleanup after
+		// HostedIDs took its snapshot.
+		return tx.Commit(ctx)
+	}
 	if err != nil {
 		return err
 	}
 	result, err := action(h)
 	if err != nil {
 		return err
+	}
+	if result.Purged {
+		if !h.Purging || !h.PurgeData || result.Running {
+			return execprotocol.ErrConflict
+		}
+		if _, err = tx.Exec(ctx, `DELETE FROM execution.hosted WHERE environment_id=$1`, id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE execution.environments SET status='revoked',credential_hash='purged:'||id::text,online_until=NULL,name='',working_directory='' WHERE id=$1`, id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE execution.operations SET acknowledged=true WHERE environment_id=$1`, id); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE execution.hosted SET running=$2,last_error=$3,provisioned=provisioned OR $4 WHERE environment_id=$1`, id, result.Running, result.Error, result.Provisioned); err != nil {
 		return err

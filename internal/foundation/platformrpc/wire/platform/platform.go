@@ -728,6 +728,8 @@ var fieldIDToName_ManagementModelProfileResult = map[int16]string{
 }
 
 type Memory interface {
+	Purge(ctx context.Context, requestJSON string) (r *Reply, err error)
+
 	Recall(ctx context.Context, accessJSON string, query string) (r *Reply, err error)
 
 	Maintain(ctx context.Context, scopeJSON string, threadID string, reason string, commandID string) (r *Reply, err error)
@@ -763,6 +765,73 @@ type Memory interface {
 	ReviewResult_(ctx context.Context, accessJSON string, threadID string, reviewID string) (r *Reply, err error)
 
 	Administer(ctx context.Context, accessJSON string, requestJSON string) (r *Reply, err error)
+}
+
+type MemoryPurgeArgs struct {
+	RequestJSON string `thrift:"requestJSON,1" frugal:"1,default,string" json:"requestJSON"`
+}
+
+func NewMemoryPurgeArgs() *MemoryPurgeArgs {
+	return &MemoryPurgeArgs{}
+}
+
+func (p *MemoryPurgeArgs) InitDefault() {
+}
+
+func (p *MemoryPurgeArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *MemoryPurgeArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *MemoryPurgeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryPurgeArgs(%+v)", *p)
+}
+
+var fieldIDToName_MemoryPurgeArgs = map[int16]string{
+	1: "requestJSON",
+}
+
+type MemoryPurgeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewMemoryPurgeResult() *MemoryPurgeResult {
+	return &MemoryPurgeResult{}
+}
+
+func (p *MemoryPurgeResult) InitDefault() {
+}
+
+var MemoryPurgeResult_Success_DEFAULT *Reply
+
+func (p *MemoryPurgeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return MemoryPurgeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *MemoryPurgeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *MemoryPurgeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *MemoryPurgeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("MemoryPurgeResult(%+v)", *p)
+}
+
+var fieldIDToName_MemoryPurgeResult = map[int16]string{
+	0: "success",
 }
 
 type MemoryRecallArgs struct {
@@ -2214,6 +2283,8 @@ var fieldIDToName_MemoryAdministerResult = map[int16]string{
 }
 
 type Calendar interface {
+	Purge(ctx context.Context, requestJSON string) (r *Reply, err error)
+
 	Health(ctx context.Context) (r *Reply, err error)
 
 	Status(ctx context.Context, accessJSON string) (r *Reply, err error)
@@ -2229,6 +2300,73 @@ type Calendar interface {
 	Assignment(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64) (r *Reply, err error)
 
 	CancelCommand(ctx context.Context, scopeJSON string, commandID string) (r *Reply, err error)
+}
+
+type CalendarPurgeArgs struct {
+	RequestJSON string `thrift:"requestJSON,1" frugal:"1,default,string" json:"requestJSON"`
+}
+
+func NewCalendarPurgeArgs() *CalendarPurgeArgs {
+	return &CalendarPurgeArgs{}
+}
+
+func (p *CalendarPurgeArgs) InitDefault() {
+}
+
+func (p *CalendarPurgeArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *CalendarPurgeArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *CalendarPurgeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarPurgeArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarPurgeArgs = map[int16]string{
+	1: "requestJSON",
+}
+
+type CalendarPurgeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarPurgeResult() *CalendarPurgeResult {
+	return &CalendarPurgeResult{}
+}
+
+func (p *CalendarPurgeResult) InitDefault() {
+}
+
+var CalendarPurgeResult_Success_DEFAULT *Reply
+
+func (p *CalendarPurgeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarPurgeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarPurgeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarPurgeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarPurgeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarPurgeResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarPurgeResult = map[int16]string{
+	0: "success",
 }
 
 type CalendarHealthArgs struct {
@@ -2875,6 +3013,8 @@ var fieldIDToName_CalendarCancelCommandResult = map[int16]string{
 }
 
 type Runtime interface {
+	Purge(ctx context.Context, requestJSON string) (r *Reply, err error)
+
 	Usage(ctx context.Context, actorID string, queryJSON string) (r *Reply, err error)
 
 	OperatorUsage(ctx context.Context, queryJSON string) (r *Reply, err error)
@@ -2904,6 +3044,73 @@ type Runtime interface {
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
 	CreateWorker(ctx context.Context, actor *Actor, parentID string, requestID string, name string) (r *Reply, err error)
+}
+
+type RuntimePurgeArgs struct {
+	RequestJSON string `thrift:"requestJSON,1" frugal:"1,default,string" json:"requestJSON"`
+}
+
+func NewRuntimePurgeArgs() *RuntimePurgeArgs {
+	return &RuntimePurgeArgs{}
+}
+
+func (p *RuntimePurgeArgs) InitDefault() {
+}
+
+func (p *RuntimePurgeArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *RuntimePurgeArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *RuntimePurgeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimePurgeArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimePurgeArgs = map[int16]string{
+	1: "requestJSON",
+}
+
+type RuntimePurgeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimePurgeResult() *RuntimePurgeResult {
+	return &RuntimePurgeResult{}
+}
+
+func (p *RuntimePurgeResult) InitDefault() {
+}
+
+var RuntimePurgeResult_Success_DEFAULT *Reply
+
+func (p *RuntimePurgeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimePurgeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimePurgeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimePurgeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimePurgeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimePurgeResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimePurgeResult = map[int16]string{
+	0: "success",
 }
 
 type RuntimeUsageArgs struct {
@@ -4154,6 +4361,8 @@ var fieldIDToName_RuntimeCreateWorkerResult = map[int16]string{
 }
 
 type Execution interface {
+	Purge(ctx context.Context, requestJSON string) (r *Reply, err error)
+
 	Health(ctx context.Context) (r *Reply, err error)
 
 	CancelPreparedOperation(ctx context.Context, actor *Actor, environmentID string, requestID string) (r *Reply, err error)
@@ -4213,6 +4422,73 @@ type Execution interface {
 	Cancel(ctx context.Context, actor *Actor, environmentID string, operationID string) (r *Reply, err error)
 
 	Extend(ctx context.Context, actor *Actor, environmentID string, operationID string, waitMillis int64) (r *Reply, err error)
+}
+
+type ExecutionPurgeArgs struct {
+	RequestJSON string `thrift:"requestJSON,1" frugal:"1,default,string" json:"requestJSON"`
+}
+
+func NewExecutionPurgeArgs() *ExecutionPurgeArgs {
+	return &ExecutionPurgeArgs{}
+}
+
+func (p *ExecutionPurgeArgs) InitDefault() {
+}
+
+func (p *ExecutionPurgeArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *ExecutionPurgeArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *ExecutionPurgeArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionPurgeArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionPurgeArgs = map[int16]string{
+	1: "requestJSON",
+}
+
+type ExecutionPurgeResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionPurgeResult() *ExecutionPurgeResult {
+	return &ExecutionPurgeResult{}
+}
+
+func (p *ExecutionPurgeResult) InitDefault() {
+}
+
+var ExecutionPurgeResult_Success_DEFAULT *Reply
+
+func (p *ExecutionPurgeResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionPurgeResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionPurgeResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionPurgeResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionPurgeResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionPurgeResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionPurgeResult = map[int16]string{
+	0: "success",
 }
 
 type ExecutionHealthArgs struct {

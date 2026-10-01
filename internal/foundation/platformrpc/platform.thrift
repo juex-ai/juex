@@ -27,6 +27,7 @@ service Management {
 }
 
 service Memory {
+  Reply Purge(1: string requestJSON)
 	Reply Recall(1: string accessJSON, 2: string query)
 	Reply Maintain(1: string scopeJSON, 2: string threadID, 3: string reason, 4: string commandID)
 	Reply Contribute(1: string scopeJSON, 2: string contributionJSON)
@@ -48,6 +49,7 @@ service Memory {
 }
 
 service Calendar {
+  Reply Purge(1: string requestJSON)
   Reply Health()
   Reply Status(1: string accessJSON)
   Reply Configure(1: string accessJSON, 2: i64 version, 3: bool enabled)
@@ -59,6 +61,7 @@ service Calendar {
 }
 
 service Runtime {
+  Reply Purge(1: string requestJSON)
 	Reply Usage(1: string actorID, 2: string queryJSON)
 	Reply OperatorUsage(1: string queryJSON)
 	Reply ConfigureUsage(1: string policyJSON)
@@ -77,6 +80,7 @@ service Runtime {
 }
 
 service Execution {
+  Reply Purge(1: string requestJSON)
   Reply Health()
   Reply CancelPreparedOperation(1: Actor actor, 2: string environmentID, 3: string requestID)
   Reply CancelPreparedTransfer(1: Actor actor, 2: string requestID)

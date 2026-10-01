@@ -210,3 +210,63 @@ func prepareStorage(ctx context.Context, config Config, spec Spec) error {
 	}
 	return nil
 }
+
+func purgeStorage(ctx context.Context, config Config, spec Spec) error {
+	if spec.StorageIdentity != config.StorageIdentity || spec.ProjectID == 0 {
+		return errors.New("hosted purge storage identity mismatch")
+	}
+	pool, err := storageMount(ctx, config)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pool.Close() }()
+	control := filepath.Join(config.Root, spec.EnvironmentID)
+	root := filepath.Join(config.WorkspaceRoot, spec.EnvironmentID)
+	rootInfo, rootErr := os.Lstat(root)
+	controlInfo, controlErr := os.Lstat(control)
+	if os.IsNotExist(rootErr) && os.IsNotExist(controlErr) {
+		return nil
+	}
+	if rootErr != nil && !os.IsNotExist(rootErr) {
+		return rootErr
+	}
+	if controlErr != nil && !os.IsNotExist(controlErr) {
+		return controlErr
+	}
+	if rootErr == nil && (!rootInfo.IsDir() || !controlOwned(rootInfo) || rootInfo.Mode().Perm()&0077 != 0) {
+		return errors.New("hosted purge workspace ownership mismatch")
+	}
+	if controlErr == nil && (!controlInfo.IsDir() || !controlOwned(controlInfo) || controlInfo.Mode().Perm()&0077 != 0) {
+		return errors.New("hosted purge control ownership mismatch")
+	}
+	wanted, _ := json.Marshal(struct {
+		Identity string
+		Project  uint32
+	}{spec.StorageIdentity, spec.ProjectID})
+	marker, err := os.ReadFile(filepath.Join(control, "storage.json"))
+	if err == nil && string(marker) != string(wanted) {
+		return errors.New("hosted purge allocation marker mismatch")
+	}
+	if err != nil && (!os.IsNotExist(err) || spec.Provisioned && rootErr == nil) {
+		return errors.New("hosted purge allocation marker missing")
+	}
+	if rootErr == nil {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Name() != "workspace" && entry.Name() != "home" {
+				return errors.New("unexpected hosted storage entry")
+			}
+			if err = projectDirectory(filepath.Join(root, entry.Name()), spec.ProjectID, false, 1000); err != nil {
+				return err
+			}
+		}
+		if err = os.RemoveAll(root); err != nil {
+			return err
+		}
+	}
+	// Keep the marker until data is gone so crash retries verify the allocation.
+	return os.RemoveAll(control)
+}

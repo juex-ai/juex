@@ -13,6 +13,13 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"Purge": kitex.NewMethodInfo(
+		purgeHandler,
+		newCalendarPurgeArgs,
+		newCalendarPurgeResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Health": kitex.NewMethodInfo(
 		healthHandler,
 		newCalendarHealthArgs,
@@ -133,6 +140,24 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func purgeHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.CalendarPurgeArgs)
+	realResult := result.(*platform.CalendarPurgeResult)
+	success, err := handler.(platform.Calendar).Purge(ctx, realArg.RequestJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newCalendarPurgeArgs() interface{} {
+	return platform.NewCalendarPurgeArgs()
+}
+
+func newCalendarPurgeResult() interface{} {
+	return platform.NewCalendarPurgeResult()
 }
 
 func healthHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -287,6 +312,16 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) Purge(ctx context.Context, requestJSON string) (r *platform.Reply, err error) {
+	var _args platform.CalendarPurgeArgs
+	_args.RequestJSON = requestJSON
+	var _result platform.CalendarPurgeResult
+	if err = p.c.Call(ctx, "Purge", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) Health(ctx context.Context) (r *platform.Reply, err error) {

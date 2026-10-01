@@ -68,6 +68,9 @@ func (s *Store) AdmitTransfer(ctx context.Context, scope execution.Scope, reques
 		return execution.Transfer{}, err
 	}
 	defer rollback(tx)
+	if err := purgeGate(ctx, tx, scope.FleetID, scope.AgentID); err != nil {
+		return execution.Transfer{}, err
+	}
 	devices, err := lockTransferDevices(ctx, tx, request)
 	if err != nil {
 		return execution.Transfer{}, err
@@ -110,7 +113,7 @@ func (s *Store) AdmitTransfer(ctx context.Context, scope execution.Scope, reques
 	}
 	var artifactID any
 	if request.ArtifactID != "" {
-		current, err := scanArtifact(tx.QueryRow(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE id=$1 FOR SHARE`, request.ArtifactID))
+		current, err := scanArtifact(tx.QueryRow(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE id=$1 AND NOT purge_blocked FOR SHARE`, request.ArtifactID))
 		if err != nil {
 			return execution.Transfer{}, err
 		}
@@ -217,7 +220,7 @@ func (s *Store) AttachTransferArtifact(ctx context.Context, prior execution.Tran
 	if transfer.State.Terminal() || transfer.CancelRequested || !transfer.Scope.SameAuthority(prior.Scope) || !transferDevicesAllowed(devices, transfer.Scope, transfer.Request) {
 		return transfer, execprotocol.ErrDenied
 	}
-	current, err := scanArtifact(tx.QueryRow(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE id=$1 FOR SHARE`, artifact.ID))
+	current, err := scanArtifact(tx.QueryRow(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE id=$1 AND NOT purge_blocked FOR SHARE`, artifact.ID))
 	if err != nil {
 		return transfer, err
 	}

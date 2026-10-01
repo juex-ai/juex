@@ -4,6 +4,7 @@ export type Role = "admin" | "member";
 export type MembershipStatus = "active" | "suspended" | "removed";
 
 export interface Agent {
+  purging: boolean;
   worker_depth: number;
   id: string;
   fleet_id: string;
@@ -113,6 +114,7 @@ export interface CalendarLunarOptions {
 }
 
 export interface CalendarOccurrence {
+  purged: boolean;
   external_pending: boolean;
   cancel_requested: boolean;
   id: string;
@@ -309,6 +311,8 @@ export interface FleetOverview {
   id: string;
   tenant_id: string;
   user_id: string;
+  purged: boolean;
+  purging: boolean;
   platform_default_model_id: string;
   owner: User;
   membership: Membership;
@@ -593,6 +597,36 @@ export interface Pairing {
   grants: Record<string, Array<string>>;
   agent_epochs: Record<string, number>;
   approval_nonce: string;
+}
+
+export interface PurgeJob {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  fleet_id: string;
+  agent_ids: Array<string>;
+  whole_fleet: boolean;
+  actor_id: string;
+  version: number;
+  state: string;
+  step: number;
+  receipts: Record<string, Receipt>;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PurgeRequest {
+  id: string;
+  agent_id: string;
+  version: number;
+}
+
+export interface Receipt {
+  fenced: boolean;
+  data_removed: boolean;
+  unconfirmed: number;
+  hosted_pending: number;
 }
 
 export interface ResultFact {

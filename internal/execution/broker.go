@@ -100,7 +100,17 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 		return s.Store.Settle(ctx, device.ID, device.ConnectionEpoch, operation.ID, execprotocol.Failed, "environment wait expired before dispatch")
 	}
 	if terminal && operation.ResultCursor == operation.Snapshot.OutputBytes {
-		if operation.Request.Kind == "export_file" || operation.Request.Kind == "import_file" {
+		if operation.Purged && operation.Request.Kind == "export_file" && operation.State == "completed" && !operation.Snapshot.FileExpired {
+			if operation.Snapshot.File == nil {
+				return execprotocol.ErrConflict
+			}
+			// Delete only the connector-owned export snapshot. The user's source
+			// file is outside platform cleanup and is never touched by this call.
+			if _, err := callDevice(ctx, exchange, execprotocol.Envelope{Type: "file_discard", AgentID: operation.Scope.AgentID, OperationID: operation.ID, FileManifest: &operation.Snapshot.File.Manifest}); err != nil {
+				return err
+			}
+		}
+		if !operation.Purged && (operation.Request.Kind == "export_file" || operation.Request.Kind == "import_file") {
 			ready, err := s.reconcileFileOperation(ctx, device, operation, exchange)
 			if err != nil || !ready {
 				return err
@@ -152,7 +162,7 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 		_, err := callDevice(ctx, exchange, execprotocol.Envelope{Type: "cancel", AgentID: operation.Scope.AgentID, OperationID: operation.ID})
 		return err
 	}
-	if operation.Request.Kind == "import_file" && !reply.Snapshot.State.Terminal() {
+	if !operation.Purged && operation.Request.Kind == "import_file" && !reply.Snapshot.State.Terminal() {
 		operation.Snapshot, operation.State = *reply.Snapshot, string(reply.Snapshot.State)
 		_, err := s.reconcileFileOperation(ctx, device, operation, exchange)
 		return err

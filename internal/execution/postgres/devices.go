@@ -98,6 +98,18 @@ func (s *Store) SetGrants(ctx context.Context, id string, version int64, grants 
 		return execution.Device{}, err
 	}
 	defer rollback(tx)
+	prior, err := scanDevice(tx.QueryRow(ctx, `SELECT `+deviceColumns+` FROM execution.environments WHERE id=$1 FOR UPDATE`, id))
+	if err != nil {
+		return execution.Device{}, err
+	}
+	if err = purgeGate(ctx, tx, prior.FleetID, ""); err != nil {
+		return execution.Device{}, err
+	}
+	for agent := range grants {
+		if err = purgeGate(ctx, tx, prior.FleetID, agent); err != nil {
+			return execution.Device{}, err
+		}
+	}
 	encoded, err := json.Marshal(grants)
 	if err != nil {
 		return execution.Device{}, err

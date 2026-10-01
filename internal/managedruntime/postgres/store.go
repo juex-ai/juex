@@ -59,6 +59,9 @@ var notificationsSchema string
 //go:embed usage_schema.sql
 var usageSchema string
 
+//go:embed purge_schema.sql
+var purgeSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -73,7 +76,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -108,7 +111,17 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 func (s *Store) begin(ctx context.Context) (pgx.Tx, error) {
-	return s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	// Shared acquisition is non-exclusive between ordinary transactions. Cleanup
+	// takes the exclusive side before any row locks, including cross-Agent work.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtext('juex.runtime.purge'))`); err != nil {
+		rollback(tx)
+		return nil, err
+	}
+	return tx, nil
 }
 func rollback(tx pgx.Tx) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -148,6 +161,9 @@ func (s *Store) EnsureAgent(ctx context.Context, scope managedruntime.Scope) (ma
 		return managedruntime.Thread{}, err
 	}
 	defer rollback(tx)
+	if err := runtimePurgeGate(ctx, tx, scope.FleetID, scope.AgentID); err != nil {
+		return managedruntime.Thread{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO runtime.agents(id,tenant_id,user_id,fleet_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, scope.AgentID, scope.TenantID, scope.UserID, scope.FleetID); err != nil {
 		return managedruntime.Thread{}, classify(err)
 	}
@@ -173,7 +189,7 @@ func (s *Store) EnsureAgent(ctx context.Context, scope managedruntime.Scope) (ma
 
 func checkScope(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope) error {
 	var id string
-	return classify(tx.QueryRow(ctx, `SELECT id FROM runtime.agents WHERE id=$1 AND tenant_id=$2 AND user_id=$3 AND fleet_id=$4`, scope.AgentID, scope.TenantID, scope.UserID, scope.FleetID).Scan(&id))
+	return classify(tx.QueryRow(ctx, `SELECT id FROM runtime.agents WHERE id=$1 AND tenant_id=$2 AND user_id=$3 AND fleet_id=$4 AND NOT purging`, scope.AgentID, scope.TenantID, scope.UserID, scope.FleetID).Scan(&id))
 }
 
 func (s *Store) AcceptInput(ctx context.Context, scope managedruntime.Scope, request managedruntime.InputRequest) (managedruntime.InputReceipt, error) {

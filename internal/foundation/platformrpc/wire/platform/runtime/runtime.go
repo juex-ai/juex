@@ -13,6 +13,13 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"Purge": kitex.NewMethodInfo(
+		purgeHandler,
+		newRuntimePurgeArgs,
+		newRuntimePurgeResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Usage": kitex.NewMethodInfo(
 		usageHandler,
 		newRuntimeUsageArgs,
@@ -182,6 +189,24 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func purgeHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimePurgeArgs)
+	realResult := result.(*platform.RuntimePurgeResult)
+	success, err := handler.(platform.Runtime).Purge(ctx, realArg.RequestJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimePurgeArgs() interface{} {
+	return platform.NewRuntimePurgeArgs()
+}
+
+func newRuntimePurgeResult() interface{} {
+	return platform.NewRuntimePurgeResult()
 }
 
 func usageHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -462,6 +487,16 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) Purge(ctx context.Context, requestJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimePurgeArgs
+	_args.RequestJSON = requestJSON
+	var _result platform.RuntimePurgeResult
+	if err = p.c.Call(ctx, "Purge", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) Usage(ctx context.Context, actorID string, queryJSON string) (r *platform.Reply, err error) {

@@ -48,6 +48,7 @@ type PeerAgent struct {
 }
 
 type Agent struct {
+	Purging        bool        `json:"purging"`
 	WorkerDepth    int         `json:"worker_depth"`
 	ID             string      `json:"id"`
 	FleetID        string      `json:"fleet_id"`
@@ -104,6 +105,8 @@ type FleetSettings struct {
 
 type FleetOverview struct {
 	Fleet
+	Purged                 bool          `json:"purged"`
+	Purging                bool          `json:"purging"`
 	PlatformDefaultModelID string        `json:"platform_default_model_id"`
 	Owner                  User          `json:"owner"`
 	Membership             Membership    `json:"membership"`

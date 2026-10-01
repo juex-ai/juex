@@ -150,3 +150,5 @@ The outbox retries a frozen identity and payload independently of model slots an
 never creates an input. Management owns personal Inbox visibility, preferences
 and verified-email delivery. Notifications link the original Thread and contain
 neither raw model/provider content nor tool arguments or output.
+
+Permanent cleanup fences Activation leases and all transaction writers before removing private conversations and jobs. Unfinished model attempts become unknown usage records before their context is erased. Already delivered peer messages remain the recipient’s history. Execution inbox recipients are scrubbed, and persistent tombstones reject late arrivals and attempts to recreate the removed Agent.

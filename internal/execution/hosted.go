@@ -24,12 +24,14 @@ type HostedResource struct {
 	ProjectID                                                uint32
 	WorkspaceBytes, WorkspaceInodes                          int64
 	Provisioned                                              bool
+	Purging, PurgeData                                       bool
 }
 
 type HostedResult struct {
 	Running     bool
 	Error       string
 	Provisioned bool
+	Purged      bool
 }
 
 type HostedRepository interface {
@@ -108,6 +110,27 @@ func (h *HostedManager) Reconcile(ctx context.Context) error {
 	for _, id := range ids {
 		err := h.Store.LockHosted(ctx, id, func(resource HostedResource) (HostedResult, error) {
 			result := HostedResult{Running: resource.Running, Provisioned: resource.Provisioned}
+			if resource.Purging {
+				// Stopping is idempotent and checks the actual owned container. A
+				// stale online heartbeat must never cause this environment to restart.
+				if err := h.Backend.Stop(ctx, resource); err != nil {
+					return result, err
+				}
+				result.Running = false
+				if resource.PurgeData {
+					backend, ok := h.Backend.(interface {
+						Purge(context.Context, HostedResource) error
+					})
+					if !ok {
+						return result, errors.New("hosted backend cannot purge storage")
+					}
+					if err := backend.Purge(ctx, resource); err != nil {
+						return result, err
+					}
+					result.Purged = true
+				}
+				return result, nil
+			}
 			scope, err := h.Authority.Agent(ctx, resource.UserID, resource.TenantID, resource.AgentID, true)
 			if err != nil && !errors.Is(err, execprotocol.ErrDenied) {
 				return result, err

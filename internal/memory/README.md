@@ -73,3 +73,5 @@ Inbox deliveries have independent acknowledgements and bounded retries. Notices
 contain outcome summaries, not original evidence or model-written reasons. A
 Worker failure after a committed decision cannot change the business result.
 Notification outages do not stop review processing.
+
+Agent cleanup removes its private review evidence, participation and pending commands while retaining shared Fleet knowledge. Whole-Fleet cleanup erases the application state. Durable tombstones are checked under the same Fleet transaction lock as initialization and mutation, so a delayed call cannot recreate deleted state.

@@ -84,6 +84,7 @@ type Device struct {
 }
 
 type Operation struct {
+	Purged          bool                  `json:"-"`
 	ID              string                `json:"id"`
 	EnvironmentID   string                `json:"environment_id"`
 	Scope           Scope                 `json:"scope"`

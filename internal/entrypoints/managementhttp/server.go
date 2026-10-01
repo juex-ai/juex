@@ -106,6 +106,10 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("GET /api/tenants/{tenant}/notification-preferences", s.signedIn(s.notificationPreferences))
 	mux.HandleFunc("PUT /api/tenants/{tenant}/notification-preferences", s.signedIn(s.configureNotifications))
 	mux.HandleFunc("GET /api/tenants/{tenant}/members", s.signedIn(s.members))
+	if _, ok := options.Directory.(Purges); ok {
+		mux.HandleFunc("GET /api/tenants/{tenant}/users/{owner}/purges", s.signedIn(s.purges))
+		mux.HandleFunc("POST /api/tenants/{tenant}/users/{owner}/purges", s.signedIn(s.requestPurge))
+	}
 	mux.HandleFunc("PATCH /api/tenants/{tenant}/members/{owner}", s.signedIn(s.changeMember))
 	mux.HandleFunc("GET /api/tenants/{tenant}/invitations", s.signedIn(s.invitations))
 	mux.HandleFunc("POST /api/tenants/{tenant}/invitations", s.signedIn(s.invite))

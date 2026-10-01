@@ -83,3 +83,41 @@ func TestHostedXFSRejectsDisabledEnforcement(t *testing.T) {
 		t.Fatal("accepted disabled quota enforcement")
 	}
 }
+
+func TestHostedXFSPurgeChecksOwnershipAndSurvivesRetry(t *testing.T) {
+	root, identity := os.Getenv("JUEX_HOSTED_STORAGE_ROOT"), os.Getenv("JUEX_HOSTED_STORAGE_ID")
+	if root == "" || identity == "" {
+		t.Skip("requires isolated XFS project-quota fixture")
+	}
+	config := Config{Root: t.TempDir(), WorkspaceRoot: root, StorageIdentity: identity}
+	spec := Spec{EnvironmentID: uuid.NewString(), ProjectID: 3901, StorageIdentity: identity, WorkspaceBytes: 32 << 20, WorkspaceInodes: 128}
+	ctx := context.Background()
+	defer func() { _ = os.RemoveAll(filepath.Join(root, spec.EnvironmentID)) }()
+	if err := prepareStorage(ctx, config, spec); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, spec.EnvironmentID)
+	file := filepath.Join(workspace, "workspace", "private-data")
+	if err := os.WriteFile(file, []byte("private workspace"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	wrong := spec
+	wrong.ProjectID++
+	if err := purgeStorage(ctx, config, wrong); err == nil {
+		t.Fatal("purge accepted a different allocation")
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatal("failed purge changed workspace", err)
+	}
+	if err := purgeStorage(ctx, config, spec); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{workspace, filepath.Join(config.Root, spec.EnvironmentID)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("purge retained owned data", path, err)
+		}
+	}
+	if err := purgeStorage(ctx, config, spec); err != nil {
+		t.Fatal("lost cleanup reply cannot be retried", err)
+	}
+}

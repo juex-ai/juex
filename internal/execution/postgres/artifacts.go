@@ -42,6 +42,9 @@ func (s *Store) ReserveArtifact(ctx context.Context, scope execution.Scope, requ
 		return execution.Artifact{}, err
 	}
 	defer rollback(tx)
+	if err := purgeGate(ctx, tx, scope.FleetID, scope.AgentID); err != nil {
+		return execution.Artifact{}, err
+	}
 	// Every object, including unfinished uploads and purges, reserves bytes in
 	// the same local volume. Serializing reservations prevents cross-user races.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.blob.capacity'))`); err != nil {
@@ -83,7 +86,7 @@ func (s *Store) ReserveArtifact(ctx context.Context, scope execution.Scope, requ
 }
 
 func (s *Store) Artifact(ctx context.Context, scope execution.Scope, id string) (execution.Artifact, error) {
-	artifact, err := scanArtifact(s.pool.QueryRow(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE id=$1 AND tenant_id=$2 AND user_id=$3 AND fleet_id=$4`, id, scope.TenantID, scope.UserID, scope.FleetID))
+	artifact, err := scanArtifact(s.pool.QueryRow(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE id=$1 AND tenant_id=$2 AND user_id=$3 AND fleet_id=$4 AND NOT purge_blocked`, id, scope.TenantID, scope.UserID, scope.FleetID))
 	if err != nil {
 		return execution.Artifact{}, err
 	}
@@ -100,7 +103,7 @@ func (s *Store) Artifacts(ctx context.Context, scope execution.Scope, after stri
 	if after == "" {
 		after = uuid.Nil.String()
 	}
-	rows, err := s.pool.Query(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE tenant_id=$1 AND user_id=$2 AND fleet_id=$3 AND state IN ('uploading','ready') AND (agent_id=$4 OR state='ready' AND visibility='fleet') AND id>$5 ORDER BY id LIMIT $6`, scope.TenantID, scope.UserID, scope.FleetID, scope.AgentID, after, limit)
+	rows, err := s.pool.Query(ctx, `SELECT `+artifactColumns+` FROM execution.artifacts WHERE tenant_id=$1 AND user_id=$2 AND fleet_id=$3 AND NOT purge_blocked AND state IN ('uploading','ready') AND (agent_id=$4 OR state='ready' AND visibility='fleet') AND id>$5 ORDER BY id LIMIT $6`, scope.TenantID, scope.UserID, scope.FleetID, scope.AgentID, after, limit)
 	if err != nil {
 		return nil, classify(err)
 	}
@@ -129,6 +132,9 @@ func (s *Store) PublishArtifact(ctx context.Context, scope execution.Scope, id s
 		return execution.Artifact{}, err
 	}
 	defer rollback(tx)
+	if err := purgeGate(ctx, tx, scope.FleetID, scope.AgentID); err != nil {
+		return execution.Artifact{}, err
+	}
 	if source := prior.Request.Source; source != nil {
 		device, err := scanDevice(tx.QueryRow(ctx, `SELECT `+deviceColumns+` FROM execution.environments WHERE id=$1 FOR UPDATE`, source.EnvironmentID))
 		if err != nil {

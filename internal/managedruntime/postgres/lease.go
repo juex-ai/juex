@@ -15,7 +15,7 @@ func (s *Store) Claim(ctx context.Context, agentID, holder string, ttl time.Dura
 	}
 	lease := managedruntime.Lease{AgentID: agentID, Holder: holder}
 	err := s.pool.QueryRow(ctx, `UPDATE runtime.agents SET holder=$2,epoch=epoch+1,lease_until=clock_timestamp()+make_interval(secs=>$3),last_scheduled_at=clock_timestamp()
-	WHERE id=$1 AND lease_until<=clock_timestamp() RETURNING epoch,lease_until`, agentID, holder, ttl.Seconds()).Scan(&lease.Epoch, &lease.ExpiresAt)
+	WHERE id=$1 AND NOT purging AND lease_until<=clock_timestamp() RETURNING epoch,lease_until`, agentID, holder, ttl.Seconds()).Scan(&lease.Epoch, &lease.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return lease, managedruntime.ErrFence
 	}

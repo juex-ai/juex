@@ -62,7 +62,24 @@ func (s *Store) ApprovePair(ctx context.Context, pair execution.Pairing) (execut
 	if err != nil {
 		return execution.Pairing{}, err
 	}
-	return scanPair(s.pool.QueryRow(ctx, `UPDATE execution.pairings SET state='approved',owner_scope=$2,grants=$3,agent_epochs=$4,approval_nonce=$5 WHERE id=$1 AND state='pending' AND expires_at>clock_timestamp() RETURNING `+pairColumns, pair.ID, owner, grants, epochs, pair.ApprovalNonce))
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return execution.Pairing{}, err
+	}
+	defer rollback(tx)
+	if err = purgeGate(ctx, tx, pair.Owner.FleetID, ""); err != nil {
+		return execution.Pairing{}, err
+	}
+	for agent := range pair.Grants {
+		if err = purgeGate(ctx, tx, pair.Owner.FleetID, agent); err != nil {
+			return execution.Pairing{}, err
+		}
+	}
+	value, err := scanPair(tx.QueryRow(ctx, `UPDATE execution.pairings SET state='approved',owner_scope=$2,grants=$3,agent_epochs=$4,approval_nonce=$5 WHERE id=$1 AND state='pending' AND expires_at>clock_timestamp() RETURNING `+pairColumns, pair.ID, owner, grants, epochs, pair.ApprovalNonce))
+	if err != nil {
+		return value, err
+	}
+	return value, tx.Commit(ctx)
 }
 
 func (s *Store) ConfirmPair(ctx context.Context, confirmation execution.PairConfirmation) (execution.Device, error) {
@@ -74,6 +91,14 @@ func (s *Store) ConfirmPair(ctx context.Context, confirmation execution.PairConf
 	pair, err := scanPair(tx.QueryRow(ctx, `SELECT `+pairColumns+` FROM execution.pairings WHERE id=$1 AND pair_secret_hash=$2 AND credential_hash=$3 AND approval_nonce=$4 AND state IN ('approved','confirmed') AND (expires_at>clock_timestamp() OR state='confirmed') FOR UPDATE`, confirmation.ID, execution.Digest(confirmation.Secret), execution.Digest(confirmation.Credential), confirmation.ApprovalNonce))
 	if err != nil {
 		return execution.Device{}, err
+	}
+	if err = purgeGate(ctx, tx, pair.Owner.FleetID, ""); err != nil {
+		return execution.Device{}, err
+	}
+	for agent := range pair.Grants {
+		if err = purgeGate(ctx, tx, pair.Owner.FleetID, agent); err != nil {
+			return execution.Device{}, err
+		}
 	}
 	if pair.State != "confirmed" {
 		grants, err := json.Marshal(pair.Grants)

@@ -77,3 +77,5 @@ future notifications. Each business email attempt checks current membership,
 verified current address and preferences. It contains only an authenticated Inbox
 link, never application evidence or conversation content. SMTP retries retain their
 message identity but cannot promise exactly-once remote delivery.
+
+Permanent cleanup is a durable, owner-scoped job for an archived Agent or a removed member’s Fleet. Management freezes the target identity, fences every participant before erasing data, and retries each acknowledged phase independently. Service tombstones reject late writes and recreation. Platform data removal and outstanding external stops are separate results. Usage and audit survive; a purged Fleet is replaced only when its owner accepts a new invitation. Historical backups expire under the operator’s retention policy.

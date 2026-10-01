@@ -49,6 +49,7 @@ type Job struct {
 }
 
 type Occurrence struct {
+	Purged          bool   `json:"purged"`
 	ExternalPending bool   `json:"external_pending"`
 	CancelRequested bool   `json:"cancel_requested"`
 	ID              string `json:"id"`

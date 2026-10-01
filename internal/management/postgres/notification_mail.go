@@ -34,7 +34,7 @@ func notificationMailAllowed(ctx context.Context, tx pgx.Tx, id, recipient strin
 	err := tx.QueryRow(ctx, `SELECT m.status='active',u.email_verified,p.email,p.completions,u.email,n.event->>'kind'
  FROM management.notifications n JOIN management.memberships m ON m.tenant_id=n.tenant_id AND m.user_id=n.user_id
  JOIN management.users u ON u.id=n.user_id JOIN management.notification_preferences p ON p.tenant_id=n.tenant_id AND p.user_id=n.user_id
- WHERE n.id=$1 AND n.visible FOR SHARE OF m,u,p`, id).Scan(&active, &verified, &email, &completion, &current, &kind)
+ WHERE n.id=$1 AND n.visible AND NOT EXISTS(SELECT 1 FROM management.purges q WHERE q.fleet_id=n.fleet_id AND (q.whole_fleet OR NULLIF(n.event->'scope'->>'agent_id','')::uuid=ANY(q.agent_ids))) FOR SHARE OF m,u,p`, id).Scan(&active, &verified, &email, &completion, &current, &kind)
 	if err == pgx.ErrNoRows {
 		return false, nil
 	}

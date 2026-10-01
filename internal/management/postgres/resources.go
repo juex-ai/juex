@@ -32,6 +32,9 @@ func authorizeFleet(ctx context.Context, tx pgx.Tx, actorID, tenantID, ownerID s
 		return management.Fleet{}, owner, management.ErrDenied
 	}
 	fleet, err := fleetFor(ctx, tx, tenantID, ownerID)
+	if err == nil && write {
+		err = purgeGate(ctx, tx, fleet.ID, "")
+	}
 	return fleet, owner, err
 }
 
@@ -42,11 +45,28 @@ func (d *Directory) FleetOverview(ctx context.Context, actorID, tenantID, ownerI
 	}
 	defer rollback(tx)
 	fleet, member, err := authorizeFleet(ctx, tx, actorID, tenantID, ownerID, false)
+	purged := false
+	if errors.Is(err, management.ErrDenied) {
+		member, err = purgeOwner(ctx, tx, actorID, tenantID, ownerID)
+		if err == nil && member.Status == management.Removed {
+			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM management.purges WHERE tenant_id=$1 AND user_id=$2 AND whole_fleet AND state='completed') AND NOT EXISTS(SELECT 1 FROM management.fleets WHERE tenant_id=$1 AND user_id=$2)`, tenantID, ownerID).Scan(&purged)
+			fleet = management.Fleet{TenantID: tenantID, UserID: ownerID}
+		}
+		if err == nil && !purged {
+			err = management.ErrDenied
+		}
+	}
 	if err != nil {
 		return management.FleetOverview{}, err
 	}
-	result := management.FleetOverview{Fleet: fleet, Membership: member, Agents: []management.Agent{}}
+	result := management.FleetOverview{Fleet: fleet, Membership: member, Agents: []management.Agent{}, Purged: purged}
 	if err := tx.QueryRow(ctx, `SELECT id,email,email_verified FROM management.users WHERE id=$1`, ownerID).Scan(&result.Owner.ID, &result.Owner.Email, &result.Owner.EmailVerified); err != nil {
+		return result, err
+	}
+	if purged {
+		return result, tx.Commit(ctx)
+	}
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM management.purges WHERE fleet_id=$1 AND whole_fleet)`, fleet.ID).Scan(&result.Purging); err != nil {
 		return result, err
 	}
 	result.Settings, err = fleetSettings(ctx, tx, fleet.ID)
@@ -130,13 +150,13 @@ func (d *Directory) ConfigureFleet(ctx context.Context, actorID, tenantID, owner
 	return settings, tx.Commit(ctx)
 }
 
-const agentColumns = `id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch,worker_depth`
+const agentColumns = `id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch,worker_depth,purging`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanAgent(row rowScanner) (management.Agent, error) {
 	var a management.Agent
-	err := row.Scan(&a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth)
+	err := row.Scan(&a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth, &a.Purging)
 	return a, classify(err)
 }
 
@@ -219,6 +239,9 @@ func (d *Directory) SetAgentArchived(ctx context.Context, actorID, tenantID, age
 	if err != nil {
 		return management.Agent{}, err
 	}
+	if err := purgeGate(ctx, tx, fleet.ID, agentID); err != nil {
+		return management.Agent{}, err
+	}
 	status, action := management.AgentActive, "agent.restored"
 	if archived {
 		status, action = management.AgentArchived, "agent.archived"
@@ -268,6 +291,9 @@ func agentAuthority(ctx context.Context, tx pgx.Tx, actorID, tenantID, agentID s
 	}
 	agent, err := scanAgent(tx.QueryRow(ctx, `SELECT `+agentColumns+` FROM management.agents WHERE id=$1`, agentID))
 	if err != nil {
+		return management.AgentAuthority{}, err
+	}
+	if err := purgeGate(ctx, tx, fleet.ID, agentID); err != nil {
 		return management.AgentAuthority{}, err
 	}
 	if execute && agent.Status != management.AgentActive {

@@ -28,7 +28,7 @@ func (s *Store) PendingDeliveries(ctx context.Context, limit int) ([]calendar.De
 		return nil, application.ErrInvalid
 	}
 	rows, err := s.pool.Query(ctx, `SELECT d.value FROM calendar.fleets f CROSS JOIN LATERAL jsonb_each(f.state->'deliveries') d
- WHERE COALESCE(d.value->>'settled','false')='false' AND (d.value->>'finished'='false' OR (d.value->>'attempted_at')::timestamptz < clock_timestamp()-interval '15 seconds') ORDER BY d.value->>'attempted_at',f.id,d.key LIMIT $1`, limit)
+ WHERE COALESCE(d.value->>'purged','false')='false' AND COALESCE(d.value->>'settled','false')='false' AND (d.value->>'finished'='false' OR (d.value->>'attempted_at')::timestamptz < clock_timestamp()-interval '15 seconds') ORDER BY d.value->>'attempted_at',f.id,d.key LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}

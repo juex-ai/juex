@@ -29,6 +29,7 @@ type Management struct {
 	Auth      *postgres.Auth
 	Mailer    *maildelivery.SMTP
 	Authority RuntimeAuthority
+	Purger    *management.Purger
 }
 
 func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, error) {
@@ -79,7 +80,32 @@ func OpenManagement(ctx context.Context, config ManagementConfig) (*Management, 
 func (m *Management) Close() { m.Pool.Close() }
 
 func (m *Management) RunBackground(ctx context.Context) {
+	done := make(chan struct{})
+	go func() { defer close(done); m.runPurges(ctx) }()
+	defer func() { <-done }()
 	m.runMail(ctx)
+}
+
+func (m *Management) runPurges(ctx context.Context) {
+	if m.Purger == nil {
+		<-ctx.Done()
+		return
+	}
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		pass, cancel := context.WithTimeout(ctx, 35*time.Second)
+		_, err := m.Purger.Reconcile(pass)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			slog.Error("resource cleanup step failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (m *Management) runMail(ctx context.Context) {

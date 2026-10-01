@@ -27,6 +27,13 @@
 .management-panel { border: 1px solid var(--juex-cream-200); border-radius: 6px; background: var(--card); margin-bottom: 24px; overflow: hidden; }
 .management-panel-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--juex-cream-200); }
 .management-panel-heading h2 { font-size: 15px; font-weight: 600; }
+.management-purge-row { padding: 20px 22px; display: flex; justify-content: space-between; gap: 24px; border-top: 1px solid var(--juex-cream-200); overflow-wrap: anywhere; }
+.management-purge-row:first-child { border-top: 0; }
+.management-purge-row p { margin: 5px 0; font-size: 14px; }
+.management-purge-row small { font-size: 12px; color: var(--juex-ink-600); }
+.management-purge-status { min-width: 220px; font-size: 13px; }
+.management-purge-status details { margin-top: 8px; }
+@media(max-width:700px) { .management-purge-row { flex-direction: column; gap: 12px; } }
 .management-panel-heading>span { font-size: 12px; color: var(--juex-ink-600); }
 .management-table-wrap { overflow-x: auto; }
 .management-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }

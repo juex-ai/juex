@@ -41,6 +41,10 @@ func (b hostedBackend) Stop(ctx context.Context, resource execution.HostedResour
 	return b.docker.Stop(ctx, hostedSpec(resource, ""))
 }
 
+func (b hostedBackend) Purge(ctx context.Context, resource execution.HostedResource) error {
+	return b.docker.Purge(ctx, hostedSpec(resource, ""))
+}
+
 func (e *Execution) configureHosted(ctx context.Context, path, listen, caPath string, store execution.HostedRepository) error {
 	info, err := os.Lstat(path)
 	if err != nil {

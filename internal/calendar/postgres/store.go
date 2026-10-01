@@ -20,6 +20,9 @@ import (
 //go:embed schema.sql
 var schema string
 
+//go:embed purge_schema.sql
+var purgeSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -39,27 +42,30 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.calendar.migrations')); CREATE SCHEMA IF NOT EXISTS calendar; CREATE TABLE IF NOT EXISTS calendar.schema_versions(version integer PRIMARY KEY, checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(schema)))
-	var stored string
-	err = tx.QueryRow(ctx, `SELECT checksum FROM calendar.schema_versions WHERE version=1`).Scan(&stored)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, err = tx.Exec(ctx, schema); err != nil {
+	migrations := []string{schema, purgeSchema}
+	for i, migration := range migrations {
+		checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(migration)))
+		var stored string
+		err = tx.QueryRow(ctx, `SELECT checksum FROM calendar.schema_versions WHERE version=$1`, i+1).Scan(&stored)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if _, err = tx.Exec(ctx, migration); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO calendar.schema_versions VALUES($1,$2)`, i+1, checksum); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
+		} else if stored != checksum {
+			return errors.New("modified calendar schema")
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO calendar.schema_versions VALUES(1,$1)`, checksum); err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	} else if stored != checksum {
-		return errors.New("modified Calendar schema")
 	}
 	var count int
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM calendar.schema_versions`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 1 {
-		return errors.New("unsupported Calendar schema")
+	if count != len(migrations) {
+		return errors.New("unsupported calendar schema")
 	}
 	return tx.Commit(ctx)
 }
@@ -80,6 +86,9 @@ func (s *Store) transaction(ctx context.Context, scope application.Scope, write 
 		return err
 	}
 	defer rollback(tx)
+	if err = purgeGate(ctx, tx, scope); err != nil {
+		return err
+	}
 	initial, err := json.Marshal(calendar.NewState())
 	if err != nil {
 		return err
@@ -104,6 +113,21 @@ func (s *Store) transaction(ctx context.Context, scope application.Scope, write 
 		return err
 	}
 	if write {
+		// Human/peer calls may carry a separately authorized schedule target.
+		// Recheck that target inside the same lock as the cleanup barrier.
+		targets := []string{}
+		for _, job := range state.Jobs {
+			if job.Status == "active" && job.AgentID != "" {
+				targets = append(targets, job.AgentID)
+			}
+		}
+		var blocked bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM calendar.purges WHERE fleet_id=$1 AND (whole_fleet OR agent_ids && $2::uuid[]))`, scope.FleetID, targets).Scan(&blocked); err != nil {
+			return err
+		}
+		if blocked {
+			return application.ErrDenied
+		}
 		state.StageNotifications()
 		data, err = json.Marshal(state)
 		if err != nil {

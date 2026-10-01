@@ -11,6 +11,7 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	Purge(ctx context.Context, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Status(ctx context.Context, accessJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Configure(ctx context.Context, accessJSON string, version int64, enabled bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -48,6 +49,11 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kCalendarClient struct {
 	*kClient
+}
+
+func (p *kCalendarClient) Purge(ctx context.Context, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Purge(ctx, requestJSON)
 }
 
 func (p *kCalendarClient) Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error) {

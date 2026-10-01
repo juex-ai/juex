@@ -15,8 +15,10 @@ import (
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
 	"github.com/juex-ai/juex/internal/entrypoints/webassets"
 	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
+	"github.com/juex-ai/juex/internal/foundation/lifecycle"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	runtimerpc "github.com/juex-ai/juex/internal/managedruntime/rpc"
+	"github.com/juex-ai/juex/internal/management"
 	memoryrpc "github.com/juex-ai/juex/internal/memory/rpc"
 )
 
@@ -52,6 +54,13 @@ func serveManagement(ctx context.Context, app *managed.Management, config serveC
 			return err
 		}
 	}
+	participants := map[string]lifecycle.Participant{"runtime": runtime}
+	for name, value := range map[string]any{"execution": execution, "memory": memory, "calendar": calendar} {
+		if p, ok := value.(lifecycle.Participant); ok {
+			participants[name] = p
+		}
+	}
+	app.Purger = &management.Purger{Repository: app.Directory, Services: participants}
 	handler, err := managementhttp.New(managementhttp.Options{Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, Calendar: calendar, PublicURL: config.PublicURL, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
 	if err != nil {
 		return err
