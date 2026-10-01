@@ -21,7 +21,19 @@ sudo python3 /opt/juex/operator.py --root /var/lib/juex-management resume
 
 平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有 HTTPS 端口公开绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
 
-使用 `docker compose --env-file /var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec management juex-management bootstrap --email admin@example.com` 生成首位管理员设置链接。这是一次性秘密 URL，必须私下交付。SMTP 配置放在 `secrets/management.env`；未配置 SMTP 时仍能复制邀请链接。模型凭据通过 Management 运维 CLI 配置。不能向 Agent 暴露部署私有文件和服务证书。
+使用 `docker compose --env-file /var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec management juex-management bootstrap --email admin@example.com` 生成首位管理员设置链接。这是一次性秘密 URL，必须私下交付。未配置 SMTP 时仍能复制邀请链接。模型凭据通过 Management 运维 CLI 配置。不能向 Agent 暴露部署私有文件和服务证书。
+
+配置 SMTP 时，将密码放入临时导出的 `JUEX_SMTP_CREDENTIAL` 环境变量，不写入 Shell 历史，然后运行：
+
+```sh
+docker compose --env-file /var/lib/juex-management/compose.env \
+  -f /var/lib/juex-management/compose.yaml exec -T -e JUEX_SMTP_CREDENTIAL \
+  management juex-management smtp seal --address smtp.example.com:587 \
+  --from juex@example.com --username mailer
+unset JUEX_SMTP_CREDENTIAL
+```
+
+将输出的 `JUEX_SMTP_CONFIG=...` 一行保存到 `secrets/management.env`，替换已有值，再使用 `operator.py up` 按新配置重建 Management。整个 SMTP 配置使用部署主密钥加密，不能持久保存密码输入。重新运行即可替换凭据；删除配置并重建 Management 即停用邮件。已有邮件队列仍会持久保存。主密钥须放入下述独立恢复归档，恢复时需要匹配的密钥。
 
 普通进程日志放在 `logs/SERVICE/juex-*.log`，保留七天、每文件上限 10 MiB、每服务最多七份。空闲服务每小时清理过期日志。Docker 不重复存储进程日志。业务回执、用量和审计使用独立的数据库保留规则。
 

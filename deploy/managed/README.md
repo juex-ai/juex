@@ -46,10 +46,29 @@ use `operator.py up/resume` for service startup.
 Issue the first-admin setup link with `docker compose --env-file
 /var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec
 management juex-management bootstrap --email admin@example.com`. It is a secret
-one-use URL; deliver it privately. SMTP settings belong in
-`secrets/management.env`; copy-link invitations remain available without SMTP.
+one-use URL; deliver it privately. Copy-link invitations remain available
+without SMTP.
 Model credentials are provisioned through the Management operator CLI. Do not
 expose the private deployment files or service certificates to agents.
+
+To configure SMTP, set the password in a temporary exported
+`JUEX_SMTP_CREDENTIAL` variable without saving it in shell history, then run:
+
+```sh
+docker compose --env-file /var/lib/juex-management/compose.env \
+  -f /var/lib/juex-management/compose.yaml exec -T -e JUEX_SMTP_CREDENTIAL \
+  management juex-management smtp seal --address smtp.example.com:587 \
+  --from juex@example.com --username mailer
+unset JUEX_SMTP_CREDENTIAL
+```
+
+Save the emitted `JUEX_SMTP_CONFIG=...` line in `secrets/management.env`,
+replacing any existing value, then use `operator.py up` to recreate Management
+with the new setting. This encrypts the entire SMTP configuration with the
+deployment master key; never persist the password input. Rerun to replace
+credentials, or remove the setting and recreate Management to disable mail.
+Existing queued mail remains durable. Keep the master key in the separate
+recovery archive described below; restore requires the matching key.
 
 Ordinary process logs are in `logs/SERVICE/juex-*.log`: seven-day retention,
 10 MiB per file and seven files per service. Idle services expire logs hourly.
