@@ -115,6 +115,25 @@ func probeGatewayAuthentication(t *testing.T) {
 		return &http.Client{Transport: transport, Timeout: 5 * time.Second}
 	}
 	noisy, other := client("127.0.0.2"), client("127.0.0.3")
+	// A running container may still be starting Nginx. Readiness must not
+	// consume or retry the POST requests whose rate-limit behavior we assert.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		res, err := other.Get("https://127.0.0.1/healthz")
+		if err == nil {
+			_ = res.Body.Close()
+			if res.StatusCode == http.StatusOK {
+				break
+			}
+			if res.StatusCode != http.StatusBadGateway && res.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("gateway readiness: unexpected HTTP %d", res.StatusCode)
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gateway did not become ready: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	call := func(c *http.Client, method, path, forwarded string) (int, string, string) {
 		t.Helper()
 		req, err := http.NewRequest(method, "https://127.0.0.1"+path, strings.NewReader("{}"))
