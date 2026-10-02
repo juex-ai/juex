@@ -25,7 +25,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var address, httpAddress, management, credentials, hostedConfiguration, hostedAddress, blobDirectory string
+	var address, httpAddress, management, credentials, hostedConfiguration, hostedAddress, blobDirectory, trustedProxies string
 	var blobCapacity int64
 	var auditDays int
 	root := &cobra.Command{Use: "juex-execution", Short: "Run the managed execution service", SilenceUsage: true, SilenceErrors: true}
@@ -57,7 +57,10 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 		run, cancel := context.WithCancel(cmd.Context())
 		defer cancel()
-		handler := executionhttp.New(run, app.Service)
+		handler, err := executionhttp.New(run, app.Service, executionhttp.Options{TrustedProxies: trustedProxies})
+		if err != nil {
+			return err
+		}
 		server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 16 << 10}
 		var guestServer *http.Server
 		var guestDone chan error
@@ -128,6 +131,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}}
 	serve.Flags().StringVar(&address, "listen", "0.0.0.0:8783", "Private Execution RPC listen address")
 	serve.Flags().StringVar(&httpAddress, "device-listen", "0.0.0.0:8683", "Device HTTP listen address behind the HTTPS reverse proxy")
+	serve.Flags().StringVar(&trustedProxies, "trusted-proxies", os.Getenv("JUEX_TRUSTED_PROXIES"), "Comma-separated proxy IPs/CIDRs allowed to supply X-Real-IP (default: none)")
 	serve.Flags().StringVar(&hostedConfiguration, "hosted-config", os.Getenv("JUEX_HOSTED_CONFIG"), "Operator-owned hosted backend JSON configuration")
 	serve.Flags().StringVar(&hostedAddress, "hosted-listen", "0.0.0.0:8684", "Dedicated hosted device TLS endpoint (connect only)")
 	serve.Flags().StringVar(&blobDirectory, "blob-root", os.Getenv("JUEX_BLOB_ROOT"), "Absolute operator-owned directory for platform file bytes (required)")

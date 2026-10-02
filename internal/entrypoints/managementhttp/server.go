@@ -7,11 +7,14 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/application"
+	"github.com/juex-ai/juex/internal/foundation/clientip"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
@@ -51,23 +54,31 @@ type Directory interface {
 }
 
 type Options struct {
-	Extensions   ExtensionAPI
-	Auth         Auth
-	Directory    Directory
-	Runtime      Runtime
-	Execution    Execution
-	Memory       Memory
-	Calendar     Calendar
-	PublicURL    string
-	InsecureHTTP bool
-	MailEnabled  bool
-	Static       http.Handler
-	Health       func(context.Context) error
+	Extensions     ExtensionAPI
+	Auth           Auth
+	Directory      Directory
+	Runtime        Runtime
+	Execution      Execution
+	Memory         Memory
+	Calendar       Calendar
+	PublicURL      string
+	TrustedProxies string
+	InsecureHTTP   bool
+	MailEnabled    bool
+	Static         http.Handler
+	Health         func(context.Context) error
 }
 
 type Server struct {
-	options Options
-	origin  string
+	options   Options
+	origin    string
+	clientIPs clientip.Resolver
+	mu        sync.Mutex
+	attempts  map[string]attempts
+}
+type attempts struct {
+	start time.Time
+	count int
 }
 
 func New(options Options) (http.Handler, error) {
@@ -78,7 +89,11 @@ func New(options Options) (http.Handler, error) {
 	if options.Auth == nil || options.Directory == nil {
 		return nil, errors.New("management auth and directory are required")
 	}
-	s := &Server{options: options, origin: origin}
+	clientIPs, err := clientip.New(options.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{options: options, origin: origin, clientIPs: clientIPs, attempts: make(map[string]attempts)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	if options.Extensions != nil {
@@ -213,11 +228,43 @@ func (s *Server) guard(next http.Handler) http.Handler {
 				}
 				r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 			}
+			if strings.HasPrefix(r.URL.Path, "/api/auth/") && r.Method == "POST" && !s.allowIP(s.clientIPs.Address(r)) {
+				w.Header().Set("Retry-After", "60")
+				respond(w, nil, management.ErrRateLimit)
+				return
+			}
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (s *Server) allowIP(address string) bool {
+	key, _, err := net.SplitHostPort(address)
+	if err != nil {
+		key = address
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if len(s.attempts) >= 4096 {
+		for k, v := range s.attempts {
+			if now.Sub(v.start) > time.Minute {
+				delete(s.attempts, k)
+			}
+		}
+	}
+	v, exists := s.attempts[key]
+	if !exists && len(s.attempts) >= 4096 {
+		return false
+	}
+	if now.Sub(v.start) > time.Minute {
+		v = attempts{start: now}
+	}
+	v.count++
+	s.attempts[key] = v
+	return v.count <= 120
 }
 
 func (s *Server) signedIn(fn func(http.ResponseWriter, *http.Request, management.User)) http.HandlerFunc {
@@ -283,7 +330,9 @@ func respond(w http.ResponseWriter, value any, err error) {
 			status, code, message = 409, "conflict", err.Error()
 		case errors.Is(err, management.ErrRateLimit):
 			status, code, message = 429, "rate_limited", err.Error()
-			w.Header().Set("Retry-After", "900")
+			if w.Header().Get("Retry-After") == "" {
+				w.Header().Set("Retry-After", "900")
+			}
 		case errors.Is(err, execprotocol.ErrQuota):
 			status, code, message = http.StatusInsufficientStorage, "storage_full", "Platform file storage is full; remove unused files or ask the operator to increase capacity"
 		case errors.Is(err, execprotocol.ErrUnavailable):

@@ -287,11 +287,12 @@ func acceptThreadInput(ctx context.Context, tx pgx.Tx, scope managedruntime.Scop
 type scanner interface{ Scan(...any) error }
 
 const threadColumns = `COALESCE((SELECT j.application FROM runtime.application_jobs j WHERE j.thread_id=t.id),''),t.id,t.agent_id,COALESCE(t.parent_id::text,''),t.kind,t.name,t.retention,t.state,t.generation,t.sequence,
-(SELECT count(*) FROM runtime.inputs i WHERE i.thread_id=t.id AND i.state IN ('queued','active')),t.created_at,t.updated_at`
+(SELECT count(*) FROM runtime.inputs i WHERE i.thread_id=t.id AND i.state IN ('queued','active')),
+(SELECT count(*) FROM runtime.inputs i WHERE i.thread_id=t.id AND i.state='held'),t.created_at,t.updated_at`
 
 func scanThread(row scanner) (managedruntime.Thread, error) {
 	var v managedruntime.Thread
-	err := row.Scan(&v.Application, &v.ID, &v.AgentID, &v.ParentID, &v.Kind, &v.Name, &v.Retention, &v.State, &v.Generation, &v.Sequence, &v.PendingInputs, &v.CreatedAt, &v.UpdatedAt)
+	err := row.Scan(&v.Application, &v.ID, &v.AgentID, &v.ParentID, &v.Kind, &v.Name, &v.Retention, &v.State, &v.Generation, &v.Sequence, &v.PendingInputs, &v.HeldInputs, &v.CreatedAt, &v.UpdatedAt)
 	return v, classify(err)
 }
 func readThread(ctx context.Context, tx pgx.Tx, agentID, threadID string) (managedruntime.Thread, error) {

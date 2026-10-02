@@ -26,6 +26,7 @@ type serveConfig struct {
 	HTTPAddress, RPCAddress, RuntimeAddress, ExecutionAddress, MemoryAddress, CalendarAddress, PublicURL string
 	Credentials                                                                                          platformrpc.Credentials
 	InsecureHTTP                                                                                         bool
+	TrustedProxies                                                                                       string
 }
 
 func serveManagement(ctx context.Context, app *managed.Management, config serveConfig, out io.Writer) error {
@@ -65,7 +66,7 @@ func serveManagement(ctx context.Context, app *managed.Management, config serveC
 		}
 	}
 	app.Purger = &management.Purger{Repository: app.Directory, Services: participants}
-	handler, err := managementhttp.New(managementhttp.Options{Extensions: extensions, Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, Calendar: calendar, PublicURL: config.PublicURL, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
+	handler, err := managementhttp.New(managementhttp.Options{Extensions: extensions, Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, Calendar: calendar, PublicURL: config.PublicURL, TrustedProxies: config.TrustedProxies, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
 	if err != nil {
 		return err
 	}

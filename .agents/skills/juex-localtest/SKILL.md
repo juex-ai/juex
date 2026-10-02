@@ -38,12 +38,6 @@ rebuilt running services. API/runtime changes require the corresponding
 changes need Linux/macOS compilation and the affected real-device behavior;
 hosted changes require Linux Docker/runsc checks when that boundary changes.
 
-Gateway changes also require `go test -tags gateway ./tests/e2e -run
-TestManagedGatewayAuthenticationLimits -count=1`. This starts an isolated
-`nginx:1.28-bookworm` Docker container and checks real connection-IP isolation,
-forwarded-header spoofing, and authentication responses using the deployment
-configuration. Docker must be available; the test fails instead of skipping.
-
 ## Isolated database and real model configuration
 
 Set `JUEX_TEST_POSTGRES_URL` to a test PostgreSQL instance whose role can create

@@ -50,6 +50,7 @@ type Thread struct {
 	Generation    int64     `json:"generation"`
 	Sequence      int64     `json:"sequence"`
 	PendingInputs int64     `json:"pending_inputs"`
+	HeldInputs    int64     `json:"held_inputs"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

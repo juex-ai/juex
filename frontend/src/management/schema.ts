@@ -810,6 +810,7 @@ export interface Thread {
   generation: number;
   sequence: number;
   pending_inputs: number;
+  held_inputs: number;
   created_at: string;
   updated_at: string;
 }

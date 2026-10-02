@@ -43,11 +43,13 @@ by the operator's firewall; database and other RPC ports are not published.
 Directly running `docker compose up` bypasses the operator's recovery checks:
 use `operator.py up/resume` for service startup.
 
-The gateway limits authentication POST requests per client connection IP;
-session reads remain available. Forwarded headers do not select the rate-limit
-bucket. Management retains durable per-account limits and password-work
-concurrency limits. Keep Management private; a replacement public gateway must
-provide equivalent client-IP protection at the ingress that sees the client.
+The gateway uses platform address `.11`. Management and Execution trust only
+that proxy for `X-Real-IP`, which both gateway routes overwrite with the actual
+client address so authentication and device rate limits remain per client.
+For a custom reverse proxy, set `JUEX_TRUSTED_PROXIES` (or `--trusted-proxies`)
+on both services to its explicit IPs/CIDRs and overwrite `X-Real-IP` at the edge.
+The default is no trusted proxies; never trust user-controlled address headers
+or an entire client network. Restore rebinds this setting to the platform subnet.
 
 Issue the first-admin setup link with `docker compose --env-file
 /var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec
@@ -100,6 +102,8 @@ available while draining. Busy, unknown or uncleanly stopped work makes backup
 fail and retains maintenance; it is never silently killed. Inspect
 `maintenance/report.json` and service logs, settle/cancel the original work
 explicitly, then retry or `resume`.
+Receipts from a confirmed permanently destroyed Hosted environment remain in the
+review inventory with their original outcomes, but no longer block backup.
 
 The bundle covers PostgreSQL, Blob, Hosted Workspace/Home, execution journals,
 configuration and pinned images. Master keys, service identities and TLS

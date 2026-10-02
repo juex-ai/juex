@@ -55,14 +55,22 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(ops, "mount_device", return_value="/dev/loop7"):
             ops.render(config, "password", "key")
             env = self.root / "secrets/management.env"
+            for service in ("management", "execution"):
+                self.assertIn("JUEX_TRUSTED_PROXIES=172.30.0.11\n",
+                              (self.root / "secrets" / (service + ".env")).read_text())
             env.write_text(env.read_text() + "JUEX_SMTP_CONFIG=encrypted-smtp-settings\n")
             hosted = json.loads((self.root / "hosted.json").read_text())
             hosted["backend"]["allow"] = ["192.168.1.0/24"]
             hosted["memory_bytes"], hosted["idle_seconds"] = 123456, 900
             (self.root / "hosted.json").write_text(json.dumps(hosted))
             config["host_ip"] = "10.0.2.101"
+            config["platform_prefix"] = "172.29.5"
             ops.render(config, "password", "key", preserve=True)
         self.assertIn("JUEX_SMTP_CONFIG=encrypted-smtp-settings\n", env.read_text())
+        for service in ("management", "execution"):
+            rendered = (self.root / "secrets" / (service + ".env")).read_text()
+            self.assertIn("JUEX_TRUSTED_PROXIES=172.29.5.11\n", rendered)
+            self.assertNotIn("JUEX_TRUSTED_PROXIES=172.30.0.11", rendered)
         restored = json.loads((self.root / "hosted.json").read_text())
         self.assertEqual(restored["backend"]["allow"], ["192.168.1.0/24"])
         self.assertEqual((restored["memory_bytes"], restored["idle_seconds"]), (123456,900))

@@ -128,6 +128,8 @@ def render(config, password, master_key, preserve=False):
         env = dict(base)
         if service == "management":
             env.update(JUEX_PUBLIC_URL=config["public_url"], JUEX_MASTER_KEY=master_key)
+        if service in ("management", "execution"):
+            env["JUEX_TRUSTED_PROXIES"] = prefix + ".11"
         if service == "execution":
             env.update(JUEX_DATABASE_URL=f"postgres://juex:{password}@{prefix}.2:5432/juex?sslmode=disable",
                        JUEX_MANAGEMENT_RPC=prefix + ".10:8781", JUEX_BLOB_ROOT=str(root / "blobs"),
