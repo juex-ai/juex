@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -136,7 +137,31 @@ func Open(config Config) (*Engine, error) {
 		_ = lock.Close()
 		return nil, err
 	}
+	if err := e.Prune(time.Now()); err != nil {
+		cancel()
+		_ = e.files.Close()
+		_ = lock.Close()
+		return nil, err
+	}
+	e.workers.Add(1)
+	go e.retain()
 	return e, nil
+}
+
+func (e *Engine) retain() {
+	defer e.workers.Done()
+	ticker := time.NewTicker(min(time.Hour, e.config.Retention))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case now := <-ticker.C:
+			if err := e.Prune(now); err != nil {
+				slog.Warn("execution journal retention failed", "error", err)
+			}
+		}
+	}
 }
 
 func (e *Engine) Close() error {

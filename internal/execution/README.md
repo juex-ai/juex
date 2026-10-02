@@ -147,7 +147,8 @@ an explicit truncation flag. MCP notification storage exhaustion closes the
 connection rather than continuing to discard notifications. New operations
 reserve result capacity; unacknowledged results and unknown recovery records are
 not rotated. Acknowledged settled output expires after the configured retention
-period, while operation identity remains to prevent replay.
+period, while operation identity remains to prevent replay. The native and hosted
+engines check retention at startup and at least hourly, including while disconnected.
 The platform retains acknowledged settled output for seven days and reserves
 up to 512 MiB per environment for results; saturation rejects new operations.
 Output is transported as bytes, preserving offsets even for non-UTF-8 content.

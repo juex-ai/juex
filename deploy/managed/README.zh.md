@@ -23,6 +23,8 @@ sudo python3 /opt/juex/operator.py --root /var/lib/juex-management resume
 
 使用 `docker compose --env-file /var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec management juex-management bootstrap --email admin@example.com` 生成首位管理员设置链接。这是一次性秘密 URL，必须私下交付。未配置 SMTP 时仍能复制邀请链接。模型凭据通过 Management 运维 CLI 配置。不能向 Agent 暴露部署私有文件和服务证书。
 
+网关使用平台网段的 `.11` 地址。Management 和 Execution 只信任该代理提供的 `X-Real-IP`；网关的两个路由均以真实客户端地址覆盖此头，使认证和设备限流按客户端独立计算。自定义反向代理需在两个服务上设置 `JUEX_TRUSTED_PROXIES`（或 `--trusted-proxies`），明确列出代理的 IP/CIDR，并在边缘覆盖 `X-Real-IP`。默认不信任任何代理；不能信任用户可控制的地址头或整个客户端网段。恢复时会按平台子网重新绑定此设置。
+
 配置 SMTP 时，将密码放入临时导出的 `JUEX_SMTP_CREDENTIAL` 环境变量，不写入 Shell 历史，然后运行：
 
 ```sh
@@ -47,6 +49,7 @@ sudo python3 /opt/juex/operator.py --root /var/lib/juex-management backup \
 两个目标目录必须是私有目录（0700），与部署目录、Workspace 及彼此分开。按要防护的故障选择独立存储。默认保留七组**完整配对备份**；数据包没有匹配的密钥包就无法恢复。
 
 备份先暂停接纳新工作，等待已接纳的模型和应用工作完成，检查外部操作与 Hosted 用户进程，再优雅停止服务写入者和空闲 Hosted guest。排空期间仍可取消任务并接收回执。繁忙、结果未知或未正常停止的工作会让备份失败并保留维护状态，不会被静默杀死。检查 `maintenance/report.json` 和服务日志，明确处理或取消原任务后，重试备份或执行 `resume`。
+已确认永久销毁的 Hosted 环境，其操作收据保留原始结果并列入审核清单，但不再阻塞备份。
 
 备份覆盖 PostgreSQL、Blob、Hosted Workspace/Home、执行日志账本、配置和固定镜像。主密钥、服务身份和 TLS 材料只写入单独的恢复位置。文件校验和及配对清单标识成功。排队任务保留原始 ID。外部设备文件和进程内存不属于平台备份内容。
 

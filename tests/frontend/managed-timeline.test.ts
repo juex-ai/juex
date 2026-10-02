@@ -60,6 +60,29 @@ test('model fallback and context exhaustion show distinct durable outcomes', () 
   if (rows[1].kind === 'notice') assert.match(rows[1].text, /授权已变更.*operator:backup/)
 })
 
+test('explicit cancellation settles held input without rewriting a completed reply', () => {
+  const rows = projectTranscript([
+    event(1, 'input.accepted', { receipt: { id: 'held-input' }, text: 'original work' }),
+    event(2, 'input.held', { input_id: 'held-input', reason: 'model_unavailable' }),
+    event(3, 'message.appended', { id: 'reply', role: 'assistant', blocks: [{ type: 'text', text: 'Completed replacement' }] }),
+    event(4, 'thread.cancelled', {}),
+  ])
+  if (rows[0].kind !== 'message' || rows[1].kind !== 'message') assert.fail('missing history')
+  assert.equal(rows[0].status, '已取消')
+  assert.equal(rows[1].status, '')
+  assert.equal(rows[1].message.blocks[0].text, 'Completed replacement')
+})
+
+test('cancelling a later Turn leaves unrelated held inputs unresolved', () => {
+  const rows = projectTranscript([
+    event(1, 'input.accepted', { receipt: { id: 'held-input' }, text: 'original work' }),
+    event(2, 'input.held', { input_id: 'held-input', reason: 'model_unavailable' }),
+    event(3, 'turn.cancelled', { input_id: 'different-input' }),
+  ])
+  if (rows[0].kind !== 'message') assert.fail('missing held input')
+  assert.match(rows[0].status, /模型不可用/)
+})
+
 test('compaction control and failures stay separate from user messages', () => {
   const rows = projectTranscript([
     event(1, 'context.requested', { receipt: { id: 'control' }, text: '' }),

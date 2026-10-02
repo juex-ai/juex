@@ -6,6 +6,7 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   const messages = new Map<string, Extract<TranscriptRow, { kind: 'message' }>>()
   const seen = new Set<string>()
+  const held = new Set<string>()
   const hooks = new Map<string, Extract<TranscriptRow, { kind: 'hook' }>>()
   for (const event of events) {
     if (seen.has(event.id)) continue
@@ -29,6 +30,7 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
       if (existing) Object.assign(existing, row)
       else { hooks.set(hook.id, row); rows.push(row) }
     } else if (event.kind === 'input.held' && data.input_id) {
+      held.add(data.input_id)
       const row = messages.get(data.input_id)
       const status = data.reason === 'compaction_failed' ? '上下文压缩未完成，本轮已暂停；原始内容保留' : data.reason === 'context_limit' ? '上下文超出可用模型容量，本轮已暂停' : data.reason === 'model_unavailable' ? '模型不可用，已暂停；配置后请重新提交' : '授权已改变，未继续执行'
       if (row) row.status = status
@@ -47,7 +49,8 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
     } else if (event.kind === 'turn.failed') {
       rows.push({ kind: 'notice', id: event.id, text: data.error === 'invalid_response' ? '模型返回了无法处理的响应。请检查模型配置后重试。' : data.error?.toLowerCase().includes('hook') ? `Hook 阻止了本轮继续：${data.error}` : '模型请求失败，本轮已停止。已接收的输入和历史仍然保留。' })
     } else if (event.kind === 'thread.cancelled' || event.kind === 'turn.cancelled') {
-      for (const row of messages.values()) if (row.status === '已接收，等待执行') row.status = '已取消'
+      for (const row of messages.values()) if (row.status === '已接收，等待执行' || event.kind === 'thread.cancelled' && held.has(row.id)) row.status = '已取消'
+      if (event.kind === 'thread.cancelled') held.clear()
       rows.push({ kind: 'notice', id: event.id, text: '已取消本次对话。已经开始的外部操作可能仍在结束中。' })
     } else if (event.kind === 'tool.unknown') {
       rows.push({ kind: 'notice', id: event.id, text: '无法确认外部操作的结果，对话已暂停。请先核对设备上的实际状态；停止本轮后，可以发送新的处理指令。' })
