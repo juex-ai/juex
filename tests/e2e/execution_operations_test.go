@@ -46,7 +46,11 @@ func executionEventually(t *testing.T, f *executionFixture, device, id string, p
 func connectExecutionDevice(t *testing.T, f *executionFixture, device execution.Device, token string, engine *native.Engine) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	server := httptest.NewTLSServer(executionhttp.New(ctx, f.execution))
+	handler, err := executionhttp.New(ctx, f.execution, executionhttp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(handler)
 	done := make(chan error, 1)
 	go func() {
 		done <- connector.Run(ctx, connector.Config{URL: server.URL, Token: token, Environment: device.Environment, Engine: engine, HTTPClient: server.Client()})
@@ -398,7 +402,10 @@ func TestExecutionIdleConnectionServicesDevicePings(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	device, token := f.pairDevice(t)
-	handler := executionhttp.New(ctx, f.execution)
+	handler, err := executionhttp.New(ctx, f.execution, executionhttp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewUnstartedServer(handler)
 	server.Config.ReadTimeout = 200 * time.Millisecond
 	server.Config.WriteTimeout = 200 * time.Millisecond

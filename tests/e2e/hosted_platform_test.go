@@ -78,7 +78,10 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 	}
 	t.Cleanup(app.Close)
 	f.execution = app.Service
-	deviceHTTP := executionhttp.New(ctx, app.Service)
+	deviceHTTP, err := executionhttp.New(ctx, app.Service, executionhttp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := &http.Server{Handler: deviceHTTP.HostedHandler(), ReadHeaderTimeout: 5 * time.Second}
 	pair, err := tls.LoadX509KeyPair(identity.Certificate, identity.Key)
 	if err != nil {

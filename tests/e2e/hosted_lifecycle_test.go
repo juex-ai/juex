@@ -234,7 +234,11 @@ func TestHostedRejoinRetainsWorkspaceButFencesOldWork(t *testing.T) {
 func TestHostedEndpointExposesOnlyHostedConnections(t *testing.T) {
 	f := executionDatabase(t)
 	_, token := f.pairDevice(t)
-	server := httptest.NewServer(executionhttp.New(context.Background(), f.execution).HostedHandler())
+	handler, err := executionhttp.New(context.Background(), f.execution, executionhttp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler.HostedHandler())
 	defer server.Close()
 	for _, path := range []string{"/device/pair", "/api/session", "/health"} {
 		response, err := http.Get(server.URL + path)

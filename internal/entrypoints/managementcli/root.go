@@ -20,7 +20,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return err
 	}
 	var publicURL, listen, email, name string
-	var credentials, rpcListen, runtimeAddress, executionAddress, memoryAddress, calendarAddress string
+	var credentials, rpcListen, runtimeAddress, executionAddress, memoryAddress, calendarAddress, trustedProxies string
 	var insecure bool
 	var auditDays int
 	root := &cobra.Command{Use: "juex-management", Short: "Run and administer the JueX management service", SilenceUsage: true, SilenceErrors: true}
@@ -147,9 +147,10 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return err
 		}
 		defer app.Close()
-		return serveManagement(cmd.Context(), app, serveConfig{HTTPAddress: listen, RPCAddress: rpcListen, RuntimeAddress: runtimeAddress, ExecutionAddress: executionAddress, MemoryAddress: memoryAddress, CalendarAddress: calendarAddress, Credentials: platformrpc.CredentialsAt(credentials, "management"), PublicURL: publicURL, InsecureHTTP: insecure}, out)
+		return serveManagement(cmd.Context(), app, serveConfig{HTTPAddress: listen, RPCAddress: rpcListen, RuntimeAddress: runtimeAddress, ExecutionAddress: executionAddress, MemoryAddress: memoryAddress, CalendarAddress: calendarAddress, Credentials: platformrpc.CredentialsAt(credentials, "management"), PublicURL: publicURL, TrustedProxies: trustedProxies, InsecureHTTP: insecure}, out)
 	}}
 	serve.Flags().StringVar(&listen, "listen", "0.0.0.0:8680", "Management HTTP listen address (use an HTTPS proxy for public access)")
+	serve.Flags().StringVar(&trustedProxies, "trusted-proxies", os.Getenv("JUEX_TRUSTED_PROXIES"), "Comma-separated proxy IPs/CIDRs allowed to supply X-Real-IP (default: none)")
 	serve.Flags().StringVar(&rpcListen, "rpc-listen", "0.0.0.0:8781", "Private Management RPC listen address")
 	serve.Flags().StringVar(&runtimeAddress, "runtime", os.Getenv("JUEX_RUNTIME_RPC"), "Private Runtime RPC address")
 	serve.Flags().StringVar(&memoryAddress, "memory", os.Getenv("JUEX_MEMORY_RPC"), "Private Memory RPC address")

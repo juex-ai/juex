@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/juex-ai/juex/internal/execution"
+	"github.com/juex-ai/juex/internal/foundation/clientip"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
@@ -27,6 +28,7 @@ type Server struct {
 	handler     http.Handler
 	workers     sync.WaitGroup
 	closed      bool
+	clientIPs   clientip.Resolver
 }
 type attempt struct {
 	at    time.Time
@@ -37,15 +39,21 @@ type connectionOwner struct {
 	cancel context.CancelFunc
 }
 
-func New(ctx context.Context, service *execution.Service) *Server {
-	s := &Server{service: service, ctx: ctx, connections: map[string]connectionOwner{}, attempts: map[string]attempt{}}
+type Options struct{ TrustedProxies string }
+
+func New(ctx context.Context, service *execution.Service, options Options) (*Server, error) {
+	clientIPs, err := clientip.New(options.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{service: service, ctx: ctx, clientIPs: clientIPs, connections: map[string]connectionOwner{}, attempts: map[string]attempt{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /device/pair", s.begin)
 	mux.HandleFunc("POST /device/pair/poll", s.poll)
 	mux.HandleFunc("POST /device/pair/confirm", s.confirm)
 	mux.HandleFunc("GET /device/connect", func(w http.ResponseWriter, r *http.Request) { s.connect(w, r, false) })
 	s.handler = s.guard(mux)
-	return s
+	return s, nil
 }
 
 // HostedHandler is mounted on the only endpoint allowed through the hosted
@@ -67,7 +75,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			respond(w, nil, execprotocol.ErrDenied)
 			return
 		}
-		if !s.admit(r.RemoteAddr) {
+		if !s.admit(s.clientIPs.Address(r)) {
+			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -101,7 +110,7 @@ func (s *Server) admit(address string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	if len(s.attempts) > 4096 {
+	if len(s.attempts) >= 4096 {
 		for key, value := range s.attempts {
 			if now.Sub(value.at) > time.Minute {
 				delete(s.attempts, key)

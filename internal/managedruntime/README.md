@@ -15,7 +15,10 @@ work survives the sender's stop. Same-Agent result subscriptions deliver bounded
 final text and Turn identities through a durable, generation-fenced inbox.
 Resubscription does not replay previous results; ordinary unsubscribe leaves
 already accepted inputs intact. Cancelling a Thread also cancels its accepted
-inputs and disables its subscriptions. Idle Workers can be archived and restored
+inputs, including held inputs, and disables its subscriptions. Held work never
+replays automatically; its separate count keeps explicit cancellation available
+when the Thread is idle and lets automatic Memory review resume after discard.
+Idle Workers can be archived and restored
 without losing history or replaying work; active descendants prevent archival.
 
 Cross-Agent collaboration sends explicit messages only to a peer's Main in the

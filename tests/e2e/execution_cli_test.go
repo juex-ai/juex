@@ -59,7 +59,11 @@ func TestExecutionCLIWebPairingAndPrivateRPC(t *testing.T) {
 	}
 	dashboard := httptest.NewServer(handler)
 	defer dashboard.Close()
-	deviceServer := httptest.NewServer(executionhttp.New(ctx, f.execution))
+	deviceHandler, err := executionhttp.New(ctx, f.execution, executionhttp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceServer := httptest.NewServer(deviceHandler)
 	defer deviceServer.Close()
 	state := filepath.Join(t.TempDir(), "device")
 	work := t.TempDir()

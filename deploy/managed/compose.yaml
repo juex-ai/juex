@@ -122,7 +122,8 @@ services:
       - ${JUEX_DEPLOY_ROOT}/logs/gateway:/run/juex/logs
       - ${JUEX_DEPLOY_ROOT}/nginx.conf:/etc/nginx/nginx.conf:ro
       - ${JUEX_DEPLOY_ROOT}/tls:/run/juex/tls:ro
-    networks: [platform]
+    networks:
+      platform: {ipv4_address: '${JUEX_PLATFORM_PREFIX:-172.30.0}.11'}
     extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
     depends_on: [management, execution]
     logging: {driver: none}
