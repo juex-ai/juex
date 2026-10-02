@@ -1,25 +1,23 @@
-# Juex E2E Coverage
+# JueX E2E Coverage
 
 > English | [中文](README.zh.md)
 
 This directory proves behavior that crosses package, process, protocol, or
 storage boundaries. Local edge cases belong in package unit tests.
 
-The suite covers complete Agent/Thread execution, restart and recovery,
-Provider/Tool protocol validity, Context Generation transitions, Worker and
-Observation routing, CLI/Web/Fleet composition, storage, and platform
-integration. The test files are the authoritative case inventory.
+The suite covers Management authority and tenant isolation, durable Runtime
+execution and recovery, Execution environments and files, and Memory/Calendar
+application lifecycles. Cases cross public HTTP, authenticated RPC, CLI, native
+executor and storage boundaries. Test files are the authoritative case inventory.
 
-Module acceptance uses the actual configuration layers, App and Engine with
-captured Provider requests. Budget output reports system text bytes, serialized
-runtime-message and tool-schema bytes, and result/error content bytes separately.
-Estimated tokens use the runtime estimator, not a Provider tokenizer or billed
-Usage. The fixture has no external resources and does not measure model quality
-or latency; temporary paths and enabled resource content can change its totals.
+PostgreSQL cases use the `postgres` build tag and create and drop isolated test
+databases. Live Provider cases additionally use the `integration` tag and an
+explicit private model fixture. Untagged tests do not run those cases;
+deterministic Provider fixtures prove contracts, not live model behavior.
 
-Build-tagged live tests read explicitly selected local Provider configuration.
-Never commit credentials or generated live reports.
+Never commit credentials or generated live reports. The
+[evaluation guide](../eval/README.md) describes model fixtures and live evidence.
 
 Use the repository-local
-[Juex local-test skill](../../.agents/skills/juex-localtest/SKILL.md) to choose
+[JueX local-test skill](../../.agents/skills/juex-localtest/SKILL.md) to choose
 and run the correct verification tier.
