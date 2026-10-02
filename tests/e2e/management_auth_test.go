@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"testing"
@@ -169,6 +171,54 @@ func TestManagementAuthenticationHTTP(t *testing.T) {
 	managementCall[any](t, member, "POST", origin+"/api/auth/login", origin, map[string]string{"email": "member@example.com", "password": "new member password"}, 200)
 	managementCall[any](t, member, "POST", origin+"/api/auth/logout", origin, map[string]any{}, 200)
 	managementCall[any](t, member, "GET", origin+"/api/auth/session", origin, nil, 401)
+}
+
+func TestManagementAuthenticationThroughSharedProxy(t *testing.T) {
+	_, directory := managementDatabase(t)
+	auth, err := postgres.NewAuth(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := auth.BeginBootstrap(context.Background(), "Proxy", "admin@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.SetPassword(context.Background(), linkToken(t, link), "admin long password"); err != nil {
+		t.Fatal(err)
+	}
+	backend := httptest.NewUnstartedServer(nil)
+	_ = backend.Listener.Close()
+	backend.Listener, err = net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := managementhttp.New(managementhttp.Options{Auth: auth, Directory: directory, PublicURL: "http://proxy.example", InsecureHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.Config.Handler = handler
+	backend.Start()
+	t.Cleanup(backend.Close)
+	target, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewUnstartedServer(httputil.NewSingleHostReverseProxy(target))
+	_ = proxy.Listener.Close()
+	proxy.Listener, err = net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.Start()
+	t.Cleanup(proxy.Close)
+	noisy, other := managementClient(t), managementClient(t)
+	for range 125 {
+		managementCall[any](t, noisy, "POST", proxy.URL+"/api/auth/login", "", map[string]string{"unknown": "invalid"}, 400)
+	}
+	// Distinct clients share the proxy's upstream address. Its traffic must not
+	// consume another account's authentication budget inside Management.
+	managementCall[any](t, other, "POST", proxy.URL+"/api/auth/login", "", map[string]string{"email": "admin@example.com", "password": "admin long password"}, 200)
+	managementCall[any](t, other, "GET", proxy.URL+"/api/auth/session", "", nil, 200)
 }
 
 func TestManagementEmailProofAndRecoveryPurposes(t *testing.T) {

@@ -32,6 +32,11 @@ Candidate 构建全部客户端和服务。Web 检查覆盖类型、单测、lin
 `tests/e2e` 覆盖，包括带 PostgreSQL 构建标签的用例。原生执行端修改要求 Linux/macOS
 编译及相关真实设备行为验证；托管边界变化要求 Linux Docker/runsc 验证。
 
+网关修改还须执行 `go test -tags gateway ./tests/e2e -run
+TestManagedGatewayAuthenticationLimits -count=1`。该测试启动隔离的
+`nginx:1.28-bookworm` Docker 容器，使用部署配置检查真实连接 IP 隔离、
+伪造转发头及认证响应。Docker 必须可用；测试会失败而非跳过。
+
 ## 隔离数据库与真实模型配置
 
 `JUEX_TEST_POSTGRES_URL` 指向可创建和删除隔离数据库的 PostgreSQL 测试实例。

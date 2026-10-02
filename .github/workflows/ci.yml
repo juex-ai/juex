@@ -123,6 +123,9 @@ jobs:
         shell: bash
       - name: Verify deployment operator and validation harness
         run: uv run python -m unittest discover -s deploy/managed
+      - name: Verify public gateway authentication limits
+        if: runner.os == 'Linux'
+        run: go test -tags gateway ./tests/e2e -run TestManagedGatewayAuthenticationLimits -count=1
 
   platform-image:
     runs-on: ubuntu-latest

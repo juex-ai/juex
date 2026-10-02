@@ -21,6 +21,8 @@ sudo python3 /opt/juex/operator.py --root /var/lib/juex-management resume
 
 平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有 HTTPS 端口公开绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
 
+网关按客户端连接 IP 限制认证 POST 请求，会话读取仍可用。转发头不参与选择限流桶。Management 保留持久化的账户限流与密码计算并发限制。Management 必须保持私有；替换公开网关时，必须在能看到客户端连接的入口提供等效的客户端 IP 防护。
+
 使用 `docker compose --env-file /var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec management juex-management bootstrap --email admin@example.com` 生成首位管理员设置链接。这是一次性秘密 URL，必须私下交付。未配置 SMTP 时仍能复制邀请链接。模型凭据通过 Management 运维 CLI 配置。不能向 Agent 暴露部署私有文件和服务证书。
 
 配置 SMTP 时，将密码放入临时导出的 `JUEX_SMTP_CREDENTIAL` 环境变量，不写入 Shell 历史，然后运行：

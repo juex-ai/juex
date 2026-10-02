@@ -43,6 +43,12 @@ by the operator's firewall; database and other RPC ports are not published.
 Directly running `docker compose up` bypasses the operator's recovery checks:
 use `operator.py up/resume` for service startup.
 
+The gateway limits authentication POST requests per client connection IP;
+session reads remain available. Forwarded headers do not select the rate-limit
+bucket. Management retains durable per-account limits and password-work
+concurrency limits. Keep Management private; a replacement public gateway must
+provide equivalent client-IP protection at the ingress that sees the client.
+
 Issue the first-admin setup link with `docker compose --env-file
 /var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec
 management juex-management bootstrap --email admin@example.com`. It is a secret
