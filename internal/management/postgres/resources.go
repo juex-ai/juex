@@ -370,7 +370,8 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 	u, err := url.Parse(config.Endpoint)
 	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || (u.Scheme != "http" && u.Scheme != "https") ||
 		strings.TrimSpace(config.Provider) == "" || len(config.Provider) > 100 || strings.TrimSpace(config.Name) == "" || len(config.Name) > 200 || config.APIKey == "" ||
-		config.ContextWindow < 1024 || config.MaxOutput <= 0 || config.MaxOutput >= config.ContextWindow ||
+		config.ContextWindow < 1024 || config.MaxOutput < 0 || config.OutputReserve <= 0 || config.MaxOutput > config.OutputReserve || config.OutputReserve >= config.ContextWindow ||
+		(config.Protocol == llm.ProtocolAnthropicMessages && config.MaxOutput == 0 && config.OutputReserve < llm.AnthropicDefaultOutputTokens) ||
 		(config.Protocol != llm.ProtocolOpenAIChat && config.Protocol != llm.ProtocolOpenAIResponses && config.Protocol != llm.ProtocolAnthropicMessages) {
 		return management.Model{}, management.ErrInvalid
 	}
@@ -390,9 +391,10 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 	if err != nil {
 		return management.Model{}, err
 	}
-	model, err := scanModel(tx.QueryRow(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-	ON CONFLICT(id) DO UPDATE SET protocol=EXCLUDED.protocol,endpoint=EXCLUDED.endpoint,key_cipher=EXCLUDED.key_cipher,context_window=EXCLUDED.context_window,max_output=EXCLUDED.max_output,authorization_epoch=models.authorization_epoch+CASE WHEN models.enabled<>EXCLUDED.enabled THEN 1 ELSE 0 END,enabled=EXCLUDED.enabled
-	RETURNING `+modelColumns, id, config.Provider, config.Name, config.Protocol, config.Endpoint, cipher, config.ContextWindow, config.MaxOutput, config.Enabled))
+	model, err := scanModel(tx.QueryRow(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,output_reserve,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	ON CONFLICT(id) DO UPDATE SET protocol=EXCLUDED.protocol,endpoint=EXCLUDED.endpoint,key_cipher=EXCLUDED.key_cipher,context_window=EXCLUDED.context_window,max_output=EXCLUDED.max_output,output_reserve=EXCLUDED.output_reserve,
+	authorization_epoch=models.authorization_epoch+CASE WHEN (models.protocol,models.endpoint,models.context_window,models.max_output,models.output_reserve,models.enabled) IS DISTINCT FROM (EXCLUDED.protocol,EXCLUDED.endpoint,EXCLUDED.context_window,EXCLUDED.max_output,EXCLUDED.output_reserve,EXCLUDED.enabled) THEN 1 ELSE 0 END,enabled=EXCLUDED.enabled
+	RETURNING `+modelColumns, id, config.Provider, config.Name, config.Protocol, config.Endpoint, cipher, config.ContextWindow, config.MaxOutput, config.OutputReserve, config.Enabled))
 	if err != nil {
 		return model, err
 	}
@@ -402,7 +404,7 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 	return model, tx.Commit(ctx)
 }
 
-const modelColumns = `id,provider,name,protocol,context_window,max_output,enabled`
+const modelColumns = `id,provider,name,protocol,context_window,max_output,output_reserve,enabled`
 
 func (d *Directory) SetModelEnabled(ctx context.Context, id string, enabled bool) error {
 	tx, err := d.begin(ctx)
@@ -429,7 +431,7 @@ func (d *Directory) SetModelEnabled(ctx context.Context, id string, enabled bool
 
 func scanModel(row rowScanner) (management.Model, error) {
 	var m management.Model
-	err := row.Scan(&m.ID, &m.Provider, &m.Name, &m.Protocol, &m.ContextWindow, &m.MaxOutput, &m.Enabled)
+	err := row.Scan(&m.ID, &m.Provider, &m.Name, &m.Protocol, &m.ContextWindow, &m.MaxOutput, &m.OutputReserve, &m.Enabled)
 	return m, classify(err)
 }
 

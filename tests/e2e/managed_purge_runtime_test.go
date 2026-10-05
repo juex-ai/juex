@@ -37,7 +37,7 @@ func TestManagedPurgePreservesUnknownUsageAndFencesLateEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Messages: work.History}); err != nil {
+	if _, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Messages: work.History}); err != nil {
 		t.Fatal(err)
 	}
 	peer, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Retained event recipient"})

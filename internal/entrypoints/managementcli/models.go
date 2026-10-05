@@ -15,14 +15,24 @@ import (
 func modelCommand(open func(*cobra.Command) (*managed.Management, error), out io.Writer) *cobra.Command {
 	root := &cobra.Command{Use: "model", Short: "Manage deployment-provided model access"}
 	var provider, name, endpoint, protocol, keyEnv string
-	var contextWindow, maxOutput int
+	var contextWindow, maxOutput, outputReserve int
 	put := &cobra.Command{Use: "put", Short: "Create or update a model; read its credential from an environment variable", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		reserve := outputReserve
+		if !cmd.Flags().Changed("output-reserve") {
+			reserve = maxOutput
+		}
+		if contextWindow < 1024 || maxOutput < 0 || reserve <= 0 || maxOutput > reserve || reserve >= contextWindow {
+			return errors.New("model limits require 0 <= max-output <= output-reserve < context-window, with a positive reserve and context-window >= 1024")
+		}
+		if llm.Protocol(protocol) == llm.ProtocolAnthropicMessages && maxOutput == 0 && reserve < llm.AnthropicDefaultOutputTokens {
+			return errors.New("anthropic/messages requires an output reserve of at least 4096 when max-output is zero")
+		}
 		app, err := open(cmd)
 		if err != nil {
 			return err
 		}
 		defer app.Close()
-		model, err := app.Directory.ConfigureModel(cmd.Context(), management.ModelConfiguration{Provider: provider, Name: name, Endpoint: endpoint, Protocol: llm.Protocol(protocol), APIKey: os.Getenv(keyEnv), ContextWindow: contextWindow, MaxOutput: maxOutput, Enabled: true})
+		model, err := app.Directory.ConfigureModel(cmd.Context(), management.ModelConfiguration{Provider: provider, Name: name, Endpoint: endpoint, Protocol: llm.Protocol(protocol), APIKey: os.Getenv(keyEnv), ContextWindow: contextWindow, MaxOutput: maxOutput, OutputReserve: reserve, Enabled: true})
 		if err != nil {
 			return err
 		}
@@ -34,7 +44,8 @@ func modelCommand(open func(*cobra.Command) (*managed.Management, error), out io
 	put.Flags().StringVar(&protocol, "protocol", "openai/chat", "openai/chat, openai/responses, or anthropic/messages")
 	put.Flags().StringVar(&keyEnv, "api-key-env", "JUEX_MODEL_API_KEY", "Environment variable holding the provider credential")
 	put.Flags().IntVar(&contextWindow, "context-window", 32768, "Model context window in tokens")
-	put.Flags().IntVar(&maxOutput, "max-output", 4096, "Maximum output tokens per request")
+	put.Flags().IntVar(&maxOutput, "max-output", 4096, "Normal request output cap; zero uses the provider default and requires --output-reserve")
+	put.Flags().IntVar(&outputReserve, "output-reserve", 0, "Positive context reservation for output; defaults to max-output when omitted")
 	root.AddCommand(put)
 	root.AddCommand(&cobra.Command{Use: "default <model-id>", Short: "Set the deployment default inherited by Fleets", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		app, err := open(cmd)

@@ -2,6 +2,10 @@ package llm
 
 type Protocol string
 
+// Anthropic requires a positive wire limit even when the caller leaves the
+// output option unset. Context reservations must cover this adapter default.
+const AnthropicDefaultOutputTokens = 4096
+
 const (
 	ProtocolAnthropicMessages    Protocol = "anthropic/messages"
 	ProtocolOpenAIResponses      Protocol = "openai/responses"

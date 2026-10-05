@@ -646,6 +646,7 @@ export interface Model {
   protocol: string;
   context_window: number;
   max_output: number;
+  output_reserve: number;
   enabled: boolean;
 }
 

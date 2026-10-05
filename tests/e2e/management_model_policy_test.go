@@ -26,7 +26,7 @@ func TestManagementModelDefaultsAndTenantVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := management.ModelConfiguration{Provider: "fixture", Name: "one", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", APIKey: "private", ContextWindow: 32768, MaxOutput: 4096, Enabled: true}
+	config := management.ModelConfiguration{Provider: "fixture", Name: "one", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", APIKey: "private", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096, Enabled: true}
 	one, err := d.ConfigureModel(ctx, config)
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestManagementModelPlanRevocationAndCredentialRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := management.ModelConfiguration{Provider: "fixture", Name: "primary", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", APIKey: "first-key", ContextWindow: 32768, MaxOutput: 4096, Enabled: true}
+	config := management.ModelConfiguration{Provider: "fixture", Name: "primary", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", APIKey: "first-key", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096, Enabled: true}
 	one, err := d.ConfigureModel(ctx, config)
 	if err != nil {
 		t.Fatal(err)

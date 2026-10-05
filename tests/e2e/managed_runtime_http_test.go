@@ -54,7 +54,7 @@ func managedRuntimeHTTP(t *testing.T, provider http.HandlerFunc) *managedRuntime
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := d.ConfigureModel(ctx, management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: providerServer.URL, APIKey: "test-key", ContextWindow: 32768, MaxOutput: 4096, Enabled: true})
+	model, err := d.ConfigureModel(ctx, management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: providerServer.URL, APIKey: "test-key", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

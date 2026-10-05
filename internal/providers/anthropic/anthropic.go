@@ -66,7 +66,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	if err != nil {
 		return llm.Response{}, err
 	}
-	maxTokens := int64(4096)
+	maxTokens := int64(llm.AnthropicDefaultOutputTokens)
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		maxTokens = int64(opts.MaxOutputTokens)
 	}

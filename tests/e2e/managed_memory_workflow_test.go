@@ -287,7 +287,7 @@ func TestManagedMemoryRuntimeEvidenceRejectsSystemInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{System: "test", Messages: work.History})
+	attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, System: "test", Messages: work.History})
 	if err != nil {
 		t.Fatal(err)
 	}

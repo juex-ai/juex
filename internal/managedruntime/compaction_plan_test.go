@@ -10,7 +10,7 @@ import (
 )
 
 func TestCompactionCanReduceAnActiveLongTurnWithoutLosingInputOrToolPairs(t *testing.T) {
-	model := ModelConfig{ModelID: uuid.NewString(), Provider: "fixture", Model: "small", ContextWindow: 32768, MaxOutput: 4096}
+	model := ModelConfig{ModelID: uuid.NewString(), Provider: "fixture", Model: "small", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096}
 	input := llm.TextMessage(llm.RoleUser, "Current task must continue")
 	input.ID = uuid.NewString()
 	input.Kind = llm.MessageKindDirect
@@ -76,7 +76,7 @@ func TestCompactionSerializesLargeArgumentsAsReadableData(t *testing.T) {
 	call := llm.Message{ID: uuid.NewString(), Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: id, ToolName: "write", Input: map[string]any{"content": strings.Repeat("large", 20000)}}}}
 	result := llm.Message{ID: uuid.NewString() + "-result", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: id, Content: "written"}}}
 	work := Work{InputID: input.ID, History: []llm.Message{input, call, result}}
-	request, err := planCompaction(work, ModelRequest{System: "instructions"}, ModelConfig{ContextWindow: 32768, MaxOutput: 4096})
+	request, err := planCompaction(work, ModelRequest{System: "instructions"}, ModelConfig{ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096})
 	if err != nil {
 		t.Fatal(err)
 	}

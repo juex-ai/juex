@@ -37,11 +37,12 @@ def validate_config(cfg):
     seen=set()
     allowed={'provider','name','protocol','endpoint','api_key','context_window','max_output'}
     for model in cfg['models']:
-        if not isinstance(model,dict) or set(model)!=allowed:raise ValueError('each test model requires provider, name, protocol, endpoint, api_key, context_window and max_output')
+        if not isinstance(model,dict) or not allowed<=set(model) or set(model)-allowed-{'output_reserve'}:raise ValueError('each test model requires provider, name, protocol, endpoint, api_key, context_window and max_output; output_reserve is optional for a positive cap')
         if any(not isinstance(model[k],str) or not model[k].strip() for k in ('provider','name','protocol','endpoint','api_key')):raise ValueError('invalid model text field')
         if model['protocol'] not in ('openai/chat','openai/responses','anthropic/messages'):raise ValueError('unsupported test model protocol')
-        for key in ('context_window','max_output'):
-            if type(model[key]) is not int or model[key]<1:raise ValueError('positive model limits required')
+        context,cap,reserve=model['context_window'],model['max_output'],model.get('output_reserve',model['max_output'])
+        if any(type(v) is not int for v in (context,cap,reserve)) or context<1024 or cap<0 or reserve<=0 or cap>reserve or reserve>=context:raise ValueError('invalid model output cap or context reservation')
+        if model['protocol']=='anthropic/messages' and cap==0 and reserve<4096:raise ValueError('Anthropic default output requires at least 4096 reserved tokens')
         ref=model['provider']+':'+model['name']
         if ref in seen:raise ValueError('duplicate provider:model in test config')
         seen.add(ref)
