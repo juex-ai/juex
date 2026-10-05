@@ -63,27 +63,30 @@ func TestNativeExecutorAgentHomeDefaultsDoNotMutateHostEnvironment(t *testing.T)
 
 func TestNativeExecutorAgentHomeResolvesDirectCommands(t *testing.T) {
 	hostPath := os.Getenv("PATH")
-	for range 2 {
+	for _, tool := range []string{"first-agent-tool", "second-agent-tool"} {
 		config := nativeConfig(t)
 		config.HomeDirectory = t.TempDir()
 		bin := filepath.Join(config.HomeDirectory, ".local", "bin")
 		if err := os.MkdirAll(bin, 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(bin, "agent-home-tool"), []byte("#!/bin/sh\nprintf '%s' \"$HOME\"\n"), 0700); err != nil {
+		// Use an installed executable so PATH/HOME coverage does not depend on
+		// macOS's first-execution assessment of a newly written script.
+		if err := os.Symlink("/usr/bin/printenv", filepath.Join(bin, tool)); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(os.Args[0], filepath.Join(bin, "agent-home-mcp")); err != nil {
 			t.Fatal(err)
 		}
 		engine := openNative(t, config)
-		hook := nativeRun(t, engine, nativeRequest(t, "home-hook", "run_hook", execprotocol.HookCommand{Command: []string{"agent-home-tool"}, Input: json.RawMessage(`{}`), TimeoutMS: 2000, MaxOutputBytes: 4096}))
+		hook := nativeRun(t, engine, nativeRequest(t, "home-hook", "run_hook", execprotocol.HookCommand{Command: []string{tool, "HOME"}, Input: json.RawMessage(`{}`), TimeoutMS: 2000, MaxOutputBytes: 4096}))
 		var output execprotocol.HookOutput
 		decodeErr := json.Unmarshal(hook.Output, &output)
-		if hook.State != execprotocol.Completed || decodeErr != nil || output.Stdout != config.HomeDirectory {
-			t.Fatalf("hook did not resolve its Agent's executable: snapshot=%+v output=%q decode_error=%v", hook, hook.Output, decodeErr)
+		if hook.State != execprotocol.Completed || decodeErr != nil || output.Stdout != config.HomeDirectory+"\n" {
+			snapshot, _ := json.Marshal(hook)
+			t.Fatalf("hook did not resolve its Agent's executable: snapshot=%s decode_error=%v", snapshot, decodeErr)
 		}
-		observer := nativeRun(t, engine, nativeRequest(t, "home-observer", "observe_command", execprotocol.ObservableCommand{Command: []string{"agent-home-tool"}}))
+		observer := nativeRun(t, engine, nativeRequest(t, "home-observer", "observe_command", execprotocol.ObservableCommand{Command: []string{tool, "HOME"}}))
 		if observer.State != execprotocol.Completed || !strings.Contains(observer.Text(), config.HomeDirectory) {
 			t.Fatal("observer did not resolve its Agent's executable", observer.State, observer.Error)
 		}
