@@ -254,7 +254,7 @@ func applicationAttempt(ctx context.Context, tx pgx.Tx, thread string, request m
 	var attempts int
 	err := tx.QueryRow(ctx, `SELECT j.request,j.cancelled,(SELECT count(*) FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE t.thread_id=j.thread_id) FROM runtime.application_jobs j WHERE j.thread_id=$1`, thread).Scan(&encoded, &cancelled, &attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return request.ValidateModelBudget(nil)
 	}
 	if err != nil {
 		return err
@@ -264,6 +264,9 @@ func applicationAttempt(ctx context.Context, tx pgx.Tx, thread string, request m
 	}
 	var job managedruntime.ApplicationJob
 	if err := json.Unmarshal(encoded, &job); err != nil {
+		return err
+	}
+	if err := request.ValidateModelBudget(job.ModelBudget); err != nil {
 		return err
 	}
 	if attempts >= job.MaxCalls {

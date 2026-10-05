@@ -127,6 +127,7 @@ type ModelConfig struct {
 }
 
 type Work struct {
+	ModelBudget     *ApplicationModelBudget
 	Deferred        bool
 	ContextSequence int64
 	Compaction      *CompactionJob
@@ -162,14 +163,15 @@ type Attempt struct {
 }
 
 type ModelRequest struct {
-	DynamicInstructions *InstructionReceipt `json:"dynamic_instructions,omitempty"`
-	Recall              *llm.Message        `json:"-"`
-	Generation          int64               `json:"generation"`
-	MaxOutputTokens     int                 `json:"max_output_tokens"`
-	Compaction          *CompactionDraft    `json:"compaction,omitempty"`
-	Model               ModelConfig         `json:"model"`
-	System              string              `json:"system"`
-	Messages            []llm.Message       `json:"messages"`
-	Tools               []llm.ToolSpec      `json:"tools"`
-	Purpose             string              `json:"purpose"`
+	ModelBudget         *ApplicationModelBudget `json:"model_budget,omitempty"`
+	DynamicInstructions *InstructionReceipt     `json:"dynamic_instructions,omitempty"`
+	Recall              *llm.Message            `json:"-"`
+	Generation          int64                   `json:"generation"`
+	MaxOutputTokens     int                     `json:"max_output_tokens"`
+	Compaction          *CompactionDraft        `json:"compaction,omitempty"`
+	Model               ModelConfig             `json:"model"`
+	System              string                  `json:"system"`
+	Messages            []llm.Message           `json:"messages"`
+	Tools               []llm.ToolSpec          `json:"tools"`
+	Purpose             string                  `json:"purpose"`
 }

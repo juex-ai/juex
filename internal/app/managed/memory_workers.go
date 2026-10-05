@@ -21,7 +21,7 @@ func (a MemoryWorkers) Admit(ctx context.Context, review memory.Review) (memory.
 	if err != nil {
 		return memory.WorkerState{}, err
 	}
-	job := managedruntime.ApplicationJob{Application: "memory", ID: review.ID, Epoch: review.Epoch, Fence: review.Fence, Name: "Memory review", Instruction: prompt, MaxCalls: 24}
+	job := managedruntime.ApplicationJob{Application: "memory", ID: review.ID, Epoch: review.Epoch, Fence: review.Fence, Name: "Memory review", Instruction: prompt, MaxCalls: 24, ModelBudget: &managedruntime.ApplicationModelBudget{ContextWindow: 16384, MaxOutput: 4096}}
 	if review.Automatic {
 		job.IdleSourceThread = review.ThreadID
 	}
