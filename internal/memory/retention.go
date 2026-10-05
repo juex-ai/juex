@@ -12,7 +12,7 @@ type EvidenceRetentionRepository interface {
 
 func (s *State) PruneEvidence(before time.Time) {
 	for _, review := range s.Reviews {
-		if review.WorkerFinished && terminal(review.Receipt.State) && review.Receipt.UpdatedAt.Before(before) {
+		if review.Imported == nil && review.WorkerFinished && terminal(review.Receipt.State) && review.Receipt.UpdatedAt.Before(before) {
 			review.Proposal.Text, review.Proposal.Reason = "", ""
 			review.Proposal.Evidence, review.Proposal.Sources = nil, nil
 		}

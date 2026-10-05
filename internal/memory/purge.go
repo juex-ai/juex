@@ -5,6 +5,12 @@ import "github.com/juex-ai/juex/internal/foundation/lifecycle"
 // Purge removes private review material, not the knowledge already shared with
 // the Fleet. Source references in shared facts remain historical provenance.
 func (s *State) Purge(target lifecycle.Target) {
+	for key, source := range s.ImportedSources {
+		if target.Contains(source.Scope.AgentID) {
+			delete(s.ImportedSources, key)
+			delete(s.ParticipationExcluded, key)
+		}
+	}
 	for key, p := range s.Participation {
 		if target.Contains(p.Scope.AgentID) {
 			delete(s.Participation, key)
