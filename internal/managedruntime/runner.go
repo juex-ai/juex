@@ -92,6 +92,7 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 	}
 	runner.tools = &toolRunner{admission: config.Admission, store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
 	runner.tools.hooks, _ = store.(HookStore)
+	runner.tools.instructions, _ = store.(InstructionStore)
 	runner.tools.applications = config.Applications
 	runner.tools.applicationStore, _ = store.(ApplicationStore)
 	runner.tools.collaboration, _ = store.(CollaborationStore)
@@ -402,6 +403,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 			return err
 		}
 	}
+	if ready, err := r.prepareInstructions(ctx, lease, work, job, &request); err != nil || !ready {
+		return err
+	}
 	provider, request, err := r.selectModel(ctx, lease, work, request)
 	if errors.Is(err, ErrNoCompaction) {
 		return r.store.SkipCompaction(ctx, lease, work)
@@ -430,6 +434,12 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		if llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+request.MaxOutputTokens+contextSafety(request.Model) > request.Model.ContextWindow {
 			return r.store.HoldInput(ctx, lease, pending.InputID, "context_limit")
 		}
+	}
+	if err := r.checkInstructionAuthority(ctx, work, request); err != nil {
+		if errors.Is(err, ErrDenied) {
+			return r.store.HoldInput(ctx, lease, work.InputID, "authority_changed")
+		}
+		return err
 	}
 	attempt, err := r.store.BeginAttempt(ctx, lease, work.TurnID, request)
 	if errors.Is(err, ErrApplicationBudget) {

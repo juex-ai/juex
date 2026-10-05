@@ -12,5 +12,6 @@ func MaintenanceReport(ctx context.Context, pool *pgxpool.Pool) (maintenance.Rep
 		{Kind: "input", SQL: `SELECT id::text,state FROM runtime.inputs WHERE state IN ('queued','active','held') ORDER BY id`},
 		{Kind: "tool", SQL: `SELECT id::text,state FROM runtime.tools WHERE state IN ('pending','waiting','unknown') OR operation_live ORDER BY id`},
 		{Kind: "hook", SQL: `SELECT id::text,state FROM runtime.hooks WHERE state IN ('pending','waiting','unknown') ORDER BY id`},
+		{Kind: "instructions", SQL: `SELECT id::text,state FROM runtime.instruction_preparations WHERE state IN ('pending','waiting','unknown') OR NOT output_acknowledged ORDER BY id`},
 	})
 }

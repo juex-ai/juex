@@ -50,9 +50,20 @@ key. Runtime needs neither the Management encryption key nor its database schema
 
 Input receipts and request-ID deduplication commit before execution. Events have
 a contiguous per-Thread sequence. Reconstructing context never reads workspace
-files. A Turn freezes its instructions and model configuration. Every new model
+files. A Turn freezes its static instructions, source policy and model configuration. Every new model
 call rechecks current authority and credential availability through injected
 business interfaces; Runtime does not query Management tables.
+
+When explicitly enabled, each new conversation request prepares a bounded
+instruction snapshot through Execution's authorized default environment. Sources
+follow the optional global file, working-directory AGENTS.md and .agents/AGENTS.md
+order. Runtime never reads its service host for this purpose. The original
+environment, directory and grant survive offline waits and restarts; exact source
+bytes and hashes commit before acknowledging output and remain with the model
+attempt. Missing/empty files add no text; invalid or unavailable results visibly
+hold the input. Files-disabled Agents and Memory review Workers do not read these
+sources. Compaction uses persisted context without starting its own file read.
+Source content cannot grant additional authority.
 
 All Activation writes lock and validate the database lease. A replacement
 increments its fencing epoch. An expired instance cannot publish its answer.

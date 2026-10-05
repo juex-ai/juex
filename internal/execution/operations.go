@@ -125,10 +125,10 @@ func (s *Service) submit(ctx context.Context, actor, tenant, environment string,
 	if err := s.authorizeHandle(ctx, scope, environment, request); err != nil {
 		return Operation{}, err
 	}
-	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && (request.Kind == "mcp_connect" || request.Kind == "observe_command"))
+	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && (request.Kind == "mcp_connect" || request.Kind == "observe_command" || request.Kind == "read_agent_instructions"))
 }
 
-// AcknowledgeOutput transfers responsibility for persisted notifications to
+// AcknowledgeOutput transfers responsibility for retained execution output to
 // Runtime. Device acknowledgment alone only confirms transport into Execution.
 func (s *Service) AcknowledgeOutput(ctx context.Context, actor, tenant, agent, environment, id string, cursor int64) error {
 	if cursor < 0 {

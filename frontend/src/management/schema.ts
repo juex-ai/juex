@@ -4,6 +4,7 @@ export type Role = "admin" | "member";
 export type MembershipStatus = "active" | "suspended" | "removed";
 
 export interface Agent {
+  dynamic_instructions: DynamicInstructions;
   capabilities: Policy;
   extensions: Array<Binding>;
   hooks: Array<Declaration>;
@@ -21,6 +22,7 @@ export interface Agent {
 }
 
 export interface AgentConfig {
+  dynamic_instructions?: DynamicInstructions | null;
   capabilities?: Policy | null;
   hooks?: Array<Declaration>;
   worker_depth?: number;
@@ -238,6 +240,7 @@ export interface CompactionRequest {
 }
 
 export interface ConfigureAgentRequest {
+  dynamic_instructions?: DynamicInstructions | null;
   capabilities?: Policy | null;
   hooks?: Array<Declaration>;
   worker_depth?: number;
@@ -308,6 +311,11 @@ export interface Device {
   ceiling: Record<string, Array<string>>;
   last_seen: string | null;
   connection_epoch: number;
+}
+
+export interface DynamicInstructions {
+  enabled: boolean;
+  global_path: string;
 }
 
 export interface Environment {

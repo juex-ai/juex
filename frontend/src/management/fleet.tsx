@@ -12,6 +12,7 @@ import { DevicesPanel } from './devices'
 import { DefaultEnvironmentDialog } from './default-environment'
 import { HooksEditor } from './hooks'
 import { CapabilitiesEditor } from './capabilities'
+import { InstructionsEditor } from './instructions'
 import { ExtensionsDialog } from './extensions'
 import { PurgeDialog, PurgePanel, type PurgeSelection } from './purge'
 import type { Agent, AgentConfig, FleetOverview, FleetSettings, Model, TenantAccess, User } from './schema'
@@ -42,7 +43,7 @@ export function FleetPage({ tenant, user, delegated = false }: { tenant: TenantA
     if (!editor) return
     setBusy(true); setError('')
     try {
-      const config = { ...editor.config, capabilities: editor.config.capabilities ?? editor.agent?.capabilities ?? { disabled: [] } }
+      const config = { ...editor.config, capabilities: editor.config.capabilities ?? editor.agent?.capabilities ?? { disabled: [] }, dynamic_instructions: editor.config.dynamic_instructions ?? editor.agent?.dynamic_instructions ?? { enabled: false, global_path: '' } }
       if (editor.agent) await api(`/tenants/${tenant.id}/agents/${editor.agent.id}`, { ...config, version: editor.agent.version }, 'PUT')
       else await api(`/tenants/${tenant.id}/users/${owner}/agents`, config)
       setEditor(null); refresh()
@@ -83,6 +84,7 @@ export function FleetPage({ tenant, user, delegated = false }: { tenant: TenantA
       <CapabilitiesEditor value={editor.config.capabilities ?? editor.agent?.capabilities ?? { disabled: [] }} onChange={capabilities => setEditor({ ...editor, config: { ...editor.config, capabilities } })} />
       <Field label="Worker 最大层级"><select className="management-select" value={editor.config.worker_depth ?? 1} onChange={event => setEditor({ ...editor, config: { ...editor.config, worker_depth: Number(event.target.value) } })}><option value={1}>1 层 · Main 可创建 Workers</option><option value={2}>2 层 · Worker 可继续委派一层</option></select></Field>
       <Field label="专属指令"><Textarea rows={5} maxLength={16000} value={editor.config.instructions} onChange={event => setEditor({ ...editor, config: { ...editor.config, instructions: event.target.value } })} placeholder="这个 Agent 负责什么？有哪些需要遵守的要求？" /></Field>
+      <InstructionsEditor value={editor.config.dynamic_instructions ?? editor.agent?.dynamic_instructions ?? { enabled: false, global_path: '' }} onChange={dynamic_instructions => setEditor({ ...editor, config: { ...editor.config, dynamic_instructions } })} />
       <Field label="模型"><ModelSelect models={models} value={editor.config.model_id} emptyLabel="继承 Fleet 默认模型" onChange={value => setEditor({ ...editor, config: { ...editor.config, model_id: value } })} /></Field>
       <HooksEditor tenant={tenant.id} owner={owner} agent={editor.agent?.id} value={editor.config.hooks ?? []} onChange={hooks => setEditor({ ...editor, config: { ...editor.config, hooks } })} />
       <DialogFooter><Button type="button" variant="outline" onClick={() => setEditor(null)}>取消</Button><Button type="submit" disabled={busy}>{busy ? '正在保存…' : '保存'}</Button></DialogFooter>

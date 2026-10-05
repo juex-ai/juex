@@ -28,7 +28,14 @@ Agent 默认允许一层 Worker，可配置为两层，Turn 固定该策略。pa
 双向通信都要求部署 CA 签发的对应服务证书，CA 私钥只由运维保管。Runtime 不需要 Management 的加密密钥或数据库 schema。
 
 输入回执和 request ID 去重在执行前提交。事件使用 Thread 内连续序号；重建上下文不读取 Workspace 文件。
-Turn 固定指令和模型配置。每次新模型调用通过注入的业务接口重新检查当前权限与凭据可用性，Runtime 不查询 Management 表。
+Turn 固定静态指令、来源策略和模型配置。每次新模型调用通过注入的业务接口重新检查当前权限与凭据可用性，Runtime 不查询 Management 表。
+
+显式启用后，每个新的对话请求通过 Execution 的已授权默认环境准备有大小上限的指令快照。
+来源顺序为可选全局文件、工作目录的 AGENTS.md、.agents/AGENTS.md；Runtime 不读取服务
+宿主机文件。离线等待和重启保留原环境、目录及授权；来源原始字节和摘要先持久化再确认
+输出消费，并随模型请求保存。缺失或空文件不追加文本；无效或不可用结果会明确暂停输入。
+禁用 Files 的 Agent 和 Memory 审查 Worker 不读取这些来源。压缩使用已持久化上下文，
+不发起自己的文件读取。来源内容不能授予额外权限。
 
 所有 Activation 写入都锁定并校验数据库租约；接管会增加 fencing 代际，过期实例不能发布回复。
 恢复沿用原 Turn，将未确认的模型请求标为 unknown。Provider adapter 的一次网络请求对应一条持久 attempt；完整、部分和缺失用量分别记录。

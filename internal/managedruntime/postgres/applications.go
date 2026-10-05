@@ -170,7 +170,7 @@ func applicationReceipt(ctx context.Context, tx pgx.Tx, scope managedruntime.Sco
  SELECT bool_or(k.state='unknown') AS unknown,
  bool_or(k.state IN ('pending','waiting') OR k.operation_live) AS unsettled,
  jsonb_agg(k.id::text ORDER BY k.id) FILTER (WHERE k.state IN ('pending','waiting','unknown') OR k.operation_live) AS operations
- FROM (SELECT id,turn_id,state,operation_live FROM runtime.tools UNION ALL SELECT id,turn_id,state,false AS operation_live FROM runtime.hooks) k JOIN runtime.turns t ON t.id=k.turn_id WHERE t.input_id=j.input_id
+ FROM (SELECT id,turn_id,state,operation_live FROM runtime.tools UNION ALL SELECT id,turn_id,state,false AS operation_live FROM runtime.hooks UNION ALL SELECT id,turn_id,state,false AS operation_live FROM runtime.instruction_preparations) k JOIN runtime.turns t ON t.id=k.turn_id WHERE t.input_id=j.input_id
  ) tools ON true
  WHERE j.application=$1 AND j.fleet_id=$2 AND j.job_id=$3 AND j.agent_id=$4`, app, scope.FleetID, id, scope.AgentID).Scan(&value.ThreadID, &value.InputID, &value.State, &operations)
 	if err == nil {

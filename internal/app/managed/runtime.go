@@ -59,6 +59,7 @@ func (a RuntimeAuthority) Snapshot(ctx context.Context, scope managedruntime.Sco
 		return managedruntime.TurnConfig{}, runtimeError(err)
 	}
 	config := managedruntime.TurnConfig{Capabilities: plan.Capabilities, Extensions: plan.Extensions, Hooks: append(plan.Hooks, extensionpolicy.Hooks(plan.Extensions)...), WorkerDepth: plan.WorkerDepth, AgentVersion: plan.AgentVersion, Instructions: plan.Instructions, RequestedModelID: plan.RequestedModelID}
+	config.DynamicInstructions = plan.DynamicInstructions
 	for _, candidate := range plan.Candidates {
 		config.Models = append(config.Models, managedruntime.ModelConfig(candidate))
 	}

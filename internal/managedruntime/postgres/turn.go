@@ -307,6 +307,9 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	if err != nil {
 		return attempt, err
 	}
+	if err := consumeInstructions(ctx, tx, turnID, attempt.ID, request); err != nil {
+		return attempt, err
+	}
 	if err := appendEvent(ctx, tx, threadID, "model.started", map[string]any{"attempt_id": attempt.ID, "turn_id": turnID, "ordinal": attempt.Ordinal, "model_id": request.Model.ModelID, "model": request.Model.Provider + ":" + request.Model.Model}); err != nil {
 		return attempt, err
 	}
@@ -473,7 +476,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 // HoldInput prevents revoked work from automatically running after a later
 // membership/Agent restore. Releasing it requires a new authorized user action.
 func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, inputID, reason string) error {
-	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" {
+	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" && reason != "instructions_unavailable" {
 		return managedruntime.ErrInvalid
 	}
 	tx, err := s.begin(ctx)
@@ -505,6 +508,9 @@ func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, input
 		return err
 	}
 	if turnID != "" {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.instruction_preparations SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 WHERE turn_id=$1 AND state IN ('pending','waiting','unknown')`, turnID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 WHERE turn_id=$1 AND state IN ('pending','waiting','unknown')`, turnID); err != nil {
 			return err
 		}

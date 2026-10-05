@@ -179,7 +179,8 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 	}
 	locked, err := tx.Query(ctx, `SELECT th.id FROM runtime.threads th WHERE th.id IN (
  SELECT t.thread_id FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id WHERE j.id::text=ANY($1::text[]) OR j.environment_id=ANY($2::text[])
- UNION SELECT h.thread_id FROM runtime.hooks h WHERE h.id::text=ANY($1::text[]) OR h.environment_id=ANY($2::text[])) ORDER BY th.id FOR UPDATE OF th`, operations, environments)
+ UNION SELECT h.thread_id FROM runtime.hooks h WHERE h.id::text=ANY($1::text[]) OR h.environment_id=ANY($2::text[])
+ UNION SELECT p.thread_id FROM runtime.instruction_preparations p WHERE p.id::text=ANY($1::text[]) OR p.environment_id=ANY($2::text[])) ORDER BY th.id FOR UPDATE OF th`, operations, environments)
 	if err != nil {
 		return err
 	}
@@ -212,6 +213,9 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 			continue
 		}
 		if event.OperationID != "" {
+			if _, err := tx.Exec(ctx, `UPDATE runtime.instruction_preparations SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE id::text=$1 AND environment_id=$2 AND scope->>'tenant_id'=$3 AND scope->>'user_id'=$4 AND (state IN ('pending','waiting') OR NOT output_acknowledged)`, event.OperationID, event.EnvironmentID, event.TenantID, event.UserID); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE id::text=$1 AND environment_id=$2 AND scope->>'tenant_id'=$3 AND scope->>'user_id'=$4 AND state IN ('pending','waiting')`, event.OperationID, event.EnvironmentID, event.TenantID, event.UserID); err != nil {
 				return err
 			}
@@ -222,6 +226,9 @@ func (s *Store) ReceiveExecutionEvents(ctx context.Context, events []execprotoco
 				return err
 			}
 		} else {
+			if _, err := tx.Exec(ctx, `UPDATE runtime.instruction_preparations SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE environment_id=$1 AND scope->>'tenant_id'=$2 AND scope->>'user_id'=$3 AND scope->>'agent_id'=ANY($4::text[]) AND (state IN ('pending','waiting') OR NOT output_acknowledged)`, event.EnvironmentID, event.TenantID, event.UserID, event.AgentIDs); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET next_check=clock_timestamp(),wake_version=wake_version+1 WHERE environment_id=$1 AND scope->>'tenant_id'=$2 AND scope->>'user_id'=$3 AND scope->>'agent_id'=ANY($4::text[]) AND state IN ('pending','waiting')`, event.EnvironmentID, event.TenantID, event.UserID, event.AgentIDs); err != nil {
 				return err
 			}
