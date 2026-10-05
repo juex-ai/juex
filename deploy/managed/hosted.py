@@ -129,7 +129,7 @@ def initialize(args):
     config = dict(backend="hosted", format=2, root=str(root), workspace=str(workspace), socket=str(absolute(args.docker_socket)),
                   public_url=args.public_url, https_port=args.listen_port or url.port or 443, platform_prefix=prefix,
                   hosted_pool=str(hosted), host_ip=args.host_ip, dns=args.dns,
-                  storage_identity=mount_identity(workspace), active_threads=10)
+                  storage_identity=mount_identity(workspace), active_threads=args.active_threads)
     for key in ("image", "hosted_image", "postgres_image", "gateway_image"):
         value = getattr(args, key)
         config[key] = docker(config, "image", "inspect", value, "--format", "{{.Id}}").stdout.decode().strip()

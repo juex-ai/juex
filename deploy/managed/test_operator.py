@@ -88,6 +88,23 @@ class RecoveryTests(unittest.TestCase):
                 ops.up({"root": str(self.root)})
             firewall.assert_not_called()
 
+    def test_hosted_initialization_preserves_requested_thread_limit(self):
+        args = SimpleNamespace(root=str((self.root / "deployment").resolve()),
+            workspace=str((self.root / "workspace").resolve()), public_url="https://example.test",
+            platform_prefix="172.30.0", hosted_pool="172.31.0.0/16", listen_port=None,
+            host_ip="172.30.0.1", dns=["1.1.1.1"], docker_socket=str((self.root / "docker.sock").resolve()),
+            image="platform", hosted_image="guest", postgres_image="postgres", gateway_image="gateway",
+            active_threads=1)
+        # Inspect configuration at the ownership boundary, before any privileged
+        # filesystem or container changes are allowed.
+        with patch.object(ops.hosted, "mount_identity", return_value="workspace-uuid"), \
+                patch.object(ops.hosted, "docker", return_value=SimpleNamespace(stdout=b"sha256:image\n")), \
+                patch.object(ops.hosted, "assert_deployment_owner", side_effect=RuntimeError("stop before creation")) as ownership:
+            with self.assertRaisesRegex(RuntimeError, "stop before creation"):
+                ops.hosted.initialize(args)
+        self.assertEqual(ownership.call_args.args[0]["active_threads"], 1)
+        self.assertFalse(Path(args.root).exists())
+
     def test_recovery_preserves_operator_settings(self):
         (self.root / "secrets").mkdir()
         config = dict(root=str(self.root), workspace="/new-workspace", socket="/new.sock",
