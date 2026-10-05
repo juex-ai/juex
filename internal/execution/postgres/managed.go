@@ -80,7 +80,7 @@ func (s *Store) EnsureManaged(ctx context.Context, scope execution.Scope, candid
 	if candidate.Backend == "gvisor" {
 		kind, name = "hosted", "Hosted workspace"
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO execution.environments(id,tenant_id,user_id,fleet_id,kind,name,os,working_directory,credential_hash,removal_epoch,grants,ceiling) VALUES($1,$2,$3,$4,$8,$9,$10,$11,$5,$6,$7,$7)`, candidate.EnvironmentID, scope.TenantID, scope.UserID, scope.FleetID, candidate.CredentialHash, scope.RemovalEpoch, grants, kind, name, candidate.OS, candidate.WorkingDirectory); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO execution.environments(id,tenant_id,user_id,fleet_id,kind,name,os,working_directory,credential_hash,removal_epoch,grants,ceiling,managed) VALUES($1,$2,$3,$4,$8,$9,$10,$11,$5,$6,$7,$7,true)`, candidate.EnvironmentID, scope.TenantID, scope.UserID, scope.FleetID, candidate.CredentialHash, scope.RemovalEpoch, grants, kind, name, candidate.OS, candidate.WorkingDirectory); err != nil {
 		return h, classify(err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO execution.managed_environments(environment_id,agent_id,slot,memory_bytes,nano_cpus,storage_identity,workspace_bytes,workspace_inodes,backend,home_directory,project_id) VALUES($1,$2,$3,NULLIF($4::bigint,0),NULLIF($5::bigint,0),NULLIF($6,'')::uuid,NULLIF($7::bigint,0),NULLIF($8::bigint,0),$9,$10,CASE WHEN $9='gvisor' THEN nextval('execution.managed_project_id') ELSE NULL END)`, candidate.EnvironmentID, scope.AgentID, slot, candidate.Memory, candidate.NanoCPUs, candidate.StorageIdentity, candidate.WorkspaceBytes, candidate.WorkspaceInodes, candidate.Backend, candidate.HomeDirectory); err != nil {

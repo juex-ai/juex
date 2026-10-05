@@ -46,6 +46,12 @@ func TestManagedEnvironmentMigrationPreservesHostedEnrollmentAndQuotaIdentity(t 
 	if _, err := f.pool.Exec(ctx, `INSERT INTO execution.hosted(environment_id,agent_id,slot,memory_bytes,nano_cpus,storage_identity,workspace_bytes,workspace_inodes,provisioned) VALUES($1,$2,17,805306368,1000000000,$3,2147483648,131072,true)`, environment, agent, storage); err != nil {
 		t.Fatal(err)
 	}
+	deletedHosted, pairedNative := uuid.NewString(), uuid.NewString()
+	for _, old := range []struct{ id, kind string }{{deletedHosted, "hosted"}, {pairedNative, "native"}} {
+		if _, err := f.pool.Exec(ctx, `INSERT INTO execution.environments(id,tenant_id,user_id,fleet_id,kind,name,os,working_directory,credential_hash,removal_epoch,grants,ceiling,status) VALUES($1,$2,$3,$4,$5,'retained','linux','', $1::uuid::text,0,'{}','{}','revoked')`, old.id, uuid.NewString(), uuid.NewString(), uuid.NewString(), old.kind); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var project int64
 	if err := f.pool.QueryRow(ctx, `SELECT project_id FROM execution.hosted WHERE environment_id=$1`, environment).Scan(&project); err != nil {
 		t.Fatal(err)
@@ -62,14 +68,23 @@ func TestManagedEnvironmentMigrationPreservesHostedEnrollmentAndQuotaIdentity(t 
 	var gotCredential, journal, gotStorage, backend, home string
 	var gotProject, nextProject int64
 	var slot int
-	var provisioned bool
-	if err := f.pool.QueryRow(ctx, `SELECT e.credential_hash,e.journal_id,m.storage_identity::text,m.project_id,m.slot,m.provisioned,m.backend,m.home_directory FROM execution.environments e JOIN execution.managed_environments m ON m.environment_id=e.id WHERE e.id=$1`, environment).Scan(&gotCredential, &journal, &gotStorage, &gotProject, &slot, &provisioned, &backend, &home); err != nil {
+	var provisioned, managed bool
+	if err := f.pool.QueryRow(ctx, `SELECT e.credential_hash,e.journal_id,m.storage_identity::text,m.project_id,m.slot,m.provisioned,m.backend,m.home_directory,e.managed FROM execution.environments e JOIN execution.managed_environments m ON m.environment_id=e.id WHERE e.id=$1`, environment).Scan(&gotCredential, &journal, &gotStorage, &gotProject, &slot, &provisioned, &backend, &home, &managed); err != nil {
 		t.Fatal(err)
 	}
-	if gotCredential != credential || journal != "retained-journal" || gotStorage != storage || gotProject != project || slot != 17 || !provisioned || backend != "gvisor" || home != "/home/agent" {
+	if gotCredential != credential || journal != "retained-journal" || gotStorage != storage || gotProject != project || slot != 17 || !provisioned || !managed || backend != "gvisor" || home != "/home/agent" {
 		t.Fatal("migration replaced Hosted ownership", gotCredential == credential, journal, gotStorage, gotProject, slot, provisioned, backend, home)
 	}
 	if err := f.pool.QueryRow(ctx, `SELECT nextval('execution.managed_project_id')`).Scan(&nextProject); err != nil || nextProject != 778 {
 		t.Fatal("migration reused a previously issued project ID", nextProject, err)
+	}
+	for _, retained := range []struct {
+		id      string
+		managed bool
+	}{{deletedHosted, true}, {pairedNative, false}} {
+		var got bool
+		if err := f.pool.QueryRow(ctx, `SELECT managed FROM execution.environments WHERE id=$1`, retained.id).Scan(&got); err != nil || got != retained.managed {
+			t.Fatal("migration changed retained environment ownership", retained, got, err)
+		}
 	}
 }

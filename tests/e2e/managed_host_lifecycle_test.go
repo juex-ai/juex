@@ -125,3 +125,37 @@ func TestManagedHostUnknownOperationPreventsDestructivePurge(t *testing.T) {
 		t.Fatal("unknown outcome was settled", op, err)
 	}
 }
+
+func TestManagedHostPurgeRetainsPlatformOwnership(t *testing.T) {
+	f := executionDatabase(t)
+	ctx := context.Background()
+	backend := &hostLifecycleProbe{root: t.TempDir()}
+	f.execution.Managed = &execution.ManagedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: make([]byte, 32)}
+	envs, err := f.execution.Environments(ctx, f.actor, f.tenant, f.agent.ID)
+	if err != nil || len(envs) != 1 {
+		t.Fatal(envs, err)
+	}
+	scope, err := f.execution.Authority.Agent(ctx, f.actor, f.tenant, f.agent.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := lifecycle.Request{Target: lifecycle.Target{ID: uuid.NewString(), TenantID: f.tenant, UserID: f.actor, FleetID: scope.FleetID, AgentIDs: []string{f.agent.ID}}, Phase: lifecycle.Erase}
+	if _, err := f.executionStore.Purge(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.execution.Managed.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := f.executionStore.Purge(ctx, r)
+	if err != nil || !receipt.DataRemoved {
+		t.Fatal("cleanup did not complete", receipt, err)
+	}
+	devices, err := f.execution.Devices(ctx, f.actor, f.tenant, f.actor)
+	if err != nil || len(devices) != 0 {
+		t.Fatal("deleted managed Host appeared as an external device", devices, err)
+	}
+	device, err := f.executionStore.Device(ctx, envs[0].ID)
+	if err != nil || !device.Managed || device.Status != "revoked" {
+		t.Fatal("cleanup erased durable ownership", device, err)
+	}
+}

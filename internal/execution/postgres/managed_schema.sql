@@ -1,3 +1,6 @@
+ALTER TABLE execution.environments ADD COLUMN managed boolean NOT NULL DEFAULT false;
+UPDATE execution.environments SET managed=true WHERE kind='hosted';
+
 ALTER TABLE execution.hosted RENAME TO managed_environments;
 CREATE SEQUENCE execution.managed_project_id AS bigint MINVALUE 1 MAXVALUE 4294967295;
 DO $$

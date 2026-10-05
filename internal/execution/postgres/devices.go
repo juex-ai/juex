@@ -11,7 +11,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
-const deviceColumns = `id,tenant_id,user_id,fleet_id,kind,name,os,working_directory,removal_epoch,grants,ceiling,status,version,journal_id,connection_epoch,last_seen,COALESCE(online_until>clock_timestamp(),false),COALESCE((SELECT last_error FROM execution.managed_environments WHERE environment_id=execution.environments.id),''),COALESCE((SELECT CASE WHEN running THEN 'starting' ELSE 'sleeping' END FROM execution.managed_environments WHERE environment_id=execution.environments.id),'offline'),EXISTS(SELECT 1 FROM execution.managed_environments WHERE environment_id=execution.environments.id)`
+const deviceColumns = `id,tenant_id,user_id,fleet_id,kind,name,os,working_directory,removal_epoch,grants,ceiling,status,version,journal_id,connection_epoch,last_seen,COALESCE(online_until>clock_timestamp(),false),COALESCE((SELECT last_error FROM execution.managed_environments WHERE environment_id=execution.environments.id),''),COALESCE((SELECT CASE WHEN running THEN 'starting' ELSE 'sleeping' END FROM execution.managed_environments WHERE environment_id=execution.environments.id),'offline'),managed`
 
 func scanDevice(row pgx.Row) (execution.Device, error) {
 	var device execution.Device
