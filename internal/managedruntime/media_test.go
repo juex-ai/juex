@@ -30,7 +30,7 @@ func TestRequestMediaPreservesReferencesAndDoesNotPersistBytes(t *testing.T) {
 	scope, calls := Scope{AgentID: "agent", TenantID: "tenant", ActorID: "actor"}, 0
 	reader := mediaGatewayFunc(func(_ context.Context, got Scope, value llm.MediaRef) ([]byte, error) {
 		calls++
-		if got != scope || value.ArtifactID != ref.ArtifactID {
+		if !reflect.DeepEqual(got, scope) || value.ArtifactID != ref.ArtifactID {
 			t.Fatal("media read lost authority scope")
 		}
 		return data, nil
