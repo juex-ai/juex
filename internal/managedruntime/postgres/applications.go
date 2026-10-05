@@ -262,13 +262,16 @@ func applicationAttempt(ctx context.Context, tx pgx.Tx, thread string, request m
 		return classify(err)
 	}
 	if purpose == "" && app == "" {
-		return nil
+		return request.ValidateModelBudget(nil)
 	}
 	if purpose == "" || purpose != app || imported != "" || cancelled {
 		return managedruntime.ErrDenied
 	}
 	var job managedruntime.ApplicationJob
 	if err := json.Unmarshal(encoded, &job); err != nil {
+		return err
+	}
+	if err := request.ValidateModelBudget(job.ModelBudget); err != nil {
 		return err
 	}
 	if attempts >= job.MaxCalls {

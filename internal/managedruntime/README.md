@@ -2,6 +2,10 @@
 
 > English | [中文](README.zh.md)
 
+Application context/output budgets freeze with the job and narrow each catalog
+candidate without changing its authorization identity. Attempts retain that policy;
+persistent admission rechecks it, including summaries and recovered work.
+
 Runtime owns the `runtime` PostgreSQL schema. An Agent is a durable identity;
 an Activation is a replaceable lease holder. Main and Workers have independent
 inputs, history, context generations and cancellation. The scheduler interleaves

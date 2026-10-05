@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,88 @@ import (
 	"testing"
 	"time"
 )
+
+func TestManagedMemoryOutputRequirementPreservesSingleAttemptBudget(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fallback%v", fallback), func(t *testing.T) {
+			var primaryCalls, backupCalls atomic.Int32
+			f := managedRuntimeHTTP(t, func(w http.ResponseWriter, _ *http.Request) {
+				primaryCalls.Add(1)
+				streamManagedReply(w, "Unexpected uncapped Memory call")
+			})
+			ctx := context.Background()
+			var endpoint string
+			if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.ModelID).Scan(&endpoint); err != nil {
+				t.Fatal(err)
+			}
+			disabled := false
+			if _, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: endpoint, APIKey: "test-key", ContextWindow: 32768, OutputReserve: 8192, Enabled: true, Options: management.ModelOptions{Capabilities: llm.CapabilityOverrides{MaxOutputTokens: &disabled}}}); err != nil {
+				t.Fatal(err)
+			}
+			if fallback {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					backupCalls.Add(1)
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if body["max_completion_tokens"] != float64(4096) {
+						t.Error("Memory cap missing from provider request", body["max_completion_tokens"])
+					}
+					streamManagedReply(w, "Reviewed supplied Memory evidence")
+				}))
+				t.Cleanup(server.Close)
+				model, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "backup", Name: "memory-capable", Protocol: llm.ProtocolOpenAIChat, Endpoint: server.URL, APIKey: "fixture", ContextWindow: 32768, OutputReserve: 8192, Enabled: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{model.ID}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job := applicationJob()
+			job.ModelBudget, job.MaxCalls = memoryModelBudget(), 1
+			receipt, err := f.store.AdmitApplication(ctx, scope, job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stop := runApplicationFixture(t, f, &runtimeApplicationGateway{})
+			var state string
+			runtimeEventually(t, func() bool {
+				return f.pool.QueryRow(ctx, `SELECT state FROM runtime.inputs WHERE id=$1`, receipt.InputID).Scan(&state) == nil && (state == "held" || state == "completed")
+			})
+			stop()
+			var attempts int
+			if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE t.input_id=$1`, receipt.InputID).Scan(&attempts); err != nil {
+				t.Fatal(err)
+			}
+			if primaryCalls.Load() != 0 {
+				t.Fatal("unsupported provider called", primaryCalls.Load())
+			}
+			if !fallback {
+				if state != "held" || attempts != 0 {
+					t.Fatal("unavailable capability consumed Memory budget", state, attempts)
+				}
+				return
+			}
+			if state != "completed" || attempts != 1 || backupCalls.Load() != 1 {
+				t.Fatal("fallback lost single-attempt budget", state, attempts, backupCalls.Load())
+			}
+			var raw []byte
+			if err := f.pool.QueryRow(ctx, `SELECT a.request FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE t.input_id=$1`, receipt.InputID).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var request managedruntime.ModelRequest
+			if err := json.Unmarshal(raw, &request); err != nil || request.Model.MaxOutput != 0 || request.Model.OutputReserve != 8192 || request.Model.ContextWindow != 32768 || request.MaxOutputTokens != 4096 || request.ModelBudget == nil || *request.ModelBudget != *job.ModelBudget {
+				t.Fatal("catalog or frozen Memory policy changed", request, err)
+			}
+		})
+	}
+}
 
 func TestManagedRequestOutputRequirementSelectsBeforeAttempt(t *testing.T) {
 	for _, tc := range []struct {
