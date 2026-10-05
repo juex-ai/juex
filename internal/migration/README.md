@@ -74,3 +74,12 @@ protocol does not collect. Source opt-outs survive configuration changes.
 Unmapped ownership, history or range boundaries fail conversion. Original source
 bytes retain legacy scheduling and recall statistics without making them live
 jobs or new processing-success claims.
+
+Calendar conversion reads captured v1 extension data with explicit same-owner
+Agent bindings and a fixed capture time. It preserves rule clocks and next
+instants, maps the source catch-up default to none, and uses the source ID when
+its optional name is empty. Calendar creates new versions and authority epochs;
+source data never supplies live delivery receipts. Pending deliveries, attachments,
+sent history, scheduling errors and interval re-anchoring require separate proven
+conversion and are rejected. A skipped one-shot with no future instant remains
+completed. The old extension must not run alongside the new Calendar owner.

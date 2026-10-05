@@ -48,7 +48,7 @@ func TestManagedRuntimeApplicationObservationPreservesLiveCalendarOnly(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := managedruntime.ModelRequest{Messages: work.History}
+			request := managedruntime.ModelRequest{Messages: work.History, Model: work.Config.Models[0], MaxOutputTokens: work.Config.Models[0].MaxOutput}
 			attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, request)
 			if err != nil {
 				t.Fatal(err)
@@ -140,7 +140,8 @@ func TestManagedRuntimeApplicationObservationPreservesLiveCalendarOnly(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			last, err := store.BeginAttempt(ctx, lease, next.TurnID, managedruntime.ModelRequest{Messages: next.History})
+			nextRequest := managedruntime.ModelRequest{Messages: next.History, Model: next.Config.Models[0], MaxOutputTokens: next.Config.Models[0].MaxOutput}
+			last, err := store.BeginAttempt(ctx, lease, next.TurnID, nextRequest)
 			if err != nil {
 				t.Fatal("Calendar observation cannot call its model", err)
 			}
@@ -158,7 +159,7 @@ func TestManagedRuntimeApplicationObservationPreservesLiveCalendarOnly(t *testin
 			if _, err := store.BeginTurn(ctx, lease, scope, input, runtimeConfig()); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.BeginAttempt(ctx, lease, next.TurnID, managedruntime.ModelRequest{Messages: next.History}); !errors.Is(err, managedruntime.ErrApplicationBudget) {
+			if _, err := store.BeginAttempt(ctx, lease, next.TurnID, nextRequest); !errors.Is(err, managedruntime.ErrApplicationBudget) {
 				t.Fatal("observation obtained a fresh application budget", err)
 			}
 			var total, calendar int
