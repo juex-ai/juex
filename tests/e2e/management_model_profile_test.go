@@ -94,19 +94,34 @@ func TestManagedModelProfilePreservesCodexIdentity(t *testing.T) {
 	}
 	runPlatformRPC(t, server)
 	var received llm.ProviderProfile
-	factory := func(value llm.ProviderProfile) (llm.Provider, error) { received = value; return nil, nil }
+	factoryCalls := 0
+	factory := func(value llm.ProviderProfile) (llm.Provider, error) {
+		factoryCalls++
+		received = value
+		return nil, nil
+	}
 	rpc, err := runtimeclient.NewAuthority(listener.Addr().String(), platformrpc.CredentialsAt(pki, "runtime"), factory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rpc.Provider(ctx, scope, plan.Models[0]); err != nil || !reflect.DeepEqual(received, profile) {
+	if _, err := rpc.Provider(ctx, scope, plan.Models[0], managedruntime.ModelRequirements{}); err != nil || !reflect.DeepEqual(received, profile) {
 		t.Fatal("private options lost over authenticated Runtime RPC", err)
+	}
+	if profile.Capabilities.MaxOutputTokens {
+		t.Fatal("fixture must retain the Codex default without output caps")
+	}
+	if p, err := authority.Provider(ctx, scope, plan.Models[0], managedruntime.ModelRequirements{OutputLimit: true}); p != nil || !errors.Is(err, managedruntime.ErrModelUnavailable) {
+		t.Error("local authority admitted an unsupported bounded request", err)
+	}
+	before := factoryCalls
+	if p, err := rpc.Provider(ctx, scope, plan.Models[0], managedruntime.ModelRequirements{OutputLimit: true}); p != nil || !errors.Is(err, managedruntime.ErrModelUnavailable) || factoryCalls != before {
+		t.Error("RPC authority invoked factory for unsupported bounded request", err, factoryCalls, before)
 	}
 	other, err := runtimeclient.NewAuthority(listener.Addr().String(), platformrpc.CredentialsAt(pki, "execution"), factory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := other.Provider(ctx, scope, plan.Models[0]); !errors.Is(err, managedruntime.ErrDenied) {
+	if _, err := other.Provider(ctx, scope, plan.Models[0], managedruntime.ModelRequirements{}); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Execution obtained the private model profile", err)
 	}
 	// A new credential for the same account and route keeps a frozen plan usable.
@@ -188,7 +203,7 @@ func TestManagedModelProfileRetainsExplicitProtocol(t *testing.T) {
 	if err != nil || profile.ID != "openai" || profile.Protocol != llm.ProtocolOpenAIChat {
 		t.Fatal("preset name overrode the stored explicit protocol", err)
 	}
-	provider, err := f.authority.Provider(ctx, scope, plan.Models[0])
+	provider, err := f.authority.Provider(ctx, scope, plan.Models[0], managedruntime.ModelRequirements{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +261,7 @@ func TestManagedModelProfileExplicitNoAuthentication(t *testing.T) {
 	if err != nil || profile.APIKey != "" || profile.ID != "local" {
 		t.Fatal("local model received a fabricated credential", err)
 	}
-	provider, err := authority.Provider(ctx, scope, plan.Models[0])
+	provider, err := authority.Provider(ctx, scope, plan.Models[0], managedruntime.ModelRequirements{})
 	if err != nil {
 		t.Fatal("provider factory rejected explicit no authentication", err)
 	}

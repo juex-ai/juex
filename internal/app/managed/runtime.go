@@ -65,9 +65,12 @@ func (a RuntimeAuthority) Snapshot(ctx context.Context, scope managedruntime.Sco
 	return config, nil
 }
 
-func (a RuntimeAuthority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.ModelConfig) (llm.Provider, error) {
+func (a RuntimeAuthority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.ModelConfig, requirements managedruntime.ModelRequirements) (llm.Provider, error) {
 	profile, err := a.Profile(ctx, scope, config)
 	if err != nil {
+		return nil, err
+	}
+	if err := requirements.Check(profile); err != nil {
 		return nil, err
 	}
 	return providers.NewProvider(profile)

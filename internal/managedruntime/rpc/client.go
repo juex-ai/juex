@@ -143,7 +143,7 @@ func (a *Authority) Snapshot(ctx context.Context, scope managedruntime.Scope) (m
 	err = platformrpc.Decode(reply, err, &result, decodeError)
 	return result, err
 }
-func (a *Authority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.ModelConfig) (llm.Provider, error) {
+func (a *Authority) Provider(ctx context.Context, scope managedruntime.Scope, config managedruntime.ModelConfig, requirements managedruntime.ModelRequirements) (llm.Provider, error) {
 	encodedScope, err := json.Marshal(scope)
 	if err != nil {
 		return nil, err
@@ -155,6 +155,9 @@ func (a *Authority) Provider(ctx context.Context, scope managedruntime.Scope, co
 	reply, err := a.client.ModelProfile(ctx, string(encodedScope), string(encodedConfig))
 	var profile llm.ProviderProfile
 	if err := platformrpc.Decode(reply, err, &profile, decodeError); err != nil {
+		return nil, err
+	}
+	if err := requirements.Check(profile); err != nil {
 		return nil, err
 	}
 	return a.factory(profile)

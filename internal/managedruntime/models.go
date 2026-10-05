@@ -76,7 +76,7 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 				return nil, request, err
 			}
 			request.Messages = messages
-			provider, err := r.authority.Provider(ctx, work.Scope, model)
+			provider, err := r.authority.Provider(ctx, work.Scope, model, ModelRequirements{OutputLimit: request.MaxOutputTokens > 0})
 			if err == nil {
 				return provider, request, nil
 			}

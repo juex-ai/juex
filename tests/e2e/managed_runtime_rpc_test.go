@@ -98,7 +98,7 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	if peers, err := authority.Peers(ctx, executorScope); err != nil || len(peers) != 0 {
 		t.Fatal(peers, err)
 	}
-	if _, err := executorAuthority.Provider(ctx, executorScope, managedruntime.ModelConfig{}); !errors.Is(err, managedruntime.ErrDenied) {
+	if _, err := executorAuthority.Provider(ctx, executorScope, managedruntime.ModelConfig{}, managedruntime.ModelRequirements{}); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Execution obtained model credentials", err)
 	}
 	threads, err := client.Threads(ctx, f.actor, f.tenant, f.agent.ID)

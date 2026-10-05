@@ -108,7 +108,7 @@ func TestDynamicInstructionsHTTPAndTurnSnapshot(t *testing.T) {
 	config.ModelID = f.agent.ModelID
 	f.agent = managementCall[management.Agent](t, f.client, "PUT", f.base, f.origin, managementhttp.ConfigureAgentRequest{Version: f.agent.Version, AgentConfig: config}, 200)
 	checkInstructionConfig(t, f.agent, false, "")
-	if _, err := f.authority.Provider(ctx, scope, plan.Models[0]); !errors.Is(err, managedruntime.ErrDenied) {
+	if _, err := f.authority.Provider(ctx, scope, plan.Models[0], managedruntime.ModelRequirements{}); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatalf("old request regained authority after instruction revocation: %v", err)
 	}
 }

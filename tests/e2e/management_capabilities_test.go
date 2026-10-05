@@ -143,7 +143,7 @@ func TestAgentCapabilitiesHTTPAuthorityAndExecutionAdmission(t *testing.T) {
 	if err != nil || appScope.Capabilities.Allows(agentpolicy.Calendar) {
 		t.Fatal("application authority lost capability policy", appScope, err)
 	}
-	if _, err := f.authority.Provider(ctx, oldScope, oldConfig.Models[0]); !errors.Is(err, managedruntime.ErrDenied) {
+	if _, err := f.authority.Provider(ctx, oldScope, oldConfig.Models[0], managedruntime.ModelRequirements{}); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("old model admission survived revocation", err)
 	}
 	if _, err := f.service.Worker(ctx, f.actor, f.tenant, f.agent.ID, f.main.ID, "disabled-worker", "must not start"); !errors.Is(err, managedruntime.ErrDenied) {

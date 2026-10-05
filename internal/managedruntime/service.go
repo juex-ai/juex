@@ -6,12 +6,24 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
+// ModelRequirements describes capabilities needed by the constructed request.
+type ModelRequirements struct {
+	OutputLimit bool
+}
+
+func (r ModelRequirements) Check(profile llm.ProviderProfile) error {
+	if r.OutputLimit && !profile.Capabilities.MaxOutputTokens {
+		return ErrModelUnavailable
+	}
+	return nil
+}
+
 // Authority is implemented by the composition root using Management's current
 // directory. Runtime never reads another service's tables or stores API keys.
 type Authority interface {
 	Authorize(context.Context, string, string, string, bool) (Scope, error)
 	Snapshot(context.Context, Scope) (TurnConfig, error)
-	Provider(context.Context, Scope, ModelConfig) (llm.Provider, error)
+	Provider(context.Context, Scope, ModelConfig, ModelRequirements) (llm.Provider, error)
 }
 
 type ConversationStore interface {
