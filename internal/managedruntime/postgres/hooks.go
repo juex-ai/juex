@@ -130,6 +130,14 @@ func applyHookContext(ctx context.Context, tx pgx.Tx, turn, thread string, event
 	return err
 }
 
+func (s *Store) ReleaseHookClaims(ctx context.Context, holder string) error {
+	if holder == "" {
+		return managedruntime.ErrInvalid
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE runtime.hooks SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder)
+	return err
+}
+
 func (s *Store) ClaimHook(ctx context.Context, holder string) (managedruntime.HookWork, error) {
 	var work managedruntime.HookWork
 	if holder == "" {

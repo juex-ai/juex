@@ -57,6 +57,7 @@ type HookDecision struct {
 
 type HookStore interface {
 	ClaimHook(context.Context, string) (HookWork, error)
+	ReleaseHookClaims(context.Context, string) error
 	PrepareHook(context.Context, HookWork, string, execprotocol.Request) error
 	FinishHook(context.Context, HookWork, HookOutcome) error
 	ToolHooks(context.Context, ToolWork, hookpolicy.Event, *ToolOutcome) (HookDecision, error)
@@ -196,6 +197,7 @@ func HookText(text string, limit int) string {
 
 func (r toolRunner) deliverHooks(ctx context.Context) {
 	holder := rand.Text()
+	defer releaseWorkerClaims(holder, "hook", r.hooks.ReleaseHookClaims)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
