@@ -24,7 +24,7 @@ var dependencies = map[string]map[string]bool{
 	"memory":         {"foundation": true, "memory": true},
 	"calendar":       {"foundation": true, "calendar": true},
 	"migration":      {"foundation": true, "migration": true},
-	"app":            {"foundation": true, "providers": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "calendar": true, "app": true},
+	"app":            {"foundation": true, "providers": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "calendar": true, "migration": true, "app": true},
 	"entrypoints":    {"foundation": true, "providers": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "calendar": true, "app": true, "entrypoints": true},
 	"cmd":            {"foundation": true, "entrypoints": true},
 }

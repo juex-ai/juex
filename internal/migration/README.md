@@ -25,3 +25,20 @@ of them nor copies their arbitrary contents. Capturing configuration or opaque
 extension files does not prove their behavior has been converted. A complete
 migration still needs verified backups, service-owned import and behavior
 acceptance before any user cutover.
+
+Pure message and terminal-input conversion lives in `internal/app/migration`,
+where typed service contracts may meet the fixed source reader. Message identities
+are scoped to the target Agent and Thread. Text spool references become verified
+full text; image references require matching private Execution Artifact receipts.
+Generated compaction references are rewritten only after exact reconstruction of
+the source suffix, preserving the model-authored body. A settled source input is
+not assumed successful: its matching recorded terminal event distinguishes
+completion, cancellation and failure. These converters perform no I/O or replay.
+
+Runtime conversion preserves inert source Commit/Input records alongside canonical
+messages and an explicit continuation checkpoint. Only the source provider-visible
+messages enter that checkpoint; policy-only and rejected content remains readable
+history. Identity maps and closed Commit event intervals preserve later evidence
+range mapping. Conflicting message copies or unresolved references fail conversion.
+Application purpose and model origins require explicit verified bindings. Current
+compaction metadata containing an image without a usable provider path is rejected.
