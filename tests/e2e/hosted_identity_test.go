@@ -56,10 +56,20 @@ func TestHostedWorkerIdentityProtectsControlState(t *testing.T) {
 	config := native.Config{StateDirectory: filepath.Join(control, "journal"), EnvironmentID: "hosted-identity", WorkingDirectory: work, Grants: map[string][]execprotocol.Capability{"agent-one": {execprotocol.Files, execprotocol.Shell, execprotocol.MCP}}, ProcessUser: &native.ProcessUser{UID: 1000, GID: 1000, Home: work, Helper: helper}}
 	engine := openNative(t, config)
 	for _, path := range []string{secret, filepath.Join(work, "secret-link")} {
-		result := nativeRun(t, engine, nativeRequest(t, "read-"+filepath.Base(path), "read", native.FileArguments{Path: path}))
-		if result.State != execprotocol.Failed || strings.Contains(result.Text(), "private-control-token") {
-			t.Fatal("file tool bypassed worker identity", result)
+		for _, kind := range []string{"read", "read_agent_instructions"} {
+			result := nativeRun(t, engine, nativeRequest(t, kind+"-"+filepath.Base(path), kind, native.FileArguments{Path: path}))
+			if result.State != execprotocol.Failed || strings.Contains(result.Text(), "private-control-token") {
+				t.Fatal("file operation bypassed worker identity", result)
+			}
 		}
+	}
+	guidance := nativeRun(t, engine, nativeRequest(t, "guidance-write", "write", native.FileArguments{Path: "AGENTS.md", Content: "worker-owned guidance"}))
+	if guidance.State != execprotocol.Completed {
+		t.Fatal(guidance)
+	}
+	guidance = nativeRun(t, engine, nativeRequest(t, "guidance-read", "read_agent_instructions", native.FileArguments{}))
+	if guidance.State != execprotocol.Completed || !strings.Contains(guidance.Text(), "worker-owned guidance") {
+		t.Fatal("instruction snapshot did not use the unprivileged file worker", guidance)
 	}
 	write := nativeRun(t, engine, nativeRequest(t, "file-write", "write", native.FileArguments{Path: "owned", Content: "worker"}))
 	if write.State != execprotocol.Completed {
