@@ -62,6 +62,18 @@ before planning. The plan omits secrets from JSON and grants no authority to
 overwrite existing catalog entries. Publication still needs Management validation,
 private target-state comparison, tenant access and Agent bindings.
 
+`ConvertAgentConfig` prepares a new Agent before resources are installed, not an
+update patch. It maps resolved modules to existing capability groups and requires
+explicit model, static instruction, Files, Shell, Calendar and collaboration
+bindings. Source file/search switches do not match the target's grouped tools;
+source Hooks and command Observables require target Shell even when the old Shell
+module was off. Unresolved combinations are rejected. Old Supervisor
+administration does not establish peer-message permission. Dynamic guidance
+requires target Files; global guidance also requires the source user-resource
+policy and a path on the selected Execution environment. Workspace/lifecycle,
+Memory profile, skill selection and resource contents remain separate conversion
+responsibilities.
+
 Pure message and terminal-input conversion lives in `internal/app/migration`,
 where typed service contracts may meet the fixed source reader. Message identities
 are scoped to the target Agent and Thread. Text spool references become verified

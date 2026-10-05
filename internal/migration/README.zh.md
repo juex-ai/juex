@@ -45,6 +45,14 @@ fallback 链，包括显式空链。保留源请求上限和有效能力；隐�
 解析。计划的 JSON 不包含密钥，也不授予覆盖现有目录项的权限。发布仍需经过
 Management 校验、私有目标状态比对、租户访问策略和 Agent 绑定。
 
+`ConvertAgentConfig` 在安装资源之前准备新 Agent 的初始配置，不用于更新补丁。
+它把已解析模块映射到现有能力分组，要求显式模型、静态指令、Files、Shell、Calendar
+和协作绑定。源文件与搜索开关不等同于目标的工具分组；即使旧 Shell 模块关闭，源
+Hook 和命令 Observable 在目标也要求 Shell。未解决的组合会被拒绝。
+旧 Supervisor 管理权限不代表跨 Agent 消息权限。动态指导依赖目标 Files；全局指导
+还要求源用户资源策略开启，并绑定所选 Execution 环境上的路径。Workspace、生命周期、
+Memory profile、skill 选择及资源内容仍需分别转换。
+
 消息与终态输入的纯转换位于 `internal/app/migration`，在这里组合服务的类型契约和
 固定源格式 reader。消息身份限定在目标 Agent 与 Thread 内。spool 引用恢复为经过
 校验的完整正文；图片引用要求匹配的 Execution 私有 Artifact 回执。仅在逐字重建
