@@ -4,12 +4,15 @@ package clientcli
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -18,8 +21,8 @@ import (
 )
 
 type options struct {
-	server, sessionFile, tenant, owner string
-	insecure                           bool
+	server, sessionFile, tenant, owner, caFile string
+	insecure                                   bool
 }
 
 type client struct {
@@ -41,6 +44,19 @@ func (o options) open(authenticated bool) (*client, error) {
 		}
 	}
 	c := &client{options: o, origin: origin, http: &http.Client{Timeout: 35 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	if o.caFile != "" {
+		data, err := os.ReadFile(o.caFile)
+		if err != nil {
+			return nil, err
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(data) {
+			return nil, errors.New("CA file contains no certificates")
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+		c.http.Transport = transport
+	}
 	c.session, err = readSession(o.sessionFile, origin)
 	if err != nil {
 		return nil, err

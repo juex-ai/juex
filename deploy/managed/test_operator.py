@@ -2,9 +2,13 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import sys
+import subprocess
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 spec = importlib.util.spec_from_file_location("juex_operator", Path(__file__).with_name("operator.py"))
 ops = importlib.util.module_from_spec(spec)
@@ -16,6 +20,44 @@ class RecoveryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+
+    def test_direct_operator_entrypoint_uses_standard_library_operator(self):
+        result = subprocess.run([sys.executable, "-S", str(Path(__file__).with_name("operator.py")), "--help"], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_unknown_backend_never_falls_back(self):
+        with self.assertRaisesRegex(ValueError, "unknown deployment backend"):
+            ops.backend({"backend": "unavailable"})
+
+    def test_restore_refuses_corrupt_or_mismatched_pairs_before_creating_state(self):
+        data, keys = self.root / "data" / "juex-test", self.root / "keys" / "juex-test"
+        data.mkdir(parents=True)
+        keys.mkdir(parents=True)
+        (data / "database.dump").write_bytes(b"database")
+        (keys / "secrets.tar").write_bytes(b"secrets")
+        ops.write_json(data / "manifest.json", {"format": 1, "complete": True, "backup_id": "juex-test",
+            "backend": "host", "files": {"database.dump": ops.digest(data / "database.dump")},
+            "recovery_sha256": "different-key-archive"})
+        ops.write_json(keys / "manifest.json", {"format": 1, "complete": True, "backup_id": "juex-test",
+            "files": {"secrets.tar": ops.digest(keys / "secrets.tar")}})
+        args = SimpleNamespace(backup=str(data.resolve()), recovery=str(keys.resolve()))
+        with patch.object(ops.host, "restore") as restore:
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                ops.restore(args)
+            (data / "database.dump").write_bytes(b"corrupt")
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                ops.restore(args)
+            restore.assert_not_called()
+
+    def test_failed_health_check_keeps_admission_closed(self):
+        (self.root / "maintenance").mkdir()
+        marker = self.root / "maintenance/draining"
+        marker.write_text("upgrade")
+        config = {"root": str(self.root), "backend": "host"}
+        with patch.object(ops.host, "up"), patch.object(ops.host, "healthy", side_effect=RuntimeError("gateway failed")):
+            with self.assertRaisesRegex(RuntimeError, "gateway failed"):
+                ops.resume(config, "")
+        self.assertTrue(marker.exists())
 
     def test_failed_revocation_can_refresh_review_without_another_mutation(self):
         (self.root / "maintenance").mkdir()
@@ -30,7 +72,7 @@ class RecoveryTests(unittest.TestCase):
     def test_recovery_up_never_opens_gateway_before_review(self):
         (self.root / "maintenance").mkdir()
         (self.root / "maintenance/recovery-required.json").write_text('{}')
-        with patch.object(ops, "compose") as compose:
+        with patch.object(ops.hosted, "compose") as compose:
             with self.assertRaisesRegex(ValueError, "review required"):
                 ops.up({"root": str(self.root)})
             compose.assert_not_called()
@@ -40,7 +82,7 @@ class RecoveryTests(unittest.TestCase):
             if args[0] == "ps": return SimpleNamespace(stdout=b"old\n")
             return SimpleNamespace(stdout=json.dumps([{"Config": {"Labels": {
                 "com.docker.compose.project.config_files": "/old/compose.yaml"}}}]).encode())
-        with patch.object(ops, "docker", side_effect=docker), patch.object(ops, "firewall") as firewall:
+        with patch.object(ops.hosted, "docker", side_effect=docker), patch.object(ops.hosted, "firewall") as firewall:
             with self.assertRaisesRegex(ValueError, "another juex deployment"):
                 ops.up({"root": str(self.root)})
             firewall.assert_not_called()
@@ -52,8 +94,8 @@ class RecoveryTests(unittest.TestCase):
             hosted_image="sha256:hosted", postgres_image="sha256:pg", gateway_image="sha256:nginx",
             https_port=443, active_threads=10, storage_identity="new-uuid", hosted_pool="172.31.0.0/16",
             host_ip="10.0.2.100", dns=["1.1.1.1"])
-        with patch.object(ops, "mount_device", return_value="/dev/loop7"):
-            ops.render(config, "password", "key")
+        with patch.object(ops.hosted, "mount_device", return_value="/dev/loop7"):
+            ops.hosted.render(config, "password", "key")
             env = self.root / "secrets/management.env"
             for service in ("management", "execution"):
                 self.assertIn("JUEX_TRUSTED_PROXIES=172.30.0.11\n",
@@ -64,8 +106,9 @@ class RecoveryTests(unittest.TestCase):
             hosted["memory_bytes"], hosted["idle_seconds"] = 123456, 900
             (self.root / "hosted.json").write_text(json.dumps(hosted))
             config["host_ip"] = "10.0.2.101"
+            config["hosted_image"] = "sha256:new-hosted"
             config["platform_prefix"] = "172.29.5"
-            ops.render(config, "password", "key", preserve=True)
+            ops.hosted.render(config, "password", "key", preserve=True)
         self.assertIn("JUEX_SMTP_CONFIG=encrypted-smtp-settings\n", env.read_text())
         for service in ("management", "execution"):
             rendered = (self.root / "secrets" / (service + ".env")).read_text()
@@ -75,6 +118,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(restored["backend"]["allow"], ["192.168.1.0/24"])
         self.assertEqual((restored["memory_bytes"], restored["idle_seconds"]), (123456,900))
         self.assertEqual(restored["backend"]["control"], "10.0.2.101:8684")
+        self.assertEqual(restored["backend"]["image"], "sha256:new-hosted")
 
     def test_retention_counts_pairs_not_orphan_recovery_material(self):
         data,keys=self.root/"data",self.root/"keys"
@@ -103,12 +147,12 @@ class RecoveryTests(unittest.TestCase):
             if args[0]=="ps":return SimpleNamespace(stdout=b"container\n")
             if args[0]=="inspect":return SimpleNamespace(stdout=json.dumps([item]).encode())
             return SimpleNamespace(stdout=b"UID PID COMMAND\n0 1 juex-guest\n1000 20 sleep 600\n")
-        with patch.object(ops,"docker",side_effect=docker):
+        with patch.object(ops.hosted,"docker",side_effect=docker):
             with self.assertRaisesRegex(RuntimeError,"user processes"):
-                ops.hosted_containers({"root":str(root),"workspace":str(root/"workspace")})
+                ops.hosted.hosted_containers({"root":str(root),"workspace":str(root/"workspace")})
         item["State"]["Running"]=False
-        with patch.object(ops,"docker",side_effect=docker):
-            self.assertEqual(len(ops.hosted_containers({"root":str(root),"workspace":str(root/"workspace")})),1)
+        with patch.object(ops.hosted,"docker",side_effect=docker):
+            self.assertEqual(len(ops.hosted.hosted_containers({"root":str(root),"workspace":str(root/"workspace")})),1)
 
 
 if __name__ == "__main__":

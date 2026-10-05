@@ -27,6 +27,7 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	root.SetOut(out)
 	root.SetErr(errOut)
 	root.PersistentFlags().StringVar(&o.server, "server", os.Getenv("JUEX_SERVER"), "Public HTTPS platform origin (or JUEX_SERVER)")
+	root.PersistentFlags().StringVar(&o.caFile, "ca-file", os.Getenv("JUEX_CA_FILE"), "PEM CA file for this platform (or JUEX_CA_FILE); hostname verification remains required")
 	root.PersistentFlags().StringVar(&o.sessionFile, "session-file", "", "Private login file; defaults to an origin-specific OS config path")
 	root.PersistentFlags().StringVar(&o.tenant, "tenant", "", "Tenant UUID; defaults to the selected or sole active membership")
 	root.PersistentFlags().StringVar(&o.owner, "owner", "", "Resource owner UUID for tenant administration; defaults to yourself")

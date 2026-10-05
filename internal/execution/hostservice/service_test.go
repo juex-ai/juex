@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +41,34 @@ func TestStatusChecksProcessIncarnationAndForegroundOwnership(t *testing.T) {
 	status, err = m.Status()
 	if err != nil || status.Running || status.State != "stopped" {
 		t.Fatal(status, err)
+	}
+}
+
+func TestOriginalShutdownFailureRemainsVisibleAfterStopGuard(t *testing.T) {
+	directory := t.TempDir()
+	recorder, err := Record(directory, "owned", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Finish(errors.New("journal close failed")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivate(filepath.Join(directory, "service-stop"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if stopped, err := StopRequested(directory); err != nil || !stopped {
+		t.Fatal(stopped, err)
+	}
+	status, err := readStatus(directory)
+	if err != nil || status.CleanExit || confirmedStop(status) == nil {
+		t.Fatalf("failed shutdown became clean: %+v %v", status, err)
+	}
+	if err := recorder.Finish(nil); err != nil {
+		t.Fatal(err)
+	}
+	status, err = readStatus(directory)
+	if err != nil || confirmedStop(status) != nil {
+		t.Fatalf("clean shutdown was not recognized: %+v %v", status, err)
 	}
 }
 

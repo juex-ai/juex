@@ -12,7 +12,8 @@ Set `JUEX_SERVER` to the deployment's HTTPS origin. `juex login --email EMAIL
 Credentials are isolated by origin under the OS configuration directory.
 `--session-file` selects an absolute file inside a private directory. HTTP
 requires the explicit development flag `--insecure-http`. Logout revokes the
-server session and removes the local credential.
+server session and removes the local credential. For a private deployment CA,
+set `JUEX_CA_FILE` or `--ca-file` to its PEM file; hostname verification still applies.
 
 `juex tenant list` and `juex tenant use ID` select a membership. A sole membership
 is selected automatically. `--owner USER_ID` lets an authorized administrator

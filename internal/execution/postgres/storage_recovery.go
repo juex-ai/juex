@@ -9,7 +9,15 @@ import (
 
 // RecoveryAllocations is an offline operator inventory, not a cross-service API.
 func (s *Store) RecoveryAllocations(ctx context.Context) ([]execution.ManagedResource, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+managedColumns+` FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE h.backend='gvisor' ORDER BY h.environment_id`)
+	return s.managedAllocations(ctx, "gvisor")
+}
+
+func (s *Store) HostAllocations(ctx context.Context) ([]execution.ManagedResource, error) {
+	return s.managedAllocations(ctx, "host")
+}
+
+func (s *Store) managedAllocations(ctx context.Context, backend string) ([]execution.ManagedResource, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+managedColumns+` FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE h.backend=$1 ORDER BY h.environment_id`, backend)
 	if err != nil {
 		return nil, err
 	}

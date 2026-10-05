@@ -79,8 +79,10 @@ conversation history. Disabling an application preserves its business records.
 ## Deployment
 
 The [operator workflow](deploy/managed/README.md) coordinates the five services,
-PostgreSQL and HTTPS gateway. Only Execution gets the engine socket; private RPC
-and database ports are fenced. Platform binaries and Web release together.
+PostgreSQL and HTTPS gateway. Host runs owned OS user services and a dedicated
+socket-only PostgreSQL cluster; Hosted runs Linux containers, gives only Execution
+the engine socket, and fences private RPC/database ports. Platform binaries,
+operator assets and Web release together.
 Device protocol versions are negotiated explicitly.
 
 Maintenance drains admission and checks in-flight operations before stopping

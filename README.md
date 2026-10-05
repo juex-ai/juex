@@ -10,8 +10,8 @@ one tenant.
 
 ## Deploy
 
-Follow the [Linux deployment guide](deploy/managed/README.md) to initialize
-Docker Compose, PostgreSQL, HTTPS, gVisor and persistent storage. The operator
+Follow the [deployment guide](deploy/managed/README.md) for macOS/Linux Host
+or Linux Hosted, including PostgreSQL, HTTPS and persistent storage. The operator
 creates the first administrator's one-use setup link and provisions model
 credentials. Administrators invite members; users sign in with email/password.
 
@@ -21,6 +21,7 @@ independent Fleet applications and continue according to their own lifecycle.
 ## Clients
 
 Release archives contain `juex` and `juex-executor` for Linux/macOS, amd64/arm64.
+Separate `juex_platform_*` archives include all five services and the operator.
 Download an archive and verify its release checksum, or use the Python 3.11+
 installer from a checked-out release:
 
