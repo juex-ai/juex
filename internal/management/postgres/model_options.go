@@ -47,9 +47,9 @@ func (d *Directory) modelOptions(id string, cipher []byte) (management.ModelOpti
 func (d *Directory) modelConfigurationChanged(ctx context.Context, tx pgx.Tx, id string, config management.ModelConfiguration, encoded []byte) (bool, error) {
 	var protocol llm.Protocol
 	var endpoint string
-	var contextWindow, maxOutput int
+	var contextWindow, maxOutput, outputReserve int
 	var cipher []byte
-	err := tx.QueryRow(ctx, `SELECT protocol,endpoint,context_window,max_output,options_cipher FROM management.models WHERE id=$1 FOR UPDATE`, id).Scan(&protocol, &endpoint, &contextWindow, &maxOutput, &cipher)
+	err := tx.QueryRow(ctx, `SELECT protocol,endpoint,context_window,max_output,output_reserve,options_cipher FROM management.models WHERE id=$1 FOR UPDATE`, id).Scan(&protocol, &endpoint, &contextWindow, &maxOutput, &outputReserve, &cipher)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -64,5 +64,5 @@ func (d *Directory) modelConfigurationChanged(ctx context.Context, tx pgx.Tx, id
 	if err != nil {
 		return false, err
 	}
-	return protocol != config.Protocol || endpoint != config.Endpoint || contextWindow != config.ContextWindow || maxOutput != config.MaxOutput || !bytes.Equal(previous, encoded), nil
+	return protocol != config.Protocol || endpoint != config.Endpoint || contextWindow != config.ContextWindow || maxOutput != config.MaxOutput || outputReserve != config.OutputReserve || !bytes.Equal(previous, encoded), nil
 }

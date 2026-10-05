@@ -2297,6 +2297,8 @@ type Calendar interface {
 
 	Change(ctx context.Context, accessJSON string, scopeJSON string, commandID string, changeJSON string) (r *Reply, err error)
 
+	AssignTrigger(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64) (r *Reply, err error)
+
 	Assignment(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64) (r *Reply, err error)
 
 	CancelCommand(ctx context.Context, scopeJSON string, commandID string) (r *Reply, err error)
@@ -2851,6 +2853,91 @@ var fieldIDToName_CalendarChangeResult = map[int16]string{
 	0: "success",
 }
 
+type CalendarAssignTriggerArgs struct {
+	ScopeJSON    string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	OccurrenceID string `thrift:"occurrenceID,2" frugal:"2,default,string" json:"occurrenceID"`
+	Epoch        int64  `thrift:"epoch,3" frugal:"3,default,i64" json:"epoch"`
+}
+
+func NewCalendarAssignTriggerArgs() *CalendarAssignTriggerArgs {
+	return &CalendarAssignTriggerArgs{}
+}
+
+func (p *CalendarAssignTriggerArgs) InitDefault() {
+}
+
+func (p *CalendarAssignTriggerArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *CalendarAssignTriggerArgs) GetOccurrenceID() (v string) {
+	return p.OccurrenceID
+}
+
+func (p *CalendarAssignTriggerArgs) GetEpoch() (v int64) {
+	return p.Epoch
+}
+func (p *CalendarAssignTriggerArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *CalendarAssignTriggerArgs) SetOccurrenceID(val string) {
+	p.OccurrenceID = val
+}
+func (p *CalendarAssignTriggerArgs) SetEpoch(val int64) {
+	p.Epoch = val
+}
+
+func (p *CalendarAssignTriggerArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarAssignTriggerArgs(%+v)", *p)
+}
+
+var fieldIDToName_CalendarAssignTriggerArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "occurrenceID",
+	3: "epoch",
+}
+
+type CalendarAssignTriggerResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewCalendarAssignTriggerResult() *CalendarAssignTriggerResult {
+	return &CalendarAssignTriggerResult{}
+}
+
+func (p *CalendarAssignTriggerResult) InitDefault() {
+}
+
+var CalendarAssignTriggerResult_Success_DEFAULT *Reply
+
+func (p *CalendarAssignTriggerResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return CalendarAssignTriggerResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *CalendarAssignTriggerResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *CalendarAssignTriggerResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *CalendarAssignTriggerResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("CalendarAssignTriggerResult(%+v)", *p)
+}
+
+var fieldIDToName_CalendarAssignTriggerResult = map[int16]string{
+	0: "success",
+}
+
 type CalendarAssignmentArgs struct {
 	ScopeJSON    string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
 	OccurrenceID string `thrift:"occurrenceID,2" frugal:"2,default,string" json:"occurrenceID"`
@@ -3013,6 +3100,12 @@ var fieldIDToName_CalendarCancelCommandResult = map[int16]string{
 }
 
 type Runtime interface {
+	AdmitMainTrigger(ctx context.Context, scopeJSON string, triggerJSON string) (r *Reply, err error)
+
+	MainTriggerReceipt(ctx context.Context, scopeJSON string, triggerID string) (r *Reply, err error)
+
+	CancelMainTrigger(ctx context.Context, scopeJSON string, triggerID string) (r *Reply, err error)
+
 	Purge(ctx context.Context, requestJSON string) (r *Reply, err error)
 
 	Usage(ctx context.Context, actorID string, queryJSON string) (r *Reply, err error)
@@ -3044,6 +3137,234 @@ type Runtime interface {
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
 	CreateWorker(ctx context.Context, actor *Actor, parentID string, requestID string, name string) (r *Reply, err error)
+}
+
+type RuntimeAdmitMainTriggerArgs struct {
+	ScopeJSON   string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	TriggerJSON string `thrift:"triggerJSON,2" frugal:"2,default,string" json:"triggerJSON"`
+}
+
+func NewRuntimeAdmitMainTriggerArgs() *RuntimeAdmitMainTriggerArgs {
+	return &RuntimeAdmitMainTriggerArgs{}
+}
+
+func (p *RuntimeAdmitMainTriggerArgs) InitDefault() {
+}
+
+func (p *RuntimeAdmitMainTriggerArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *RuntimeAdmitMainTriggerArgs) GetTriggerJSON() (v string) {
+	return p.TriggerJSON
+}
+func (p *RuntimeAdmitMainTriggerArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *RuntimeAdmitMainTriggerArgs) SetTriggerJSON(val string) {
+	p.TriggerJSON = val
+}
+
+func (p *RuntimeAdmitMainTriggerArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeAdmitMainTriggerArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeAdmitMainTriggerArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "triggerJSON",
+}
+
+type RuntimeAdmitMainTriggerResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeAdmitMainTriggerResult() *RuntimeAdmitMainTriggerResult {
+	return &RuntimeAdmitMainTriggerResult{}
+}
+
+func (p *RuntimeAdmitMainTriggerResult) InitDefault() {
+}
+
+var RuntimeAdmitMainTriggerResult_Success_DEFAULT *Reply
+
+func (p *RuntimeAdmitMainTriggerResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeAdmitMainTriggerResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeAdmitMainTriggerResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeAdmitMainTriggerResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeAdmitMainTriggerResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeAdmitMainTriggerResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeAdmitMainTriggerResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeMainTriggerReceiptArgs struct {
+	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	TriggerID string `thrift:"triggerID,2" frugal:"2,default,string" json:"triggerID"`
+}
+
+func NewRuntimeMainTriggerReceiptArgs() *RuntimeMainTriggerReceiptArgs {
+	return &RuntimeMainTriggerReceiptArgs{}
+}
+
+func (p *RuntimeMainTriggerReceiptArgs) InitDefault() {
+}
+
+func (p *RuntimeMainTriggerReceiptArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *RuntimeMainTriggerReceiptArgs) GetTriggerID() (v string) {
+	return p.TriggerID
+}
+func (p *RuntimeMainTriggerReceiptArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *RuntimeMainTriggerReceiptArgs) SetTriggerID(val string) {
+	p.TriggerID = val
+}
+
+func (p *RuntimeMainTriggerReceiptArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeMainTriggerReceiptArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeMainTriggerReceiptArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "triggerID",
+}
+
+type RuntimeMainTriggerReceiptResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeMainTriggerReceiptResult() *RuntimeMainTriggerReceiptResult {
+	return &RuntimeMainTriggerReceiptResult{}
+}
+
+func (p *RuntimeMainTriggerReceiptResult) InitDefault() {
+}
+
+var RuntimeMainTriggerReceiptResult_Success_DEFAULT *Reply
+
+func (p *RuntimeMainTriggerReceiptResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeMainTriggerReceiptResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeMainTriggerReceiptResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeMainTriggerReceiptResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeMainTriggerReceiptResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeMainTriggerReceiptResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeMainTriggerReceiptResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeCancelMainTriggerArgs struct {
+	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+	TriggerID string `thrift:"triggerID,2" frugal:"2,default,string" json:"triggerID"`
+}
+
+func NewRuntimeCancelMainTriggerArgs() *RuntimeCancelMainTriggerArgs {
+	return &RuntimeCancelMainTriggerArgs{}
+}
+
+func (p *RuntimeCancelMainTriggerArgs) InitDefault() {
+}
+
+func (p *RuntimeCancelMainTriggerArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+
+func (p *RuntimeCancelMainTriggerArgs) GetTriggerID() (v string) {
+	return p.TriggerID
+}
+func (p *RuntimeCancelMainTriggerArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+func (p *RuntimeCancelMainTriggerArgs) SetTriggerID(val string) {
+	p.TriggerID = val
+}
+
+func (p *RuntimeCancelMainTriggerArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeCancelMainTriggerArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeCancelMainTriggerArgs = map[int16]string{
+	1: "scopeJSON",
+	2: "triggerID",
+}
+
+type RuntimeCancelMainTriggerResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeCancelMainTriggerResult() *RuntimeCancelMainTriggerResult {
+	return &RuntimeCancelMainTriggerResult{}
+}
+
+func (p *RuntimeCancelMainTriggerResult) InitDefault() {
+}
+
+var RuntimeCancelMainTriggerResult_Success_DEFAULT *Reply
+
+func (p *RuntimeCancelMainTriggerResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeCancelMainTriggerResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeCancelMainTriggerResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeCancelMainTriggerResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeCancelMainTriggerResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeCancelMainTriggerResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeCancelMainTriggerResult = map[int16]string{
+	0: "success",
 }
 
 type RuntimePurgeArgs struct {

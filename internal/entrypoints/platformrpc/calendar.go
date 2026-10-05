@@ -103,3 +103,15 @@ func (h *calendarHandler) CancelCommand(ctx context.Context, scopeJSON, id strin
 	}
 	return appReply(nil, h.service.CancelCommand(ctx, scope, id))
 }
+
+func (h *calendarHandler) AssignTrigger(ctx context.Context, scopeJSON, id string, epoch int64) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "runtime" {
+		return appReply(nil, application.ErrDenied)
+	}
+	var scope application.Scope
+	if !appDecode(scopeJSON, &scope) {
+		return appReply(nil, application.ErrInvalid)
+	}
+	value, err := h.service.AssignTrigger(ctx, scope, id, epoch)
+	return appReply(value, err)
+}

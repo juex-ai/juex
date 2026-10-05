@@ -5,7 +5,11 @@
 Calendar owns shared Fleet schedules, occurrence history, application enablement
 and notification outboxes. Management resolves human and Agent authority; Runtime
 admits explicit Agent work as ordinary, budgeted Workers. Reminder occurrences
-deliver an Inbox notification without calling a model. The typed private SDK is
+deliver an Inbox notification without calling a model. Main triggers instead
+deliver an input into the selected Agent's retained Main context. Their accepted
+receipt proves durable delivery, not completion. Before acceptance, cancellation
+fences admission; afterwards the input follows ordinary Main authority and
+cancellation rules. Calendar disable does not retract accepted Main inputs. The typed private SDK is
 in `rpc`; user and Agent entry points cannot supply an arbitrary execution scope.
 
 The PostgreSQL adapter serializes each Fleet's bounded state under one short row
@@ -25,9 +29,16 @@ identities and can cancel them after completion or application disablement.
 Cancellation remains requested until Runtime confirms settlement. Concurrent
 delivery attempts are fenced so an older response cannot replace a newer result.
 
-Fault recovery chooses the latest unrecorded occurrence within the schedule's
-lateness window (24 hours by default, configurable from 1 to 1,440 minutes).
-Expired occurrences are recorded as missed. Manual pause/resume and application
+The default recovery policy chooses the latest unrecorded occurrence within the
+schedule's lateness window (24 hours by default, 1 to 1,440 minutes). Expired
+occurrences are recorded as missed. The none policy skips only unprepared
+instants at or before the recovery boundary. Continuous timer delays retain the
+original due instant without applying a recovery lateness window. Prepared
+deliveries always retain their identity. A single scheduler session holds a
+PostgreSQL advisory lock; all occurrence and clock writes use that same
+connection. Acquisition establishes a fixed database-time recovery boundary. A
+second instance cannot reset it, and a disconnected leader cannot commit stale
+scheduling writes. Delivery and notification remain independently retryable. Manual pause/resume and application
 disable/enable only schedule future occurrences. Disabled data remains readable
 to authorized humans; Agent access and new triggers stop. Target or authority
 revocation pauses a schedule until explicit resume with fresh authority. Archiving
@@ -41,7 +52,8 @@ Lunar one-shot dates normalize to an absolute instant at admission. The module
 does not read a user's local filesystem or execute user code.
 
 Completion, reminder and attention notices use independent Main and Inbox
-acknowledgements. Main notices are context for the next input, not a new wake.
+acknowledgements. Main notices are context for the next input, not a new wake; the explicit Main
+trigger mode is the separate waking input. Its receipt notice goes only to Inbox.
 Notification preferences and verified-email delivery belong to Management.
 
 Agent cleanup pauses its schedules and preserves shared definitions and occurrence history. Undelivered work is fenced; uncertain external effects stay explicitly unresolved. New and resumed schedules check their target against cleanup tombstones inside the Fleet transaction. Whole-Fleet cleanup erases Calendar state and prevents late initialization.

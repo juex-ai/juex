@@ -11,9 +11,9 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
   for (const event of events) {
     if (seen.has(event.id)) continue
     seen.add(event.id)
-    const data = event.data as { receipt?: InputReceipt; text?: string; input_id?: string; reason?: string; error?: string; to_model?: string }
+    const data = event.data as { receipt?: InputReceipt; text?: string; input_id?: string; reason?: string; error?: string; to_model?: string; source?: { kind?: string } }
     if (event.kind === 'input.accepted' && data.receipt && typeof data.text === 'string') {
-      const row: Extract<TranscriptRow, { kind: 'message' }> = { kind: 'message', id: data.receipt.id, message: { id: data.receipt.id, role: 'user', blocks: [{ type: 'text', text: data.text }] }, status: '已接收，等待执行' }
+      const row: Extract<TranscriptRow, { kind: 'message' }> = { kind: 'message', id: data.receipt.id, message: { id: data.receipt.id, role: 'user', kind: data.source?.kind === 'application_trigger' ? 'system_notice' : undefined, blocks: [{ type: 'text', text: data.text }] }, status: '已接收，等待执行' }
       rows.push(row); messages.set(row.id, row)
     } else if (event.kind === 'message.appended') {
       const message = event.data as Message

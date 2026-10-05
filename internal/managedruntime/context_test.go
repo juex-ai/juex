@@ -13,7 +13,7 @@ func TestContextProjectionPreservesOriginalAndReadableReference(t *testing.T) {
 	id := uuid.NewString()
 	original := strings.Repeat("正文中间内容", 2000)
 	history := []llm.Message{{ID: id, Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: original}}}}
-	projected := projectContext(history, ModelConfig{ContextWindow: 32768, MaxOutput: 4096})
+	projected := projectContext(history, ModelConfig{ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096})
 	if history[0].Blocks[0].Text != original {
 		t.Fatal("changed durable input")
 	}

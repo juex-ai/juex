@@ -36,7 +36,7 @@ func TestManagedModelProfilePreservesCodexIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := management.ModelConfiguration{Provider: "openai-codex", Name: "fixture-model", Endpoint: "https://chatgpt.com/backend-api/codex", Protocol: llm.ProtocolOpenAICodexResponses, APIKey: "test-access-token", ContextWindow: 32768, MaxOutput: 4096, Enabled: true}
+	config := management.ModelConfiguration{Provider: "openai-codex", Name: "fixture-model", Endpoint: "https://chatgpt.com/backend-api/codex", Protocol: llm.ProtocolOpenAICodexResponses, APIKey: "test-access-token", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 8192, Enabled: true}
 	vision := true
 	config.Options = management.ModelOptions{ThinkingEffort: "xhigh", Headers: map[string]string{"ChatGPT-Account-ID": "test-private-account", "X-Thread": "${juex_thread_id}"}, Query: map[string]string{"route": "private-route"}, Capabilities: llm.CapabilityOverrides{Vision: &vision}, Compat: llm.CompatOptions{CodexTransport: "sse"}}
 	model, err := managed.ConfigureModel(ctx, directory, config)
@@ -124,6 +124,7 @@ func TestManagedModelProfilePreservesCodexIdentity(t *testing.T) {
 		func() { config.Options.ThinkingEffort = "high" },
 		func() { config.Options.Query["route"] = "different-route" },
 		func() { config.MaxOutput++ },
+		func() { config.OutputReserve++ },
 	} {
 		previous, err := authority.Snapshot(ctx, scope)
 		if err != nil {
@@ -210,7 +211,7 @@ func TestManagedModelProfileExplicitNoAuthentication(t *testing.T) {
 	}))
 	t.Cleanup(endpoint.Close)
 	streaming := false
-	config := management.ModelConfiguration{Provider: "local", Name: "local-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: endpoint.URL + "/v1", ContextWindow: 32768, MaxOutput: 4096, Enabled: true}
+	config := management.ModelConfiguration{Provider: "local", Name: "local-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: endpoint.URL + "/v1", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 8192, Enabled: true}
 	config.Options.Capabilities.Streaming = &streaming
 	if _, err := managed.ConfigureModel(ctx, directory, config); !errors.Is(err, management.ErrInvalid) {
 		t.Fatal("missing key silently became no authentication", err)

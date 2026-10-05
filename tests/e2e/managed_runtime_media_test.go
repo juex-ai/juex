@@ -50,7 +50,7 @@ func TestManagedRuntimeMediaUsesAuthorizedArtifactBeforeAttempt(t *testing.T) {
 				t.Fatal(err)
 			}
 			vision := true
-			if _, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: plan.Models[0].Endpoint, APIKey: "test-key", ContextWindow: 32768, MaxOutput: 4096, Enabled: true, Options: management.ModelOptions{Capabilities: llm.CapabilityOverrides{Vision: &vision}}}); err != nil {
+			if _, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: plan.Models[0].Endpoint, APIKey: "test-key", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 8192, Enabled: true, Options: management.ModelOptions{Capabilities: llm.CapabilityOverrides{Vision: &vision}}}); err != nil {
 				t.Fatal(err)
 			}
 			agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Imported image", ModelID: f.agent.ModelID})

@@ -34,7 +34,7 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 		request.Messages = projectModelHistory(work, model)
 		if base.Recall != nil && work.Compaction == nil {
 			withRecall := append([]llm.Message{*base.Recall}, request.Messages...)
-			if llm.EstimateContextTokens(request.System, request.Tools, withRecall)+request.MaxOutputTokens+contextSafety(model) <= model.ContextWindow {
+			if llm.EstimateContextTokens(request.System, request.Tools, withRecall)+model.OutputReserve+contextSafety(model) <= model.ContextWindow {
 				request.Messages = withRecall
 			}
 		}
@@ -70,7 +70,7 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 		if planErr != nil && !errors.Is(planErr, ErrContextLimit) {
 			return nil, request, planErr
 		}
-		if planErr == nil && llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+request.MaxOutputTokens+contextSafety(model) <= model.ContextWindow {
+		if planErr == nil && llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+outputBudget(request)+contextSafety(model) <= model.ContextWindow {
 			messages, err := hydrateMedia(ctx, r.config.Media, work.Scope, request.Messages)
 			if err != nil {
 				return nil, request, err
@@ -102,4 +102,13 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 func projectModelHistory(work Work, model ModelConfig) []llm.Message {
 	work.History = projectContext(work.History, model)
 	return modelHistory(work, model)
+}
+
+// Normal requests may leave the provider cap unset while still reserving output
+// capacity. A compaction draft instead has its own bounded summary request.
+func outputBudget(request ModelRequest) int {
+	if request.Compaction != nil {
+		return request.MaxOutputTokens
+	}
+	return request.Model.OutputReserve
 }

@@ -18,6 +18,7 @@ type Client interface {
 	Schedules(ctx context.Context, accessJSON string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Occurrences(ctx context.Context, accessJSON string, scheduleID string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Change(ctx context.Context, accessJSON string, scopeJSON string, commandID string, changeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	AssignTrigger(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Assignment(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CancelCommand(ctx context.Context, scopeJSON string, commandID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 }
@@ -84,6 +85,11 @@ func (p *kCalendarClient) Occurrences(ctx context.Context, accessJSON string, sc
 func (p *kCalendarClient) Change(ctx context.Context, accessJSON string, scopeJSON string, commandID string, changeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Change(ctx, accessJSON, scopeJSON, commandID, changeJSON)
+}
+
+func (p *kCalendarClient) AssignTrigger(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.AssignTrigger(ctx, scopeJSON, occurrenceID, epoch)
 }
 
 func (p *kCalendarClient) Assignment(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64, callOptions ...callopt.Option) (r *platform.Reply, err error) {

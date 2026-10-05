@@ -43,6 +43,7 @@ func TestManagedCalendarFirstWakeUsesOrdinaryAgentWorker(t *testing.T) {
 	}
 	store := calendarpg.New(f.pool)
 	service := &calendar.Service{Repository: store, Authority: f.authority, Workers: managed.CalendarWorkers{Runtime: f.service}}
+	t.Cleanup(service.CloseScheduler)
 	gateway := managed.RuntimeApplications{Calendar: service}
 	f.service.Applications = gateway
 	access := application.Access{ActorID: f.actor, TenantID: f.tenant, UserID: f.actor}

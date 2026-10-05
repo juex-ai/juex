@@ -29,6 +29,7 @@ type Service struct {
 	Store        ConversationStore
 	Authority    Authority
 	Applications ApplicationGateway
+	Triggers     TriggerAuthority
 }
 
 func (s *Service) scope(ctx context.Context, actor, tenant, agent string, execute bool) (Scope, error) {

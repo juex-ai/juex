@@ -69,8 +69,14 @@ var hooksSchema string
 //go:embed extensions_schema.sql
 var extensionsSchema string
 
+//go:embed output_budget_schema.sql
+var outputBudgetSchema string
+
 //go:embed instructions_schema.sql
 var instructionsSchema string
+
+//go:embed main_triggers_schema.sql
+var mainTriggersSchema string
 
 //go:embed import_schema.sql
 var importSchema string
@@ -92,7 +98,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, importSchema, threadApplicationSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, outputBudgetSchema, mainTriggersSchema, importSchema, threadApplicationSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -247,7 +253,7 @@ func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, req
 }
 
 func acceptThreadInput(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, thread managedruntime.Thread, request managedruntime.InputRequest, source managedruntime.InputSource) (managedruntime.InputReceipt, error) {
-	if thread.Kind == "worker" && thread.Application == "" && source.Kind != "application" && !scope.Capabilities.Allows(agentpolicy.Workers) || source.Kind == "observation" && !scope.Capabilities.Allows(agentpolicy.Observations) || source.Kind == "application" && !scope.Capabilities.Allows(agentpolicy.Capability(source.Application)) || source.Kind == "peer_message" && !scope.Capabilities.Allows(agentpolicy.Collaboration) {
+	if thread.Kind == "worker" && thread.Application == "" && source.Kind != "application" && !scope.Capabilities.Allows(agentpolicy.Workers) || source.Kind == "observation" && !scope.Capabilities.Allows(agentpolicy.Observations) || (source.Kind == "application" || source.Kind == "application_trigger") && !scope.Capabilities.Allows(agentpolicy.Capability(source.Application)) || source.Kind == "peer_message" && !scope.Capabilities.Allows(agentpolicy.Collaboration) {
 		return managedruntime.InputReceipt{}, managedruntime.ErrDenied
 	}
 	if err := applicationInput(ctx, tx, thread.ID, source); err != nil {

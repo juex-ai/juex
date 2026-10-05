@@ -435,7 +435,7 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 			return nil
 		}
 		request.System += decision.Context
-		if llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+request.MaxOutputTokens+contextSafety(request.Model) > request.Model.ContextWindow {
+		if llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+outputBudget(request)+contextSafety(request.Model) > request.Model.ContextWindow {
 			return r.store.HoldInput(ctx, lease, pending.InputID, "context_limit")
 		}
 	}

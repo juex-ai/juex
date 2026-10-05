@@ -56,6 +56,9 @@ var managedEnvironmentReceiptsSchema string
 //go:embed capabilities_schema.sql
 var capabilitiesSchema string
 
+//go:embed output_budget_schema.sql
+var outputBudgetSchema string
+
 //go:embed instructions_schema.sql
 var instructionsSchema string
 
@@ -77,7 +80,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		CREATE TABLE IF NOT EXISTS management.schema_versions (version integer PRIMARY KEY, checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{initialSchema, authSchema, mailSchema, resourcesSchema, authoritySchema, modelPolicySchema, workersSchema, applicationsSchema, notificationsSchema, purgeSchema, retentionSchema, hooksSchema, extensionsSchema, managedEnvironmentReceiptsSchema, capabilitiesSchema, instructionsSchema, modelOptionsSchema}
+	migrations := []string{initialSchema, authSchema, mailSchema, resourcesSchema, authoritySchema, modelPolicySchema, workersSchema, applicationsSchema, notificationsSchema, purgeSchema, retentionSchema, hooksSchema, extensionsSchema, managedEnvironmentReceiptsSchema, capabilitiesSchema, instructionsSchema, outputBudgetSchema, modelOptionsSchema}
 	rows, err := tx.Query(ctx, `SELECT version, checksum FROM management.schema_versions ORDER BY version`)
 	if err != nil {
 		return err

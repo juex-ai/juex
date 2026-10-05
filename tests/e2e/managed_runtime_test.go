@@ -53,7 +53,7 @@ func runtimeDatabase(t *testing.T) (*pgxpool.Pool, *runtimepg.Store, managedrunt
 }
 
 func runtimeConfig() managedruntime.TurnConfig {
-	return managedruntime.TurnConfig{AgentVersion: 1, Instructions: "Be precise", Models: []managedruntime.ModelConfig{{ModelID: "00000000-0000-4000-8000-000000000001", Provider: "fixture", Model: "small", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", ContextWindow: 32768, MaxOutput: 4096}}}
+	return managedruntime.TurnConfig{AgentVersion: 1, Instructions: "Be precise", Models: []managedruntime.ModelConfig{{ModelID: "00000000-0000-4000-8000-000000000001", Provider: "fixture", Model: "small", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096}}}
 }
 
 func TestManagedRuntimeActivationAllowsConcurrentForeignKeyChecks(t *testing.T) {
@@ -133,7 +133,7 @@ func TestManagedRuntimeDurableInputAndFencing(t *testing.T) {
 	if len(work.History) != 1 || work.History[0].FirstText() != "Hello" {
 		t.Fatal(work)
 	}
-	attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "main"})
+	attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, System: work.Config.Instructions, Messages: work.History, Purpose: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestManagedRuntimeDurableInputAndFencing(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT state FROM runtime.attempts WHERE id=$1`, attempt.ID).Scan(&state); err != nil || state != "unknown" {
 		t.Fatal("lost provider attempt not retained", state, err)
 	}
-	second, err := store.BeginAttempt(ctx, replacement, recovered.TurnID, managedruntime.ModelRequest{Messages: recovered.History, Purpose: "main"})
+	second, err := store.BeginAttempt(ctx, replacement, recovered.TurnID, managedruntime.ModelRequest{MaxOutputTokens: recovered.Config.Models[recovered.ModelIndex].MaxOutput, Messages: recovered.History, Purpose: "main"})
 	if err != nil || second.Ordinal != 2 {
 		t.Fatal(second, err)
 	}

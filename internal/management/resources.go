@@ -28,6 +28,7 @@ type ModelCandidate struct {
 	Endpoint                string       `json:"endpoint"`
 	ContextWindow           int          `json:"context_window"`
 	MaxOutput               int          `json:"max_output"`
+	OutputReserve           int          `json:"output_reserve"`
 	ModelAuthorizationEpoch int64        `json:"model_authorization_epoch"`
 	TenantAccessEpoch       int64        `json:"tenant_access_epoch"`
 }
@@ -112,17 +113,18 @@ type Model struct {
 	Protocol      llm.Protocol `json:"protocol"`
 	ContextWindow int          `json:"context_window"`
 	MaxOutput     int          `json:"max_output"`
+	OutputReserve int          `json:"output_reserve"`
 	Enabled       bool         `json:"enabled"`
 }
 
 // ModelConfiguration is accepted only by the deployment operator. Credentials,
 // options and endpoint are absent from the public Model read model.
 type ModelConfiguration struct {
-	Provider, Name, Endpoint, APIKey string
-	Protocol                         llm.Protocol
-	ContextWindow, MaxOutput         int
-	Enabled                          bool
-	Options                          ModelOptions
+	Provider, Name, Endpoint, APIKey        string
+	Protocol                                llm.Protocol
+	ContextWindow, MaxOutput, OutputReserve int
+	Enabled                                 bool
+	Options                                 ModelOptions
 }
 
 // ModelOptions can contain account routing and secrets in headers or query

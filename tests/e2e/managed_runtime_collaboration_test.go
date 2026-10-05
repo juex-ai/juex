@@ -177,7 +177,7 @@ func finishCollaborationInput(t *testing.T, f *managedRuntimeFixture, scope mana
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Messages: work.History})
+	attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Messages: work.History})
 	if err != nil {
 		t.Fatal(err)
 	}

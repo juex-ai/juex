@@ -82,7 +82,8 @@ func OpenRuntime(ctx context.Context, config RuntimeConfig) (*Runtime, error) {
 		return nil, err
 	}
 	ok = true
-	return &Runtime{Pool: pool, Service: &managedruntime.Service{Store: store, Authority: authority, Applications: config.Runner.Applications}, Runner: runner}, nil
+	triggers, _ := config.Runner.Applications.(managedruntime.TriggerAuthority)
+	return &Runtime{Pool: pool, Service: &managedruntime.Service{Store: store, Authority: authority, Applications: config.Runner.Applications, Triggers: triggers}, Runner: runner}, nil
 }
 
 func (r *Runtime) Close() { r.Pool.Close() }

@@ -135,7 +135,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		message := llm.TextMessage(llm.RoleUser, text)
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
-		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" {
+		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" || work.Source.Kind == "application_trigger" {
 			message.Kind = llm.MessageKindSystemNotice
 		}
 		if work.Source.Kind != "compaction" {
@@ -277,10 +277,11 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	if request.Generation != generation {
 		return managedruntime.Attempt{}, managedruntime.ErrConflict
 	}
-	if request.MaxOutputTokens == 0 {
-		request.MaxOutputTokens = request.Model.MaxOutput
-	}
-	if request.MaxOutputTokens < 1 || request.MaxOutputTokens > request.Model.MaxOutput {
+	if request.Purpose == "compaction" {
+		if request.MaxOutputTokens <= 0 || request.MaxOutputTokens > request.Model.OutputReserve {
+			return managedruntime.Attempt{}, managedruntime.ErrInvalid
+		}
+	} else if request.MaxOutputTokens != request.Model.MaxOutput {
 		return managedruntime.Attempt{}, managedruntime.ErrInvalid
 	}
 	if err := admitCompactionAttempt(ctx, tx, turnID, request); err != nil {
