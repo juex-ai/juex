@@ -101,7 +101,10 @@ File publication, Artifact import and explicit environment-to-environment copy
 freeze both authorized locations before admission. Their durable transfer IDs
 and completion events resume the original tool call without polling the model.
 File metadata and Artifact references enter context; binary contents do not.
-Omitting a location selects only the hosted workspace, never another device.
+Omitting an environment selects the Agent's configured default, never an arbitrary
+device. New tools, transfers and hooks freeze that default's directory and current
+grant version before admission. Changing the default cannot reroute prepared work;
+explicit extension bindings and existing handles keep their original locations.
 External cancellation stays pending until Execution confirms the original operation
 has settled; accepting the cancellation request alone is not settlement. Cancellation
 arriving before a timed-out admission request prevents that request from executing.

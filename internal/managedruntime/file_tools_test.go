@@ -12,7 +12,7 @@ import (
 
 func TestFileToolFreezesAuthorizedLocations(t *testing.T) {
 	environments := []execprotocol.Environment{
-		{ID: "hosted", Kind: "hosted", AuthorizationVersion: 4, Capabilities: []execprotocol.Capability{execprotocol.Files}},
+		{ID: "hosted", Kind: "hosted", Default: true, AuthorizationVersion: 4, Capabilities: []execprotocol.Capability{execprotocol.Files}},
 		{ID: "mac", Kind: "native", Online: false, AuthorizationVersion: 8, Capabilities: []execprotocol.Capability{execprotocol.Files}},
 		{ID: "shell-only", Kind: "native", AuthorizationVersion: 3, Capabilities: []execprotocol.Capability{execprotocol.Shell}},
 	}
@@ -48,7 +48,7 @@ func TestFileToolFreezesAuthorizedLocations(t *testing.T) {
 	}
 	work.Call = llm.Block{ToolName: "publish_file", Input: map[string]any{"source": map[string]any{"path": "file"}}}
 	if _, _, err := prepareFileTransfer(work, environments[1:]); !errors.Is(err, execprotocol.ErrDenied) {
-		t.Fatal("missing hosted environment silently selected a remote device", err)
+		t.Fatal("missing default environment silently selected a remote device", err)
 	}
 }
 

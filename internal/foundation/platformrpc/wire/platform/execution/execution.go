@@ -195,6 +195,20 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"DefaultEnvironment": kitex.NewMethodInfo(
+		defaultEnvironmentHandler,
+		newExecutionDefaultEnvironmentArgs,
+		newExecutionDefaultEnvironmentResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"SetDefaultEnvironment": kitex.NewMethodInfo(
+		setDefaultEnvironmentHandler,
+		newExecutionSetDefaultEnvironmentArgs,
+		newExecutionSetDefaultEnvironmentResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Submit": kitex.NewMethodInfo(
 		submitHandler,
 		newExecutionSubmitArgs,
@@ -764,6 +778,42 @@ func newExecutionEnvironmentsResult() interface{} {
 	return platform.NewExecutionEnvironmentsResult()
 }
 
+func defaultEnvironmentHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionDefaultEnvironmentArgs)
+	realResult := result.(*platform.ExecutionDefaultEnvironmentResult)
+	success, err := handler.(platform.Execution).DefaultEnvironment(ctx, realArg.Actor)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionDefaultEnvironmentArgs() interface{} {
+	return platform.NewExecutionDefaultEnvironmentArgs()
+}
+
+func newExecutionDefaultEnvironmentResult() interface{} {
+	return platform.NewExecutionDefaultEnvironmentResult()
+}
+
+func setDefaultEnvironmentHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionSetDefaultEnvironmentArgs)
+	realResult := result.(*platform.ExecutionSetDefaultEnvironmentResult)
+	success, err := handler.(platform.Execution).SetDefaultEnvironment(ctx, realArg.Actor, realArg.ConfigurationJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionSetDefaultEnvironmentArgs() interface{} {
+	return platform.NewExecutionSetDefaultEnvironmentArgs()
+}
+
+func newExecutionSetDefaultEnvironmentResult() interface{} {
+	return platform.NewExecutionSetDefaultEnvironmentResult()
+}
+
 func submitHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.ExecutionSubmitArgs)
 	realResult := result.(*platform.ExecutionSubmitResult)
@@ -1157,6 +1207,27 @@ func (p *kClient) Environments(ctx context.Context, actor *platform.Actor) (r *p
 	_args.Actor = actor
 	var _result platform.ExecutionEnvironmentsResult
 	if err = p.c.Call(ctx, "Environments", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) DefaultEnvironment(ctx context.Context, actor *platform.Actor) (r *platform.Reply, err error) {
+	var _args platform.ExecutionDefaultEnvironmentArgs
+	_args.Actor = actor
+	var _result platform.ExecutionDefaultEnvironmentResult
+	if err = p.c.Call(ctx, "DefaultEnvironment", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) SetDefaultEnvironment(ctx context.Context, actor *platform.Actor, configurationJSON string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionSetDefaultEnvironmentArgs
+	_args.Actor = actor
+	_args.ConfigurationJSON = configurationJSON
+	var _result platform.ExecutionSetDefaultEnvironmentResult
+	if err = p.c.Call(ctx, "SetDefaultEnvironment", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

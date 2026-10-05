@@ -106,6 +106,8 @@ service Execution {
   Reply Restrict(1: string actorID, 2: string tenantID, 3: string environmentID, 4: i64 version, 5: string grantsJSON)
   Reply Revoke(1: string actorID, 2: string tenantID, 3: string environmentID)
   Reply Environments(1: Actor actor)
+  Reply DefaultEnvironment(1: Actor actor)
+  Reply SetDefaultEnvironment(1: Actor actor, 2: string configurationJSON)
   Reply Submit(1: Actor actor, 2: string environmentID, 3: string requestJSON, 4: i64 waitMillis)
   Reply SubmitFenced(1: Actor actor, 2: string environmentID, 3: string requestJSON, 4: i64 waitMillis, 5: string fenceJSON)
   Reply Operation(1: Actor actor, 2: string environmentID, 3: string operationID, 4: i64 cursor, 5: i32 limit)

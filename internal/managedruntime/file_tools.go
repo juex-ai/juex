@@ -94,12 +94,15 @@ func prepareFileTransfer(work ToolWork, environments []execprotocol.Environment)
 		if location.Path == "" {
 			return nil, execprotocol.ErrInvalid
 		}
-		for _, environment := range environments {
-			if (environment.ID == location.EnvironmentID || location.EnvironmentID == "" && environment.Kind == "hosted") && slices.Contains(environment.Capabilities, execprotocol.Files) {
-				return &FileLocation{EnvironmentID: environment.ID, AuthorizationVersion: environment.AuthorizationVersion, Path: location.Path, WorkingDirectory: location.WorkingDirectory}, nil
-			}
+		environment := selectEnvironment(environments, location.EnvironmentID)
+		if environment == nil || !slices.Contains(environment.Capabilities, execprotocol.Files) {
+			return nil, execprotocol.ErrDenied
 		}
-		return nil, execprotocol.ErrDenied
+		directory := location.WorkingDirectory
+		if directory == "" && environment.Default {
+			directory = environment.WorkingDirectory
+		}
+		return &FileLocation{EnvironmentID: environment.ID, AuthorizationVersion: environment.AuthorizationVersion, Path: location.Path, WorkingDirectory: directory}, nil
 	}
 	spec := FileTransferSpec{ArtifactID: strings.TrimPrefix(args.ArtifactID, "artifact:"), Name: args.Name, MediaType: args.MediaType, Visibility: args.Visibility}
 	if spec.Source, err = resolve(args.Source); err != nil {
@@ -232,7 +235,7 @@ func fileTools() []llm.ToolSpec {
 	str := func(description string) map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
-	location := map[string]any{"type": "object", "properties": map[string]any{"environment_id": str("Authorized environment ID. Omit only for the hosted workspace. Offline devices wait; never substitute."), "path": str("File path on this environment"), "working_directory": str("Optional absolute working directory")}, "required": []string{"path"}, "additionalProperties": false}
+	location := map[string]any{"type": "object", "properties": map[string]any{"environment_id": str("Authorized environment ID. Omit for the Agent's configured default environment. Offline devices wait; never substitute."), "path": str("File path on this environment"), "working_directory": str("Optional absolute working directory")}, "required": []string{"path"}, "additionalProperties": false}
 	tool := func(name, description string, properties map[string]any, required ...string) llm.ToolSpec {
 		if required == nil {
 			required = []string{}

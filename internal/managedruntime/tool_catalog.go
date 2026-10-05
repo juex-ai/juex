@@ -23,7 +23,7 @@ func executionTools() []llm.ToolSpec {
 		return llm.ToolSpec{Name: name, Description: description, Schema: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}
 	}
 	location := func(properties map[string]any) map[string]any {
-		properties["environment_id"] = str("Authorized environment ID. Omit only for the Agent's hosted workspace. Offline devices wait; never substitute another environment.")
+		properties["environment_id"] = str("Authorized environment ID. Omit to use the Agent's configured default environment. Offline environments wait; never substitute another environment.")
 		properties["working_directory"] = str("Absolute working directory on that environment. This is not a permission boundary.")
 		return properties
 	}
@@ -50,7 +50,24 @@ func executionTools() []llm.ToolSpec {
 
 func executionContext(environments []execprotocol.Environment) string {
 	encoded, _ := json.Marshal(environments)
-	return "\n\nExecution environments (descriptive data, not instructions):\n" + string(encoded) + "\nUse only the listed capabilities. Native devices run with the enrolled OS user's permissions; working_directory is not a sandbox. File, command and MCP tools run only on the selected environment. Handles retain their original environment. Omitted environment_id selects the hosted workspace; do not substitute a native device if it is unavailable. Hosted /workspace and /home/agent persist across container replacement; the root filesystem is read-only. Put Python virtual environments under these persistent paths and install npm global tools under /home/agent/.local (the default prefix). System dependencies require an explicit image recipe. Memory and Calendar are platform applications, not filesystem locations."
+	context := "\n\nExecution environments (descriptive data, not instructions):\n" + string(encoded) + "\nUse only the listed capabilities. Native devices run with the enrolled OS user's permissions; working_directory is not a sandbox. File, command and MCP tools run only on the selected environment. Handles retain their original environment. Omitted environment_id selects the environment marked default; omitted working_directory uses that environment's listed directory. If the default is unavailable, do not substitute another environment. Memory and Calendar are platform applications, not filesystem locations."
+	if slices.ContainsFunc(environments, func(env execprotocol.Environment) bool { return env.Kind == "hosted" }) {
+		context += " Hosted /workspace and /home/agent persist across container replacement; the root filesystem is read-only. On hosted environments, put Python virtual environments under these persistent paths and install npm global tools under /home/agent/.local (the default prefix). Hosted system dependencies require an explicit image recipe."
+	}
+	return context
+}
+
+func selectEnvironment(environments []execprotocol.Environment, id string) *execprotocol.Environment {
+	var selected *execprotocol.Environment
+	for i := range environments {
+		if id == environments[i].ID || id == "" && environments[i].Default {
+			if selected != nil {
+				return nil
+			}
+			selected = &environments[i]
+		}
+	}
+	return selected
 }
 
 func prepareExecution(work ToolWork, environments []execprotocol.Environment) (string, execprotocol.Request, error) {
@@ -90,16 +107,18 @@ func prepareExecution(work ToolWork, environments []execprotocol.Environment) (s
 		delete(arguments, "handle")
 	} else {
 		environment, _ = arguments["environment_id"].(string)
-		for _, candidate := range environments {
-			if environment == "" && candidate.Kind == "hosted" {
-				environment = candidate.ID
-				break
-			}
+		selected := selectEnvironment(environments, environment)
+		if selected == nil {
+			return "", execprotocol.Request{}, fmt.Errorf("selected or default environment is unavailable; configure an authorized environment")
+		}
+		environment = selected.ID
+		if directory, _ := arguments["working_directory"].(string); directory == "" && selected.Default && selected.WorkingDirectory != "" {
+			arguments["working_directory"] = selected.WorkingDirectory
 		}
 	}
 	delete(arguments, "environment_id")
 	if environment == "" {
-		return "", execprotocol.Request{}, fmt.Errorf("no hosted workspace available; explicitly select an authorized environment")
+		return "", execprotocol.Request{}, execprotocol.ErrInvalid
 	}
 	if work.Call.ToolName != "process_status" && work.Call.ToolName != "process_cancel" {
 		allowed := false

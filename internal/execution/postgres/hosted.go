@@ -27,12 +27,24 @@ func (s *Store) EnsureHosted(ctx context.Context, scope execution.Scope, candida
 	if err := purgeGate(ctx, tx, scope.FleetID, scope.AgentID); err != nil {
 		return execution.HostedResource{}, err
 	}
+	// Serialize default provisioning with a concurrent user selection. A list
+	// that began before the selection must not allocate an unused workspace.
+	if err := lockDefaultEnvironment(ctx, tx, scope.AgentID); err != nil {
+		return execution.HostedResource{}, err
+	}
+	var selected string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT environment_id::text FROM execution.default_environments WHERE agent_id=$1),'')`, scope.AgentID).Scan(&selected); err != nil {
+		return execution.HostedResource{}, err
+	}
 	// Slot allocation and one-environment-per-Agent are one transaction.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.hosted.allocate'))`); err != nil {
 		return execution.HostedResource{}, err
 	}
 	h, err := scanHosted(tx.QueryRow(ctx, `SELECT `+hostedColumns+` FROM execution.hosted h JOIN execution.environments e ON e.id=h.environment_id WHERE h.agent_id=$1 FOR UPDATE OF e`, scope.AgentID))
 	if err == nil {
+		if selected != "" && selected != h.EnvironmentID {
+			return h, execprotocol.ErrConflict
+		}
 		if h.TenantID != scope.TenantID || h.UserID != scope.UserID {
 			return h, execprotocol.ErrDenied
 		}
@@ -45,6 +57,9 @@ func (s *Store) EnsureHosted(ctx context.Context, scope execution.Scope, candida
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return h, err
+	}
+	if selected != "" {
+		return h, execprotocol.ErrConflict
 	}
 	var slot int
 	if err := tx.QueryRow(ctx, `SELECT n FROM generate_series(0,4095) n WHERE NOT EXISTS(SELECT 1 FROM execution.hosted h WHERE h.slot=n) ORDER BY n LIMIT 1`).Scan(&slot); err != nil {

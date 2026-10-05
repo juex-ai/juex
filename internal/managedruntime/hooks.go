@@ -111,18 +111,15 @@ func (r toolRunner) executeHook(ctx context.Context, work *HookWork) HookOutcome
 		if err != nil {
 			return retry
 		}
-		var selected *execprotocol.Environment
-		for i := range environments {
-			env := &environments[i]
-			if (work.Declaration.EnvironmentID == env.ID || work.Declaration.EnvironmentID == "" && env.Kind == "hosted") && slices.Contains(env.Capabilities, execprotocol.Shell) && env.AuthorizationVersion > 0 && (work.Declaration.AuthorizationVersion == 0 || work.Declaration.AuthorizationVersion == env.AuthorizationVersion) {
-				selected = env
-				break
-			}
-		}
-		if selected == nil {
+		selected := selectEnvironment(environments, work.Declaration.EnvironmentID)
+		if selected == nil || !slices.Contains(selected.Capabilities, execprotocol.Shell) || selected.AuthorizationVersion < 1 || work.Declaration.AuthorizationVersion != 0 && work.Declaration.AuthorizationVersion != selected.AuthorizationVersion {
 			return HookOutcome{State: "failed", Error: "hook environment is unavailable or shell permission is missing"}
 		}
-		arguments, err := json.Marshal(work.Declaration.Operation(work.Input))
+		command := work.Declaration.Operation(work.Input)
+		if command.WorkingDirectory == "" && command.Extension == nil && selected.Default {
+			command.WorkingDirectory = selected.WorkingDirectory
+		}
+		arguments, err := json.Marshal(command)
 		if err != nil {
 			return HookOutcome{State: "failed", Error: "invalid hook command"}
 		}

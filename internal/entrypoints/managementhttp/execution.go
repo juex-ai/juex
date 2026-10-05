@@ -13,6 +13,8 @@ type Execution interface {
 	ArtifactAPI
 	TransferAPI
 	Environments(context.Context, string, string, string) ([]execprotocol.Environment, error)
+	DefaultEnvironment(context.Context, string, string, string) (execution.DefaultEnvironment, error)
+	SetDefaultEnvironment(context.Context, string, string, string, execution.DefaultEnvironment) (execution.DefaultEnvironment, error)
 	PreviewPair(context.Context, string, string, string) (execution.Pairing, error)
 	ApprovePair(context.Context, string, string, string, map[string][]execprotocol.Capability) (execution.Pairing, error)
 	Devices(context.Context, string, string, string) ([]execution.Device, error)
@@ -22,6 +24,21 @@ type Execution interface {
 
 func (s *Server) environments(w http.ResponseWriter, r *http.Request, user management.User) {
 	v, err := s.options.Execution.Environments(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"))
+	respond(w, v, err)
+}
+
+func (s *Server) defaultEnvironment(w http.ResponseWriter, r *http.Request, user management.User) {
+	v, err := s.options.Execution.DefaultEnvironment(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"))
+	respond(w, v, err)
+}
+
+func (s *Server) setDefaultEnvironment(w http.ResponseWriter, r *http.Request, user management.User) {
+	var body execution.DefaultEnvironment
+	if err := decode(r, &body); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	v, err := s.options.Execution.SetDefaultEnvironment(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"), body)
 	respond(w, v, err)
 }
 

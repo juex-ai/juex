@@ -20,19 +20,39 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 	if err != nil {
 		return nil, err
 	}
-	if s.Hosted != nil {
+	binding, err := s.Store.DefaultEnvironment(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	devices, err := s.Store.Devices(ctx, scope.OwnerScope)
+	if err != nil {
+		return nil, err
+	}
+	usesHosted := binding.EnvironmentID == "" || slices.ContainsFunc(devices, func(device Device) bool {
+		return device.ID == binding.EnvironmentID && device.Kind == "hosted"
+	})
+	if s.Hosted != nil && usesHosted {
 		done, err := maintenance.Enter(s.Admission)
 		if err == nil {
 			err = s.Hosted.Ensure(ctx, scope)
 			done()
 		}
+		if errors.Is(err, execprotocol.ErrConflict) {
+			fresh, readErr := s.Store.DefaultEnvironment(ctx, scope)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if fresh.EnvironmentID != "" {
+				binding, err = fresh, nil
+			}
+		}
 		if err != nil && !errors.Is(err, maintenance.ErrDraining) {
 			return nil, err
 		}
-	}
-	devices, err := s.Store.Devices(ctx, scope.OwnerScope)
-	if err != nil {
-		return nil, err
+		devices, err = s.Store.Devices(ctx, scope.OwnerScope)
+		if err != nil {
+			return nil, err
+		}
 	}
 	environments := []execprotocol.Environment{}
 	for _, device := range devices {
@@ -40,6 +60,10 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 			continue
 		}
 		environment := device.Environment
+		environment.Default = device.ID == binding.EnvironmentID || binding.EnvironmentID == "" && device.Kind == "hosted"
+		if environment.Default && binding.WorkingDirectory != "" {
+			environment.WorkingDirectory = binding.WorkingDirectory
+		}
 		environment.AuthorizationVersion = device.Version
 		environment.Capabilities = slices.Clone(device.Grants[agent])
 		environment.JournalID = ""

@@ -78,6 +78,24 @@ func (c *Client) Environments(ctx context.Context, user, tenant, agent string) (
 	err = decode(reply, err, &result)
 	return result, err
 }
+
+func (c *Client) DefaultEnvironment(ctx context.Context, user, tenant, agent string) (execution.DefaultEnvironment, error) {
+	reply, err := c.client.DefaultEnvironment(ctx, actor(user, tenant, agent))
+	var result execution.DefaultEnvironment
+	err = decode(reply, err, &result)
+	return result, err
+}
+
+func (c *Client) SetDefaultEnvironment(ctx context.Context, user, tenant, agent string, value execution.DefaultEnvironment) (execution.DefaultEnvironment, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return execution.DefaultEnvironment{}, err
+	}
+	reply, err := c.client.SetDefaultEnvironment(ctx, actor(user, tenant, agent), string(encoded))
+	var result execution.DefaultEnvironment
+	err = decode(reply, err, &result)
+	return result, err
+}
 func (c *Client) Submit(ctx context.Context, user, tenant, environment string, request execprotocol.Request, wait time.Duration) (execution.Operation, error) {
 	encoded, err := json.Marshal(request)
 	if err != nil {

@@ -51,6 +51,9 @@ var recoverySchema string
 //go:embed retention_schema.sql
 var retentionSchema string
 
+//go:embed default_environment_schema.sql
+var defaultEnvironmentSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -64,7 +67,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.migrations')); CREATE SCHEMA IF NOT EXISTS execution; CREATE TABLE IF NOT EXISTS execution.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, eventsSchema, hostedSchema, hostedStorageSchema, observedOutputSchema, artifactsSchema, transfersSchema, cancellationsSchema, transferProgressSchema, purgeSchema, retentionSchema, recoverySchema}
+	migrations := []string{schema, eventsSchema, hostedSchema, hostedStorageSchema, observedOutputSchema, artifactsSchema, transfersSchema, cancellationsSchema, transferProgressSchema, purgeSchema, retentionSchema, recoverySchema, defaultEnvironmentSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM execution.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
