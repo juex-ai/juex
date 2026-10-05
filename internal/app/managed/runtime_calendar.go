@@ -3,6 +3,7 @@ package managed
 import (
 	"context"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"time"
 
 	"github.com/juex-ai/juex/internal/calendar"
@@ -24,7 +25,7 @@ func (a RuntimeApplications) Tools(ctx context.Context, scope managedruntime.Sco
 	if err != nil {
 		return catalog, err
 	}
-	if a.Calendar == nil || job != nil && job.Application == "memory" {
+	if a.Calendar == nil || !scope.Capabilities.Allows(agentpolicy.Calendar) || job != nil && job.Application == "memory" {
 		return catalog, nil
 	}
 	call, cancel := context.WithTimeout(ctx, 500*time.Millisecond)

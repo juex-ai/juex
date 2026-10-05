@@ -11,10 +11,10 @@ import { useResource } from './use-resource'
 import { DevicesPanel } from './devices'
 import { DefaultEnvironmentDialog } from './default-environment'
 import { HooksEditor } from './hooks'
+import { CapabilitiesEditor } from './capabilities'
 import { ExtensionsDialog } from './extensions'
 import { PurgeDialog, PurgePanel, type PurgeSelection } from './purge'
 import type { Agent, AgentConfig, FleetOverview, FleetSettings, Model, TenantAccess, User } from './schema'
-
 export function FleetPage({ tenant, user, delegated = false }: { tenant: TenantAccess; user: User; delegated?: boolean }) {
   const { ownerId } = useParams()
   const owner = delegated ? ownerId! : user.id
@@ -42,8 +42,9 @@ export function FleetPage({ tenant, user, delegated = false }: { tenant: TenantA
     if (!editor) return
     setBusy(true); setError('')
     try {
-      if (editor.agent) await api(`/tenants/${tenant.id}/agents/${editor.agent.id}`, { ...editor.config, version: editor.agent.version }, 'PUT')
-      else await api(`/tenants/${tenant.id}/users/${owner}/agents`, editor.config)
+      const config = { ...editor.config, capabilities: editor.config.capabilities ?? editor.agent?.capabilities ?? { disabled: [] } }
+      if (editor.agent) await api(`/tenants/${tenant.id}/agents/${editor.agent.id}`, { ...config, version: editor.agent.version }, 'PUT')
+      else await api(`/tenants/${tenant.id}/users/${owner}/agents`, config)
       setEditor(null); refresh()
     } catch (err) { setError(errorText(err)) } finally { setBusy(false) }
   }
@@ -76,7 +77,16 @@ export function FleetPage({ tenant, user, delegated = false }: { tenant: TenantA
     <PurgeDialog key={purge?.requestId ?? 'closed'} tenantId={tenant.id} owner={owner} selection={purge} close={() => setPurge(null)} changed={refresh} />
     {environmentAgent && <DefaultEnvironmentDialog tenant={tenant.id} agent={environmentAgent} close={() => setEnvironmentAgent(null)} changed={refresh} />}
     {extensions && <ExtensionsDialog tenant={tenant.id} agent={extensions} close={() => setExtensions(null)} changed={refresh} />}
-    <Dialog open={editor !== null} onOpenChange={open => { if (!open) setEditor(null) }}><DialogContent className="sm:max-w-2xl max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{editor?.agent ? 'Agent 设置' : '创建 Agent'}</DialogTitle><DialogDescription>每个 Agent 拥有独立的对话，可选择默认执行环境。同一 Fleet 共享 Memory 和 Calendar。</DialogDescription></DialogHeader>{editor && <form className="management-form" onSubmit={saveAgent}>{error && <Notice error>{error}</Notice>}<Field label="名称"><Input autoComplete="off" required maxLength={100} value={editor.config.name} onChange={event => setEditor({ ...editor, config: { ...editor.config, name: event.target.value } })} /></Field><Field label="Worker 最大层级"><select className="management-select" value={editor.config.worker_depth ?? 1} onChange={event => setEditor({ ...editor, config: { ...editor.config, worker_depth: Number(event.target.value) } })}><option value={1}>1 层 · Main 可创建 Workers</option><option value={2}>2 层 · Worker 可继续委派一层</option></select></Field><Field label="专属指令"><Textarea rows={5} maxLength={16000} value={editor.config.instructions} onChange={event => setEditor({ ...editor, config: { ...editor.config, instructions: event.target.value } })} placeholder="这个 Agent 负责什么？有哪些需要遵守的要求？" /></Field><Field label="模型"><ModelSelect models={models} value={editor.config.model_id} emptyLabel="继承 Fleet 默认模型" onChange={value => setEditor({ ...editor, config: { ...editor.config, model_id: value } })} /></Field><HooksEditor tenant={tenant.id} owner={owner} agent={editor.agent?.id} value={editor.config.hooks ?? []} onChange={hooks => setEditor({ ...editor, config: { ...editor.config, hooks } })} /><DialogFooter><Button type="button" variant="outline" onClick={() => setEditor(null)}>取消</Button><Button type="submit" disabled={busy}>{busy ? '正在保存…' : '保存'}</Button></DialogFooter></form>}</DialogContent></Dialog>
+    <Dialog open={editor !== null} onOpenChange={open => { if (!open) setEditor(null) }}><DialogContent className="sm:max-w-2xl max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{editor?.agent ? 'Agent 设置' : '创建 Agent'}</DialogTitle><DialogDescription>每个 Agent 拥有独立的对话，可选择默认执行环境。同一 Fleet 共享 Memory 和 Calendar。</DialogDescription></DialogHeader>{editor && <form className="management-form" onSubmit={saveAgent}>
+      {error && <Notice error>{error}</Notice>}
+      <Field label="名称"><Input autoComplete="off" required maxLength={100} value={editor.config.name} onChange={event => setEditor({ ...editor, config: { ...editor.config, name: event.target.value } })} /></Field>
+      <CapabilitiesEditor value={editor.config.capabilities ?? editor.agent?.capabilities ?? { disabled: [] }} onChange={capabilities => setEditor({ ...editor, config: { ...editor.config, capabilities } })} />
+      <Field label="Worker 最大层级"><select className="management-select" value={editor.config.worker_depth ?? 1} onChange={event => setEditor({ ...editor, config: { ...editor.config, worker_depth: Number(event.target.value) } })}><option value={1}>1 层 · Main 可创建 Workers</option><option value={2}>2 层 · Worker 可继续委派一层</option></select></Field>
+      <Field label="专属指令"><Textarea rows={5} maxLength={16000} value={editor.config.instructions} onChange={event => setEditor({ ...editor, config: { ...editor.config, instructions: event.target.value } })} placeholder="这个 Agent 负责什么？有哪些需要遵守的要求？" /></Field>
+      <Field label="模型"><ModelSelect models={models} value={editor.config.model_id} emptyLabel="继承 Fleet 默认模型" onChange={value => setEditor({ ...editor, config: { ...editor.config, model_id: value } })} /></Field>
+      <HooksEditor tenant={tenant.id} owner={owner} agent={editor.agent?.id} value={editor.config.hooks ?? []} onChange={hooks => setEditor({ ...editor, config: { ...editor.config, hooks } })} />
+      <DialogFooter><Button type="button" variant="outline" onClick={() => setEditor(null)}>取消</Button><Button type="submit" disabled={busy}>{busy ? '正在保存…' : '保存'}</Button></DialogFooter>
+    </form>}</DialogContent></Dialog>
     <Dialog open={settings !== null} onOpenChange={open => { if (!open) setSettings(null) }}><DialogContent><DialogHeader><DialogTitle>Fleet 设置</DialogTitle><DialogDescription>模型选择在新 Turn 生效。Memory 和 Calendar 在各自应用中管理。</DialogDescription></DialogHeader>{settings && <form onSubmit={saveSettings}>{error && <Notice error>{error}</Notice>}<Field label="默认模型"><ModelSelect models={models} value={settings.default_model_id} emptyLabel={`继承平台默认 · ${modelLabel(fleet?.platform_default_model_id ?? '')}`} onChange={value => setSettings({ ...settings, default_model_id: value })} /></Field><DialogFooter><Button type="button" variant="outline" onClick={() => setSettings(null)}>取消</Button><Button type="submit" disabled={busy}>{busy ? '正在保存…' : '保存设置'}</Button></DialogFooter></form>}</DialogContent></Dialog>
     <Dialog open={archive !== null} onOpenChange={open => { if (!open) setArchive(null) }}><DialogContent onOpenAutoFocus={event => { event.preventDefault(); document.getElementById('archive-agent-cancel')?.focus() }}><DialogHeader><DialogTitle>归档 {archive?.name}</DialogTitle><DialogDescription>停止新执行，并请求停止进行中的工作；历史和托管文件保留。关联日程将暂停，恢复 Agent 后需要显式恢复日程。</DialogDescription></DialogHeader>{error && <Notice error>{error}</Notice>}<DialogFooter><Button id="archive-agent-cancel" variant="outline" onClick={() => setArchive(null)}>取消</Button><Button disabled={busy} onClick={() => archive && void archiveAgent(archive, true)}>确认归档</Button></DialogFooter></DialogContent></Dialog>
   </>

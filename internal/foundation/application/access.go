@@ -4,6 +4,8 @@ package application
 import (
 	"context"
 	"errors"
+
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 )
 
 var (
@@ -23,17 +25,17 @@ type Access struct {
 
 type Scope struct {
 	Access
-	FleetID       string `json:"fleet_id"`
-	ActorEpoch    int64  `json:"actor_epoch"`
-	MemberEpoch   int64  `json:"member_epoch"`
-	MemberVersion int64  `json:"member_version"`
-	AgentEpoch    int64  `json:"agent_epoch,omitempty"`
+	Capabilities  agentpolicy.Policy `json:"capabilities"`
+	FleetID       string             `json:"fleet_id"`
+	ActorEpoch    int64              `json:"actor_epoch"`
+	MemberEpoch   int64              `json:"member_epoch"`
+	MemberVersion int64              `json:"member_version"`
+	AgentEpoch    int64              `json:"agent_epoch,omitempty"`
 }
 
 // Membership versions describe profile edits; only execution epochs revoke work.
 func (s Scope) SameAuthority(other Scope) bool {
-	s.MemberVersion, other.MemberVersion = 0, 0
-	return s == other
+	return s.Access == other.Access && s.FleetID == other.FleetID && s.ActorEpoch == other.ActorEpoch && s.MemberEpoch == other.MemberEpoch && s.AgentEpoch == other.AgentEpoch
 }
 
 func (s Scope) Valid() bool {

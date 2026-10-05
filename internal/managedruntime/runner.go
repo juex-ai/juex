@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"log/slog"
 	"slices"
 	"sort"
@@ -341,7 +342,12 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if r.tools.collaboration != nil && (job == nil || job.Application != "memory") {
 		_, peers := r.authority.(AgentDirectory)
 		request.Tools = append(request.Tools, collaborationTools(peers)...)
-		request.System += "\n\nCurrent Agent: " + work.Scope.AgentID + "; current Thread: " + work.ThreadID + "; maximum Worker nesting depth: " + strconv.Itoa(max(work.Config.WorkerDepth, 1)) + ". Each Worker starts with only its explicit task, not the parent conversation. Other Agents receive only explicit messages."
+		if work.Config.Capabilities.Allows(agentpolicy.Workers) {
+			request.System += "\n\nCurrent Agent: " + work.Scope.AgentID + "; current Thread: " + work.ThreadID + "; maximum Worker nesting depth: " + strconv.Itoa(max(work.Config.WorkerDepth, 1)) + ". Each Worker starts with only its explicit task, not the parent conversation."
+		}
+		if work.Config.Capabilities.Allows(agentpolicy.Collaboration) {
+			request.System += "\n\nOther Agents receive only explicit messages."
+		}
 	}
 	if work.Source.Kind == "observation" {
 		request.Purpose = "observation"
@@ -350,7 +356,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		request.Purpose = "application:" + job.Application
 	}
 	if r.config.Applications != nil {
-		catalog, err := r.config.Applications.Tools(ctx, scope, job)
+		appScope := scope
+		appScope.Capabilities = work.Config.Capabilities
+		catalog, err := r.config.Applications.Tools(ctx, appScope, job)
 		if err != nil {
 			return err
 		}
@@ -364,27 +372,32 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 	}
 	if r.tools.gateway != nil && (job == nil || job.Application != "memory") {
-		environments, err := r.tools.gateway.Environments(ctx, scope)
-		if err != nil {
-			return err
+		if usesExecution(work.Config.Capabilities) || work.Source.Kind == "observation" {
+			environments, err := r.tools.gateway.Environments(ctx, scope)
+			if err != nil {
+				return err
+			}
+			if work.Source.Kind == "observation" && !observationGrant(environments, work.Source.EnvironmentID, work.Source.AuthorizationVersion, work.Source.Capability) {
+				return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
+			}
+			request.System += executionContext(environments)
 		}
-		if work.Source.Kind == "observation" && !observationGrant(environments, work.Source.EnvironmentID, work.Source.AuthorizationVersion, work.Source.Capability) {
-			return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
-		}
-		request.System += executionContext(environments)
 		request.Tools = append(request.Tools, executionTools()...)
-		if len(work.Config.Extensions) > 0 {
-			request.System += extensionContext(work.Config.Extensions)
-			request.Tools = append(request.Tools, extensionTools()...)
-		}
 		if r.tools.files != nil {
 			request.Tools = append(request.Tools, fileTools()...)
 		}
 	}
+	if len(work.Config.Extensions) > 0 && work.Config.Capabilities.Allows(agentpolicy.Extensions) && (job == nil || job.Application != "memory") {
+		request.System += extensionContext(work.Config.Extensions, work.Config.Capabilities)
+		request.Tools = append(request.Tools, extensionTools()...)
+	}
 	if job != nil {
 		request.Tools = slices.DeleteFunc(request.Tools, func(tool llm.ToolSpec) bool { return !job.AllowsTool(tool.Name) })
 	}
-	if job == nil {
+	request.Tools = slices.DeleteFunc(request.Tools, func(tool llm.ToolSpec) bool {
+		return !toolAllowed(work.Config.Capabilities, tool.Name) || !toolAllowed(scope.Capabilities, tool.Name)
+	})
+	if job == nil && work.Config.Capabilities.Allows(agentpolicy.Memory) {
 		if err := r.recall(ctx, lease, work, &request); err != nil {
 			return err
 		}

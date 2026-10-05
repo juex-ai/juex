@@ -4,6 +4,7 @@ package managedruntime
 import (
 	"encoding/json"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"time"
 
@@ -25,6 +26,7 @@ var (
 
 // Scope comes from current Management authority, never a browser request body.
 type Scope struct {
+	Capabilities agentpolicy.Policy `json:"capabilities"`
 	// WorkerDepth is descriptive policy, not part of the authorization identity.
 	WorkerDepth              int    `json:"worker_depth"`
 	TenantID                 string `json:"tenant_id"`
@@ -99,6 +101,7 @@ type Lease struct {
 }
 
 type TurnConfig struct {
+	Capabilities     agentpolicy.Policy        `json:"capabilities"`
 	Extensions       []extensionpolicy.Binding `json:"extensions,omitempty"`
 	Hooks            []hookpolicy.Declaration  `json:"hooks,omitempty"`
 	WorkerDepth      int                       `json:"worker_depth"`

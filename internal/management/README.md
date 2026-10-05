@@ -51,6 +51,14 @@ Fleet settings own model defaults. Memory and Calendar own their application
 enablement and execution epochs; the dashboard reads and configures each service
 through its authenticated API instead of maintaining duplicate flags.
 
+Management owns the Agent capability policy. Omitted policy preserves the stored
+value on configuration edits; an explicit empty disabled list allows all groups.
+Tightening the policy and advancing the Agent execution epoch commit together.
+Runtime freezes the policy per Turn and intersects it with fresh authority;
+Execution and application owners enforce their own operations through the same
+authority snapshot. A per-Agent application restriction does not change Fleet
+application enablement or erase application history.
+
 Models are deployment-owned. Tenant catalogs inherit by default or use an
 explicit allowlist; an empty allowlist grants nothing. Fleet defaults inherit
 the platform default, and Agents may override them. Operators configure flat,

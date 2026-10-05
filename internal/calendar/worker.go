@@ -3,6 +3,7 @@ package calendar
 import (
 	"context"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"log/slog"
 	"time"
 
@@ -90,7 +91,7 @@ func (s *Service) advance(ctx context.Context, job Job) error {
 	if err != nil && !errors.Is(err, application.ErrDenied) {
 		return err
 	}
-	allowed := err == nil && current.SameAuthority(job.Scope)
+	allowed := err == nil && current.SameAuthority(job.Scope) && current.Capabilities.Allows(agentpolicy.Calendar)
 	return s.Repository.Update(ctx, job.Scope, func(state *State) error {
 		j := state.Jobs[job.ID]
 		if j == nil || j.Version != job.Version || j.Epoch != job.Epoch {
@@ -131,7 +132,7 @@ func (s *Service) deliver(ctx context.Context, d Delivery) error {
 		} else {
 			current, e := s.Authority.AuthorizeApplication(ctx, d.Scope.Access, true)
 			err = e
-			if err == nil && !current.SameAuthority(d.Scope) {
+			if err == nil && (!current.SameAuthority(d.Scope) || !current.Capabilities.Allows(agentpolicy.Calendar)) {
 				err = application.ErrDenied
 			}
 			if err == nil {

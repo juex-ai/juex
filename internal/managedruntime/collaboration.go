@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
@@ -146,7 +147,7 @@ func (r toolRunner) applyCollaboration(ctx context.Context, work ToolWork) (any,
 		if err != nil {
 			return nil, err
 		}
-		if target.TenantID != work.Scope.TenantID || target.UserID != work.Scope.UserID || target.FleetID != work.Scope.FleetID {
+		if target.TenantID != work.Scope.TenantID || target.UserID != work.Scope.UserID || target.FleetID != work.Scope.FleetID || !target.Capabilities.Allows(agentpolicy.Collaboration) {
 			return nil, ErrDenied
 		}
 	}
@@ -164,6 +165,6 @@ func (r toolRunner) deliverThreadResults(ctx context.Context) {
 		if err != nil && !errors.Is(err, ErrDenied) {
 			return err
 		}
-		return r.collaboration.FinishThreadDelivery(ctx, delivery, err == nil && fresh.SameAuthority(delivery.Scope))
+		return r.collaboration.FinishThreadDelivery(ctx, delivery, err == nil && fresh.SameAuthority(delivery.Scope) && fresh.Capabilities.Allows(agentpolicy.Workers))
 	})
 }

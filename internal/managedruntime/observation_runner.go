@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"log/slog"
 	"slices"
 	"time"
@@ -54,19 +55,23 @@ func (r toolRunner) observe(ctx context.Context) {
 		}
 		batch := ObservationBatch{Cursor: source.Cursor, Pending: source.Pending, Discarding: source.Discarding, Command: source.Command, RetryAfter: 5 * time.Second}
 		fresh, err := r.authority.Authorize(ctx, source.Scope.ActorID, source.Scope.TenantID, source.Scope.AgentID, true)
-		if errors.Is(err, ErrDenied) || err == nil && !source.Scope.SameAuthority(fresh) {
-			batch.Closed = true
+		if err != nil && !errors.Is(err, ErrDenied) {
 			return r.observations.FinishObservation(ctx, source, batch)
 		}
-		if err != nil {
-			return r.observations.FinishObservation(ctx, source, batch)
-		}
+		publish := err == nil && source.Scope.SameAuthority(fresh) && source.Scope.Capabilities.Allows(agentpolicy.Observations) && fresh.Capabilities.Allows(agentpolicy.Observations)
 		operation, err := r.gateway.Operation(ctx, source.Scope, source.EnvironmentID, source.OperationID, source.Cursor)
 		if errors.Is(err, execprotocol.ErrDenied) || errors.Is(err, execprotocol.ErrNotFound) && !source.DeliveryPending {
 			batch.Closed = true
 			return r.observations.FinishObservation(ctx, source, batch)
 		}
 		if err != nil {
+			return r.observations.FinishObservation(ctx, source, batch)
+		}
+		if !publish {
+			batch, err = acknowledgeOnlyObservation(source, operation)
+			if err != nil {
+				return err
+			}
 			return r.observations.FinishObservation(ctx, source, batch)
 		}
 		batch, err = parseObservation(source, operation)
@@ -84,6 +89,18 @@ func (r toolRunner) observe(ctx context.Context) {
 	})
 }
 
+// Output acknowledgment belongs to the already admitted operation. Revoking
+// observations must not leak its retained output or publish buffered events.
+func acknowledgeOnlyObservation(source ObservationSource, operation ToolOperation) (ObservationBatch, error) {
+	snapshot := operation.Snapshot
+	if snapshot.NextCursor != source.Cursor+int64(len(snapshot.Output)) || snapshot.OutputBytes < snapshot.NextCursor {
+		return ObservationBatch{}, execprotocol.ErrInvalid
+	}
+	batch := ObservationBatch{Cursor: snapshot.NextCursor, More: snapshot.NextCursor < snapshot.OutputBytes, RetryAfter: 5 * time.Second}
+	batch.Closed = snapshot.OutputExpired || execprotocol.State(operation.State).Terminal() && !batch.More
+	return batch, nil
+}
+
 func (r toolRunner) deliverObservations(ctx context.Context) {
 	holder := rand.Text()
 	defer r.releaseObservationClaims(holder)
@@ -93,7 +110,7 @@ func (r toolRunner) deliverObservations(ctx context.Context) {
 			return err
 		}
 		fresh, err := r.authority.Authorize(ctx, delivery.Scope.ActorID, delivery.Scope.TenantID, delivery.Scope.AgentID, true)
-		if errors.Is(err, ErrDenied) || err == nil && !delivery.Scope.SameAuthority(fresh) {
+		if errors.Is(err, ErrDenied) || err == nil && (!delivery.Scope.SameAuthority(fresh) || !fresh.Capabilities.Allows(agentpolicy.Observations)) {
 			return r.observations.FinishObservationDelivery(ctx, delivery, false, nil)
 		}
 		if err != nil {

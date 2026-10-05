@@ -39,6 +39,13 @@ the next assistant message is not assumed to correspond one-to-one with an Input
 Context compaction preserves durable history and a checkpoint. Worker archival
 requires idle work and retains readable history.
 
+An Agent's capability policy limits its tools and background activity independently
+of Fleet application enablement and environment grants. Ordinary Worker delegation
+and application-owned Workers have separate capability checks. Tightening any
+capability revokes all earlier Agent execution epochs; reopening it neither revives
+old work nor expands a Turn's frozen policy. Cancellation and historical receipts
+remain available. Capability restrictions do not provide OS isolation for Host Shell.
+
 ## Execution environments
 
 Each Agent can select an authorized environment and working directory as its

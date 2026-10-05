@@ -55,7 +55,7 @@ func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.To
  ORDER BY j.next_check,j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1)
  UPDATE runtime.tools j SET lease_epoch=j.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds'
  FROM candidate c,runtime.turns t WHERE j.id=c.id AND t.id=j.turn_id
- RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live,j.deferred_result,j.hook_context,t.config->'extensions'`, holder).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive, &work.DeferredResult, &work.HookContext, &work.Extensions)
+ RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live,j.deferred_result,j.hook_context,t.config->'extensions',COALESCE(t.config->'capabilities','{"disabled":[]}'::jsonb)`, holder).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive, &work.DeferredResult, &work.HookContext, &work.Extensions, &work.FrozenCapabilities)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return work, managedruntime.ErrNoWork
 	}
@@ -98,7 +98,9 @@ func (s *Store) PrepareTool(ctx context.Context, work managedruntime.ToolWork, e
 		return managedruntime.ErrFence
 	}
 	if request.Kind == "mcp_connect" || request.Kind == "exec_command" || request.Kind == "observe_command" {
-		if _, err := tx.Exec(ctx, `INSERT INTO runtime.observation_sources(id,thread_id,agent_id,scope,environment_id,operation_id,kind,options,working_directory,authorization_version) SELECT j.id,t.thread_id,th.agent_id,j.scope,j.environment_id,j.id::text,j.request->>'kind',COALESCE(j.request->'arguments'->'options','{}'::jsonb),COALESCE(j.request->'arguments'->>'working_directory',''),COALESCE((j.request->>'authorization_version')::bigint,0) FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id JOIN runtime.threads th ON th.id=t.thread_id WHERE j.id=$1 ON CONFLICT DO NOTHING`, work.ID); err != nil {
+		// Every prepared stream retains its acknowledgment consumer. Frozen policy
+		// decides whether that consumer may also publish observations.
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.observation_sources(id,thread_id,agent_id,scope,environment_id,operation_id,kind,options,working_directory,authorization_version) SELECT j.id,t.thread_id,th.agent_id,j.scope||jsonb_build_object('capabilities',COALESCE(t.config->'capabilities','{"disabled":[]}'::jsonb)),j.environment_id,j.id::text,j.request->>'kind',COALESCE(j.request->'arguments'->'options','{}'::jsonb),COALESCE(j.request->'arguments'->>'working_directory',''),COALESCE((j.request->>'authorization_version')::bigint,0) FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id JOIN runtime.threads th ON th.id=t.thread_id WHERE j.id=$1 ON CONFLICT DO NOTHING`, work.ID); err != nil {
 			return err
 		}
 	}
