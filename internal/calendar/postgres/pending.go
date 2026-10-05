@@ -41,7 +41,7 @@ func (s *Store) PendingNotifications(ctx context.Context, limit int) ([]calendar
 	}
 	rows, err := s.pool.Query(ctx, `SELECT n.value FROM calendar.fleets f
  CROSS JOIN LATERAL jsonb_each(f.state->'deliveries') d
- CROSS JOIN LATERAL jsonb_each(d.value->'notices') n
+ CROSS JOIN LATERAL jsonb_each(NULLIF(d.value->'notices','null'::jsonb)) n
  WHERE n.value->>'main_done'='false' OR n.value->>'inbox_done'='false'
  ORDER BY n.value->>'attempted_at',f.id,d.key,n.key LIMIT $1`, limit)
 	if err != nil {
