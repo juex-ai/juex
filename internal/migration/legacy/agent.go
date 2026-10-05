@@ -74,6 +74,9 @@ func readAgent(r *sourceReader, directoryID string) (Agent, error) {
 	if !validAgentID(d.ID) || d.ID != directoryID || strings.TrimSpace(d.Name) == "" || !filepath.IsAbs(d.Workspace) || d.CreatedAt.IsZero() {
 		return Agent{}, errors.New("agent.json: invalid identity or Workspace binding")
 	}
+	if _, err := r.optionalRead("juex.yaml"); err != nil {
+		return Agent{}, err
+	}
 	entries, err := r.list(".", false)
 	if err != nil {
 		return Agent{}, err

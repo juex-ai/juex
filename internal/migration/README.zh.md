@@ -21,6 +21,12 @@ Workspace，捕获配置、`.env`、`AGENTS.md` 和 `.agents/AGENTS.md` 的原�
 私有文件并不表示已经完成行为转换。用户切换前，完整迁移仍需通过可校验备份、
 各服务所属的导入流程和行为验收。
 
+`internal/app/migration.ResolveConfig` 按固定源版本的合并规则解析已捕获的 Home、
+Workspace、Agent 和显式启动文件层。远程导入必须匹配源地址、声明文件和启动上下文
+的精确缓存身份；转换不请求网络，也不重新发布配置。报告不包含 provider 的私有值。
+结果描述磁盘配置，不证明继承环境、认证信息或目标资源绑定。未支持的字段、缺失或
+相互矛盾的捕获证据会明确阻止解析。
+
 消息与终态输入的纯转换位于 `internal/app/migration`，在这里组合服务的类型契约和
 固定源格式 reader。消息身份限定在目标 Agent 与 Thread 内。spool 引用恢复为经过
 校验的完整正文；图片引用要求匹配的 Execution 私有 Artifact 回执。仅在逐字重建

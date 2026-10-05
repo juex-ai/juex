@@ -27,6 +27,14 @@ extension files does not prove their behavior has been converted. A complete
 migration still needs verified backups, service-owned import and behavior
 acceptance before any user cutover.
 
+`internal/app/migration.ResolveConfig` resolves captured Home, Workspace, Agent
+and explicit startup-file layers using the fixed source merge rules. Remote
+imports require the exact source, declaring-file and startup-context cache
+identity; conversion never fetches or republishes configuration. Reports omit
+private provider values. The result describes disk configuration, not proven
+inherited environment, authentication or target resource bindings. Unsupported
+fields and missing or contradictory capture evidence stop resolution explicitly.
+
 Pure message and terminal-input conversion lives in `internal/app/migration`,
 where typed service contracts may meet the fixed source reader. Message identities
 are scoped to the target Agent and Thread. Text spool references become verified
