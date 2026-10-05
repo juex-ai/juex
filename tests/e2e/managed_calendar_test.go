@@ -213,7 +213,7 @@ func TestManagedRuntimeApplicationCancellationTracksExternalOutcome(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Messages: work.History})
+	attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Messages: work.History})
 	if err != nil {
 		t.Fatal(err)
 	}

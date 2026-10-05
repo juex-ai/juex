@@ -286,10 +286,11 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	if request.Generation != generation {
 		return managedruntime.Attempt{}, managedruntime.ErrConflict
 	}
-	if request.MaxOutputTokens == 0 {
-		request.MaxOutputTokens = request.Model.MaxOutput
-	}
-	if request.MaxOutputTokens < 1 || request.MaxOutputTokens > request.Model.MaxOutput {
+	if request.Purpose == "compaction" {
+		if request.MaxOutputTokens <= 0 || request.MaxOutputTokens > request.Model.OutputReserve {
+			return managedruntime.Attempt{}, managedruntime.ErrInvalid
+		}
+	} else if request.MaxOutputTokens != request.Model.MaxOutput {
 		return managedruntime.Attempt{}, managedruntime.ErrInvalid
 	}
 	if err := admitCompactionAttempt(ctx, tx, turnID, request); err != nil {

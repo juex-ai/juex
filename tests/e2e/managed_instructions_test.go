@@ -103,7 +103,7 @@ func TestManagedInstructionReceiptSurvivesRestartAndBindsAttempt(t *testing.T) {
 	if err != nil || decision.State != "ready" || decision.Receipt == nil || decision.Receipt.ID != read.ID || decision.Receipt.EnvironmentID != "original-device" || decision.Receipt.Snapshot.Sources[0].Text != "before restart" {
 		t.Fatal("prepared snapshot changed across recovery", decision, err)
 	}
-	modelRequest := managedruntime.ModelRequest{System: "static plus saved guidance", DynamicInstructions: decision.Receipt}
+	modelRequest := managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, System: "static plus saved guidance", DynamicInstructions: decision.Receipt}
 	modelRequest.DynamicInstructions.AuthorizationVersion++
 	if _, err := store.BeginAttempt(ctx, lease, work.TurnID, modelRequest); !errors.Is(err, managedruntime.ErrConflict) {
 		t.Fatal("attempt accepted a different source grant", err)

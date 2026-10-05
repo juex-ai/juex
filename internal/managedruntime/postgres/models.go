@@ -18,7 +18,10 @@ func validModelPlan(plan managedruntime.TurnConfig) bool {
 	}
 	seen := map[string]bool{}
 	for _, model := range plan.Models {
-		if model.ModelID == "" || model.Model == "" || model.Provider == "" || model.ContextWindow < 1024 || model.MaxOutput <= 0 || model.MaxOutput >= model.ContextWindow || seen[model.ModelID] {
+		if model.Protocol == llm.ProtocolAnthropicMessages && model.MaxOutput == 0 && model.OutputReserve < llm.AnthropicDefaultOutputTokens {
+			return false
+		}
+		if model.ModelID == "" || model.Model == "" || model.Provider == "" || model.ContextWindow < 1024 || model.MaxOutput < 0 || model.OutputReserve <= 0 || model.MaxOutput > model.OutputReserve || model.OutputReserve >= model.ContextWindow || seen[model.ModelID] {
 			return false
 		}
 		seen[model.ModelID] = true

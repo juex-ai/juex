@@ -121,6 +121,7 @@ type ModelConfig struct {
 	Endpoint                string       `json:"endpoint"`
 	ContextWindow           int          `json:"context_window"`
 	MaxOutput               int          `json:"max_output"`
+	OutputReserve           int          `json:"output_reserve"`
 	ModelAuthorizationEpoch int64        `json:"model_authorization_epoch"`
 	TenantAccessEpoch       int64        `json:"tenant_access_epoch"`
 }

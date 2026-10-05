@@ -15,6 +15,10 @@ Python 模块 `tests.eval.juex_eval` 规划绑定提交的 candidate/final 门�
 {"models":[{"provider":"example","name":"MODEL","protocol":"openai/chat","endpoint":"https://provider.example/v1","api_key":"TEST_SECRET","context_window":131072,"max_output":8192}]}
 ```
 
+要验证沿用 Provider 默认的普通请求，将 `max_output` 设为零并提供正的
+`output_reserve`。正上限省略预留量时使用同一个值。Anthropic 的零上限测试配置
+至少需要预留 4096 token。
+
 不会自动发现个人 Runtime 配置。凭据不进入 Git，文件权限为 0600。
 报告遮盖所选 API key，每次运行结束都会删除临时所选模型文件。
 模型通过种子可重复选择；`--only provider:model` 和 `--all-models` 明确测试范围。

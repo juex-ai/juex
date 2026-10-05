@@ -92,7 +92,7 @@ func TestManagedInstructionsCompactionReusesConversationSnapshot(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Purpose: "conversation"})
+				attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Purpose: "conversation"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -150,7 +150,7 @@ func TestManagedInstructionsFallbackReadsCurrentSources(t *testing.T) {
 	}))
 	t.Cleanup(second.Close)
 	ctx := context.Background()
-	model, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "alternate", Name: "backup", Protocol: llm.ProtocolOpenAIChat, Endpoint: second.URL, APIKey: "test-key", ContextWindow: 16384, MaxOutput: 1024, Enabled: true})
+	model, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "alternate", Name: "backup", Protocol: llm.ProtocolOpenAIChat, Endpoint: second.URL, APIKey: "test-key", ContextWindow: 16384, MaxOutput: 1024, OutputReserve: 1024, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

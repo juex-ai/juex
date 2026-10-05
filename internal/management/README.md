@@ -75,6 +75,12 @@ route. A changed endpoint or protocol cannot receive credentials via an old
 route snapshot. Admission ends before the external request: revocation blocks
 later admissions, not an already dispatched request.
 
+The normal request output cap is separate from its positive context reservation.
+A zero cap keeps the adapter/provider default; it does not promise unlimited
+output or guarantee that the provider uses only the reserved tokens. Anthropic
+requires at least its 4096-token adapter default in that reservation. Both values
+are frozen into model plans; changing either invalidates earlier candidates.
+
 Schema setup is explicit through `postgres.Migrate`, transactionally serialized
 and checksum-verified. Unknown or modified versions fail instead of being
 silently repaired. Database integration cases in `tests/e2e` use the `postgres`
