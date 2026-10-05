@@ -79,8 +79,9 @@ func TestNativeExecutorAgentHomeResolvesDirectCommands(t *testing.T) {
 		engine := openNative(t, config)
 		hook := nativeRun(t, engine, nativeRequest(t, "home-hook", "run_hook", execprotocol.HookCommand{Command: []string{"agent-home-tool"}, Input: json.RawMessage(`{}`), TimeoutMS: 2000, MaxOutputBytes: 4096}))
 		var output execprotocol.HookOutput
-		if hook.State != execprotocol.Completed || json.Unmarshal(hook.Output, &output) != nil || output.Stdout != config.HomeDirectory {
-			t.Fatal("hook did not resolve its Agent's executable", hook.State, hook.Error, output)
+		decodeErr := json.Unmarshal(hook.Output, &output)
+		if hook.State != execprotocol.Completed || decodeErr != nil || output.Stdout != config.HomeDirectory {
+			t.Fatal("hook did not resolve its Agent's executable", hook.State, hook.Error, output, decodeErr)
 		}
 		observer := nativeRun(t, engine, nativeRequest(t, "home-observer", "observe_command", execprotocol.ObservableCommand{Command: []string{"agent-home-tool"}}))
 		if observer.State != execprotocol.Completed || !strings.Contains(observer.Text(), config.HomeDirectory) {
