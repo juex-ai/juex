@@ -30,7 +30,10 @@ login session and a device credential are separate identities.
 
 An Agent owns a permanent Main and independent Workers. A Worker records its
 parent; cancellation of that parent does not undo already accepted independent
-work. Application jobs use scoped ordinary Workers. Cross-Agent collaboration
+work. Application model jobs use scoped ordinary Workers. Calendar may instead deliver
+an input into the permanent Main. Its acceptance transfers the input to Runtime;
+it does not prove model completion. Cancelling the Calendar delivery cannot
+retract an accepted Main input or cancel unrelated Main work. Cross-Agent collaboration
 is explicit and confined to the same owner and Fleet.
 
 An Activation is replaceable runtime capacity, not the Agent's identity.

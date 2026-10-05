@@ -72,6 +72,7 @@ func (s *Store) Purge(ctx context.Context, request lifecycle.Request) (lifecycle
 			`DELETE FROM runtime.observations WHERE agent_id IN (SELECT id FROM doomed)`,
 			`DELETE FROM runtime.thread_actions WHERE target_agent_id IN (SELECT id FROM doomed) OR action_id IN (SELECT t.id FROM runtime.tools t JOIN runtime.turns tr ON tr.id=t.turn_id WHERE tr.thread_id IN (SELECT id FROM threads))`,
 			`DELETE FROM runtime.application_jobs WHERE agent_id IN (SELECT id FROM doomed)`,
+			`DELETE FROM runtime.main_triggers WHERE agent_id IN (SELECT id FROM doomed)`,
 			`DELETE FROM runtime.context_checkpoints WHERE thread_id IN (SELECT id FROM threads)`,
 			`DELETE FROM runtime.compactions WHERE thread_id IN (SELECT id FROM threads)`,
 			`DELETE FROM runtime.tools WHERE turn_id IN (SELECT id FROM runtime.turns WHERE thread_id IN (SELECT id FROM threads))`,

@@ -17,15 +17,21 @@ func (d *Definition) Validate() error {
 	if d.Name == "" || len(d.Name) > 200 || len([]rune(d.Name)) > 100 || strings.ContainsAny(d.Name, "\r\n") || d.Content == "" || len(d.Content) > 8192 {
 		return invalid("name requires 1-200 bytes and content 1-8192 bytes")
 	}
-	if d.Mode != "agent" && d.Mode != "reminder" {
-		return invalid("mode must be agent or reminder")
+	if d.Mode != "agent" && d.Mode != "main" && d.Mode != "reminder" {
+		return invalid("mode must be agent, main or reminder")
 	}
-	if d.Mode == "agent" {
+	if d.Mode == "agent" || d.Mode == "main" {
 		if _, err := uuid.Parse(d.AgentID); err != nil {
-			return invalid("agent mode requires an Agent ID")
+			return invalid("agent and main modes require an Agent ID")
 		}
 	} else if d.AgentID != "" || len(d.Content) > 2048 {
 		return invalid("reminder has no target Agent and permits at most 2048 bytes")
+	}
+	if d.CatchUp == "" {
+		d.CatchUp = "latest"
+	}
+	if d.CatchUp != "latest" && d.CatchUp != "none" {
+		return invalid("catch_up must be latest or none")
 	}
 	if d.MaxLatenessMinutes == 0 {
 		d.MaxLatenessMinutes = 1440
@@ -39,7 +45,16 @@ func (d *Definition) Validate() error {
 	return nil
 }
 
-func digest(value any) string {
+func digest(value Change) string {
+	if value.Definition != nil {
+		definition := *value.Definition
+		// An explicit default and an omitted default are the same command. Keep
+		// its canonical identity stable across the addition of policy options.
+		if definition.CatchUp == "latest" {
+			definition.CatchUp = ""
+		}
+		value.Definition = &definition
+	}
 	data, _ := json.Marshal(value)
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
@@ -124,7 +139,7 @@ func (s *State) change(target application.Scope, q Change, now time.Time) (Recei
 		if err := definition.Validate(); err != nil {
 			return Receipt{}, err
 		}
-		if !target.Valid() || target.FleetID == "" || definition.Mode == "agent" && target.AgentID != definition.AgentID {
+		if !target.Valid() || target.FleetID == "" || (definition.Mode == "agent" || definition.Mode == "main") && target.AgentID != definition.AgentID {
 			return Receipt{}, application.ErrDenied
 		}
 		if job.Status == "completed" {
@@ -241,12 +256,17 @@ func (s *State) Advance(id string, now time.Time) error {
 	if j == nil || !s.Control.Enabled || j.Status != "active" || j.NextAt.IsZero() || j.NextAt.After(now) {
 		return nil
 	}
-	at, found, err := recurrence.Latest(j.Rule, j.Clock, now)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return application.ErrConflict
+	at := j.NextAt
+	if j.CatchUp != "none" {
+		var found bool
+		var err error
+		at, found, err = recurrence.Latest(j.Rule, j.Clock, now)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return application.ErrConflict
+		}
 	}
 	if len(s.Deliveries) >= 50000 || s.Status().Pending >= 100 {
 		return application.ErrConflict
@@ -254,7 +274,7 @@ func (s *State) Advance(id string, now time.Time) error {
 	occurrenceID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("calendar/"+j.Scope.FleetID+"/"+j.ID+"/"+at.UTC().Format(time.RFC3339Nano))).String()
 	if _, exists := s.Deliveries[occurrenceID]; !exists {
 		d := &Delivery{Occurrence: Occurrence{ID: occurrenceID, ScheduleID: j.ID, ScheduleVersion: j.Version, Definition: j.Definition, ScheduledAt: at, State: "pending", UpdatedAt: now}, Scope: j.Scope, Epoch: j.Epoch}
-		if now.Sub(at) > time.Duration(j.MaxLatenessMinutes)*time.Minute {
+		if j.CatchUp != "none" && now.Sub(at) > time.Duration(j.MaxLatenessMinutes)*time.Minute {
 			d.State = "missed"
 			d.Finished = true
 			d.Settled = true
@@ -295,5 +315,42 @@ func (s *State) CancelCommand(scope application.Scope, id string) error {
 		return nil
 	}
 	s.Commands[key] = Command{Scope: scope, Cancelled: true}
+	return nil
+}
+
+// Recover only applies to instants missed before this scheduler session began.
+// A delayed live tick still emits the original NextAt, even past the lateness
+// window. Prepared deliveries are independent of this scheduling cursor.
+func (s *State) Recover(id string, cutoff time.Time) error {
+	j := s.Jobs[id]
+	if j == nil || j.CatchUp != "none" || !s.Control.Enabled || j.Status != "active" || j.NextAt.IsZero() || j.NextAt.After(cutoff) {
+		return nil
+	}
+	at, found, err := recurrence.Latest(j.Rule, j.Clock, cutoff)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return application.ErrConflict
+	}
+	occurrenceID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("calendar/"+j.Scope.FleetID+"/"+j.ID+"/"+at.UTC().Format(time.RFC3339Nano))).String()
+	if _, exists := s.Deliveries[occurrenceID]; !exists {
+		if len(s.Deliveries) >= 50000 {
+			return application.ErrConflict
+		}
+		s.Deliveries[occurrenceID] = &Delivery{Occurrence: Occurrence{ID: occurrenceID, ScheduleID: j.ID, ScheduleVersion: j.Version, Definition: j.Definition, ScheduledAt: at, State: "skipped", UpdatedAt: cutoff}, Scope: j.Scope, Epoch: j.Epoch, Finished: true, Settled: true}
+	}
+	j.Clock.LastEvaluatedAt = cutoff
+	j.Clock.LastEmittedScheduledAt = at
+	j.UpdatedAt = cutoff
+	next, found, err := recurrence.Next(j.Rule, j.Clock, cutoff)
+	if err != nil {
+		return err
+	}
+	j.NextAt = next
+	if !found {
+		j.Status = "completed"
+		j.NextAt = time.Time{}
+	}
 	return nil
 }

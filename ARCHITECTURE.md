@@ -74,7 +74,11 @@ Assistant text remains conversation content; tools and reasoning are disclosures
 Memory and Calendar work through their own transactions and outboxes. Their model
 jobs use ordinary scoped Runtime Workers and share owner scheduling/usage. An
 application credential cannot become a general user session or read arbitrary
-conversation history. Disabling an application preserves its business records.
+conversation history. Calendar Main triggers use a separate Runtime admission
+receipt and a private input identity; they do not bind Main to a Worker job.
+Cancellation and admission serialize on that receipt. Calendar policy checks and
+Runtime commits are not cross-service atomic, so cancellation remains pending
+until Runtime confirms whether admission already won. Disabling an application preserves its business records.
 
 ## Deployment
 

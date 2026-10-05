@@ -85,6 +85,11 @@ func (s *Store) transaction(ctx context.Context, scope application.Scope, write 
 	if err != nil {
 		return err
 	}
+	return transaction(ctx, tx, scope, write, fn)
+}
+
+func transaction(ctx context.Context, tx pgx.Tx, scope application.Scope, write bool, fn func(*calendar.State) error) error {
+	var err error
 	defer rollback(tx)
 	if err = purgeGate(ctx, tx, scope); err != nil {
 		return err

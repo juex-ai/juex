@@ -124,6 +124,7 @@ export interface CalendarDefinition {
   mode: string;
   agent_id?: string;
   rule: CalendarRule;
+  catch_up?: string;
   max_lateness_minutes: number;
 }
 
@@ -143,9 +144,12 @@ export interface CalendarOccurrence {
   mode: string;
   agent_id?: string;
   rule: CalendarRule;
+  catch_up?: string;
   max_lateness_minutes: number;
   scheduled_at: string;
   state: string;
+  main_thread_id?: string;
+  input_id?: string;
   worker_id?: string;
   operations?: Array<string>;
   updated_at: string;
@@ -186,6 +190,7 @@ export interface CalendarSchedule {
   mode: string;
   agent_id?: string;
   rule: CalendarRule;
+  catch_up?: string;
   max_lateness_minutes: number;
   version: number;
   status: string;
