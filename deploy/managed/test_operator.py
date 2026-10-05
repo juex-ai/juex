@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import sys
@@ -153,6 +154,62 @@ class RecoveryTests(unittest.TestCase):
         item["State"]["Running"]=False
         with patch.object(ops.hosted,"docker",side_effect=docker):
             self.assertEqual(len(ops.hosted.hosted_containers({"root":str(root),"workspace":str(root/"workspace")})),1)
+
+    def test_hosted_management_inherits_only_explicit_operator_credentials(self):
+        for environment in ({}, {"JUEX_MODEL_API_KEY": "model-secret", "JUEX_SMTP_CREDENTIAL": "smtp-secret"}):
+            with self.subTest(environment=list(environment)), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(ops.hosted, "compose") as compose:
+                ops.hosted.management({}, "models", "put")
+                arguments = compose.call_args.args[1:]
+                expected = ["run", "--rm", "--no-deps", "-T"]
+                for name in environment:
+                    expected.extend(["-e", name])
+                self.assertEqual(arguments, (*expected, "operator", "juex-management", "models", "put"))
+
+    def test_hosted_upgrade_removes_only_clean_owned_guests_before_replacing_binary(self):
+        config = {"root": str(self.root), "workspace": str(self.root / "workspace")}
+        for name in ("secrets", "control/env/control", "workspace/env/workspace", "workspace/env/home"):
+            (self.root / name).mkdir(parents=True)
+        for name in ("postgres-password", "master-key"):
+            (self.root / "secrets" / name).write_text("test-only")
+        proof = self.root / "workspace/env/home/keep"
+        proof.write_text("durable")
+        owned = {"Id": "owned", "Config": {"Labels": {"ai.juex.hosted.environment": "env"}},
+                 "Mounts": [{"Destination": target, "Source": str(self.root / source)} for target, source in (
+                     ("/var/lib/juex-control", "control/env/control"), ("/workspace", "workspace/env/workspace"),
+                     ("/home/agent", "workspace/env/home"))],
+                 "State": {"Running": False, "OOMKilled": False, "ExitCode": 143}}
+        foreign = {"Id": "foreign", "Config": owned["Config"], "Mounts": [
+            {"Destination": "/var/lib/juex-control", "Source": "/another/control/env/control"}],
+            "State": {"Running": False}}
+        calls = []
+        def docker(_, *args, **kwargs):
+            calls.append(args)
+            if args[0] == "ps": return SimpleNamespace(stdout=b"owned foreign\n")
+            if args[:2] == ("inspect", "--format"):
+                return SimpleNamespace(stdout=json.dumps(owned["State"]).encode())
+            if args[0] == "inspect":
+                return SimpleNamespace(stdout=json.dumps([owned if args[1] == "owned" else foreign]).encode())
+            if args[0] == "create": return SimpleNamespace(stdout=b"image-copy\n")
+            return SimpleNamespace(stdout=b"sha256:replacement\n")
+        args = SimpleNamespace(image="new-platform", hosted_image="new-guest")
+        with patch.object(ops.hosted, "docker", side_effect=docker), patch.object(ops.hosted, "render"):
+            ops.hosted.upgrade(config, args)
+        self.assertIn(("rm", "owned"), calls)
+        self.assertLess(calls.index(("rm", "owned")), next(i for i, call in enumerate(calls) if call[0] == "cp"))
+        self.assertFalse(any(call[0] in ("rm", "network") and "foreign" in call for call in calls))
+        self.assertFalse(any("-f" in call or "-v" in call or call[0] == "network" for call in calls))
+        self.assertEqual(proof.read_text(), "durable")
+        for state in ({"Running": True, "ExitCode": 0}, {"Running": False, "OOMKilled": True, "ExitCode": 0},
+                      {"Running": False, "ExitCode": 137}):
+            calls.clear()
+            with self.subTest(state=state), patch.object(ops.hosted, "hosted_containers", return_value=[owned]), \
+                    patch.object(ops.hosted, "docker", side_effect=docker), patch.object(ops.hosted, "render") as render:
+                owned["State"] = state
+                with self.assertRaisesRegex(RuntimeError, "cleanly"):
+                    ops.hosted.upgrade(config, args)
+                self.assertFalse(any(call[0] in ("rm", "cp", "create") for call in calls))
+                render.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -131,6 +131,18 @@ class HostDeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "public HTTPS gateway"):
                 host.healthy(config)
 
+    def test_gateway_quotes_deployment_paths_with_spaces(self):
+        root = self.base / "platform data"
+        (root / "secrets").mkdir(parents=True)
+        config = {"root": str(root), "rpc_base": 19741, "public_url": "https://example.test:19644",
+                  "workspace": "/workspaces", "identity": "identity", "local_tls": True,
+                  "http_port": 19640, "device_port": 19643, "https_port": 19644,
+                  "release": {"bin": "/release/bin", "operator": str(host.HERE)}}
+        host.render(config, "password", "master")
+        nginx = (root / "nginx.conf").read_text()
+        self.assertIn(f'ssl_certificate "{root}/tls/certificate.pem";', nginx)
+        self.assertIn(f'ssl_certificate_key "{root}/tls/key.pem";', nginx)
+
 
 if __name__ == "__main__":
     unittest.main()

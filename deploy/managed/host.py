@@ -164,12 +164,13 @@ def render(config, password, master_key, preserve=False):
     write_json(root / "host.json", host)
     write_json(root / "deployment.json", config)
     template = (Path(config["release"]["operator"]) / "nginx.conf").read_text()
-    template = template.replace("events {}", f'pid "{root}/run/nginx.pid";\nerror_log stderr;\nevents {{}}')
-    temporary = "".join(f'  {name}_temp_path "{root}/run/nginx-{name}";\n'
+    template = template.replace("events {}", f'pid {json.dumps(str(root / "run/nginx.pid"), ensure_ascii=False)};\nerror_log stderr;\nevents {{}}')
+    temporary = "".join(f'  {name}_temp_path {json.dumps(str(root / ("run/nginx-" + name)), ensure_ascii=False)};\n'
                         for name in ("client_body", "proxy", "fastcgi", "uwsgi", "scgi"))
     template = template.replace("http {", "http {\n  access_log off;\n" + temporary)
     template = template.replace("listen 443 ssl;", f'listen 0.0.0.0:{config["https_port"]} ssl;')
-    template = template.replace("/run/juex/tls", str(root / "tls"))
+    for name in ("certificate.pem", "key.pem"):
+        template = template.replace("/run/juex/tls/" + name, json.dumps(str(root / "tls" / name), ensure_ascii=False))
     template = template.replace("http://execution:8683", f'http://127.0.0.1:{config["device_port"]}')
     template = template.replace("http://management:8680", f'http://127.0.0.1:{config["http_port"]}')
     durable(root / "nginx.conf", template)
@@ -251,7 +252,7 @@ def initialize(args):
     run([Path(pg) / "initdb", "-D", root / "postgres", "-U", "juex", "--pwfile", root / "secrets/postgres-password",
          "--auth-local=scram-sha-256", "--auth-host=reject", "--encoding=UTF8", "--locale=C"])
     with (root / "postgres/postgresql.conf").open("a") as f:
-        f.write("\nlisten_addresses = ''\nunix_socket_directories = '" + str(root / "socket") + "'\nunix_socket_permissions = 0700\n")
+        f.write("\nlisten_addresses = ''\nunix_socket_directories = '" + str(root / "socket").replace("\\", "\\\\") + "'\nunix_socket_permissions = 0700\n")
     run([config["nginx"], "-e", "stderr", "-t", "-p", root, "-c", root / "nginx.conf"])
     (root / "maintenance/install-incomplete").unlink()
     sync_directory(root / "maintenance")
@@ -412,7 +413,7 @@ def restore(args, source, manifest, recovery):
     run([Path(pg) / "initdb", "-D", root / "postgres", "-U", "juex", "--pwfile", root / "secrets/postgres-password",
          "--auth-local=scram-sha-256", "--auth-host=reject", "--encoding=UTF8", "--locale=C"])
     with (root / "postgres/postgresql.conf").open("a") as f:
-        f.write("\nlisten_addresses = ''\nunix_socket_directories = '" + str(root / "socket") + "'\nunix_socket_permissions = 0700\n")
+        f.write("\nlisten_addresses = ''\nunix_socket_directories = '" + str(root / "socket").replace("\\", "\\\\") + "'\nunix_socket_permissions = 0700\n")
     start_database(config)
     with (source / "database.dump").open("rb") as input_file:
         run([Path(pg) / "pg_restore", "-h", root / "socket", "-U", "juex", "-d", "juex", "--no-owner", "--exit-on-error"],

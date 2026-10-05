@@ -297,7 +297,11 @@ def stop_writers(config, hosted):
 
 
 def management(config, *args, **kwargs):
-    return compose(config, "run", "--rm", "--no-deps", "-T", "operator", "juex-management", *args, **kwargs)
+    environment = []
+    for name in ("JUEX_MODEL_API_KEY", "JUEX_SMTP_CREDENTIAL"):
+        if name in os.environ:
+            environment.extend(("-e", name))
+    return compose(config, "run", "--rm", "--no-deps", "-T", *environment, "operator", "juex-management", *args, **kwargs)
 
 
 def quiesce(config, lock_fd):
@@ -377,6 +381,15 @@ def upgrade(config, args):
     updated = dict(config)
     for key in ("image", "hosted_image"):
         updated[key] = docker(config, "image", "inspect", getattr(args, key), "--format", "{{.Id}}").stdout.decode().strip()
+    guests = hosted_containers(config)
+    for item in guests:
+        state = json.loads(docker(config, "inspect", "--format", "{{json .State}}", item["Id"]).stdout)
+        if state["Running"] or state.get("OOMKilled") or state["ExitCode"] not in (0, 143):
+            raise RuntimeError("hosted guest did not stop cleanly; upgrade refused")
+    # Ensure verifies the pinned image and guest digest. Recreate only the
+    # stopped container; the owned network, Home, Workspace and journal survive.
+    for item in guests:
+        docker(config, "rm", item["Id"])
     root = Path(config["root"])
     container = docker(updated, "create", updated["image"], "/bin/true").stdout.decode().strip()
     try:

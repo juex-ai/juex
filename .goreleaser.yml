@@ -1,6 +1,12 @@
 project_name: juex
 version: 2
 
+before:
+  hooks:
+    - pnpm --dir frontend install --frozen-lockfile
+    - pnpm --dir frontend build
+    - make web-sync
+
 builds:
   - id: juex
     main: ./cmd/juex
