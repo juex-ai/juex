@@ -38,7 +38,7 @@ func TestManagementAgentOwnershipModelsAndLifecycle(t *testing.T) {
 	if _, err := d.AcceptInvitation(ctx, member.ID, token); err != nil {
 		t.Fatal(err)
 	}
-	config := management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: "http://localhost:12345/v1", APIKey: "a-private-provider-secret", ContextWindow: 32768, MaxOutput: 4096, Enabled: true}
+	config := management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: "http://localhost:12345/v1", APIKey: "a-private-provider-secret", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096, Enabled: true}
 	model, err := d.ConfigureModel(ctx, config)
 	if err != nil {
 		t.Fatal(err)

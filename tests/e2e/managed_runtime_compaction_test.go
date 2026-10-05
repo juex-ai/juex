@@ -44,7 +44,7 @@ func seedCompaction(t *testing.T, store *runtimepg.Store, scope managedruntime.S
 		if err != nil {
 			t.Fatal(err)
 		}
-		attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Purpose: "conversation"})
+		attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Purpose: "conversation"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +97,7 @@ func TestManagedRuntimeCompactionCheckpointSurvivesRestartAndQueuedInput(t *test
 	if recovered.Compaction == nil || recovered.Compaction.ID != request.Compaction.JobID || recovered.Compaction.Attempts != 1 || recovered.ContextSequence != work.ContextSequence {
 		t.Fatal("lost compaction source", recovered)
 	}
-	if _, err := store.BeginAttempt(ctx, replacement, work.TurnID, managedruntime.ModelRequest{Purpose: "conversation"}); !errors.Is(err, managedruntime.ErrConflict) {
+	if _, err := store.BeginAttempt(ctx, replacement, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Purpose: "conversation"}); !errors.Is(err, managedruntime.ErrConflict) {
 		t.Fatal("bypassed pending compaction", err)
 	}
 	retried, err := store.BeginAttempt(ctx, replacement, work.TurnID, request)
@@ -130,7 +130,7 @@ func TestManagedRuntimeCompactionCheckpointSurvivesRestartAndQueuedInput(t *test
 	if err != nil || !strings.Contains(page.Text, "Historical verified") {
 		t.Fatal("original history lost", page, err)
 	}
-	nextAttempt, err := store.BeginAttempt(ctx, replacement, current.TurnID, managedruntime.ModelRequest{Purpose: "conversation", Generation: current.Generation})
+	nextAttempt, err := store.BeginAttempt(ctx, replacement, current.TurnID, managedruntime.ModelRequest{MaxOutputTokens: current.Config.Models[current.ModelIndex].MaxOutput, Purpose: "conversation", Generation: current.Generation})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestManagedRuntimeAutomaticCompactionContinuesOriginalTurn(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Purpose: "conversation"})
+				attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Purpose: "conversation"})
 				if err != nil {
 					t.Fatal(err)
 				}

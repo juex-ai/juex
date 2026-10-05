@@ -36,7 +36,7 @@ func (d *Directory) SnapshotPlan(ctx context.Context, scope management.ModelCall
 	plan.Extensions = authority.Agent.Extensions
 	plan.AgentVersion, plan.Instructions, plan.RequestedModelID = authority.Agent.Version, authority.Agent.Instructions, authority.ModelID
 	rows, err := tx.Query(ctx, `WITH wanted AS (SELECT $2::uuid AS id,0 AS ordinal UNION ALL SELECT fallback_id,ordinal FROM management.model_fallbacks WHERE model_id=$2)
- SELECT m.id,m.provider,m.name,m.protocol,m.endpoint,m.context_window,m.max_output,m.authorization_epoch,COALESCE(e.epoch,1)
+ SELECT m.id,m.provider,m.name,m.protocol,m.endpoint,m.context_window,m.max_output,m.output_reserve,m.authorization_epoch,COALESCE(e.epoch,1)
  FROM wanted w JOIN management.models m ON m.id=w.id LEFT JOIN management.tenant_model_epochs e ON e.model_id=m.id AND e.tenant_id=$1
  WHERE m.enabled AND `+modelVisible+` ORDER BY w.ordinal`, scope.TenantID, authority.ModelID)
 	if err != nil {
@@ -44,7 +44,7 @@ func (d *Directory) SnapshotPlan(ctx context.Context, scope management.ModelCall
 	}
 	for rows.Next() {
 		var candidate management.ModelCandidate
-		if err := rows.Scan(&candidate.ModelID, &candidate.Provider, &candidate.Model, &candidate.Protocol, &candidate.Endpoint, &candidate.ContextWindow, &candidate.MaxOutput, &candidate.ModelAuthorizationEpoch, &candidate.TenantAccessEpoch); err != nil {
+		if err := rows.Scan(&candidate.ModelID, &candidate.Provider, &candidate.Model, &candidate.Protocol, &candidate.Endpoint, &candidate.ContextWindow, &candidate.MaxOutput, &candidate.OutputReserve, &candidate.ModelAuthorizationEpoch, &candidate.TenantAccessEpoch); err != nil {
 			rows.Close()
 			return plan, err
 		}
@@ -77,14 +77,14 @@ func (d *Directory) ResolveCandidate(ctx context.Context, scope management.Model
 	}
 	var current management.ModelCandidate
 	var cipher []byte
-	err = tx.QueryRow(ctx, `SELECT m.id,m.provider,m.name,m.protocol,m.endpoint,m.authorization_epoch,COALESCE(e.epoch,1),m.key_cipher FROM management.models m LEFT JOIN management.tenant_model_epochs e ON e.model_id=m.id AND e.tenant_id=$1 WHERE m.id=$2 AND m.enabled AND `+modelVisible, scope.TenantID, candidate.ModelID).Scan(&current.ModelID, &current.Provider, &current.Model, &current.Protocol, &current.Endpoint, &current.ModelAuthorizationEpoch, &current.TenantAccessEpoch, &cipher)
+	err = tx.QueryRow(ctx, `SELECT m.id,m.provider,m.name,m.protocol,m.endpoint,m.context_window,m.max_output,m.output_reserve,m.authorization_epoch,COALESCE(e.epoch,1),m.key_cipher FROM management.models m LEFT JOIN management.tenant_model_epochs e ON e.model_id=m.id AND e.tenant_id=$1 WHERE m.id=$2 AND m.enabled AND `+modelVisible, scope.TenantID, candidate.ModelID).Scan(&current.ModelID, &current.Provider, &current.Model, &current.Protocol, &current.Endpoint, &current.ContextWindow, &current.MaxOutput, &current.OutputReserve, &current.ModelAuthorizationEpoch, &current.TenantAccessEpoch, &cipher)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", management.ErrModelUnavailable
 	}
 	if err != nil {
 		return "", classify(err)
 	}
-	if candidate.Provider != current.Provider || candidate.Model != current.Model || candidate.Protocol != current.Protocol || candidate.Endpoint != current.Endpoint || candidate.ModelAuthorizationEpoch != current.ModelAuthorizationEpoch || candidate.TenantAccessEpoch != current.TenantAccessEpoch {
+	if candidate != current {
 		return "", management.ErrModelUnavailable
 	}
 	key, err := d.config.Secrets.Open("model:"+candidate.ModelID, cipher)
