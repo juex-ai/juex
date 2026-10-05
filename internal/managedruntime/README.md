@@ -78,6 +78,14 @@ Context checkpoints store an ordered message prefix and its event watermark.
 Continuation appends messages after that watermark in the current generation;
 native compaction and imported context use the same projection and recovery path.
 
+Conversation images retain immutable Execution Artifact references. Before a
+model request, the injected media reader reauthorizes those references and checks
+their bytes against the stored hashes. Bytes exist only for that request, never
+in Runtime persistence or a local media directory. Missing, revoked or oversized
+images hold the input before a model attempt; they are not silently replaced by
+text. The dashboard reads the same authorized Artifacts and reports unavailable
+images explicitly. Deleting an Artifact does not erase its historical reference.
+
 All Activation writes lock and validate the database lease. A replacement
 increments its fencing epoch. An expired instance cannot publish its answer.
 Recovery retains the original Turn and marks unacknowledged model attempts

@@ -106,3 +106,13 @@ test('compaction control and failures stay separate from user messages', () => {
   if (rows[2].kind === 'notice') assert.match(rows[2].text, /未完成.*原始内容保留/)
   if (rows[3].kind === 'notice') assert.match(rows[3].text, /无需压缩/)
 })
+
+test('unavailable image pauses input with an attachment-specific explanation', () => {
+  const rows = projectTranscript([
+    event(1, 'input.accepted', { receipt: { id: 'input' }, text: 'Describe this image' }),
+    event(2, 'input.held', { input_id: 'input', reason: 'media_unavailable' }),
+  ])
+  if (rows[0].kind !== 'message') assert.fail('missing held input')
+  assert.match(rows[0].status, /图片.*暂停/)
+  assert.doesNotMatch(rows[0].status, /授权已改变/)
+})

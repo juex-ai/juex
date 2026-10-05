@@ -41,7 +41,7 @@ func EstimateMessageTokens(history []Message) int {
 }
 
 func EstimateMediaReferenceChars(media *MediaRef) int {
-	chars := len(media.ArtifactPath) + len(media.MediaType) + len(media.SHA256) + 24
+	chars := len(media.ArtifactID) + len(media.ArtifactPath) + len(media.MediaType) + len(media.SHA256) + 24
 	imageTokens := 85
 	if media.Width > 0 && media.Height > 0 {
 		pixels := int64(media.Width) * int64(media.Height)

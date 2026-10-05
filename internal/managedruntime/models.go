@@ -42,6 +42,13 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 		var planErr error
 		if work.Source.Kind == "compaction" || work.Compaction != nil || compactionNeeded(work, request, model) {
 			request, planErr = planCompaction(work, base, model)
+			if planErr == nil {
+				// The summary body contains textual references. Validate the source
+				// before that projection can summarize an unavailable image away.
+				if _, err := hydrateMedia(ctx, r.config.Media, work.Scope, work.History); err != nil {
+					return nil, request, err
+				}
+			}
 			if errors.Is(planErr, ErrNoCompaction) && work.Source.Kind != "compaction" {
 				planErr = ErrContextLimit
 			}
@@ -64,6 +71,11 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 			return nil, request, planErr
 		}
 		if planErr == nil && llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+request.MaxOutputTokens+contextSafety(model) <= model.ContextWindow {
+			messages, err := hydrateMedia(ctx, r.config.Media, work.Scope, request.Messages)
+			if err != nil {
+				return nil, request, err
+			}
+			request.Messages = messages
 			provider, err := r.authority.Provider(ctx, work.Scope, model)
 			if err == nil {
 				return provider, request, nil

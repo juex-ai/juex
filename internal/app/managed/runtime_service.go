@@ -75,6 +75,7 @@ func OpenRuntime(ctx context.Context, config RuntimeConfig) (*Runtime, error) {
 		}
 		config.Runner.Tools = RuntimeTools{Client: client}
 		config.Runner.Files = RuntimeTools{Client: client}
+		config.Runner.Media = RuntimeTools{Client: client}
 	}
 	runner, err := managedruntime.NewRunner(store, authority, config.Runner)
 	if err != nil {

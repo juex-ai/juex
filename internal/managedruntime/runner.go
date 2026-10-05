@@ -38,6 +38,7 @@ type RunnerConfig struct {
 	Applications      ApplicationGateway
 	Tools             ToolGateway
 	Files             FileGateway
+	Media             MediaGateway
 	Concurrency       int
 	IdleTimeout       time.Duration
 	PollInterval      time.Duration
@@ -418,6 +419,9 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	}
 	if errors.Is(err, ErrModelUnavailable) {
 		return r.store.HoldInput(ctx, lease, pending.InputID, "model_unavailable")
+	}
+	if errors.Is(err, ErrMediaUnavailable) {
+		return r.store.HoldInput(ctx, lease, pending.InputID, "media_unavailable")
 	}
 	if err != nil {
 		return err

@@ -467,6 +467,7 @@ export interface Manifest {
 }
 
 export interface MediaRef {
+  artifact_id?: string;
   artifact_path?: string;
   media_type?: string;
   sha256?: string;

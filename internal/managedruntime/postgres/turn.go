@@ -467,7 +467,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 // HoldInput prevents revoked work from automatically running after a later
 // membership/Agent restore. Releasing it requires a new authorized user action.
 func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, inputID, reason string) error {
-	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" && reason != "instructions_unavailable" {
+	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" && reason != "instructions_unavailable" && reason != "media_unavailable" {
 		return managedruntime.ErrInvalid
 	}
 	tx, err := s.begin(ctx)

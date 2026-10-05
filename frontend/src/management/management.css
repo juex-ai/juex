@@ -110,6 +110,9 @@
 .management-message.from-user { padding: 16px 18px; background: var(--juex-cream-100); border-radius: 6px; }
 .management-user-text { white-space: pre-wrap; }
 .management-message-status { display: block; margin-top: 8px; font-size: 10px; color: var(--juex-ink-600); }
+.management-message-media { margin: 12px 0; max-width: 100%; }
+.management-message-media img { display: block; max-width: 100%; max-height: 480px; object-fit: contain; margin-bottom: 8px; }
+.management-media-error { font-size: 12px; color: var(--juex-ink-600); }
 .management-turn-notice,.management-working { margin: 16px 0; font-size: 12px; color: var(--juex-ink-600); }
 .management-working { display: flex; gap: 8px; align-items: center; }
 .management-tool-row { font-size: 12px; color: var(--juex-ink-600); padding: 7px 0; border-top: 1px solid var(--juex-cream-200); }
