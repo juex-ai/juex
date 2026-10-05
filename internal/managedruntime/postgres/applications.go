@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/juex-ai/juex/internal/managedruntime"
@@ -79,7 +78,7 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 		// Application idempotency lives in its job row. Ordinary user-selected
 		// Worker request IDs must never be able to pre-create this private context.
 		var created string
-		if err := tx.QueryRow(ctx, `INSERT INTO runtime.threads(agent_id,parent_id,kind,name) VALUES($1,$2,'worker',$3) RETURNING id`, scope.AgentID, parent.ID, job.Name).Scan(&created); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO runtime.threads(agent_id,parent_id,kind,name,application) VALUES($1,$2,'worker',$3,$4) RETURNING id`, scope.AgentID, parent.ID, job.Name, job.Application).Scan(&created); err != nil {
 			return managedruntime.ApplicationReceipt{}, err
 		}
 		if err := appendEvent(ctx, tx, created, "thread.created", map[string]string{"kind": "worker", "parent_id": parent.ID, "application": job.Application, "job_id": job.ID}); err != nil {
@@ -210,15 +209,15 @@ func (s *Store) ThreadApplication(ctx context.Context, scope managedruntime.Scop
 	}
 	var encoded, stored []byte
 	var cancelled bool
-	var imported string
-	err = tx.QueryRow(ctx, `SELECT request,scope,cancelled,import_state FROM runtime.application_jobs WHERE thread_id=$1 AND agent_id=$2`, thread, scope.AgentID).Scan(&encoded, &stored, &cancelled, &imported)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, tx.Commit(ctx)
-	}
+	var purpose, app, imported string
+	err = tx.QueryRow(ctx, `SELECT t.application,COALESCE(j.application,''),j.request,j.scope,COALESCE(j.cancelled,false),COALESCE(j.import_state,'') FROM runtime.threads t LEFT JOIN runtime.application_jobs j ON j.thread_id=t.id WHERE t.id=$1 AND t.agent_id=$2`, thread, scope.AgentID).Scan(&purpose, &app, &encoded, &stored, &cancelled, &imported)
 	if err != nil {
 		return nil, classify(err)
 	}
-	if imported != "" {
+	if purpose == "" && app == "" {
+		return nil, tx.Commit(ctx)
+	}
+	if purpose == "" || purpose != app || imported != "" {
 		return nil, managedruntime.ErrDenied
 	}
 	var job managedruntime.ApplicationJob
@@ -236,18 +235,18 @@ func (s *Store) ThreadApplication(ctx context.Context, scope managedruntime.Scop
 }
 
 func applicationInput(ctx context.Context, tx pgx.Tx, thread string, source managedruntime.InputSource) error {
-	var app, id string
-	err := tx.QueryRow(ctx, `SELECT application,job_id FROM runtime.application_jobs WHERE thread_id=$1`, thread).Scan(&app, &id)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var purpose, app, id, imported string
+	err := tx.QueryRow(ctx, `SELECT t.application,COALESCE(j.application,''),COALESCE(j.job_id,''),COALESCE(j.import_state,'') FROM runtime.threads t LEFT JOIN runtime.application_jobs j ON j.thread_id=t.id WHERE t.id=$1`, thread).Scan(&purpose, &app, &id, &imported)
+	if err != nil {
+		return classify(err)
+	}
+	if purpose == "" && app == "" {
 		if source.Kind == "application" {
 			return managedruntime.ErrDenied
 		}
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if source.Kind != "application" || source.Application != app || source.ApplicationJobID != id {
+	if purpose == "" || purpose != app || imported != "" || source.Kind != "application" || source.Application != app || source.ApplicationJobID != id {
 		return managedruntime.ErrDenied
 	}
 	return nil
@@ -257,14 +256,15 @@ func applicationAttempt(ctx context.Context, tx pgx.Tx, thread string, request m
 	var encoded []byte
 	var cancelled bool
 	var attempts int
-	err := tx.QueryRow(ctx, `SELECT j.request,j.cancelled,(SELECT count(*) FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE t.thread_id=j.thread_id) FROM runtime.application_jobs j WHERE j.thread_id=$1`, thread).Scan(&encoded, &cancelled, &attempts)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var purpose, app, imported string
+	err := tx.QueryRow(ctx, `SELECT th.application,COALESCE(j.application,''),COALESCE(j.import_state,''),j.request,COALESCE(j.cancelled,false),(SELECT count(*) FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE t.thread_id=j.thread_id) FROM runtime.threads th LEFT JOIN runtime.application_jobs j ON j.thread_id=th.id WHERE th.id=$1`, thread).Scan(&purpose, &app, &imported, &encoded, &cancelled, &attempts)
+	if err != nil {
+		return classify(err)
+	}
+	if purpose == "" && app == "" {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if cancelled {
+	if purpose == "" || purpose != app || imported != "" || cancelled {
 		return managedruntime.ErrDenied
 	}
 	var job managedruntime.ApplicationJob

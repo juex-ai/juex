@@ -190,6 +190,64 @@ func TestManagedRuntimeImportModelOriginsRemainThreadScoped(t *testing.T) {
 	}
 }
 
+func TestManagedRuntimeImportRetainsSeveralApplicationWorkersWithoutJobs(t *testing.T) {
+	pool, store, scope, _ := runtimeDatabase(t)
+	scope.AgentID = uuid.NewString()
+	ctx := context.Background()
+	data := runtimeImportFixture(t, scope.AgentID)
+	data.Threads[1].Application = &managedruntime.ImportedApplication{Application: "memory"}
+	for range 2 {
+		worker := data.Threads[1]
+		worker.Thread.ID = uuid.NewString()
+		data.Threads = append(data.Threads, worker)
+	}
+	if err := store.ImportAgent(ctx, scope, data); err != nil {
+		t.Fatal("multiple historical roles rejected", err)
+	}
+	store = runtimepg.New(pool)
+	threads, err := store.Threads(ctx, scope)
+	if err != nil || len(threads) != 4 {
+		t.Fatal("historical Worker identities were merged", len(threads), err)
+	}
+	for _, thread := range threads {
+		if thread.Kind == "main" {
+			continue
+		}
+		if thread.Application != "memory" {
+			t.Fatal("historical restriction lost", thread.ID)
+		}
+		if _, err := store.SetThreadArchived(ctx, scope, thread.ID, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: "ordinary", ThreadID: thread.ID, Text: "run a command"}); !errors.Is(err, managedruntime.ErrDenied) {
+			t.Fatal("historical role accepted ordinary input", err)
+		}
+		if _, err := store.AcceptCompaction(ctx, scope, thread.ID, managedruntime.CompactionRequest{RequestID: "compact"}); !errors.Is(err, managedruntime.ErrDenied) {
+			t.Fatal("historical role accepted compaction input", err)
+		}
+		if _, err := store.CreateWorker(ctx, scope, thread.ID, "child", "Child"); !errors.Is(err, managedruntime.ErrDenied) {
+			t.Fatal("historical role created an unrestricted child", err)
+		}
+		if _, err := store.ThreadApplication(ctx, scope, thread.ID); !errors.Is(err, managedruntime.ErrDenied) {
+			t.Fatal("historical role regained execution authority", err)
+		}
+		job := applicationJob()
+		job.IdleSourceThread = thread.ID
+		if _, err := store.AdmitApplication(ctx, scope, job); !errors.Is(err, managedruntime.ErrDenied) {
+			t.Fatal("historical application became automatic human evidence source", err)
+		}
+	}
+	for _, table := range []string{"application_jobs", "attempts", "notification_outbox"} {
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.`+table).Scan(&count); err != nil || count != 0 {
+			t.Fatal("import fabricated jobs or work", table, count, err)
+		}
+	}
+	if err := store.ImportAgent(ctx, scope, data); err != nil {
+		t.Fatal("historical role retry was not idempotent", err)
+	}
+}
+
 func TestManagedRuntimeImportIsAtomicAndIdempotent(t *testing.T) {
 	pool, store, scope, _ := runtimeDatabase(t)
 	ctx := context.Background()

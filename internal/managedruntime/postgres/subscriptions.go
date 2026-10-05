@@ -246,6 +246,13 @@ func (s *Store) FinishObservationDelivery(ctx context.Context, delivery managedr
 	if !enabled || generation != delivery.Generation || thread.Retention != "active" {
 		return tx.Commit(ctx)
 	}
+	if valid && thread.Application != "" {
+		// Calendar jobs can explicitly observe their environment within the same
+		// job budget. Historical purpose alone never grants that authority.
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs WHERE thread_id=$1 AND application=$2 AND application='calendar' AND import_state='' AND NOT cancelled)`, thread.ID, thread.Application).Scan(&valid); err != nil {
+			return err
+		}
+	}
 	if !valid {
 		if _, err = tx.Exec(ctx, `UPDATE runtime.subscriptions SET enabled=false,generation=generation+1 WHERE id=$1`, delivery.SubscriptionID); err != nil {
 			return err

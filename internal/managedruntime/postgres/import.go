@@ -60,7 +60,7 @@ func (s *Store) ImportAgent(ctx context.Context, scope managedruntime.Scope, val
 	// determine topology. All rows stay invisible until the transaction commits.
 	for _, imported := range value.Threads {
 		t := imported.Thread
-		if _, err := tx.Exec(ctx, `INSERT INTO runtime.threads(id,agent_id,kind,name,retention,state,generation,sequence,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, t.ID, scope.AgentID, t.Kind, t.Name, t.Retention, t.State, t.Generation, t.Sequence, t.CreatedAt, t.UpdatedAt); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.threads(id,agent_id,kind,name,retention,state,generation,sequence,created_at,updated_at,application) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, t.ID, scope.AgentID, t.Kind, t.Name, t.Retention, t.State, t.Generation, t.Sequence, t.CreatedAt, t.UpdatedAt, t.Application); err != nil {
 			return classify(err)
 		}
 	}
@@ -102,7 +102,7 @@ func importThread(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, im
 			return err
 		}
 	}
-	if app := imported.Application; app != nil {
+	if app := imported.Application; app != nil && app.JobID != "" {
 		if _, err := tx.Exec(ctx, `INSERT INTO runtime.application_jobs(application,fleet_id,job_id,agent_id,scope,thread_id,input_id,import_state,created_at) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,$8,$9)`, app.Application, scope.FleetID, app.JobID, scope.AgentID, scope, t.ID, app.InputID, app.State, t.CreatedAt); err != nil {
 			return err
 		}

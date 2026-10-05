@@ -75,6 +75,9 @@ var instructionsSchema string
 //go:embed import_schema.sql
 var importSchema string
 
+//go:embed thread_application_schema.sql
+var threadApplicationSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -89,7 +92,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, importSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, importSchema, threadApplicationSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -296,7 +299,7 @@ func acceptThreadInput(ctx context.Context, tx pgx.Tx, scope managedruntime.Scop
 
 type scanner interface{ Scan(...any) error }
 
-const threadColumns = `COALESCE((SELECT j.application FROM runtime.application_jobs j WHERE j.thread_id=t.id),''),t.id,t.agent_id,COALESCE(t.parent_id::text,''),t.kind,t.name,t.retention,t.state,t.generation,t.sequence,
+const threadColumns = `t.application,t.id,t.agent_id,COALESCE(t.parent_id::text,''),t.kind,t.name,t.retention,t.state,t.generation,t.sequence,
 (SELECT count(*) FROM runtime.inputs i WHERE i.thread_id=t.id AND i.state IN ('queued','active')),
 (SELECT count(*) FROM runtime.inputs i WHERE i.thread_id=t.id AND i.state='held'),t.created_at,t.updated_at`
 

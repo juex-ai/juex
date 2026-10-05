@@ -69,3 +69,19 @@ func TestAgentImportPreservesEmptyRenewedContext(t *testing.T) {
 		t.Fatal("empty renewal context rejected", err)
 	}
 }
+
+func TestAgentImportRetainsApplicationPurposeWithoutInventingAJob(t *testing.T) {
+	agent, value := validImport(t)
+	main := value.Threads[0].Thread
+	for range 3 {
+		worker := Thread{ID: uuid.NewString(), AgentID: agent, ParentID: main.ID, Kind: "worker", Name: "Historical Memory Worker", Application: "memory", Retention: "active", State: "idle", Generation: 1, CreatedAt: main.CreatedAt, UpdatedAt: main.UpdatedAt}
+		value.Threads = append(value.Threads, ImportedThread{Thread: worker, Application: &ImportedApplication{Application: "memory"}})
+	}
+	if err := value.Validate(agent); err != nil {
+		t.Fatal("historical purpose requires a fabricated job", err)
+	}
+	value.Threads[1].Application.State = "completed"
+	if err := value.Validate(agent); err == nil {
+		t.Fatal("purpose-only import invented a job outcome")
+	}
+}

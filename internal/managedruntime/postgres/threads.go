@@ -40,11 +40,7 @@ func createWorker(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, pa
 	if !scope.Capabilities.Allows(agentpolicy.Workers) {
 		return managedruntime.Thread{}, managedruntime.ErrDenied
 	}
-	var applicationParent bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs WHERE thread_id=$1)`, parent.ID).Scan(&applicationParent); err != nil {
-		return managedruntime.Thread{}, err
-	}
-	if applicationParent {
+	if parent.Application != "" {
 		return managedruntime.Thread{}, managedruntime.ErrDenied
 	}
 	if strings.TrimSpace(name) == "" || len([]rune(name)) > 100 {

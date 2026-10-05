@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +62,21 @@ func ConvertRuntime(scope managedruntime.Scope, source legacy.Agent, bindings Ru
 	if err != nil {
 		return RuntimeConversion{}, err
 	}
+	roles, err := c.applicationRoles(source)
+	if err != nil {
+		return RuntimeConversion{}, err
+	}
+	bindings.Applications = maps.Clone(bindings.Applications)
+	if bindings.Applications == nil {
+		bindings.Applications = map[string]managedruntime.ImportedApplication{}
+	}
+	for thread := range roles {
+		purpose := managedruntime.ImportedApplication{Application: "memory"}
+		if existing, ok := bindings.Applications[thread]; ok && existing != purpose {
+			return RuntimeConversion{}, errors.New("source historical Worker purpose cannot be replaced with a job")
+		}
+		bindings.Applications[thread] = purpose
+	}
 	for thread := range bindings.Applications {
 		if _, exists := c.threads[thread]; !exists {
 			return RuntimeConversion{}, errors.New("application binding names an unknown source Thread")
@@ -70,14 +85,6 @@ func ConvertRuntime(scope managedruntime.Scope, source legacy.Agent, bindings Ru
 	for thread := range bindings.ModelOrigins {
 		if _, exists := c.threads[thread]; !exists {
 			return RuntimeConversion{}, errors.New("model binding names an unknown source Thread")
-		}
-	}
-	for _, file := range source.Files {
-		if strings.HasPrefix(file.Path, "modules/memory-client/workers/") {
-			thread := strings.TrimSuffix(path.Base(file.Path), ".json")
-			if bindings.Applications[thread].Application != "memory" {
-				return RuntimeConversion{}, errors.New("source Memory Worker requires a verified application binding")
-			}
 		}
 	}
 	result := RuntimeConversion{
@@ -92,6 +99,12 @@ func ConvertRuntime(scope managedruntime.Scope, source legacy.Agent, bindings Ru
 		result.Identities.Messages[id], result.Identities.Inputs[id], result.Identities.Turns[id] = map[string]string{}, map[string]string{}, map[string]string{}
 		if err := tc.convert(thread, bindings); err != nil {
 			return RuntimeConversion{}, fmt.Errorf("source Thread %s: %w", id, err)
+		}
+		if role, exists := roles[id]; exists {
+			if err := tc.appendEvent("application", role.AssignmentID, "import.application", tc.value.Thread.Generation, tc.value.Thread.UpdatedAt, role); err != nil {
+				return RuntimeConversion{}, err
+			}
+			tc.value.Thread.Sequence = int64(len(tc.value.Events))
 		}
 		result.Import.Threads = append(result.Import.Threads, tc.value)
 		result.CommitSpans[id] = tc.spans

@@ -240,7 +240,7 @@ func (s *Store) FinishThreadDelivery(ctx context.Context, delivery managedruntim
 	if !enabled || generation != delivery.Generation || thread.Retention != "active" {
 		return tx.Commit(ctx)
 	}
-	if !valid {
+	if !valid || thread.Application != "" {
 		if _, err = tx.Exec(ctx, `UPDATE runtime.thread_subscriptions SET enabled=false,generation=generation+1 WHERE id=$1`, delivery.SubscriptionID); err != nil {
 			return err
 		}

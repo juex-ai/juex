@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,8 +45,15 @@ func TestManagedRuntimeCheckpointMigrationKeepsLaterMessages(t *testing.T) {
 	}
 	scope := managedruntime.Scope{TenantID: uuid.NewString(), UserID: uuid.NewString(), FleetID: uuid.NewString(), AgentID: uuid.NewString(), ActorID: uuid.NewString(), ActorAuthorizationEpoch: 1, MembershipVersion: 1, MembershipExecutionEpoch: 1, AgentExecutionEpoch: 1}
 	store := runtimepg.New(pool)
-	main, err := store.EnsureAgent(ctx, scope)
-	if err != nil {
+	// Seed the deployed shape directly: current Store reads the latest columns.
+	main := managedruntime.Thread{ID: uuid.NewString()}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.agents(id,tenant_id,user_id,fleet_id) VALUES($1,$2,$3,$4)`, scope.AgentID, scope.TenantID, scope.UserID, scope.FleetID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.threads(id,agent_id,kind,name) VALUES($1,$2,'main','Main')`, main.ID, scope.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.events(thread_id,sequence,generation,kind,data) VALUES($1,1,1,'thread.created','{}')`, main.ID); err != nil {
 		t.Fatal(err)
 	}
 	data := runtimeImportFixture(t, scope.AgentID).Threads[0]
@@ -76,9 +84,28 @@ func TestManagedRuntimeCheckpointMigrationKeepsLaterMessages(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE runtime.threads SET generation=2,sequence=5 WHERE id=$1`, main.ID); err != nil {
 		t.Fatal(err)
 	}
+	workers := map[string]string{"memory": uuid.NewString(), "calendar": uuid.NewString()}
+	encodedScope, _ := json.Marshal(scope)
+	for app, worker := range workers {
+		if _, err := pool.Exec(ctx, `INSERT INTO runtime.threads(id,agent_id,parent_id,kind,name) VALUES($1,$2,$3,'worker',$4)`, worker, scope.AgentID, main.ID, app); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO runtime.application_jobs(application,fleet_id,job_id,agent_id,scope,thread_id,cancelled) VALUES($1,$2,$1,$3,$4,$5,true)`, app, scope.FleetID, scope.AgentID, encodedScope, worker); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for range 2 {
 		if err := runtimepg.Migrate(ctx, pool); err != nil {
 			t.Fatal(err)
+		}
+	}
+	for app, worker := range workers {
+		page, err := store.Timeline(ctx, scope, worker, 0, 10)
+		if err != nil || page.Thread.Application != app {
+			t.Fatal("deployed application purpose not backfilled", app, page.Thread.Application, err)
+		}
+		if _, err := store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: "after-upgrade", ThreadID: worker, Text: "unrelated task"}); !errors.Is(err, managedruntime.ErrDenied) {
+			t.Fatal("upgrade removed application input restriction", app, err)
 		}
 	}
 	var through int64

@@ -129,7 +129,6 @@ func TestRuntimeConversionRejectsUnprovenContextAndOwnership(t *testing.T) {
 
 func TestRuntimeConversionPreservesRestrictedApplicationBindings(t *testing.T) {
 	scope, source, bindings := runtimeFixture()
-	source.Files = []legacy.SourceFile{{Path: "modules/memory-client/workers/abcdef.json"}}
 	bindings.Applications = map[string]managedruntime.ImportedApplication{"abcdef": {Application: "memory", JobID: "converted-history-role", State: "failed"}}
 	value, err := ConvertRuntime(scope, source, bindings)
 	if err != nil || value.Import.Threads[1].Thread.Application != "memory" || value.Import.Threads[1].Application.State != "failed" {

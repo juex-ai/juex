@@ -31,13 +31,15 @@ type ImportedInput struct {
 	Text string `json:"text"`
 }
 
-// Imported application work retains its purpose and terminal outcome but does
-// not carry execution authority from a previous deployment.
+// Imported application work retains its purpose without carrying execution
+// authority. A purpose-only historical Worker has no JobID, InputID or State;
+// several such Workers may belong to one source application's business review.
+// A proven one-to-one job can additionally retain its terminal outcome.
 type ImportedApplication struct {
 	Application string `json:"application"`
-	JobID       string `json:"job_id"`
+	JobID       string `json:"job_id,omitempty"`
 	InputID     string `json:"input_id,omitempty"`
-	State       string `json:"state"`
+	State       string `json:"state,omitempty"`
 }
 
 func (v AgentImport) Validate(agent string) error {
@@ -109,13 +111,19 @@ func (v AgentImport) Validate(agent string) error {
 			threadInputs[input.ID] = input
 		}
 		if app := imported.Application; app != nil {
-			key := app.Application + "/" + app.JobID
-			if (app.Application != "memory" && app.Application != "calendar") || app.JobID == "" || len(app.JobID) > 128 || jobs[key] || !importTerminal(app.State) || (app.InputID != "" && threadInputs[app.InputID].State != app.State) {
+			if (app.Application != "memory" && app.Application != "calendar") || t.Application != app.Application {
 				return ErrInvalid
 			}
-			jobs[key] = true
-			if t.Application != app.Application {
-				return ErrInvalid
+			if app.JobID == "" {
+				if app.InputID != "" || app.State != "" {
+					return ErrInvalid
+				}
+			} else {
+				key := app.Application + "/" + app.JobID
+				if len(app.JobID) > 128 || jobs[key] || !importTerminal(app.State) || (app.InputID != "" && threadInputs[app.InputID].State != app.State) {
+					return ErrInvalid
+				}
+				jobs[key] = true
 			}
 		} else if t.Application != "" {
 			return ErrInvalid

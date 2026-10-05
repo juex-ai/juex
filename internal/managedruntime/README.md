@@ -70,8 +70,11 @@ One transaction binds the source and payload hashes to its owner and retains
 Threads, terminal inputs, events and an ordered context checkpoint. Exact retries
 acknowledge the original import without rewriting subsequent work. Historical
 insertion creates no notifications, model attempts or runnable jobs. Imported
-application Workers retain their terminal purpose and cannot regain execution
-authority. Verified per-message model provenance belongs to its original Thread;
+application Workers retain their purpose independently of executable job identity
+and cannot regain execution authority. A historical purpose needs no invented job
+or outcome; delayed subscriptions cannot wake it. Live Calendar subscriptions keep
+their original job authority and call budget. Verified per-message model provenance
+belongs to its original Thread;
 unknown provenance never authorizes reasoning-signature replay.
 
 Context checkpoints store an ordered message prefix and its event watermark.

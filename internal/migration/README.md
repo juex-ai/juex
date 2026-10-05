@@ -40,5 +40,9 @@ messages and an explicit continuation checkpoint. Only the source provider-visib
 messages enter that checkpoint; policy-only and rejected content remains readable
 history. Identity maps and closed Commit event intervals preserve later evidence
 range mapping. Conflicting message copies or unresolved references fail conversion.
-Application purpose and model origins require explicit verified bindings. Current
-compaction metadata containing an image without a usable provider path is rejected.
+Verified source Memory assignment files retain Worker purpose and an inert review
+relationship without copying credentials. Several historical Workers may reference
+one business review; conversion never invents jobs or combines their outcomes.
+Other application job relationships and model origins require explicit verified
+bindings. Current compaction metadata containing an image without a usable provider
+path is rejected.
