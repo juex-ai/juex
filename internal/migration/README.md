@@ -27,6 +27,15 @@ extension files does not prove their behavior has been converted. A complete
 migration still needs verified backups, service-owned import and behavior
 acceptance before any user cutover.
 
+`ReadExtension` captures an explicitly selected installation independently of
+Fleet state. The caller proves the allow policy and winning root; the reader
+never merges bundles or runs code. It captures the manifest and enabled resource
+entrypoints with hashes and absence checks. Disabled categories are not probed.
+Scripts and arbitrary auxiliary files remain part of the separate backup.
+Symlink installations or selected resources need separate proven handling and
+are rejected. This capture does not create target extension authority or prove
+command, environment or private-state compatibility.
+
 `internal/app/migration.ResolveConfig` resolves captured Home, Workspace, Agent
 and explicit startup-file layers using the fixed source merge rules. Remote
 imports require the exact source, declaring-file and startup-context cache
