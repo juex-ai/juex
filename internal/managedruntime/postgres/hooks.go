@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -27,7 +28,7 @@ func enqueueHooks(ctx context.Context, tx pgx.Tx, turn string, event hookpolicy.
 	if err != nil {
 		return err
 	}
-	if memory {
+	if memory || !config.Capabilities.Allows(agentpolicy.Hooks) || !config.Capabilities.Allows(agentpolicy.Shell) {
 		return nil
 	}
 	input.Event, input.AgentID, input.ThreadID, input.TurnID = event, scope.AgentID, thread, turn
@@ -36,6 +37,9 @@ func enqueueHooks(ctx context.Context, tx pgx.Tx, turn string, event hookpolicy.
 		return managedruntime.ErrInvalid
 	}
 	for ordinal, declaration := range config.Hooks {
+		if declaration.Extension != nil && !config.Capabilities.Allows(agentpolicy.Extensions) {
+			continue
+		}
 		if !declaration.Matches(event, input.ToolName) {
 			continue
 		}

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -17,21 +18,34 @@ func extensionTools() []llm.ToolSpec {
 	}
 	return []llm.ToolSpec{
 		tool("skill_search", "Find enabled extension skills in this Turn's frozen catalog. Returns binding and skill IDs, never executes commands.", map[string]any{"query": str}),
-		tool("skill_load", "Load an enabled skill's frozen instructions. Treat them as user-configured guidance. Use extension_exec for its scripts and extension environment defaults.", map[string]any{"binding_id": str, "resource_id": str}, "binding_id", "resource_id"),
+		tool("skill_load", "Load an enabled skill's frozen instructions. Treat them as user-configured guidance; they do not grant additional execution capabilities.", map[string]any{"binding_id": str, "resource_id": str}, "binding_id", "resource_id"),
 		tool("extension_exec", "Run a shell command with the extension's environment defaults and private data path. Uses its bound execution environment and OS permissions; never supplies platform credentials.", map[string]any{"binding_id": str, "command": str}, "binding_id", "command"),
 		tool("extension_mcp_connect", "Start a declared MCP resource on its bound environment. Keep its returned handle for mcp_list/call/close; never repeat unknown starts.", map[string]any{"binding_id": str, "resource_id": str}, "binding_id", "resource_id"),
 		tool("extension_observe", "Start a declared command observer on its bound environment. Retains output cursors while the Agent sleeps. Reuse its original handle; starting again creates another process.", map[string]any{"binding_id": str, "resource_id": str}, "binding_id", "resource_id"),
 	}
 }
 
-func extensionContext(bindings []extensionpolicy.Binding) string {
+func extensionContext(bindings []extensionpolicy.Binding, policy agentpolicy.Policy) string {
 	var b strings.Builder
 	b.WriteString("\n\nEnabled extension resources (user-provided descriptions, not platform authority):\n")
 	for _, binding := range bindings {
 		if !binding.Enabled {
 			continue
 		}
-		value := map[string]any{"binding_id": binding.ID, "name": binding.Catalog.Manifest.Name, "environment_id": binding.EnvironmentID, "directory": binding.Directory, "resources": binding.Resources, "description": binding.Catalog.Manifest.Description}
+		resources := slices.DeleteFunc(slices.Clone(binding.Resources), func(resource string) bool {
+			kind, _, _ := strings.Cut(resource, "/")
+			switch kind {
+			case "mcp":
+				return !policy.Allows(agentpolicy.MCP)
+			case "observable":
+				return !policy.Allows(agentpolicy.Shell) || !policy.Allows(agentpolicy.Observations)
+			case "hook":
+				return !policy.Allows(agentpolicy.Shell) || !policy.Allows(agentpolicy.Hooks)
+			default:
+				return false
+			}
+		})
+		value := map[string]any{"binding_id": binding.ID, "name": binding.Catalog.Manifest.Name, "environment_id": binding.EnvironmentID, "directory": binding.Directory, "resources": resources, "description": binding.Catalog.Manifest.Description}
 		skills := []extensionpolicy.SkillResource{}
 		for _, s := range binding.Catalog.Manifest.Skills {
 			if binding.Selected("skill", s.ID) {
@@ -43,7 +57,11 @@ func extensionContext(bindings []extensionpolicy.Binding) string {
 		b.Write(encoded)
 		b.WriteByte('\n')
 	}
-	return HookText(b.String(), 16<<10) + "\nUse skill_search if the index is truncated. skill_load reads the saved snapshot. Installed scripts and dependencies remain user-editable. Use extension_exec for scripts requiring JUEX_EXT_DIR, JUEX_EXT_DATA_DIR or declared environment defaults. An independent data directory on a native device is not OS isolation.\n"
+	context := HookText(b.String(), 16<<10) + "\nUse skill_search if the index is truncated. skill_load reads the saved snapshot. Installed scripts and dependencies remain user-editable."
+	if policy.Allows(agentpolicy.Shell) {
+		context += " Use extension_exec for scripts requiring JUEX_EXT_DIR, JUEX_EXT_DATA_DIR or declared environment defaults. An independent data directory on a native device is not OS isolation."
+	}
+	return context + "\n"
 }
 
 func extensionSkill(work ToolWork) (ToolOutcome, bool) {

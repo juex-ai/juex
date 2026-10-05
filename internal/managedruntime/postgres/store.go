@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"strings"
 	"time"
 
@@ -237,6 +238,9 @@ func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, req
 }
 
 func acceptThreadInput(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, thread managedruntime.Thread, request managedruntime.InputRequest, source managedruntime.InputSource) (managedruntime.InputReceipt, error) {
+	if thread.Kind == "worker" && thread.Application == "" && source.Kind != "application" && !scope.Capabilities.Allows(agentpolicy.Workers) || source.Kind == "observation" && !scope.Capabilities.Allows(agentpolicy.Observations) || source.Kind == "application" && !scope.Capabilities.Allows(agentpolicy.Capability(source.Application)) || source.Kind == "peer_message" && !scope.Capabilities.Allows(agentpolicy.Collaboration) {
+		return managedruntime.InputReceipt{}, managedruntime.ErrDenied
+	}
 	if err := applicationInput(ctx, tx, thread.ID, source); err != nil {
 		return managedruntime.InputReceipt{}, err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -88,7 +89,7 @@ func (s *Service) AdmitApplication(ctx context.Context, original Scope, job Appl
 	if err != nil {
 		return ApplicationReceipt{}, err
 	}
-	if !scope.SameAuthority(original) {
+	if !scope.SameAuthority(original) || !scope.Capabilities.Allows(agentpolicy.Capability(job.Application)) {
 		return ApplicationReceipt{}, ErrDenied
 	}
 	if err := s.Applications.Check(ctx, scope, job); err != nil {

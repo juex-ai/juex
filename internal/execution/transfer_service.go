@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
@@ -162,7 +163,7 @@ func (s *Service) transferAuthority(ctx context.Context, transfer Transfer) erro
 	if err != nil {
 		return err
 	}
-	if !scope.SameAuthority(transfer.Scope) {
+	if !scope.SameAuthority(transfer.Scope) || !scope.Capabilities.Allows(agentpolicy.Files) {
 		return execprotocol.ErrDenied
 	}
 	for _, location := range []*FileLocation{transfer.Request.Source, transfer.Request.Target} {

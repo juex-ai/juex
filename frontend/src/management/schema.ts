@@ -4,6 +4,7 @@ export type Role = "admin" | "member";
 export type MembershipStatus = "active" | "suspended" | "removed";
 
 export interface Agent {
+  capabilities: Policy;
   extensions: Array<Binding>;
   hooks: Array<Declaration>;
   purging: boolean;
@@ -20,6 +21,7 @@ export interface Agent {
 }
 
 export interface AgentConfig {
+  capabilities?: Policy | null;
   hooks?: Array<Declaration>;
   worker_depth?: number;
   name: string;
@@ -236,6 +238,7 @@ export interface CompactionRequest {
 }
 
 export interface ConfigureAgentRequest {
+  capabilities?: Policy | null;
   hooks?: Array<Declaration>;
   worker_depth?: number;
   name: string;
@@ -734,6 +737,10 @@ export interface Pairing {
   approval_nonce: string;
 }
 
+export interface Policy {
+  disabled: Array<string>;
+}
+
 export interface PurgeJob {
   id: string;
   tenant_id: string;
@@ -780,6 +787,7 @@ export interface Scope {
   can_execute: boolean;
   owner_email: string;
   tenant_name: string;
+  capabilities: Policy;
   agent_id: string;
   agent_execution_epoch: number;
 }

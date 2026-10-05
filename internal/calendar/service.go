@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/application"
 )
 
@@ -16,6 +17,9 @@ func (s *Service) transact(ctx context.Context, access application.Access, write
 	scope, err := s.Authority.AuthorizeApplication(ctx, access, write || access.AgentID != "")
 	if err != nil {
 		return err
+	}
+	if scope.AgentID != "" && !scope.Capabilities.Allows(agentpolicy.Calendar) {
+		return application.ErrDisabled
 	}
 	action := func(state *State) error {
 		if !state.Control.Enabled && access.AgentID != "" {
@@ -87,6 +91,9 @@ func (s *Service) Change(ctx context.Context, access application.Access, frozen 
 	if repeated != nil {
 		return *repeated, nil
 	}
+	if scope.AgentID != "" && !scope.Capabilities.Allows(agentpolicy.Calendar) {
+		return Receipt{}, application.ErrDisabled
+	}
 	if q.Action == "save" {
 		var previous *Job
 		if err := s.Repository.View(ctx, scope, func(state *State) error {
@@ -105,7 +112,7 @@ func (s *Service) Change(ctx context.Context, access application.Access, frozen 
 			if err != nil && !errors.Is(err, application.ErrDenied) {
 				return Receipt{}, err
 			}
-			if err != nil || !current.SameAuthority(previous.Scope) {
+			if err != nil || !current.SameAuthority(previous.Scope) || !current.Capabilities.Allows(agentpolicy.Calendar) {
 				if err := s.Repository.Update(ctx, scope, func(state *State) error {
 					j := state.Jobs[q.ID]
 					if j != nil && j.Version == previous.Version && j.Status == "active" {
@@ -154,7 +161,7 @@ func (s *Service) Change(ctx context.Context, access application.Access, frozen 
 		if err != nil {
 			return Receipt{}, err
 		}
-		if target.FleetID != scope.FleetID || target.UserID != scope.UserID || target.TenantID != scope.TenantID {
+		if target.FleetID != scope.FleetID || target.UserID != scope.UserID || target.TenantID != scope.TenantID || !target.Capabilities.Allows(agentpolicy.Calendar) {
 			return Receipt{}, application.ErrDenied
 		}
 	}

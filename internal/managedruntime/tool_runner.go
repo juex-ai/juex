@@ -146,7 +146,8 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			return retryTool()
 		}
 		if work.Request.ID != "" {
-			return ToolOutcome{State: "unknown", Content: "Authority changed while execution could be pending. Do not repeat the operation.", IsError: true, OperationLive: true}
+			work.Cancelled = true
+			return r.execute(ctx, work)
 		}
 		return toolResult(work.Call, map[string]string{"error": "authority_changed"}, true)
 	}
@@ -189,6 +190,14 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 	if work.DeferredResult != nil {
 		return *work.DeferredResult
 	}
+	if !toolAllowed(work.FrozenCapabilities, work.Call.ToolName) || !toolAllowed(fresh.Capabilities, work.Call.ToolName) {
+		if work.Request.ID != "" {
+			work.Cancelled = true
+			return r.execute(ctx, work)
+		}
+		return toolResult(work.Call, map[string]string{"error": "capability_disabled"}, true)
+	}
+	work.Scope.Capabilities = fresh.Capabilities
 	if r.hooks != nil {
 		decision, err := r.hooks.ToolHooks(ctx, *work, hookpolicy.PreToolUse, nil)
 		if err != nil {

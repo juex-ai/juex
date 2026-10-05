@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/application"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/managedruntime"
@@ -57,7 +58,7 @@ func (a RuntimeApplications) NoticeValid(ctx context.Context, event application.
 }
 
 func (a RuntimeApplications) Recall(ctx context.Context, scope managedruntime.Scope, text string) (managedruntime.RecallSnapshot, error) {
-	if a.Memory == nil {
+	if a.Memory == nil || !scope.Capabilities.Allows(agentpolicy.Memory) {
 		return managedruntime.RecallSnapshot{}, nil
 	}
 	v, err := a.Memory.Recall(ctx, appScope(scope).Access, text)
@@ -67,7 +68,7 @@ func (a RuntimeApplications) Recall(ctx context.Context, scope managedruntime.Sc
 	return managedruntime.RecallSnapshot{Epoch: v.Epoch, Fence: v.Fence, Text: v.Text}, appRuntimeError(err)
 }
 func (a RuntimeApplications) RecallValid(ctx context.Context, scope managedruntime.Scope, snapshot managedruntime.RecallSnapshot) bool {
-	if a.Memory == nil {
+	if a.Memory == nil || !scope.Capabilities.Allows(agentpolicy.Memory) {
 		return false
 	}
 	call, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
@@ -77,7 +78,7 @@ func (a RuntimeApplications) RecallValid(ctx context.Context, scope managedrunti
 }
 
 func (a RuntimeApplications) Contribute(ctx context.Context, item managedruntime.EvidenceDelivery) error {
-	if a.Memory == nil {
+	if a.Memory == nil || !item.Scope.Capabilities.Allows(agentpolicy.Memory) {
 		return managedruntime.ErrDenied
 	}
 	scope := appScope(item.Scope)
@@ -99,10 +100,10 @@ type RuntimeApplications struct {
 }
 
 func appScope(s managedruntime.Scope) application.Scope {
-	return application.Scope{Access: application.Access{ActorID: s.ActorID, TenantID: s.TenantID, UserID: s.UserID, AgentID: s.AgentID}, FleetID: s.FleetID, ActorEpoch: s.ActorAuthorizationEpoch, MemberEpoch: s.MembershipExecutionEpoch, AgentEpoch: s.AgentExecutionEpoch, MemberVersion: s.MembershipVersion}
+	return application.Scope{Capabilities: s.Capabilities, Access: application.Access{ActorID: s.ActorID, TenantID: s.TenantID, UserID: s.UserID, AgentID: s.AgentID}, FleetID: s.FleetID, ActorEpoch: s.ActorAuthorizationEpoch, MemberEpoch: s.MembershipExecutionEpoch, AgentEpoch: s.AgentExecutionEpoch, MemberVersion: s.MembershipVersion}
 }
 func workerScope(s application.Scope) managedruntime.Scope {
-	return managedruntime.Scope{ActorID: s.ActorID, TenantID: s.TenantID, UserID: s.UserID, AgentID: s.AgentID, FleetID: s.FleetID, ActorAuthorizationEpoch: s.ActorEpoch, MembershipExecutionEpoch: s.MemberEpoch, AgentExecutionEpoch: s.AgentEpoch, MembershipVersion: s.MemberVersion}
+	return managedruntime.Scope{Capabilities: s.Capabilities, ActorID: s.ActorID, TenantID: s.TenantID, UserID: s.UserID, AgentID: s.AgentID, FleetID: s.FleetID, ActorAuthorizationEpoch: s.ActorEpoch, MembershipExecutionEpoch: s.MemberEpoch, AgentExecutionEpoch: s.AgentEpoch, MembershipVersion: s.MemberVersion}
 }
 func appRuntimeError(err error) error {
 	switch {
@@ -135,7 +136,7 @@ func (a RuntimeApplications) Check(ctx context.Context, scope managedruntime.Sco
 	return appRuntimeError(err)
 }
 func (a RuntimeApplications) memoryTools(ctx context.Context, scope managedruntime.Scope, job *managedruntime.ApplicationJob) (managedruntime.ApplicationTools, error) {
-	if a.Memory == nil {
+	if a.Memory == nil || !scope.Capabilities.Allows(agentpolicy.Memory) {
 		return managedruntime.ApplicationTools{}, nil
 	}
 	call, cancel := context.WithTimeout(ctx, 500*time.Millisecond)

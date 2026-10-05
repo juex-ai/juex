@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/execution/native"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
@@ -98,7 +99,24 @@ func liveEvidence(t *testing.T, f *executionFixture, model liveModel, kind strin
 }
 
 func TestManagedLiveProviderTools(t *testing.T) {
+	for _, minimal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "files_and_shell"}[minimal], func(t *testing.T) {
+			validateLiveProviderTools(t, minimal)
+		})
+	}
+}
+
+func validateLiveProviderTools(t *testing.T, minimal bool) {
+	t.Helper()
 	f, model := liveFixture(t)
+	if minimal {
+		policy := agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Workers, agentpolicy.Collaboration, agentpolicy.MCP, agentpolicy.Observations, agentpolicy.Memory, agentpolicy.Calendar, agentpolicy.Hooks, agentpolicy.Extensions}}
+		var err error
+		f.agent, err = f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Instructions: f.agent.Instructions, Capabilities: &policy})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	device, token := f.pairDevice(t)
 	work := t.TempDir()
 	if err := os.WriteFile(filepath.Join(work, "seed.txt"), []byte("original input"), 0600); err != nil {

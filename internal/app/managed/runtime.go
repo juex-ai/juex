@@ -25,7 +25,7 @@ func (a RuntimeAuthority) AuthorizeFleet(ctx context.Context, actor, tenant, own
 }
 
 func runtimeScope(a management.AgentAuthority) managedruntime.Scope {
-	return managedruntime.Scope{WorkerDepth: a.Agent.WorkerDepth, TenantID: a.Fleet.TenantID, UserID: a.Fleet.UserID, FleetID: a.Fleet.ID, AgentID: a.Agent.ID, ActorID: a.ActorID,
+	return managedruntime.Scope{Capabilities: a.Agent.Capabilities, WorkerDepth: a.Agent.WorkerDepth, TenantID: a.Fleet.TenantID, UserID: a.Fleet.UserID, FleetID: a.Fleet.ID, AgentID: a.Agent.ID, ActorID: a.ActorID,
 		ActorAuthorizationEpoch: a.ActorAuthorizationEpoch, MembershipVersion: a.MembershipVersion, MembershipExecutionEpoch: a.MembershipExecutionEpoch, AgentExecutionEpoch: a.Agent.ExecutionEpoch}
 }
 
@@ -58,7 +58,7 @@ func (a RuntimeAuthority) Snapshot(ctx context.Context, scope managedruntime.Sco
 	if err != nil {
 		return managedruntime.TurnConfig{}, runtimeError(err)
 	}
-	config := managedruntime.TurnConfig{Extensions: plan.Extensions, Hooks: append(plan.Hooks, extensionpolicy.Hooks(plan.Extensions)...), WorkerDepth: plan.WorkerDepth, AgentVersion: plan.AgentVersion, Instructions: plan.Instructions, RequestedModelID: plan.RequestedModelID}
+	config := managedruntime.TurnConfig{Capabilities: plan.Capabilities, Extensions: plan.Extensions, Hooks: append(plan.Hooks, extensionpolicy.Hooks(plan.Extensions)...), WorkerDepth: plan.WorkerDepth, AgentVersion: plan.AgentVersion, Instructions: plan.Instructions, RequestedModelID: plan.RequestedModelID}
 	for _, candidate := range plan.Candidates {
 		config.Models = append(config.Models, managedruntime.ModelConfig(candidate))
 	}

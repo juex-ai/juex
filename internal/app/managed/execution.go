@@ -58,5 +58,5 @@ func (a *ExecutionAuthority) Agent(ctx context.Context, actor, tenant, agent str
 	if owner.FleetID != authority.FleetID || owner.MembershipExecutionEpoch != authority.MembershipExecutionEpoch || owner.ActorAuthorizationEpoch != authority.ActorAuthorizationEpoch {
 		return execution.Scope{}, execprotocol.ErrDenied
 	}
-	return execution.Scope{OwnerScope: owner, AgentID: authority.AgentID, AgentExecutionEpoch: authority.AgentExecutionEpoch}, nil
+	return execution.Scope{Capabilities: authority.Capabilities, OwnerScope: owner, AgentID: authority.AgentID, AgentExecutionEpoch: authority.AgentExecutionEpoch}, nil
 }

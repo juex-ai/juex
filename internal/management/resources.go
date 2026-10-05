@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -31,6 +32,7 @@ type ModelCandidate struct {
 }
 
 type ModelPlan struct {
+	Capabilities                   agentpolicy.Policy
 	Extensions                     []extensionpolicy.Binding
 	Hooks                          []hookpolicy.Declaration
 	WorkerDepth                    int
@@ -52,6 +54,7 @@ type PeerAgent struct {
 }
 
 type Agent struct {
+	Capabilities   agentpolicy.Policy        `json:"capabilities"`
 	Extensions     []extensionpolicy.Binding `json:"extensions"`
 	Hooks          []hookpolicy.Declaration  `json:"hooks"`
 	Purging        bool                      `json:"purging"`
@@ -69,6 +72,8 @@ type Agent struct {
 }
 
 type AgentConfig struct {
+	// An omitted policy preserves the existing value on configuration updates.
+	Capabilities *agentpolicy.Policy      `json:"capabilities,omitempty"`
 	Hooks        []hookpolicy.Declaration `json:"hooks,omitempty"`
 	WorkerDepth  int                      `json:"worker_depth,omitempty"`
 	Name         string                   `json:"name"`
@@ -77,6 +82,9 @@ type AgentConfig struct {
 }
 
 func (c AgentConfig) Validate() error {
+	if c.Capabilities != nil && c.Capabilities.Validate() != nil {
+		return ErrInvalid
+	}
 	if hookpolicy.Validate(c.Hooks) != nil {
 		return ErrInvalid
 	}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
 
@@ -36,6 +37,9 @@ func (s *Store) CreateWorker(ctx context.Context, scope managedruntime.Scope, pa
 }
 
 func createWorker(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, parent managedruntime.Thread, requestID, name string, maxDepth int) (managedruntime.Thread, error) {
+	if !scope.Capabilities.Allows(agentpolicy.Workers) {
+		return managedruntime.Thread{}, managedruntime.ErrDenied
+	}
 	var applicationParent bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs WHERE thread_id=$1)`, parent.ID).Scan(&applicationParent); err != nil {
 		return managedruntime.Thread{}, err

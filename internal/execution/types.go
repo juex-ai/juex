@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
@@ -24,8 +25,9 @@ type OwnerScope struct {
 
 type Scope struct {
 	OwnerScope
-	AgentID             string `json:"agent_id"`
-	AgentExecutionEpoch int64  `json:"agent_execution_epoch"`
+	Capabilities        agentpolicy.Policy `json:"capabilities"`
+	AgentID             string             `json:"agent_id"`
+	AgentExecutionEpoch int64              `json:"agent_execution_epoch"`
 }
 
 func (s Scope) SameAuthority(other Scope) bool {

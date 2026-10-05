@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 )
@@ -73,7 +74,7 @@ func (r toolRunner) executeHook(ctx context.Context, work *HookWork) HookOutcome
 		if err != nil && !errors.Is(err, ErrDenied) {
 			return retry
 		}
-		work.Cancelled = err != nil || !work.Scope.SameAuthority(fresh)
+		work.Cancelled = err != nil || !work.Scope.SameAuthority(fresh) || !fresh.Capabilities.Allows(agentpolicy.Hooks) || !fresh.Capabilities.Allows(agentpolicy.Shell) || work.Declaration.Extension != nil && !fresh.Capabilities.Allows(agentpolicy.Extensions)
 	}
 	if !work.Cancelled && r.applicationStore != nil {
 		job, err := r.applicationStore.ThreadApplication(ctx, work.Scope, work.ThreadID)

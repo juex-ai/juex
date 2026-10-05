@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -86,7 +87,7 @@ func TestManagedAuditRetentionPreservesAuthorityAndUnknownExecution(t *testing.T
 		t.Fatal(recent, err)
 	}
 	after, err := f.execution.Authority.Agent(ctx, f.actor, f.tenant, f.agent.ID, true)
-	if err != nil || after != scope {
+	if err != nil || !reflect.DeepEqual(after, scope) {
 		t.Fatal("retention changed authority", after, err)
 	}
 	operation, err := f.executionStore.Enqueue(ctx, device, scope, request, time.Hour, false)

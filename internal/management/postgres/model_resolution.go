@@ -30,6 +30,7 @@ func (d *Directory) SnapshotPlan(ctx context.Context, scope management.ModelCall
 		return plan, management.ErrModelUnavailable
 	}
 	plan.WorkerDepth = authority.Agent.WorkerDepth
+	plan.Capabilities = authority.Agent.Capabilities
 	plan.Hooks = authority.Agent.Hooks
 	plan.Extensions = authority.Agent.Extensions
 	plan.AgentVersion, plan.Instructions, plan.RequestedModelID = authority.Agent.Version, authority.Agent.Instructions, authority.ModelID

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/application"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 )
@@ -162,8 +163,25 @@ func (s *Service) advance(ctx context.Context) error {
 		return err
 	}
 	for _, item := range items {
+		fresh, err := s.Authority.AuthorizeApplication(ctx, item.Scope.Access, true)
+		if err != nil && !errors.Is(err, application.ErrDenied) {
+			return err
+		}
+		allowed := err == nil && fresh.SameAuthority(item.Scope) && fresh.Capabilities.Allows(agentpolicy.Memory)
 		if err := s.Repository.Update(ctx, item.Scope, func(state *State) error {
-			_, err := state.Advance(item.Scope.AgentID+"/"+item.ThreadID, time.Now())
+			key := item.Scope.AgentID + "/" + item.ThreadID
+			current := state.Participation[key]
+			if current == nil || !current.Scope.SameAuthority(item.Scope) {
+				return nil
+			}
+			if !allowed {
+				// This buffer is queued work, not committed knowledge. Retire it
+				// so re-enabling cannot repackage evidence from revoked authority.
+				current.Evidence, current.Manual = nil, false
+				current.AttemptedThrough, current.AttemptedAt = current.Through, time.Now()
+				return nil
+			}
+			_, err := state.Advance(key, time.Now())
 			return err
 		}); err != nil {
 			return err
