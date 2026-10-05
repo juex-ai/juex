@@ -247,10 +247,14 @@ func (s *Service) Occurrences(ctx context.Context, access application.Access, sc
 
 // Assignment is private to Runtime: it verifies the persisted Worker purpose.
 func (s *Service) Assignment(ctx context.Context, frozen application.Scope, id string, epoch int64) (Delivery, error) {
+	return s.assignment(ctx, frozen, id, epoch, "agent")
+}
+
+func (s *Service) assignment(ctx context.Context, frozen application.Scope, id string, epoch int64, mode string) (Delivery, error) {
 	var value Delivery
 	err := s.transact(ctx, frozen.Access, false, func(state *State, scope application.Scope) error {
 		d := state.Deliveries[id]
-		if d == nil || !scope.SameAuthority(frozen) || !scope.SameAuthority(d.Scope) || !state.Control.Enabled || epoch != state.Control.Epoch || d.Epoch != epoch || d.CancelRequested || d.Finished || d.Mode != "agent" {
+		if d == nil || !scope.SameAuthority(frozen) || !scope.SameAuthority(d.Scope) || !state.Control.Enabled || epoch != state.Control.Epoch || d.Epoch != epoch || d.CancelRequested || d.Finished || d.Mode != mode {
 			return application.ErrDenied
 		}
 		value = *d

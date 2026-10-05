@@ -15,7 +15,7 @@ func (s *State) StageNotifications() {
 			continue
 		}
 		switch d.State {
-		case "completed", "cancelled", "missed", "needs_attention", "outcome_unknown":
+		case "completed", "accepted", "cancelled", "missed", "skipped", "needs_attention", "outcome_unknown":
 		default:
 			continue
 		}
@@ -31,6 +31,10 @@ func (s *State) StageNotifications() {
 		}
 		kind, title, summary := "completed", "日程已执行", d.Name
 		switch d.State {
+		case "accepted":
+			kind, title = "reminder", "日程已送达 Main"
+		case "skipped":
+			kind, title = "attention", "日程已按恢复策略跳过"
 		case "missed":
 			kind, title = "attention", "日程已错过补跑期限"
 		case "needs_attention":
@@ -49,7 +53,7 @@ func (s *State) StageNotifications() {
 			identity += "/unknown"
 		}
 		event := application.Event{ID: uuid.NewSHA1(uuid.NameSpaceURL, []byte(identity)).String(), Application: "calendar", ResourceID: d.ID, Kind: kind, Title: title, Summary: summary, Scope: d.Scope, Epoch: d.Epoch, CreatedAt: d.UpdatedAt}
-		d.Notices[key] = &Notification{Event: event, MainDone: d.Scope.AgentID == ""}
+		d.Notices[key] = &Notification{Event: event, MainDone: d.Scope.AgentID == "" || d.Mode == "main"}
 	}
 }
 

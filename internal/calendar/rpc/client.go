@@ -76,3 +76,10 @@ func (c *Client) CancelCommand(ctx context.Context, scope application.Scope, id 
 	reply, err := c.client.CancelCommand(ctx, encode(scope), id)
 	return platformrpc.Decode(reply, err, nil, appwire.DecodeError)
 }
+
+func (c *Client) AssignTrigger(ctx context.Context, scope application.Scope, id string, epoch int64) (calendar.Delivery, error) {
+	reply, err := c.client.AssignTrigger(ctx, encode(scope), id, epoch)
+	var value calendar.Delivery
+	err = platformrpc.Decode(reply, err, &value, appwire.DecodeError)
+	return value, err
+}
