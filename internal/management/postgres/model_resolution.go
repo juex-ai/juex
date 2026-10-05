@@ -62,37 +62,42 @@ func (d *Directory) SnapshotPlan(ctx context.Context, scope management.ModelCall
 
 // ResolveCandidate is the admission point for one provider call. It does not
 // hold database locks across the subsequent network request.
-func (d *Directory) ResolveCandidate(ctx context.Context, scope management.ModelCallScope, candidate management.ModelCandidate) (string, error) {
+func (d *Directory) ResolveCandidate(ctx context.Context, scope management.ModelCallScope, candidate management.ModelCandidate) (management.ModelConnection, error) {
+	var connection management.ModelConnection
 	tx, err := d.begin(ctx)
 	if err != nil {
-		return "", err
+		return connection, err
 	}
 	defer rollback(tx)
 	authority, err := agentAuthority(ctx, tx, scope.ActorID, scope.TenantID, scope.AgentID, true)
 	if err != nil {
-		return "", err
+		return connection, err
 	}
 	if !modelScopeMatches(scope, authority) {
-		return "", management.ErrDenied
+		return connection, management.ErrDenied
 	}
 	var current management.ModelCandidate
-	var cipher []byte
-	err = tx.QueryRow(ctx, `SELECT m.id,m.provider,m.name,m.protocol,m.endpoint,m.authorization_epoch,COALESCE(e.epoch,1),m.key_cipher FROM management.models m LEFT JOIN management.tenant_model_epochs e ON e.model_id=m.id AND e.tenant_id=$1 WHERE m.id=$2 AND m.enabled AND `+modelVisible, scope.TenantID, candidate.ModelID).Scan(&current.ModelID, &current.Provider, &current.Model, &current.Protocol, &current.Endpoint, &current.ModelAuthorizationEpoch, &current.TenantAccessEpoch, &cipher)
+	var cipher, optionsCipher []byte
+	err = tx.QueryRow(ctx, `SELECT m.id,m.provider,m.name,m.protocol,m.endpoint,m.context_window,m.max_output,m.authorization_epoch,COALESCE(e.epoch,1),m.key_cipher,m.options_cipher FROM management.models m LEFT JOIN management.tenant_model_epochs e ON e.model_id=m.id AND e.tenant_id=$1 WHERE m.id=$2 AND m.enabled AND `+modelVisible, scope.TenantID, candidate.ModelID).Scan(&current.ModelID, &current.Provider, &current.Model, &current.Protocol, &current.Endpoint, &current.ContextWindow, &current.MaxOutput, &current.ModelAuthorizationEpoch, &current.TenantAccessEpoch, &cipher, &optionsCipher)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", management.ErrModelUnavailable
+		return connection, management.ErrModelUnavailable
 	}
 	if err != nil {
-		return "", classify(err)
+		return connection, classify(err)
 	}
-	if candidate.Provider != current.Provider || candidate.Model != current.Model || candidate.Protocol != current.Protocol || candidate.Endpoint != current.Endpoint || candidate.ModelAuthorizationEpoch != current.ModelAuthorizationEpoch || candidate.TenantAccessEpoch != current.TenantAccessEpoch {
-		return "", management.ErrModelUnavailable
+	if candidate != current {
+		return connection, management.ErrModelUnavailable
 	}
 	key, err := d.config.Secrets.Open("model:"+candidate.ModelID, cipher)
 	if err != nil {
-		return "", err
+		return connection, err
+	}
+	options, err := d.modelOptions(candidate.ModelID, optionsCipher)
+	if err != nil {
+		return connection, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", err
+		return connection, err
 	}
-	return string(key), nil
+	return management.ModelConnection{APIKey: string(key), Options: options}, nil
 }

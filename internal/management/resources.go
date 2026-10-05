@@ -115,13 +115,42 @@ type Model struct {
 	Enabled       bool         `json:"enabled"`
 }
 
-// ModelConfiguration is accepted only by the deployment operator. APIKey and
-// endpoint are intentionally absent from the public Model read model.
+// ModelConfiguration is accepted only by the deployment operator. Credentials,
+// options and endpoint are absent from the public Model read model.
 type ModelConfiguration struct {
 	Provider, Name, Endpoint, APIKey string
 	Protocol                         llm.Protocol
 	ContextWindow, MaxOutput         int
 	Enabled                          bool
+	Options                          ModelOptions
+}
+
+// ModelOptions can contain account routing and secrets in headers or query
+// parameters. Management encrypts the whole value; frozen plans carry only the
+// model authorization epoch and never copy these options into Runtime events.
+type ModelOptions struct {
+	Authentication string                  `json:"authentication"`
+	ThinkingEffort string                  `json:"thinking_effort,omitempty"`
+	Headers        map[string]string       `json:"headers,omitempty"`
+	Query          map[string]string       `json:"query,omitempty"`
+	Capabilities   llm.CapabilityOverrides `json:"capabilities"`
+	Compat         llm.CompatOptions       `json:"compat"`
+}
+
+func (o ModelOptions) Normalized() ModelOptions {
+	if o.Authentication == "" {
+		o.Authentication = "api_key"
+	}
+	if len(o.Compat.ReasoningReplayFields) == 0 {
+		o.Compat.ReasoningReplayFields = nil
+	}
+	return o
+}
+
+// ModelConnection is returned only after fresh admission of a model call.
+type ModelConnection struct {
+	APIKey  string
+	Options ModelOptions
 }
 
 type FleetSettings struct {

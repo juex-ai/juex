@@ -169,11 +169,8 @@ func finishCompaction(ctx context.Context, tx pgx.Tx, turn, thread, input string
 	if err := appendEvent(ctx, tx, thread, "message.appended", summary); err != nil {
 		return err
 	}
-	ids := draft.RetainedIDs
-	if ids == nil {
-		ids = []string{}
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO runtime.context_checkpoints(thread_id,generation,compaction_id,summary_id,retained_ids) VALUES($1,$2,$3,$4,$5)`, thread, generation, job.ID, summary.ID, ids); err != nil {
+	ids := append([]string{summary.ID}, draft.RetainedIDs...)
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.context_checkpoints(thread_id,generation,compaction_id,message_ids,through_sequence) SELECT $1,$2,$3,$4,sequence FROM runtime.threads WHERE id=$1`, thread, generation, job.ID, ids); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.compactions SET state='completed',completed_at=clock_timestamp() WHERE id=$1`, job.ID); err != nil {

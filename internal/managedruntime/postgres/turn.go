@@ -178,7 +178,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 	if err != nil {
 		return work, err
 	}
-	work.ModelOrigins, err = modelOrigins(ctx, tx, work.History)
+	work.ModelOrigins, err = modelOrigins(ctx, tx, thread.ID, work.History)
 	if err != nil {
 		return work, err
 	}
@@ -186,33 +186,30 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 }
 
 func history(ctx context.Context, tx pgx.Tx, threadID string, generation int64) ([]llm.Message, error) {
-	var summaryID string
-	var retainedIDs []string
-	err := tx.QueryRow(ctx, `SELECT summary_id,retained_ids FROM runtime.context_checkpoints WHERE thread_id=$1 AND generation=$2`, threadID, generation).Scan(&summaryID, &retainedIDs)
+	var messageIDs []string
+	var through int64
+	err := tx.QueryRow(ctx, `SELECT message_ids,through_sequence FROM runtime.context_checkpoints WHERE thread_id=$1 AND generation=$2`, threadID, generation).Scan(&messageIDs, &through)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT data,generation FROM runtime.events WHERE thread_id=$1 AND kind='message.appended' AND (generation=$2 OR data->>'id'=ANY($3::text[])) ORDER BY sequence`, threadID, generation, retainedIDs)
+	rows, err := tx.Query(ctx, `SELECT data,sequence FROM runtime.events WHERE thread_id=$1 AND kind='message.appended' AND ((generation=$2 AND sequence>$4) OR (sequence<=$4 AND data->>'id'=ANY($3::text[]))) ORDER BY sequence`, threadID, generation, messageIDs, through)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	retained := map[string]llm.Message{}
 	current := []llm.Message{}
-	var summary llm.Message
 	for rows.Next() {
 		var encoded []byte
-		var gen int64
-		if err := rows.Scan(&encoded, &gen); err != nil {
+		var sequence int64
+		if err := rows.Scan(&encoded, &sequence); err != nil {
 			return nil, err
 		}
 		var message llm.Message
 		if err := json.Unmarshal(encoded, &message); err != nil {
 			return nil, err
 		}
-		if message.ID == summaryID {
-			summary = message
-		} else if gen == generation {
+		if sequence > through {
 			current = append(current, message)
 		} else {
 			retained[message.ID] = message
@@ -221,14 +218,8 @@ func history(ctx context.Context, tx pgx.Tx, threadID string, generation int64) 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if summaryID == "" {
-		return current, nil
-	}
-	if summary.ID == "" {
-		return nil, managedruntime.ErrConflict
-	}
-	result := []llm.Message{summary}
-	for _, id := range retainedIDs {
+	result := make([]llm.Message, 0, len(messageIDs)+len(current))
+	for _, id := range messageIDs {
 		message, ok := retained[id]
 		if !ok {
 			return nil, managedruntime.ErrConflict

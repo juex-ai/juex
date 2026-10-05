@@ -9,6 +9,7 @@ type Config struct {
 	Protocol       string
 	BaseURL        string
 	APIKey         string
+	Authentication string
 	Model          string
 	ThinkingEffort string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
 	Headers        map[string]string

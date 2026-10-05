@@ -30,6 +30,9 @@ func NewOpenAI(profile llm.ProviderProfile, _ any) llm.Provider {
 		option.WithAPIKey(profile.APIKey),
 		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
 	}
+	if profile.Authentication == "none" {
+		opts = append(opts, option.WithHeaderDel("Authorization"))
+	}
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
 	}

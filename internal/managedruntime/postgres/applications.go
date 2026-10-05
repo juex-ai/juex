@@ -43,7 +43,7 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 	var storedScope []byte
 	var matches, cancelled bool
 	var threadID string
-	if err := tx.QueryRow(ctx, `SELECT scope,request IS NULL OR request=$4::jsonb,cancelled,COALESCE(thread_id::text,'') FROM runtime.application_jobs WHERE application=$1 AND fleet_id=$2 AND job_id=$3 FOR UPDATE`, job.Application, scope.FleetID, job.ID, encodedJob).Scan(&storedScope, &matches, &cancelled, &threadID); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT scope,import_state='' AND (request IS NULL OR request=$4::jsonb),cancelled,COALESCE(thread_id::text,'') FROM runtime.application_jobs WHERE application=$1 AND fleet_id=$2 AND job_id=$3 FOR UPDATE`, job.Application, scope.FleetID, job.ID, encodedJob).Scan(&storedScope, &matches, &cancelled, &threadID); err != nil {
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	var original managedruntime.Scope
@@ -161,7 +161,8 @@ func applicationReceipt(ctx context.Context, tx pgx.Tx, scope managedruntime.Sco
 	// Cancellation revokes future work immediately, but cannot assert that an
 	// external process has stopped before the executor acknowledges its outcome.
 	err := tx.QueryRow(ctx, `SELECT COALESCE(j.thread_id::text,''),COALESCE(j.input_id::text,''),
- CASE WHEN tools.unknown THEN 'outcome_unknown'
+ CASE WHEN j.import_state<>'' THEN j.import_state
+ WHEN tools.unknown THEN 'outcome_unknown'
  WHEN j.cancelled AND tools.unsettled THEN 'cancel_requested'
  WHEN j.cancelled THEN 'cancelled' ELSE COALESCE(i.state,'pending') END,
  COALESCE(tools.operations,'[]'::jsonb)
@@ -209,12 +210,16 @@ func (s *Store) ThreadApplication(ctx context.Context, scope managedruntime.Scop
 	}
 	var encoded, stored []byte
 	var cancelled bool
-	err = tx.QueryRow(ctx, `SELECT request,scope,cancelled FROM runtime.application_jobs WHERE thread_id=$1 AND agent_id=$2`, thread, scope.AgentID).Scan(&encoded, &stored, &cancelled)
+	var imported string
+	err = tx.QueryRow(ctx, `SELECT request,scope,cancelled,import_state FROM runtime.application_jobs WHERE thread_id=$1 AND agent_id=$2`, thread, scope.AgentID).Scan(&encoded, &stored, &cancelled, &imported)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, tx.Commit(ctx)
 	}
 	if err != nil {
 		return nil, classify(err)
+	}
+	if imported != "" {
+		return nil, managedruntime.ErrDenied
 	}
 	var job managedruntime.ApplicationJob
 	var original managedruntime.Scope

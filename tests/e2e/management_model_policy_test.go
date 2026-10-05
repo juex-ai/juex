@@ -148,9 +148,9 @@ func TestManagementModelPlanRevocationAndCredentialRouting(t *testing.T) {
 	}
 	resolve := func(candidate management.ModelCandidate, want string, wantErr error) {
 		t.Helper()
-		key, err := d.ResolveCandidate(ctx, scope, candidate)
-		if !errors.Is(err, wantErr) || key != want {
-			t.Fatalf("candidate admission failed: err=%v expected=%v; credential match=%v", err, wantErr, key == want)
+		connection, err := d.ResolveCandidate(ctx, scope, candidate)
+		if !errors.Is(err, wantErr) || connection.APIKey != want {
+			t.Fatalf("candidate admission failed: err=%v expected=%v; credential match=%v", err, wantErr, connection.APIKey == want)
 		}
 	}
 	resolve(plan.Candidates[0], config.APIKey, nil)
@@ -225,7 +225,7 @@ func TestManagementModelPlanRevocationAndCredentialRouting(t *testing.T) {
 	for _, alter := range []func(*management.ModelCallScope){func(s *management.ModelCallScope) { s.UserID = tenant.ID }, func(s *management.ModelCallScope) { s.FleetID = tenant.ID }, func(s *management.ModelCallScope) { s.ActorAuthorizationEpoch++ }, func(s *management.ModelCallScope) { s.MembershipExecutionEpoch++ }, func(s *management.ModelCallScope) { s.AgentExecutionEpoch++ }} {
 		foreign := scope
 		alter(&foreign)
-		if key, err := d.ResolveCandidate(ctx, foreign, fresh.Candidates[0]); !errors.Is(err, management.ErrDenied) || key != "" {
+		if connection, err := d.ResolveCandidate(ctx, foreign, fresh.Candidates[0]); !errors.Is(err, management.ErrDenied) || connection.APIKey != "" {
 			t.Fatal("scope bypass", err)
 		}
 		if _, err := d.SnapshotPlan(ctx, foreign); !errors.Is(err, management.ErrDenied) {

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"slices"
@@ -367,11 +368,24 @@ func recordResource(ctx context.Context, tx pgx.Tx, actorID string, fleet manage
 }
 
 func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelConfiguration) (management.Model, error) {
+	config.Options = config.Options.Normalized()
+	if config.Protocol == llm.ProtocolOpenAICodexResponses && !explicitCodexAccount(config.Options.Headers) {
+		return management.Model{}, management.ErrInvalid
+	}
+	if config.Options.Authentication != "api_key" && config.Options.Authentication != "none" ||
+		(config.Options.Authentication == "api_key") != (config.APIKey != "") {
+		return management.Model{}, management.ErrInvalid
+	}
+	encodedOptions, err := json.Marshal(config.Options)
+	if err != nil || len(encodedOptions) > 64<<10 {
+		return management.Model{}, management.ErrInvalid
+	}
 	u, err := url.Parse(config.Endpoint)
 	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || (u.Scheme != "http" && u.Scheme != "https") ||
-		strings.TrimSpace(config.Provider) == "" || len(config.Provider) > 100 || strings.TrimSpace(config.Name) == "" || len(config.Name) > 200 || config.APIKey == "" ||
+		strings.TrimSpace(config.Provider) == "" || len(config.Provider) > 100 || strings.TrimSpace(config.Name) == "" || len(config.Name) > 200 ||
 		config.ContextWindow < 1024 || config.MaxOutput <= 0 || config.MaxOutput >= config.ContextWindow ||
-		(config.Protocol != llm.ProtocolOpenAIChat && config.Protocol != llm.ProtocolOpenAIResponses && config.Protocol != llm.ProtocolAnthropicMessages) {
+		(config.Protocol != llm.ProtocolOpenAIChat && config.Protocol != llm.ProtocolOpenAIResponses && config.Protocol != llm.ProtocolAnthropicMessages && config.Protocol != llm.ProtocolOpenAICodexResponses) ||
+		(config.Protocol == llm.ProtocolOpenAICodexResponses && config.Provider != "openai-codex") {
 		return management.Model{}, management.ErrInvalid
 	}
 	tx, err := d.begin(ctx)
@@ -390,9 +404,17 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 	if err != nil {
 		return management.Model{}, err
 	}
-	model, err := scanModel(tx.QueryRow(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-	ON CONFLICT(id) DO UPDATE SET protocol=EXCLUDED.protocol,endpoint=EXCLUDED.endpoint,key_cipher=EXCLUDED.key_cipher,context_window=EXCLUDED.context_window,max_output=EXCLUDED.max_output,authorization_epoch=models.authorization_epoch+CASE WHEN models.enabled<>EXCLUDED.enabled THEN 1 ELSE 0 END,enabled=EXCLUDED.enabled
-	RETURNING `+modelColumns, id, config.Provider, config.Name, config.Protocol, config.Endpoint, cipher, config.ContextWindow, config.MaxOutput, config.Enabled))
+	optionsCipher, err := d.config.Secrets.Seal("model-options:"+id, encodedOptions)
+	if err != nil {
+		return management.Model{}, err
+	}
+	changed, err := d.modelConfigurationChanged(ctx, tx, id, config, encodedOptions)
+	if err != nil {
+		return management.Model{}, err
+	}
+	model, err := scanModel(tx.QueryRow(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,enabled,options_cipher) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	ON CONFLICT(id) DO UPDATE SET protocol=EXCLUDED.protocol,endpoint=EXCLUDED.endpoint,key_cipher=EXCLUDED.key_cipher,context_window=EXCLUDED.context_window,max_output=EXCLUDED.max_output,options_cipher=EXCLUDED.options_cipher,authorization_epoch=models.authorization_epoch+CASE WHEN models.enabled<>EXCLUDED.enabled OR $11 THEN 1 ELSE 0 END,enabled=EXCLUDED.enabled
+	RETURNING `+modelColumns, id, config.Provider, config.Name, config.Protocol, config.Endpoint, cipher, config.ContextWindow, config.MaxOutput, config.Enabled, optionsCipher, changed))
 	if err != nil {
 		return model, err
 	}

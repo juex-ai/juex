@@ -38,6 +38,7 @@ type ProviderProfile struct {
 	Protocol       Protocol
 	BaseURL        string
 	APIKey         string
+	Authentication string
 	Model          string
 	ThinkingEffort string
 	Headers        map[string]string

@@ -65,6 +65,19 @@ hold the input. Files-disabled Agents and Memory review Workers do not read thes
 sources. Compaction uses persisted context without starting its own file read.
 Source content cannot grant additional authority.
 
+Offline import accepts a complete, idle Agent only into an empty target identity.
+One transaction binds the source and payload hashes to its owner and retains
+Threads, terminal inputs, events and an ordered context checkpoint. Exact retries
+acknowledge the original import without rewriting subsequent work. Historical
+insertion creates no notifications, model attempts or runnable jobs. Imported
+application Workers retain their terminal purpose and cannot regain execution
+authority. Verified per-message model provenance belongs to its original Thread;
+unknown provenance never authorizes reasoning-signature replay.
+
+Context checkpoints store an ordered message prefix and its event watermark.
+Continuation appends messages after that watermark in the current generation;
+native compaction and imported context use the same projection and recovery path.
+
 All Activation writes lock and validate the database lease. A replacement
 increments its fencing epoch. An expired instance cannot publish its answer.
 Recovery retains the original Turn and marks unacknowledged model attempts

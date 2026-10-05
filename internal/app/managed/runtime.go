@@ -10,7 +10,6 @@ import (
 	"github.com/juex-ai/juex/internal/management"
 	"github.com/juex-ai/juex/internal/management/postgres"
 	"github.com/juex-ai/juex/internal/providers"
-	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
 
 type RuntimeAuthority struct{ Directory *postgres.Directory }
@@ -75,11 +74,11 @@ func (a RuntimeAuthority) Provider(ctx context.Context, scope managedruntime.Sco
 }
 
 func (a RuntimeAuthority) Profile(ctx context.Context, scope managedruntime.Scope, config managedruntime.ModelConfig) (llm.ProviderProfile, error) {
-	key, err := a.Directory.ResolveCandidate(ctx, modelScope(scope), management.ModelCandidate(config))
+	connection, err := a.Directory.ResolveCandidate(ctx, modelScope(scope), management.ModelCandidate(config))
 	if err != nil {
 		return llm.ProviderProfile{}, runtimeError(err)
 	}
-	profile, err := providerprofile.ResolveProfile(providerprofile.Config{ID: "managed-" + config.ModelID, Protocol: string(config.Protocol), BaseURL: config.Endpoint, APIKey: key, Model: config.Model})
+	profile, err := modelProfile(management.ModelConfiguration{Provider: config.Provider, Protocol: config.Protocol, Endpoint: config.Endpoint, Name: config.Model, APIKey: connection.APIKey, Options: connection.Options})
 	if err != nil {
 		return llm.ProviderProfile{}, managedruntime.ErrModelUnavailable
 	}

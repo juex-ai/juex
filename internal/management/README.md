@@ -70,9 +70,17 @@ the platform default, and Agents may override them. Operators configure flat,
 ordered fallback lists. Snapshot admission and each credential resolution check
 current resource authority in one Management transaction. Per-model and tenant
 access epochs prevent revoke/restore from reviving an old Turn's grant; unchanged
-candidates remain usable. Credentials may rotate without changing the frozen
-route. A changed endpoint or protocol cannot receive credentials via an old
-route snapshot. Admission ends before the external request: revocation blocks
+candidates remain usable. API keys may rotate without changing the frozen
+route. Changes to endpoint, protocol, limits or private provider options advance
+the model epoch, including an account change followed by restoration. Private
+headers/query parameters, thinking and capability/compatibility options are
+encrypted with the model and returned only to Runtime after fresh admission;
+public catalogs and frozen Turns contain no copies of those values. Provider
+labels do not override explicit protocols. Managed Codex requires a fixed,
+explicit `ChatGPT-Account-ID`; token rotation never chooses the account implicitly.
+An unauthenticated local OpenAI-compatible endpoint requires explicit `none`
+authentication and sends no Authorization header or invented API key.
+Admission ends before the external request: revocation blocks
 later admissions, not an already dispatched request.
 
 Schema setup is explicit through `postgres.Migrate`, transactionally serialized
