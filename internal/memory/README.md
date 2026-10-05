@@ -31,6 +31,10 @@ Review bindings and original evidence arrive through trusted Runtime composition
 never model-supplied role or capability fields. Runtime owns ordinary Worker
 execution, model credentials and usage; Memory owns the application decision.
 
+Memory review fixes an independent context/output budget in its Worker job.
+Runtime intersects it with each authorized model and retains it across fallback,
+tools and restart; ordinary Agent model policy is unaffected.
+
 The review outbox admits one ordinary Runtime Worker per stable review ID. It
 recovers lost admission replies and cancels revoked jobs even before admission.
 The Worker has a durable model-call budget and only knowledge review tools. A

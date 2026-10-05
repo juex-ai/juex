@@ -75,6 +75,9 @@ var outputBudgetSchema string
 //go:embed instructions_schema.sql
 var instructionsSchema string
 
+//go:embed application_budget_schema.sql
+var applicationBudgetSchema string
+
 //go:embed main_triggers_schema.sql
 var mainTriggersSchema string
 
@@ -92,7 +95,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, outputBudgetSchema, mainTriggersSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, outputBudgetSchema, mainTriggersSchema, applicationBudgetSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
