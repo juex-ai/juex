@@ -14,6 +14,12 @@ import (
 
 func (e *Engine) extensionCommand(cmd *exec.Cmd, agent string, extension *execprotocol.ExtensionContext) error {
 	if extension == nil {
+		if e.config.HomeDirectory != "" {
+			// exec.Command initially searches the connector's PATH. Managed
+			// Host commands must use the Agent's per-process package locations.
+			cmd.Path, cmd.Err = ExtensionExecutable(cmd.Args[0], cmd.Dir, cmd.Env)
+			return cmd.Err
+		}
 		return nil
 	}
 	if extension.Validate() != nil {

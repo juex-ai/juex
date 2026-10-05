@@ -12,7 +12,7 @@ Web / 管理 CLI ── HTTPS ── Management
 远程执行端 ── 出站 HTTPS ── Execution
 Management / Runtime / Execution / Memory / Calendar ── 认证 Kitex RPC
 各服务 ── 自己的 PostgreSQL schema
-Execution ── Blob 存储、Docker/runsc 容器和设备连接
+Execution ── Blob 存储、受管 Host 执行器、Docker/runsc 容器和设备连接
 ```
 
 [Management](internal/management/README.zh.md) 拥有身份、配置和实时权限。
@@ -40,6 +40,11 @@ Activation 独立于 Agent 过期，Execution 保持连接和后台工作。
 Execution 拥有带版本的 Agent 默认环境和目录绑定；Management 提供配置入口，不重复
 保存该状态。Runtime 通过统一执行协议解析并持久固定每个新操作的位置。
 明确选择环境后，不再供给部署默认环境。
+
+Execution 通过 Host 和 gVisor 后端统一管理部署所供给环境的生命周期。Host 使用 OS
+服务管理器运行独立原生执行器，具有 Agent 专属 Home/Workspace 和自有控制日志。
+Execution 重启保留这些进程。目录所有权显式记录，与原生设备类型分开；cwd 和 HOME
+均不提供 OS 隔离。
 
 Execution 是唯一可访问 Docker 引擎的服务。托管环境使用 runsc、UID 1000、明确的
 资源限制、XFS 项目配额和受限网络。Workspace/Home 在容器重建后保留。

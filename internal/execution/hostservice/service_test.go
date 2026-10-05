@@ -15,7 +15,7 @@ import (
 
 func TestStatusChecksProcessIncarnationAndForegroundOwnership(t *testing.T) {
 	dir := t.TempDir()
-	m, err := New(dir)
+	m, err := New(dir, os.Args[0])
 	if err != nil {
 		t.Fatal(err)
 	}

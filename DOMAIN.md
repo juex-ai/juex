@@ -50,6 +50,11 @@ New operations freeze the selected location; prepared requests and process or
 connection handles retain their original environment. An unavailable default
 never causes automatic substitution.
 
+The deployment owns automatically provisioned environments, whether Host or
+Hosted. Each has stable per-Agent identity, Home and Workspace. An externally
+paired device remains user-owned; native execution alone does not imply platform
+ownership or permission to delete its files.
+
 A network disconnect does not imply process termination. Offline requests wait
 durably without consuming model slots. Unknown outcomes are visible and never
 silently repeated or redirected. Online revocation rejects new work and requests

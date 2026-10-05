@@ -71,6 +71,7 @@ type PairConfirmation struct {
 
 type Device struct {
 	execprotocol.Environment
+	Managed         bool                                 `json:"managed"`
 	TenantID        string                               `json:"tenant_id"`
 	UserID          string                               `json:"user_id"`
 	FleetID         string                               `json:"fleet_id"`

@@ -195,7 +195,7 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 	}
 	submit("background", "printf started; sleep 60")
 	executionEventually(t, f, environment.ID, "background", func(op execution.Operation) bool { return op.State == "running" })
-	if _, err := f.pool.Exec(ctx, `UPDATE execution.hosted SET last_activity=clock_timestamp()-interval '1 hour'`); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE execution.managed_environments SET last_activity=clock_timestamp()-interval '1 hour'`); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(2 * time.Second)
@@ -254,7 +254,7 @@ func TestHostedPlatformContainerLifecycle(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !receipt.DataRemoved || receipt.HostedPending != 0 {
+	if !receipt.DataRemoved || receipt.EnvironmentsPending != 0 {
 		t.Fatal("hosted cleanup did not settle", receipt)
 	}
 	for _, root := range []string{configuration.Backend.Root, configuration.Backend.WorkspaceRoot} {

@@ -57,7 +57,7 @@ type Receipt struct {
 	Fenced        bool `json:"fenced"`
 	DataRemoved   bool `json:"data_removed"`
 	Unconfirmed   int  `json:"unconfirmed"`
-	HostedPending int  `json:"hosted_pending"`
+	EnvironmentsPending int  `json:"environments_pending"`
 }
 
 type Participant interface {

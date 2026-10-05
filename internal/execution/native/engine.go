@@ -22,6 +22,7 @@ type Config struct {
 	StateDirectory   string
 	EnvironmentID    string
 	WorkingDirectory string
+	HomeDirectory    string
 	Grants           map[string][]execprotocol.Capability
 	Concurrency      int
 	OutputLimit      int64
@@ -71,6 +72,14 @@ func Open(config Config) (*Engine, error) {
 			return nil, err
 		}
 		config.ProcessUser = &copy
+	}
+	if config.HomeDirectory != "" {
+		if !filepath.IsAbs(config.HomeDirectory) || config.ProcessUser != nil {
+			return nil, execprotocol.ErrInvalid
+		}
+		if info, err := os.Stat(config.HomeDirectory); err != nil || !info.IsDir() {
+			return nil, execprotocol.ErrInvalid
+		}
 	}
 	if config.WorkingDirectory == "" {
 		var err error

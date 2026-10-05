@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -20,6 +21,13 @@ type ProcessUser struct {
 
 func (e *Engine) processEnvironment(extra map[string]string) ([]string, error) {
 	if e.config.ProcessUser == nil {
+		if home := e.config.HomeDirectory; home != "" {
+			values := map[string]string{"HOME": home, "NPM_CONFIG_PREFIX": home + "/.local", "PYTHONUSERBASE": home + "/.local", "PATH": home + "/.local/bin:" + os.Getenv("PATH")}
+			for key, value := range extra {
+				values[key] = value
+			}
+			return processEnvironment(values)
+		}
 		return processEnvironment(extra)
 	}
 	values := map[string]string{"HOME": e.config.ProcessUser.Home, "USER": "agent", "LOGNAME": "agent", "TMPDIR": "/tmp", "NPM_CONFIG_PREFIX": e.config.ProcessUser.Home + "/.local", "PYTHONUSERBASE": e.config.ProcessUser.Home + "/.local"}

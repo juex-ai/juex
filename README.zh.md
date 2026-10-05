@@ -4,7 +4,8 @@
 
 JueX 是服务化的 Managed Agent 平台。一次部署通过一个 Management Dashboard
 服务多个租户和用户。每个用户在每个租户中拥有一个 Fleet；Agents 在共享的持久
-Runtime 中运行，使用托管环境或明确授权的远程执行环境。部署默认使用单租户。
+Runtime 中运行，使用部署管理的 Host 或 Hosted 环境，也可使用明确授权的远程设备。
+部署默认使用单租户。
 
 ## 部署
 

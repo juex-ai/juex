@@ -41,6 +41,72 @@ func TestNativeExecutorConcurrentDeliveryRunsOnce(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorAgentHomeDefaultsDoNotMutateHostEnvironment(t *testing.T) {
+	hostHome := os.Getenv("HOME")
+	for range 2 {
+		config := nativeConfig(t)
+		config.HomeDirectory = t.TempDir()
+		engine := openNative(t, config)
+		result := nativeRun(t, engine, nativeRequest(t, "agent-home", "exec_command", native.CommandArguments{Command: `printf '%s\n' "$HOME" "$NPM_CONFIG_PREFIX" "$PYTHONUSERBASE"; printf private > "$HOME/home-proof"`}))
+		want := config.HomeDirectory + "\n" + config.HomeDirectory + "/.local\n" + config.HomeDirectory + "/.local\n"
+		if result.State != execprotocol.Completed || result.Text() != want {
+			t.Fatal("wrong Agent home", result)
+		}
+		if data, err := os.ReadFile(filepath.Join(config.HomeDirectory, "home-proof")); err != nil || string(data) != "private" {
+			t.Fatal(string(data), err)
+		}
+	}
+	if os.Getenv("HOME") != hostHome {
+		t.Fatal("Engine changed process-global HOME")
+	}
+}
+
+func TestNativeExecutorAgentHomeResolvesDirectCommands(t *testing.T) {
+	hostPath := os.Getenv("PATH")
+	for range 2 {
+		config := nativeConfig(t)
+		config.HomeDirectory = t.TempDir()
+		bin := filepath.Join(config.HomeDirectory, ".local", "bin")
+		if err := os.MkdirAll(bin, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "agent-home-tool"), []byte("#!/bin/sh\nprintf '%s' \"$HOME\"\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(os.Args[0], filepath.Join(bin, "agent-home-mcp")); err != nil {
+			t.Fatal(err)
+		}
+		engine := openNative(t, config)
+		hook := nativeRun(t, engine, nativeRequest(t, "home-hook", "run_hook", execprotocol.HookCommand{Command: []string{"agent-home-tool"}, Input: json.RawMessage(`{}`), TimeoutMS: 2000, MaxOutputBytes: 4096}))
+		var output execprotocol.HookOutput
+		if hook.State != execprotocol.Completed || json.Unmarshal(hook.Output, &output) != nil || output.Stdout != config.HomeDirectory {
+			t.Fatal("hook did not resolve its Agent's executable", hook.State, hook.Error, output)
+		}
+		observer := nativeRun(t, engine, nativeRequest(t, "home-observer", "observe_command", execprotocol.ObservableCommand{Command: []string{"agent-home-tool"}}))
+		if observer.State != execprotocol.Completed || !strings.Contains(observer.Text(), config.HomeDirectory) {
+			t.Fatal("observer did not resolve its Agent's executable", observer.State, observer.Error)
+		}
+		request := nativeRequest(t, "home-mcp", "mcp_connect", native.MCPArguments{Command: "agent-home-mcp", Args: []string{"-test.run=^TestNativeExecutorMCPHelper$"}, Environment: map[string]string{"JUEX_NATIVE_MCP_HELPER": "1", "JUEX_NATIVE_MCP_COUNTER": filepath.Join(config.HomeDirectory, "mcp-counter")}})
+		if _, err := engine.Submit(request); err != nil {
+			t.Fatal(err)
+		}
+		nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool {
+			return strings.Contains(snapshot.Text(), `"type":"connected"`)
+		})
+		call := nativeRun(t, engine, nativeRequest(t, "home-mcp-call", "mcp_call", native.MCPArguments{ConnectionID: request.ID, Name: "echo", Arguments: map[string]any{"text": "local-home"}}))
+		if call.State != execprotocol.Completed || !strings.Contains(call.Text(), "echo:local-home") {
+			t.Fatal("MCP did not execute from Agent HOME", call)
+		}
+		if err := engine.Cancel("agent-one", request.ID); err != nil {
+			t.Fatal(err)
+		}
+		nativeEventually(t, engine, request.ID, func(snapshot execprotocol.Snapshot) bool { return snapshot.State == execprotocol.Cancelled })
+	}
+	if os.Getenv("PATH") != hostPath {
+		t.Fatal("Engine changed process-global PATH")
+	}
+}
+
 func TestNativeExecutorMCPPersistsNotificationsAndCallIdentity(t *testing.T) {
 	config := nativeConfig(t)
 	engine := openNative(t, config)

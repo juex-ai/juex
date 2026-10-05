@@ -4,8 +4,9 @@
 
 JueX is a managed Agent platform. One deployment serves multiple tenants and
 users through a single Management dashboard. Each user has one Fleet per tenant;
-Agents run in a shared durable Runtime and use hosted or explicitly authorized
-remote execution environments. The default deployment has one tenant.
+Agents run in a shared durable Runtime and use deployment-managed Host or Hosted
+environments, or explicitly authorized remote devices. The default deployment has
+one tenant.
 
 ## Deploy
 

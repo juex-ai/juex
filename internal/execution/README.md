@@ -96,15 +96,28 @@ never become command output. Source captures expire only after separate file
 acknowledgment; acknowledging the small operation result does not release them.
 An executor restart leaves unfinished transfers unknown without replay.
 
-Hosted execution uses Docker's API with a pinned Linux image, cgroup v2 and
-gVisor `runsc`; missing isolation fails startup. Each Agent has one durable
-environment identity, network subnet, Workspace and Home when provisioned by the
-deployment default. Listing environments
-does not start containers. Pending operations start them on demand; unfinished
+Deployment-managed Host and Hosted environments share one lifecycle. Each Agent
+has one durable environment identity, Workspace and Home. Listing environments
+does not start executors. Pending operations start them on demand; unfinished
 processes, MCP connections and unacknowledged results prevent idle reclamation.
 The default idle timeout is five minutes. Environment row locks serialize
 reclamation with new operation admission. Rejoining a Tenant preserves the
 owned Workspace but never reauthorizes operations from an earlier epoch.
+
+`juex-execution serve --host-config /absolute/operator-config.json` enables Host
+provisioning on Linux/macOS. It is mutually exclusive with `--hosted-config`.
+The operator supplies an installed executor, private separate workspace/control
+roots, a stable deployment identity and enrollment key, and a reachable device
+endpoint. HTTPS verifies the configured CA; local HTTP requires explicit opt-in.
+Host starts independent native services, so restarting Execution leaves their
+processes and journals intact. Per-Agent HOME supplies local package locations
+without changing the platform process environment or granting OS isolation.
+Only empty unowned roots may be initialized; existing ownership, credentials and
+journals must match. Missing provisioned state requires explicit recovery.
+
+Hosted execution uses Docker's API with a pinned Linux image, cgroup v2 and
+gVisor `runsc`; missing isolation fails startup. Each environment owns a network
+subnet in addition to its persistent Workspace and Home.
 
 The trusted guest control process runs as root; every file tool, shell, PTY and
 MCP child runs as UID/GID 1000. Private enrollment and recovery state are outside
@@ -172,7 +185,17 @@ versions. Reconnection preserves the engine. Platform grants can restrict the
 locally approved Agent/capability ceiling; they cannot expand it. Revocation
 stops related queued and running operations when received by the device.
 
-Permanent Agent cleanup cancels owned operations and transfers depending on its Artifacts, including imports running in another Agent’s environment. Their original identities remain until real settlement; unknown results stay unresolved. Native user files are never removed. Unreceived source captures are explicitly discarded before result acknowledgment. Hosted containers and networks stop before Workspace, Home and private control data are removed; storage ownership and allocation are verified on every retry. Minimal outcome receipts remain after private payloads are erased.
+Permanent Agent cleanup cancels owned operations and transfers depending on its
+Artifacts, including imports running in another Agent's environment. Their
+original identities remain until real settlement; unknown results stay unresolved.
+Externally paired devices and explicitly selected user directories are never
+erased. Unreceived source captures are explicitly discarded before result
+acknowledgment. Managed Host retains its connector and journal until cancellation
+is confirmed, then removes its service and marked owned directories. Stopping a
+native executor cannot settle unknown external processes. Hosted containers and
+networks stop before Workspace, Home and private control data are removed.
+Every retry checks ownership; deletion can resume after a database rollback.
+Minimal outcome receipts remain after private payloads are erased.
 
 Operation and Artifact audit facts default to 90 days, configurable through `--audit-days`. Retention does not delete operation identities, unknown outcomes, cancellation decisions, file metadata or business output.
 
