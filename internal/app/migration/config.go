@@ -33,6 +33,7 @@ type ConfigContext struct {
 // must still be verified. Private provider values are deliberately not JSON.
 type ResolvedConfig struct {
 	AgentID                   string          `json:"agent_id"`
+	StartupModelOverride      bool            `json:"startup_model_override"`
 	Models                    []ConfigModel   `json:"models"`
 	Preset                    string          `json:"preset"`
 	Modules                   map[string]bool `json:"modules"`
@@ -197,6 +198,7 @@ func resolveAgentConfig(source legacy.Fleet, agent legacy.Agent, evidence Config
 	if len(context.ModelRefs) > 0 {
 		s.models = slices.Clone(context.ModelRefs)
 	}
+	s.value.StartupModelOverride = len(context.ModelRefs) > 0
 	return s.resolve()
 }
 

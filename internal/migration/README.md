@@ -35,6 +35,15 @@ private provider values. The result describes disk configuration, not proven
 inherited environment, authentication or target resource bindings. Unsupported
 fields and missing or contradictory capture evidence stop resolution explicitly.
 
+`ResolveModels` then applies explicitly supplied effective source environment and
+captured Codex credentials. Unknown environment values are distinct from absent
+or empty values; private profiles never enter JSON reports. It preserves fallback
+selection and request-time identity templates without consulting the importing
+process or refreshing tokens. The caller still has to prove process/auth capture
+provenance and provider availability. Source output caps, target budget reservation
+and Management account bindings must be reconciled before catalog publication;
+successful source resolution alone is not a deployable target configuration.
+
 Pure message and terminal-input conversion lives in `internal/app/migration`,
 where typed service contracts may meet the fixed source reader. Message identities
 are scoped to the target Agent and Thread. Text spool references become verified
