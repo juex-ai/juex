@@ -6,15 +6,20 @@ test('Calendar Main delivery and recovery controls preserve their distinct meani
   const user = { id: 'owner', email: 'owner@example.test', email_verified: true };
   const tenant = { id: 'tenant', name: 'Workspace', role: 'admin' };
   const agent = { id: 'agent', name: 'Supervisor', status: 'active' };
+  const thread = { id: 'main', agent_id: 'agent', kind: 'main', name: 'Main', retention: 'active', state: 'queued', generation: 1, sequence: 1, pending_inputs: 1, held_inputs: 0 };
   let schedule;
   await page.route('**/api/**', async route => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     const json = value => route.fulfill({ contentType: 'application/json', body: JSON.stringify(value) });
     if (path === '/api/auth/session') return json(user);
     if (path === '/api/config') return json({ email_enabled: false });
     if (path === '/api/tenants') return json([tenant]);
     if (path.endsWith('/fleet')) return json({ owner: user, membership: { status: 'active' }, settings: {}, agents: [agent] });
     if (path.endsWith('/notifications')) return json({ items: [], unread: 0 });
+    if (path.endsWith('/agents/agent')) return json({ agent, owner_id: user.id, can_execute: true });
+    if (path.endsWith('/threads')) return json([thread]);
+    if (path.endsWith('/events')) return json({ thread, events: Number(url.searchParams.get('after') || 0) === 0 ? [{ id: 'accepted', sequence: 1, kind: 'input.accepted', data: { receipt: { id: 'input' }, text: 'Calendar trigger: Use retained Main context', source: { kind: 'application_trigger', application: 'calendar' } } }] : [], next_sequence: 1, has_more: false });
     if (path.endsWith('/calendar')) return json({ enabled: true, epoch: 1, version: 1, schedules: schedule ? 1 : 0, pending: 0 });
     if (path.endsWith('/calendar/changes')) {
       const request = route.request().postDataJSON();
@@ -48,4 +53,10 @@ test('Calendar Main delivery and recovery controls preserve their distinct meani
   await expect(page.getByRole('link', { name: '查看 Main' })).toHaveAttribute('href', '/t/tenant/agents/agent?thread=main');
   await expect(page.getByRole('button', { name: '取消本次执行' })).toHaveCount(0);
   await expect(page.getByText('已送达 Main，执行结果请查看对话。', { exact: false })).toBeVisible();
+  await page.getByRole('link', { name: '查看 Main' }).click();
+  const trigger = page.locator('details.management-tool-row').filter({ hasText: '系统动态 · 已接收，等待执行' });
+  await expect(trigger).toBeVisible();
+  await trigger.locator('summary').click();
+  await expect(trigger.getByText('Calendar trigger: Use retained Main context', { exact: true })).toBeVisible();
+  await expect(page.locator('.management-message-author').filter({ hasText: '你' })).toHaveCount(0);
 });
