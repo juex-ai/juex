@@ -3,6 +3,7 @@ package calendar
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/juex-ai/juex/internal/calendar/recurrence"
@@ -16,11 +17,14 @@ type Repository interface {
 }
 
 type Service struct {
-	Admission  maintenance.Admission
-	Repository Repository
-	Authority  application.Authority
-	Workers    WorkerGateway
-	Notifier   Notifier
+	Admission   maintenance.Admission
+	Repository  Repository
+	Authority   application.Authority
+	Workers     WorkerGateway
+	MainInputs  MainGateway
+	schedulerMu sync.Mutex
+	scheduler   Scheduler
+	Notifier    Notifier
 }
 
 type Definition struct {
@@ -29,6 +33,7 @@ type Definition struct {
 	Mode               string          `json:"mode"`
 	AgentID            string          `json:"agent_id,omitempty"`
 	Rule               recurrence.Rule `json:"rule"`
+	CatchUp            string          `json:"catch_up,omitempty"`
 	MaxLatenessMinutes int             `json:"max_lateness_minutes"`
 }
 
@@ -58,11 +63,13 @@ type Occurrence struct {
 	ScheduleID      string `json:"schedule_id"`
 	ScheduleVersion int64  `json:"schedule_version"`
 	Definition
-	ScheduledAt time.Time `json:"scheduled_at"`
-	State       string    `json:"state"`
-	WorkerID    string    `json:"worker_id,omitempty"`
-	Operations  []string  `json:"operations,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ScheduledAt  time.Time `json:"scheduled_at"`
+	State        string    `json:"state"`
+	MainThreadID string    `json:"main_thread_id,omitempty"`
+	InputID      string    `json:"input_id,omitempty"`
+	WorkerID     string    `json:"worker_id,omitempty"`
+	Operations   []string  `json:"operations,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type Delivery struct {

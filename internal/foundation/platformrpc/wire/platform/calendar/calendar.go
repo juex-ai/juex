@@ -62,6 +62,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"AssignTrigger": kitex.NewMethodInfo(
+		assignTriggerHandler,
+		newCalendarAssignTriggerArgs,
+		newCalendarAssignTriggerResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Assignment": kitex.NewMethodInfo(
 		assignmentHandler,
 		newCalendarAssignmentArgs,
@@ -268,6 +275,24 @@ func newCalendarChangeResult() interface{} {
 	return platform.NewCalendarChangeResult()
 }
 
+func assignTriggerHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.CalendarAssignTriggerArgs)
+	realResult := result.(*platform.CalendarAssignTriggerResult)
+	success, err := handler.(platform.Calendar).AssignTrigger(ctx, realArg.ScopeJSON, realArg.OccurrenceID, realArg.Epoch)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newCalendarAssignTriggerArgs() interface{} {
+	return platform.NewCalendarAssignTriggerArgs()
+}
+
+func newCalendarAssignTriggerResult() interface{} {
+	return platform.NewCalendarAssignTriggerResult()
+}
+
 func assignmentHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.CalendarAssignmentArgs)
 	realResult := result.(*platform.CalendarAssignmentResult)
@@ -388,6 +413,18 @@ func (p *kClient) Change(ctx context.Context, accessJSON string, scopeJSON strin
 	_args.ChangeJSON = changeJSON
 	var _result platform.CalendarChangeResult
 	if err = p.c.Call(ctx, "Change", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) AssignTrigger(ctx context.Context, scopeJSON string, occurrenceID string, epoch int64) (r *platform.Reply, err error) {
+	var _args platform.CalendarAssignTriggerArgs
+	_args.ScopeJSON = scopeJSON
+	_args.OccurrenceID = occurrenceID
+	_args.Epoch = epoch
+	var _result platform.CalendarAssignTriggerResult
+	if err = p.c.Call(ctx, "AssignTrigger", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

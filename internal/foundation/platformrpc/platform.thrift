@@ -56,11 +56,15 @@ service Calendar {
   Reply Schedules(1: string accessJSON, 2: i32 offset, 3: i32 limit)
   Reply Occurrences(1: string accessJSON, 2: string scheduleID, 3: i32 offset, 4: i32 limit)
   Reply Change(1: string accessJSON, 2: string scopeJSON, 3: string commandID, 4: string changeJSON)
+  Reply AssignTrigger(1: string scopeJSON, 2: string occurrenceID, 3: i64 epoch)
   Reply Assignment(1: string scopeJSON, 2: string occurrenceID, 3: i64 epoch)
   Reply CancelCommand(1: string scopeJSON, 2: string commandID)
 }
 
 service Runtime {
+  Reply AdmitMainTrigger(1: string scopeJSON, 2: string triggerJSON)
+  Reply MainTriggerReceipt(1: string scopeJSON, 2: string triggerID)
+  Reply CancelMainTrigger(1: string scopeJSON, 2: string triggerID)
   Reply Purge(1: string requestJSON)
 	Reply Usage(1: string actorID, 2: string queryJSON)
 	Reply OperatorUsage(1: string queryJSON)

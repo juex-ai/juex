@@ -135,7 +135,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		message := llm.TextMessage(llm.RoleUser, text)
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
-		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" {
+		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" || work.Source.Kind == "application_trigger" {
 			message.Kind = llm.MessageKindSystemNotice
 		}
 		if work.Source.Kind != "compaction" {

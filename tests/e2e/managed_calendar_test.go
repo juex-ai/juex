@@ -29,7 +29,9 @@ func calendarFixture(t *testing.T) (memoryFixture, *calendar.Service, *calendarp
 		t.Fatal(err)
 	}
 	store := calendarpg.New(f.pool)
-	return f, &calendar.Service{Repository: store, Authority: managed.RuntimeAuthority{Directory: f.directory}}, store
+	service := &calendar.Service{Repository: store, Authority: managed.RuntimeAuthority{Directory: f.directory}}
+	t.Cleanup(service.CloseScheduler)
+	return f, service, store
 }
 
 func calendarChange(agent string) calendar.Change {

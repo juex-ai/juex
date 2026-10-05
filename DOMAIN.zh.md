@@ -26,7 +26,9 @@ User 是具有稳定身份的全局账号，与登录凭据分离。Tenant 通�
 | Calendar | Fleet 日程、触发任务和投递身份。 |
 
 Agent 拥有永久 Main 和独立 Worker。Worker 记录父线程，但父线程取消不会撤销已经
-接纳的独立工作。应用任务使用限定范围的普通 Worker。跨 Agent 协作必须显式进行，
+接纳的独立工作。应用模型任务使用限定范围的普通 Worker。Calendar 也可向永久
+Main 投递输入；接纳后输入归 Runtime 所有，不代表模型执行完成。取消 Calendar
+投递不能撤回已接收的 Main 输入，也不能取消 Main 的其他工作。跨 Agent 协作必须显式进行，
 且限定在同一所有者和 Fleet。
 
 Activation 是可替换的运行容量，不是 Agent 身份。输入先持久提交，再返回接纳回执。

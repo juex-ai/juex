@@ -13,6 +13,27 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"AdmitMainTrigger": kitex.NewMethodInfo(
+		admitMainTriggerHandler,
+		newRuntimeAdmitMainTriggerArgs,
+		newRuntimeAdmitMainTriggerResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"MainTriggerReceipt": kitex.NewMethodInfo(
+		mainTriggerReceiptHandler,
+		newRuntimeMainTriggerReceiptArgs,
+		newRuntimeMainTriggerReceiptResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"CancelMainTrigger": kitex.NewMethodInfo(
+		cancelMainTriggerHandler,
+		newRuntimeCancelMainTriggerArgs,
+		newRuntimeCancelMainTriggerResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Purge": kitex.NewMethodInfo(
 		purgeHandler,
 		newRuntimePurgeArgs,
@@ -189,6 +210,60 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func admitMainTriggerHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeAdmitMainTriggerArgs)
+	realResult := result.(*platform.RuntimeAdmitMainTriggerResult)
+	success, err := handler.(platform.Runtime).AdmitMainTrigger(ctx, realArg.ScopeJSON, realArg.TriggerJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeAdmitMainTriggerArgs() interface{} {
+	return platform.NewRuntimeAdmitMainTriggerArgs()
+}
+
+func newRuntimeAdmitMainTriggerResult() interface{} {
+	return platform.NewRuntimeAdmitMainTriggerResult()
+}
+
+func mainTriggerReceiptHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeMainTriggerReceiptArgs)
+	realResult := result.(*platform.RuntimeMainTriggerReceiptResult)
+	success, err := handler.(platform.Runtime).MainTriggerReceipt(ctx, realArg.ScopeJSON, realArg.TriggerID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeMainTriggerReceiptArgs() interface{} {
+	return platform.NewRuntimeMainTriggerReceiptArgs()
+}
+
+func newRuntimeMainTriggerReceiptResult() interface{} {
+	return platform.NewRuntimeMainTriggerReceiptResult()
+}
+
+func cancelMainTriggerHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeCancelMainTriggerArgs)
+	realResult := result.(*platform.RuntimeCancelMainTriggerResult)
+	success, err := handler.(platform.Runtime).CancelMainTrigger(ctx, realArg.ScopeJSON, realArg.TriggerID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeCancelMainTriggerArgs() interface{} {
+	return platform.NewRuntimeCancelMainTriggerArgs()
+}
+
+func newRuntimeCancelMainTriggerResult() interface{} {
+	return platform.NewRuntimeCancelMainTriggerResult()
 }
 
 func purgeHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -487,6 +562,39 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) AdmitMainTrigger(ctx context.Context, scopeJSON string, triggerJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeAdmitMainTriggerArgs
+	_args.ScopeJSON = scopeJSON
+	_args.TriggerJSON = triggerJSON
+	var _result platform.RuntimeAdmitMainTriggerResult
+	if err = p.c.Call(ctx, "AdmitMainTrigger", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) MainTriggerReceipt(ctx context.Context, scopeJSON string, triggerID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeMainTriggerReceiptArgs
+	_args.ScopeJSON = scopeJSON
+	_args.TriggerID = triggerID
+	var _result platform.RuntimeMainTriggerReceiptResult
+	if err = p.c.Call(ctx, "MainTriggerReceipt", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) CancelMainTrigger(ctx context.Context, scopeJSON string, triggerID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeCancelMainTriggerArgs
+	_args.ScopeJSON = scopeJSON
+	_args.TriggerID = triggerID
+	var _result platform.RuntimeCancelMainTriggerResult
+	if err = p.c.Call(ctx, "CancelMainTrigger", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) Purge(ctx context.Context, requestJSON string) (r *platform.Reply, err error) {
