@@ -31,6 +31,7 @@ func (d *Directory) SnapshotPlan(ctx context.Context, scope management.ModelCall
 	}
 	plan.WorkerDepth = authority.Agent.WorkerDepth
 	plan.Capabilities = authority.Agent.Capabilities
+	plan.DynamicInstructions = authority.Agent.DynamicInstructions
 	plan.Hooks = authority.Agent.Hooks
 	plan.Extensions = authority.Agent.Extensions
 	plan.AgentVersion, plan.Instructions, plan.RequestedModelID = authority.Agent.Version, authority.Agent.Instructions, authority.ModelID

@@ -104,6 +104,7 @@ func TestManagedLiveProviderTools(t *testing.T) {
 			validateLiveProviderTools(t, minimal)
 		})
 	}
+	t.Run("dynamic_instructions", validateLiveDynamicInstructions)
 }
 
 func validateLiveProviderTools(t *testing.T, minimal bool) {

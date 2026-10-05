@@ -32,9 +32,11 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
     } else if (event.kind === 'input.held' && data.input_id) {
       held.add(data.input_id)
       const row = messages.get(data.input_id)
-      const status = data.reason === 'compaction_failed' ? '上下文压缩未完成，本轮已暂停；原始内容保留' : data.reason === 'context_limit' ? '上下文超出可用模型容量，本轮已暂停' : data.reason === 'model_unavailable' ? '模型不可用，已暂停；配置后请重新提交' : '授权已改变，未继续执行'
+      const status = data.reason === 'instructions_unavailable' ? '指令文件读取未完成，本轮已暂停；检查执行环境或来源设置后请重新提交' : data.reason === 'compaction_failed' ? '上下文压缩未完成，本轮已暂停；原始内容保留' : data.reason === 'context_limit' ? '上下文超出可用模型容量，本轮已暂停' : data.reason === 'model_unavailable' ? '模型不可用，已暂停；配置后请重新提交' : '授权已改变，未继续执行'
       if (row) row.status = status
       else rows.push({ kind: 'notice', id: event.id, text: status })
+    } else if (event.kind === 'instructions.failed' || event.kind === 'instructions.unknown') {
+      rows.push({ kind: 'notice', id: event.id, text: `指令文件读取未完成${data.error ? `：${data.error}` : '。请检查执行环境和来源设置。'}` })
     } else if (event.kind === 'context.requested') {
       rows.push({ kind: 'notice', id: event.id, text: '上下文压缩请求已接收，将按顺序执行。' })
     } else if (event.kind === 'context.compacting') {

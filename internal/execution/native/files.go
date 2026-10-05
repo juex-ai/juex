@@ -65,6 +65,8 @@ func RunFileOperation(ctx context.Context, directory, kind string, args FileArgu
 		return err
 	}
 	switch kind {
+	case "read_agent_instructions":
+		return readAgentInstructions(ctx, directory, args.Path, writer)
 	case "inspect_extension":
 		return inspectExtension(ctx, path, writer)
 	case "read":

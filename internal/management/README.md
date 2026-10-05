@@ -59,6 +59,11 @@ Execution and application owners enforce their own operations through the same
 authority snapshot. A per-Agent application restriction does not change Fleet
 application enablement or erase application history.
 
+Dynamic instruction sources are explicitly enabled and default to off. An
+optional global path belongs to the selected execution environment. Omitting
+this setting preserves it during other configuration edits; disabling or changing
+an active source advances the Agent execution epoch with the configuration write.
+
 Models are deployment-owned. Tenant catalogs inherit by default or use an
 explicit allowlist; an empty allowlist grants nothing. Fleet defaults inherit
 the platform default, and Agents may override them. Operators configure flat,

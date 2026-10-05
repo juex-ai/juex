@@ -18,6 +18,7 @@ import (
 )
 
 type toolRunner struct {
+	instructions     InstructionStore
 	admission        maintenance.Admission
 	hooks            HookStore
 	applications     ApplicationGateway
@@ -40,6 +41,9 @@ func (r toolRunner) run(ctx context.Context) {
 		for range 2 {
 			workers.Go(func() { r.deliverHooks(ctx) })
 		}
+	}
+	if r.instructions != nil {
+		workers.Go(func() { r.deliverInstructions(ctx) })
 	}
 	if r.collaboration != nil {
 		workers.Go(func() { r.deliverThreadResults(ctx) })

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
+	"github.com/juex-ai/juex/internal/foundation/instructionpolicy"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
@@ -101,14 +102,15 @@ type Lease struct {
 }
 
 type TurnConfig struct {
-	Capabilities     agentpolicy.Policy        `json:"capabilities"`
-	Extensions       []extensionpolicy.Binding `json:"extensions,omitempty"`
-	Hooks            []hookpolicy.Declaration  `json:"hooks,omitempty"`
-	WorkerDepth      int                       `json:"worker_depth"`
-	AgentVersion     int64                     `json:"agent_version"`
-	Instructions     string                    `json:"instructions"`
-	RequestedModelID string                    `json:"requested_model_id"`
-	Models           []ModelConfig             `json:"models"`
+	DynamicInstructions instructionpolicy.DynamicInstructions `json:"dynamic_instructions"`
+	Capabilities        agentpolicy.Policy                    `json:"capabilities"`
+	Extensions          []extensionpolicy.Binding             `json:"extensions,omitempty"`
+	Hooks               []hookpolicy.Declaration              `json:"hooks,omitempty"`
+	WorkerDepth         int                                   `json:"worker_depth"`
+	AgentVersion        int64                                 `json:"agent_version"`
+	Instructions        string                                `json:"instructions"`
+	RequestedModelID    string                                `json:"requested_model_id"`
+	Models              []ModelConfig                         `json:"models"`
 }
 
 type ModelConfig struct {
@@ -159,13 +161,14 @@ type Attempt struct {
 }
 
 type ModelRequest struct {
-	Recall          *llm.Message     `json:"-"`
-	Generation      int64            `json:"generation"`
-	MaxOutputTokens int              `json:"max_output_tokens"`
-	Compaction      *CompactionDraft `json:"compaction,omitempty"`
-	Model           ModelConfig      `json:"model"`
-	System          string           `json:"system"`
-	Messages        []llm.Message    `json:"messages"`
-	Tools           []llm.ToolSpec   `json:"tools"`
-	Purpose         string           `json:"purpose"`
+	DynamicInstructions *InstructionReceipt `json:"dynamic_instructions,omitempty"`
+	Recall              *llm.Message        `json:"-"`
+	Generation          int64               `json:"generation"`
+	MaxOutputTokens     int                 `json:"max_output_tokens"`
+	Compaction          *CompactionDraft    `json:"compaction,omitempty"`
+	Model               ModelConfig         `json:"model"`
+	System              string              `json:"system"`
+	Messages            []llm.Message       `json:"messages"`
+	Tools               []llm.ToolSpec      `json:"tools"`
+	Purpose             string              `json:"purpose"`
 }
