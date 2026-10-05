@@ -53,6 +53,15 @@ provenance and provider availability. Source output caps, target budget reservat
 and Management account bindings must be reconciled before catalog publication;
 successful source resolution alone is not a deployable target configuration.
 
+`ConvertModels` builds a private publication plan from resolved profiles and
+explicit reservations. Effective provider/model identities deduplicate only when
+all private settings agree. Shared primary models require identical ordered,
+direct fallback chains, including an explicit empty chain. Source request caps
+and effective capabilities remain unchanged; an implicit endpoint must be resolved
+before planning. The plan omits secrets from JSON and grants no authority to
+overwrite existing catalog entries. Publication still needs Management validation,
+private target-state comparison, tenant access and Agent bindings.
+
 Pure message and terminal-input conversion lives in `internal/app/migration`,
 where typed service contracts may meet the fixed source reader. Message identities
 are scoped to the target Agent and Thread. Text spool references become verified

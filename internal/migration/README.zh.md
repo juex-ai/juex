@@ -39,6 +39,12 @@ Workspace、Agent 和显式启动文件层。远程导入必须匹配源地址�
 以及 provider 可用性。发布模型目录前，还需协调源输出上限、目标预算预留和
 Management 账户绑定；源解析成功本身不代表已得到可部署的目标配置。
 
+`ConvertModels` 从已解析 profile 和显式预算预留生成私有发布计划。只有全部私有
+设置相同，才合并有效 provider/model 身份。共享主模型必须有一致的有序、直接
+fallback 链，包括显式空链。保留源请求上限和有效能力；隐式 endpoint 必须先完成
+解析。计划的 JSON 不包含密钥，也不授予覆盖现有目录项的权限。发布仍需经过
+Management 校验、私有目标状态比对、租户访问策略和 Agent 绑定。
+
 消息与终态输入的纯转换位于 `internal/app/migration`，在这里组合服务的类型契约和
 固定源格式 reader。消息身份限定在目标 Agent 与 Thread 内。spool 引用恢复为经过
 校验的完整正文；图片引用要求匹配的 Execution 私有 Artifact 回执。仅在逐字重建
