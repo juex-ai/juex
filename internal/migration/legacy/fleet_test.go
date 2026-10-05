@@ -1,6 +1,7 @@
 package legacy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -104,6 +105,68 @@ func TestReadFleetPreservesConfigImportCache(t *testing.T) {
 		}
 	}
 	t.Fatal("lost last-known-good imported configuration bytes")
+}
+
+func TestWorkspaceResourcesCaptureExactInputsWithoutCopyingUserFiles(t *testing.T) {
+	dir, workspace := legacyFleetFixture(t)
+	if err := os.Mkdir(filepath.Join(workspace, ".agents"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	resources := map[string]string{
+		".env":              "PROVIDER_MODEL=fixture:local\n",
+		"AGENTS.md":         "workspace guidance\r\n",
+		".agents/AGENTS.md": "local guidance\n",
+	}
+	for name, value := range resources {
+		writeFixture(t, filepath.Join(workspace, name), []byte(value))
+	}
+	writeFixture(t, filepath.Join(workspace, "ordinary-user-file.txt"), []byte("not a config resource"))
+	before := fixtureHashes(t, workspace)
+	captured, err := ReadFleet(dir, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, file := range captured.Workspaces[0].Files {
+		got[file.Path] = string(file.Data)
+	}
+	for name, want := range resources {
+		if got[name] != want {
+			t.Fatalf("resource %s was not preserved exactly", name)
+		}
+	}
+	if _, exists := got["ordinary-user-file.txt"]; exists || !reflect.DeepEqual(before, fixtureHashes(t, workspace)) {
+		t.Fatal("capture changed or absorbed unrelated Workspace data")
+	}
+}
+
+func TestWorkspaceResourcesRejectChangesAndLateCreation(t *testing.T) {
+	for _, name := range []string{".env", "AGENTS.md", ".agents/AGENTS.md"} {
+		for _, present := range []bool{false, true} {
+			t.Run(name+fmt.Sprint("/present=", present), func(t *testing.T) {
+				workspace := t.TempDir()
+				if err := os.Mkdir(filepath.Join(workspace, ".agents"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(workspace, name)
+				if present {
+					writeFixture(t, path, []byte("before"))
+				}
+				_, reader, err := readWorkspaceConfig(AgentDefinition{ID: "abc234", Workspace: workspace})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = reader.root.Close() })
+				if err := reader.unchanged(); err != nil {
+					t.Fatal(err)
+				}
+				writeFixture(t, path, []byte("after and changed size"))
+				if err := reader.unchanged(); err == nil {
+					t.Fatal("resource changed without invalidating capture")
+				}
+			})
+		}
+	}
 }
 
 func TestReadFleetCapturesExplicitSourceDefaultHome(t *testing.T) {

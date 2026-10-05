@@ -20,7 +20,8 @@ ranges retain their original scope, including ranges spanning Generations.
 Agent capture includes referenced media/spool bytes and verifies their hashes.
 Fleet capture requires the source user's default Home explicitly, preserves
 configuration layers and import-cache bytes, and records absent configuration.
-It reads only configuration from external Workspaces; it neither takes ownership
+It captures configuration, `.env`, `AGENTS.md` and `.agents/AGENTS.md` from external
+Workspaces, including exact bytes or recorded absence; it neither takes ownership
 of them nor copies their arbitrary contents. Capturing configuration or opaque
 extension files does not prove their behavior has been converted. A complete
 migration still needs verified backups, service-owned import and behavior

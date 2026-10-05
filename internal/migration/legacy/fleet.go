@@ -308,8 +308,10 @@ func readWorkspaceConfig(agent AgentDefinition) (Workspace, *sourceReader, error
 	if filepath.Base(filepath.Clean(agent.Workspace)) == ".juex" {
 		config = "juex.yaml"
 	}
-	if _, err := r.optionalRead(config); err != nil {
-		return Workspace{}, nil, err
+	for _, name := range []string{config, ".env", "AGENTS.md", ".agents/AGENTS.md"} {
+		if _, err := r.optionalRead(name); err != nil {
+			return Workspace{}, nil, err
+		}
 	}
 	failed = false
 	return Workspace{AgentID: agent.ID, Path: agent.Workspace, ResolvedPath: resolved, Files: r.files, AbsentFiles: r.absent}, r, nil
