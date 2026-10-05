@@ -18,6 +18,14 @@ func digest(value any) string {
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
+func proposalKey(scope application.Scope, thread, key string, automatic bool) string {
+	key = scope.AgentID + "/" + thread + "/" + key
+	if automatic {
+		return "automatic/" + key
+	}
+	return key
+}
+
 func overlaps(a, b mc.Source) bool {
 	return a.FleetID == b.FleetID && a.AgentID == b.AgentID && a.ThreadID == b.ThreadID && a.From <= b.Through && b.From <= a.Through
 }
@@ -80,7 +88,7 @@ func (s *State) Propose(scope application.Scope, thread string, p mc.Proposal, a
 	if bytes > mc.MaxBatchBytes {
 		return mc.Receipt{}, application.ErrInvalid
 	}
-	key := scope.AgentID + "/" + thread + "/" + p.Key
+	key := proposalKey(scope, thread, p.Key, automatic)
 	hash := digest(struct {
 		Proposal  mc.Proposal
 		Automatic bool

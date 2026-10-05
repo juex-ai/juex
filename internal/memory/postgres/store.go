@@ -26,6 +26,9 @@ var purgeSchema string
 //go:embed import_schema.sql
 var importSchema string
 
+//go:embed review_keys_schema.sql
+var reviewKeysSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -45,7 +48,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.memory.migrations')); CREATE SCHEMA IF NOT EXISTS memory; CREATE TABLE IF NOT EXISTS memory.schema_versions(version integer PRIMARY KEY, checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, purgeSchema, importSchema}
+	migrations := []string{schema, purgeSchema, importSchema, reviewKeysSchema}
 	for i, migration := range migrations {
 		checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(migration)))
 		var stored string

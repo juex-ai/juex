@@ -42,7 +42,9 @@ func (s *Store) ImportFleet(ctx context.Context, scope application.Scope, value 
 	// A Fleet-scoped check alone cannot detect an individual Agent's deletion.
 	agents := map[string]bool{}
 	for _, review := range state.Reviews {
-		agents[review.Scope.AgentID] = true
+		if review.Scope.AgentID != "" {
+			agents[review.Scope.AgentID] = true
+		}
 	}
 	for _, source := range state.ImportedSources {
 		agents[source.Scope.AgentID] = true

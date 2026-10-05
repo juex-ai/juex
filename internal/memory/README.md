@@ -67,6 +67,9 @@ terminal receipts and source evidence without creating jobs or notifications.
 Historical review authority cannot authorize new decisions. Imported source
 opt-outs survive configuration changes; retained evidence is not an active
 participation buffer. Forgetting and owner cleanup also apply to this history.
+Repeated historical attempts keep distinct receipts; only the source index's
+current receipt owns its proposal key. Human administration receipts belong to
+the Fleet without an invented Agent, Thread or current decision authorization.
 
 Advanced recall prepares one bounded keyword-search snapshot per original human
 input. Runtime persists even an unavailable outcome, so recovery, retries and tool

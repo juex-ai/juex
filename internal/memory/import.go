@@ -38,7 +38,10 @@ type ImportedReview struct {
 	Proposal  mc.Proposal       `json:"proposal"`
 	Receipt   mc.Receipt        `json:"receipt"`
 	Automatic bool              `json:"automatic"`
-	History   ReviewHistory     `json:"history"`
+	// Several historical receipts may share a proposal key; only its current
+	// source index owner participates in deduplication after import.
+	RetainKey bool          `json:"retain_key"`
+	History   ReviewHistory `json:"history"`
 }
 
 // FleetImport is an offline snapshot. It cannot supply live jobs, commands,
@@ -125,8 +128,13 @@ func (value FleetImport) BuildState(owner application.Scope) (*State, error) {
 	}
 	for _, r := range value.Reviews {
 		id := r.Receipt.ID
-		key := r.Scope.AgentID + "/" + r.ThreadID + "/" + r.Proposal.Key
-		if !importScope(owner, r.Scope, r.ThreadID) || id == "" || len(id) > 128 || s.Reviews[id] != nil || !terminal(r.Receipt.State) || r.Receipt.UpdatedAt.IsZero() || r.Receipt.Attempts < 0 || r.Proposal.Key == "" || len(r.Proposal.Key) > 128 || s.Keys[key] != "" || !importHash(r.History.SourceSHA256) || len(r.History.Fingerprint) > 128 || len(r.History.DecisionHash) > 128 || len(r.Proposal.Text)+len(r.Proposal.Reason) > mc.MaxBatchBytes || len(r.Proposal.Sources) > 100 {
+		key := proposalKey(r.Scope, r.ThreadID, r.Proposal.Key, r.Automatic)
+		validScope := importScope(owner, r.Scope, r.ThreadID)
+		if r.Scope.AgentID == "" {
+			// Fleet administration has no Runtime Thread or replayable proposal.
+			validScope = r.Scope.SameAuthority(owner) && r.ThreadID == "" && !r.Automatic && !r.RetainKey && r.Proposal.Text == "" && r.Proposal.Reason == "" && len(r.Proposal.Sources)+len(r.Proposal.Evidence) == 0
+		}
+		if !validScope || id == "" || len(id) > 128 || s.Reviews[id] != nil || !terminal(r.Receipt.State) || r.Receipt.UpdatedAt.IsZero() || r.Receipt.Attempts < 0 || r.Proposal.Key == "" || len(r.Proposal.Key) > 128 || r.RetainKey && s.Keys[key] != "" || !importHash(r.History.SourceSHA256) || len(r.History.Fingerprint) > 128 || len(r.History.DecisionHash) > 128 || len(r.Proposal.Text)+len(r.Proposal.Reason) > mc.MaxBatchBytes || len(r.Proposal.Sources) > 100 {
 			return nil, application.ErrInvalid
 		}
 		for _, ref := range r.Proposal.Sources {
@@ -154,7 +162,9 @@ func (value FleetImport) BuildState(owner application.Scope) (*State, error) {
 			Proposal  mc.Proposal
 			Automatic bool
 		}{r.Proposal, r.Automatic})}
-		s.Keys[key] = id
+		if r.RetainKey {
+			s.Keys[key] = id
+		}
 	}
 	for _, source := range value.Sources {
 		key := source.Scope.AgentID + "/" + source.ThreadID

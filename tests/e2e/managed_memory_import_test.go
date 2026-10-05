@@ -21,6 +21,48 @@ import (
 	memorypg "github.com/juex-ai/juex/internal/memory/postgres"
 )
 
+func TestManagedMemoryReviewKeyMigrationPreservesNamespaces(t *testing.T) {
+	f := managedMemory(t)
+	ctx := context.Background()
+	if _, err := f.service.Configure(ctx, f.human, 1, true, mc.Advanced); err != nil {
+		t.Fatal(err)
+	}
+	proposal := f.proposal("shared-key")
+	automatic, err := f.service.Propose(ctx, f.scope, f.thread, proposal, true, "automatic-before-upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey := f.scope.AgentID + "/" + f.thread + "/" + proposal.Key
+	// Schema 3 used the same key shape for automatic and explicit proposals.
+	if _, err := f.pool.Exec(ctx, `UPDATE memory.fleets SET state=jsonb_set(state,'{keys}',jsonb_build_object($1::text,$2::text))`, oldKey, automatic.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `DELETE FROM memory.schema_versions WHERE version=4`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := memorypg.Migrate(ctx, f.pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.service.Repository = memorypg.New(f.pool)
+	if receipt, err := f.service.Propose(ctx, f.scope, f.thread, proposal, true, "automatic-after-upgrade"); err != nil || receipt.ID != automatic.ID {
+		t.Fatal("upgrade lost existing automatic identity", receipt, err)
+	}
+	explicit, err := f.service.Propose(ctx, f.scope, f.thread, proposal, false, "explicit-after-upgrade")
+	if err != nil || explicit.ID == automatic.ID {
+		t.Fatal("automatic and explicit proposal keys collided", explicit, err)
+	}
+	if err := f.store.View(ctx, f.scope, func(s *memory.State) error {
+		if len(s.Keys) != 2 || s.Keys[oldKey] != explicit.ID || s.Keys["automatic/"+oldKey] != automatic.ID {
+			t.Fatal("migration left an alias or rewrote receipts", s.Keys)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagedMemoryImportRejectsExpandedStateAtomically(t *testing.T) {
 	f := managedMemory(t)
 	value := memoryImportFixture(f)
@@ -69,7 +111,7 @@ func memoryImportFixture(f memoryFixture) memory.FleetImport {
 	evidence := proposal.Evidence[0]
 	evidence.Kind, evidence.Text, evidence.Source.From, evidence.Source.Through = "assistant", "Old assistant evidence", 2, 3
 	source.Evidence = []mc.Evidence{evidence}
-	return memory.FleetImport{Source: "fixture/fleet", SourceSHA256: strings.Repeat("b", 64), Control: application.Control{Enabled: true, Epoch: 1, Version: 1}, Fence: 1, Strategy: mc.Basic, AdvancedSince: time.Now().UTC(), Entries: []mc.Entry{entry}, Reviews: []memory.ImportedReview{{Scope: f.scope, ThreadID: f.thread, Proposal: proposal, Receipt: receipt, History: memory.ReviewHistory{SourceSHA256: strings.Repeat("c", 64), Fingerprint: "old-fingerprint", DecisionHash: "old-decision"}}}, Sources: []memory.HistoricalSource{source}}
+	return memory.FleetImport{Source: "fixture/fleet", SourceSHA256: strings.Repeat("b", 64), Control: application.Control{Enabled: true, Epoch: 1, Version: 1}, Fence: 1, Strategy: mc.Basic, AdvancedSince: time.Now().UTC(), Entries: []mc.Entry{entry}, Reviews: []memory.ImportedReview{{Scope: f.scope, ThreadID: f.thread, Proposal: proposal, Receipt: receipt, RetainKey: true, History: memory.ReviewHistory{SourceSHA256: strings.Repeat("c", 64), Fingerprint: "old-fingerprint", DecisionHash: "old-decision"}}}, Sources: []memory.HistoricalSource{source}}
 }
 func fleetOwner(f memoryFixture) application.Scope {
 	s := f.scope

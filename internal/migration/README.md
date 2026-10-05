@@ -46,3 +46,13 @@ one business review; conversion never invents jobs or combines their outcomes.
 Other application job relationships and model origins require explicit verified
 bindings. Current compaction metadata containing an image without a usable provider
 path is rejected.
+
+Memory conversion uses those same Runtime identities and complete Commit
+intervals for entry/fact provenance, review evidence, source cursors and no-store
+ranges. It preserves terminal outcomes and knowledge revisions; old assignment
+credentials never become current authority. Pending historical evidence remains
+Memory-owned inert history, including assistant evidence the current Advanced
+protocol does not collect. Source opt-outs survive configuration changes.
+Unmapped ownership, history or range boundaries fail conversion. Original source
+bytes retain legacy scheduling and recall statistics without making them live
+jobs or new processing-success claims.
