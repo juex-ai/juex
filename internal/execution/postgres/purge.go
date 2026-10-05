@@ -19,7 +19,7 @@ func purgeGate(ctx context.Context, tx pgx.Tx, fleet, agent string) error {
 	return nil
 }
 
-// Purge is called under ArtifactManager's byte-write lock. Hosted side effects
+// Purge is called under ArtifactManager's byte-write lock. Managed side effects
 // retain their environment lock and are completed separately before receipt.
 func (s *Store) Purge(ctx context.Context, r lifecycle.Request) (lifecycle.Receipt, error) {
 	var result lifecycle.Receipt
@@ -61,7 +61,7 @@ func (s *Store) Purge(ctx context.Context, r lifecycle.Request) (lifecycle.Recei
 		return result, err
 	}
 	queries := []string{
-		`UPDATE execution.hosted SET purging=true WHERE environment_id IN (SELECT id FROM execution.environments WHERE fleet_id=$1) AND ($2 OR agent_id=ANY($3))`,
+		`UPDATE execution.managed_environments SET purging=true WHERE environment_id IN (SELECT id FROM execution.environments WHERE fleet_id=$1) AND ($2 OR agent_id=ANY($3))`,
 		`UPDATE execution.environments SET grants=CASE WHEN $2 THEN '{}'::jsonb ELSE grants-$3::text[] END,ceiling=CASE WHEN $2 THEN '{}'::jsonb ELSE ceiling-$3::text[] END WHERE fleet_id=$1`,
 		`UPDATE execution.pairings SET grants=grants-$3::text[],agent_epochs=agent_epochs-$3::text[] WHERE owner_scope->>'fleet_id'=$1::text`,
 		`DELETE FROM execution.pairings WHERE $2 AND owner_scope->>'fleet_id'=$1::text`,
@@ -79,12 +79,12 @@ func (s *Store) Purge(ctx context.Context, r lifecycle.Request) (lifecycle.Recei
 	if r.Phase == lifecycle.Erase {
 		queries = []string{
 			`DELETE FROM execution.default_environments WHERE fleet_id=$1 AND ($2 OR agent_id=ANY($3))`,
-			`UPDATE execution.hosted SET purge_data=true WHERE purging AND environment_id IN (SELECT id FROM execution.environments WHERE fleet_id=$1) AND ($2 OR agent_id=ANY($3))`,
+			`UPDATE execution.managed_environments SET purge_data=true WHERE purging AND environment_id IN (SELECT id FROM execution.environments WHERE fleet_id=$1) AND ($2 OR agent_id=ANY($3))`,
 			`UPDATE execution.artifacts SET state='purging' WHERE fleet_id=$1 AND ($2 OR agent_id=ANY($3)) AND state!='deleted'`,
 			`DELETE FROM execution.transfers WHERE scope->>'fleet_id'=$1::text AND ($2 OR agent_id=ANY($3))`,
 			`UPDATE execution.operations SET purged=true,output='',output_hold=false,request=jsonb_build_object('version',request->'version','id',id,'agent_id',scope->'agent_id','kind',request->'kind'),request_hash='',scope=scope-'owner_email'-'tenant_name',snapshot=jsonb_build_object('version',snapshot->'version','environment_id',environment_id,'id',id,'agent_id',scope->'agent_id','kind',request->'kind','state',state,'next_cursor',COALESCE(snapshot->'next_cursor','0'::jsonb),'output_bytes',COALESCE(snapshot->'output_bytes','0'::jsonb),'output_expired',true,'file',CASE WHEN request->>'kind'='export_file' AND NOT acknowledged THEN snapshot->'file' ELSE null END,'file_expired',snapshot->'file_expired') WHERE scope->>'fleet_id'=$1::text AND ($2 OR (scope->>'agent_id')::uuid=ANY($3))`,
 			`DELETE FROM execution.cancellations WHERE fleet_id=$1 AND ($2 OR agent_id=ANY($3))`,
-			`UPDATE execution.environments SET name='',working_directory='' WHERE fleet_id=$1 AND $2`,
+			`UPDATE execution.environments SET name='',working_directory='' WHERE fleet_id=$1 AND $2 AND NOT EXISTS(SELECT 1 FROM execution.managed_environments m WHERE m.environment_id=execution.environments.id)`,
 			`DELETE FROM execution.events WHERE environment_id IN (SELECT id FROM execution.environments WHERE fleet_id=$1) AND ($2 OR agent_ids <@ $3::uuid[])`,
 			`UPDATE execution.events SET agent_ids=ARRAY(SELECT unnest(agent_ids) EXCEPT SELECT unnest($3::uuid[])) WHERE environment_id IN (SELECT id FROM execution.environments WHERE fleet_id=$1) AND agent_ids && $3::uuid[]`,
 		}
@@ -97,7 +97,7 @@ func (s *Store) Purge(ctx context.Context, r lifecycle.Request) (lifecycle.Recei
 			return result, err
 		}
 	}
-	if err = tx.QueryRow(ctx, `SELECT count(*) FROM execution.hosted h JOIN execution.environments e ON e.id=h.environment_id WHERE e.fleet_id=$1 AND ($2 OR h.agent_id=ANY($3))`, r.FleetID, r.WholeFleet, r.AgentIDs).Scan(&result.HostedPending); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE e.fleet_id=$1 AND ($2 OR h.agent_id=ANY($3))`, r.FleetID, r.WholeFleet, r.AgentIDs).Scan(&result.EnvironmentsPending); err != nil {
 		return result, err
 	}
 	// A peer's hosted import is outside this purge's container deletion scope.
@@ -109,6 +109,6 @@ func (s *Store) Purge(ctx context.Context, r lifecycle.Request) (lifecycle.Recei
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM execution.artifacts WHERE fleet_id=$1 AND ($2 OR agent_id=ANY($3)) AND state!='deleted'`, r.FleetID, r.WholeFleet, r.AgentIDs).Scan(&blobs); err != nil {
 		return result, err
 	}
-	result.DataRemoved = r.Phase == lifecycle.Erase && blobs == 0 && result.HostedPending == 0
+	result.DataRemoved = r.Phase == lifecycle.Erase && blobs == 0 && result.EnvironmentsPending == 0
 	return result, tx.Commit(ctx)
 }

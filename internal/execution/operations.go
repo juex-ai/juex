@@ -28,13 +28,13 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 	if err != nil {
 		return nil, err
 	}
-	usesHosted := binding.EnvironmentID == "" || slices.ContainsFunc(devices, func(device Device) bool {
-		return device.ID == binding.EnvironmentID && device.Kind == "hosted"
+	usesManaged := binding.EnvironmentID == "" || slices.ContainsFunc(devices, func(device Device) bool {
+		return device.ID == binding.EnvironmentID && device.Managed
 	})
-	if s.Hosted != nil && usesHosted {
+	if s.Managed != nil && usesManaged {
 		done, err := maintenance.Enter(s.Admission)
 		if err == nil {
-			err = s.Hosted.Ensure(ctx, scope)
+			err = s.Managed.Ensure(ctx, scope)
 			done()
 		}
 		if errors.Is(err, execprotocol.ErrConflict) {
@@ -60,7 +60,7 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 			continue
 		}
 		environment := device.Environment
-		environment.Default = device.ID == binding.EnvironmentID || binding.EnvironmentID == "" && device.Kind == "hosted"
+		environment.Default = device.ID == binding.EnvironmentID || binding.EnvironmentID == "" && device.Managed
 		if environment.Default && binding.WorkingDirectory != "" {
 			environment.WorkingDirectory = binding.WorkingDirectory
 		}
@@ -196,7 +196,7 @@ func (s *Service) EffectiveGrants(ctx context.Context, device Device) (map[strin
 		return nil, err
 	}
 	if owner.RemovalEpoch != device.RemovalEpoch || owner.FleetID != device.FleetID {
-		if device.Kind == "hosted" {
+		if device.Managed {
 			return grants, nil
 		}
 		return grants, s.Store.Revoke(ctx, device.ID, device.UserID)

@@ -41,6 +41,26 @@ func TestNativeExecutorConcurrentDeliveryRunsOnce(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorAgentHomeDefaultsDoNotMutateHostEnvironment(t *testing.T) {
+	hostHome := os.Getenv("HOME")
+	for range 2 {
+		config := nativeConfig(t)
+		config.HomeDirectory = t.TempDir()
+		engine := openNative(t, config)
+		result := nativeRun(t, engine, nativeRequest(t, "agent-home", "exec_command", native.CommandArguments{Command: `printf '%s\n' "$HOME" "$NPM_CONFIG_PREFIX" "$PYTHONUSERBASE"; printf private > "$HOME/home-proof"`}))
+		want := config.HomeDirectory + "\n" + config.HomeDirectory + "/.local\n" + config.HomeDirectory + "/.local\n"
+		if result.State != execprotocol.Completed || result.Text() != want {
+			t.Fatal("wrong Agent home", result)
+		}
+		if data, err := os.ReadFile(filepath.Join(config.HomeDirectory, "home-proof")); err != nil || string(data) != "private" {
+			t.Fatal(string(data), err)
+		}
+	}
+	if os.Getenv("HOME") != hostHome {
+		t.Fatal("Engine changed process-global HOME")
+	}
+}
+
 func TestNativeExecutorMCPPersistsNotificationsAndCallIdentity(t *testing.T) {
 	config := nativeConfig(t)
 	engine := openNative(t, config)

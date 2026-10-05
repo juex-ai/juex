@@ -28,24 +28,54 @@ type HostedConfiguration struct {
 	WorkspaceInodes int64         `json:"workspace_inodes"`
 }
 
-type hostedBackend struct{ docker *hosted.Docker }
+type hostedBackend struct {
+	docker hostedEngine
+	config HostedConfiguration
+}
 
-func hostedSpec(resource execution.HostedResource, credential string) hosted.Spec {
+type hostedEngine interface {
+	Ensure(context.Context, hosted.Spec) (hosted.Instance, error)
+	Stop(context.Context, hosted.Spec) error
+	Purge(context.Context, hosted.Spec) error
+}
+
+func (b hostedBackend) Resource(id string) (execution.ManagedResource, error) {
+	memory, cpu := b.config.Memory, b.config.NanoCPUs
+	if memory == 0 {
+		memory = 768 << 20
+	}
+	if cpu == 0 {
+		cpu = 1000000000
+	}
+	bytes, inodes := b.config.WorkspaceBytes, b.config.WorkspaceInodes
+	if bytes == 0 {
+		bytes = 2 << 30
+	}
+	if inodes == 0 {
+		inodes = 131072
+	}
+	return execution.ManagedResource{EnvironmentID: id, Backend: "gvisor", OS: "linux", WorkingDirectory: "/workspace", HomeDirectory: "/home/agent", Memory: memory, NanoCPUs: cpu, StorageIdentity: b.config.Backend.StorageIdentity, WorkspaceBytes: bytes, WorkspaceInodes: inodes}, nil
+}
+
+func hostedSpec(resource execution.ManagedResource, credential string) hosted.Spec {
 	return hosted.Spec{EnvironmentID: resource.EnvironmentID, AgentID: resource.AgentID, TenantID: resource.TenantID, UserID: resource.UserID, Credential: credential, Slot: resource.Slot, Memory: resource.Memory, NanoCPUs: resource.NanoCPUs, StorageIdentity: resource.StorageIdentity, ProjectID: resource.ProjectID, WorkspaceBytes: resource.WorkspaceBytes, WorkspaceInodes: resource.WorkspaceInodes, Provisioned: resource.Provisioned}
 }
-func (b hostedBackend) Ensure(ctx context.Context, resource execution.HostedResource, credential string) error {
+func (b hostedBackend) Ensure(ctx context.Context, resource execution.ManagedResource, credential string) error {
 	_, err := b.docker.Ensure(ctx, hostedSpec(resource, credential))
 	return err
 }
-func (b hostedBackend) Stop(ctx context.Context, resource execution.HostedResource) error {
+func (b hostedBackend) Stop(ctx context.Context, resource execution.ManagedResource) error {
 	return b.docker.Stop(ctx, hostedSpec(resource, ""))
 }
 
-func (b hostedBackend) Purge(ctx context.Context, resource execution.HostedResource) error {
+func (b hostedBackend) Purge(ctx context.Context, resource execution.ManagedResource) error {
+	if err := b.docker.Stop(ctx, hostedSpec(resource, "")); err != nil {
+		return err
+	}
 	return b.docker.Purge(ctx, hostedSpec(resource, ""))
 }
 
-func (e *Execution) configureHosted(ctx context.Context, path, listen, caPath string, store execution.HostedRepository) error {
+func (e *Execution) configureHosted(ctx context.Context, path, listen, caPath string, store execution.ManagedRepository) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -99,7 +129,7 @@ func (e *Execution) configureHosted(ctx context.Context, path, listen, caPath st
 		return err
 	}
 	e.hosted = backend
-	e.Service.Hosted = &execution.HostedManager{Store: store, Authority: e.Service.Authority, Backend: hostedBackend{backend}, Key: key, Idle: time.Duration(config.IdleSeconds) * time.Second, Memory: config.Memory, NanoCPUs: config.NanoCPUs, StorageIdentity: config.Backend.StorageIdentity, WorkspaceBytes: config.WorkspaceBytes, WorkspaceInodes: config.WorkspaceInodes}
+	e.Service.Managed = &execution.ManagedManager{Store: store, Authority: e.Service.Authority, Backend: hostedBackend{docker: backend, config: config}, Key: key, Idle: time.Duration(config.IdleSeconds) * time.Second}
 	return nil
 }
 

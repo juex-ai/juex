@@ -27,12 +27,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type enrollment struct {
-	Server       string           `json:"server"`
-	Credential   string           `json:"credential"`
-	Device       execution.Device `json:"device"`
-	InsecureHTTP bool             `json:"insecure_http"`
-}
 type pendingPair struct {
 	Server       string                     `json:"server"`
 	Request      execution.PairRequest      `json:"request"`
@@ -164,7 +158,7 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 		if device.Status != "active" {
 			return errors.New("enrollment is no longer active")
 		}
-		if err := savePrivate(filepath.Join(state, "enrollment.json"), enrollment{Server: origin, Credential: pending.Confirmation.Credential, Device: device, InsecureHTTP: insecure}); err != nil {
+		if err := savePrivate(filepath.Join(state, "enrollment.json"), connector.Enrollment{Server: origin, Credential: pending.Confirmation.Credential, Device: device, InsecureHTTP: insecure}); err != nil {
 			return err
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -179,14 +173,14 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	pair.Flags().BoolVar(&insecure, "insecure-http", false, "Allow HTTP for an isolated development platform")
 	pair.Flags().BoolVar(&restart, "restart", false, "Replace an expired or unconfirmed local pairing request")
 	run := &cobra.Command{Use: "run", Short: "Connect in the foreground; network interruptions retain running operations", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
-		var config enrollment
+		var config connector.Enrollment
 		if err := readPrivate(filepath.Join(state, "enrollment.json"), &config); err != nil {
 			return err
 		}
 		if _, err := publicURL(config.Server, config.InsecureHTTP); err != nil {
 			return err
 		}
-		engine, err := native.Open(native.Config{StateDirectory: filepath.Join(state, "journal"), EnvironmentID: config.Device.ID, WorkingDirectory: config.Device.WorkingDirectory, Grants: config.Device.Ceiling})
+		engine, err := native.Open(native.Config{StateDirectory: filepath.Join(state, "journal"), EnvironmentID: config.Device.ID, WorkingDirectory: config.Device.WorkingDirectory, Grants: config.Device.Ceiling, HomeDirectory: config.HomeDirectory})
 		if err != nil {
 			return err
 		}
@@ -198,7 +192,7 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	return root.ExecuteContext(ctx)
 }
 
-func runDevice(ctx context.Context, directory string, config enrollment, engine *native.Engine, background bool, out io.Writer) (result error) {
+func runDevice(ctx context.Context, directory string, config connector.Enrollment, engine *native.Engine, background bool, out io.Writer) (result error) {
 	log, err := hostservice.OpenLog(directory)
 	if err != nil {
 		_ = engine.Close()
@@ -218,7 +212,11 @@ func runDevice(ctx context.Context, directory string, config enrollment, engine 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var stateErr error
-	err = connector.Run(ctx, connector.Config{URL: config.Server, Token: config.Credential, Environment: config.Device.Environment, Engine: engine, InsecureHTTP: config.InsecureHTTP, OnState: func(state string) {
+	client, err := config.HTTPClient()
+	if err != nil {
+		return err
+	}
+	err = connector.Run(ctx, connector.Config{URL: config.Server, Token: config.Credential, Environment: config.Device.Environment, Engine: engine, HTTPClient: client, InsecureHTTP: config.InsecureHTTP, OnState: func(state string) {
 		_, logErr := fmt.Fprintf(writer, "%s Device %s\n", time.Now().UTC().Format(time.RFC3339), state)
 		stateErr = errors.Join(stateErr, logErr, recorder.Update(state))
 		if stateErr != nil {
@@ -233,9 +231,15 @@ func runDevice(ctx context.Context, directory string, config enrollment, engine 
 }
 
 func addServiceCommands(root *cobra.Command, state *string, out io.Writer) {
-	manager := func() (*hostservice.Manager, error) { return hostservice.New(*state) }
+	manager := func() (*hostservice.Manager, error) {
+		binary, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		return hostservice.New(*state, binary)
+	}
 	paired := func() error {
-		var config enrollment
+		var config connector.Enrollment
 		return readPrivate(filepath.Join(*state, "enrollment.json"), &config)
 	}
 	root.AddCommand(&cobra.Command{Use: "start", Short: "Start this enrollment in the OS user service manager", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {

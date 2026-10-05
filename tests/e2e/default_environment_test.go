@@ -131,17 +131,17 @@ func TestDefaultEnvironmentAPIAndCLIRespectAuthorityAndVersion(t *testing.T) {
 }
 
 type pausedDefaultProvisioning struct {
-	execution.HostedRepository
+	execution.ManagedRepository
 	reached, proceed chan struct{}
 }
 
-func (p pausedDefaultProvisioning) EnsureHosted(ctx context.Context, scope execution.Scope, candidate execution.HostedResource) (execution.HostedResource, error) {
+func (p pausedDefaultProvisioning) EnsureManaged(ctx context.Context, scope execution.Scope, candidate execution.ManagedResource) (execution.ManagedResource, error) {
 	close(p.reached)
 	select {
 	case <-p.proceed:
-		return p.HostedRepository.EnsureHosted(ctx, scope, candidate)
+		return p.ManagedRepository.EnsureManaged(ctx, scope, candidate)
 	case <-ctx.Done():
-		return execution.HostedResource{}, ctx.Err()
+		return execution.ManagedResource{}, ctx.Err()
 	}
 }
 
@@ -150,8 +150,8 @@ func TestDefaultEnvironmentConcurrentSelectionPreventsStaleHostedProvisioning(t 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	device, _ := f.pairDevice(t)
-	provisioning := pausedDefaultProvisioning{HostedRepository: f.executionStore, reached: make(chan struct{}), proceed: make(chan struct{})}
-	f.execution.Hosted = &execution.HostedManager{Store: provisioning, Backend: &hostedBackendProbe{}, Authority: f.execution.Authority, Key: make([]byte, 32), StorageIdentity: uuid.NewString()}
+	provisioning := pausedDefaultProvisioning{ManagedRepository: f.executionStore, reached: make(chan struct{}), proceed: make(chan struct{})}
+	f.execution.Managed = &execution.ManagedManager{Store: provisioning, Backend: &hostedBackendProbe{}, Authority: f.execution.Authority, Key: make([]byte, 32)}
 	type result struct {
 		environments []execprotocol.Environment
 		err          error
@@ -175,7 +175,7 @@ func TestDefaultEnvironmentConcurrentSelectionPreventsStaleHostedProvisioning(t 
 		t.Fatal(got)
 	}
 	var count int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM execution.hosted`).Scan(&count); err != nil || count != 0 {
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM execution.managed_environments`).Scan(&count); err != nil || count != 0 {
 		t.Fatal("stale list provisioned unused Hosted", count, err)
 	}
 }
@@ -189,13 +189,13 @@ func TestDefaultEnvironmentNativeSuppressesHostedAndNeverFallsBack(t *testing.T)
 		t.Fatal(err)
 	}
 	backend := &hostedBackendProbe{}
-	f.execution.Hosted = &execution.HostedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: make([]byte, 32), StorageIdentity: uuid.NewString()}
+	f.execution.Managed = &execution.ManagedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: make([]byte, 32)}
 	envs, err := f.execution.Environments(ctx, f.actor, f.tenant, f.agent.ID)
 	if err != nil || len(envs) != 1 || !envs[0].Default {
 		t.Fatal(envs, err)
 	}
 	var count int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM execution.hosted`).Scan(&count); err != nil || count != 0 {
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM execution.managed_environments`).Scan(&count); err != nil || count != 0 {
 		t.Fatal("native binding allocated hosted workspace", count, err)
 	}
 	if err := f.execution.Revoke(ctx, f.actor, f.tenant, device.ID); err != nil {

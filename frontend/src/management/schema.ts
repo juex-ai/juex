@@ -294,6 +294,7 @@ export interface Device {
   authorization_version: number;
   availability?: string;
   error?: string;
+  managed: boolean;
   tenant_id: string;
   user_id: string;
   fleet_id: string;
@@ -760,7 +761,7 @@ export interface Receipt {
   fenced: boolean;
   data_removed: boolean;
   unconfirmed: number;
-  hosted_pending: number;
+  environments_pending: number;
 }
 
 export interface ResultFact {

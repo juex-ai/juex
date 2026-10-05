@@ -20,7 +20,7 @@ const signature = "JueX native executor service"
 
 type Manager struct{ StateDirectory, Executable, Home, ConfigHome, OS, Path string }
 
-func New(directory string) (*Manager, error) {
+func New(directory, executable string) (*Manager, error) {
 	if !filepath.IsAbs(directory) || strings.ContainsAny(directory, "\r\n\x00") {
 		return nil, errors.New("service state must be an absolute path without control characters")
 	}
@@ -28,11 +28,10 @@ func New(directory string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	binary, err := os.Executable()
-	if err != nil {
-		return nil, err
+	if !filepath.IsAbs(executable) {
+		return nil, errors.New("executor executable must be an absolute path")
 	}
-	binary, err = filepath.EvalSymlinks(binary)
+	binary, err := filepath.EvalSymlinks(executable)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +44,33 @@ func New(directory string) (*Manager, error) {
 		return nil, err
 	}
 	return &Manager{StateDirectory: directory, Executable: binary, Home: home, ConfigHome: config, OS: runtime.GOOS, Path: os.Getenv("PATH")}, nil
+}
+
+// Remove releases only this executor's owned service definition after stopping.
+func (m *Manager) Remove(ctx context.Context) error {
+	if err := m.Stop(ctx); err != nil {
+		return err
+	}
+	if err := m.Autostart(ctx, false); err != nil {
+		return err
+	}
+	if m.OS != "linux" {
+		return nil
+	}
+	data, err := os.ReadFile(m.unitPath())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !bytes.Contains(data, []byte(signature)) {
+		return errors.New("refusing to remove an unrelated service definition")
+	}
+	if err := os.Remove(m.unitPath()); err != nil {
+		return err
+	}
+	return run(ctx, "systemctl", "--user", "daemon-reload")
 }
 func (m *Manager) label() string {
 	hash := sha256.Sum256([]byte(m.StateDirectory))

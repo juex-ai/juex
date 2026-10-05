@@ -13,7 +13,7 @@ Web / management CLI ── HTTPS ── Management
 Remote executors ── outbound HTTPS ── Execution
 Management / Runtime / Execution / Memory / Calendar ── authenticated Kitex RPC
 Each service ── its own PostgreSQL schema
-Execution ── Blob storage, Docker/runsc guests and device connections
+Execution ── Blob storage, managed Host executors, Docker/runsc guests and device connections
 ```
 
 [Management](internal/management/README.md) owns identity, configuration and
@@ -46,6 +46,12 @@ Execution owns versioned Agent default environment/directory bindings; Managemen
 exposes their configuration without duplicating that state. Runtime resolves and
 persists each new operation's location through the common execution protocol.
 Explicit environment selection suppresses deployment-default provisioning.
+
+One Execution-owned lifecycle manages deployment-provided environments through
+Host and gVisor backends. Host runs an independent native executor under the OS
+service manager, with Agent-specific Home/Workspace and an owned control journal.
+Execution restarts preserve those processes. Directory ownership is explicit and
+separate from native device kind; neither cwd nor HOME provides OS isolation.
 
 Execution is the sole service with Docker engine access. Hosted guests use runsc,
 UID 1000, explicit resource limits, XFS project quotas and a restricted network.

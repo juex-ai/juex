@@ -21,6 +21,7 @@ type ExecutionConfig struct {
 	DatabaseURL, ManagementAddress string
 	Credentials                    platformrpc.Credentials
 	HostedConfiguration            string
+	HostConfiguration              string
 	HostedListen                   string
 	BlobDirectory                  string
 	BlobCapacity                   int64
@@ -37,6 +38,9 @@ type Execution struct {
 }
 
 func OpenExecution(ctx context.Context, config ExecutionConfig) (*Execution, error) {
+	if config.HostConfiguration != "" && config.HostedConfiguration != "" {
+		return nil, errors.New("choose one managed execution backend: Host or Hosted")
+	}
 	auditDays, err := auditRetentionDays(config.AuditDays)
 	if err != nil {
 		return nil, err
@@ -73,6 +77,12 @@ func OpenExecution(ctx context.Context, config ExecutionConfig) (*Execution, err
 			return nil, err
 		}
 	}
+	if config.HostConfiguration != "" {
+		if err := app.configureHost(config.HostConfiguration, store); err != nil {
+			app.Close()
+			return nil, err
+		}
+	}
 	return app, nil
 }
 func (e *Execution) Close() {
@@ -96,10 +106,10 @@ func (e *Execution) Run(ctx context.Context) {
 		if err == nil && e.Service.Blobs != nil {
 			err = e.Service.Blobs.Reconcile(pass)
 		}
-		if err == nil && e.Service.Hosted != nil {
+		if err == nil && e.Service.Managed != nil {
 			done, admissionErr := maintenance.Enter(e.Service.Admission)
 			if admissionErr == nil {
-				err = e.Service.Hosted.Reconcile(pass)
+				err = e.Service.Managed.Reconcile(pass)
 				done()
 			}
 		}

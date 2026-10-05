@@ -22,8 +22,8 @@ func (s *Service) Purge(ctx context.Context, request lifecycle.Request) (lifecyc
 	if err = s.Blobs.Reconcile(ctx); err != nil {
 		return result, err
 	}
-	if result.HostedPending > 0 && s.Hosted != nil {
-		if err = s.Hosted.Reconcile(ctx); err != nil {
+	if result.EnvironmentsPending > 0 && s.Managed != nil {
+		if err = s.Managed.Reconcile(ctx); err != nil {
 			return result, err
 		}
 	}

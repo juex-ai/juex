@@ -20,7 +20,7 @@ type maintenancePurgeBackend struct {
 	purges int
 }
 
-func (b *maintenancePurgeBackend) Purge(context.Context, execution.HostedResource) error {
+func (b *maintenancePurgeBackend) Purge(context.Context, execution.ManagedResource) error {
 	b.purges++
 	return nil
 }
@@ -34,7 +34,7 @@ func TestExecutionMaintenanceRequiresConfirmedHostedDestruction(t *testing.T) {
 				backend := &maintenancePurgeBackend{}
 				var environment string
 				if kind == "hosted" {
-					f.execution.Hosted = &execution.HostedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: make([]byte, 32), Idle: time.Minute, StorageIdentity: uuid.NewString()}
+					f.execution.Managed = &execution.ManagedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: make([]byte, 32), Idle: time.Minute}
 					envs, err := f.execution.Environments(ctx, f.actor, f.tenant, f.agent.ID)
 					if err != nil || len(envs) != 1 {
 						t.Fatal(envs, err)

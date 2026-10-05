@@ -22,7 +22,7 @@ type Service struct {
 	Admission maintenance.Admission
 	Store     Repository
 	Authority Authority
-	Hosted    *HostedManager
+	Managed   *ManagedManager
 	Blobs     *ArtifactManager
 	Transfers TransferRepository
 }
@@ -172,7 +172,7 @@ func (s *Service) Devices(ctx context.Context, actor, tenant, owner string) ([]D
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(devices, func(device Device) bool { return device.Kind != "native" }), nil
+	return slices.DeleteFunc(devices, func(device Device) bool { return device.Managed || device.Kind != "native" }), nil
 }
 
 func (s *Service) Revoke(ctx context.Context, actor, tenant, id string) error {
@@ -180,7 +180,7 @@ func (s *Service) Revoke(ctx context.Context, actor, tenant, id string) error {
 	if err != nil {
 		return err
 	}
-	if device.TenantID != tenant || device.Kind != "native" {
+	if device.TenantID != tenant || device.Managed || device.Kind != "native" {
 		return execprotocol.ErrDenied
 	}
 	if _, err := s.Authority.Owner(ctx, actor, tenant, device.UserID, false); err != nil {
@@ -194,7 +194,7 @@ func (s *Service) Restrict(ctx context.Context, actor, tenant, id string, versio
 	if err != nil {
 		return Device{}, err
 	}
-	if device.TenantID != tenant || device.UserID != actor || device.Kind != "native" {
+	if device.TenantID != tenant || device.UserID != actor || device.Managed || device.Kind != "native" {
 		return Device{}, execprotocol.ErrDenied
 	}
 	owner, err := s.Authority.Owner(ctx, actor, tenant, actor, true)

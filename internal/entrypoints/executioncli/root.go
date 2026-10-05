@@ -25,7 +25,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var address, httpAddress, management, credentials, hostedConfiguration, hostedAddress, blobDirectory, trustedProxies string
+	var address, httpAddress, management, credentials, hostedConfiguration, hostConfiguration, hostedAddress, blobDirectory, trustedProxies string
 	var blobCapacity int64
 	var auditDays int
 	root := &cobra.Command{Use: "juex-execution", Short: "Run the managed execution service", SilenceUsage: true, SilenceErrors: true}
@@ -36,7 +36,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root.PersistentFlags().StringVar(&credentials, "credentials", os.Getenv("JUEX_SERVICE_CERTS"), "Directory containing the CA and Execution service identity")
 	serve := &cobra.Command{Use: "serve", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		identity := platformrpc.CredentialsAt(credentials, "execution")
-		app, err := managed.OpenExecution(cmd.Context(), managed.ExecutionConfig{Admission: gate.Enter, DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: management, Credentials: identity, HostedConfiguration: hostedConfiguration, HostedListen: hostedAddress, BlobDirectory: blobDirectory, BlobCapacity: blobCapacity, AuditDays: auditDays})
+		app, err := managed.OpenExecution(cmd.Context(), managed.ExecutionConfig{Admission: gate.Enter, DatabaseURL: os.Getenv("JUEX_DATABASE_URL"), ManagementAddress: management, Credentials: identity, HostedConfiguration: hostedConfiguration, HostConfiguration: hostConfiguration, HostedListen: hostedAddress, BlobDirectory: blobDirectory, BlobCapacity: blobCapacity, AuditDays: auditDays})
 		if err != nil {
 			return err
 		}
@@ -64,7 +64,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 		server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 16 << 10}
 		var guestServer *http.Server
 		var guestDone chan error
-		if app.Service.Hosted != nil {
+		if hostedConfiguration != "" {
 			pair, err := tls.LoadX509KeyPair(identity.Certificate, identity.Key)
 			if err != nil {
 				return err
@@ -133,6 +133,7 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	serve.Flags().StringVar(&httpAddress, "device-listen", "0.0.0.0:8683", "Device HTTP listen address behind the HTTPS reverse proxy")
 	serve.Flags().StringVar(&trustedProxies, "trusted-proxies", os.Getenv("JUEX_TRUSTED_PROXIES"), "Comma-separated proxy IPs/CIDRs allowed to supply X-Real-IP (default: none)")
 	serve.Flags().StringVar(&hostedConfiguration, "hosted-config", os.Getenv("JUEX_HOSTED_CONFIG"), "Operator-owned hosted backend JSON configuration")
+	serve.Flags().StringVar(&hostConfiguration, "host-config", os.Getenv("JUEX_HOST_CONFIG"), "Operator-owned native Host backend JSON configuration")
 	serve.Flags().StringVar(&hostedAddress, "hosted-listen", "0.0.0.0:8684", "Dedicated hosted device TLS endpoint (connect only)")
 	serve.Flags().StringVar(&blobDirectory, "blob-root", os.Getenv("JUEX_BLOB_ROOT"), "Absolute operator-owned directory for platform file bytes (required)")
 	serve.Flags().IntVar(&auditDays, "audit-days", 90, "Retain operation audit facts for this many days (1–3650)")

@@ -62,7 +62,7 @@ func testPurgeDependentTransfer(t *testing.T, hosted bool) {
 	f.agent = peer
 	device, _ := f.pairDevice(t)
 	if hosted {
-		f.execution.Hosted = &execution.HostedManager{Store: f.executionStore, Backend: &hostedBackendProbe{}, Authority: f.execution.Authority, Key: make([]byte, 32), Idle: time.Minute, StorageIdentity: uuid.NewString()}
+		f.execution.Managed = &execution.ManagedManager{Store: f.executionStore, Backend: &hostedBackendProbe{}, Authority: f.execution.Authority, Key: make([]byte, 32), Idle: time.Minute}
 		environments, err := f.execution.Environments(ctx, f.actor, f.tenant, peer.ID)
 		if err != nil {
 			t.Fatal(err)
