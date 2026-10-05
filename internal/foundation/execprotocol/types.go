@@ -111,6 +111,7 @@ func (s Snapshot) Text() string { return string(s.Output) }
 
 // Environment is descriptive context, not authority supplied by the model.
 type Environment struct {
+	Default              bool         `json:"default"`
 	ID                   string       `json:"id"`
 	JournalID            string       `json:"journal_id"`
 	Name                 string       `json:"name"`

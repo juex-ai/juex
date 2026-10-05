@@ -66,6 +66,34 @@ func addResources(root *cobra.Command, command commandFactory, in io.Reader) {
 	})
 	configure.Flags().StringVar(&configFile, "data-file", "-", "Configuration JSON file; - reads stdin")
 	agents.AddCommand(configure)
+	agents.AddCommand(command("environments ID", "List an Agent's authorized environments and default location", cobra.ExactArgs(1), true, func(cmd *cobra.Command, c *client, args []string) (any, error) {
+		path, err := c.agentPath(cmd.Context(), args[0])
+		if err != nil {
+			return nil, err
+		}
+		return c.request(cmd.Context(), "GET", path+"/environments", nil)
+	}))
+	agents.AddCommand(command("environment ID", "Inspect an Agent's default environment configuration", cobra.ExactArgs(1), true, func(cmd *cobra.Command, c *client, args []string) (any, error) {
+		path, err := c.agentPath(cmd.Context(), args[0])
+		if err != nil {
+			return nil, err
+		}
+		return c.request(cmd.Context(), "GET", path+"/default-environment", nil)
+	}))
+	var environmentFile string
+	configureEnvironment := command("configure-environment ID", "Set environment_id, working_directory and current version using JSON; empty environment_id selects the deployment default", cobra.ExactArgs(1), true, func(cmd *cobra.Command, c *client, args []string) (any, error) {
+		path, err := c.agentPath(cmd.Context(), args[0])
+		if err != nil {
+			return nil, err
+		}
+		body, err := readJSONFile(environmentFile, in)
+		if err != nil {
+			return nil, err
+		}
+		return c.request(cmd.Context(), "PUT", path+"/default-environment", body)
+	})
+	configureEnvironment.Flags().StringVar(&environmentFile, "data-file", "-", "Default environment JSON file; - reads stdin")
+	agents.AddCommand(configureEnvironment)
 	for _, verb := range []string{"archive", "restore"} {
 		var version int64
 		cmd := command(verb+" ID", verb+" an Agent without deleting its history", cobra.ExactArgs(1), true, func(cmd *cobra.Command, c *client, args []string) (any, error) {

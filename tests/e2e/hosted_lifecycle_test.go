@@ -194,6 +194,9 @@ func TestHostedRejoinRetainsWorkspaceButFencesOldWork(t *testing.T) {
 		t.Fatal(environments, err)
 	}
 	environment := environments[0]
+	if _, err := f.execution.SetDefaultEnvironment(ctx, member.ID, f.tenant, agent.ID, execution.DefaultEnvironment{EnvironmentID: environment.ID, WorkingDirectory: "/workspace/project"}); err != nil {
+		t.Fatal(err)
+	}
 	request := nativeRequest(t, "before-removal", "exec_command", native.CommandArguments{Command: "printf forbidden"})
 	request.AgentID = agent.ID
 	if _, err := f.execution.Submit(ctx, member.ID, f.tenant, environment.ID, request, 0); err != nil {
@@ -210,7 +213,7 @@ func TestHostedRejoinRetainsWorkspaceButFencesOldWork(t *testing.T) {
 	}
 	invite()
 	rejoined, err := f.execution.Environments(ctx, member.ID, f.tenant, agent.ID)
-	if err != nil || len(rejoined) != 1 || rejoined[0].ID != environment.ID {
+	if err != nil || len(rejoined) != 1 || rejoined[0].ID != environment.ID || !rejoined[0].Default || rejoined[0].WorkingDirectory != "/workspace/project" {
 		t.Fatal("rejoin changed workspace identity", rejoined, err)
 	}
 	device, err := f.executionStore.Device(ctx, environment.ID)

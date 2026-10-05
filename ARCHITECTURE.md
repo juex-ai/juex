@@ -42,6 +42,11 @@ release those slots. Activations expire independently of Agents; Execution keeps
 connections and background work alive. Model calls and user code are separate:
 only trusted Runtime obtains deployment model credentials.
 
+Execution owns versioned Agent default environment/directory bindings; Management
+exposes their configuration without duplicating that state. Runtime resolves and
+persists each new operation's location through the common execution protocol.
+Explicit environment selection suppresses deployment-default provisioning.
+
 Execution is the sole service with Docker engine access. Hosted guests use runsc,
 UID 1000, explicit resource limits, XFS project quotas and a restricted network.
 Workspace/Home survive guest rebuilds. Authorized native devices execute as their

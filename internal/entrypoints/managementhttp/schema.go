@@ -36,6 +36,7 @@ func GenerateTypeScript() ([]byte, error) {
 		reflect.TypeFor[management.ExtensionInspection](), reflect.TypeFor[management.ExtensionInspectionRequest](), reflect.TypeFor[management.ExtensionChange](),
 		reflect.TypeFor[execution.Device](), reflect.TypeFor[execution.Pairing](),
 		reflect.TypeFor[execprotocol.Environment](),
+		reflect.TypeFor[execution.DefaultEnvironment](),
 		reflect.TypeFor[execution.Artifact](), reflect.TypeFor[execution.ArtifactUpload](), reflect.TypeFor[execprotocol.FileChunk](),
 		reflect.TypeFor[execution.Transfer](), reflect.TypeFor[ExtendTransferRequest](),
 		reflect.TypeFor[management.AgentConfig](), reflect.TypeFor[ConfigureAgentRequest](), reflect.TypeFor[ArchiveAgentRequest](),

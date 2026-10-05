@@ -4413,6 +4413,10 @@ type Execution interface {
 
 	Environments(ctx context.Context, actor *Actor) (r *Reply, err error)
 
+	DefaultEnvironment(ctx context.Context, actor *Actor) (r *Reply, err error)
+
+	SetDefaultEnvironment(ctx context.Context, actor *Actor, configurationJSON string) (r *Reply, err error)
+
 	Submit(ctx context.Context, actor *Actor, environmentID string, requestJSON string, waitMillis int64) (r *Reply, err error)
 
 	SubmitFenced(ctx context.Context, actor *Actor, environmentID string, requestJSON string, waitMillis int64, fenceJSON string) (r *Reply, err error)
@@ -6657,6 +6661,167 @@ func (p *ExecutionEnvironmentsResult) String() string {
 }
 
 var fieldIDToName_ExecutionEnvironmentsResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionDefaultEnvironmentArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+}
+
+func NewExecutionDefaultEnvironmentArgs() *ExecutionDefaultEnvironmentArgs {
+	return &ExecutionDefaultEnvironmentArgs{}
+}
+
+func (p *ExecutionDefaultEnvironmentArgs) InitDefault() {
+}
+
+var ExecutionDefaultEnvironmentArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionDefaultEnvironmentArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionDefaultEnvironmentArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+func (p *ExecutionDefaultEnvironmentArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+
+func (p *ExecutionDefaultEnvironmentArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionDefaultEnvironmentArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionDefaultEnvironmentArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionDefaultEnvironmentArgs = map[int16]string{
+	1: "actor",
+}
+
+type ExecutionDefaultEnvironmentResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionDefaultEnvironmentResult() *ExecutionDefaultEnvironmentResult {
+	return &ExecutionDefaultEnvironmentResult{}
+}
+
+func (p *ExecutionDefaultEnvironmentResult) InitDefault() {
+}
+
+var ExecutionDefaultEnvironmentResult_Success_DEFAULT *Reply
+
+func (p *ExecutionDefaultEnvironmentResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionDefaultEnvironmentResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionDefaultEnvironmentResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionDefaultEnvironmentResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionDefaultEnvironmentResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionDefaultEnvironmentResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionDefaultEnvironmentResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionSetDefaultEnvironmentArgs struct {
+	Actor             *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ConfigurationJSON string `thrift:"configurationJSON,2" frugal:"2,default,string" json:"configurationJSON"`
+}
+
+func NewExecutionSetDefaultEnvironmentArgs() *ExecutionSetDefaultEnvironmentArgs {
+	return &ExecutionSetDefaultEnvironmentArgs{}
+}
+
+func (p *ExecutionSetDefaultEnvironmentArgs) InitDefault() {
+}
+
+var ExecutionSetDefaultEnvironmentArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionSetDefaultEnvironmentArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionSetDefaultEnvironmentArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionSetDefaultEnvironmentArgs) GetConfigurationJSON() (v string) {
+	return p.ConfigurationJSON
+}
+func (p *ExecutionSetDefaultEnvironmentArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionSetDefaultEnvironmentArgs) SetConfigurationJSON(val string) {
+	p.ConfigurationJSON = val
+}
+
+func (p *ExecutionSetDefaultEnvironmentArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionSetDefaultEnvironmentArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionSetDefaultEnvironmentArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionSetDefaultEnvironmentArgs = map[int16]string{
+	1: "actor",
+	2: "configurationJSON",
+}
+
+type ExecutionSetDefaultEnvironmentResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionSetDefaultEnvironmentResult() *ExecutionSetDefaultEnvironmentResult {
+	return &ExecutionSetDefaultEnvironmentResult{}
+}
+
+func (p *ExecutionSetDefaultEnvironmentResult) InitDefault() {
+}
+
+var ExecutionSetDefaultEnvironmentResult_Success_DEFAULT *Reply
+
+func (p *ExecutionSetDefaultEnvironmentResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionSetDefaultEnvironmentResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionSetDefaultEnvironmentResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionSetDefaultEnvironmentResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionSetDefaultEnvironmentResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionSetDefaultEnvironmentResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionSetDefaultEnvironmentResult = map[int16]string{
 	0: "success",
 }
 

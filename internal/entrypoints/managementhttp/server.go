@@ -167,6 +167,8 @@ func New(options Options) (http.Handler, error) {
 	}
 	if options.Execution != nil {
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/environments", s.signedIn(s.environments))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/default-environment", s.signedIn(s.defaultEnvironment))
+		mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/default-environment", s.signedIn(s.setDefaultEnvironment))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/artifacts", s.signedIn(s.beginArtifact))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/transfers", s.signedIn(s.beginTransfer))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/transfers", s.signedIn(s.transfers))

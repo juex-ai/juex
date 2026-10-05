@@ -99,6 +99,8 @@ type Operation struct {
 }
 
 type Repository interface {
+	DefaultEnvironment(context.Context, Scope) (DefaultEnvironment, error)
+	SetDefaultEnvironment(context.Context, Scope, DefaultEnvironment) (DefaultEnvironment, error)
 	BeginPair(context.Context, PairRequest) (Pairing, error)
 	Pair(context.Context, string, string) (Pairing, error)
 	ApprovePair(context.Context, Pairing) (Pairing, error)

@@ -41,11 +41,14 @@ requires idle work and retains readable history.
 
 ## Execution environments
 
-Each Agent has a persistent hosted Workspace/Home. Authorized Linux/macOS devices
-are additional environments, selected by stable IDs for location-dependent tools.
-Process and connection handles remain bound to their original environment. A cwd
-is a default location, not a filesystem permission boundary. Device authorization
-allows the current OS user's capabilities; hosted gVisor enforces separate limits.
+Each Agent can select an authorized environment and working directory as its
+default, or use the deployment-provided environment. Host environments use
+Linux/macOS directories and the OS user's capabilities; hosted environments have
+persistent Workspace/Home and gVisor-enforced limits. A cwd is a default location,
+not a filesystem permission boundary. Selecting a default never grants access.
+New operations freeze the selected location; prepared requests and process or
+connection handles retain their original environment. An unavailable default
+never causes automatic substitution.
 
 A network disconnect does not imply process termination. Offline requests wait
 durably without consuming model slots. Unknown outcomes are visible and never

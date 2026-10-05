@@ -37,6 +37,8 @@ type Client interface {
 	Restrict(ctx context.Context, actorID string, tenantID string, environmentID string, version int64, grantsJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Revoke(ctx context.Context, actorID string, tenantID string, environmentID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Environments(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	DefaultEnvironment(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	SetDefaultEnvironment(ctx context.Context, actor *platform.Actor, configurationJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Submit(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	SubmitFenced(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, fenceJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Operation(ctx context.Context, actor *platform.Actor, environmentID string, operationID string, cursor int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -201,6 +203,16 @@ func (p *kExecutionClient) Revoke(ctx context.Context, actorID string, tenantID 
 func (p *kExecutionClient) Environments(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Environments(ctx, actor)
+}
+
+func (p *kExecutionClient) DefaultEnvironment(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.DefaultEnvironment(ctx, actor)
+}
+
+func (p *kExecutionClient) SetDefaultEnvironment(ctx context.Context, actor *platform.Actor, configurationJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.SetDefaultEnvironment(ctx, actor, configurationJSON)
 }
 
 func (p *kExecutionClient) Submit(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, callOptions ...callopt.Option) (r *platform.Reply, err error) {

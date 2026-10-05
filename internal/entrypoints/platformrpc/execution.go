@@ -92,6 +92,29 @@ func (h *executionHandler) Environments(ctx context.Context, actor *platform.Act
 	v, err := h.service.Environments(ctx, actor.UserID, actor.TenantID, actor.AgentID)
 	return executionReply(v, err)
 }
+
+func (h *executionHandler) DefaultEnvironment(ctx context.Context, actor *platform.Actor) (*platform.Reply, error) {
+	if !managementCaller(ctx) {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
+	if !validActor(actor) {
+		return executionReply(nil, execprotocol.ErrInvalid)
+	}
+	v, err := h.service.DefaultEnvironment(ctx, actor.UserID, actor.TenantID, actor.AgentID)
+	return executionReply(v, err)
+}
+
+func (h *executionHandler) SetDefaultEnvironment(ctx context.Context, actor *platform.Actor, encoded string) (*platform.Reply, error) {
+	if !managementCaller(ctx) {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
+	var value execution.DefaultEnvironment
+	if !validActor(actor) || len(encoded) > 8192 || json.Unmarshal([]byte(encoded), &value) != nil {
+		return executionReply(nil, execprotocol.ErrInvalid)
+	}
+	v, err := h.service.SetDefaultEnvironment(ctx, actor.UserID, actor.TenantID, actor.AgentID, value)
+	return executionReply(v, err)
+}
 func (h *executionHandler) Submit(ctx context.Context, actor *platform.Actor, environment, encoded string, wait int64) (*platform.Reply, error) {
 	if !managementCaller(ctx) {
 		return executionReply(nil, execprotocol.ErrDenied)

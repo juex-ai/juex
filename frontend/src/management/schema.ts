@@ -274,7 +274,14 @@ export interface Declaration {
   source?: string;
 }
 
+export interface DefaultEnvironment {
+  environment_id: string;
+  working_directory: string;
+  version: number;
+}
+
 export interface Device {
+  default: boolean;
   id: string;
   journal_id: string;
   name: string;
@@ -300,6 +307,7 @@ export interface Device {
 }
 
 export interface Environment {
+  default: boolean;
   id: string;
   journal_id: string;
   name: string;

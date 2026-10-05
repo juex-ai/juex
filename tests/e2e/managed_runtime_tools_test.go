@@ -19,6 +19,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app/managed"
 	serverrpc "github.com/juex-ai/juex/internal/entrypoints/platformrpc"
+	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/execution/native"
 	executionrpc "github.com/juex-ai/juex/internal/execution/rpc"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
@@ -127,7 +128,7 @@ func TestManagedRuntimeOfflineToolsReleaseSlotAndResumeAfterRestart(t *testing.T
 			if !strings.Contains(string(encoded), deviceID) || body["tools"] == nil {
 				t.Error("model lacks authorized environment/tool context")
 			}
-			streamManagedTool(w, "read", map[string]any{"environment_id": deviceID, "path": "result.txt"})
+			streamManagedTool(w, "read", map[string]any{"path": "result.txt"})
 		} else {
 			if !strings.Contains(string(encoded), "durable result") || !strings.Contains(string(encoded), "call_fixture") {
 				t.Error("tool result missing from resumed model context", string(encoded))
@@ -136,8 +137,13 @@ func TestManagedRuntimeOfflineToolsReleaseSlotAndResumeAfterRestart(t *testing.T
 		}
 	})
 	ctx := context.Background()
+	work := t.TempDir()
 	device, token := f.pairDevice(t)
 	deviceID = device.ID
+	binding, err := f.execution.SetDefaultEnvironment(ctx, f.actor, f.tenant, f.agent.ID, execution.DefaultEnvironment{EnvironmentID: device.ID, WorkingDirectory: work})
+	if err != nil {
+		t.Fatal(err)
+	}
 	gateway := runtimeExecutionGateway(t, f)
 	stop := runRuntimeTools(t, f, gateway)
 	f.submit(t, "main-read", f.main.ID, "Read the file on my device")
@@ -173,11 +179,14 @@ func TestManagedRuntimeOfflineToolsReleaseSlotAndResumeAfterRestart(t *testing.T
 		t.Fatal(err)
 	}
 	stop()
-	work := t.TempDir()
+	binding.WorkingDirectory = t.TempDir()
+	if _, err := f.execution.SetDefaultEnvironment(ctx, f.actor, f.tenant, f.agent.ID, binding); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(work, "result.txt"), []byte("durable result"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	engine := openNative(t, native.Config{StateDirectory: filepath.Join(t.TempDir(), "state"), WorkingDirectory: work, EnvironmentID: device.ID, Grants: device.Ceiling})
+	engine := openNative(t, native.Config{StateDirectory: filepath.Join(t.TempDir(), "state"), WorkingDirectory: t.TempDir(), EnvironmentID: device.ID, Grants: device.Ceiling})
 	connectExecutionDevice(t, f, device, token, engine)
 	runRuntimeTools(t, f, gateway)
 	runtimeEventually(t, func() bool { return mainCalls.Load() == 2 && f.timeline(t, f.main.ID).Thread.State == "idle" })

@@ -37,6 +37,10 @@ Runtime 对所有者公平排队，使用受限共享模型槽位。等待工具
 Activation 独立于 Agent 过期，Execution 保持连接和后台工作。
 模型调用与用户代码分离，只有可信 Runtime 能取得部署方模型凭据。
 
+Execution 拥有带版本的 Agent 默认环境和目录绑定；Management 提供配置入口，不重复
+保存该状态。Runtime 通过统一执行协议解析并持久固定每个新操作的位置。
+明确选择环境后，不再供给部署默认环境。
+
 Execution 是唯一可访问 Docker 引擎的服务。托管环境使用 runsc、UID 1000、明确的
 资源限制、XFS 项目配额和受限网络。Workspace/Home 在容器重建后保留。
 授权原生设备以 OS 用户运行，持久保存本地操作日志、输出游标和确认信息。

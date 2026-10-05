@@ -78,6 +78,7 @@ func (s *Store) Purge(ctx context.Context, r lifecycle.Request) (lifecycle.Recei
 	result.Fenced = true
 	if r.Phase == lifecycle.Erase {
 		queries = []string{
+			`DELETE FROM execution.default_environments WHERE fleet_id=$1 AND ($2 OR agent_id=ANY($3))`,
 			`UPDATE execution.hosted SET purge_data=true WHERE purging AND environment_id IN (SELECT id FROM execution.environments WHERE fleet_id=$1) AND ($2 OR agent_id=ANY($3))`,
 			`UPDATE execution.artifacts SET state='purging' WHERE fleet_id=$1 AND ($2 OR agent_id=ANY($3)) AND state!='deleted'`,
 			`DELETE FROM execution.transfers WHERE scope->>'fleet_id'=$1::text AND ($2 OR agent_id=ANY($3))`,

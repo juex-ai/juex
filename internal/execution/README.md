@@ -7,6 +7,14 @@ An Agent Activation does not own a device connection or the lifetime of its
 processes. Location-dependent requests use an explicit environment; process and
 connection handles remain bound to that environment and Agent.
 
+Execution stores each Agent's versioned default environment and optional absolute
+working directory. The public configuration API is proxied by Management; selecting
+an environment requires an existing current grant and never expands it. Missing
+or revoked defaults stay unavailable. An empty selection uses deployment-default
+provisioning, while an explicit selection suppresses it. Configuration changes
+affect new operations only, not retained handles or prepared requests. Host cwd
+selection neither changes the executor's HOME nor creates OS isolation.
+
 Execution also owns immutable file objects. PostgreSQL assigns IDs, ownership,
 visibility and capacity reservations; the required `--blob-root` is an absolute,
 private operator-owned directory, not business identity. Private attachments
@@ -90,7 +98,8 @@ An executor restart leaves unfinished transfers unknown without replay.
 
 Hosted execution uses Docker's API with a pinned Linux image, cgroup v2 and
 gVisor `runsc`; missing isolation fails startup. Each Agent has one durable
-environment identity, network subnet, Workspace and Home. Listing environments
+environment identity, network subnet, Workspace and Home when provisioned by the
+deployment default. Listing environments
 does not start containers. Pending operations start them on demand; unfinished
 processes, MCP connections and unacknowledged results prevent idle reclamation.
 The default idle timeout is five minutes. Environment row locks serialize
