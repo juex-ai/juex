@@ -299,3 +299,87 @@ func TestApplicationModelBudgetCompactionCountsAndSurvivesRestart(t *testing.T) 
 		t.Fatal(count, err)
 	}
 }
+
+func TestApplicationModelBudgetSkipsUnusableCompactionCandidate(t *testing.T) {
+	var primary, fallback atomic.Int32
+	f := managedRuntimeHTTP(t, func(w http.ResponseWriter, _ *http.Request) {
+		primary.Add(1)
+		streamManagedReply(w, "Earlier facts summarized; review current evidence.")
+	})
+	ctx := context.Background()
+	var endpoint string
+	if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.ModelID).Scan(&endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: endpoint, APIKey: "test-key", ContextWindow: 4096, OutputReserve: 1024, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallback.Add(1)
+		streamManagedReply(w, "Reviewed current evidence.")
+	}))
+	t.Cleanup(backup.Close)
+	model, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "backup", Name: "large", Protocol: llm.ProtocolOpenAIChat, Endpoint: backup.URL, APIKey: "fixture", ContextWindow: 32768, OutputReserve: 8192, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{model.ID}); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := applicationJob()
+	job.MaxCalls = 8
+	receipt, err := f.store.AdmitApplication(ctx, scope, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := f.store.Claim(ctx, scope.AgentID, "old-runtime", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := f.authority.Snapshot(ctx, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := f.store.BeginTurn(ctx, lease, scope, receipt.InputID, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Model: config.Models[0], Purpose: "application:memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "search", ToolName: "memory_search", Input: map[string]any{"query": "evidence"}}}}, StopReason: llm.StopToolUse}
+	if err := f.store.FinishAttempt(ctx, lease, attempt.ID, response, ""); err != nil {
+		t.Fatal(err)
+	}
+	tool, err := f.store.ClaimTool(ctx, "old-tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.FinishTool(ctx, tool, managedruntime.ToolOutcome{State: "ready", Content: strings.Repeat("Older evidence and facts. ", 5000)}); err != nil {
+		t.Fatal(err)
+	}
+	// The migration adds only frozen job metadata to existing waiting work.
+	encoded, _ := json.Marshal(memoryModelBudget())
+	if _, err := f.pool.Exec(ctx, `UPDATE runtime.application_jobs SET request=jsonb_set(request,'{model_budget}',$2::jsonb) WHERE job_id=$1`, job.ID, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Release(ctx, lease); err != nil {
+		t.Fatal(err)
+	}
+	stop := runApplicationFixture(t, f, &runtimeApplicationGateway{})
+	var state string
+	runtimeEventually(t, func() bool {
+		r, e := f.store.ApplicationReceipt(ctx, scope, job.Application, job.ID)
+		state = r.State
+		return e == nil && (state == "completed" || state == "held")
+	})
+	stop()
+	if state != "completed" || primary.Load() != 0 || fallback.Load() == 0 {
+		t.Fatal("unusable primary prevented a valid fallback", state, primary.Load(), fallback.Load())
+	}
+}

@@ -108,6 +108,13 @@ func planCompaction(work Work, base ModelRequest, model ModelConfig) (ModelReque
 			draft.RetainedIDs = append(draft.RetainedIDs, message.ID)
 		}
 	}
+	// A summary cannot shrink frozen instructions or retained messages. Reject
+	// an impossible post-compaction budget before consuming a provider attempt,
+	// so the caller can select a larger authorized fallback.
+	minimum := llm.EstimateContextTokens(draft.ConversationSystem, draft.ConversationTools, draft.Retained)
+	if minimum >= model.ContextWindow*3/4 || minimum+model.OutputReserve+contextSafety(model) >= model.ContextWindow*4/5 {
+		return ModelRequest{}, ErrContextLimit
+	}
 	if len(draft.Retained) >= len(history) {
 		return ModelRequest{}, ErrNoCompaction
 	}
