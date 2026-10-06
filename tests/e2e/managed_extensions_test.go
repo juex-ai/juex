@@ -159,6 +159,27 @@ func TestManagedExtensionSkillsCommandsObserversAndAttachments(t *testing.T) {
 		if json.NewDecoder(r.Body).Decode(&body) != nil {
 			t.Error("invalid model request")
 		}
+		searchDeclared := false
+		tools, _ := body["tools"].([]any)
+		for _, item := range tools {
+			tool, _ := item.(map[string]any)
+			function, _ := tool["function"].(map[string]any)
+			if function["name"] != "skill_search" {
+				continue
+			}
+			searchDeclared = true
+			parameters, _ := function["parameters"].(map[string]any)
+			if required, ok := parameters["required"].([]any); !ok || len(required) != 0 {
+				t.Error("optional skill search arguments must encode an empty required array", parameters)
+			}
+			properties, _ := parameters["properties"].(map[string]any)
+			if properties["query"] == nil {
+				t.Error("skill search query missing from provider schema")
+			}
+		}
+		if !searchDeclared {
+			t.Error("enabled extension skill search missing from provider request")
+		}
 		switch calls.Add(1) {
 		case 1:
 			streamManagedTool(w, "skill_load", map[string]any{"binding_id": binding, "resource_id": "guide"})

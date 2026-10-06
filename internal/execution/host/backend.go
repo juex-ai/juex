@@ -52,6 +52,15 @@ type ownership struct {
 }
 
 func New(config Config) (*Backend, error) {
+	return open(config, true)
+}
+
+// OpenExisting never adopts or initializes directories during offline work.
+func OpenExisting(config Config) (*Backend, error) {
+	return open(config, false)
+}
+
+func open(config Config, initialize bool) (*Backend, error) {
 	if !validID(config.Identity) || runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return nil, execprotocol.ErrInvalid
 	}
@@ -78,7 +87,7 @@ func New(config Config) (*Backend, error) {
 		return nil, errors.New("host executor is not executable")
 	}
 	for root, role := range map[string]string{config.Root: "workspace", config.ControlRoot: "control"} {
-		if err := rootIdentity(root, config.Identity, role, true); err != nil {
+		if err := rootIdentity(root, config.Identity, role, initialize); err != nil {
 			return nil, err
 		}
 	}

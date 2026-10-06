@@ -19,6 +19,7 @@ type Status struct {
 	Running       bool      `json:"running"`
 	Background    bool      `json:"background"`
 	Autostart     bool      `json:"autostart"`
+	CleanExit     bool      `json:"clean_exit"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
@@ -40,6 +41,21 @@ func (r *Recorder) Update(state string) error {
 	r.status.State = state
 	r.status.UpdatedAt = time.Now().UTC()
 	return writeJSON(filepath.Join(r.directory, "service-state.json"), r.status)
+}
+
+// Finish records the original process result. A stop-marker startup never
+// replaces it, so an OS supervisor's later exit code cannot hide failed cleanup.
+func (r *Recorder) Finish(result error) error {
+	r.status.CleanExit = result == nil
+	return r.Update("stopped")
+}
+
+func StopRequested(directory string) (bool, error) {
+	_, err := readPrivate(filepath.Join(directory, "service-stop"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 func readStatus(directory string) (Status, error) {
 	v := Status{State: "stopped"}

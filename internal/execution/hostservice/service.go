@@ -142,8 +142,17 @@ func (m *Manager) install(path string) error {
 
 func (m *Manager) Start(ctx context.Context) (Status, error) {
 	v, err := m.Status()
-	if err != nil || v.Running {
+	if err != nil {
 		return v, err
+	}
+	if _, err := StopRequested(m.StateDirectory); err != nil {
+		return v, err
+	}
+	if err := os.Remove(filepath.Join(m.StateDirectory, "service-stop")); err != nil && !os.IsNotExist(err) {
+		return v, err
+	}
+	if v.Running {
+		return v, nil
 	}
 	switch m.OS {
 	case "linux":
@@ -202,6 +211,9 @@ func (m *Manager) Stop(ctx context.Context) error {
 	if v.Running && !v.Background {
 		return errors.New("executor is running in a terminal; stop its run command with Ctrl+C")
 	}
+	if err := writePrivate(filepath.Join(m.StateDirectory, "service-stop"), nil); err != nil {
+		return err
+	}
 	switch m.OS {
 	case "linux":
 		if _, err := os.Stat(m.unitPath()); os.IsNotExist(err) {
@@ -211,11 +223,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 		}
 		err = run(ctx, "systemctl", "--user", "stop", m.label()+".service")
 	case "darwin":
-		target := m.domain(ctx) + "/" + m.label()
-		if run(ctx, "launchctl", "print", target) != nil {
-			return nil
-		}
-		err = run(ctx, "launchctl", "bootout", target)
+		return m.stopDarwin(ctx, v)
 	default:
 		return errors.New("background executor supports Linux and macOS")
 	}
@@ -232,11 +240,81 @@ func (m *Manager) Stop(ctx context.Context) error {
 			return err
 		}
 		if !status.Running {
-			return nil
+			return confirmedStop(status)
 		}
 		select {
 		case <-ctx.Done():
 			return errors.New("executor stop has not been confirmed")
+		case <-ticker.C:
+		}
+	}
+}
+
+func confirmedStop(status Status) error {
+	if status.PID > 1 && !status.CleanExit {
+		return errors.New("executor exited without a clean shutdown receipt")
+	}
+	return nil
+}
+
+func launchdPID(ctx context.Context, target string) (int, bool, error) {
+	output, err := exec.CommandContext(ctx, "launchctl", "print", target).CombinedOutput()
+	if err != nil {
+		if bytes.Contains(output, []byte("Could not find service")) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("inspect executor service: %w", err)
+	}
+	for line := range strings.SplitSeq(string(output), "\n") {
+		if value, found := strings.CutPrefix(strings.TrimSpace(line), "pid = "); found {
+			pid, err := strconv.Atoi(value)
+			return pid, true, err
+		}
+	}
+	return 0, true, nil
+}
+
+func (m *Manager) stopDarwin(ctx context.Context, previous Status) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	target := m.domain(ctx) + "/" + m.label()
+	pid, _, err := launchdPID(ctx, target)
+	if err != nil {
+		return err
+	}
+	if pid > 0 {
+		// bootout may escalate to SIGKILL. Signal cooperatively first; the
+		// startup marker makes even an abnormal KeepAlive restart exit idle.
+		if err := run(ctx, "launchctl", "kill", "SIGTERM", target); err != nil {
+			return err
+		}
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		status, err := m.Status()
+		if err != nil {
+			return err
+		}
+		pid, loaded, err := launchdPID(ctx, target)
+		if err != nil {
+			return err
+		}
+		if !status.Running && pid == 0 {
+			if err := confirmedStop(status); err != nil {
+				return err
+			}
+			if previous.Running && status.Fingerprint != previous.Fingerprint {
+				return errors.New("executor process changed during shutdown")
+			}
+			if loaded {
+				return run(ctx, "launchctl", "bootout", target)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("executor stop has not been confirmed; no force stop was sent")
 		case <-ticker.C:
 		}
 	}
@@ -288,7 +366,7 @@ func systemdArgument(value string) string { return systemdQuote(strings.ReplaceA
 func (m *Manager) definition() ([]byte, error) {
 	switch m.OS {
 	case "linux":
-		return []byte(fmt.Sprintf("# %s\n[Unit]\nDescription=JueX native executor\n\n[Service]\nType=simple\nExecStart=%s --state %s run --background-log\nEnvironment=%s\nUMask=0077\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=20\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n", signature, systemdArgument(m.Executable), systemdArgument(m.StateDirectory), systemdQuote("PATH="+m.Path))), nil
+		return []byte(fmt.Sprintf("# %s\n[Unit]\nDescription=JueX native executor\n\n[Service]\nType=simple\nExecStart=%s --state %s run --background-log\nEnvironment=%s\nUMask=0077\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=20\nSendSIGKILL=no\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n", signature, systemdArgument(m.Executable), systemdArgument(m.StateDirectory), systemdQuote("PATH="+m.Path))), nil
 	case "darwin":
 		text := func(value string) string {
 			var b bytes.Buffer

@@ -71,8 +71,9 @@ Runtime Worker 执行，共享所有者调度和用量规则。应用凭据不�
 ## 部署
 
 [运维流程](deploy/managed/README.zh.md) 协调五个服务、PostgreSQL 和 HTTPS 网关。
-仅 Execution 持有引擎 socket；私有 RPC 和数据库端口受防火墙保护。
-平台服务端与 Web 协调发布，设备协议版本明确协商。
+Host 运行自有 OS 用户服务和仅使用私有 socket 的专属 PostgreSQL；Hosted 运行 Linux
+容器，仅向 Execution 提供引擎 socket，并保护私有 RPC 和数据库端口。
+平台服务端、部署工具与 Web 协调发布，设备协议版本明确协商。
 
 维护先暂停接纳并检查在途操作，再停止写入方。完整备份将数据库、Blob、Workspace/Home、
 操作日志、环境配方和固定镜像与独立 Secret 恢复材料配对保存。
