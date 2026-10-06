@@ -147,8 +147,10 @@ func TestMigrationStdioExtensionNativeProtocol(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cwd, "marker")); !os.IsNotExist(err) {
 		t.Fatal("literal argument was evaluated", err)
 	}
-	event := wait(connect.ID, func(s execprotocol.Snapshot) bool { return strings.Contains(s.Text(), "migrated-notification") })
-	if event.State != execprotocol.Running || strings.Contains(event.Text(), `"type":"stderr"`) {
+	event := wait(connect.ID, func(s execprotocol.Snapshot) bool {
+		return strings.Contains(s.Text(), "migrated-notification") && strings.Contains(s.Text(), "migration-fixture-diagnostic")
+	})
+	if event.State != execprotocol.Running {
 		t.Fatal(event)
 	}
 	if err := engine.Cancel(agentID, connect.ID); err != nil {
@@ -166,7 +168,7 @@ func TestMigrationStdioExtensionNativeProtocol(t *testing.T) {
 	}
 	engine = openNative(t, config)
 	retained, err := engine.Snapshot(agentID, connect.ID, 0, 256<<10)
-	if err != nil || retained.State != execprotocol.Cancelled || !strings.Contains(retained.Text(), "migrated-notification") {
+	if err != nil || retained.State != execprotocol.Cancelled || !strings.Contains(retained.Text(), "migrated-notification") || !strings.Contains(retained.Text(), "migration-fixture-diagnostic") {
 		t.Fatal(retained, err)
 	}
 
@@ -239,6 +241,8 @@ func TestMigrationStdioMCPHelper(t *testing.T) {
 	if os.Getenv("MIGRATION_EXTENSION_HELPER") != "1" {
 		return
 	}
+	// MCP servers may log diagnostics to stderr without corrupting JSON-RPC stdout.
+	fmt.Fprintln(os.Stderr, "migration-fixture-diagnostic")
 	child := exec.Command("/bin/sh", "-c", "exec sleep 120")
 	if err := child.Start(); err != nil {
 		os.Exit(2)
