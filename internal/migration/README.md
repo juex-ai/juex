@@ -36,6 +36,14 @@ Symlink installations or selected resources need separate proven handling and
 are rejected. This capture does not create target extension authority or prove
 command, environment or private-state compatibility.
 
+`ConvertStdioExtension` turns a selected v1 stdio declaration into the existing v2
+manifest. Explicit executable, process cwd and Runtime WorkDir bindings preserve
+separate source locations through a fixed argv launcher. Execution still owns
+extension-private paths. Unsupported transports, Agent-wide defaults, unproved
+resource absence and unresolved argument paths require separate conversion.
+Conversion does not install dependencies, copy private state, connect MCP or
+subscribe notifications; those require installation and behavior acceptance.
+
 `internal/app/migration.ResolveConfig` resolves captured Home, Workspace, Agent
 and explicit startup-file layers using the fixed source merge rules. Remote
 imports require the exact source, declaring-file and startup-context cache

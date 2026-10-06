@@ -27,6 +27,12 @@ Workspace，捕获配置、`.env`、`AGENTS.md` 和 `.agents/AGENTS.md` 的原�
 单独的备份保留。符号链接安装或选中资源需要另行证明处理方式，因此会被拒绝。
 这种捕获不会创建目标扩展授权，也不证明命令、环境或私有状态已经兼容。
 
+`ConvertStdioExtension` 把选中的 v1 stdio 声明转换为现有 v2 manifest。显式可执行文件、
+进程 cwd 和 Runtime WorkDir 绑定通过固定 argv launcher 保留源端不同的位置。
+扩展私有路径仍由 Execution 所有。未支持的 transport、Agent 级默认环境、缺少资源
+不存在的证据，以及未解决的参数路径，需要单独转换。转换不安装依赖、复制私有状态、
+连接 MCP 或订阅通知；这些仍需安装流程和行为验收。
+
 `internal/app/migration.ResolveConfig` 按固定源版本的合并规则解析已捕获的 Home、
 Workspace、Agent 和显式启动文件层。远程导入必须匹配源地址、声明文件和启动上下文
 的精确缓存身份；转换不请求网络，也不重新发布配置。报告不包含 provider 的私有值。
