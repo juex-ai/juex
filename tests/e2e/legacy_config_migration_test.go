@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app/migration"
+	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/migration/legacy"
 	"github.com/juex-ai/juex/internal/providers"
@@ -66,7 +67,7 @@ func TestLegacyConfigCaptureResolvesOfflineWithoutAmbientCredentials(t *testing.
 	defer modelServer.Close()
 	url := server.URL + "/models?token=fixture-secret"
 	write(filepath.Join(home, "fleet.json"), []byte(`{"id":"source-fleet"}`))
-	definition, _ := json.Marshal(legacy.AgentDefinition{ID: "abc234", Name: "Original", Workspace: work, CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)})
+	definition, _ := json.Marshal(legacy.AgentDefinition{ID: "abc234", Name: "Original", Workspace: work, Enabled: true, Autostart: true, CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)})
 	write(filepath.Join(home, "agents/abc234/agent.json"), definition)
 	write(filepath.Join(home, "juex.yaml"), []byte(fmt.Sprintf("imports: [{source: %q}]\n", url)))
 	write(filepath.Join(work, ".juex/juex.yaml"), []byte("preset: minimal\nmodels: [fixture:local:tag]\n"))
@@ -127,6 +128,32 @@ func TestLegacyConfigCaptureResolvesOfflineWithoutAmbientCredentials(t *testing.
 	models, err := migration.ResolveModels(resolved[0], migration.ModelEvidence{AgentID: "abc234", Environment: environment})
 	if err != nil || modelRequests.Load() != 0 {
 		t.Fatal("model conversion performed I/O or failed", err)
+	}
+	// Freeze the complete publication inputs while all original source paths
+	// are unavailable. A fresh load must produce the identical private plan.
+	instructions, yes, no := "", true, false
+	key := migration.ModelKey{Provider: "fixture", Name: "local:tag"}
+	inputs := migration.BundleInputs{Config: evidence, Models: []migration.ModelEvidence{{AgentID: "abc234", Environment: environment}},
+		Agents:       map[string]migration.BundleAgentPolicy{"abc234": {Activation: "on_demand", Instructions: &instructions, FilesEnabled: &yes, ShellEnabled: &yes, CalendarEnabled: &no, CollaborationEnabled: &no, Workspace: work}},
+		ModelsPolicy: []migration.BundleModelPolicy{{Key: key, OutputReserve: 2048}}}
+	at := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
+	target := migration.BundleTarget{DeploymentID: "e2e-deployment", ActorID: "11111111-1111-4111-8111-111111111111", TenantID: "22222222-2222-4222-8222-222222222222", UserID: "11111111-1111-4111-8111-111111111111", FleetID: "33333333-3333-4333-8333-333333333333"}
+	directory := filepath.Join(t.TempDir(), "bundle")
+	bundleHash, err := migration.WriteBundle(directory, fleet, inputs, migration.BundleHeader{Target: target, CapturedAt: at, MemoryAdvancedSince: at, MemoryControl: application.Control{Enabled: true, Epoch: 1, Version: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := migration.LoadBundle(directory, bundleHash, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := bundle.Prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := migration.ConvertModels([]migration.ResolvedModels{models}, map[migration.ModelKey]int{key: 2048})
+	if err != nil || !reflect.DeepEqual(prepared.Models, want) || requests.Load() != 0 || modelRequests.Load() != 0 {
+		t.Fatal("bundle lost private publication policy or performed live I/O", err)
 	}
 	provider, err := providers.NewProvider(models.Models[0].Profile)
 	if err != nil {

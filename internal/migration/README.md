@@ -25,6 +25,19 @@ against those bytes. Reporting JSON is not a capture format. The capture contain
 private history and configuration; startup/auth evidence, selected extension
 installations and destination bindings still need the operator's enclosing bundle.
 
+App's `WriteBundle` freezes that capture, private configuration/auth/resource
+evidence, explicit target policies and destination identity in three files.
+`LoadBundle` requires an independently retained manifest digest and destination;
+it rejects changed, missing, non-private or symlink payloads. File bytes and
+unknown/absent/empty environment values survive round trips. Pure `Prepare`
+resolves the model catalog and initial Agent/resource policies without reopening
+source paths or allocating target UUIDs. This does not prove source shutdown,
+authorize database writes, install resources or activate Agents; owner imports
+and actual behavior acceptance remain necessary.
+Enabled source Agents require an explicit target on-demand activation choice.
+Their old process autostart flags remain in the capture; shared Runtime does not
+reproduce per-Agent login jobs. Disabled source Agents need separate conversion.
+
 Agent capture includes referenced media/spool bytes and verifies their hashes.
 Fleet capture requires the source user's default Home explicitly, preserves
 configuration layers and import-cache bytes, and records absent configuration.

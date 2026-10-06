@@ -32,6 +32,15 @@ type AgentConfigBindings struct {
 // clear existing hooks. Lifecycle, Workspace, resources and Memory profile
 // require separate conversion and acceptance.
 func ConvertAgentConfig(source ResolvedConfig, definition legacy.AgentDefinition, bindings AgentConfigBindings) (management.AgentConfig, error) {
+	id, err := uuid.Parse(bindings.ModelID)
+	if err != nil || id == uuid.Nil || id.String() != bindings.ModelID {
+		return management.AgentConfig{}, errors.New("agent configuration requires a published model identity")
+	}
+	return prepareAgentConfig(source, definition, bindings)
+}
+
+// Preparation validates policy before publication allocates a model UUID.
+func prepareAgentConfig(source ResolvedConfig, definition legacy.AgentDefinition, bindings AgentConfigBindings) (management.AgentConfig, error) {
 	if strings.TrimSpace(source.AgentID) == "" || source.AgentID != definition.ID {
 		return management.AgentConfig{}, errors.New("agent configuration requires matching source identity")
 	}
@@ -42,10 +51,6 @@ func ConvertAgentConfig(source ResolvedConfig, definition legacy.AgentDefinition
 		if _, ok := source.Modules[name]; !ok {
 			return management.AgentConfig{}, errors.New("agent configuration has missing or unknown source modules")
 		}
-	}
-	id, err := uuid.Parse(bindings.ModelID)
-	if err != nil || id == uuid.Nil || id.String() != bindings.ModelID {
-		return management.AgentConfig{}, errors.New("agent configuration requires a published model identity")
 	}
 	if (source.WorkerDepth != 1 && source.WorkerDepth != 2) || bindings.ShellEnabled == nil || bindings.FilesEnabled == nil || bindings.CalendarEnabled == nil || bindings.CollaborationEnabled == nil || bindings.Instructions == nil {
 		return management.AgentConfig{}, errors.New("agent configuration requires resolved depth, instructions and explicit file, shell, application and collaboration policies")
