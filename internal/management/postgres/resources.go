@@ -179,7 +179,16 @@ func (d *Directory) CreateAgent(ctx context.Context, actorID, tenantID, ownerID 
 	if err != nil {
 		return management.Agent{}, err
 	}
-	if err := enabledModel(ctx, tx, tenantID, config.ModelID); err != nil {
+	agent, err := createAgent(ctx, tx, actorID, fleet, member, config)
+	if err != nil {
+		return management.Agent{}, err
+	}
+	return agent, tx.Commit(ctx)
+}
+
+// The caller validates configuration and holds the Tenant lock before creation.
+func createAgent(ctx context.Context, tx pgx.Tx, actorID string, fleet management.Fleet, member management.Membership, config management.AgentConfig) (management.Agent, error) {
+	if err := enabledModel(ctx, tx, fleet.TenantID, config.ModelID); err != nil {
 		return management.Agent{}, err
 	}
 	policy := agentpolicy.Policy{}
@@ -197,7 +206,7 @@ func (d *Directory) CreateAgent(ctx context.Context, actorID, tenantID, ownerID 
 	if err := recordResource(ctx, tx, actorID, fleet, member, "agent.created", agent.ID, agent.Version); err != nil {
 		return agent, err
 	}
-	return agent, tx.Commit(ctx)
+	return agent, nil
 }
 
 func agentOwner(ctx context.Context, tx pgx.Tx, tenantID, agentID string) (string, error) {

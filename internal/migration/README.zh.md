@@ -53,6 +53,10 @@ Hook 和命令 Observable 在目标也要求 Shell。未解决的组合会被拒
 还要求源用户资源策略开启，并绑定所选 Execution 环境上的路径。Workspace、生命周期、
 Memory profile、skill 选择及资源内容仍需分别转换。
 
+Management 的离线 `ImportAgents` 原子保存初始定义及源 ID 映射。匹配的重试返回相同
+目标身份；名称不是迁移键。它要求固定预期的新 Fleet，并拒绝在清理后重建。此回执
+不授权后续服务导入，也不证明源状态、资源和生命周期已完成迁移。
+
 消息与终态输入的纯转换位于 `internal/app/migration`，在这里组合服务的类型契约和
 固定源格式 reader。消息身份限定在目标 Agent 与 Thread 内。spool 引用恢复为经过
 校验的完整正文；图片引用要求匹配的 Execution 私有 Artifact 回执。仅在逐字重建

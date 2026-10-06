@@ -74,6 +74,12 @@ policy and a path on the selected Execution environment. Workspace/lifecycle,
 Memory profile, skill selection and resource contents remain separate conversion
 responsibilities.
 
+Management's offline `ImportAgents` persists initial definitions and their source
+ID mapping atomically. A matching retry recovers the same target identities;
+names are not migration keys. It requires the expected fresh Fleet and rejects
+recreation after purge. This receipt does not authorize subsequent service imports
+or prove that source state, resources and lifecycle have been migrated.
+
 Pure message and terminal-input conversion lives in `internal/app/migration`,
 where typed service contracts may meet the fixed source reader. Message identities
 are scoped to the target Agent and Thread. Text spool references become verified

@@ -64,6 +64,15 @@ optional global path belongs to the selected execution environment. Omitting
 this setting preserves it during other configuration edits; disabling or changing
 an active source advances the Agent execution epoch with the configuration write.
 
+Offline Agent import creates definitions, audit and a source-identity receipt in
+one transaction. First import requires a Fleet with no Agents or purge history;
+the caller pins that Fleet identity and stops target writers. Exact retries
+recover IDs without resetting later configuration, archive state or execution
+epochs, even if the original model is no longer available. Current membership
+and purge checks still apply. Returned IDs grant no authority; other owners
+require fresh authorization for subsequent migration steps. This private boundary
+does not import resources or expose an HTTP route.
+
 Models are deployment-owned. Tenant catalogs inherit by default or use an
 explicit allowlist; an empty allowlist grants nothing. Fleet defaults inherit
 the platform default, and Agents may override them. Operators configure flat,
