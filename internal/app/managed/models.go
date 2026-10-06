@@ -15,15 +15,37 @@ import (
 // before Management seals the private configuration. Services do not import
 // provider adapters or infer configuration from the operator's Home.
 func ConfigureModel(ctx context.Context, directory *postgres.Directory, config management.ModelConfiguration) (management.Model, error) {
-	var err error
-	config, err = normalizeModelConfiguration(config)
+	config, err := prepareModelConfiguration(config)
 	if err != nil {
 		return management.Model{}, err
 	}
-	if _, err := modelProfile(config); err != nil {
-		return management.Model{}, management.ErrInvalid
-	}
 	return directory.ConfigureModel(ctx, config)
+}
+
+// ImportModels validates every adapter before the offline operator transaction.
+func ImportModels(ctx context.Context, directory *postgres.Directory, value management.ModelsImport) (map[management.ModelKey]string, error) {
+	models := make([]management.ImportedModel, len(value.Models))
+	for i, item := range value.Models {
+		config, err := prepareModelConfiguration(item.Configuration)
+		if err != nil {
+			return nil, err
+		}
+		models[i] = management.ImportedModel{Configuration: config, Fallbacks: item.Fallbacks}
+	}
+	value.Models = models
+	return directory.ImportModels(ctx, value)
+}
+
+func prepareModelConfiguration(config management.ModelConfiguration) (management.ModelConfiguration, error) {
+	var err error
+	config, err = normalizeModelConfiguration(config)
+	if err != nil {
+		return config, err
+	}
+	if _, err := modelProfile(config); err != nil {
+		return config, management.ErrInvalid
+	}
+	return config, nil
 }
 
 func normalizeModelConfiguration(config management.ModelConfiguration) (management.ModelConfiguration, error) {

@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app/managed"
@@ -20,13 +21,15 @@ func TestMigrationModelPlanPreservesProfilesAndFallbacksThroughManagement(t *tes
 	configs := []profile.Config{
 		{ID: "openai-codex", Model: "main", BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "fixture-codex-token", Headers: map[string]string{"ChatGPT-Account-ID": "fixture-account", "X-Thread": "${juex_thread_id}"}, Query: map[string]string{"route": "private-fixture-route"}, ThinkingEffort: "high", Compat: llm.CompatOptions{CodexTransport: "sse"}},
 		{ID: "anthropic", Model: "backup", BaseURL: "https://api.anthropic.com", APIKey: "fixture-anthropic-token", ThinkingEffort: "low"},
-		{ID: "local-label", Protocol: string(llm.ProtocolOpenAIChat), Model: "local", BaseURL: "http://localhost:17777/v1", APIKey: "fixture-local-token"},
+		{ID: "local-label", Protocol: string(llm.ProtocolOpenAIChat), Model: "local", BaseURL: "http://localhost:17777/v1", Authentication: "none"},
 	}
 	var models []migration.ResolvedModel
 	originals := map[migration.ModelKey]llm.ProviderProfile{}
 	reserves := map[migration.ModelKey]int{}
 	for _, config := range configs {
-		config.Authentication = "api_key"
+		if config.Authentication == "" {
+			config.Authentication = "api_key"
+		}
 		p, err := profile.ResolveProfile(config)
 		if err != nil {
 			t.Fatal(err)
@@ -40,30 +43,7 @@ func TestMigrationModelPlanPreservesProfilesAndFallbacksThroughManagement(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := map[migration.ModelKey]string{}
-	var allowed []string
-	for _, model := range plan.Catalog {
-		published, err := managed.ConfigureModel(ctx, directory, model.Configuration)
-		if err != nil {
-			t.Fatal("owner rejected converted model", model.Key, err)
-		}
-		ids[model.Key] = published.ID
-		allowed = append(allowed, published.ID)
-	}
-	// Empty tails must be actionable replacements, not omitted instructions.
 	local, codex := migration.ModelKey{Provider: models[2].Profile.ID, Name: models[2].Profile.Model}, migration.ModelKey{Provider: models[0].Profile.ID, Name: models[0].Profile.Model}
-	if err := directory.SetModelFallbacks(ctx, ids[local], []string{ids[codex]}); err != nil {
-		t.Fatal(err)
-	}
-	for _, tail := range plan.Fallbacks {
-		candidates := make([]string, 0, len(tail.Candidates))
-		for _, key := range tail.Candidates {
-			candidates = append(candidates, ids[key])
-		}
-		if err := directory.SetModelFallbacks(ctx, ids[tail.Primary], candidates); err != nil {
-			t.Fatal(err)
-		}
-	}
 	user, err := directory.CreateUser(ctx, "model-import@example.test")
 	if err != nil {
 		t.Fatal(err)
@@ -72,8 +52,13 @@ func TestMigrationModelPlanPreservesProfilesAndFallbacksThroughManagement(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := directory.SetTenantModels(ctx, tenant.ID, false, allowed); err != nil {
+	ids, err := migration.PublishModels(ctx, directory, tenant.ID, "fixture", strings.Repeat("a", 64), plan)
+	if err != nil {
 		t.Fatal(err)
+	}
+	overview, err := directory.FleetOverview(ctx, user.ID, tenant.ID, user.ID)
+	if err != nil || overview.PlatformDefaultModelID != "" {
+		t.Fatal("publication changed platform default", err)
 	}
 	authority := managed.RuntimeAuthority{Directory: directory}
 	for _, binding := range plan.Agents {

@@ -377,26 +377,9 @@ func recordResource(ctx context.Context, tx pgx.Tx, actorID string, fleet manage
 }
 
 func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelConfiguration) (management.Model, error) {
-	config.Options = config.Options.Normalized()
-	if config.Protocol == llm.ProtocolOpenAICodexResponses && !explicitCodexAccount(config.Options.Headers) {
-		return management.Model{}, management.ErrInvalid
-	}
-	if config.Options.Authentication != "api_key" && config.Options.Authentication != "none" ||
-		(config.Options.Authentication == "api_key") != (config.APIKey != "") {
-		return management.Model{}, management.ErrInvalid
-	}
-	encodedOptions, err := json.Marshal(config.Options)
-	if err != nil || len(encodedOptions) > 64<<10 {
-		return management.Model{}, management.ErrInvalid
-	}
-	u, err := url.Parse(config.Endpoint)
-	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || (u.Scheme != "http" && u.Scheme != "https") ||
-		strings.TrimSpace(config.Provider) == "" || len(config.Provider) > 100 || strings.TrimSpace(config.Name) == "" || len(config.Name) > 200 ||
-		config.ContextWindow < 1024 || config.MaxOutput < 0 || config.OutputReserve <= 0 || config.MaxOutput > config.OutputReserve || config.OutputReserve >= config.ContextWindow ||
-		(config.Protocol == llm.ProtocolAnthropicMessages && config.MaxOutput == 0 && config.OutputReserve < llm.AnthropicDefaultOutputTokens) ||
-		(config.Protocol != llm.ProtocolOpenAIChat && config.Protocol != llm.ProtocolOpenAIResponses && config.Protocol != llm.ProtocolAnthropicMessages && config.Protocol != llm.ProtocolOpenAICodexResponses) ||
-		(config.Protocol == llm.ProtocolOpenAICodexResponses && config.Provider != "openai-codex") {
-		return management.Model{}, management.ErrInvalid
+	config, encodedOptions, err := prepareModelConfiguration(config)
+	if err != nil {
+		return management.Model{}, err
 	}
 	tx, err := d.begin(ctx)
 	if err != nil {
@@ -432,6 +415,32 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 		return model, err
 	}
 	return model, tx.Commit(ctx)
+}
+
+// Shared by ordinary configuration and the atomic offline importer.
+func prepareModelConfiguration(config management.ModelConfiguration) (management.ModelConfiguration, []byte, error) {
+	config.Options = config.Options.Normalized()
+	if config.Protocol == llm.ProtocolOpenAICodexResponses && !explicitCodexAccount(config.Options.Headers) {
+		return config, nil, management.ErrInvalid
+	}
+	if config.Options.Authentication != "api_key" && config.Options.Authentication != "none" ||
+		(config.Options.Authentication == "api_key") != (config.APIKey != "") {
+		return config, nil, management.ErrInvalid
+	}
+	encodedOptions, err := json.Marshal(config.Options)
+	if err != nil || len(encodedOptions) > 64<<10 {
+		return config, nil, management.ErrInvalid
+	}
+	u, err := url.Parse(config.Endpoint)
+	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || (u.Scheme != "http" && u.Scheme != "https") ||
+		strings.TrimSpace(config.Provider) == "" || len(config.Provider) > 100 || strings.TrimSpace(config.Name) == "" || len(config.Name) > 200 ||
+		config.ContextWindow < 1024 || config.MaxOutput < 0 || config.OutputReserve <= 0 || config.MaxOutput > config.OutputReserve || config.OutputReserve >= config.ContextWindow ||
+		(config.Protocol == llm.ProtocolAnthropicMessages && config.MaxOutput == 0 && config.OutputReserve < llm.AnthropicDefaultOutputTokens) ||
+		(config.Protocol != llm.ProtocolOpenAIChat && config.Protocol != llm.ProtocolOpenAIResponses && config.Protocol != llm.ProtocolAnthropicMessages && config.Protocol != llm.ProtocolOpenAICodexResponses) ||
+		(config.Protocol == llm.ProtocolOpenAICodexResponses && config.Provider != "openai-codex") {
+		return config, nil, management.ErrInvalid
+	}
+	return config, encodedOptions, nil
 }
 
 const modelColumns = `id,provider,name,protocol,context_window,max_output,output_reserve,enabled`

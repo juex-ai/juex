@@ -88,8 +88,8 @@ func ConvertModels(values []ResolvedModels, reserves map[ModelKey]int) (ModelPub
 			chain = append(chain, key)
 		}
 		primary := chain[0]
-		// An explicit empty chain must survive so publication can clear a prior
-		// fallback policy. Chains are direct and are never recursively expanded.
+		// Retain empty tails to detect conflicting source policies. Publication
+		// creates direct chains and never recursively expands them.
 		tail := append([]ModelKey{}, chain[1:]...)
 		if prior, exists := tails[primary]; exists && !slices.Equal(prior, tail) {
 			return ModelPublicationPlan{}, errors.New("shared primary model has conflicting ordered fallback policy")

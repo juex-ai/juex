@@ -48,8 +48,10 @@ Management 账户绑定；源解析成功本身不代表已得到可部署的目
 `ConvertModels` 从已解析 profile 和显式预算预留生成私有发布计划。只有全部私有
 设置相同，才合并有效 provider/model 身份。共享主模型必须有一致的有序、直接
 fallback 链，包括显式空链。保留源请求上限和有效能力；隐式 endpoint 必须先完成
-解析。计划的 JSON 不包含密钥，也不授予覆盖现有目录项的权限。发布仍需经过
-Management 校验、私有目标状态比对、租户访问策略和 Agent 绑定。
+解析。计划的 JSON 不包含密钥，也不授予覆盖现有目录项的权限。`PublishModels` 通过
+适配器校验及 Management 的离线原子导入，初始化空部署模型目录和未设置的租户模型
+策略。它写入直接 fallback 链与目录 allowlist，保持平台默认模型不变；精确重试返回
+稳定 UUID，不恢复运维方后续修改。来源证据和 Agent 绑定仍由调用方负责。
 
 `ConvertAgentConfig` 在安装资源之前准备新 Agent 的初始配置，不用于更新补丁。
 它把已解析模块映射到现有能力分组，要求显式模型、静态指令、Files、Shell、Calendar

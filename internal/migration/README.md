@@ -68,8 +68,12 @@ all private settings agree. Shared primary models require identical ordered,
 direct fallback chains, including an explicit empty chain. Source request caps
 and effective capabilities remain unchanged; an implicit endpoint must be resolved
 before planning. The plan omits secrets from JSON and grants no authority to
-overwrite existing catalog entries. Publication still needs Management validation,
-private target-state comparison, tenant access and Agent bindings.
+overwrite existing catalog entries. `PublishModels` applies adapter validation and
+Management's atomic offline import to an empty deployment catalog and an unset
+Tenant model policy. It writes direct fallback chains and the catalog allowlist,
+preserves the platform default, and recovers stable UUIDs on exact retries without
+resetting later operator edits. Source provenance and Agent bindings remain the
+caller's responsibility.
 
 `ConvertAgentConfig` prepares a new Agent before resources are installed, not an
 update patch. It maps resolved modules to existing capability groups and requires

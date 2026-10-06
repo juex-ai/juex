@@ -92,6 +92,12 @@ authentication and sends no Authorization header or invented API key.
 Admission ends before the external request: revocation blocks
 later admissions, not an already dispatched request.
 
+Offline model import initializes an empty deployment catalog and an unset Tenant
+model policy in one transaction, including sealed configuration, direct fallbacks,
+an explicit allowlist and a catalog-owned receipt. The platform default is unchanged.
+Exact private-input retries recover UUIDs without restoring later credentials or
+policy. The receipt survives Fleet cleanup and grants no execution authority.
+
 The normal request output cap is separate from its positive context reservation.
 A zero cap keeps the adapter/provider default; it does not promise unlimited
 output or guarantee that the provider uses only the reserved tokens. Anthropic
