@@ -56,7 +56,7 @@ func TestMigrationStdioExtensionNativeProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := []string{"-test.run=^TestMigrationStdioMCPHelper$", "--", "two words", "quote'\"", "", "$HOME", "$(touch marker)", ";literal", "${WORKDIR}/file", "$WORKDIR_X"}
-	source := migrationExtensionCapture(t, args, map[string]string{"MIGRATION_EXTENSION_HELPER": "1", "STATE": "$JUEX_EXT_DATA_DIR/private", "WORKDIR": "ignored", "JUEX_WORKDIR": "ignored", "JUEX_EXT_DIR": "ignored", "juex_ext_data_dir": "ignored", "BASH_ENV": startup, "ENV": startup, "SHELLOPTS": "xtrace:nounset"})
+	source := migrationExtensionCapture(t, args, map[string]string{"MIGRATION_EXTENSION_HELPER": "1", "STATE": "$JUEX_EXT_DATA_DIR/private", "WORKDIR": "ignored", "JUEX_WORKDIR": "ignored", "JUEX_EXT_DIR": "ignored", "juex_ext_data_dir": "ignored", "BASH_ENV": startup, "ENV": startup})
 	manifest, err := migration.ConvertStdioExtension(source, map[string]migration.MCPProcessBinding{"wire": {Executable: executable, WorkingDirectory: cwd, RuntimeWorkDir: workspace}})
 	if err != nil {
 		t.Fatal(err)
@@ -232,6 +232,10 @@ func migrationProcessStopped(t *testing.T, pid int) {
 }
 
 func TestMigrationStdioMCPHelper(t *testing.T) {
+	if os.Getenv("MIGRATION_EXTENSION_ENV_PROBE") == "1" {
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"IFS": os.Getenv("IFS"), "PWD": os.Getenv("PWD"), "SHELLOPTS": os.Getenv("SHELLOPTS")})
+		os.Exit(0)
+	}
 	if os.Getenv("MIGRATION_EXTENSION_HELPER") != "1" {
 		return
 	}
@@ -298,4 +302,31 @@ func TestMigrationStdioMCPHelper(t *testing.T) {
 		os.Exit(9)
 	}
 	os.Exit(0)
+}
+
+func TestMigrationStdioExtensionRejectsChangedProcessEnvironment(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{"IFS": ":", "PWD": "/synthetic/source", "SHELLOPTS": "xtrace"}
+	command := exec.Command(executable, "-test.run=^TestMigrationStdioMCPHelper$")
+	command.Env = append(os.Environ(), "MIGRATION_EXTENSION_ENV_PROBE=1")
+	for key, value := range values {
+		command.Env = append(command.Env, key+"="+value)
+	}
+	data, err := command.Output()
+	var observed map[string]string
+	if err != nil || json.Unmarshal(data, &observed) != nil || !reflect.DeepEqual(observed, values) {
+		t.Fatal(string(data), err)
+	}
+	for key, value := range values {
+		t.Run(key, func(t *testing.T) {
+			source := migrationExtensionCapture(t, nil, map[string]string{key: value})
+			_, err := migration.ConvertStdioExtension(source, map[string]migration.MCPProcessBinding{"wire": {Executable: executable, WorkingDirectory: t.TempDir(), RuntimeWorkDir: t.TempDir()}})
+			if err == nil {
+				t.Fatal("accepted a launcher that changes the observed source environment")
+			}
+		})
+	}
 }

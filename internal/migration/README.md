@@ -40,7 +40,8 @@ command, environment or private-state compatibility.
 manifest. Explicit executable, process cwd and Runtime WorkDir bindings preserve
 separate source locations through a fixed argv launcher. Execution still owns
 extension-private paths. Unsupported transports, Agent-wide defaults, unproved
-resource absence and unresolved argument paths require separate conversion.
+resource absence, shell-managed environment values and unresolved argument paths
+require separate conversion.
 Conversion does not install dependencies, copy private state, connect MCP or
 subscribe notifications; those require installation and behavior acceptance.
 

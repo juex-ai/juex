@@ -177,3 +177,17 @@ func TestConvertStdioExtensionDeterministicBindingsAndLimits(t *testing.T) {
 		t.Fatal("accepted manifest larger than Native inspection limit")
 	}
 }
+
+func TestConvertStdioExtensionRejectsShellOwnedEnvironment(t *testing.T) {
+	for _, key := range []string{"IFS", "PWD", "OLDPWD", "SHLVL", "SHELLOPTS", "BASHOPTS", "BASH_VERSION", "BASHPID", "UID", "EUID", "PPID", "RANDOM", "SECONDS", "LINENO", "OPTIND", "OPTERR", "HISTCMD", "POSIXLY_CORRECT", "BASH", "BASH_VERSINFO", "BASH_COMMAND", "BASH_EXECUTION_STRING", "_", "PS1"} {
+		t.Run(key, func(t *testing.T) {
+			data, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"wire": map[string]any{"command": "wire", "env": map[string]string{key: "explicit-source-value"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ConvertStdioExtension(stdioSnapshot(stdioManifest, string(data)), stdioBindings()); err == nil {
+				t.Fatal("silently accepted shell-rewritten environment")
+			}
+		})
+	}
+}

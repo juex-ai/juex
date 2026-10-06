@@ -136,6 +136,9 @@ func convertStdioServer(name string, data []byte, binding MCPProcessBinding) (ex
 		result.Command = append(result.Command, arg)
 	}
 	for key, value := range environment {
+		if shellOwnedEnvironment(key) {
+			return empty, errors.New("explicit shell-managed environment requires separate process conversion")
+		}
 		// Fixed-source PrepareConfig overwrites these keys after explicit env and
 		// ignores case-insensitive data-dir assignments. Execution owns both EXT keys.
 		if key == "WORKDIR" || key == "JUEX_WORKDIR" || key == "JUEX_EXT_DIR" || strings.EqualFold(key, "JUEX_EXT_DATA_DIR") {
@@ -185,4 +188,22 @@ func replaceExtensionRef(value, key, replacement string) string {
 }
 func extensionEnvByte(c byte) bool {
 	return c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
+}
+
+// The source execs MCP directly. A shell initializes these variables even in
+// privileged mode, so accepting them would silently replace explicit values.
+// BASH_ENV is startup input rather than shell state; -p ignores it and passes
+// it through unchanged, as it does ENV.
+func shellOwnedEnvironment(key string) bool {
+	if strings.HasPrefix(key, "BASH") && key != "BASH_ENV" {
+		return true
+	}
+	switch key {
+	case "IFS", "PWD", "OLDPWD", "SHLVL", "SHELLOPTS", "_",
+		"UID", "EUID", "PPID", "GROUPS", "RANDOM", "SRANDOM", "SECONDS",
+		"LINENO", "OPTIND", "OPTARG", "OPTERR", "DIRSTACK", "PIPESTATUS", "HISTCMD", "POSIXLY_CORRECT",
+		"HOSTTYPE", "MACHTYPE", "OSTYPE", "HOSTNAME", "PS0", "PS1", "PS2", "PS3", "PS4":
+		return true
+	}
+	return false
 }
