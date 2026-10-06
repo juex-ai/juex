@@ -242,6 +242,51 @@ func TestBundlePrepareRejectsInactiveOrMisrepresentedExtensions(t *testing.T) {
 	}
 }
 
+func TestBundlePrepareRequiresSelectedSourceCalendar(t *testing.T) {
+	for _, variant := range []string{"extensions-disabled", "mcp-disabled", "not-allowed", "selected", "observables-disabled"} {
+		t.Run(variant, func(t *testing.T) {
+			source, inputs, header := bundleFixture(t)
+			for i, f := range source.Files {
+				if f.Path != "juex.yaml" {
+					continue
+				}
+				data := strings.Replace(string(f.Data), "preset: minimal", "preset: standard", 1) + "enable_user_agents_resources: false\nextensions: {allow: [calendar]}\n"
+				switch variant {
+				case "extensions-disabled":
+					data += "modules: {extensions: {enabled: false}}\n"
+				case "mcp-disabled":
+					data += "modules: {mcp: {enabled: false}}\n"
+				case "not-allowed":
+					data = strings.Replace(data, "allow: [calendar]", "allow: []", 1)
+				case "observables-disabled":
+					data += "modules: {observables: {enabled: false}}\n"
+				}
+				changed := configFile(f.Path, data)
+				source.Files[i] = changed
+				for j, home := range source.DefaultHome.Files {
+					if home.Path == f.Path {
+						source.DefaultHome.Files[j] = changed
+					}
+				}
+			}
+			source.Agents[0].Files = append(source.Agents[0].Files, configFile("extensions/calendar/calendar.json", `{"version":1,"entries":{}}`))
+			yes := true
+			policy := inputs.Agents["abc234"]
+			policy.CalendarEnabled = &yes
+			inputs.Agents["abc234"] = policy
+			b := Bundle{source: source, inputs: inputs, header: header}
+			_, err := b.Prepare()
+			if variant == "selected" || variant == "observables-disabled" {
+				if err != nil {
+					t.Fatal("selected Calendar rejected", err)
+				}
+			} else if err == nil {
+				t.Fatal("unselected legacy Calendar state accepted")
+			}
+		})
+	}
+}
+
 func TestBundlePrepareBindsAgentsByIdentity(t *testing.T) {
 	source, inputs, header := bundleFixture(t)
 	second := source.Agents[0].Definition

@@ -64,6 +64,13 @@ func (b *Bundle) Prepare() (PreparedBundle, error) {
 		if !agent.Definition.Enabled || policy.Activation != "on_demand" {
 			return empty, errors.New("enabled source Agents require an explicit on-demand target lifecycle")
 		}
+		for _, file := range agent.Files {
+			if file.Path == "extensions/calendar/calendar.json" && (!c.Modules["extensions"] || !c.Modules["mcp"] || !slices.Contains(c.ExtensionAllow, "calendar")) {
+				// The old Calendar scheduler lived behind the selected MCP
+				// extension. A leftover file does not prove it was enabled.
+				return empty, errors.New("captured Calendar state requires the selected source MCP extension")
+			}
+		}
 		m, err := ResolveModels(c, evidence[c.AgentID])
 		if err != nil {
 			return empty, err

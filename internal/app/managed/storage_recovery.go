@@ -37,7 +37,7 @@ func RecoverHostedStorage(ctx context.Context, address, path, previous, maintena
 		return err
 	}
 	defer pool.Close()
-	if err := requireOffline(ctx, pool); err != nil {
+	if err := RequireOffline(ctx, pool); err != nil {
 		return err
 	}
 	store := executionpg.New(pool)

@@ -34,7 +34,7 @@ func StopManagedHosts(ctx context.Context, address, path, directory string, inhe
 		return nil, err
 	}
 	defer pool.Close()
-	if err := requireOffline(ctx, pool); err != nil {
+	if err := RequireOffline(ctx, pool); err != nil {
 		return nil, err
 	}
 	report, err := executionpg.MaintenanceReport(ctx, pool)

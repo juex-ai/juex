@@ -100,7 +100,7 @@ build: web
 	$(MAKE) build-go
 
 CLIENTS := juex juex-executor
-SERVICES := juex-management juex-runtime juex-execution juex-memory juex-calendar juex-guest juex-service-log
+SERVICES := juex-management juex-runtime juex-execution juex-memory juex-calendar juex-guest juex-service-log juex-migrate
 
 build-clients:
 	mkdir -p dist

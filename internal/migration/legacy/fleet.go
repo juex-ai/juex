@@ -59,6 +59,12 @@ func ReadFleet(home, defaultHome string) (Fleet, error) {
 		return Fleet{}, err
 	}
 	defer func() { _ = root.Close() }()
+	return readFleet(root, home, defaultHome)
+}
+
+// The source guard lends its already opened root so capture cannot be rebound
+// to a different Home between the guard's stage-boundary identity checks.
+func readFleet(root *os.Root, home, defaultHome string) (Fleet, error) {
 	r := sourceReader{root: root, stats: make(map[string]os.FileInfo)}
 	fleet := Fleet{SourceHome: home}
 	defaultConfig, defaultReader, err := readDefaultHomeConfig(defaultHome)

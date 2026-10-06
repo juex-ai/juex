@@ -20,7 +20,7 @@ from common import (HERE, SERVICES, absolute, digest, durable, environment, pack
                     rebind_environment, run, separate, sync_directory, unpack, write_json)
 import processes
 
-BINARIES = ("juex", *("juex-" + name for name in (*SERVICES, "executor", "service-log")))
+BINARIES = ("juex", *("juex-" + name for name in (*SERVICES, "executor", "service-log", "migrate")))
 OPERATOR_FILES = ("operator.py", "common.py", "host.py", "hosted.py", "processes.py", "nginx.conf")
 service_status = processes.service_status
 

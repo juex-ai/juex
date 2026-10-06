@@ -38,6 +38,34 @@ Enabled source Agents require an explicit target on-demand activation choice.
 Their old process autostart flags remain in the capture; shared Runtime does not
 reproduce per-Agent login jobs. Disabled source Agents need separate conversion.
 
+`SourceGuard` opens only the fixed source version's existing writer locks and
+holds them through import. Missing/busy locks, replaced directories or a changed
+Agent registry stop the operation; the guard never creates or repairs source
+files. Capture borrows its opened root. `VerifySource` compares the complete
+capture with the frozen bundle without refreshing its identity on mismatch.
+These locks do not cover the old Fleet HTTP recovery handler or external editors:
+the operator must independently stop source services and their children, disable
+autostart, and retain verified backups before capture and cutover.
+
+The platform-only `juex-migrate apply` helper reads an existing private Host
+deployment and requires the operator's inherited exclusive maintenance descriptor.
+Existing storage directories must remain private and retain their identity;
+unfinished installation, restore or authority review blocks import.
+It rejects ambient `PG*` connection settings and uses the deployment's socket-only
+database on port 5432, keeps one connection, checks
+offline inventory and imports through Management, Execution, Runtime, Memory and
+Calendar owner APIs. Interrupted uploads resume only when every unfinished object
+matches this bundle, its real target Agent, current authority and complete request.
+Other unsettled work blocks import. Exact retries reuse owner receipts; failure
+preserves partial commits and maintenance. Ordinary backup/upgrade readiness is
+unchanged; a migration retry enters the helper only after independently verifying
+that writers and executors remain stopped, with PostgreSQL still available.
+
+Apply does not select a default environment, install/connect extensions or resume
+the platform. Those actions and application acceptance remain required. Captured
+Calendar state requires the source Calendar MCP extension to have been selected;
+a leftover file cannot authorize reactivating an old schedule.
+
 Agent capture includes referenced media/spool bytes and verifies their hashes.
 Fleet capture requires the source user's default Home explicitly, preserves
 configuration layers and import-cache bytes, and records absent configuration.
