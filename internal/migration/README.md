@@ -17,6 +17,14 @@ rejected without repairing the source. Archive/restore metadata remains the
 authority for Worker retention even when the last Turn failed. Memory no-store
 ranges retain their original scope, including ranges spanning Generations.
 
+`EncodeCapture` writes a private, fixed-version Fleet capture; `DecodeCapture`
+requires its independently recorded SHA-256 and never reopens source paths.
+Original bytes are deduplicated without merging ownership or absence records.
+Thread coordinates, continuation and Memory projections are rebuilt and checked
+against those bytes. Reporting JSON is not a capture format. The capture contains
+private history and configuration; startup/auth evidence, selected extension
+installations and destination bindings still need the operator's enclosing bundle.
+
 Agent capture includes referenced media/spool bytes and verifies their hashes.
 Fleet capture requires the source user's default Home explicitly, preserves
 configuration layers and import-cache bytes, and records absent configuration.

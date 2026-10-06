@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -87,6 +88,26 @@ func TestLegacyConfigCaptureResolvesOfflineWithoutAmbientCredentials(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	capture, captureHash, err := legacy.EncodeCapture(fleet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep logical source identities while making every original path unavailable.
+	// Import must use the same private cache bytes after an interruption.
+	frozenRoot := root + "-frozen"
+	if err := os.Rename(root, frozenRoot); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Rename(frozenRoot, root) })
+	fleet, err = legacy.DecodeCapture(capture, captureHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromCapture, err := migration.ResolveConfig(fleet, evidence)
+	if err != nil || !reflect.DeepEqual(fromCapture, resolved) {
+		t.Fatalf("private capture changed source configuration: %v", err)
+	}
+	resolved = fromCapture
 	if len(resolved) != 1 || len(resolved[0].Models) != 1 || resolved[0].Models[0].Configuration.APIKey != "captured-only-secret" || resolved[0].Models[0].Configuration.Model != "local:tag" || resolved[0].Modules["memory"] || requests.Load() != 0 {
 		t.Fatal("offline source behavior changed")
 	}
@@ -116,7 +137,7 @@ func TestLegacyConfigCaptureResolvesOfflineWithoutAmbientCredentials(t *testing.
 		t.Fatal("converted profile did not complete exactly one fixture request", err)
 	}
 	for name, before := range files {
-		after, err := os.ReadFile(name)
+		after, err := os.ReadFile(strings.Replace(name, root, frozenRoot, 1))
 		if err != nil || string(before) != string(after) {
 			t.Fatal("source changed during capture/conversion")
 		}

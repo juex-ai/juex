@@ -126,31 +126,9 @@ func readMemory(r *sourceReader, fleetID string) (Memory, error) {
 		if err != nil {
 			return Memory{}, err
 		}
-		parts := bytes.SplitN(data, []byte("\n---\n"), 2)
-		if len(parts) != 2 || !bytes.HasPrefix(parts[0], []byte("---\n")) || !utf8.Valid(data) {
-			return Memory{}, fmt.Errorf("memory/%s: invalid entry framing or text", file.Name())
-		}
-		var entry mc.Entry
-		if err := decode(bytes.TrimPrefix(parts[0], []byte("---\n")), &entry); err != nil {
+		entry, err := decodeMemoryEntry(file.Name(), data, result.State, fleetID)
+		if err != nil {
 			return Memory{}, err
-		}
-		if entry.Body != "" {
-			return Memory{}, errors.New("Memory entry body conflicts with its Markdown payload")
-		}
-		entry.Body = string(parts[1])
-		if err := mc.ValidateEntryID(entry.ID); err != nil {
-			return Memory{}, err
-		}
-		if entry.ID+".md" != file.Name() || entry.Revision == 0 || entry.CreatedAt.IsZero() || entry.UpdatedAt.Before(entry.CreatedAt) || result.State.Deleted[entry.ID] {
-			return Memory{}, fmt.Errorf("memory/%s: inconsistent identity, revision or retention", file.Name())
-		}
-		if err := validateMemorySources(entry.Sources, fleetID); err != nil {
-			return Memory{}, err
-		}
-		for _, fact := range entry.Facts {
-			if err := validateMemorySources(fact.Sources, fleetID); err != nil {
-				return Memory{}, err
-			}
 		}
 		result.Entries = append(result.Entries, entry)
 	}
@@ -189,6 +167,36 @@ func readMemory(r *sourceReader, fleetID string) (Memory, error) {
 	}
 	result.Files, result.AbsentFiles = r.files, r.absent
 	return result, nil
+}
+
+func decodeMemoryEntry(name string, data []byte, state MemoryState, fleetID string) (mc.Entry, error) {
+	parts := bytes.SplitN(data, []byte("\n---\n"), 2)
+	if len(parts) != 2 || !bytes.HasPrefix(parts[0], []byte("---\n")) || !utf8.Valid(data) {
+		return mc.Entry{}, fmt.Errorf("memory/%s: invalid entry framing or text", name)
+	}
+	var entry mc.Entry
+	if err := decode(bytes.TrimPrefix(parts[0], []byte("---\n")), &entry); err != nil {
+		return mc.Entry{}, err
+	}
+	if entry.Body != "" {
+		return mc.Entry{}, errors.New("Memory entry body conflicts with its Markdown payload")
+	}
+	entry.Body = string(parts[1])
+	if err := mc.ValidateEntryID(entry.ID); err != nil {
+		return mc.Entry{}, err
+	}
+	if entry.ID+".md" != name || entry.Revision == 0 || entry.CreatedAt.IsZero() || entry.UpdatedAt.Before(entry.CreatedAt) || state.Deleted[entry.ID] {
+		return mc.Entry{}, fmt.Errorf("memory/%s: inconsistent identity, revision or retention", name)
+	}
+	if err := validateMemorySources(entry.Sources, fleetID); err != nil {
+		return mc.Entry{}, err
+	}
+	for _, fact := range entry.Facts {
+		if err := validateMemorySources(fact.Sources, fleetID); err != nil {
+			return mc.Entry{}, err
+		}
+	}
+	return entry, nil
 }
 
 func (s MemoryState) validate(fleet string) error {

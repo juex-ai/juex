@@ -14,6 +14,12 @@ Fleet 已经静止。合法空输入队列的文件缺席也会记录，并在�
 即使最后一次 Turn 失败，Worker 的保留状态仍以归档、恢复的 metadata 为准。
 Memory 禁存范围保留原始作用域，包括跨 Generation 的范围。
 
+`EncodeCapture` 输出固定版本的私有 Fleet 快照；`DecodeCapture` 要求提供独立记录的
+SHA-256，不重新打开源路径。原始字节去重不会合并所有权或缺席记录。Thread 坐标、
+续接上下文和 Memory 投影会从原始字节重建并校验。报告 JSON 不是快照格式。快照
+包含私有历史和配置；启动/认证证据、选中的扩展安装和目标绑定仍需由操作工具的
+外层迁移包一起固定。
+
 Agent 捕获包括被引用的媒体和 spool 文件内容，并验证其 hash。Fleet 捕获要求明确
 提供源用户的默认 Home，保留配置层和导入缓存字节，并记录配置缺席。对于外部
 Workspace，捕获配置、`.env`、`AGENTS.md` 和 `.agents/AGENTS.md` 的原始字节或缺席记录，

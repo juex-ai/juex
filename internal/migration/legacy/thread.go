@@ -44,9 +44,31 @@ func readThread(r *sourceReader, directoryID string) (Thread, error) {
 	if err := checkGenerationFiles(r.root, result.Metadata.Generations); err != nil {
 		return Thread{}, err
 	}
+	result, err = decodeThread(result.Metadata, directoryID, r.read, r.optionalRead)
+	if err != nil {
+		return Thread{}, err
+	}
+	if err := checkGenerationFiles(r.root, result.Metadata.Generations); err != nil {
+		return Thread{}, err
+	}
+	if err := r.unchanged(); err != nil {
+		return Thread{}, err
+	}
+	result.Files = r.files
+	result.AbsentFiles = r.absent
+	return result, nil
+}
+
+// decodeThread rebuilds derived state from original journal bytes. Capture
+// decoding shares this validation without reopening a live source store.
+func decodeThread(metadata ThreadMetadata, directoryID string, read, optional func(string) ([]byte, error)) (Thread, error) {
+	result := Thread{Metadata: metadata}
+	if err := metadata.validate(directoryID); err != nil {
+		return Thread{}, err
+	}
 	for i, generation := range result.Metadata.Generations {
 		path := "generations/" + generation.ID + ".jsonl"
-		data, err := r.read(path)
+		data, err := read(path)
 		if err != nil {
 			return Thread{}, err
 		}
@@ -87,7 +109,7 @@ func readThread(r *sourceReader, directoryID string) (Thread, error) {
 	if err := result.validateUsageCursor(); err != nil {
 		return Thread{}, err
 	}
-	data, err = r.optionalRead("inputs.json")
+	data, err := optional("inputs.json")
 	if err != nil {
 		return Thread{}, err
 	}
@@ -118,14 +140,6 @@ func readThread(r *sourceReader, directoryID string) (Thread, error) {
 		messages[input.MessageID] = true
 	}
 	result.Inputs = inputs.Records
-	if err := checkGenerationFiles(r.root, result.Metadata.Generations); err != nil {
-		return Thread{}, err
-	}
-	if err := r.unchanged(); err != nil {
-		return Thread{}, err
-	}
-	result.Files = r.files
-	result.AbsentFiles = r.absent
 	return result, nil
 }
 
