@@ -17,6 +17,7 @@ type PreparedBundle struct {
 	Models     ModelPublicationPlan                  `json:"-"`
 	Agents     map[string]management.AgentConfig     `json:"-"`
 	Extensions map[string][]extensionpolicy.Manifest `json:"-"`
+	origins    map[string]sourceOrigins
 }
 
 // Prepare resolves frozen configuration without source, environment, clock or
@@ -49,6 +50,7 @@ func (b *Bundle) Prepare() (PreparedBundle, error) {
 	}
 	plan := PreparedBundle{Agents: map[string]management.AgentConfig{}, Extensions: map[string][]extensionpolicy.Manifest{}}
 	models := make([]ResolvedModels, 0, len(configs))
+	originalModels := make([]ResolvedModels, 0, len(configs))
 	byAgent := make(map[string]ResolvedConfig, len(configs))
 	sourceAgents := make(map[string]legacy.Agent, len(b.source.Agents))
 	for _, agent := range b.source.Agents {
@@ -75,6 +77,8 @@ func (b *Bundle) Prepare() (PreparedBundle, error) {
 		if err != nil {
 			return empty, err
 		}
+		originalModels = append(originalModels, m)
+		m.Models = slices.Clone(m.Models)
 		for i := range m.Models {
 			profile := &m.Models[i].Profile
 			key := ModelKey{Provider: profile.ID, Name: profile.Model}
@@ -96,6 +100,28 @@ func (b *Bundle) Prepare() (PreparedBundle, error) {
 	plan.Models, err = ConvertModels(models, reserves)
 	if err != nil {
 		return empty, err
+	}
+	plan.origins = map[string]sourceOrigins{}
+	usedOrigins := map[ModelKey]bool{}
+	for _, agent := range b.source.Agents {
+		origins, err := sourceModelOrigins(agent, originalModels)
+		if err != nil {
+			return empty, err
+		}
+		plan.origins[agent.Definition.ID] = origins
+		for _, messages := range origins {
+			for _, key := range messages {
+				usedOrigins[key] = true
+			}
+		}
+	}
+	for _, original := range originalModels {
+		for _, model := range original.Models {
+			key := ModelKey{Provider: model.Profile.ID, Name: model.Profile.Model}
+			if usedOrigins[key] && !sourceReplayRoute(model.Profile, endpoints[key]) {
+				return empty, errors.New("reasoning replay requires a proven unchanged source endpoint")
+			}
+		}
 	}
 	seen := map[string]bool{}
 	for _, e := range b.inputs.Extensions {

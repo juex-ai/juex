@@ -23,7 +23,7 @@ func ConfigureModel(ctx context.Context, directory *postgres.Directory, config m
 }
 
 // ImportModels validates every adapter before the offline operator transaction.
-func ImportModels(ctx context.Context, directory *postgres.Directory, value management.ModelsImport) (map[management.ModelKey]string, error) {
+func ImportModels(ctx context.Context, directory *postgres.Directory, value management.ModelsImport) (map[management.ModelKey]management.ModelImportIdentity, error) {
 	models := make([]management.ImportedModel, len(value.Models))
 	for i, item := range value.Models {
 		config, err := prepareModelConfiguration(item.Configuration)

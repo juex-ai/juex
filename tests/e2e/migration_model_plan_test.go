@@ -62,7 +62,7 @@ func TestMigrationModelPlanPreservesProfilesAndFallbacksThroughManagement(t *tes
 	}
 	authority := managed.RuntimeAuthority{Directory: directory}
 	for _, binding := range plan.Agents {
-		agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: binding.SourceAgentID, ModelID: ids[binding.Primary]})
+		agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: binding.SourceAgentID, ModelID: ids[binding.Primary].ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,7 +82,7 @@ func TestMigrationModelPlanPreservesProfilesAndFallbacksThroughManagement(t *tes
 			t.Fatal("wrong fallback count", binding.SourceAgentID, len(frozen.Models))
 		}
 		for i, candidate := range frozen.Models {
-			if candidate.ModelID != ids[want[i]] || candidate.MaxOutput != 0 || candidate.OutputReserve != reserves[want[i]] {
+			if candidate.ModelID != ids[want[i]].ID || candidate.MaxOutput != 0 || candidate.OutputReserve != reserves[want[i]] {
 				t.Fatal("selection or output policy changed", binding.SourceAgentID, i)
 			}
 			got, err := authority.Profile(ctx, scope, candidate)

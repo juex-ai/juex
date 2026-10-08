@@ -158,7 +158,7 @@ func Apply(ctx context.Context, b *Bundle, config ApplyConfig) (report ApplyRepo
 	request := management.AgentsImport{ExpectedFleetID: target.FleetID, Source: "juex/281889e5/fleet/" + b.source.ID, SourceSHA256: b.digest}
 	for _, binding := range prepared.Models.Agents {
 		value := prepared.Agents[binding.SourceAgentID]
-		value.ModelID = modelIDs[binding.Primary]
+		value.ModelID = modelIDs[binding.Primary].ID
 		request.Agents = append(request.Agents, management.ImportedAgent{SourceAgentID: binding.SourceAgentID, Config: value})
 	}
 	report.Agents, err = directory.ImportAgents(ctx, target.ActorID, target.TenantID, target.UserID, request)
@@ -249,7 +249,11 @@ func Apply(ctx context.Context, b *Bundle, config ApplyConfig) (report ApplyRepo
 		if err != nil {
 			return report, err
 		}
-		converted, err := ConvertRuntime(scope, agent, RuntimeBindings{SourceSHA256: b.digest, Artifacts: artifacts, ModelOrigins: b.inputs.Agents[agent.Definition.ID].ModelOrigins})
+		origins, err := bindModelOrigins(prepared.origins[agent.Definition.ID], prepared.Models, modelIDs)
+		if err != nil {
+			return report, err
+		}
+		converted, err := ConvertRuntime(scope, agent, RuntimeBindings{SourceSHA256: b.digest, Artifacts: artifacts, ModelOrigins: origins})
 		if err != nil {
 			return report, err
 		}

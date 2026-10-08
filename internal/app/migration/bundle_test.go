@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/application"
-	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/migration/legacy"
 )
 
@@ -64,9 +63,6 @@ func TestBundleRoundTripFreezesPrivateInputsWithoutSource(t *testing.T) {
 	context.ModelRefs = []string{"second:model", "first:model"}
 	inputs.Config.Contexts["abc234"] = context
 	inputs.Extensions = []BundleExtension{{AgentID: "abc234", Snapshot: stdioSnapshot(stdioManifest, stdioServers), Bindings: map[string]MCPProcessBinding{"wire": {Executable: "/target/bin/wire", WorkingDirectory: "/target/process", RuntimeWorkDir: "/target/work"}}}}
-	policy := inputs.Agents["abc234"]
-	policy.ModelOrigins = map[string]map[string]managedruntime.ModelConfig{"0": {"same-message": {Provider: "first", Model: "first", ModelAuthorizationEpoch: 2}}, "worker": {"same-message": {Provider: "second", Model: "second", ModelAuthorizationEpoch: 3}}}
-	inputs.Agents["abc234"] = policy
 	dir := filepath.Join(t.TempDir(), "bundle")
 	digest, err := WriteBundle(dir, source, inputs, header)
 	if err != nil {

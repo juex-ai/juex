@@ -18,13 +18,13 @@ import (
 
 type importedModelIdentity struct {
 	Key management.ModelKey `json:"key"`
-	ID  string              `json:"id"`
+	management.ModelImportIdentity
 }
 
 // ImportModels is an offline operator boundary, not a Fleet or HTTP operation.
 // Configuration, direct fallbacks, tenant access and recovery identity commit
 // together. An exact retry only returns identities; it never undoes later edits.
-func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImport) (map[management.ModelKey]string, error) {
+func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImport) (map[management.ModelKey]management.ModelImportIdentity, error) {
 	value, hash, err := prepareModelImport(value)
 	if err != nil {
 		return nil, err
@@ -47,13 +47,16 @@ func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImp
 		if tenant != value.TenantID || source != value.Source || sourceHash != value.SourceSHA256 || payloadHash != hash || len(receipt) != len(value.Models) {
 			return nil, management.ErrConflict
 		}
-		ids := make(map[management.ModelKey]string, len(receipt))
+		ids := make(map[management.ModelKey]management.ModelImportIdentity, len(receipt))
+		seen := map[string]bool{}
 		for i, item := range receipt {
 			config := value.Models[i].Configuration
-			if item.Key != (management.ModelKey{Provider: config.Provider, Name: config.Name}) || item.ID == "" {
+			id, parseErr := uuid.Parse(item.ID)
+			if item.Key != (management.ModelKey{Provider: config.Provider, Name: config.Name}) || parseErr != nil || id == uuid.Nil || id.String() != item.ID || seen[item.ID] || item.ModelAuthorizationEpoch < 1 {
 				return nil, management.ErrConflict
 			}
-			ids[item.Key] = item.ID
+			seen[item.ID] = true
+			ids[item.Key] = item.ModelImportIdentity
 		}
 		// This receipt grants no authority. Callers must admit every subsequent
 		// Agent import and model request against current Management policy.
@@ -72,7 +75,7 @@ func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImp
 	if used {
 		return nil, management.ErrConflict
 	}
-	ids := make(map[management.ModelKey]string, len(value.Models))
+	ids := make(map[management.ModelKey]management.ModelImportIdentity, len(value.Models))
 	for _, item := range value.Models {
 		config := item.Configuration
 		id := uuid.NewString()
@@ -88,26 +91,28 @@ func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImp
 		if err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,output_reserve,enabled,options_cipher) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, config.Provider, config.Name, config.Protocol, config.Endpoint, keyCipher, config.ContextWindow, config.MaxOutput, config.OutputReserve, config.Enabled, optionsCipher); err != nil {
+		var epoch int64
+		if err := tx.QueryRow(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,output_reserve,enabled,options_cipher) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING authorization_epoch`, id, config.Provider, config.Name, config.Protocol, config.Endpoint, keyCipher, config.ContextWindow, config.MaxOutput, config.OutputReserve, config.Enabled, optionsCipher).Scan(&epoch); err != nil {
 			return nil, classify(err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO management.operator_audit(action,resource_id) VALUES('model.imported',$1)`, id); err != nil {
 			return nil, err
 		}
 		key := management.ModelKey{Provider: config.Provider, Name: config.Name}
-		ids[key] = id
-		receipt = append(receipt, importedModelIdentity{Key: key, ID: id})
+		identity := management.ModelImportIdentity{ID: id, ModelAuthorizationEpoch: epoch}
+		ids[key] = identity
+		receipt = append(receipt, importedModelIdentity{Key: key, ModelImportIdentity: identity})
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO management.tenant_model_policy(tenant_id,inherit) VALUES($1,false)`, value.TenantID); err != nil {
 		return nil, classify(err)
 	}
 	for _, item := range value.Models {
-		id := ids[management.ModelKey{Provider: item.Configuration.Provider, Name: item.Configuration.Name}]
+		id := ids[management.ModelKey{Provider: item.Configuration.Provider, Name: item.Configuration.Name}].ID
 		if _, err := tx.Exec(ctx, `INSERT INTO management.tenant_model_access(tenant_id,model_id) VALUES($1,$2)`, value.TenantID, id); err != nil {
 			return nil, err
 		}
 		for i, candidate := range item.Fallbacks {
-			if _, err := tx.Exec(ctx, `INSERT INTO management.model_fallbacks(model_id,fallback_id,ordinal) VALUES($1,$2,$3)`, id, ids[candidate], i+1); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO management.model_fallbacks(model_id,fallback_id,ordinal) VALUES($1,$2,$3)`, id, ids[candidate].ID, i+1); err != nil {
 				return nil, err
 			}
 		}

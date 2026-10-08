@@ -120,9 +120,17 @@ before planning. The plan omits secrets from JSON and grants no authority to
 overwrite existing catalog entries. `PublishModels` applies adapter validation and
 Management's atomic offline import to an empty deployment catalog and an unset
 Tenant model policy. It writes direct fallback chains and the catalog allowlist,
-preserves the platform default, and recovers stable UUIDs on exact retries without
-resetting later operator edits. Source provenance and Agent bindings remain the
-caller's responsibility.
+preserves the platform default, and records stable UUIDs with their first route
+authorization epochs. Exact retries return that receipt without resetting later
+operator edits or rebinding historical messages to a newly authorized route.
+
+`Prepare` joins retained reasoning messages to the fixed source's unique request
+epoch, request and response, checks its digest and original reasoning, and matches
+the unmodified captured catalog. Opaque Codex reasoning additionally requires a
+proven account and unchanged endpoint. Apply binds that evidence to the first
+publication receipt; it does not grant current access. Provider projection still
+filters incompatible routes, and Codex still omits reasoning on its wire requests.
+Unproved provenance stops conversion rather than inferring it from display names.
 
 `ConvertAgentConfig` prepares a new Agent before resources are installed, not an
 update patch. It maps resolved modules to existing capability groups and requires
@@ -159,8 +167,8 @@ range mapping. Conflicting message copies or unresolved references fail conversi
 Verified source Memory assignment files retain Worker purpose and an inert review
 relationship without copying credentials. Several historical Workers may reference
 one business review; conversion never invents jobs or combines their outcomes.
-Other application job relationships and model origins require explicit verified
-bindings. Current compaction metadata containing an image without a usable provider
+Other application job relationships require explicit verified bindings.
+Current compaction metadata containing an image without a usable provider
 path is rejected.
 
 Memory conversion uses those same Runtime identities and complete Commit

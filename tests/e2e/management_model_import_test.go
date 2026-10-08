@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -90,7 +91,7 @@ func TestManagementModelImportRetryKeepsPrivateChangesAndFreshAuthority(t *testi
 			}
 		})
 	}
-	primary := ids[management.ModelKey{Provider: "fixture", Name: "a"}]
+	primary := ids[management.ModelKey{Provider: "fixture", Name: "a"}].ID
 	agent, err := d.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Imported", ModelID: primary})
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +145,107 @@ func TestManagementModelImportRetryKeepsPrivateChangesAndFreshAuthority(t *testi
 	}
 	if _, err := recovered.Snapshot(ctx, scope); !errors.Is(err, managedruntime.ErrModelUnavailable) {
 		t.Fatal("receipt bypassed current tenant policy", err)
+	}
+}
+
+func TestManagementModelImportReceiptRetainsFirstRouteEpoch(t *testing.T) {
+	pool, d := managementDatabase(t)
+	_, tenant, _ := agentImportOwner(t, d)
+	ctx := context.Background()
+	value := modelImportRequest(tenant.ID)
+	first, err := managed.ImportModels(ctx, d, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readReceipt := func() []struct {
+		Key   management.ModelKey `json:"key"`
+		ID    string              `json:"id"`
+		Epoch int64               `json:"model_authorization_epoch"`
+	} {
+		t.Helper()
+		var raw []byte
+		if err := pool.QueryRow(ctx, `SELECT models FROM management.model_imports WHERE singleton`).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var receipt []struct {
+			Key   management.ModelKey `json:"key"`
+			ID    string              `json:"id"`
+			Epoch int64               `json:"model_authorization_epoch"`
+		}
+		if err := json.Unmarshal(raw, &receipt); err != nil {
+			t.Fatal(err)
+		}
+		return receipt
+	}
+	receipt := readReceipt()
+	if len(receipt) != 3 || receipt[0].Epoch < 1 {
+		t.Fatal("import receipt lacks the original model route epoch")
+	}
+	currentEpoch := func() int64 {
+		t.Helper()
+		var epoch int64
+		if err := pool.QueryRow(ctx, `SELECT authorization_epoch FROM management.models WHERE id=$1`, receipt[0].ID).Scan(&epoch); err != nil {
+			t.Fatal(err)
+		}
+		return epoch
+	}
+	if currentEpoch() != receipt[0].Epoch {
+		t.Fatal("receipt did not capture the initially published route")
+	}
+	changed := value.Models[0].Configuration
+	changed.APIKey = "rotated-fixture-token"
+	if _, err := managed.ConfigureModel(ctx, d, changed); err != nil || currentEpoch() != receipt[0].Epoch {
+		t.Fatal("credential rotation changed the unchanged route epoch", err)
+	}
+	changed.Endpoint += "/changed-route"
+	if _, err := managed.ConfigureModel(ctx, d, changed); err != nil || currentEpoch() <= receipt[0].Epoch {
+		t.Fatal("route change did not revoke its original epoch", err)
+	}
+	changed.Endpoint = value.Models[0].Configuration.Endpoint
+	changed.Options.Headers = map[string]string{"X-Account": "different-account"}
+	if _, err := managed.ConfigureModel(ctx, d, changed); err != nil {
+		t.Fatal(err)
+	}
+	changed.Options.Headers = value.Models[0].Configuration.Options.Headers
+	if _, err := managed.ConfigureModel(ctx, d, changed); err != nil || currentEpoch() <= receipt[0].Epoch {
+		t.Fatal("account restoration revived old epoch", err)
+	}
+	again, err := managed.ImportModels(ctx, d, value)
+	if err != nil || !reflect.DeepEqual(first, again) || !reflect.DeepEqual(receipt, readReceipt()) {
+		t.Fatal("retry rebound source history to the current route", err)
+	}
+}
+
+func TestManagementModelImportRejectsInvalidPublicationReceipt(t *testing.T) {
+	for _, kind := range []string{"missing epoch", "invalid UUID", "duplicate UUID"} {
+		t.Run(kind, func(t *testing.T) {
+			pool, d := managementDatabase(t)
+			_, tenant, _ := agentImportOwner(t, d)
+			ctx := context.Background()
+			value := modelImportRequest(tenant.ID)
+			if _, err := managed.ImportModels(ctx, d, value); err != nil {
+				t.Fatal(err)
+			}
+			var receipt []map[string]any
+			if err := pool.QueryRow(ctx, `SELECT models FROM management.model_imports`).Scan(&receipt); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "missing epoch":
+				delete(receipt[0], "model_authorization_epoch")
+			case "invalid UUID":
+				receipt[0]["id"] = "not-a-uuid"
+			case "duplicate UUID":
+				receipt[1]["id"] = receipt[0]["id"]
+			}
+			if _, err := pool.Exec(ctx, `UPDATE management.model_imports SET models=$1`, receipt); err != nil {
+				t.Fatal(err)
+			}
+			before := modelImportCounts(t, pool)
+			if got, err := managed.ImportModels(ctx, d, value); !errors.Is(err, management.ErrConflict) || got != nil || before != modelImportCounts(t, pool) {
+				t.Fatal("invalid receipt accepted or repaired", err)
+			}
+		})
 	}
 }
 
@@ -242,7 +344,7 @@ func TestManagementModelImportSerializesWithOrdinaryOperators(t *testing.T) {
 				t.Fatal(err)
 			}
 			first := make(chan error, 1)
-			var firstIDs map[management.ModelKey]string
+			var firstIDs map[management.ModelKey]management.ModelImportIdentity
 			go func() {
 				var err error
 				switch kind {
@@ -259,7 +361,7 @@ func TestManagementModelImportSerializesWithOrdinaryOperators(t *testing.T) {
 			}()
 			waitModelImportLock(t, pool, lock, 1)
 			second := make(chan error, 1)
-			var secondIDs map[management.ModelKey]string
+			var secondIDs map[management.ModelKey]management.ModelImportIdentity
 			go func() {
 				var err error
 				secondIDs, err = managed.ImportModels(ctx, d, value)

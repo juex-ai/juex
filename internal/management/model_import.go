@@ -6,6 +6,13 @@ type ModelKey struct {
 	Name     string `json:"name"`
 }
 
+// ModelImportIdentity records the first published route. It is historical
+// provenance, never a grant to call a model under current authorization.
+type ModelImportIdentity struct {
+	ID                      string `json:"id"`
+	ModelAuthorizationEpoch int64  `json:"model_authorization_epoch"`
+}
+
 // ImportedModel carries private operator input, never a public read model.
 // Fallbacks are direct, ordered references within this import's catalog.
 type ImportedModel struct {

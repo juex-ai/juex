@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/juex-ai/juex/internal/foundation/application"
-	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/migration/legacy"
 )
 
@@ -51,8 +50,7 @@ type BundleAgentPolicy struct {
 	CollaborationEnabled  *bool   `json:"collaboration_enabled"`
 	GlobalInstructionPath string  `json:"global_instruction_path"`
 	// Workspace stays externally owned; capture does not authorize its deletion.
-	Workspace    string                                           `json:"workspace"`
-	ModelOrigins map[string]map[string]managedruntime.ModelConfig `json:"model_origins"`
+	Workspace string `json:"workspace"`
 }
 
 type BundleModelPolicy struct {
@@ -153,7 +151,7 @@ func WriteBundle(directory string, source legacy.Fleet, inputs BundleInputs, hea
 	if err != nil {
 		return "", err
 	}
-	manifest, err := json.Marshal(bundleManifest{1, bundleSourceRevision, 1, header, bundlePayload{fleetHash, int64(len(fleet))}, bundlePayload{bundleDigest(private), int64(len(private))}})
+	manifest, err := json.Marshal(bundleManifest{1, bundleSourceRevision, 2, header, bundlePayload{fleetHash, int64(len(fleet))}, bundlePayload{bundleDigest(private), int64(len(private))}})
 	if err != nil {
 		return "", errors.New("cannot encode bundle manifest")
 	}
@@ -217,7 +215,7 @@ func LoadBundle(directory, expectedSHA256 string, target BundleTarget) (*Bundle,
 		return nil, errors.New("bundle manifest digest mismatch")
 	}
 	var m bundleManifest
-	if decodeBundleJSON(manifest, &m) != nil || m.Version != 1 || m.SourceRevision != bundleSourceRevision || m.ConversionPolicy != 1 || m.Header.validate() != nil || m.Header.Target != target {
+	if decodeBundleJSON(manifest, &m) != nil || m.Version != 1 || m.SourceRevision != bundleSourceRevision || m.ConversionPolicy != 2 || m.Header.validate() != nil || m.Header.Target != target {
 		return nil, errors.New("unsupported bundle or destination mismatch")
 	}
 	read := func(name string, p bundlePayload, limit int64) ([]byte, error) {

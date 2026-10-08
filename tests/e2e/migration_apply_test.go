@@ -28,6 +28,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/secrets"
+	"github.com/juex-ai/juex/internal/managedruntime"
 	runtimepg "github.com/juex-ai/juex/internal/managedruntime/postgres"
 	managementpg "github.com/juex-ai/juex/internal/management/postgres"
 	memorypg "github.com/juex-ai/juex/internal/memory/postgres"
@@ -66,7 +67,7 @@ func migrationApplyBundle(t *testing.T, target migration.BundleTarget) (*migrati
 	}
 	at := time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC)
 	write("fleet.json", []byte(`{"id":"apply-source"}`))
-	write("juex.yaml", []byte("preset: minimal\nmodels: [fixture:model]\nproviders:\n  - id: fixture\n    protocol: openai/chat\n    base_url: https://model.example\n    api_key: isolated-model-key\n    models: [{id: model, context_window: 8192}]\n"))
+	write("juex.yaml", []byte("preset: minimal\nmodels: [fixture:fixture-model]\nproviders:\n  - id: fixture\n    protocol: openai/chat\n    base_url: https://model.example/v1\n    api_key: isolated-model-key\n    models: [{id: fixture-model, context_window: 8192}]\n"))
 	write("agents/abc234/agent.json", encode(legacy.AgentDefinition{ID: "abc234", Name: "Imported", Workspace: work, Enabled: true, CreatedAt: at}))
 	write("services/memory/state/state.json", []byte(`{"fleet":"apply-source","strategy":"basic","fence":0,"clock":0,"access":{},"uses":{},"requests":{},"keys":{},"sources":{},"suppressed":[],"deleted":{}}`))
 	if err := os.MkdirAll(filepath.Join(home, "services/memory/memory"), 0700); err != nil {
@@ -74,8 +75,33 @@ func migrationApplyBundle(t *testing.T, target migration.BundleTarget) (*migrati
 	}
 	gen := legacy.Generation{ID: "g000001", Ordinal: 1, BoundarySeq: 1}
 	journal := append(encode(map[string]any{"v": 1, "index": 0, "count": 1, "data": legacy.Commit{Version: 1, Seq: 1, At: at.Format("2006-01-02T15:04:05.000Z"), Facts: []legacy.Fact{{Type: "thread.created", ThreadID: "0", Alias: "main", GenerationID: gen.ID}}}}), '\n')
+	// The epoch comes from the fixed source implementation, not the converter.
+	epoch, err := os.ReadFile("../../internal/app/migration/testdata/source_request_epoch.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e struct {
+		EpochID       string `json:"epoch_id"`
+		RequestDigest string `json:"request_digest"`
+	}
+	if err := json.Unmarshal(epoch, &e); err != nil {
+		t.Fatal(err)
+	}
+	userMessage := llm.Message{ID: "fixture-user", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Fixture question."}}}
+	answer := llm.Message{ID: "fixture-answer", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "Retained source reasoning."}, {Type: llm.BlockText, Text: "Retained answer."}}}
+	event := func(id, kind string, payload any) legacy.Fact {
+		return legacy.Fact{Type: "event.recorded", Event: encode(map[string]any{"id": id, "type": kind, "turn_id": "fixture-turn", "payload": payload})}
+	}
+	facts := []legacy.Fact{
+		{Type: "message.appended", GenerationID: gen.ID, Message: &userMessage},
+		event(e.EpochID, "provider.request_epoch", map[string]any{"epoch": json.RawMessage(epoch)}),
+		event("fixture-request", "llm.requested", map[string]any{"epoch_id": e.EpochID, "request_digest": e.RequestDigest, "purpose": "turn", "iter": 0}),
+		event("fixture-response", "llm.responded", map[string]any{"epoch_id": e.EpochID, "request_digest": e.RequestDigest, "message_id": answer.ID, "blocks": answer.Blocks, "iter": 0}),
+		{Type: "message.appended", GenerationID: gen.ID, Message: &answer},
+	}
+	journal = append(journal, append(encode(map[string]any{"v": 1, "index": 0, "count": 1, "data": legacy.Commit{Version: 1, Seq: 2, At: at.Format("2006-01-02T15:04:05.000Z"), Facts: facts}}), '\n')...)
 	write("agents/abc234/threads/0/generations/g000001.jsonl", journal)
-	cursor := legacy.Cursor{GenerationID: gen.ID, Seq: 1, Offset: int64(len(journal))}
+	cursor := legacy.Cursor{GenerationID: gen.ID, Seq: 2, Offset: int64(len(journal))}
 	write("agents/abc234/threads/0/thread.json", encode(legacy.ThreadMetadata{Version: 1, ThreadID: "0", Alias: "main", CreatedAt: at.Format("2006-01-02T15:04:05.000Z"), UpdatedAt: at.Format("2006-01-02T15:04:05.000Z"), LastActivityAt: at.Format("2006-01-02T15:04:05.000Z"), RetentionState: "active", ExecutionState: "idle", Revision: 1, CurrentGeneration: gen, Generations: []legacy.Generation{gen}, Counts: legacy.Counts{GenerationCount: 1}, TokenUsage: legacy.UsageAggregate{ByModel: map[string]llm.Usage{}}, EventCursor: cursor, UsageAggregatedThrough: cursor}))
 	media := bytes.Repeat([]byte("original attachment\n"), 100)
 	write("agents/abc234/media/evidence.txt", media)
@@ -97,7 +123,7 @@ func migrationApplyBundle(t *testing.T, target migration.BundleTarget) (*migrati
 		model.Environment[key] = nil
 	}
 	empty, yes, no := "", true, false
-	inputs := migration.BundleInputs{Config: evidence, Models: []migration.ModelEvidence{model}, Agents: map[string]migration.BundleAgentPolicy{"abc234": {Activation: "on_demand", Workspace: work, Instructions: &empty, FilesEnabled: &yes, ShellEnabled: &yes, CalendarEnabled: &no, CollaborationEnabled: &no}}, ModelsPolicy: []migration.BundleModelPolicy{{Key: migration.ModelKey{Provider: "fixture", Name: "model"}, OutputReserve: 2048}}}
+	inputs := migration.BundleInputs{Config: evidence, Models: []migration.ModelEvidence{model}, Agents: map[string]migration.BundleAgentPolicy{"abc234": {Activation: "on_demand", Workspace: work, Instructions: &empty, FilesEnabled: &yes, ShellEnabled: &yes, CalendarEnabled: &no, CollaborationEnabled: &no}}, ModelsPolicy: []migration.BundleModelPolicy{{Key: migration.ModelKey{Provider: "fixture", Name: "fixture-model"}, OutputReserve: 2048}}}
 	header := migration.BundleHeader{Target: target, CapturedAt: at, MemoryAdvancedSince: at, MemoryControl: application.Control{Enabled: true, Epoch: 1, Version: 1}}
 	path := filepath.Join(t.TempDir(), "bundle")
 	digest, err := migration.WriteBundle(path, source, inputs, header)
@@ -126,7 +152,7 @@ func migrationApplyLock(t *testing.T, directory string) *os.File {
 }
 
 func TestMigrationApplyOwnerImportsRecoverExactUploads(t *testing.T) {
-	for _, stage := range []string{"reserved", "partial", "blob-committed", "foreign-request", "revoked-epoch"} {
+	for _, stage := range []string{"reserved", "partial", "blob-committed", "changed-route", "foreign-request", "revoked-epoch"} {
 		t.Run(stage, func(t *testing.T) {
 			pool, directory := managementDatabase(t)
 			ctx := context.Background()
@@ -213,6 +239,17 @@ func TestMigrationApplyOwnerImportsRecoverExactUploads(t *testing.T) {
 			if err := objects.Close(); err != nil {
 				t.Fatal(err)
 			}
+			if stage == "changed-route" {
+				prepared, err := b.Prepare()
+				if err != nil {
+					t.Fatal(err)
+				}
+				changed := prepared.Models.Catalog[0].Configuration
+				changed.Endpoint += "/new-route"
+				if _, err := managed.ConfigureModel(ctx, directoryForApply(seed), changed); err != nil {
+					t.Fatal(err)
+				}
+			}
 			seed.Close()
 			config.BlobCapacity = 1 << 20
 			config.Lock = migrationApplyLock(t, maintenance)
@@ -239,6 +276,28 @@ func TestMigrationApplyOwnerImportsRecoverExactUploads(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer check.Close()
+			var origin managedruntime.ModelConfig
+			var initialEpoch, currentEpoch int64
+			if err := check.QueryRow(ctx, `SELECT model FROM runtime.imported_message_models`).Scan(&origin); err != nil {
+				t.Fatal(err)
+			}
+			if err := check.QueryRow(ctx, `SELECT (models->0->>'model_authorization_epoch')::bigint FROM management.model_imports`).Scan(&initialEpoch); err != nil {
+				t.Fatal(err)
+			}
+			if err := check.QueryRow(ctx, `SELECT authorization_epoch FROM management.models WHERE id=$1`, origin.ModelID).Scan(&currentEpoch); err != nil {
+				t.Fatal(err)
+			}
+			if origin.ModelAuthorizationEpoch != initialEpoch || origin.Endpoint != "https://model.example/v1" || origin.TenantAccessEpoch != 0 || stage == "changed-route" && currentEpoch <= initialEpoch {
+				t.Fatal("source origin rebound to later authorization", origin, initialEpoch, currentEpoch)
+			}
+			var body []byte
+			if err := check.QueryRow(ctx, `SELECT data FROM runtime.events WHERE kind='message.appended' AND data->>'role'='assistant'`).Scan(&body); err != nil {
+				t.Fatal(err)
+			}
+			var message llm.Message
+			if err := json.Unmarshal(body, &message); err != nil || len(message.Blocks) != 2 || message.Blocks[0].Text != "Retained source reasoning." {
+				t.Fatal("source reasoning history changed", err)
+			}
 			var agents, threads, artifacts, attempts, jobs, notifications, accepted int
 			if err := check.QueryRow(ctx, `SELECT (SELECT count(*) FROM management.agents),(SELECT count(*) FROM runtime.threads),(SELECT count(*) FROM execution.artifacts WHERE state='ready'),(SELECT count(*) FROM runtime.attempts),(SELECT count(*) FROM runtime.application_jobs),(SELECT count(*) FROM runtime.notification_outbox),(SELECT count(*) FROM execution.artifact_audit WHERE action='artifact.upload.accepted')`).Scan(&agents, &threads, &artifacts, &attempts, &jobs, &notifications, &accepted); err != nil {
 				t.Fatal(err)
