@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh.md)
 
-The operator manages five platform services, PostgreSQL and an HTTPS gateway.
+The operator manages five platform services, PostgreSQL and a public gateway.
 Choose **Host** for macOS/Linux native directories and Shell, or **Hosted** for
 Linux gVisor isolation and XFS quotas. The backend is fixed at initialization;
 startup never falls back to a different execution mode.
@@ -22,17 +22,15 @@ then run from its directory (use `--bin-dir /absolute/repo/dist` for local build
 ```sh
 python3 deploy/managed/operator.py --root /absolute/private/juex-platform install \
   --backend host --workspace /absolute/private/juex-workspaces \
-  --bin-dir /absolute/release/bin --public-url https://machine.example:8443 \
+  --bin-dir /absolute/release/bin --ingress http --public-url http://machine.example:8080 \
   --postgres-bin /absolute/postgresql/bin --nginx /absolute/bin/nginx \
-  --tar /absolute/bin/gtar --local-tls --admin-email admin@example.com
+  --tar /absolute/bin/gtar --admin-email admin@example.com
 ```
 
-`--local-tls` creates a private deployment CA for the given hostname/IP. It does
-not alter OS/browser trust. Distribute `tls/ca.pem` to clients explicitly; the
-CLI uses `--ca-file` or `JUEX_CA_FILE`. For already trusted TLS, supply
-`--tls-certificate` and `--tls-key`; add `--tls-ca` for a private issuing CA.
-Access from another device must use a hostname/IP included in the certificate.
-The one-use admin setup link is saved in private `secrets/bootstrap.json`.
+Local and NetBird installations explicitly select HTTP; no public certificate or
+browser CA installation is needed. Use the same HTTP origin and `--insecure-http`
+for CLI/device clients. The one-use admin setup link is saved in private
+`secrets/bootstrap.json`.
 
 Initialization refuses existing deployment/workspace directories. It creates
 its own socket-only PGDATA, nginx prefix, logs and uniquely named OS services;
@@ -41,8 +39,8 @@ enough for PostgreSQL's Unix socket. Unfinished initialization retains
 `maintenance/install-incomplete` and cannot start; preserve its evidence and
 retry in new directories after fixing the reported dependency/configuration.
 
-The gateway and service listeners bind `0.0.0.0`; RPC requires service mTLS.
-The gateway is the public origin for LAN/NetBird clients. Host Agents run as the
+The public gateway binds `0.0.0.0` for LAN/NetBird clients. Its Management HTTP
+and device upstreams bind loopback; RPC requires service mTLS. Host Agents run as the
 same OS user: separate Home/Workspace directories are not a security boundary.
 Native jobs start in the owning user's service session; this does not promise
 macOS operation before login. The environment/PATH captured during installation
@@ -57,8 +55,7 @@ Use Docker Engine with Compose, installed `runsc`, Python 3.11+, GNU tar,
 `iptables`, `findmnt`, and `xfsprogs`. Prepare a **dedicated XFS filesystem**
 mounted with `prjquota,nosuid,nodev`, owned by root with mode 0700. It must be
 separate from the deployment directory. The operator never formats disks.
-Provide a TLS certificate/key valid for the public HTTPS hostname, a
-Hosted base image, two unused private IPv4 ranges, and an address reachable
+Provide a Hosted base image, two unused private IPv4 ranges, and an address reachable
 from Hosted containers. Hosted DNS must be explicit. Choose storage outside
 user-controlled directories.
 
@@ -74,14 +71,13 @@ rollback. Copy this directory to `/opt/juex`.
 ```sh
 sudo python3 /opt/juex/operator.py --root /var/lib/juex-management init \
   --workspace /srv/juex-workspaces --image juex-platform:VERSION \
-  --hosted-image juex-hosted:VERSION --public-url https://juex.example.com \
-  --host-ip 172.30.0.1 --dns 1.1.1.1 \
-  --tls-certificate /secure/fullchain.pem --tls-key /secure/privkey.pem
+  --hosted-image juex-hosted:VERSION --ingress http \
+  --public-url http://machine.example:8080 --host-ip 172.30.0.1 --dns 1.1.1.1
 sudo python3 /opt/juex/operator.py --root /var/lib/juex-management resume
 ```
 
 The default platform bridge is `172.30.0.0/24`; Hosted allocations use
-`172.31.0.0/16`. Override them if they overlap existing routes. Only the HTTPS
+`172.31.0.0/16`. Override them if they overlap existing routes. Only the public gateway
 port binds publicly to `0.0.0.0`. Execution's host-network endpoints are fenced
 by the operator's firewall; database and other RPC ports are not published.
 Directly running `docker compose up` bypasses the operator's recovery checks:
@@ -90,16 +86,14 @@ use `operator.py up/resume` for service startup.
 The gateway uses platform address `.11`. Management and Execution trust only
 that proxy for `X-Real-IP`, which both gateway routes overwrite with the actual
 client address so authentication and device rate limits remain per client.
-For a custom reverse proxy, set `JUEX_TRUSTED_PROXIES` (or `--trusted-proxies`)
-on both services to its explicit IPs/CIDRs and overwrite `X-Real-IP` at the edge.
-The default is no trusted proxies; never trust user-controlled address headers
-or an entire client network. Restore rebinds this setting to the platform subnet.
+An external production proxy uses the explicit ingress policy below; the service
+trust remains limited to nginx. Restore rebinds it to the platform subnet.
 
-Issue the first-admin setup link with `docker compose --env-file
-/var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec
-management juex-management bootstrap --email admin@example.com`. It is a secret
-one-use URL; deliver it privately. Copy-link invitations remain available
-without SMTP.
+Issue the first-admin setup link with `sudo python3 /opt/juex/operator.py --root
+/var/lib/juex-management manage bootstrap --email admin@example.com`. The operator
+applies the deployment's transport policy to every Management command. The link
+is a secret one-use URL; deliver it privately. Copy-link invitations remain
+available without SMTP.
 Model credentials are provisioned through the Management operator CLI. Do not
 expose the private deployment files or service certificates to agents.
 
@@ -107,9 +101,8 @@ To configure SMTP, set the password in a temporary exported
 `JUEX_SMTP_CREDENTIAL` variable without saving it in shell history, then run:
 
 ```sh
-docker compose --env-file /var/lib/juex-management/compose.env \
-  -f /var/lib/juex-management/compose.yaml exec -T -e JUEX_SMTP_CREDENTIAL \
-  management juex-management smtp seal --address smtp.example.com:587 \
+sudo --preserve-env=JUEX_SMTP_CREDENTIAL python3 /opt/juex/operator.py \
+  --root /var/lib/juex-management manage smtp seal --address smtp.example.com:587 \
   --from juex@example.com --username mailer
 unset JUEX_SMTP_CREDENTIAL
 ```
@@ -126,6 +119,39 @@ Ordinary process logs are in `logs/SERVICE/juex-*.log`: seven-day retention,
 10 MiB per file and seven files per service. Idle services expire logs hourly.
 Docker's duplicate process log storage is disabled. Business receipts, usage
 and audit records have separate database retention contracts.
+
+## Production HTTPS
+
+Use `--ingress proxy --public-url https://juex.example.com --listen-port 8080
+--proxy-cidr 127.0.0.1/32` when Caddy runs on the same Host machine. Caddy owns
+public certificates and renewal; the private nginx hop uses HTTP. Session cookies
+remain Secure and origin checks use the HTTPS public URL. nginx must include
+`http_realip_module`. A minimal Caddyfile is:
+
+```caddyfile
+juex.example.com {
+  reverse_proxy 127.0.0.1:8080 {
+    header_up X-Real-IP {remote_host}
+  }
+}
+```
+
+Allow only the proxy's actual TCP source addresses. In Hosted, Docker port
+forwarding can change that source: inspect the gateway peer and pass its exact
+address with `--proxy-cidr`; do not trust an entire client subnet. nginx checks
+the original peer before accepting Caddy's client address, then overwrites both
+service routes' identity headers. The gateway must not be directly accessible
+from untrusted networks. Caddy must be running and its public origin reachable
+before JueX `install` or `resume` can pass its public health check.
+
+For TLS directly in nginx, use `--ingress https` and provide `--tls-certificate`
+and `--tls-key`; a private issuer also needs `--tls-ca`. Host additionally supports
+`--local-tls`, which generates a deployment CA without changing OS/browser trust.
+Clients must explicitly trust that CA. Internal service mTLS and Hosted guest TLS
+are independent of all three public ingress modes. Backup/restore preserves the
+selected ingress; external Caddy configuration and certificates remain the
+operator's responsibility. Changing an enrolled Host origin requires an explicit
+device migration, not editing the origin in place.
 
 ## Shared operation
 
@@ -231,7 +257,7 @@ process memory or replay unknown commands.
 
 Use the repository's [local-test skill](../../.agents/skills/juex-localtest/SKILL.md)
 for verification. Real Host acceptance additionally exercises the owning OS
-service manager and HTTPS gateway; Hosted acceptance needs Linux Docker,
+service manager and public gateway; Hosted acceptance needs Linux Docker,
 gVisor and quota-backed XFS. Unit tests or compilation do not prove either.
 
 Run the new release's operator with `upgrade --bin-dir /absolute/new-release/bin`

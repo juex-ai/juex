@@ -7,7 +7,7 @@ from pathlib import Path
 import secrets
 import shutil
 import time
-import urllib.parse
+import common
 
 from common import (SERVICES, HERE, absolute, separate, durable, environment, rebind_environment, write_json, run, pack, unpack, sync_directory)
 
@@ -64,6 +64,7 @@ def render(config, password, master_key, preserve=False):
         "JUEX_WORKSPACE_DEVICE": mount_device(config["workspace"]),
         "JUEX_PLATFORM_PREFIX": prefix, "JUEX_HTTPS_PORT": config["https_port"],
         "JUEX_ACTIVE_THREADS": config["active_threads"],
+        "JUEX_INSECURE_HTTP": str(common.ingress_insecure(config)).lower(),
         "JUEX_POSTGRES_IMAGE": config["postgres_image"], "JUEX_GATEWAY_IMAGE": config["gateway_image"],
     })
     hosted = {
@@ -85,6 +86,7 @@ def render(config, password, master_key, preserve=False):
         hosted = saved
     write_json(root / "hosted.json", hosted)
     write_json(root / "deployment.json", config)
+    durable(root / "nginx.conf", common.ingress_gateway(config, (HERE / "nginx.conf").read_text()))
 
 
 def prepare_postgres(config):
@@ -113,27 +115,28 @@ def initialize(args):
     separate(root, workspace)
     if root.exists():
         raise ValueError("initialization requires a new deployment directory")
-    url = urllib.parse.urlsplit(args.public_url)
-    if url.scheme != "https" or not url.hostname or url.path or url.query or url.fragment or url.username:
-        raise ValueError("public URL must be an HTTPS origin")
+    public = common.ingress_configuration(args)
+    if args.local_tls:
+        raise ValueError("Hosted HTTPS ingress requires a supplied certificate/key")
     prefix = args.platform_prefix
     platform = ipaddress.ip_network(prefix + ".0/24")
     hosted = ipaddress.ip_network(args.hosted_pool)
     if not platform.is_private or not hosted.is_private or hosted.prefixlen != 16 or hosted.overlaps(platform):
         raise ValueError("platform /24 and hosted /16 must be separate private IPv4 networks")
-    if args.listen_port is not None and not 1 <= args.listen_port <= 65535:
-        raise ValueError("invalid HTTPS bind port")
     ipaddress.IPv4Address(args.host_ip)
     for address in args.dns:
         ipaddress.IPv4Address(address)
     config = dict(backend="hosted", format=2, root=str(root), workspace=str(workspace), socket=str(absolute(args.docker_socket)),
-                  public_url=args.public_url, https_port=args.listen_port or url.port or 443, platform_prefix=prefix,
+                  **public, platform_prefix=prefix,
                   hosted_pool=str(hosted), host_ip=args.host_ip, dns=args.dns,
                   storage_identity=mount_identity(workspace), active_threads=args.active_threads)
     for key in ("image", "hosted_image", "postgres_image", "gateway_image"):
         value = getattr(args, key)
         config[key] = docker(config, "image", "inspect", value, "--format", "{{.Id}}").stdout.decode().strip()
     assert_deployment_owner(config)
+    if public["ingress"] == "proxy":
+        version = docker(config, "run", "--rm", "--network", "none", config["gateway_image"], "nginx", "-V")
+        common.ingress_check_nginx(public, version.stdout + version.stderr)
     root.mkdir(mode=0o700)
     for name in ("secrets", "certificates", "tls", "bin", "blobs", "control", "postgres"):
         (root / name).mkdir(mode=0o700)
@@ -159,9 +162,13 @@ def initialize(args):
             os.chmod(directory / name, 0o600)
             os.chown(directory / name, 10001, 10001)
         os.chown(directory, 10001, 10001)
-    for source, name in ((args.tls_certificate, "certificate.pem"), (args.tls_key, "key.pem")):
-        shutil.copyfile(source, root / "tls" / name)
-        os.chmod(root / "tls" / name, 0o600)
+    if public["ingress"] == "https":
+        for source, name in ((args.tls_certificate, "certificate.pem"), (args.tls_key, "key.pem")):
+            shutil.copyfile(source, root / "tls" / name)
+            os.chmod(root / "tls" / name, 0o600)
+        if args.tls_ca:
+            shutil.copyfile(args.tls_ca, root / "tls/ca.pem")
+            os.chmod(root / "tls/ca.pem", 0o600)
     container = docker(config, "create", config["image"], "/bin/true").stdout.decode().strip()
     try:
         for name in ("juex-guest", "juex-service-log"):
@@ -178,7 +185,7 @@ def initialize(args):
 
 def firewall(config):
     # Only the trusted Execution controller is on the host network. Public
-    # clients reach it through the TLS gateway; RPC/device ports stay private.
+    # clients reach it through the public gateway; RPC/device ports stay private.
     chain = "JUEX-PLATFORM"
     ensure_xtables_lock()
     ipt = ["iptables", "-w", "5"]
@@ -246,10 +253,10 @@ def healthy(config):
     deadline = time.monotonic() + 90
     while True:
         result = compose(config, "exec", "-T", "management", "juex-management", "services", "check", check=False, timeout=15)
-        if result.returncode == 0:
+        if result.returncode == 0 and common.ingress_healthy(config):
             return
         if time.monotonic() >= deadline:
-            raise RuntimeError("services did not become healthy; maintenance retained")
+            raise RuntimeError("services or public gateway did not become healthy; maintenance retained")
         time.sleep(1)
 
 
@@ -301,7 +308,7 @@ def management(config, *args, **kwargs):
     for name in ("JUEX_MODEL_API_KEY", "JUEX_SMTP_CREDENTIAL"):
         if name in os.environ:
             environment.extend(("-e", name))
-    return compose(config, "run", "--rm", "--no-deps", "-T", *environment, "operator", "juex-management", *args, **kwargs)
+    return compose(config, "run", "--rm", "--no-deps", "-T", *environment, "operator", "juex-management", *common.ingress_management_flags(config), *args, **kwargs)
 
 
 def quiesce(config, lock_fd):

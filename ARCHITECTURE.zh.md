@@ -8,8 +8,8 @@ Monorepo 包含一个 Go module、React Dashboard 和可独立运行的服务。
 ## 服务边界
 
 ```text
-Web / 管理 CLI ── HTTPS ── Management
-远程执行端 ── 出站 HTTPS ── Execution
+Web / 管理 CLI ── HTTP(S) ── Management
+远程执行端 ── 出站 HTTP(S) ── Execution
 Management / Runtime / Execution / Memory / Calendar ── 认证 Kitex RPC
 各服务 ── 自己的 PostgreSQL schema
 Execution ── Blob 存储、受管 Host 执行器、Docker/runsc 容器和设备连接
@@ -57,7 +57,8 @@ Execution 是唯一可访问 Docker 引擎的服务。托管环境使用 runsc�
 
 ## 客户端与应用
 
-同一个 HTTPS origin 提供 Dashboard、资源 API 和设备传输。公共 API 是 Web 和
+同一个配置的 origin 提供 Dashboard、资源 API 和设备传输。本机和 NetBird 部署显式
+使用 HTTP；生产使用 HTTPS，可由外部 Caddy 终止 TLS。私有服务 mTLS 与之独立。公共 API 是 Web 和
 CLI 的共同边界。React 使用生成的 Management 类型及共享组件，持久事实以服务端
 记录为准。Assistant 文本作为对话内容，工具与思考采用折叠详情。
 
@@ -70,7 +71,7 @@ Runtime Worker 执行，共享所有者调度和用量规则。应用凭据不�
 
 ## 部署
 
-[运维流程](deploy/managed/README.zh.md) 协调五个服务、PostgreSQL 和 HTTPS 网关。
+[运维流程](deploy/managed/README.zh.md) 协调五个服务、PostgreSQL 和公共网关。
 Host 运行自有 OS 用户服务和仅使用私有 socket 的专属 PostgreSQL；Hosted 运行 Linux
 容器，仅向 Execution 提供引擎 socket，并保护私有 RPC 和数据库端口。
 平台服务端、部署工具与 Web 协调发布，设备协议版本明确协商。

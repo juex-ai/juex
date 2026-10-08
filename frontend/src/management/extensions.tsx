@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -45,7 +46,7 @@ export function ExtensionsDialog({ tenant, agent, close, changed }: { tenant: st
     event.preventDefault(); setBusy(true); setError(''); setSaved('')
     const target = environment || available[0]?.id || ''
     const same = request?.environment === target && request?.directory === directory && (!inspection || pending)
-    const next = same ? request! : { id: crypto.randomUUID(), binding: refreshBinding || crypto.randomUUID(), environment: target, directory }
+    const next = same ? request! : { id: randomUUID(), binding: refreshBinding || randomUUID(), environment: target, directory }
     setRequest(next)
     try {
       const result = await api<ExtensionInspection>(`${root}/extension-inspections`, { request_id: next.id, environment_id: target, directory })

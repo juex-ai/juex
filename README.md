@@ -11,7 +11,7 @@ one tenant.
 ## Deploy
 
 Follow the [deployment guide](deploy/managed/README.md) for macOS/Linux Host
-or Linux Hosted, including PostgreSQL, HTTPS and persistent storage. The operator
+or Linux Hosted, including PostgreSQL, a public gateway and persistent storage. The operator
 creates the first administrator's one-use setup link and provisions model
 credentials. Administrators invite members; users sign in with email/password.
 

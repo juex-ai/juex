@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-部署工具管理五个平台服务、PostgreSQL 和 HTTPS 网关。macOS/Linux 的原生目录与
+部署工具管理五个平台服务、PostgreSQL 和公共网关。macOS/Linux 的原生目录与
 Shell 使用 **Host**，Linux 的 gVisor 隔离和 XFS 配额使用 **Hosted**。初始化时固定
 后端；启动不会自动回退到另一种执行模式。
 
@@ -20,15 +20,13 @@ runsc 或 XFS。以所属非 root 用户运行，并具备可用的 macOS launch
 ```sh
 python3 deploy/managed/operator.py --root /absolute/private/juex-platform install \
   --backend host --workspace /absolute/private/juex-workspaces \
-  --bin-dir /absolute/release/bin --public-url https://machine.example:8443 \
+  --bin-dir /absolute/release/bin --ingress http --public-url http://machine.example:8080 \
   --postgres-bin /absolute/postgresql/bin --nginx /absolute/bin/nginx \
-  --tar /absolute/bin/gtar --local-tls --admin-email admin@example.com
+  --tar /absolute/bin/gtar --admin-email admin@example.com
 ```
 
-`--local-tls` 为指定域名/IP 创建部署专属 CA，不修改 OS 或浏览器的信任设置。
-向客户端明确分发 `tls/ca.pem`；CLI 使用 `--ca-file` 或 `JUEX_CA_FILE`。
-已有受信 TLS 时提供 `--tls-certificate` 和 `--tls-key`；私有签发 CA 额外使用
-`--tls-ca`。其他设备访问时，域名/IP 必须包含在证书中。首位管理员的一次性设置链接
+本机和 NetBird 安装显式选择 HTTP，无需公开证书或安装浏览器 CA。CLI 和设备客户端
+使用相同 HTTP origin，并显式传入 `--insecure-http`。首位管理员的一次性设置链接
 保存在私有 `secrets/bootstrap.json`。
 
 初始化拒绝已有的部署和 Workspace 目录，创建专属的 socket-only PGDATA、nginx
@@ -37,8 +35,8 @@ python3 deploy/managed/operator.py --root /absolute/private/juex-platform instal
 `maintenance/install-incomplete` 并拒绝启动；保留失败证据，修正依赖或配置后使用
 新目录重试。
 
-网关和服务监听绑定 `0.0.0.0`，RPC 要求服务 mTLS。网关是 LAN/NetBird 客户端的公开
-origin。Host Agents 使用同一 OS 用户；独立 Home/Workspace 目录不构成安全隔离。
+公共网关绑定 `0.0.0.0`，供 LAN/NetBird 客户端访问。其 Management HTTP 和设备
+上游仅绑定 loopback，RPC 要求服务 mTLS。Host Agents 使用同一 OS 用户；独立 Home/Workspace 目录不构成安全隔离。
 原生任务在所属用户的服务会话中启动，不承诺 macOS 登录前运行。安装时保存的环境和
 PATH 必须包含 Agent 所需的工具。
 
@@ -46,31 +44,29 @@ PATH 必须包含 Agent 所需的工具。
 
 只有 Execution 持有 Docker socket。托管负载使用 `runsc`，可信平台服务使用 `runc`。
 
-安装 Docker Engine、Compose、`runsc`、Python 3.11+、GNU tar、`iptables`、`findmnt` 和 `xfsprogs`。准备开启 `prjquota,nosuid,nodev` 的**独立 XFS 文件系统**，由 root 持有且权限为 0700，并与部署目录分开。运维工具不会格式化磁盘。提供匹配公开 HTTPS 域名的 TLS 证书和私钥、已有的 Hosted 基础镜像、两个未占用的私有 IPv4 网段，以及 Hosted 容器能够访问的主机地址。必须明确配置 Hosted DNS。存储目录不能由用户控制。
+安装 Docker Engine、Compose、`runsc`、Python 3.11+、GNU tar、`iptables`、`findmnt` 和 `xfsprogs`。准备开启 `prjquota,nosuid,nodev` 的**独立 XFS 文件系统**，由 root 持有且权限为 0700，并与部署目录分开。运维工具不会格式化磁盘。提供已有的 Hosted 基础镜像、两个未占用的私有 IPv4 网段，以及 Hosted 容器能够访问的主机地址。必须明确配置 Hosted DNS。存储目录不能由用户控制。
 
 执行 `docker build -f deploy/managed/Dockerfile -t juex-platform:VERSION .` 构建平台镜像。基础镜像参数允许使用部署者控制的镜像源。执行 `docker build -f deploy/managed/Dockerfile.hosted -t juex-hosted:VERSION .` 构建支持 Python/Node 的 Hosted 镜像。用户依赖安装到持久 Home/Workspace，系统包放入版本化镜像配方。初始化前拉取 PostgreSQL 和网关镜像；初始化会记录不可变的本地镜像 ID。保留这些镜像用于回滚。将本目录复制到 `/opt/juex`。
 
 ```sh
 sudo python3 /opt/juex/operator.py --root /var/lib/juex-management init \
   --workspace /srv/juex-workspaces --image juex-platform:VERSION \
-  --hosted-image juex-hosted:VERSION --public-url https://juex.example.com \
-  --host-ip 172.30.0.1 --dns 1.1.1.1 \
-  --tls-certificate /secure/fullchain.pem --tls-key /secure/privkey.pem
+  --hosted-image juex-hosted:VERSION --ingress http \
+  --public-url http://machine.example:8080 --host-ip 172.30.0.1 --dns 1.1.1.1
 sudo python3 /opt/juex/operator.py --root /var/lib/juex-management resume
 ```
 
-平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有 HTTPS 端口公开绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
+平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有公共网关端口绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
 
-使用 `docker compose --env-file /var/lib/juex-management/compose.env -f /var/lib/juex-management/compose.yaml exec management juex-management bootstrap --email admin@example.com` 生成首位管理员设置链接。这是一次性秘密 URL，必须私下交付。未配置 SMTP 时仍能复制邀请链接。模型凭据通过 Management 运维 CLI 配置。不能向 Agent 暴露部署私有文件和服务证书。
+使用 `sudo python3 /opt/juex/operator.py --root /var/lib/juex-management manage bootstrap --email admin@example.com` 生成首位管理员设置链接；运维工具为每个 Management 命令应用部署的传输策略。这是一次性秘密 URL，必须私下交付。未配置 SMTP 时仍能复制邀请链接。模型凭据通过 Management 运维 CLI 配置。不能向 Agent 暴露部署私有文件和服务证书。
 
-网关使用平台网段的 `.11` 地址。Management 和 Execution 只信任该代理提供的 `X-Real-IP`；网关的两个路由均以真实客户端地址覆盖此头，使认证和设备限流按客户端独立计算。自定义反向代理需在两个服务上设置 `JUEX_TRUSTED_PROXIES`（或 `--trusted-proxies`），明确列出代理的 IP/CIDR，并在边缘覆盖 `X-Real-IP`。默认不信任任何代理；不能信任用户可控制的地址头或整个客户端网段。恢复时会按平台子网重新绑定此设置。
+网关使用平台网段的 `.11` 地址。Management 和 Execution 只信任该代理提供的 `X-Real-IP`；网关的两个路由均以真实客户端地址覆盖此头，使认证和设备限流按客户端独立计算。外部生产代理使用下述显式入口策略；服务仍仅信任 nginx。恢复时会按平台子网重新绑定此设置。
 
 配置 SMTP 时，将密码放入临时导出的 `JUEX_SMTP_CREDENTIAL` 环境变量，不写入 Shell 历史，然后运行：
 
 ```sh
-docker compose --env-file /var/lib/juex-management/compose.env \
-  -f /var/lib/juex-management/compose.yaml exec -T -e JUEX_SMTP_CREDENTIAL \
-  management juex-management smtp seal --address smtp.example.com:587 \
+sudo --preserve-env=JUEX_SMTP_CREDENTIAL python3 /opt/juex/operator.py \
+  --root /var/lib/juex-management manage smtp seal --address smtp.example.com:587 \
   --from juex@example.com --username mailer
 unset JUEX_SMTP_CREDENTIAL
 ```
@@ -78,6 +74,33 @@ unset JUEX_SMTP_CREDENTIAL
 将输出的 `JUEX_SMTP_CONFIG=...` 一行保存到 `secrets/management.env`，替换已有值，再使用 `operator.py up` 按新配置重建 Management。整个 SMTP 配置使用部署主密钥加密，不能持久保存密码输入。重新运行即可替换凭据；删除配置并重建 Management 即停用邮件。已有邮件队列仍会持久保存。主密钥须放入下述独立恢复归档，恢复时需要匹配的密钥。
 
 普通进程日志放在 `logs/SERVICE/juex-*.log`，保留七天、每文件上限 10 MiB、每服务最多七份。空闲服务每小时清理过期日志。Docker 不重复存储进程日志。业务回执、用量和审计使用独立的数据库保留规则。
+
+## 生产 HTTPS
+
+Caddy 与 Host 位于同一台机器时，使用 `--ingress proxy --public-url https://juex.example.com
+--listen-port 8080 --proxy-cidr 127.0.0.1/32`。公开证书和续期由 Caddy 负责，私有 nginx
+中间链路使用 HTTP。会话 Cookie 仍带 Secure，origin 检查使用 HTTPS 公开地址。
+nginx 须包含 `http_realip_module`。最小 Caddyfile：
+
+```caddyfile
+juex.example.com {
+  reverse_proxy 127.0.0.1:8080 {
+    header_up X-Real-IP {remote_host}
+  }
+}
+```
+
+只允许代理实际使用的 TCP 来源地址。Hosted 的 Docker 端口转发可能改变来源：检查网关
+看到的 peer，用 `--proxy-cidr` 配置精确地址，不要信任整个客户端子网。nginx 先校验
+原始 peer，再接受 Caddy 提供的客户端地址，并覆盖两个服务路由的身份头。不能让不可信
+网络直接访问网关。JueX `install` 或 `resume` 的公共健康检查要求 Caddy 已启动且公开
+origin 可达。
+
+若由 nginx 直接终止 TLS，使用 `--ingress https` 并提供 `--tls-certificate` 和
+`--tls-key`；私有签发机构还需 `--tls-ca`。Host 另外支持 `--local-tls`，仅生成部署
+CA，不修改 OS 或浏览器信任，客户端必须显式信任该 CA。内部服务 mTLS 和 Hosted
+Guest TLS 与这三种公开入口模式独立。备份和恢复保留入口选择；外部 Caddy 配置和证书
+由部署方负责恢复。已登记的 Host origin 变更需要显式迁移设备，不能直接修改地址。
 
 ## 统一运维
 
@@ -138,7 +161,7 @@ sudo python3 /opt/juex/operator.py --root /var/lib/juex-recovered resume \
 ## 验证与升级
 
 验证以仓库的 [local-test skill](../../.agents/skills/juex-localtest/SKILL.zh.md) 为准。
-真实 Host 验收还需运行所属 OS 的服务管理器和 HTTPS 网关；Hosted 验收需要 Linux
+真实 Host 验收还需运行所属 OS 的服务管理器和公共网关；Hosted 验收需要 Linux
 Docker、gVisor 和有配额的 XFS。单测或编译不能证明任一部署模式已经可用。
 
 使用新发布的部署工具执行升级：Host 使用

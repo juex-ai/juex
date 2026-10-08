@@ -94,7 +94,8 @@ class RecoveryTests(unittest.TestCase):
             platform_prefix="172.30.0", hosted_pool="172.31.0.0/16", listen_port=None,
             host_ip="172.30.0.1", dns=["1.1.1.1"], docker_socket=str((self.root / "docker.sock").resolve()),
             image="platform", hosted_image="guest", postgres_image="postgres", gateway_image="gateway",
-            active_threads=1)
+            active_threads=1, ingress="https", proxy_cidr=[], local_tls=False,
+            tls_certificate="cert.pem", tls_key="key.pem", tls_ca=None)
         # Inspect configuration at the ownership boundary, before any privileged
         # filesystem or container changes are allowed.
         with patch.object(ops.hosted, "mount_identity", return_value="workspace-uuid"), \

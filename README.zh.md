@@ -10,7 +10,7 @@ Runtime 中运行，使用部署管理的 Host 或 Hosted 环境，也可使用�
 ## 部署
 
 按照 [部署指南](deploy/managed/README.zh.md) 部署 macOS/Linux Host 或 Linux Hosted，
-包括 PostgreSQL、HTTPS 和持久存储。部署方生成首位管理员的一次性初始化链接，
+包括 PostgreSQL、公共网关和持久存储。部署方生成首位管理员的一次性初始化链接，
 配置模型凭据。管理员邀请成员，用户通过邮箱和密码登录。
 
 关闭浏览器不会停止已接纳的工作。Memory 和 Calendar 是独立的 Fleet 应用，
