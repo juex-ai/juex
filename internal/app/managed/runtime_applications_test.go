@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/memory"
@@ -14,6 +15,21 @@ type unavailableMemory struct {
 	RuntimeMemory
 	err error
 }
+
+func TestDisabledAgentApplicationsDoNotContactServicesOrExposeGuidance(t *testing.T) {
+	scope := managedruntime.Scope{Capabilities: agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Memory, agentpolicy.Calendar}}}
+	a := RuntimeApplications{Memory: unavailableMemory{err: application.ErrDenied}, Calendar: unavailableCalendar{}}
+	catalog, err := a.Tools(context.Background(), scope, nil)
+	if err != nil || len(catalog.Tools) != 0 || catalog.Instructions != "" {
+		t.Fatalf("disabled applications affected conversation: %+v %v", catalog, err)
+	}
+	recall, err := a.Recall(context.Background(), scope, "hello")
+	if err != nil || recall.Text != "" {
+		t.Fatal("disabled Memory was recalled", recall, err)
+	}
+}
+
+type unavailableCalendar struct{ RuntimeCalendar }
 
 func (m unavailableMemory) Status(context.Context, application.Access) (memory.Status, error) {
 	return memory.Status{}, m.err

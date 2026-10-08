@@ -17,6 +17,10 @@ private JSON/YAML file with this shape:
 {"models":[{"provider":"example","name":"MODEL","protocol":"openai/chat","endpoint":"https://provider.example/v1","api_key":"TEST_SECRET","context_window":131072,"max_output":8192}]}
 ```
 
+For provider-default ordinary requests, set `max_output` to zero and supply a
+positive `output_reserve`. A positive cap may omit the reserve to use the same
+value. Anthropic zero-cap fixtures require at least 4096 reserved tokens.
+
 No personal runtime configuration is discovered automatically. Keep credentials
 outside Git with mode 0600. Reports redact selected API keys; temporary selected
 model files are deleted after every outcome. Selection is seeded and reproducible;

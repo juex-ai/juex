@@ -18,7 +18,7 @@ type FileLocation struct {
 }
 
 func (l FileLocation) Permits(device Device, scope Scope) bool {
-	return l.EnvironmentID == device.ID && l.AuthorizationVersion == device.Version && permits(device, scope, "read")
+	return l.EnvironmentID == device.ID && l.AuthorizationVersion == device.Version && permits(device, scope, execprotocol.Request{Kind: "read"})
 }
 
 type TransferRequest struct {

@@ -42,7 +42,7 @@ const (
 
 func RequiredCapability(kind string) Capability {
 	switch kind {
-	case "inspect_extension", "read", "write", "edit", "glob", "grep", "export_file", "import_file":
+	case "read_agent_instructions", "inspect_extension", "read", "write", "edit", "glob", "grep", "export_file", "import_file":
 		return Files
 	case "observe_command", "exec_command", "write_stdin", "run_hook":
 		return Shell

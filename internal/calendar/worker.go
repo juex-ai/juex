@@ -3,6 +3,7 @@ package calendar
 import (
 	"context"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"log/slog"
 	"time"
 
@@ -22,7 +23,6 @@ type WorkerGateway interface {
 	Cancel(context.Context, Delivery) error
 }
 type PendingRepository interface {
-	ActiveSchedules(context.Context, int) ([]Job, error)
 	PendingDeliveries(context.Context, int) ([]Delivery, error)
 	PendingNotifications(context.Context, int) ([]Notification, error)
 }
@@ -34,25 +34,11 @@ func (s *Service) Step(ctx context.Context) error {
 	}
 	defer done()
 	repo, ok := s.Repository.(PendingRepository)
-	if !ok || s.Workers == nil {
+	if !ok {
 		return application.ErrInvalid
 	}
 	var failures []error
-	jobs, err := repo.ActiveSchedules(ctx, 100)
-	if err != nil {
-		return err
-	}
-	for _, job := range jobs {
-		if ctx.Err() != nil {
-			break
-		}
-		call, cancel := context.WithTimeout(ctx, 2*time.Second)
-		err := s.advance(call, job)
-		cancel()
-		if err != nil {
-			failures = append(failures, err)
-		}
-	}
+	failures = append(failures, s.schedule(ctx))
 	deliveries, err := repo.PendingDeliveries(ctx, 100)
 	if err != nil {
 		failures = append(failures, err)
@@ -74,8 +60,8 @@ func (s *Service) Step(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-func (s *Service) advance(ctx context.Context, job Job) error {
-	if err := s.Repository.Update(ctx, job.Scope, func(state *State) error {
+func (s *Service) advance(ctx context.Context, job Job, scheduler Scheduler) error {
+	if err := scheduler.Update(ctx, job.Scope, func(state *State) error {
 		j := state.Jobs[job.ID]
 		if j == nil {
 			return application.ErrDenied
@@ -90,8 +76,8 @@ func (s *Service) advance(ctx context.Context, job Job) error {
 	if err != nil && !errors.Is(err, application.ErrDenied) {
 		return err
 	}
-	allowed := err == nil && current.SameAuthority(job.Scope)
-	return s.Repository.Update(ctx, job.Scope, func(state *State) error {
+	allowed := err == nil && current.SameAuthority(job.Scope) && current.Capabilities.Allows(agentpolicy.Calendar)
+	return scheduler.Update(ctx, job.Scope, func(state *State) error {
 		j := state.Jobs[job.ID]
 		if j == nil || j.Version != job.Version || j.Epoch != job.Epoch {
 			return nil
@@ -103,6 +89,9 @@ func (s *Service) advance(ctx context.Context, job Job) error {
 			j.Version++
 			j.UpdatedAt = time.Now()
 			return nil
+		}
+		if err := state.Recover(job.ID, scheduler.RecoveredAt()); err != nil {
+			return err
 		}
 		return state.Advance(job.ID, time.Now())
 	})
@@ -127,11 +116,11 @@ func (s *Service) deliver(ctx context.Context, d Delivery) error {
 	if !d.CancelRequested {
 		var err error
 		if !d.Finished {
-			_, err = s.Assignment(ctx, d.Scope, d.ID, d.Epoch)
+			_, err = s.assignment(ctx, d.Scope, d.ID, d.Epoch, d.Mode)
 		} else {
 			current, e := s.Authority.AuthorizeApplication(ctx, d.Scope.Access, true)
 			err = e
-			if err == nil && !current.SameAuthority(d.Scope) {
+			if err == nil && (!current.SameAuthority(d.Scope) || !current.Capabilities.Allows(agentpolicy.Calendar)) {
 				err = application.ErrDenied
 			}
 			if err == nil {
@@ -143,13 +132,31 @@ func (s *Service) deliver(ctx context.Context, d Delivery) error {
 			}
 		}
 		if errors.Is(err, application.ErrDenied) || errors.Is(err, application.ErrDisabled) {
-			if err := s.Repository.Update(ctx, d.Scope, func(state *State) error { state.Deliveries[d.ID].CancelRequested = true; return nil }); err != nil {
+			stale := false
+			if err := s.Repository.Update(ctx, d.Scope, func(state *State) error {
+				current := state.Deliveries[d.ID]
+				if current == nil || current.Attempt != d.Attempt || current.Settled {
+					stale = true
+					return nil
+				}
+				current.CancelRequested = true
+				return nil
+			}); err != nil {
 				return err
+			}
+			if stale {
+				return nil
 			}
 			d.CancelRequested = true
 		} else if err != nil {
 			return err
 		}
+	}
+	if d.Mode == "main" {
+		return s.deliverMain(ctx, d)
+	}
+	if s.Workers == nil {
+		return application.ErrInvalid
 	}
 	if d.CancelRequested {
 		if err := s.Workers.Cancel(ctx, d); err != nil {
@@ -191,6 +198,7 @@ func (s *Service) deliver(ctx context.Context, d Delivery) error {
 }
 
 func (s *Service) Run(ctx context.Context) error {
+	defer s.CloseScheduler()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {

@@ -63,7 +63,10 @@ CLI 的共同边界。React 使用生成的 Management 类型及共享组件，�
 
 Memory 和 Calendar 使用自己的事务和 outbox。需要模型的任务通过限定范围的普通
 Runtime Worker 执行，共享所有者调度和用量规则。应用凭据不能变成一般用户会话或
-读取任意对话历史。应用停用保留业务记录。
+读取任意对话历史。Calendar Main 触发使用独立的 Runtime 接纳回执和私有输入身份，
+不把 Main 绑定为应用 Worker。取消与接纳在回执处串行决定先后；Calendar 策略检查
+与 Runtime 提交不是跨服务原子操作，取消须等 Runtime 确认接纳是否已先发生。
+应用停用保留业务记录。
 
 ## 部署
 

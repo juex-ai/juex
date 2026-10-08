@@ -3,6 +3,7 @@ package managedruntime
 import (
 	"context"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"time"
 )
 
@@ -32,9 +33,14 @@ func (r *Runner) deliverEvidence(ctx context.Context) {
 					if item.Text == "" {
 						return ErrInvalid
 					}
-					if _, err := r.currentScope(attempt, item.Scope); err != nil {
+					fresh, err := r.currentScope(attempt, item.Scope)
+					if err != nil {
 						return err
 					}
+					if !fresh.Capabilities.Allows(agentpolicy.Memory) {
+						return ErrDenied
+					}
+					item.Scope.Capabilities = fresh.Capabilities
 					return gateway.Contribute(attempt, item)
 				}()
 				reason := ""

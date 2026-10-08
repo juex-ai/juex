@@ -9,20 +9,6 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/application"
 )
 
-func (s *Store) ActiveSchedules(ctx context.Context, limit int) ([]calendar.Job, error) {
-	if limit < 1 || limit > 100 {
-		return nil, application.ErrInvalid
-	}
-	rows, err := s.pool.Query(ctx, `SELECT j.value FROM calendar.fleets f CROSS JOIN LATERAL jsonb_each(f.state->'jobs') j
- WHERE f.state->'control'->>'enabled'='true' AND j.value->>'status'='active'
-
- ORDER BY j.value->>'attempted_at',f.id,j.key LIMIT $1`, limit)
-	if err != nil {
-		return nil, err
-	}
-	return decodeRows[calendar.Job](rows)
-}
-
 func (s *Store) PendingDeliveries(ctx context.Context, limit int) ([]calendar.Delivery, error) {
 	if limit < 1 || limit > 100 {
 		return nil, application.ErrInvalid

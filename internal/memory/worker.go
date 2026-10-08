@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"log/slog"
 	"time"
 
@@ -88,7 +89,7 @@ func (s *Service) deliver(ctx context.Context, job Review) error {
 		return s.finishWorker(ctx, job, WorkerState{})
 	}
 	scope, err := s.Authority.AuthorizeApplication(ctx, job.Scope.Access, true)
-	if errors.Is(err, application.ErrDenied) || err == nil && !scope.SameAuthority(job.Scope) {
+	if errors.Is(err, application.ErrDenied) || err == nil && (!scope.SameAuthority(job.Scope) || !scope.Capabilities.Allows(agentpolicy.Memory)) {
 		return s.failWorker(ctx, job, "execution authority changed")
 	}
 	if err != nil {

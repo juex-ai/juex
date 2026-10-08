@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/application"
 	mc "github.com/juex-ai/juex/internal/foundation/memoryclient"
 	"github.com/juex-ai/juex/internal/memory/knowledge"
@@ -13,6 +14,9 @@ func (s *Service) transact(ctx context.Context, access application.Access, write
 	scope, err := s.Authority.AuthorizeApplication(ctx, access, write || access.AgentID != "")
 	if err != nil {
 		return err
+	}
+	if scope.AgentID != "" && !scope.Capabilities.Allows(agentpolicy.Memory) {
+		return application.ErrDisabled
 	}
 	fn := func(state *State) error {
 		if !state.Control.Enabled && access.AgentID != "" {
@@ -142,7 +146,12 @@ func (s *Service) Decide(ctx context.Context, frozen application.Scope, binding 
 			Binding  Binding
 			Decision mc.Decision
 		}{"decide", binding, decision}
-		value, err = state.command(scope, commandID, payload, func() (mc.Receipt, error) { return state.Decide(scope, binding, decision, time.Now()) })
+		value, err = state.command(scope, commandID, payload, func() (mc.Receipt, error) {
+			if !scope.Capabilities.Allows(agentpolicy.Memory) || !frozen.Capabilities.Allows(agentpolicy.Memory) {
+				return mc.Receipt{}, application.ErrDisabled
+			}
+			return state.Decide(scope, binding, decision, time.Now())
+		})
 		return
 	})
 	return value, err
@@ -153,8 +162,13 @@ func (s *Service) CancelCommand(ctx context.Context, scope application.Scope, id
 }
 
 func (s *Service) Result(ctx context.Context, access application.Access, thread, id string) (mc.Receipt, error) {
+	// Exact historical receipts remain readable after execution is disabled.
+	scope, err := s.Authority.AuthorizeApplication(ctx, access, false)
+	if err != nil {
+		return mc.Receipt{}, err
+	}
 	var value mc.Receipt
-	err := s.transact(ctx, access, false, func(state *State, scope application.Scope) (err error) {
+	err = s.Repository.View(ctx, scope, func(state *State) (err error) {
 		value, err = state.Result(scope, thread, id)
 		return
 	})

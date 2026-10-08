@@ -161,7 +161,7 @@ func TestManagedRuntimeNotificationTerminalFactsAndApplicationExclusion(t *testi
 				if err != nil {
 					t.Fatal(err)
 				}
-				a, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Messages: work.History})
+				a, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Messages: work.History})
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/execution/blob"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
@@ -71,12 +72,15 @@ func (s *Service) BeginArtifact(ctx context.Context, actor, tenant, agent string
 	if err := request.Validate(); err != nil {
 		return ArtifactUpload{}, err
 	}
+	if !scope.Capabilities.Allows(agentpolicy.Files) {
+		return ArtifactUpload{}, execprotocol.ErrDenied
+	}
 	if request.Source != nil {
 		device, err := s.Store.Device(ctx, request.Source.EnvironmentID)
 		if err != nil {
 			return ArtifactUpload{}, err
 		}
-		if !permits(device, scope, "read") || device.Version != request.Source.AuthorizationVersion {
+		if !permits(device, scope, execprotocol.Request{Kind: "read"}) || device.Version != request.Source.AuthorizationVersion {
 			return ArtifactUpload{}, execprotocol.ErrDenied
 		}
 		operation, err := s.Store.Operation(ctx, device.ID, request.Source.OperationID, 0, 4096)
@@ -108,7 +112,7 @@ func writableArtifact(ctx context.Context, manager *ArtifactManager, scope Scope
 	if err != nil {
 		return artifact, err
 	}
-	if !scope.CanExecute || !artifact.Scope.SameAuthority(scope) {
+	if !scope.CanExecute || !scope.Capabilities.Allows(agentpolicy.Files) || !artifact.Scope.SameAuthority(scope) {
 		return Artifact{}, execprotocol.ErrDenied
 	}
 	return artifact, nil

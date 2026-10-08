@@ -29,12 +29,14 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 		model := work.Config.Models[index]
 		request = base
 		request.Model = model
+		request.ModelBudget = work.ModelBudget
+		limits := request.ContextModel()
 		request.Generation = work.Generation
-		request.MaxOutputTokens = model.MaxOutput
+		request.MaxOutputTokens = limits.MaxOutput
 		request.Messages = projectModelHistory(work, model)
 		if base.Recall != nil && work.Compaction == nil {
 			withRecall := append([]llm.Message{*base.Recall}, request.Messages...)
-			if llm.EstimateContextTokens(request.System, request.Tools, withRecall)+request.MaxOutputTokens+contextSafety(model) <= model.ContextWindow {
+			if llm.EstimateContextTokens(request.System, request.Tools, withRecall)+limits.OutputReserve+contextSafety(limits) <= limits.ContextWindow {
 				request.Messages = withRecall
 			}
 		}
@@ -63,7 +65,7 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 		if planErr != nil && !errors.Is(planErr, ErrContextLimit) {
 			return nil, request, planErr
 		}
-		if planErr == nil && llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+request.MaxOutputTokens+contextSafety(model) <= model.ContextWindow {
+		if planErr == nil && llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+outputBudget(request)+contextSafety(limits) <= limits.ContextWindow {
 			provider, err := r.authority.Provider(ctx, work.Scope, model)
 			if err == nil {
 				return provider, request, nil
@@ -88,6 +90,16 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 // Create references before removing provider-specific blocks so their offsets
 // continue to address the immutable original message across model switches.
 func projectModelHistory(work Work, model ModelConfig) []llm.Message {
-	work.History = projectContext(work.History, model)
+	limits := (ModelRequest{Model: model, ModelBudget: work.ModelBudget}).ContextModel()
+	work.History = projectContext(work.History, limits)
 	return modelHistory(work, model)
+}
+
+// Normal requests may leave the provider cap unset while still reserving output
+// capacity. A compaction draft instead has its own bounded summary request.
+func outputBudget(request ModelRequest) int {
+	if request.Compaction != nil {
+		return request.MaxOutputTokens
+	}
+	return request.ContextModel().OutputReserve
 }

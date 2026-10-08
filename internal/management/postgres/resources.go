@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
+	"github.com/juex-ai/juex/internal/foundation/instructionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/management"
 )
@@ -153,13 +155,13 @@ func (d *Directory) ConfigureFleet(ctx context.Context, actorID, tenantID, owner
 	return settings, tx.Commit(ctx)
 }
 
-const agentColumns = `extensions,id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch,worker_depth,purging,hooks`
+const agentColumns = `extensions,id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch,worker_depth,purging,hooks,capabilities,dynamic_instructions`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanAgent(row rowScanner) (management.Agent, error) {
 	var a management.Agent
-	err := row.Scan(&a.Extensions, &a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth, &a.Purging, &a.Hooks)
+	err := row.Scan(&a.Extensions, &a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth, &a.Purging, &a.Hooks, &a.Capabilities, &a.DynamicInstructions)
 	return a, classify(err)
 }
 
@@ -179,7 +181,15 @@ func (d *Directory) CreateAgent(ctx context.Context, actorID, tenantID, ownerID 
 	if err := enabledModel(ctx, tx, tenantID, config.ModelID); err != nil {
 		return management.Agent{}, err
 	}
-	agent, err := scanAgent(tx.QueryRow(ctx, `INSERT INTO management.agents(fleet_id,name,instructions,model_id,worker_depth,hooks) VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5,$6) RETURNING `+agentColumns, fleet.ID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...)))
+	policy := agentpolicy.Policy{}
+	if config.Capabilities != nil {
+		policy = *config.Capabilities
+	}
+	instructions := instructionpolicy.DynamicInstructions{}
+	if config.DynamicInstructions != nil {
+		instructions = *config.DynamicInstructions
+	}
+	agent, err := scanAgent(tx.QueryRow(ctx, `INSERT INTO management.agents(fleet_id,name,instructions,model_id,worker_depth,hooks,capabilities,dynamic_instructions) VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8) RETURNING `+agentColumns, fleet.ID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...), policy.Normalized(), instructions))
 	if err != nil {
 		return agent, err
 	}
@@ -222,8 +232,16 @@ func (d *Directory) ConfigureAgent(ctx context.Context, actorID, tenantID, agent
 	if hookpolicy.Validate(append(slices.Clone(config.Hooks), extensionpolicy.Hooks(prior.Extensions)...)) != nil {
 		return management.Agent{}, management.ErrInvalid
 	}
-	revoke := hookpolicy.Revokes(prior.Hooks, config.Hooks)
-	agent, err := scanAgent(tx.QueryRow(ctx, `UPDATE management.agents SET name=$2,instructions=$3,model_id=NULLIF($4,'')::uuid,worker_depth=$6,hooks=$7,execution_epoch=execution_epoch+CASE WHEN $8 THEN 1 ELSE 0 END,version=version+1,updated_at=clock_timestamp() WHERE id=$1 AND version=$5 AND status='active' RETURNING `+agentColumns, agentID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, version, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...), revoke))
+	policy := prior.Capabilities
+	if config.Capabilities != nil {
+		policy = config.Capabilities.Normalized()
+	}
+	instructions := prior.DynamicInstructions
+	if config.DynamicInstructions != nil {
+		instructions = *config.DynamicInstructions
+	}
+	revoke := hookpolicy.Revokes(prior.Hooks, config.Hooks) || policy.Restricts(prior.Capabilities) || instructions.Revokes(prior.DynamicInstructions)
+	agent, err := scanAgent(tx.QueryRow(ctx, `UPDATE management.agents SET name=$2,instructions=$3,model_id=NULLIF($4,'')::uuid,worker_depth=$6,hooks=$7,execution_epoch=execution_epoch+CASE WHEN $8 THEN 1 ELSE 0 END,capabilities=$9,dynamic_instructions=$10,version=version+1,updated_at=clock_timestamp() WHERE id=$1 AND version=$5 AND status='active' RETURNING `+agentColumns, agentID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, version, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...), revoke, policy, instructions))
 	if errors.Is(err, management.ErrDenied) {
 		return agent, management.ErrConflict
 	}
@@ -352,7 +370,8 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 	u, err := url.Parse(config.Endpoint)
 	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || (u.Scheme != "http" && u.Scheme != "https") ||
 		strings.TrimSpace(config.Provider) == "" || len(config.Provider) > 100 || strings.TrimSpace(config.Name) == "" || len(config.Name) > 200 || config.APIKey == "" ||
-		config.ContextWindow < 1024 || config.MaxOutput <= 0 || config.MaxOutput >= config.ContextWindow ||
+		config.ContextWindow < 1024 || config.MaxOutput < 0 || config.OutputReserve <= 0 || config.MaxOutput > config.OutputReserve || config.OutputReserve >= config.ContextWindow ||
+		(config.Protocol == llm.ProtocolAnthropicMessages && config.MaxOutput == 0 && config.OutputReserve < llm.AnthropicDefaultOutputTokens) ||
 		(config.Protocol != llm.ProtocolOpenAIChat && config.Protocol != llm.ProtocolOpenAIResponses && config.Protocol != llm.ProtocolAnthropicMessages) {
 		return management.Model{}, management.ErrInvalid
 	}
@@ -372,9 +391,10 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 	if err != nil {
 		return management.Model{}, err
 	}
-	model, err := scanModel(tx.QueryRow(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-	ON CONFLICT(id) DO UPDATE SET protocol=EXCLUDED.protocol,endpoint=EXCLUDED.endpoint,key_cipher=EXCLUDED.key_cipher,context_window=EXCLUDED.context_window,max_output=EXCLUDED.max_output,authorization_epoch=models.authorization_epoch+CASE WHEN models.enabled<>EXCLUDED.enabled THEN 1 ELSE 0 END,enabled=EXCLUDED.enabled
-	RETURNING `+modelColumns, id, config.Provider, config.Name, config.Protocol, config.Endpoint, cipher, config.ContextWindow, config.MaxOutput, config.Enabled))
+	model, err := scanModel(tx.QueryRow(ctx, `INSERT INTO management.models(id,provider,name,protocol,endpoint,key_cipher,context_window,max_output,output_reserve,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	ON CONFLICT(id) DO UPDATE SET protocol=EXCLUDED.protocol,endpoint=EXCLUDED.endpoint,key_cipher=EXCLUDED.key_cipher,context_window=EXCLUDED.context_window,max_output=EXCLUDED.max_output,output_reserve=EXCLUDED.output_reserve,
+	authorization_epoch=models.authorization_epoch+CASE WHEN (models.protocol,models.endpoint,models.context_window,models.max_output,models.output_reserve,models.enabled) IS DISTINCT FROM (EXCLUDED.protocol,EXCLUDED.endpoint,EXCLUDED.context_window,EXCLUDED.max_output,EXCLUDED.output_reserve,EXCLUDED.enabled) THEN 1 ELSE 0 END,enabled=EXCLUDED.enabled
+	RETURNING `+modelColumns, id, config.Provider, config.Name, config.Protocol, config.Endpoint, cipher, config.ContextWindow, config.MaxOutput, config.OutputReserve, config.Enabled))
 	if err != nil {
 		return model, err
 	}
@@ -384,7 +404,7 @@ func (d *Directory) ConfigureModel(ctx context.Context, config management.ModelC
 	return model, tx.Commit(ctx)
 }
 
-const modelColumns = `id,provider,name,protocol,context_window,max_output,enabled`
+const modelColumns = `id,provider,name,protocol,context_window,max_output,output_reserve,enabled`
 
 func (d *Directory) SetModelEnabled(ctx context.Context, id string, enabled bool) error {
 	tx, err := d.begin(ctx)
@@ -411,7 +431,7 @@ func (d *Directory) SetModelEnabled(ctx context.Context, id string, enabled bool
 
 func scanModel(row rowScanner) (management.Model, error) {
 	var m management.Model
-	err := row.Scan(&m.ID, &m.Provider, &m.Name, &m.Protocol, &m.ContextWindow, &m.MaxOutput, &m.Enabled)
+	err := row.Scan(&m.ID, &m.Provider, &m.Name, &m.Protocol, &m.ContextWindow, &m.MaxOutput, &m.OutputReserve, &m.Enabled)
 	return m, classify(err)
 }
 

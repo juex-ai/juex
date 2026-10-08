@@ -1,11 +1,35 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { projectTranscript } from '../../frontend/src/management/timeline.ts'
+
+test('instruction read failures explain the held input without claiming authorization changed', () => {
+  const rows = projectTranscript([
+    event(1, 'input.accepted', { receipt: { id: 'guidance-input' }, text: 'Continue' }),
+    event(2, 'instructions.failed', { error: 'instruction source must contain bounded UTF-8 text' }),
+    event(3, 'input.held', { input_id: 'guidance-input', reason: 'instructions_unavailable' }),
+  ])
+  assert.ok(rows.some(row => row.kind === 'notice' && row.text.includes('UTF-8')))
+  assert.ok(rows.some(row => row.kind === 'message' && row.status.includes('指令文件')))
+  assert.ok(!rows.some(row => row.kind === 'message' && row.status.includes('授权已改变')))
+})
 import type { Event } from '../../frontend/src/management/schema.ts'
 
 function event(sequence: number, kind: string, data: unknown): Event {
   return { id: `event-${sequence}`, thread_id: 'thread', sequence, generation: 1, kind, data, created_at: '2026-09-30T00:00:00Z' }
 }
+
+test('queued Calendar triggers retain system provenance before consumption', () => {
+  const accepted = event(1, 'input.accepted', { receipt: { id: 'calendar-input' }, text: 'Calendar trigger: Check context', source: { kind: 'application_trigger', application: 'calendar' } })
+  const queued = projectTranscript([accepted])
+  if (queued[0].kind !== 'message') assert.fail('missing queued trigger')
+  assert.equal(queued[0].message.kind, 'system_notice')
+  assert.equal(queued[0].status, '已接收，等待执行')
+  const consumed = projectTranscript([accepted, event(2, 'message.appended', { id: 'calendar-input', role: 'user', kind: 'system_notice', blocks: [{ type: 'text', text: 'Calendar trigger: Check context' }] })])
+  assert.equal(consumed.length, 1)
+  if (consumed[0].kind !== 'message') assert.fail('missing consumed trigger')
+  assert.equal(consumed[0].message.kind, 'system_notice')
+  assert.equal(consumed[0].status, '')
+})
 
 test('hook completion replaces its pending log while preserving an unknown result', () => {
   const rows = projectTranscript([

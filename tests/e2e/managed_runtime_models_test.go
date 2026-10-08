@@ -49,7 +49,7 @@ func TestManagedRuntimeProviderFallbackUsesActualModel(t *testing.T) {
 				streamManagedReply(w, "Fallback answer")
 			}))
 			t.Cleanup(second.Close)
-			model, err := f.directory.ConfigureModel(context.Background(), management.ModelConfiguration{Provider: "alternate", Name: "backup", Protocol: llm.ProtocolOpenAIChat, Endpoint: second.URL, APIKey: "backup-key", ContextWindow: 16384, MaxOutput: 1024, Enabled: true})
+			model, err := f.directory.ConfigureModel(context.Background(), management.ModelConfiguration{Provider: "alternate", Name: "backup", Protocol: llm.ProtocolOpenAIChat, Endpoint: second.URL, APIKey: "backup-key", ContextWindow: 16384, MaxOutput: 1024, OutputReserve: 1024, Enabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,6 +103,7 @@ func TestManagedRuntimeFallbackPositionSurvivesActivation(t *testing.T) {
 	backup := config.Models[0]
 	backup.ModelID = "00000000-0000-4000-8000-000000000002"
 	backup.Model = "backup"
+	backup.MaxOutput, backup.OutputReserve = 0, 2048
 	config.Models = append(config.Models, backup)
 	lease, err := store.Claim(ctx, scope.AgentID, "first", time.Minute)
 	if err != nil {
@@ -112,7 +113,7 @@ func TestManagedRuntimeFallbackPositionSurvivesActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Model: config.Models[0], Purpose: "conversation"})
+	attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Model: config.Models[0], Purpose: "conversation"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,10 +139,10 @@ func TestManagedRuntimeFallbackPositionSurvivesActivation(t *testing.T) {
 	if err != nil || work.ModelIndex != 1 || len(work.Config.Models) != 2 || work.Config.Models[1] != backup {
 		t.Fatal(work, err)
 	}
-	if _, err := restarted.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Model: config.Models[0], Purpose: "conversation"}); !errors.Is(err, managedruntime.ErrConflict) {
+	if _, err := restarted.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Model: config.Models[0], Purpose: "conversation"}); !errors.Is(err, managedruntime.ErrConflict) {
 		t.Fatal("reset to primary", err)
 	}
-	attempt, err = restarted.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Model: backup, Purpose: "conversation"})
+	attempt, err = restarted.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: backup.MaxOutput, Model: backup, Purpose: "conversation"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +201,7 @@ func TestManagedRuntimeFallbackAfterToolWaitRechecksTenantAccess(t *testing.T) {
 		streamManagedReply(w, "Used the original tool result")
 	}))
 	t.Cleanup(second.Close)
-	backup, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "alternate", Name: "backup", Protocol: llm.ProtocolOpenAIChat, Endpoint: second.URL, APIKey: "backup", ContextWindow: 32768, MaxOutput: 4096, Enabled: true})
+	backup, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "alternate", Name: "backup", Protocol: llm.ProtocolOpenAIChat, Endpoint: second.URL, APIKey: "backup", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestManagedRuntimeContextFallbackDoesNotLeaveUnusableCompaction(t *testing.
 	}))
 	t.Cleanup(primary.Close)
 	ctx := context.Background()
-	model, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "small", Name: "tiny", Protocol: llm.ProtocolOpenAIChat, Endpoint: primary.URL, APIKey: "fixture", ContextWindow: 2048, MaxOutput: 512, Enabled: true})
+	model, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "small", Name: "tiny", Protocol: llm.ProtocolOpenAIChat, Endpoint: primary.URL, APIKey: "fixture", ContextWindow: 2048, MaxOutput: 512, OutputReserve: 512, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +276,7 @@ func TestManagedRuntimeFallbackContextLimitHoldsWithoutRequest(t *testing.T) {
 	f := managedRuntimeHTTP(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1); http.Error(w, "temporary", 503) })
 	backupServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(10); streamManagedReply(w, "should not run") }))
 	t.Cleanup(backupServer.Close)
-	model, err := f.directory.ConfigureModel(context.Background(), management.ModelConfiguration{Provider: "alternate", Name: "tiny", Protocol: llm.ProtocolOpenAIChat, Endpoint: backupServer.URL, APIKey: "backup", ContextWindow: 2048, MaxOutput: 512, Enabled: true})
+	model, err := f.directory.ConfigureModel(context.Background(), management.ModelConfiguration{Provider: "alternate", Name: "tiny", Protocol: llm.ProtocolOpenAIChat, Endpoint: backupServer.URL, APIKey: "backup", ContextWindow: 2048, MaxOutput: 512, OutputReserve: 512, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

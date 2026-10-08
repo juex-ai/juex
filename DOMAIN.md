@@ -30,7 +30,10 @@ login session and a device credential are separate identities.
 
 An Agent owns a permanent Main and independent Workers. A Worker records its
 parent; cancellation of that parent does not undo already accepted independent
-work. Application jobs use scoped ordinary Workers. Cross-Agent collaboration
+work. Application model jobs use scoped ordinary Workers. Calendar may instead deliver
+an input into the permanent Main. Its acceptance transfers the input to Runtime;
+it does not prove model completion. Cancelling the Calendar delivery cannot
+retract an accepted Main input or cancel unrelated Main work. Cross-Agent collaboration
 is explicit and confined to the same owner and Fleet.
 
 An Activation is replaceable runtime capacity, not the Agent's identity.
@@ -38,6 +41,13 @@ Inputs commit before acceptance is returned. Request IDs deduplicate admission;
 the next assistant message is not assumed to correspond one-to-one with an Input.
 Context compaction preserves durable history and a checkpoint. Worker archival
 requires idle work and retains readable history.
+
+An Agent's capability policy limits its tools and background activity independently
+of Fleet application enablement and environment grants. Ordinary Worker delegation
+and application-owned Workers have separate capability checks. Tightening any
+capability revokes all earlier Agent execution epochs; reopening it neither revives
+old work nor expands a Turn's frozen policy. Cancellation and historical receipts
+remain available. Capability restrictions do not provide OS isolation for Host Shell.
 
 ## Execution environments
 

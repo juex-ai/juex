@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -14,18 +15,19 @@ var ErrSourceBusy = errors.New("source Thread is not safely idle")
 // ApplicationJob is a frozen task from a trusted built-in service. The app owns
 // its business result; Runtime owns this ordinary Worker's execution and usage.
 type ApplicationJob struct {
-	IdleSourceThread string `json:"idle_source_thread,omitempty"`
-	Application      string `json:"application"`
-	ID               string `json:"id"`
-	Epoch            int64  `json:"epoch"`
-	Fence            uint64 `json:"fence"`
-	Name             string `json:"name"`
-	Instruction      string `json:"instruction"`
-	MaxCalls         int    `json:"max_calls"`
+	ModelBudget      *ApplicationModelBudget `json:"model_budget,omitempty"`
+	IdleSourceThread string                  `json:"idle_source_thread,omitempty"`
+	Application      string                  `json:"application"`
+	ID               string                  `json:"id"`
+	Epoch            int64                   `json:"epoch"`
+	Fence            uint64                  `json:"fence"`
+	Name             string                  `json:"name"`
+	Instruction      string                  `json:"instruction"`
+	MaxCalls         int                     `json:"max_calls"`
 }
 
 func (j ApplicationJob) Valid() bool {
-	return (j.Application == "memory" || j.Application == "calendar") && j.ID != "" && len(j.ID) <= 128 && j.Epoch > 0 && j.MaxCalls >= 1 && j.MaxCalls <= 32 && strings.TrimSpace(j.Name) != "" && len([]rune(j.Name)) <= 100 && strings.TrimSpace(j.Instruction) != "" && len(j.Instruction) <= 128<<10
+	return j.ModelBudget.valid() && (j.Application == "memory" || j.Application == "calendar") && j.ID != "" && len(j.ID) <= 128 && j.Epoch > 0 && j.MaxCalls >= 1 && j.MaxCalls <= 32 && strings.TrimSpace(j.Name) != "" && len([]rune(j.Name)) <= 100 && strings.TrimSpace(j.Instruction) != "" && len(j.Instruction) <= 128<<10
 }
 
 func (j ApplicationJob) AllowsTool(name string) bool {
@@ -88,7 +90,7 @@ func (s *Service) AdmitApplication(ctx context.Context, original Scope, job Appl
 	if err != nil {
 		return ApplicationReceipt{}, err
 	}
-	if !scope.SameAuthority(original) {
+	if !scope.SameAuthority(original) || !scope.Capabilities.Allows(agentpolicy.Capability(job.Application)) {
 		return ApplicationReceipt{}, ErrDenied
 	}
 	if err := s.Applications.Check(ctx, scope, job); err != nil {

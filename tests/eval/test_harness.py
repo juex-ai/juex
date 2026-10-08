@@ -38,6 +38,16 @@ class SelectionTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     selection.validate_config(cfg)
 
+    def test_output_cap_and_reserve_are_independent(self):
+        for model in (dict(MODEL, max_output=0, output_reserve=4096), dict(MODEL, output_reserve=8192)):
+            self.assertEqual(selection.validate_config({'models': [model]}), {'models': [model]})
+        for limits in (dict(max_output=0), dict(max_output=-1, output_reserve=4096), dict(output_reserve=0), dict(output_reserve=1024), dict(output_reserve=32768), dict(output_reserve=True)):
+            with self.subTest(limits=limits), self.assertRaises(ValueError):
+                selection.validate_config({'models': [dict(MODEL, **limits)]})
+        with self.assertRaises(ValueError):
+            selection.validate_config({'models': [dict(MODEL, protocol='anthropic/messages', max_output=0, output_reserve=512)]})
+        selection.validate_config({'models': [dict(MODEL, protocol='anthropic/messages', max_output=0, output_reserve=4096)]})
+
 
 class LiveEvidenceTest(unittest.TestCase):
     def run_case(self, stdout, returncode=0):

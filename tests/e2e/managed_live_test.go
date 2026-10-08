@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/execution/native"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
@@ -27,6 +28,7 @@ type liveModel struct {
 	APIKey        string       `json:"api_key"`
 	ContextWindow int          `json:"context_window"`
 	MaxOutput     int          `json:"max_output"`
+	OutputReserve int          `json:"output_reserve"`
 }
 
 func liveFixture(t *testing.T) (*executionFixture, liveModel) {
@@ -46,17 +48,24 @@ func liveFixture(t *testing.T) (*executionFixture, liveModel) {
 	if json.Unmarshal(raw, &model) != nil || model.Provider == "" || model.Name == "" || model.APIKey == "" {
 		t.Fatal("invalid selected-model fixture")
 	}
+	if model.OutputReserve == 0 && model.MaxOutput > 0 {
+		model.OutputReserve = model.MaxOutput
+	}
 	if t.Name() == "TestManagedLiveCompaction" {
 		// Exercise a real checkpoint within a bounded validation token budget.
 		model.ContextWindow = min(model.ContextWindow, 16384)
 		model.MaxOutput = min(model.MaxOutput, 2048)
+		model.OutputReserve = min(model.OutputReserve, 2048)
+		if model.Protocol == llm.ProtocolAnthropicMessages && model.MaxOutput == 0 {
+			model.OutputReserve = llm.AnthropicDefaultOutputTokens
+		}
 	}
 	f := executionDatabaseWithProvider(t, func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("live validation reached fixture provider")
 		http.Error(w, "unexpected fixture", 500)
 	})
 	ctx := context.Background()
-	configured, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: model.Provider, Name: model.Name, Protocol: model.Protocol, Endpoint: model.Endpoint, APIKey: model.APIKey, ContextWindow: model.ContextWindow, MaxOutput: model.MaxOutput, Enabled: true})
+	configured, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: model.Provider, Name: model.Name, Protocol: model.Protocol, Endpoint: model.Endpoint, APIKey: model.APIKey, ContextWindow: model.ContextWindow, MaxOutput: model.MaxOutput, OutputReserve: model.OutputReserve, Enabled: true})
 	if err != nil {
 		t.Fatal("configure selected live model: ", err)
 	}
@@ -93,12 +102,37 @@ func liveEvidence(t *testing.T, f *executionFixture, model liveModel, kind strin
 	if err != nil || attempts == 0 {
 		t.Fatal("missing live model attempts", err)
 	}
+	var mismatches int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM runtime.attempts WHERE
+ (request->'model'->>'output_reserve')::integer IS DISTINCT FROM $1::integer OR
+ (request->>'purpose'<>'compaction' AND (request->>'max_output_tokens')::integer IS DISTINCT FROM $2::integer) OR
+ (request->>'purpose'='compaction' AND ((request->>'max_output_tokens')::integer<=0 OR (request->>'max_output_tokens')::integer>$1::integer))`, model.OutputReserve, model.MaxOutput).Scan(&mismatches); err != nil || mismatches != 0 {
+		t.Fatal("live requests did not preserve normal cap and compaction reservation", mismatches, err)
+	}
 	assertRuntimeTranscript(t, f)
-	t.Logf("MANAGED_LIVE_EVIDENCE kind=%s provider=%s model=%s context_window=%d attempts=%d complete_usage=%d thread=%s", kind, model.Provider, model.Name, model.ContextWindow, attempts, known, f.main.ID)
+	t.Logf("MANAGED_LIVE_EVIDENCE kind=%s provider=%s model=%s context_window=%d max_output=%d output_reserve=%d attempts=%d complete_usage=%d thread=%s", kind, model.Provider, model.Name, model.ContextWindow, model.MaxOutput, model.OutputReserve, attempts, known, f.main.ID)
 }
 
 func TestManagedLiveProviderTools(t *testing.T) {
+	for _, minimal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "files_and_shell"}[minimal], func(t *testing.T) {
+			validateLiveProviderTools(t, minimal)
+		})
+	}
+	t.Run("dynamic_instructions", validateLiveDynamicInstructions)
+}
+
+func validateLiveProviderTools(t *testing.T, minimal bool) {
+	t.Helper()
 	f, model := liveFixture(t)
+	if minimal {
+		policy := agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Workers, agentpolicy.Collaboration, agentpolicy.MCP, agentpolicy.Observations, agentpolicy.Memory, agentpolicy.Calendar, agentpolicy.Hooks, agentpolicy.Extensions}}
+		var err error
+		f.agent, err = f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Instructions: f.agent.Instructions, Capabilities: &policy})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	device, token := f.pairDevice(t)
 	work := t.TempDir()
 	if err := os.WriteFile(filepath.Join(work, "seed.txt"), []byte("original input"), 0600); err != nil {

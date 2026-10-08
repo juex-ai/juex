@@ -51,6 +51,19 @@ Fleet settings own model defaults. Memory and Calendar own their application
 enablement and execution epochs; the dashboard reads and configures each service
 through its authenticated API instead of maintaining duplicate flags.
 
+Management owns the Agent capability policy. Omitted policy preserves the stored
+value on configuration edits; an explicit empty disabled list allows all groups.
+Tightening the policy and advancing the Agent execution epoch commit together.
+Runtime freezes the policy per Turn and intersects it with fresh authority;
+Execution and application owners enforce their own operations through the same
+authority snapshot. A per-Agent application restriction does not change Fleet
+application enablement or erase application history.
+
+Dynamic instruction sources are explicitly enabled and default to off. An
+optional global path belongs to the selected execution environment. Omitting
+this setting preserves it during other configuration edits; disabling or changing
+an active source advances the Agent execution epoch with the configuration write.
+
 Models are deployment-owned. Tenant catalogs inherit by default or use an
 explicit allowlist; an empty allowlist grants nothing. Fleet defaults inherit
 the platform default, and Agents may override them. Operators configure flat,
@@ -61,6 +74,12 @@ candidates remain usable. Credentials may rotate without changing the frozen
 route. A changed endpoint or protocol cannot receive credentials via an old
 route snapshot. Admission ends before the external request: revocation blocks
 later admissions, not an already dispatched request.
+
+The normal request output cap is separate from its positive context reservation.
+A zero cap keeps the adapter/provider default; it does not promise unlimited
+output or guarantee that the provider uses only the reserved tokens. Anthropic
+requires at least its 4096-token adapter default in that reservation. Both values
+are frozen into model plans; changing either invalidates earlier candidates.
 
 Schema setup is explicit through `postgres.Migrate`, transactionally serialized
 and checksum-verified. Unknown or modified versions fail instead of being

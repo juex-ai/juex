@@ -87,7 +87,7 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 	terminal := execprotocol.State(operation.State).Terminal()
 	if !terminal {
 		fresh, err := s.Authority.Agent(ctx, operation.Scope.ActorID, operation.Scope.TenantID, operation.Scope.AgentID, true)
-		if err != nil || !fresh.SameAuthority(operation.Scope) || !permits(device, fresh, operation.Request.Kind) || operation.Request.AuthorizationVersion > 0 && operation.Request.AuthorizationVersion != device.Version || !slices.Contains(grants[operation.Scope.AgentID], execprotocol.RequiredCapability(operation.Request.Kind)) {
+		if err != nil || !fresh.SameAuthority(operation.Scope) || !permits(device, fresh, operation.Request) || operation.Request.AuthorizationVersion > 0 && operation.Request.AuthorizationVersion != device.Version || !slices.Contains(grants[operation.Scope.AgentID], execprotocol.RequiredCapability(operation.Request.Kind)) {
 			if err := s.Store.CancelOperation(ctx, device.ID, operation.ID); err != nil {
 				return err
 			}
@@ -198,7 +198,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if deviceErr != nil {
 			return deviceErr
 		}
-		if err != nil || !fresh.SameAuthority(operation.Scope) || !permits(device, fresh, operation.Request.Kind) {
+		if err != nil || !fresh.SameAuthority(operation.Scope) || !permits(device, fresh, operation.Request) {
 			if err := s.Store.CancelOperation(ctx, operation.EnvironmentID, operation.ID); err != nil {
 				return err
 			}

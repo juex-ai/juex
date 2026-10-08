@@ -4,7 +4,9 @@ package managedruntime
 import (
 	"encoding/json"
 	"errors"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
+	"github.com/juex-ai/juex/internal/foundation/instructionpolicy"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
@@ -25,6 +27,7 @@ var (
 
 // Scope comes from current Management authority, never a browser request body.
 type Scope struct {
+	Capabilities agentpolicy.Policy `json:"capabilities"`
 	// WorkerDepth is descriptive policy, not part of the authorization identity.
 	WorkerDepth              int    `json:"worker_depth"`
 	TenantID                 string `json:"tenant_id"`
@@ -99,13 +102,15 @@ type Lease struct {
 }
 
 type TurnConfig struct {
-	Extensions       []extensionpolicy.Binding `json:"extensions,omitempty"`
-	Hooks            []hookpolicy.Declaration  `json:"hooks,omitempty"`
-	WorkerDepth      int                       `json:"worker_depth"`
-	AgentVersion     int64                     `json:"agent_version"`
-	Instructions     string                    `json:"instructions"`
-	RequestedModelID string                    `json:"requested_model_id"`
-	Models           []ModelConfig             `json:"models"`
+	DynamicInstructions instructionpolicy.DynamicInstructions `json:"dynamic_instructions"`
+	Capabilities        agentpolicy.Policy                    `json:"capabilities"`
+	Extensions          []extensionpolicy.Binding             `json:"extensions,omitempty"`
+	Hooks               []hookpolicy.Declaration              `json:"hooks,omitempty"`
+	WorkerDepth         int                                   `json:"worker_depth"`
+	AgentVersion        int64                                 `json:"agent_version"`
+	Instructions        string                                `json:"instructions"`
+	RequestedModelID    string                                `json:"requested_model_id"`
+	Models              []ModelConfig                         `json:"models"`
 }
 
 type ModelConfig struct {
@@ -116,11 +121,13 @@ type ModelConfig struct {
 	Endpoint                string       `json:"endpoint"`
 	ContextWindow           int          `json:"context_window"`
 	MaxOutput               int          `json:"max_output"`
+	OutputReserve           int          `json:"output_reserve"`
 	ModelAuthorizationEpoch int64        `json:"model_authorization_epoch"`
 	TenantAccessEpoch       int64        `json:"tenant_access_epoch"`
 }
 
 type Work struct {
+	ModelBudget     *ApplicationModelBudget
 	Deferred        bool
 	ContextSequence int64
 	Compaction      *CompactionJob
@@ -156,13 +163,15 @@ type Attempt struct {
 }
 
 type ModelRequest struct {
-	Recall          *llm.Message     `json:"-"`
-	Generation      int64            `json:"generation"`
-	MaxOutputTokens int              `json:"max_output_tokens"`
-	Compaction      *CompactionDraft `json:"compaction,omitempty"`
-	Model           ModelConfig      `json:"model"`
-	System          string           `json:"system"`
-	Messages        []llm.Message    `json:"messages"`
-	Tools           []llm.ToolSpec   `json:"tools"`
-	Purpose         string           `json:"purpose"`
+	ModelBudget         *ApplicationModelBudget `json:"model_budget,omitempty"`
+	DynamicInstructions *InstructionReceipt     `json:"dynamic_instructions,omitempty"`
+	Recall              *llm.Message            `json:"-"`
+	Generation          int64                   `json:"generation"`
+	MaxOutputTokens     int                     `json:"max_output_tokens"`
+	Compaction          *CompactionDraft        `json:"compaction,omitempty"`
+	Model               ModelConfig             `json:"model"`
+	System              string                  `json:"system"`
+	Messages            []llm.Message           `json:"messages"`
+	Tools               []llm.ToolSpec          `json:"tools"`
+	Purpose             string                  `json:"purpose"`
 }

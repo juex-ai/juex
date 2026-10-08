@@ -5,8 +5,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
+	"github.com/juex-ai/juex/internal/foundation/instructionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -26,11 +28,14 @@ type ModelCandidate struct {
 	Endpoint                string       `json:"endpoint"`
 	ContextWindow           int          `json:"context_window"`
 	MaxOutput               int          `json:"max_output"`
+	OutputReserve           int          `json:"output_reserve"`
 	ModelAuthorizationEpoch int64        `json:"model_authorization_epoch"`
 	TenantAccessEpoch       int64        `json:"tenant_access_epoch"`
 }
 
 type ModelPlan struct {
+	DynamicInstructions            instructionpolicy.DynamicInstructions
+	Capabilities                   agentpolicy.Policy
 	Extensions                     []extensionpolicy.Binding
 	Hooks                          []hookpolicy.Declaration
 	WorkerDepth                    int
@@ -52,23 +57,29 @@ type PeerAgent struct {
 }
 
 type Agent struct {
-	Extensions     []extensionpolicy.Binding `json:"extensions"`
-	Hooks          []hookpolicy.Declaration  `json:"hooks"`
-	Purging        bool                      `json:"purging"`
-	WorkerDepth    int                       `json:"worker_depth"`
-	ID             string                    `json:"id"`
-	FleetID        string                    `json:"fleet_id"`
-	Name           string                    `json:"name"`
-	Instructions   string                    `json:"instructions"`
-	ModelID        string                    `json:"model_id"`
-	Status         AgentStatus               `json:"status"`
-	Version        int64                     `json:"version"`
-	ExecutionEpoch int64                     `json:"-"`
-	CreatedAt      time.Time                 `json:"created_at"`
-	UpdatedAt      time.Time                 `json:"updated_at"`
+	DynamicInstructions instructionpolicy.DynamicInstructions `json:"dynamic_instructions"`
+	Capabilities        agentpolicy.Policy                    `json:"capabilities"`
+	Extensions          []extensionpolicy.Binding             `json:"extensions"`
+	Hooks               []hookpolicy.Declaration              `json:"hooks"`
+	Purging             bool                                  `json:"purging"`
+	WorkerDepth         int                                   `json:"worker_depth"`
+	ID                  string                                `json:"id"`
+	FleetID             string                                `json:"fleet_id"`
+	Name                string                                `json:"name"`
+	Instructions        string                                `json:"instructions"`
+	ModelID             string                                `json:"model_id"`
+	Status              AgentStatus                           `json:"status"`
+	Version             int64                                 `json:"version"`
+	ExecutionEpoch      int64                                 `json:"-"`
+	CreatedAt           time.Time                             `json:"created_at"`
+	UpdatedAt           time.Time                             `json:"updated_at"`
 }
 
 type AgentConfig struct {
+	// An omitted setting preserves the source policy during unrelated edits.
+	DynamicInstructions *instructionpolicy.DynamicInstructions `json:"dynamic_instructions,omitempty"`
+	// An omitted policy preserves the existing value on configuration updates.
+	Capabilities *agentpolicy.Policy      `json:"capabilities,omitempty"`
 	Hooks        []hookpolicy.Declaration `json:"hooks,omitempty"`
 	WorkerDepth  int                      `json:"worker_depth,omitempty"`
 	Name         string                   `json:"name"`
@@ -77,6 +88,12 @@ type AgentConfig struct {
 }
 
 func (c AgentConfig) Validate() error {
+	if c.DynamicInstructions != nil && c.DynamicInstructions.Validate() != nil {
+		return ErrInvalid
+	}
+	if c.Capabilities != nil && c.Capabilities.Validate() != nil {
+		return ErrInvalid
+	}
 	if hookpolicy.Validate(c.Hooks) != nil {
 		return ErrInvalid
 	}
@@ -96,16 +113,17 @@ type Model struct {
 	Protocol      llm.Protocol `json:"protocol"`
 	ContextWindow int          `json:"context_window"`
 	MaxOutput     int          `json:"max_output"`
+	OutputReserve int          `json:"output_reserve"`
 	Enabled       bool         `json:"enabled"`
 }
 
 // ModelConfiguration is accepted only by the deployment operator. APIKey and
 // endpoint are intentionally absent from the public Model read model.
 type ModelConfiguration struct {
-	Provider, Name, Endpoint, APIKey string
-	Protocol                         llm.Protocol
-	ContextWindow, MaxOutput         int
-	Enabled                          bool
+	Provider, Name, Endpoint, APIKey        string
+	Protocol                                llm.Protocol
+	ContextWindow, MaxOutput, OutputReserve int
+	Enabled                                 bool
 }
 
 type FleetSettings struct {

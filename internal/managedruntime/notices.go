@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
@@ -20,7 +21,7 @@ type NoticeGateway interface {
 
 func noticeScope(event application.Event) Scope {
 	s := event.Scope
-	return Scope{ActorID: s.ActorID, TenantID: s.TenantID, UserID: s.UserID, AgentID: s.AgentID, FleetID: s.FleetID, ActorAuthorizationEpoch: s.ActorEpoch, MembershipExecutionEpoch: s.MemberEpoch, AgentExecutionEpoch: s.AgentEpoch, MembershipVersion: s.MemberVersion}
+	return Scope{Capabilities: s.Capabilities, ActorID: s.ActorID, TenantID: s.TenantID, UserID: s.UserID, AgentID: s.AgentID, FleetID: s.FleetID, ActorAuthorizationEpoch: s.ActorEpoch, MembershipExecutionEpoch: s.MemberEpoch, AgentExecutionEpoch: s.AgentEpoch, MembershipVersion: s.MemberVersion}
 }
 
 func (s *Service) RecordApplicationNotice(ctx context.Context, event application.Event) error {
@@ -37,7 +38,7 @@ func (s *Service) RecordApplicationNotice(ctx context.Context, event application
 	if err != nil {
 		return err
 	}
-	if !current.SameAuthority(original) {
+	if !current.SameAuthority(original) || !current.Capabilities.Allows(agentpolicy.Capability(event.Application)) {
 		return ErrDenied
 	}
 	if err := gate.NoticeValid(ctx, event); err != nil {
@@ -67,6 +68,9 @@ func (r *Runner) applicationNotices(ctx context.Context, lease Lease, work *Work
 	batch, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	for _, event := range events {
+		if !work.Config.Capabilities.Allows(agentpolicy.Capability(event.Application)) {
+			continue
+		}
 		call, stop := context.WithTimeout(batch, 500*time.Millisecond)
 		_, err := r.currentScope(call, noticeScope(event))
 		if err == nil {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/managedruntime"
 )
 
@@ -36,6 +37,9 @@ func (s *Store) CreateWorker(ctx context.Context, scope managedruntime.Scope, pa
 }
 
 func createWorker(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, parent managedruntime.Thread, requestID, name string, maxDepth int) (managedruntime.Thread, error) {
+	if !scope.Capabilities.Allows(agentpolicy.Workers) {
+		return managedruntime.Thread{}, managedruntime.ErrDenied
+	}
 	var applicationParent bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs WHERE thread_id=$1)`, parent.ID).Scan(&applicationParent); err != nil {
 		return managedruntime.Thread{}, err
@@ -157,6 +161,9 @@ func cancelThread(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, th
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 WHERE thread_id=$1 AND state IN ('pending','waiting','unknown')`, thread.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.instruction_preparations SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 WHERE thread_id=$1 AND state IN ('pending','waiting','unknown')`, thread.ID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET state='idle' WHERE id=$1`, thread.ID); err != nil {

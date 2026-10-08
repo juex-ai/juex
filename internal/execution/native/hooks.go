@@ -55,6 +55,12 @@ func (e *Engine) runHook(parent context.Context, op *operation) (*int, error) {
 		cancel()
 	}
 	waitErr := cmd.Wait()
+	// Freeze the observed process outcome before storage can outlive its
+	// deadline. A later timeout cannot undo a completed policy decision.
+	if waitErr != nil && ctx.Err() != nil {
+		waitErr = ctx.Err()
+	}
+	cancel()
 	code := cmd.ProcessState.ExitCode()
 	output, marshalErr := json.Marshal(execprotocol.HookOutput{Stdout: stdout.String(), Stderr: stderr.String(), Overflow: stdout.overflow || stderr.overflow})
 	if marshalErr != nil {
@@ -69,11 +75,9 @@ func (e *Engine) runHook(parent context.Context, op *operation) (*int, error) {
 	if stdout.overflow || stderr.overflow {
 		return &code, errors.New("hook output exceeded its configured limit")
 	}
-	if ctx.Err() != nil {
-		return &code, ctx.Err()
-	}
 	// Exit 2 is an explicit policy decision interpreted by Runtime.
-	if code == 2 {
+	var exitErr *exec.ExitError
+	if code == 2 && errors.As(waitErr, &exitErr) {
 		return &code, nil
 	}
 	return &code, waitErr

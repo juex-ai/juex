@@ -7,12 +7,13 @@ import (
 	"slices"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
 
-func permits(device Device, scope Scope, kind string) bool {
-	return device.Status == "active" && scope.CanExecute && device.TenantID == scope.TenantID && device.UserID == scope.UserID && device.FleetID == scope.FleetID && device.RemovalEpoch == scope.RemovalEpoch && slices.Contains(device.Grants[scope.AgentID], execprotocol.RequiredCapability(kind))
+func permits(device Device, scope Scope, request execprotocol.Request) bool {
+	return operationAllowed(scope.Capabilities, request) && device.Status == "active" && scope.CanExecute && device.TenantID == scope.TenantID && device.UserID == scope.UserID && device.FleetID == scope.FleetID && device.RemovalEpoch == scope.RemovalEpoch && slices.Contains(device.Grants[scope.AgentID], execprotocol.RequiredCapability(request.Kind))
 }
 
 func (s *Service) Environments(ctx context.Context, actor, tenant, agent string) ([]execprotocol.Environment, error) {
@@ -31,7 +32,7 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 	usesManaged := binding.EnvironmentID == "" || slices.ContainsFunc(devices, func(device Device) bool {
 		return device.ID == binding.EnvironmentID && device.Managed
 	})
-	if s.Managed != nil && usesManaged {
+	if s.Managed != nil && usesManaged && (scope.Capabilities.Allows(agentpolicy.Files) || scope.Capabilities.Allows(agentpolicy.Shell) || scope.Capabilities.Allows(agentpolicy.MCP)) {
 		done, err := maintenance.Enter(s.Admission)
 		if err == nil {
 			err = s.Managed.Ensure(ctx, scope)
@@ -65,7 +66,7 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 			environment.WorkingDirectory = binding.WorkingDirectory
 		}
 		environment.AuthorizationVersion = device.Version
-		environment.Capabilities = slices.Clone(device.Grants[agent])
+		environment.Capabilities = permittedCapabilities(scope.Capabilities, device.Grants[agent])
 		environment.JournalID = ""
 		environments = append(environments, environment)
 	}
@@ -118,13 +119,16 @@ func (s *Service) submit(ctx context.Context, actor, tenant, environment string,
 	if err != nil {
 		return Operation{}, err
 	}
-	if !permits(device, scope, request.Kind) {
+	if !permits(device, scope, request) {
 		return Operation{}, execprotocol.ErrDenied
 	}
-	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && (request.Kind == "mcp_connect" || request.Kind == "observe_command"))
+	if err := s.authorizeHandle(ctx, scope, environment, request); err != nil {
+		return Operation{}, err
+	}
+	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && (request.Kind == "mcp_connect" || request.Kind == "observe_command" || request.Kind == "read_agent_instructions"))
 }
 
-// AcknowledgeOutput transfers responsibility for persisted notifications to
+// AcknowledgeOutput transfers responsibility for retained execution output to
 // Runtime. Device acknowledgment alone only confirms transport into Execution.
 func (s *Service) AcknowledgeOutput(ctx context.Context, actor, tenant, agent, environment, id string, cursor int64) error {
 	if cursor < 0 {
@@ -178,7 +182,7 @@ func (s *Service) Extend(ctx context.Context, actor, tenant, agent, environment,
 	if err != nil {
 		return err
 	}
-	if !permits(device, scope, operation.Request.Kind) || wait < time.Minute || wait > 30*24*time.Hour {
+	if !scope.SameAuthority(operation.Scope) || !permits(device, scope, operation.Request) || wait < time.Minute || wait > 30*24*time.Hour {
 		return execprotocol.ErrDenied
 	}
 	return s.Store.ExtendWait(ctx, environment, id, wait)
@@ -207,7 +211,7 @@ func (s *Service) EffectiveGrants(ctx context.Context, device Device) (map[strin
 			continue
 		}
 		if scope.FleetID == device.FleetID {
-			grants[agent] = slices.Clone(capabilities)
+			grants[agent] = permittedCapabilities(scope.Capabilities, capabilities)
 		}
 	}
 	return grants, nil

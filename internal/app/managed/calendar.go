@@ -45,8 +45,9 @@ func OpenCalendar(ctx context.Context, config CalendarConfig) (*Calendar, error)
 		return nil, err
 	}
 	service.Workers = CalendarWorkers{Runtime: client}
+	service.MainInputs = CalendarMainInputs{Runtime: client}
 	service.Notifier = ApplicationNotifications{Runtime: client, Management: authority}
 	return &Calendar{Pool: pool, Service: service}, nil
 }
 
-func (m *Calendar) Close() { m.Pool.Close() }
+func (m *Calendar) Close() { m.Service.CloseScheduler(); m.Pool.Close() }

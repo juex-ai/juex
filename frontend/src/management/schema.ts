@@ -4,6 +4,8 @@ export type Role = "admin" | "member";
 export type MembershipStatus = "active" | "suspended" | "removed";
 
 export interface Agent {
+  dynamic_instructions: DynamicInstructions;
+  capabilities: Policy;
   extensions: Array<Binding>;
   hooks: Array<Declaration>;
   purging: boolean;
@@ -20,6 +22,8 @@ export interface Agent {
 }
 
 export interface AgentConfig {
+  dynamic_instructions?: DynamicInstructions | null;
+  capabilities?: Policy | null;
   hooks?: Array<Declaration>;
   worker_depth?: number;
   name: string;
@@ -120,6 +124,7 @@ export interface CalendarDefinition {
   mode: string;
   agent_id?: string;
   rule: CalendarRule;
+  catch_up?: string;
   max_lateness_minutes: number;
 }
 
@@ -139,9 +144,12 @@ export interface CalendarOccurrence {
   mode: string;
   agent_id?: string;
   rule: CalendarRule;
+  catch_up?: string;
   max_lateness_minutes: number;
   scheduled_at: string;
   state: string;
+  main_thread_id?: string;
+  input_id?: string;
   worker_id?: string;
   operations?: Array<string>;
   updated_at: string;
@@ -182,6 +190,7 @@ export interface CalendarSchedule {
   mode: string;
   agent_id?: string;
   rule: CalendarRule;
+  catch_up?: string;
   max_lateness_minutes: number;
   version: number;
   status: string;
@@ -236,6 +245,8 @@ export interface CompactionRequest {
 }
 
 export interface ConfigureAgentRequest {
+  dynamic_instructions?: DynamicInstructions | null;
+  capabilities?: Policy | null;
   hooks?: Array<Declaration>;
   worker_depth?: number;
   name: string;
@@ -305,6 +316,11 @@ export interface Device {
   ceiling: Record<string, Array<string>>;
   last_seen: string | null;
   connection_epoch: number;
+}
+
+export interface DynamicInstructions {
+  enabled: boolean;
+  global_path: string;
 }
 
 export interface Environment {
@@ -635,6 +651,7 @@ export interface Model {
   protocol: string;
   context_window: number;
   max_output: number;
+  output_reserve: number;
   enabled: boolean;
 }
 
@@ -734,6 +751,10 @@ export interface Pairing {
   approval_nonce: string;
 }
 
+export interface Policy {
+  disabled: Array<string>;
+}
+
 export interface PurgeJob {
   id: string;
   tenant_id: string;
@@ -780,6 +801,7 @@ export interface Scope {
   can_execute: boolean;
   owner_email: string;
   tenant_name: string;
+  capabilities: Policy;
   agent_id: string;
   agent_execution_epoch: number;
 }

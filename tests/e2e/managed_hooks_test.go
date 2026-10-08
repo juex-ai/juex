@@ -308,7 +308,7 @@ func TestManagedHooksCompactionCommitsOnceAcrossPostHookRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Purpose: "conversation"})
+		attempt, err := f.store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Purpose: "conversation"})
 		if err != nil {
 			t.Fatal(err)
 		}

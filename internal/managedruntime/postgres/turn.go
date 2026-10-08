@@ -135,7 +135,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		message := llm.TextMessage(llm.RoleUser, text)
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
-		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" {
+		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" || work.Source.Kind == "application_trigger" {
 			message.Kind = llm.MessageKindSystemNotice
 		}
 		if work.Source.Kind != "compaction" {
@@ -286,12 +286,6 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	if request.Generation != generation {
 		return managedruntime.Attempt{}, managedruntime.ErrConflict
 	}
-	if request.MaxOutputTokens == 0 {
-		request.MaxOutputTokens = request.Model.MaxOutput
-	}
-	if request.MaxOutputTokens < 1 || request.MaxOutputTokens > request.Model.MaxOutput {
-		return managedruntime.Attempt{}, managedruntime.ErrInvalid
-	}
 	if err := admitCompactionAttempt(ctx, tx, turnID, request); err != nil {
 		return managedruntime.Attempt{}, err
 	}
@@ -305,6 +299,9 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	attempt := managedruntime.Attempt{TurnID: turnID}
 	err = tx.QueryRow(ctx, `INSERT INTO runtime.attempts(turn_id,ordinal,request) SELECT $1,COALESCE(max(ordinal),0)+1,$2 FROM runtime.attempts WHERE turn_id=$1 RETURNING id,ordinal`, turnID, encoded).Scan(&attempt.ID, &attempt.Ordinal)
 	if err != nil {
+		return attempt, err
+	}
+	if err := consumeInstructions(ctx, tx, turnID, attempt.ID, request); err != nil {
 		return attempt, err
 	}
 	if err := appendEvent(ctx, tx, threadID, "model.started", map[string]any{"attempt_id": attempt.ID, "turn_id": turnID, "ordinal": attempt.Ordinal, "model_id": request.Model.ModelID, "model": request.Model.Provider + ":" + request.Model.Model}); err != nil {
@@ -473,7 +470,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 // HoldInput prevents revoked work from automatically running after a later
 // membership/Agent restore. Releasing it requires a new authorized user action.
 func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, inputID, reason string) error {
-	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" {
+	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" && reason != "instructions_unavailable" {
 		return managedruntime.ErrInvalid
 	}
 	tx, err := s.begin(ctx)
@@ -505,6 +502,9 @@ func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, input
 		return err
 	}
 	if turnID != "" {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.instruction_preparations SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 WHERE turn_id=$1 AND state IN ('pending','waiting','unknown')`, turnID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET cancel_requested=true,next_check=clock_timestamp(),wake_version=wake_version+1 WHERE turn_id=$1 AND state IN ('pending','waiting','unknown')`, turnID); err != nil {
 			return err
 		}

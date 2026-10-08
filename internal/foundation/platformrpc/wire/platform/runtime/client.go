@@ -11,6 +11,9 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	AdmitMainTrigger(ctx context.Context, scopeJSON string, triggerJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	MainTriggerReceipt(ctx context.Context, scopeJSON string, triggerID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	CancelMainTrigger(ctx context.Context, scopeJSON string, triggerID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Purge(ctx context.Context, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Usage(ctx context.Context, actorID string, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	OperatorUsage(ctx context.Context, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -56,6 +59,21 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kRuntimeClient struct {
 	*kClient
+}
+
+func (p *kRuntimeClient) AdmitMainTrigger(ctx context.Context, scopeJSON string, triggerJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.AdmitMainTrigger(ctx, scopeJSON, triggerJSON)
+}
+
+func (p *kRuntimeClient) MainTriggerReceipt(ctx context.Context, scopeJSON string, triggerID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.MainTriggerReceipt(ctx, scopeJSON, triggerID)
+}
+
+func (p *kRuntimeClient) CancelMainTrigger(ctx context.Context, scopeJSON string, triggerID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.CancelMainTrigger(ctx, scopeJSON, triggerID)
 }
 
 func (p *kRuntimeClient) Purge(ctx context.Context, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
