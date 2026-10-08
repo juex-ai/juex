@@ -10,6 +10,7 @@ Provider；原生设备使用 `juex-executor`。
 --password-stdin` 从标准输入读取密码，只输出账号。凭据按 origin 隔离，保存在
 操作系统配置目录下。`--session-file` 可选择私有目录中的绝对文件路径。HTTP
 需要显式启用开发选项 `--insecure-http`。退出登录会撤销服务端会话并删除本地凭据。
+部署使用私有 CA 时，将 `JUEX_CA_FILE` 或 `--ca-file` 指向其 PEM 文件；仍校验主机名。
 
 使用 `juex tenant list` 和 `juex tenant use ID` 选择成员关系。只有一个成员关系时
 自动选择。`--owner USER_ID` 允许有权限的管理员管理其他成员；所有权限检查仍在

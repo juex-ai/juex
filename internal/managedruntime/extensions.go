@@ -14,6 +14,9 @@ import (
 func extensionTools() []llm.ToolSpec {
 	str := map[string]any{"type": "string"}
 	tool := func(name, description string, properties map[string]any, required ...string) llm.ToolSpec {
+		if required == nil {
+			required = []string{}
+		}
 		return llm.ToolSpec{Name: name, Description: description, Schema: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}
 	}
 	return []llm.ToolSpec{

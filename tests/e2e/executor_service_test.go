@@ -117,7 +117,7 @@ func TestExecutorUserServiceLifecycle(t *testing.T) {
 	if output, err := call("stop"); err != nil {
 		t.Fatalf("stop: %v %s", err, output)
 	}
-	if v := status("status"); v.Running || v.State != "stopped" {
+	if v := status("status"); v.Running || v.State != "stopped" || !v.CleanExit {
 		t.Fatal(v)
 	}
 	third := status("start")

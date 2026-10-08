@@ -173,6 +173,12 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	pair.Flags().BoolVar(&insecure, "insecure-http", false, "Allow HTTP for an isolated development platform")
 	pair.Flags().BoolVar(&restart, "restart", false, "Replace an expired or unconfirmed local pairing request")
 	run := &cobra.Command{Use: "run", Short: "Connect in the foreground; network interruptions retain running operations", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		if background {
+			stopped, err := hostservice.StopRequested(state)
+			if err != nil || stopped {
+				return err
+			}
+		}
 		var config connector.Enrollment
 		if err := readPrivate(filepath.Join(state, "enrollment.json"), &config); err != nil {
 			return err
@@ -198,17 +204,18 @@ func runDevice(ctx context.Context, directory string, config connector.Enrollmen
 		_ = engine.Close()
 		return err
 	}
-	defer func() { result = errors.Join(result, log.Close()) }()
 	writer := io.Writer(log)
 	if !background {
 		writer = io.MultiWriter(out, log)
 	}
 	recorder, err := hostservice.Record(directory, config.Device.ID, background)
 	if err != nil {
-		_ = engine.Close()
-		return err
+		return errors.Join(err, engine.Close(), log.Close())
 	}
-	defer func() { result = errors.Join(result, engine.Close(), recorder.Update("stopped")) }()
+	defer func() {
+		result = errors.Join(result, engine.Close(), log.Close())
+		result = errors.Join(result, recorder.Finish(result))
+	}()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var stateErr error

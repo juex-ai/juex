@@ -140,5 +140,6 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	serve.Flags().Int64Var(&blobCapacity, "blob-capacity", 20<<30, "Maximum reserved platform file bytes")
 	root.AddCommand(serve)
 	root.AddCommand(recoveryCommand(out))
+	root.AddCommand(stopHostsCommand(out))
 	return root.ExecuteContext(ctx)
 }

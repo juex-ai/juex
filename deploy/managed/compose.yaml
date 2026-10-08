@@ -34,7 +34,7 @@ services:
 
   management:
     <<: *service
-    command: [juex-service-log, --, juex-management, serve]
+    command: [juex-service-log, --, juex-management, '--insecure-http=${JUEX_INSECURE_HTTP:-false}', serve]
     env_file: ['${JUEX_DEPLOY_ROOT}/secrets/management.env']
     volumes:
       - ${JUEX_DEPLOY_ROOT}/logs/management:/run/juex/logs

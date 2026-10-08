@@ -1,3 +1,4 @@
+import { sha256 } from '@noble/hashes/sha2.js'
 import type { Artifact, ArtifactRequest, ArtifactUpload, FileChunk, FileManifest } from './schema'
 
 export const fileChunkBytes = 256 * 1024
@@ -7,7 +8,6 @@ export type FileTransport = <T>(path: string, body?: unknown, method?: string, s
 
 export async function fileManifest(file: File, signal: AbortSignal): Promise<FileManifest> {
   if (file.size > maxFileBytes) throw new Error('单个文件最多支持 256 MiB。')
-  if (!crypto.subtle) throw new Error('请通过 HTTPS 或本机地址访问，以使用文件上传。')
   signal.throwIfAborted()
   const data = await file.arrayBuffer()
   signal.throwIfAborted()
@@ -17,8 +17,7 @@ export async function fileManifest(file: File, signal: AbortSignal): Promise<Fil
 }
 
 async function digest(data: ArrayBuffer): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', data)
-  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('')
+  return Array.from(sha256(new Uint8Array(data)), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
 function base64(data: ArrayBuffer): string {

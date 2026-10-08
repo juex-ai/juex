@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,46 @@ import (
 	"testing"
 	"time"
 )
+
+func TestClientPrivateCAStillVerifiesServerIdentity(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	call := func(origin, caFile string) error {
+		c, err := (options{server: origin, caFile: caFile, sessionFile: filepath.Join(dir, "session")}).open(false)
+		if err != nil {
+			return err
+		}
+		_, err = c.request(context.Background(), "GET", "/tenants", nil)
+		return err
+	}
+	if err := call(server.URL, ""); err == nil {
+		t.Fatal("private CA was implicitly trusted")
+	}
+	if err := call(server.URL, ca); err != nil {
+		t.Fatal(err)
+	}
+	wrongName, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongName.Host = "localhost:" + wrongName.Port()
+	if err := call(wrongName.String(), ca); err == nil {
+		t.Fatal("CA bypassed hostname verification")
+	}
+	if err := os.WriteFile(ca, []byte("invalid certificate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := call(server.URL, ca); err == nil {
+		t.Fatal("invalid CA accepted")
+	}
+}
 
 func TestClientOriginAndCredentialProtection(t *testing.T) {
 	var leaked atomic.Bool

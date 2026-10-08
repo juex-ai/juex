@@ -87,6 +87,7 @@ func (r toolRunner) receive(ctx context.Context) {
 
 func (r toolRunner) deliver(ctx context.Context) {
 	holder := rand.Text()
+	defer releaseWorkerClaims(holder, "tool", r.store.ReleaseToolClaims)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -110,6 +111,16 @@ func (r toolRunner) deliver(ctx context.Context) {
 		if err != nil && !errors.Is(err, ErrNoWork) && !errors.Is(err, ErrFence) && ctx.Err() == nil {
 			slog.Warn("tool delivery delayed", "error", err)
 		}
+	}
+}
+
+func releaseWorkerClaims(holder, kind string, release func(context.Context, string) error) {
+	// A cancelled claim may have committed even if its response was lost.
+	// Release by worker identity only after that worker has stopped executing.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := release(ctx, holder); err != nil {
+		slog.Warn("runtime worker shutdown release delayed", "kind", kind, "error", err)
 	}
 }
 

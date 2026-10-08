@@ -6,7 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +23,29 @@ import (
 	"github.com/juex-ai/juex/internal/management"
 	managementpg "github.com/juex-ai/juex/internal/management/postgres"
 )
+
+func TestManagedClientCLIWithPrivateDeploymentCA(t *testing.T) {
+	f := managedRuntimeHTTP(t, func(http.ResponseWriter, *http.Request) { t.Error("unexpected model call") })
+	origin, err := url.Parse(f.origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(origin))
+	defer gateway.Close()
+	c := newManagedCLI(t, gateway.URL)
+	ca := filepath.Join(filepath.Dir(c.session), "deployment-ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: gateway.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.args = []string{"--server", gateway.URL, "--ca-file", ca, "--session-file", c.session}
+	cliValue[management.User](c, "runtime test password\n", "login", "--email", "runtime@example.test", "--password-stdin")
+	if user := cliValue[management.User](c, "", "whoami"); user.ID != f.actor {
+		t.Fatal(user)
+	}
+	if fleet := cliValue[management.FleetOverview](c, "", "fleet", "show"); len(fleet.Agents) != 1 {
+		t.Fatal(fleet)
+	}
+}
 
 type managedCLI struct {
 	t       *testing.T

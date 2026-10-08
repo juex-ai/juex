@@ -9,8 +9,8 @@ Runtime 中运行，使用部署管理的 Host 或 Hosted 环境，也可使用�
 
 ## 部署
 
-按照 [Linux 部署指南](deploy/managed/README.zh.md) 初始化 Docker Compose、
-PostgreSQL、HTTPS、gVisor 和持久存储。部署方生成首位管理员的一次性初始化链接，
+按照 [部署指南](deploy/managed/README.zh.md) 部署 macOS/Linux Host 或 Linux Hosted，
+包括 PostgreSQL、公共网关和持久存储。部署方生成首位管理员的一次性初始化链接，
 配置模型凭据。管理员邀请成员，用户通过邮箱和密码登录。
 
 关闭浏览器不会停止已接纳的工作。Memory 和 Calendar 是独立的 Fleet 应用，
@@ -19,6 +19,7 @@ PostgreSQL、HTTPS、gVisor 和持久存储。部署方生成首位管理员的�
 ## 客户端
 
 发布归档包含 Linux/macOS、amd64/arm64 的 `juex` 和 `juex-executor`。
+独立的 `juex_platform_*` 归档还包含全部五个服务和部署工具。
 下载归档并校验发布校验和，或在检出的发布版本中使用 Python 3.11+ 安装器：
 
 ```sh

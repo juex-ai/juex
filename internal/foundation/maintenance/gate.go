@@ -89,6 +89,38 @@ func (g Gate) Exclusive() (func(), error) {
 	return func() { _ = f.Close() }, nil
 }
 
+// InheritExclusive shares the operator's open file description across exec.
+// Closing this child descriptor must not explicitly unlock the parent's barrier.
+func (g Gate) InheritExclusive(f *os.File) (func(), error) {
+	if g.directory == "" || f == nil {
+		return nil, errors.New("inherited maintenance lock and directory are required")
+	}
+	marker, err := os.Lstat(filepath.Join(g.directory, "draining"))
+	if err != nil {
+		return nil, err
+	}
+	if !marker.Mode().IsRegular() {
+		return nil, errors.New("invalid maintenance drain marker")
+	}
+	expected, err := g.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = expected.Close() }()
+	info, err := expected.Stat()
+	if err != nil {
+		return nil, err
+	}
+	inherited, err := f.Stat()
+	if err != nil || !os.SameFile(info, inherited) {
+		return nil, errors.New("inherited maintenance lock does not match this deployment")
+	}
+	if err := exclusiveLock(f); err != nil {
+		return nil, err
+	}
+	return func() { _ = f.Close() }, nil
+}
+
 // Control keeps login and explicit cancellation available while draining.
 // The final exclusive barrier still prevents these writes during shutdown.
 func (g Gate) Control() (func(), error) { return g.enter(true) }

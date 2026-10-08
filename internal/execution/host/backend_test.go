@@ -82,6 +82,23 @@ func TestHostProvisioningRetainsOwnedDirectoriesAndEnrollment(t *testing.T) {
 	}
 }
 
+func TestOfflineHostOpenNeverInitializesMissingOwnership(t *testing.T) {
+	b, _, _ := hostFixture(t)
+	if _, err := OpenExisting(b.config); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(b.config.ControlRoot, "owner.json")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(b.config); err == nil {
+		t.Fatal("adopted an unowned directory during offline maintenance")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("offline open recreated ownership: %v", err)
+	}
+}
+
 func TestHostPurgeRejectsSymlinkAndUnownedDirectory(t *testing.T) {
 	b, r, _ := hostFixture(t)
 	ctx := context.Background()

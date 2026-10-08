@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { CalendarDays, Plus, RefreshCw } from 'lucide-react'
@@ -47,10 +48,10 @@ export function CalendarPage({ tenant, user, delegated = false }: { tenant: Tena
     catch (err) { setError(errorText(err)); if (err instanceof APIError && err.status >= 400 && err.status < 500 && err.status !== 408) { setPending(null); refresh() } } finally { setBusy(false) }
   }
   function action(item: CalendarSchedule, action: string, occurrenceId?: string) {
-    void change({ request_id: crypto.randomUUID(), id: item.id, version: item.version, action, occurrence_id: occurrenceId })
+    void change({ request_id: randomUUID(), id: item.id, version: item.version, action, occurrence_id: occurrenceId })
   }
   function save(definition: CalendarDefinition) {
-    void change({ request_id: crypto.randomUUID(), id: editor?.item?.id ?? crypto.randomUUID(), version: editor?.item?.version ?? 0, action: 'save', definition })
+    void change({ request_id: randomUUID(), id: editor?.item?.id ?? randomUUID(), version: editor?.item?.version ?? 0, action: 'save', definition })
   }
   async function configure() {
     if (!status.data) return
@@ -65,7 +66,7 @@ export function CalendarPage({ tenant, user, delegated = false }: { tenant: Tena
       while (true) {
         const page = await api<CalendarSchedulePage>(`${base}/schedules?offset=${offset}&limit=50`)
         const item = page.schedules.find(s => s.id === scheduleID)
-        if (item) { await change({ request_id: crypto.randomUUID(), id: item.id, version: item.version, action: 'cancel_occurrence', occurrence_id: id }); return }
+        if (item) { await change({ request_id: randomUUID(), id: item.id, version: item.version, action: 'cancel_occurrence', occurrence_id: id }); return }
         if (!page.next) throw new Error('日程已变化，请刷新后重试。')
         offset = page.next
       }

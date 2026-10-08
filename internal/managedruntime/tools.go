@@ -46,6 +46,7 @@ type ToolGateway interface {
 
 type ToolStore interface {
 	ClaimTool(context.Context, string) (ToolWork, error)
+	ReleaseToolClaims(context.Context, string) error
 	PrepareTool(context.Context, ToolWork, string, execprotocol.Request) error
 	FinishTool(context.Context, ToolWork, ToolOutcome) error
 	ReceiveExecutionEvents(context.Context, []execprotocol.Event) error
