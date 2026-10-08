@@ -292,10 +292,10 @@ def stop_writers(config, hosted):
     # makes this maintenance operation fail and leaves admission closed.
     ids = compose(config, "ps", "-q", "gateway", *SERVICES).stdout.decode().split()
     for identity in ids:
-        docker(config, "stop", "--timeout", "-1", identity, timeout=90)
+        docker(config, "stop", "-t", "-1", identity, timeout=90)
     for item in hosted:
         if item["State"]["Running"]:
-            docker(config, "stop", "--timeout", "-1", item["Id"], timeout=90)
+            docker(config, "stop", "-t", "-1", item["Id"], timeout=90)
     for identity in ids + [item["Id"] for item in hosted]:
         state = json.loads(docker(config, "inspect", "--format", "{{json .State}}", identity).stdout)
         if state["Running"] or state.get("OOMKilled") or state["ExitCode"] not in (0, 143):
@@ -318,7 +318,7 @@ def quiesce(config, lock_fd):
 def stop_database(config):
     ids = compose(config, "ps", "-q", "postgres").stdout.decode().split()
     for identity in ids:
-        docker(config, "stop", "--timeout", "-1", identity, timeout=90)
+        docker(config, "stop", "-t", "-1", identity, timeout=90)
 
 
 def snapshot(config, data_dir, key_dir):
