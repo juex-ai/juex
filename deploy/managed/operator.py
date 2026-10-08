@@ -240,6 +240,10 @@ def main():
         for name in ("workspace", "image", "hosted-image", "host-ip", "tls-certificate", "tls-key", "tls-ca", "bin-dir"):
             init.add_argument("--" + name)
         init.add_argument("--public-url", required=True)
+        init.add_argument("--ingress", choices=("http", "https", "proxy"), default="https",
+                          help="Explicit local HTTP, native TLS, or HTTPS terminated by an external proxy")
+        init.add_argument("--proxy-cidr", action="append", default=[],
+                          help="Trusted external TLS proxy address/CIDR; repeat for each proxy")
         init.add_argument("--local-tls", action="store_true", help="Generate a deployment CA; does not change system trust")
         init.add_argument("--dns", action="append")
         init.add_argument("--listen-port", type=int)
@@ -291,7 +295,7 @@ def main():
     if args.command in ("init", "install"):
         require_backend_user(args.backend)
         if args.backend == "hosted":
-            for field in ("workspace", "image", "hosted_image", "host_ip", "tls_certificate", "tls_key", "dns"):
+            for field in ("workspace", "image", "hosted_image", "host_ip", "dns"):
                 if not getattr(args, field):
                     parser.error("Hosted requires --" + field.replace("_", "-"))
         backend({"backend": args.backend}).initialize(args)

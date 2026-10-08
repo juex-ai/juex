@@ -9,16 +9,15 @@ from platform import machine, system as platform_system
 import secrets
 import shutil
 import socket
-import ssl
 import sys
 import time
 import urllib.parse
-import urllib.request
 import uuid
 
 from common import (HERE, SERVICES, absolute, digest, durable, environment, pack,
                     rebind_environment, run, separate, sync_directory, unpack, write_json)
 import processes
+import common
 
 BINARIES = ("juex", *("juex-" + name for name in (*SERVICES, "executor", "service-log")))
 OPERATOR_FILES = ("operator.py", "common.py", "host.py", "hosted.py", "processes.py", "nginx.conf")
@@ -132,7 +131,7 @@ def management(config, *args, **kwargs):
     for key in ("JUEX_MODEL_API_KEY", "JUEX_SMTP_CREDENTIAL"):
         if key in os.environ:
             env[key] = os.environ[key]
-    return run([binary(config, "management"), *args], env=env, **kwargs)
+    return run([binary(config, "management"), *common.ingress_management_flags(config), *args], env=env, **kwargs)
 
 
 def render(config, password, master_key, preserve=False):
@@ -153,7 +152,8 @@ def render(config, password, master_key, preserve=False):
         (rebind_environment if preserve else environment)(root / "secrets" / (name + ".env"), values)
     host = {"backend": {"root": config["workspace"], "control_root": str(root / "control"),
                         "identity": config["identity"], "executable": binary(config, "executor"),
-                        "server": config["public_url"], "ca_file": str(root / "tls/ca.pem") if (root / "tls/ca.pem").is_file() else ""},
+                        "server": config["public_url"], "insecure_http": common.ingress_insecure(config),
+                        "ca_file": str(root / "tls/ca.pem") if (root / "tls/ca.pem").is_file() else ""},
             "key_file": str(root / "secrets/host.key"), "idle_seconds": 300}
     if preserve:
         saved = json.loads((root / "host.json").read_text())
@@ -163,12 +163,13 @@ def render(config, password, master_key, preserve=False):
         host = saved
     write_json(root / "host.json", host)
     write_json(root / "deployment.json", config)
-    template = (Path(config["release"]["operator"]) / "nginx.conf").read_text()
+    template = common.ingress_gateway(config, (Path(config["release"]["operator"]) / "nginx.conf").read_text())
     template = template.replace("events {}", f'pid {json.dumps(str(root / "run/nginx.pid"), ensure_ascii=False)};\nerror_log stderr;\nevents {{}}')
     temporary = "".join(f'  {name}_temp_path {json.dumps(str(root / ("run/nginx-" + name)), ensure_ascii=False)};\n'
                         for name in ("client_body", "proxy", "fastcgi", "uwsgi", "scgi"))
     template = template.replace("http {", "http {\n  access_log off;\n" + temporary)
     template = template.replace("listen 443 ssl;", f'listen 0.0.0.0:{config["https_port"]} ssl;')
+    template = template.replace("listen 443;", f'listen 0.0.0.0:{config["https_port"]};')
     for name in ("certificate.pem", "key.pem"):
         template = template.replace("/run/juex/tls/" + name, json.dumps(str(root / "tls" / name), ensure_ascii=False))
     template = template.replace("http://execution:8683", f'http://127.0.0.1:{config["device_port"]}')
@@ -186,21 +187,19 @@ def initialize(args):
     separate(root, workspace)
     if workspace.exists():
         raise ValueError("Host initialization requires a new workspace directory")
-    url = urllib.parse.urlsplit(args.public_url)
-    if url.scheme != "https" or not url.hostname or url.path or url.query or url.fragment or url.username:
-        raise ValueError("public URL must be an HTTPS origin")
+    public = common.ingress_configuration(args)
+    url = urllib.parse.urlsplit(public["public_url"])
     if not args.bin_dir:
         raise ValueError("Host deployment requires --bin-dir from a complete platform release")
-    if not args.local_tls and not (args.tls_certificate and args.tls_key):
-        raise ValueError("provide TLS certificate/key or explicitly use --local-tls")
     pg, major = postgres_tools(args.postgres_bin)
     nginx = executable(args.nginx, "nginx")
+    if public["ingress"] == "proxy":
+        version = run([nginx, "-V"])
+        common.ingress_check_nginx(public, version.stdout + version.stderr)
     tar = executable(args.tar, "gtar" if system() == "darwin" else "tar")
     if b"GNU tar" not in run([tar, "--version"]).stdout:
         raise ValueError("backup requires GNU tar for sparse files, permissions and mount boundaries")
-    https_port = args.listen_port or url.port or 8443
-    if https_port != (url.port or 443):
-        raise ValueError("native gateway port must match the public origin")
+    https_port = public["https_port"]
     ports = [https_port, args.http_port, args.device_port, *range(args.rpc_base, args.rpc_base + 5)]
     if len(set(ports)) != len(ports) or any(port < 1024 or port > 65535 for port in ports):
         raise ValueError("native service ports must be distinct unprivileged ports")
@@ -225,7 +224,7 @@ def initialize(args):
               "path": os.environ.get("PATH", "/usr/bin:/bin"), "postgres_bin": pg, "postgres_major": major,
               "nginx": nginx, "tar": tar, "https_port": https_port, "http_port": args.http_port,
               "device_port": args.device_port, "rpc_base": args.rpc_base,
-              "public_url": args.public_url, "local_tls": args.local_tls, "active_threads": args.active_threads,
+              **public, "local_tls": args.local_tls, "active_threads": args.active_threads,
               "release": stage_release(root, args.bin_dir)}
     install_operator(config)
     password, master = secrets.token_hex(32), secrets.token_hex(32)
@@ -241,7 +240,7 @@ def initialize(args):
             (directory / filename).chmod(0o600)
     if args.local_tls:
         local_certificate(config, url.hostname)
-    else:
+    elif public["ingress"] == "https":
         for source, filename in ((args.tls_certificate, "certificate.pem"), (args.tls_key, "key.pem")):
             shutil.copyfile(source, root / "tls" / filename)
             (root / "tls" / filename).chmod(0o600)
@@ -286,9 +285,9 @@ def service_command(config, name):
         port = config["rpc_base"] + SERVICES.index(name)
         command = [binary(config, name), "serve", "--listen", f"0.0.0.0:{port}"]
         if name == "management":
-            command = [binary(config, name), "serve", "--listen", f'0.0.0.0:{config["http_port"]}', "--rpc-listen", f"0.0.0.0:{port}"]
+            command = [binary(config, name), *common.ingress_management_flags(config), "serve", "--listen", f'127.0.0.1:{config["http_port"]}', "--rpc-listen", f"0.0.0.0:{port}"]
         elif name == "execution":
-            command += ["--device-listen", f'0.0.0.0:{config["device_port"]}']
+            command += ["--device-listen", f'127.0.0.1:{config["device_port"]}']
         elif name == "runtime":
             command += ["--max-active-threads", str(config["active_threads"])]
     return [binary(config, "service-log"), "--directory", str(root / "logs" / name), "--", *command]
@@ -320,18 +319,12 @@ def start_database(config):
 
 def healthy(config):
     deadline = time.monotonic() + 90
-    ca = Path(config["root"]) / "tls/ca.pem"
-    context = ssl.create_default_context(cafile=str(ca) if ca.exists() else None)
     while True:
-        if management(config, "services", "check", check=False, timeout=15).returncode == 0:
-            try:
-                with urllib.request.urlopen(config["public_url"] + "/healthz", context=context, timeout=3) as response:
-                    if response.status == 200:
-                        return
-            except OSError:
-                pass
+        if (management(config, "services", "check", check=False, timeout=15).returncode == 0
+                and common.ingress_healthy(config)):
+            return
         if time.monotonic() >= deadline:
-            raise RuntimeError("services or public HTTPS gateway did not become healthy; maintenance retained")
+            raise RuntimeError("services or public gateway did not become healthy; maintenance retained")
         time.sleep(1)
 
 

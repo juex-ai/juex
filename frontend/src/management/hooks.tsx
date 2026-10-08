@@ -1,3 +1,4 @@
+import { randomUUID } from '@/lib/uuid'
 import { useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -31,7 +32,7 @@ export function HooksEditor({ tenant, owner, agent, value, onChange }: { tenant:
       {hook.source && <small>来源：{hook.source}</small>}
       <Button type="button" variant="ghost" onClick={() => onChange(value.filter((_, i) => i !== index))}><Trash2 size={14} />移除 Hook</Button>
     </fieldset>)}
-    <Button type="button" variant="outline" disabled={value.length >= 16} onClick={() => onChange([...value, { id: `hook-${crypto.randomUUID().slice(0, 8)}`, enabled: true, required: true, events: ['PreToolUse'], command: ['/bin/sh', '-c', ''], timeout_seconds: 10, max_output_bytes: 8192 }])}><Plus size={14} />添加 Hook</Button>
+    <Button type="button" variant="outline" disabled={value.length >= 16} onClick={() => onChange([...value, { id: `hook-${randomUUID().slice(0, 8)}`, enabled: true, required: true, events: ['PreToolUse'], command: ['/bin/sh', '-c', ''], timeout_seconds: 10, max_output_bytes: 8192 }])}><Plus size={14} />添加 Hook</Button>
   </details>
 }
 

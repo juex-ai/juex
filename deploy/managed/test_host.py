@@ -126,9 +126,9 @@ class HostDeploymentTests(unittest.TestCase):
     def test_private_rpc_health_does_not_hide_failed_public_gateway(self):
         config = {"root": str(self.base), "public_url": "https://unavailable.test"}
         with patch.object(host, "management", return_value=SimpleNamespace(returncode=0)), \
-                patch.object(host.urllib.request, "urlopen", side_effect=OSError("gateway unavailable")), \
+                patch.object(host.common, "ingress_healthy", return_value=False), \
                 patch.object(host.time, "monotonic", side_effect=[0, 91]):
-            with self.assertRaisesRegex(RuntimeError, "public HTTPS gateway"):
+            with self.assertRaisesRegex(RuntimeError, "public gateway"):
                 host.healthy(config)
 
     def test_gateway_quotes_deployment_paths_with_spaces(self):

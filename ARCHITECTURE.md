@@ -9,8 +9,8 @@ contracts and tests define exact fields and routes.
 ## Service boundaries
 
 ```text
-Web / management CLI ── HTTPS ── Management
-Remote executors ── outbound HTTPS ── Execution
+Web / management CLI ── HTTP(S) ── Management
+Remote executors ── outbound HTTP(S) ── Execution
 Management / Runtime / Execution / Memory / Calendar ── authenticated Kitex RPC
 Each service ── its own PostgreSQL schema
 Execution ── Blob storage, managed Host executors, Docker/runsc guests and device connections
@@ -66,7 +66,9 @@ only into the authorized connection/process scope.
 
 ## Clients and applications
 
-One HTTPS origin serves the dashboard, resource APIs and device transport. The
+One configured origin serves the dashboard, resource APIs and device transport.
+Local/NetBird deployments explicitly use HTTP; production uses HTTPS, optionally
+terminated by an external Caddy proxy. Private service mTLS is independent. The
 public API is the common boundary for Web and CLI. The React app uses generated
 Management types and shared UI components; server records own durable truth.
 Assistant text remains conversation content; tools and reasoning are disclosures.
@@ -83,7 +85,7 @@ until Runtime confirms whether admission already won. Disabling an application p
 ## Deployment
 
 The [operator workflow](deploy/managed/README.md) coordinates the five services,
-PostgreSQL and HTTPS gateway. Host runs owned OS user services and a dedicated
+PostgreSQL and public gateway. Host runs owned OS user services and a dedicated
 socket-only PostgreSQL cluster; Hosted runs Linux containers, gives only Execution
 the engine socket, and fences private RPC/database ports. Platform binaries,
 operator assets and Web release together.
