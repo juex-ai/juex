@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -94,6 +95,27 @@ class IngressTests(unittest.TestCase):
                 patch.object(hosted.time, "monotonic", side_effect=[0, 91]):
             with self.assertRaisesRegex(RuntimeError, "public gateway"):
                 hosted.healthy({"ingress": "http"})
+
+    def test_slow_private_probe_retries_within_startup_window(self):
+        for backend, probe in ((host, "management"), (hosted, "compose")):
+            with self.subTest(backend=backend.__name__), \
+                    patch.object(backend, probe, side_effect=[subprocess.TimeoutExpired("services check", 15), SimpleNamespace(returncode=0)]) as check, \
+                    patch.object(common, "ingress_healthy", return_value=True) as ingress, \
+                    patch.object(backend.time, "monotonic", side_effect=[0, 15]), \
+                    patch.object(backend.time, "sleep"):
+                backend.healthy({"ingress": "http"})
+                self.assertEqual(check.call_count, 2)
+                ingress.assert_called_once()
+
+    def test_timed_out_private_probe_cannot_bypass_startup_deadline(self):
+        for backend, probe in ((host, "management"), (hosted, "compose")):
+            with self.subTest(backend=backend.__name__), \
+                    patch.object(backend, probe, side_effect=subprocess.TimeoutExpired("services check", 15)), \
+                    patch.object(common, "ingress_healthy") as ingress, \
+                    patch.object(backend.time, "monotonic", side_effect=[0, 91]):
+                with self.assertRaisesRegex(RuntimeError, "maintenance retained"):
+                    backend.healthy({"ingress": "http"})
+                ingress.assert_not_called()
 
     def test_proxy_requires_realip_module_before_creating_state(self):
         with self.assertRaisesRegex(ValueError, "http_realip_module"):

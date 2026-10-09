@@ -46,7 +46,7 @@ func TestMigrationAgentConfigPreservesResolvedPolicyThroughManagement(t *testing
 		wantDisabled           []agentpolicy.Capability
 	}{
 		{"standard", "preset: standard\nenable_user_agents_resources: false\nmodules: {worker-threads: {max_depth: 2}}\n", "", true, []agentpolicy.Capability{agentpolicy.Collaboration}},
-		{"minimal", "preset: minimal\nenable_user_agents_resources: false\nmodules: {worker-threads: {max_depth: 2}}\n", "", false, []agentpolicy.Capability{agentpolicy.Calendar, agentpolicy.Collaboration, agentpolicy.Extensions, agentpolicy.Hooks, agentpolicy.MCP, agentpolicy.Memory, agentpolicy.Observations, agentpolicy.Workers}},
+		{"minimal", "preset: minimal\nenable_user_agents_resources: false\nmodules: {worker-threads: {max_depth: 2}}\n", "", false, []agentpolicy.Capability{agentpolicy.Calendar, agentpolicy.Collaboration, agentpolicy.ContextControl, agentpolicy.Extensions, agentpolicy.Hooks, agentpolicy.MCP, agentpolicy.Memory, agentpolicy.Notes, agentpolicy.Observations, agentpolicy.Tasks, agentpolicy.Workers, agentpolicy.WorkingFiles}},
 		{"global guidance", "preset: standard\nmodules: {worker-threads: {max_depth: 2}}\n", "/target/user/.agents/AGENTS.md", true, []agentpolicy.Capability{agentpolicy.Collaboration}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,6 +110,11 @@ func TestMigrationAgentConfigExplicitFilesChoiceReachesRuntimeCatalog(t *testing
 				for _, name := range []string{"read", "write", "edit", "grep", "glob"} {
 					if slices.Contains(names, name) != tc.files {
 						t.Errorf("target Files=%v did not govern %s", tc.files, name)
+					}
+				}
+				for _, name := range []string{"update_notes", "list_tasks", "create_task", "update_task", "delete_task", "context_new", "context_compact"} {
+					if slices.Contains(names, name) {
+						t.Errorf("target Files=%v enabled separately disabled %s", tc.files, name)
 					}
 				}
 				calls.Add(1)
