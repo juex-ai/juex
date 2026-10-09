@@ -21,9 +21,10 @@ import (
 
 type delayedAdmissionAuthority struct {
 	execution.Authority
-	entered chan struct{}
-	release chan struct{}
-	delayed atomic.Bool
+	entered  chan struct{}
+	release  chan struct{}
+	deadline chan error
+	delayed  atomic.Bool
 }
 
 func (a *delayedAdmissionAuthority) Agent(ctx context.Context, actor, tenant, agent string, execute bool) (execution.Scope, error) {
@@ -31,6 +32,7 @@ func (a *delayedAdmissionAuthority) Agent(ctx context.Context, actor, tenant, ag
 	if err == nil && execute && a.delayed.CompareAndSwap(false, true) {
 		close(a.entered)
 		<-a.release
+		a.deadline <- ctx.Err()
 	}
 	return scope, err
 }
@@ -57,7 +59,7 @@ func TestExecutionPreparedCancellationWinsAgainstTimedOutRPCAdmission(t *testing
 			if err := f.store.PrepareTool(ctx, job, device.ID, request); err != nil {
 				t.Fatal(err)
 			}
-			authority := &delayedAdmissionAuthority{Authority: f.execution.Authority, entered: make(chan struct{}), release: make(chan struct{})}
+			authority := &delayedAdmissionAuthority{Authority: f.execution.Authority, entered: make(chan struct{}), release: make(chan struct{}), deadline: make(chan error, 1)}
 			var release sync.Once
 			defer release.Do(func() { close(authority.release) })
 			f.execution.Authority = authority
@@ -65,15 +67,15 @@ func TestExecutionPreparedCancellationWinsAgainstTimedOutRPCAdmission(t *testing
 			admission := make(chan error, 1)
 			rpcCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 			defer cancel()
-			go func() {
+			admit := func(ctx context.Context) error {
 				if file {
-					_, err := gateway.StartFileTransfer(rpcCtx, scope, job.ID, managedruntime.FileTransferSpec{Source: &managedruntime.FileLocation{EnvironmentID: device.ID, AuthorizationVersion: device.Version, Path: "source.bin"}, Name: "source.bin", MediaType: "application/octet-stream", Visibility: "agent"})
-					admission <- err
-				} else {
-					_, err := gateway.Submit(rpcCtx, scope, device.ID, request)
-					admission <- err
+					_, err := gateway.StartFileTransfer(ctx, scope, job.ID, managedruntime.FileTransferSpec{Source: &managedruntime.FileLocation{EnvironmentID: device.ID, AuthorizationVersion: device.Version, Path: "source.bin"}, Name: "source.bin", MediaType: "application/octet-stream", Visibility: "agent"})
+					return err
 				}
-			}()
+				_, err := gateway.Submit(ctx, scope, device.ID, request)
+				return err
+			}
+			go func() { admission <- admit(rpcCtx) }()
 			select {
 			case <-authority.entered:
 			case <-time.After(5 * time.Second):
@@ -100,6 +102,19 @@ func TestExecutionPreparedCancellationWinsAgainstTimedOutRPCAdmission(t *testing
 				return f.pool.QueryRow(ctx, `SELECT state='cancelled' AND NOT operation_live FROM runtime.tools WHERE id=$1`, job.ID).Scan(&settled) == nil && settled
 			})
 			release.Do(func() { close(authority.release) })
+			select {
+			case err := <-authority.deadline:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("server admission did not expire", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("original admission did not leave the barrier")
+			}
+			// The expired attempt need not create a receipt. Retrying its original
+			// identity must still observe the durable cancellation and never run.
+			if err := admit(ctx); err != nil {
+				t.Fatal("late admission retry", err)
+			}
 			// Reconstruct the repository as a restarted process would. The late
 			// request must leave only a terminal fact, never dispatchable work.
 			restarted := executionpg.New(f.pool)
