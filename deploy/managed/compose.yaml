@@ -3,7 +3,8 @@ name: juex
 x-service: &service
   image: ${JUEX_PLATFORM_IMAGE:?Set the pinned platform image}
   runtime: runc
-  restart: unless-stopped
+  # Daemon startup must pass the operator's storage and recovery checks.
+  restart: on-failure
   init: true
   read_only: true
   cap_drop: [ALL]
@@ -18,7 +19,7 @@ services:
   postgres:
     image: ${JUEX_POSTGRES_IMAGE:-postgres:18-bookworm}
     runtime: runc
-    restart: unless-stopped
+    restart: on-failure
     entrypoint: [/usr/local/bin/juex-service-log, --, /usr/local/bin/docker-entrypoint.sh]
     command: [postgres]
     environment: {POSTGRES_DB: juex, POSTGRES_USER: juex, POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password}
@@ -113,7 +114,7 @@ services:
   gateway:
     image: ${JUEX_GATEWAY_IMAGE:-nginx:1.28-bookworm}
     runtime: runc
-    restart: unless-stopped
+    restart: on-failure
     entrypoint: [/usr/local/bin/juex-service-log, --, /docker-entrypoint.sh]
     command: [nginx, -g, 'daemon off;']
     ports: ['0.0.0.0:${JUEX_HTTPS_PORT:-443}:443']

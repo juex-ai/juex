@@ -86,6 +86,7 @@ def render(config, password, master_key, preserve=False):
         hosted = saved
     write_json(root / "hosted.json", hosted)
     write_json(root / "deployment.json", config)
+    durable(root / "compose.yaml", (HERE / "compose.yaml").read_text())
     durable(root / "nginx.conf", common.ingress_gateway(config, (HERE / "nginx.conf").read_text()))
 
 
@@ -175,8 +176,6 @@ def initialize(args):
             docker(config, "cp", container + ":/usr/local/bin/" + name, root / "bin" / name)
     finally:
         docker(config, "rm", container)
-    for name in ("compose.yaml", "nginx.conf"):
-        shutil.copyfile(HERE / name, root / name)
     prepare_postgres(config)
     prepare_logs(root)
     render(config, password, master_key)
@@ -233,6 +232,10 @@ def up(config, reviewed=False):
         raise ValueError("restore is incomplete")
     if mount_identity(config["workspace"]) != config["storage_identity"]:
         raise ValueError("Workspace identity changed; use the offline restore procedure")
+    # A loop-backed filesystem retains its UUID across boots, but its device
+    # number can change. Bind only the device belonging to the verified mount.
+    rebind_environment(Path(config["root"]) / "compose.env",
+                       {"JUEX_WORKSPACE_DEVICE": mount_device(config["workspace"])})
     firewall(config)
     compose(config, "up", "-d", timeout=180)
 
@@ -319,6 +322,9 @@ def stop_database(config):
     ids = compose(config, "ps", "-q", "postgres").stdout.decode().split()
     for identity in ids:
         docker(config, "stop", "-t", "-1", identity, timeout=90)
+        state = json.loads(docker(config, "inspect", "--format", "{{json .State}}", identity).stdout)
+        if state["Running"] or state.get("OOMKilled") or state["ExitCode"] not in (0, 143):
+            raise RuntimeError("database did not stop cleanly; maintenance retained")
 
 
 def snapshot(config, data_dir, key_dir):
@@ -393,6 +399,9 @@ def upgrade(config, args):
         state = json.loads(docker(config, "inspect", "--format", "{{json .State}}", item["Id"]).stdout)
         if state["Running"] or state.get("OOMKilled") or state["ExitCode"] not in (0, 143):
             raise RuntimeError("hosted guest did not stop cleanly; upgrade refused")
+    # A new Compose template can recreate PostgreSQL too. Stop it through the
+    # graceful operator boundary rather than Compose's forced-kill timeout.
+    stop_database(config)
     # Ensure verifies the pinned image and guest digest. Recreate only the
     # stopped container; the owned network, Home, Workspace and journal survive.
     for item in guests:

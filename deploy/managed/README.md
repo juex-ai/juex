@@ -83,6 +83,35 @@ by the operator's firewall; database and other RPC ports are not published.
 Directly running `docker compose up` bypasses the operator's recovery checks:
 use `operator.py up/resume` for service startup.
 
+### Boot ordering
+
+Configure the dedicated filesystem in a systemd mount unit before enabling
+platform startup. For a loop-backed filesystem, mount the existing backing file
+with `loop,prjquota,nosuid,nodev` and `ReadWriteOnly=yes`; do not pin a
+`/dev/loopN` number. `up` verifies the recorded filesystem UUID and refreshes
+the block-device binding before starting containers. It never creates or formats
+the filesystem. Initialization and upgrade regenerate the owned Compose file;
+keep operator settings in the documented configuration files.
+
+Use a root-owned systemd service with `Type=oneshot`, `RemainAfterExit=yes`,
+`RequiresMountsFor=/srv/juex-workspaces`, and `BindsTo=` plus `After=` for both
+`docker.service` and the exact mount unit. Obtain the mount name with
+`systemd-escape --path --suffix=mount /srv/juex-workspaces`. Set `ExecStart` to
+the installed operator's `up` command, `ExecStop` to its `down` command, both
+with the deployment's absolute `--root`; set `TimeoutStartSec=infinity`,
+`TimeoutStopSec=infinity` and `WantedBy=multi-user.target`. Validate with
+`systemd-analyze verify` before enabling the service. Let this service pull in
+the mount; do not make this data volume or JueX a Docker-global dependency.
+
+Containers use `on-failure` to restart failed processes without bypassing the
+operator on daemon startup. After an unexpected Docker restart, explicitly
+start the platform service again. `up` preserves maintenance; a preceding
+`down`, failed backup or recovery still requires the normal explicit `resume`
+procedure. Do not put `resume` in a boot unit. Stop the platform and prove it is
+idle before normal unmount/remount testing; never force-unmount active storage.
+Systemd ordering does not cancel host shutdown if a busy `down` fails. An idle
+mount/start exercise does not prove whole-host reboot or disaster recovery.
+
 The gateway uses platform address `.11`. Management and Execution trust only
 that proxy for `X-Real-IP`, which both gateway routes overwrite with the actual
 client address so authentication and device rate limits remain per client.

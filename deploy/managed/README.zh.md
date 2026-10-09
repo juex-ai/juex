@@ -58,6 +58,30 @@ sudo python3 /opt/juex/operator.py --root /var/lib/juex-management resume
 
 平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有公共网关端口绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
 
+### 开机启动顺序
+
+启用平台启动前，用 systemd mount 单元配置专用文件系统。loop 文件系统使用已有的
+后备文件，指定 `loop,prjquota,nosuid,nodev` 和 `ReadWriteOnly=yes`，不要固定
+`/dev/loopN` 编号。`up` 先验证已登记的文件系统 UUID，再刷新块设备绑定并启动容器；
+不会创建或格式化文件系统。初始化和升级会重新生成自有 Compose 文件，运维设置应保留
+在文档指定的配置文件中。
+
+使用 root 所有的 systemd service，设置 `Type=oneshot`、`RemainAfterExit=yes`、
+`RequiresMountsFor=/srv/juex-workspaces`，并为 `docker.service` 和精确的 mount 单元
+同时设置 `BindsTo=` 与 `After=`。通过
+`systemd-escape --path --suffix=mount /srv/juex-workspaces` 获取 mount 单元名称。
+`ExecStart` 使用已安装 operator 的 `up`，`ExecStop` 使用 `down`，都带部署的绝对
+`--root`；设置 `TimeoutStartSec=infinity`、`TimeoutStopSec=infinity` 和
+`WantedBy=multi-user.target`。启用前运行 `systemd-analyze verify`。由该 service
+拉起挂载，不要把此数据卷或 JueX 设为 Docker 的全局依赖。
+
+容器使用 `on-failure` 重启异常退出的进程，避免 daemon 启动时绕过 operator。
+Docker 意外重启后，需要显式启动平台 service。`up` 保留维护状态；此前的 `down`、
+失败备份或恢复仍需正常的显式 `resume` 流程。不要在开机单元中使用 `resume`。
+正常卸载/重挂载测试前，须证明平台空闲并将其停止，禁止强制卸载活动存储。
+若忙碌状态导致 `down` 失败，systemd 排序不会取消整机关机。空闲状态下的挂载/启动
+演练不能证明整机重启或灾难恢复。
+
 使用 `sudo python3 /opt/juex/operator.py --root /var/lib/juex-management manage bootstrap --email admin@example.com` 生成首位管理员设置链接；运维工具为每个 Management 命令应用部署的传输策略。这是一次性秘密 URL，必须私下交付。未配置 SMTP 时仍能复制邀请链接。模型凭据通过 Management 运维 CLI 配置。不能向 Agent 暴露部署私有文件和服务证书。
 
 网关使用平台网段的 `.11` 地址。Management 和 Execution 只信任该代理提供的 `X-Real-IP`；网关的两个路由均以真实客户端地址覆盖此头，使认证和设备限流按客户端独立计算。外部生产代理使用下述显式入口策略；服务仍仅信任 nginx。恢复时会按平台子网重新绑定此设置。

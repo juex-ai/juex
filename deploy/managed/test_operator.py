@@ -106,6 +106,64 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(ownership.call_args.args[0]["active_threads"], 1)
         self.assertFalse(Path(args.root).exists())
 
+    def test_hosted_up_rebinds_device_after_identity_check_and_retains_maintenance(self):
+        (self.root / "maintenance").mkdir()
+        marker = self.root / "maintenance/draining"
+        marker.write_text("operator maintenance")
+        env = self.root / "compose.env"
+        original = "JUEX_WORKSPACE_DEVICE=/dev/loop1\nOPERATOR_SETTING=preserved\n"
+        env.write_text(original)
+        config = dict(root=str(self.root), workspace="/workspace", storage_identity="expected")
+        with patch.object(ops.hosted, "assert_deployment_owner"), \
+                patch.object(ops.hosted, "mount_identity", return_value="different") as identity, \
+                patch.object(ops.hosted, "mount_device", return_value="/dev/loop7") as device, \
+                patch.object(ops.hosted, "firewall") as firewall, \
+                patch.object(ops.hosted, "compose") as compose:
+            with self.assertRaisesRegex(ValueError, "Workspace identity changed"):
+                ops.up(config)
+            self.assertEqual(env.read_text(), original)
+            device.assert_not_called()
+            firewall.assert_not_called()
+            compose.assert_not_called()
+            identity.return_value = "expected"
+            def start(*args, **kwargs):
+                self.assertEqual(env.read_text(), "OPERATOR_SETTING=preserved\nJUEX_WORKSPACE_DEVICE=/dev/loop7\n")
+                firewall.assert_called_once_with(config)
+            compose.side_effect = start
+            ops.up(config)
+            compose.assert_called_once_with(config, "up", "-d", timeout=180)
+        self.assertTrue(marker.exists())
+
+    def test_hosted_upgrade_stops_database_before_replacing_configuration(self):
+        (self.root / "secrets").mkdir()
+        for name in ("postgres-password", "master-key"):
+            (self.root / "secrets" / name).write_text("test")
+        config = dict(root=str(self.root))
+        args = SimpleNamespace(image="platform", hosted_image="guest")
+        with patch.object(ops.hosted, "hosted_containers", return_value=[]), \
+                patch.object(ops.hosted, "docker", return_value=SimpleNamespace(stdout=b"image\n")), \
+                patch.object(ops.hosted, "stop_database", side_effect=RuntimeError("stop failed")) as stop, \
+                patch.object(ops.hosted, "render") as render:
+            with self.assertRaisesRegex(RuntimeError, "stop failed"):
+                ops.hosted.upgrade(config, args)
+            render.assert_not_called()
+            stop.reset_mock(side_effect=True)
+            render.side_effect = lambda *a, **kw: stop.assert_called_once_with(config)
+            ops.hosted.upgrade(config, args)
+            render.assert_called_once()
+
+    def test_database_stop_rejects_unclean_exit(self):
+        config = dict(root=str(self.root))
+        for state in ({"Running": True, "ExitCode": 0},
+                      {"Running": False, "OOMKilled": True, "ExitCode": 0},
+                      {"Running": False, "ExitCode": 137}):
+            with self.subTest(state=state), \
+                    patch.object(ops.hosted, "compose", return_value=SimpleNamespace(stdout=b"postgres\n")), \
+                    patch.object(ops.hosted, "docker", return_value=SimpleNamespace(stdout=json.dumps(state).encode())) as docker:
+                with self.assertRaisesRegex(RuntimeError, "database did not stop cleanly"):
+                    ops.hosted.stop_database(config)
+                self.assertEqual(docker.call_args_list[0].args, (config, "stop", "-t", "-1", "postgres"))
+
     def test_recovery_preserves_operator_settings(self):
         (self.root / "secrets").mkdir()
         config = dict(root=str(self.root), workspace="/new-workspace", socket="/new.sock",
@@ -115,6 +173,7 @@ class RecoveryTests(unittest.TestCase):
             host_ip="10.0.2.100", dns=["1.1.1.1"])
         with patch.object(ops.hosted, "mount_device", return_value="/dev/loop7"):
             ops.hosted.render(config, "password", "key")
+            self.assertEqual((self.root / "compose.yaml").read_bytes(), (ops.hosted.HERE / "compose.yaml").read_bytes())
             env = self.root / "secrets/management.env"
             for service in ("management", "execution"):
                 self.assertIn("JUEX_TRUSTED_PROXIES=172.30.0.11\n",
@@ -127,7 +186,9 @@ class RecoveryTests(unittest.TestCase):
             config["host_ip"] = "10.0.2.101"
             config["hosted_image"] = "sha256:new-hosted"
             config["platform_prefix"] = "172.29.5"
+            (self.root / "compose.yaml").write_text("old template")
             ops.hosted.render(config, "password", "key", preserve=True)
+            self.assertEqual((self.root / "compose.yaml").read_bytes(), (ops.hosted.HERE / "compose.yaml").read_bytes())
         self.assertIn("JUEX_SMTP_CONFIG=encrypted-smtp-settings\n", env.read_text())
         for service in ("management", "execution"):
             rendered = (self.root / "secrets" / (service + ".env")).read_text()
@@ -203,6 +264,7 @@ class RecoveryTests(unittest.TestCase):
         calls = []
         def docker(_, *args, **kwargs):
             calls.append(args)
+            if args[0] == "compose": return SimpleNamespace(stdout=b"postgres\n")
             if args[0] == "ps": return SimpleNamespace(stdout=b"owned foreign\n")
             if args[:2] == ("inspect", "--format"):
                 return SimpleNamespace(stdout=json.dumps(owned["State"]).encode())
@@ -216,7 +278,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn(("rm", "owned"), calls)
         self.assertLess(calls.index(("rm", "owned")), next(i for i, call in enumerate(calls) if call[0] == "cp"))
         self.assertFalse(any(call[0] in ("rm", "network") and "foreign" in call for call in calls))
-        self.assertFalse(any("-f" in call or "-v" in call or call[0] == "network" for call in calls))
+        self.assertIn(("stop", "-t", "-1", "postgres"), calls)
+        self.assertFalse(any(call[0] == "rm" and ("-f" in call or "-v" in call) or call[0] == "network" for call in calls))
         self.assertEqual(proof.read_text(), "durable")
         for state in ({"Running": True, "ExitCode": 0}, {"Running": False, "OOMKilled": True, "ExitCode": 0},
                       {"Running": False, "ExitCode": 137}):
