@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import subprocess
 import time
 import common
 
@@ -255,9 +256,13 @@ def ensure_xtables_lock():
 def healthy(config):
     deadline = time.monotonic() + 90
     while True:
-        result = compose(config, "exec", "-T", "management", "juex-management", "services", "check", check=False, timeout=15)
-        if result.returncode == 0 and common.ingress_healthy(config):
-            return
+        try:
+            result = compose(config, "exec", "-T", "management", "juex-management", "services", "check", check=False, timeout=15)
+            if result.returncode == 0 and common.ingress_healthy(config):
+                return
+        except subprocess.TimeoutExpired:
+            # Docker exec and the services share the cold-start resource budget.
+            pass
         if time.monotonic() >= deadline:
             raise RuntimeError("services or public gateway did not become healthy; maintenance retained")
         time.sleep(1)
