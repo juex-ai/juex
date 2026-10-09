@@ -32,7 +32,7 @@ func TestConvertAgentConfigPreservesPolicyWithoutInferringNewAuthority(t *testin
 		}
 		want := agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Calendar, agentpolicy.Collaboration}}
 		if minimal {
-			want.Disabled = append(want.Disabled, agentpolicy.Workers, agentpolicy.MCP, agentpolicy.Observations, agentpolicy.Memory, agentpolicy.Hooks, agentpolicy.Extensions)
+			want.Disabled = append(want.Disabled, agentpolicy.Workers, agentpolicy.MCP, agentpolicy.Observations, agentpolicy.Memory, agentpolicy.Hooks, agentpolicy.Extensions, agentpolicy.Notes, agentpolicy.Tasks, agentpolicy.ContextControl, agentpolicy.WorkingFiles)
 		}
 		if !reflect.DeepEqual(*got.Capabilities, want.Normalized()) {
 			t.Fatal("incorrect grouped policy", minimal, got.Capabilities)
@@ -60,7 +60,7 @@ func TestConvertAgentConfigDisabledModulesAndDynamicSources(t *testing.T) {
 		source.Modules[name] = false
 	}
 	got, err := ConvertAgentConfig(source, definition, bindings)
-	if err != nil || len(got.Capabilities.Disabled) != 10 || got.DynamicInstructions.Enabled {
+	if err != nil || len(got.Capabilities.Disabled) != 14 || got.DynamicInstructions.Enabled {
 		t.Fatal("disabled capabilities were re-enabled", err)
 	}
 	*bindings.FilesEnabled = true

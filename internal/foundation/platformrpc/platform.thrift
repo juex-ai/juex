@@ -78,6 +78,7 @@ service Runtime {
   Reply Threads(1: Actor actor)
   Reply Timeline(1: Actor actor, 2: string threadID, 3: i64 after, 4: i32 limit)
   Reply Compact(1: Actor actor, 2: string threadID, 3: string requestID, 4: string focus)
+  Reply ResetContext(1: Actor actor, 2: string threadID, 3: string requestID)
   Reply Archive(1: Actor actor, 2: string threadID, 3: bool archived)
   Reply Cancel(1: Actor actor, 2: string threadID)
   Reply CreateWorker(1: Actor actor, 2: string parentID, 3: string requestID, 4: string name)

@@ -74,6 +74,16 @@ func (s *Store) ImportAgent(ctx context.Context, scope managedruntime.Scope, val
 
 func importThread(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, imported managedruntime.ImportedThread) error {
 	t := imported.Thread
+	// Import current state verbatim. CRUD completion rules and continuation are
+	// live behavior and must never run while restoring historical records.
+	if err := writeThreadState(ctx, tx, t.ID, imported.State); err != nil {
+		return err
+	}
+	if imported.WorkingFiles != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.thread_working_files(thread_id,location) VALUES($1,$2)`, t.ID, imported.WorkingFiles); err != nil {
+			return err
+		}
+	}
 	if t.ParentID != "" {
 		if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET parent_id=$2 WHERE id=$1`, t.ID, t.ParentID); err != nil {
 			return err

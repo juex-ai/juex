@@ -130,6 +130,9 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	if restored, err := client.Archive(ctx, f.actor, f.tenant, f.agent.ID, worker.ID, false); err != nil || restored.Retention != "active" {
 		t.Fatal(restored, err)
 	}
+	if reset, err := client.ResetContext(ctx, f.actor, f.tenant, f.agent.ID, worker.ID, "rpc-reset"); err != nil || reset.ID != worker.ID || reset.Generation != worker.Generation+1 {
+		t.Fatal("RPC context reset", reset, err)
+	}
 	if _, err := client.Threads(ctx, "00000000-0000-4000-8000-000000000001", f.tenant, f.agent.ID); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("RPC authority missing", err)
 	}

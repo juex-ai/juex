@@ -15,6 +15,7 @@ import (
 	calendarpg "github.com/juex-ai/juex/internal/calendar/postgres"
 	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/execution/blob"
+	"github.com/juex-ai/juex/internal/execution/host"
 	executionpg "github.com/juex-ai/juex/internal/execution/postgres"
 	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/application"
@@ -42,18 +43,21 @@ type ApplyConfig struct {
 	PublicURL            string              `json:"-"`
 	BlobDirectory        string              `json:"-"`
 	BlobCapacity         int64               `json:"-"`
+	HostBackend          host.Config         `json:"-"`
+	HostKey              []byte              `json:"-"`
 	verifyTarget         func() error
 }
 
 // ApplyReport records inert imports. Environment selection, extension resource
 // installation and actual application acceptance are separate cutover steps.
 type ApplyReport struct {
-	BundleSHA256 string                       `json:"bundle_sha256"`
-	Agents       map[string]string            `json:"agents,omitempty"`
-	Threads      map[string]map[string]string `json:"threads,omitempty"`
-	Stages       []string                     `json:"stages,omitempty"`
-	Artifacts    int                          `json:"artifacts"`
-	Imported     bool                         `json:"imported"`
+	BundleSHA256 string                                 `json:"bundle_sha256"`
+	Agents       map[string]string                      `json:"agents,omitempty"`
+	Threads      map[string]map[string]string           `json:"threads,omitempty"`
+	Stages       []string                               `json:"stages,omitempty"`
+	Artifacts    int                                    `json:"artifacts"`
+	Files        map[string]execution.HostImportReceipt `json:"files,omitempty"`
+	Imported     bool                                   `json:"imported"`
 }
 
 // Apply imports owner state while keeping source locks and destination
@@ -209,11 +213,34 @@ func Apply(ctx context.Context, b *Bundle, config ApplyConfig) (report ApplyRepo
 	memoryBindings := MemoryBindings{SourceSHA256: b.digest, Control: b.header.MemoryControl, AdvancedSince: b.header.MemoryAdvancedSince, Agents: map[string]MemoryAgentBinding{}}
 	calendarBindings := CalendarBindings{SourceSHA256: b.digest, CapturedAt: b.header.CapturedAt, Agents: map[string]application.Scope{}}
 	report.Threads = map[string]map[string]string{}
+	report.Files = map[string]execution.HostImportReceipt{}
 	for _, agent := range b.source.Agents {
 		if err := check(); err != nil {
 			return report, err
 		}
 		id := report.Agents[agent.Definition.ID]
+		fileRequest, err := b.hostFiles(agent, id, prepared)
+		if err != nil {
+			return report, err
+		}
+		var restored execution.HostImportReceipt
+		if len(fileRequest.Threads)+len(fileRequest.Extensions) > 0 {
+			backend, err := host.OpenExisting(config.HostBackend)
+			if err != nil {
+				return report, err
+			}
+			scope, err := local.Agent(ctx, target.ActorID, target.TenantID, id, true)
+			if err != nil {
+				return report, err
+			}
+			manager := execution.ManagedManager{Store: executionStore, Backend: backend, Key: config.HostKey}
+			restored, err = manager.RestoreHostFiles(ctx, scope, fileRequest)
+			if err != nil {
+				return report, err
+			}
+			report.Files[agent.Definition.ID] = restored
+			report.Stages = append(report.Stages, "files/"+agent.Definition.ID)
+		}
 		artifacts := map[string]execution.Artifact{}
 		for _, file := range agent.Files {
 			if !strings.HasPrefix(file.Path, "media/") {
@@ -253,7 +280,7 @@ func Apply(ctx context.Context, b *Bundle, config ApplyConfig) (report ApplyRepo
 		if err != nil {
 			return report, err
 		}
-		converted, err := ConvertRuntime(scope, agent, RuntimeBindings{SourceSHA256: b.digest, Artifacts: artifacts, ModelOrigins: origins})
+		converted, err := ConvertRuntime(scope, agent, RuntimeBindings{SourceSHA256: b.digest, Artifacts: artifacts, ModelOrigins: origins, WorkingFiles: restoredWorkingFiles(agent, id, restored)})
 		if err != nil {
 			return report, err
 		}

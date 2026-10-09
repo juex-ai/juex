@@ -20,6 +20,12 @@ func toolAllowed(policy agentpolicy.Policy, name string) bool {
 	switch name {
 	case "read_context":
 		return true
+	case "update_notes":
+		return policy.Allows(agentpolicy.Notes)
+	case "context_new", "context_compact":
+		return policy.Allows(agentpolicy.ContextControl)
+	case "list_tasks", "create_task", "update_task", "delete_task":
+		return policy.Allows(agentpolicy.Tasks)
 	case "agent_list", "agent_send":
 		return policy.Allows(agentpolicy.Collaboration)
 	case "read", "write", "edit", "glob", "grep", "publish_file", "import_file", "copy_file", "list_artifacts", "file_transfer_status", "file_transfer_cancel":

@@ -161,6 +161,7 @@ func New(options Options) (http.Handler, error) {
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/inputs", s.signedIn(s.submitInput))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads/{thread}/events", s.signedIn(s.threadEvents))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/compact", s.signedIn(s.compactThread))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/reset-context", s.signedIn(s.resetThreadContext))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/cancel", s.signedIn(s.cancelThread))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/workers", s.signedIn(s.createWorker))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/archive", s.signedIn(s.archiveThread))

@@ -19,8 +19,13 @@ func hostTargetFixture(t *testing.T) (string, BundleTarget) {
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"secrets", "socket", "blobs", "maintenance"} {
+	for _, name := range []string{"secrets", "socket", "blobs", "maintenance", "workspaces", "control"} {
 		if err := os.Mkdir(filepath.Join(dir, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"workspaces", "control"} {
+		if err := os.WriteFile(filepath.Join(dir, name, "owner.json"), []byte(`{"deployment_id":"11111111-1111-4111-8111-111111111111"}`), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -41,6 +46,9 @@ func hostTargetFixture(t *testing.T) (string, BundleTarget) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(dir, "secrets/host.key"), bytes.Repeat([]byte{0xbb}, 32), 0600); err != nil {
+		t.Fatal(err)
+	}
 	return dir, BundleTarget{DeploymentID: id}
 }
 
@@ -59,7 +67,7 @@ func TestHostTargetRejectsUnfinishedDeployment(t *testing.T) {
 }
 
 func TestHostTargetRejectsUnsafeStoragePaths(t *testing.T) {
-	for _, name := range []string{"socket", "blobs", "maintenance"} {
+	for _, name := range []string{"socket", "blobs", "maintenance", "workspaces", "control"} {
 		for _, variant := range []string{"missing", "symlink", "public"} {
 			t.Run(name+"/"+variant, func(t *testing.T) {
 				dir, target := hostTargetFixture(t)
@@ -69,7 +77,7 @@ func TestHostTargetRejectsUnsafeStoragePaths(t *testing.T) {
 						t.Fatal(err)
 					}
 				} else {
-					if err := os.Remove(path); err != nil {
+					if err := os.RemoveAll(path); err != nil {
 						t.Fatal(err)
 					}
 					if variant == "symlink" {
@@ -87,7 +95,7 @@ func TestHostTargetRejectsUnsafeStoragePaths(t *testing.T) {
 }
 
 func TestHostTargetRechecksStorageBindingAndRecovery(t *testing.T) {
-	for _, variant := range []string{"socket", "blobs", "maintenance", "recovery"} {
+	for _, variant := range []string{"socket", "blobs", "maintenance", "recovery", "workspaces", "control"} {
 		t.Run(variant, func(t *testing.T) {
 			dir, target := hostTargetFixture(t)
 			config, err := HostTarget(dir, target)
@@ -105,6 +113,15 @@ func TestHostTargetRechecksStorageBindingAndRecovery(t *testing.T) {
 				}
 				if err := os.Mkdir(p, 0700); err != nil {
 					t.Fatal(err)
+				}
+				if variant == "workspaces" || variant == "control" {
+					data, err := os.ReadFile(filepath.Join(p+"-original", "owner.json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(p, "owner.json"), data, 0600); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 			if err := config.verifyTarget(); err == nil {

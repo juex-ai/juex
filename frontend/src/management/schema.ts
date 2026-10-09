@@ -301,6 +301,7 @@ export interface Device {
   online: boolean;
   capabilities: Array<string>;
   working_directory: string;
+  working_files_root?: string;
   permission_mode: string;
   authorization_version: number;
   availability?: string;
@@ -333,6 +334,7 @@ export interface Environment {
   online: boolean;
   capabilities: Array<string>;
   working_directory: string;
+  working_files_root?: string;
   permission_mode: string;
   authorization_version: number;
   availability?: string;
@@ -784,6 +786,10 @@ export interface Receipt {
   data_removed: boolean;
   unconfirmed: number;
   environments_pending: number;
+}
+
+export interface ResetContextRequest {
+  request_id: string;
 }
 
 export interface ResultFact {

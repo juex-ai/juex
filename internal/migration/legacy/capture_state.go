@@ -187,7 +187,7 @@ func captureSharedPaths(f *Fleet) error {
 		for _, value := range values {
 			name := path.Join(root, value.Path)
 			prior, exists := files[name]
-			if absent[name] || exists && (prior.SHA256 != value.SHA256 || prior.Mode != value.Mode || prior.Size != value.Size) {
+			if absent[name] || exists && (prior.SHA256 != value.SHA256 || prior.Mode != value.Mode || prior.Size != value.Size || !prior.ModifiedAt.Equal(value.ModifiedAt)) {
 				return errors.New("overlapping capture paths disagree")
 			}
 			files[name] = value

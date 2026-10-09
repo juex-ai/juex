@@ -23,6 +23,7 @@ import (
 	calendarpg "github.com/juex-ai/juex/internal/calendar/postgres"
 	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/execution/blob"
+	"github.com/juex-ai/juex/internal/execution/host"
 	executionpg "github.com/juex-ai/juex/internal/execution/postgres"
 	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
@@ -105,6 +106,9 @@ func migrationApplyBundle(t *testing.T, target migration.BundleTarget) (*migrati
 	write("agents/abc234/threads/0/thread.json", encode(legacy.ThreadMetadata{Version: 1, ThreadID: "0", Alias: "main", CreatedAt: at.Format("2006-01-02T15:04:05.000Z"), UpdatedAt: at.Format("2006-01-02T15:04:05.000Z"), LastActivityAt: at.Format("2006-01-02T15:04:05.000Z"), RetentionState: "active", ExecutionState: "idle", Revision: 1, CurrentGeneration: gen, Generations: []legacy.Generation{gen}, Counts: legacy.Counts{GenerationCount: 1}, TokenUsage: legacy.UsageAggregate{ByModel: map[string]llm.Usage{}}, EventCursor: cursor, UsageAggregatedThrough: cursor}))
 	media := bytes.Repeat([]byte("original attachment\n"), 100)
 	write("agents/abc234/media/evidence.txt", media)
+	write("agents/abc234/threads/0/scratchpad/drafts/plan.md", []byte("Retained working file"))
+	write("agents/abc234/threads/0/modules/notes/notes.md", []byte("Retained current Notes"))
+	write("agents/abc234/threads/0/modules/tasks/tasks.json", []byte(`{"version":1,"tasks":[{"id":"done-task","title":"Verified","description":"Completed before migration","status":"done","priority":"p1","continuation_count":1,"updated_at":"2026-09-20T01:02:03Z"}]}`))
 	guard, err := legacy.AcquireSourceGuard(home, []string{"abc234"})
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +155,28 @@ func migrationApplyLock(t *testing.T, directory string) *os.File {
 	return f
 }
 
+func migrationApplyHost(t *testing.T, config *migration.ApplyConfig) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{root, control} {
+		if err := os.Chmod(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config.HostBackend = host.Config{Root: root, ControlRoot: control, Identity: config.Target.DeploymentID, Executable: os.Args[0], Server: config.PublicURL, InsecureHTTP: true}
+	config.HostKey = []byte("0123456789abcdef0123456789abcdef")
+	if _, err := host.New(config.HostBackend); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMigrationApplyOwnerImportsRecoverExactUploads(t *testing.T) {
 	for _, stage := range []string{"reserved", "partial", "blob-committed", "changed-route", "foreign-request", "revoked-epoch"} {
 		t.Run(stage, func(t *testing.T) {
@@ -182,6 +208,7 @@ func TestMigrationApplyOwnerImportsRecoverExactUploads(t *testing.T) {
 				}
 			}
 			config := migration.ApplyConfig{Target: target, Source: guard, MaintenanceDirectory: maintenance, DatabaseURL: pool.Config().ConnString(), MasterKey: []byte("0123456789abcdef0123456789abcdef"), PublicURL: "http://localhost:8680", BlobDirectory: filepath.Join(t.TempDir(), "blobs"), BlobCapacity: 1}
+			migrationApplyHost(t, &config)
 			pool.Close()
 			config.Lock = migrationApplyLock(t, maintenance)
 			partial, err := migration.Apply(ctx, b, config)
@@ -276,6 +303,27 @@ func TestMigrationApplyOwnerImportsRecoverExactUploads(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer check.Close()
+			var location managedruntime.WorkingFiles
+			var state managedruntime.ThreadState
+			if err := check.QueryRow(ctx, `SELECT location FROM runtime.thread_working_files`).Scan(&location); err != nil {
+				t.Fatal(err)
+			}
+			if err := check.QueryRow(ctx, `SELECT value FROM runtime.thread_state`).Scan(&state); err != nil {
+				t.Fatal(err)
+			}
+			if state.Notes.Content != "Retained current Notes" || len(state.Tasks) != 1 || state.Tasks[0].ContinuationCount != 1 || state.Tasks[0].Status != "done" {
+				t.Fatal("current working state changed", state)
+			}
+			if data, err := os.ReadFile(filepath.Join(location.Directory, "drafts/plan.md")); err != nil || string(data) != "Retained working file" {
+				t.Fatal("working files not restored", err)
+			}
+			if location.EnvironmentID != got.Files["abc234"].EnvironmentID {
+				t.Fatal("Runtime location not bound to Execution receipt")
+			}
+			var started bool
+			if err := check.QueryRow(ctx, `SELECT running OR provisioned FROM execution.managed_environments WHERE environment_id=$1`, location.EnvironmentID).Scan(&started); err != nil || started {
+				t.Fatal("offline restore started environment", err)
+			}
 			var origin managedruntime.ModelConfig
 			var initialEpoch, currentEpoch int64
 			if err := check.QueryRow(ctx, `SELECT model FROM runtime.imported_message_models`).Scan(&origin); err != nil {

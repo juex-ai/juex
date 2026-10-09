@@ -11,6 +11,10 @@ const capabilities = [
   ['calendar', 'Calendar 日程'],
   ['hooks', 'Hooks 自动脚本'],
   ['extensions', '扩展与 Skills'],
+  ['notes', 'Notes 持续工作上下文'],
+  ['tasks', 'Tasks 任务操作与完成门禁'],
+  ['context-control', '模型主动压缩与重置上下文'],
+  ['working-files', 'Thread 持续工作目录'],
 ] as const
 
 export function CapabilitiesEditor({ value, onChange }: { value: Policy; onChange: (value: Policy) => void }) {

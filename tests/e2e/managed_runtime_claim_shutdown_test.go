@@ -183,3 +183,92 @@ func checkClaimRelease(t *testing.T, release func(context.Context, string) error
 		}
 	}
 }
+
+func TestManagedRuntimeToolShutdownDuringSourceWake(t *testing.T) {
+	f := executionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	device, _ := f.pairDevice(t)
+	_, work := prepareRuntimeTool(t, f, device.ID)
+	releaseDuringRuntimeWake(t, ctx, f, "tools", work.ID, "UPDATE runtime.tools%", func() error {
+		return f.store.ReleaseToolClaims(ctx, "lost-delivery-worker")
+	})
+	next, err := f.store.ClaimTool(ctx, "restarted-tool")
+	if err != nil || next.ID != work.ID || next.LeaseEpoch <= work.LeaseEpoch || next.WakeVersion != work.WakeVersion+1 {
+		t.Fatal("restart could not reclaim the preserved tool wake immediately", next, err)
+	}
+	if err := f.store.FinishTool(ctx, work, managedruntime.ToolOutcome{State: "ready"}); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("stopped tool worker retained its write fence", err)
+	}
+}
+
+func TestManagedRuntimeHookShutdownDuringSourceWake(t *testing.T) {
+	f := executionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	device, _ := f.pairDevice(t)
+	configureManagedHooks(t, f, []hookpolicy.Declaration{managedHook("input", device.ID, hookpolicy.UserPromptSubmit, "printf hook")})
+	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := f.submit(t, "hook-wake-shutdown", f.main.ID, "Run hook")
+	config, err := f.authority.Snapshot(ctx, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := f.store.Claim(ctx, f.agent.ID, "before-stop", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.BeginTurn(ctx, lease, scope, input.ID, config); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Release(ctx, lease); err != nil {
+		t.Fatal(err)
+	}
+	work, err := f.store.ClaimHook(ctx, "stopping-hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseDuringRuntimeWake(t, ctx, f, "hooks", work.ID, "UPDATE runtime.hooks%", func() error {
+		return f.store.ReleaseHookClaims(ctx, "stopping-hook")
+	})
+	next, err := f.store.ClaimHook(ctx, "restarted-hook")
+	if err != nil || next.ID != work.ID || next.LeaseEpoch <= work.LeaseEpoch || next.WakeVersion != work.WakeVersion+1 {
+		t.Fatal("restart could not reclaim the preserved hook wake immediately", next, err)
+	}
+	if err := f.store.FinishHook(ctx, work, managedruntime.HookOutcome{State: "completed"}); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("stopped hook worker retained its write fence", err)
+	}
+}
+
+func releaseDuringRuntimeWake(t *testing.T, ctx context.Context, f *executionFixture, table, id, releaseQuery string, release func() error) {
+	t.Helper()
+	writer, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = writer.Rollback(ctx) }()
+	var writerPID uint32
+	if err := writer.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&writerPID); err != nil {
+		t.Fatal(err)
+	}
+	// Execution can publish one last wake while Runtime releases this worker.
+	// Hold that row until shutdown is blocked on it, rather than racing sleeps.
+	if _, err := writer.Exec(ctx, `UPDATE runtime.`+table+` SET wake_version=wake_version+1 WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan error, 1)
+	go func() { released <- release() }()
+	runtimeEventually(t, func() bool {
+		var waiting bool
+		return f.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) AND query LIKE $2)`, writerPID, releaseQuery).Scan(&waiting) == nil && waiting
+	})
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-released; err != nil {
+		t.Fatal("source wake prevented graceful worker release", err)
+	}
+}

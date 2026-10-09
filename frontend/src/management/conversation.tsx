@@ -104,11 +104,22 @@ function saveSubmission(key: string, request: InputRequest | null) {
   try { if (request) sessionStorage.setItem(key, JSON.stringify(request)); else sessionStorage.removeItem(key) } catch { /* The in-memory request ID still deduplicates retries when storage is unavailable. */ }
 }
 
+function storedReset(key: string): { request_id: string } | null {
+  try { const id = sessionStorage.getItem(key); return id ? { request_id: id } : null } catch { return null }
+}
+
+function saveReset(key: string, request: { request_id: string } | null) {
+  try { if (request) sessionStorage.setItem(key, request.request_id); else sessionStorage.removeItem(key) } catch { /* Keep the in-memory identity if browser storage is unavailable. */ }
+}
+
 function ThreadConversation({ base, thread, actor, writable, onThread }: { base: string; thread: Thread; actor: string; writable: boolean; onThread: (thread: Thread) => void }) {
   const storageKey = `juex.pending:${actor}:${base}:${thread.id}`
+  const resetKey = `juex.reset:${actor}:${base}:${thread.id}`
   const [submission, setSubmission] = useState<InputRequest | null>(() => storedSubmission(storageKey))
   const [compactFocus, setCompactFocus] = useState<string | null>(null)
   const [compactRequest, setCompactRequest] = useState<CompactionRequest | null>(null)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetRequest, setResetRequest] = useState<{ request_id: string } | null>(() => storedReset(resetKey))
   const [draft, setDraft] = useState(() => storedSubmission(storageKey)?.text ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -153,8 +164,17 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
     setError(''); setBusy(true)
     try { await api(`${base}/threads/${thread.id}/cancel`, {}) } catch (err) { setError(errorText(err)) } finally { setBusy(false) }
   }
+  async function resetContext(event: FormEvent) {
+    event.preventDefault(); if (busy) return
+    const request = resetRequest ?? { request_id: nanoid() }
+    setBusy(true); setError(''); setResetRequest(request)
+    saveReset(resetKey, request)
+    try { const updated = await api<Thread>(`${base}/threads/${thread.id}/reset-context`, request); onThread(updated); setRevision(value => value + 1); setResetOpen(false); setResetRequest(null); saveReset(resetKey, null) } catch (err) {
+      setError(errorText(err))
+    } finally { setBusy(false) }
+  }
   return <section className="management-conversation" aria-label={`${thread.name} 对话`}>
-    <div className="management-conversation-heading"><strong>{thread.name}</strong><Button size="sm" variant="ghost" disabled={!inputWritable || busy} onClick={() => { setError(''); setCompactFocus(compactRequest?.focus ?? '') }}><Minimize2 size={14} />压缩上下文</Button><span>{running && <LoaderCircle size={13} className="animate-spin" />}{stateText[current.state] ?? current.state}</span></div>
+    <div className="management-conversation-heading"><strong>{thread.name}</strong><Button size="sm" variant="ghost" disabled={!inputWritable || busy} onClick={() => { setError(''); setCompactFocus(compactRequest?.focus ?? '') }}><Minimize2 size={14} />压缩上下文</Button><Button size="sm" variant="ghost" disabled={!inputWritable || busy || (!resetRequest && (running || current.held_inputs > 0 || !['idle', 'failed'].includes(current.state)))} onClick={() => { setError(''); setResetOpen(true) }}><RotateCcw size={14} />新上下文</Button><span>{running && <LoaderCircle size={13} className="animate-spin" />}{stateText[current.state] ?? current.state}</span></div>
     <div className="management-transcript" ref={scroll} onScroll={event => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
       {!timeline.thread ? <Loading /> : rows.length === 0 ? <Empty title="从一条消息开始">说明你要完成的事，Agent 会在这里持续处理。</Empty> : rows.map(row => row.kind === 'notice' ? <p className="management-turn-notice" key={row.id}>{row.text}</p> : row.kind === 'hook' ? <details className="management-hook-log" key={row.id}><summary>Hook · {row.hook} · {hookEvents[row.event] ?? row.event} · {{ started: '等待执行结果', completed: '已完成', failed: '失败', cancelled: '已取消', unknown: '结果未知，请先核对设备状态' }[row.state] ?? row.state}</summary>{row.detail && <pre>{row.detail}</pre>}</details>: <MessageView key={row.id} base={base} message={row.message} status={row.status} application={current.application} />)}
       {current.state === 'running' && <div className="management-working" role="status"><LoaderCircle size={14} className="animate-spin" />正在处理…</div>}
@@ -165,6 +185,7 @@ function ThreadConversation({ base, thread, actor, writable, onThread }: { base:
       <form className="management-composer" onSubmit={send}><Textarea aria-label="消息" rows={3} maxLength={32000} value={draft} readOnly={submission !== null} disabled={!inputWritable} onChange={event => setDraft(event.target.value)} placeholder={current.application ? '此 Worker 执行应用审核，可查看进度或停止' : writable ? '告诉 Agent 你想完成什么…' : '当前只能查看历史'} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /><div><small>Enter 发送 · Shift + Enter 换行</small><span>{running && writable && <Button type="button" variant="outline" disabled={busy} onClick={() => void cancel()}><Square size={13} />停止</Button>}<Button type="submit" disabled={!inputWritable || busy || !draft.trim()} aria-label={submission ? '重试发送' : '发送消息'}>{busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}{submission ? '重试' : '发送'}</Button></span></div></form>
     </div>
     <Dialog open={compactFocus !== null} onOpenChange={open => { if (!open && !busy) setCompactFocus(null) }}><DialogContent><DialogHeader><DialogTitle>压缩上下文</DialogTitle><DialogDescription>为后续任务整理摘要，完整对话历史仍会保留。当前任务正在运行时，压缩会按提交顺序等待执行。</DialogDescription></DialogHeader><form onSubmit={compact}>{error && <Notice error>{error}</Notice>}{compactRequest && <Notice>结果尚未确认，重试会使用同一个请求编号。</Notice>}<Field label="需要重点保留的内容（可选）"><Textarea value={compactFocus ?? ''} maxLength={1000} readOnly={compactRequest !== null} onChange={event => setCompactFocus(event.target.value)} placeholder="例如：关键决策、文件路径和未完成事项" /></Field><DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={() => setCompactFocus(null)}>关闭</Button><Button disabled={busy}>{busy ? '提交中…' : compactRequest ? '重试' : '开始压缩'}</Button></DialogFooter></form></DialogContent></Dialog>
+    <Dialog open={resetOpen} onOpenChange={open => { if (!busy) setResetOpen(open) }}><DialogContent><DialogHeader><DialogTitle>开始新上下文</DialogTitle><DialogDescription>后续消息不再携带当前对话内容。启用的 Notes 会清空，已完成的 Tasks 会移出当前列表；未完成 Tasks、完整历史和工作文件保留。</DialogDescription></DialogHeader><form onSubmit={resetContext}>{error && <Notice error>{error}</Notice>}{resetRequest && <Notice>结果尚未确认，重试会使用同一个请求编号。</Notice>}<DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={() => setResetOpen(false)}>关闭</Button><Button disabled={busy}>{busy ? '提交中…' : resetRequest ? '重试' : '开始新上下文'}</Button></DialogFooter></form></DialogContent></Dialog>
   </section>
 }
 

@@ -170,6 +170,13 @@ func (c *Client) Compact(ctx context.Context, user, tenant, agent, thread string
 	return result, err
 }
 
+func (c *Client) ResetContext(ctx context.Context, user, tenant, agent, thread, requestID string) (managedruntime.Thread, error) {
+	reply, err := c.client.ResetContext(ctx, actor(user, tenant, agent), thread, requestID)
+	var result managedruntime.Thread
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}
+
 func (a *Authority) Peers(ctx context.Context, scope managedruntime.Scope) ([]managedruntime.PeerAgent, error) {
 	encoded, err := json.Marshal(scope)
 	if err != nil {

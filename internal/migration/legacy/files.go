@@ -69,7 +69,7 @@ func (r *sourceReader) read(path string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: source changed while reading", path)
 	}
 	sum := sha256.Sum256(data)
-	r.files = append(r.files, SourceFile{Path: path, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Mode: uint32(before.Mode().Perm()), Data: data})
+	r.files = append(r.files, SourceFile{Path: path, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Mode: uint32(before.Mode().Perm()), ModifiedAt: before.ModTime().UTC(), Data: data})
 	r.stats[path] = before
 	if r.byPath == nil {
 		r.byPath = make(map[string][]byte)

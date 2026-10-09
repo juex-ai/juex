@@ -125,6 +125,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"ResetContext": kitex.NewMethodInfo(
+		resetContextHandler,
+		newRuntimeResetContextArgs,
+		newRuntimeResetContextResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Archive": kitex.NewMethodInfo(
 		archiveHandler,
 		newRuntimeArchiveArgs,
@@ -500,6 +507,24 @@ func newRuntimeCompactResult() interface{} {
 	return platform.NewRuntimeCompactResult()
 }
 
+func resetContextHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeResetContextArgs)
+	realResult := result.(*platform.RuntimeResetContextResult)
+	success, err := handler.(platform.Runtime).ResetContext(ctx, realArg.Actor, realArg.ThreadID, realArg.RequestID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeResetContextArgs() interface{} {
+	return platform.NewRuntimeResetContextArgs()
+}
+
+func newRuntimeResetContextResult() interface{} {
+	return platform.NewRuntimeResetContextResult()
+}
+
 func archiveHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.RuntimeArchiveArgs)
 	realResult := result.(*platform.RuntimeArchiveResult)
@@ -736,6 +761,18 @@ func (p *kClient) Compact(ctx context.Context, actor *platform.Actor, threadID s
 	_args.Focus = focus
 	var _result platform.RuntimeCompactResult
 	if err = p.c.Call(ctx, "Compact", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ResetContext(ctx context.Context, actor *platform.Actor, threadID string, requestID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeResetContextArgs
+	_args.Actor = actor
+	_args.ThreadID = threadID
+	_args.RequestID = requestID
+	var _result platform.RuntimeResetContextResult
+	if err = p.c.Call(ctx, "ResetContext", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

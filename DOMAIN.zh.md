@@ -35,6 +35,12 @@ Activation 是可替换的运行容量，不是 Agent 身份。输入先持久�
 请求 ID 对接纳去重，不能假设下一条 assistant 消息与某条 Input 一一对应。
 上下文压缩保留持久历史和检查点。Worker 归档要求工作空闲，并保留可读历史。
 
+Notes 和 Tasks 是 Thread 拥有的可变工作上下文，独立于 Fleet Memory。
+启用的 Notes 和 Tasks 在每次模型迭代时投影。未完成的 todo/doing Tasks 阻止正常结束；
+pending/failed Tasks 不阻止。全部剩余 Tasks 完成时清空启用的 Notes。
+压缩保留 Notes 和未完成 Tasks；新上下文清理启用的 Notes 和已完成 Tasks，
+同时保留 Thread 身份、历史和工作文件。
+
 Agent 能力策略限制其工具与后台活动，独立于 Fleet 应用启用状态和环境许可。
 普通 Worker 委派与应用所拥有的 Worker 分别检查对应能力。收紧任何能力都会撤销
 所有旧 Agent 执行代际；重新开放既不恢复旧工作，也不扩大 Turn 已固定的策略。

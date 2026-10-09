@@ -18,6 +18,7 @@ import (
 )
 
 type toolRunner struct {
+	threadState      ThreadStateStore
 	instructions     InstructionStore
 	admission        maintenance.Admission
 	hooks            HookStore
@@ -243,6 +244,9 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 		return toolResult(work.Call, value, false)
 	}
 	if outcome, handled := r.contextTool(ctx, *work); handled {
+		return outcome
+	}
+	if outcome, handled := r.threadStateTool(ctx, *work); handled {
 		return outcome
 	}
 	if outcome, handled := r.collaborationTool(ctx, *work); handled {

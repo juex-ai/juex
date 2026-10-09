@@ -41,8 +41,15 @@ func (s *Store) ReleaseToolClaims(ctx context.Context, holder string) error {
 	if holder == "" {
 		return managedruntime.ErrInvalid
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE runtime.tools SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder)
-	return err
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if _, err := tx.Exec(ctx, `UPDATE runtime.tools SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.ToolWork, error) {
@@ -56,14 +63,18 @@ func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.To
 	}
 	defer rollback(tx)
 	var scope, call, request []byte
+	// State mutations follow the model's ordinal order even when other delivery
+	// workers are free; otherwise a final done could clear an earlier Notes edit.
 	err = tx.QueryRow(ctx, `WITH candidate AS (
  SELECT j.id FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id
  WHERE j.lease_until<=clock_timestamp() AND j.next_check<=clock_timestamp()
  AND (j.state IN ('pending','waiting') OR (j.operation_live AND (j.state='ready' OR t.state='cancelled' OR j.cancel_requested)))
+ AND (NOT (j.call->>'tool_name'=ANY($2::text[])) OR NOT EXISTS(
+ SELECT 1 FROM runtime.tools prior WHERE prior.attempt_id=j.attempt_id AND prior.ordinal<j.ordinal AND prior.call->>'tool_name'=ANY($2::text[]) AND prior.state IN ('pending','waiting','unknown')))
  ORDER BY j.next_check,j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1)
  UPDATE runtime.tools j SET lease_epoch=j.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds'
  FROM candidate c,runtime.turns t WHERE j.id=c.id AND t.id=j.turn_id
- RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live,j.deferred_result,j.hook_context,t.config->'extensions',COALESCE(t.config->'capabilities','{"disabled":[]}'::jsonb)`, holder).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive, &work.DeferredResult, &work.HookContext, &work.Extensions, &work.FrozenCapabilities)
+ RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live,j.deferred_result,j.hook_context,t.config->'extensions',COALESCE(t.config->'capabilities','{"disabled":[]}'::jsonb)`, holder, managedruntime.ThreadStateToolNames()).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive, &work.DeferredResult, &work.HookContext, &work.Extensions, &work.FrozenCapabilities)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return work, managedruntime.ErrNoWork
 	}
@@ -309,7 +320,10 @@ func consumeToolResults(ctx context.Context, tx pgx.Tx, turnID, threadID string,
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE runtime.tools SET consumed=true WHERE id=ANY($1::uuid[])`, ids)
-	return err
+	if err != nil || cancelled {
+		return err
+	}
+	return applyContextTransition(ctx, tx, turnID, threadID)
 }
 
 func consumeObservations(ctx context.Context, tx pgx.Tx, agent, thread string) error {

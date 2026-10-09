@@ -27,6 +27,7 @@ type Authority interface {
 }
 
 type ConversationStore interface {
+	ResetContext(context.Context, Scope, string, string) (Thread, error)
 	SetThreadArchived(context.Context, Scope, string, bool) (Thread, error)
 	EnsureAgent(context.Context, Scope) (Thread, error)
 	AcceptCompaction(context.Context, Scope, string, CompactionRequest) (InputReceipt, error)
@@ -35,6 +36,14 @@ type ConversationStore interface {
 	Timeline(context.Context, Scope, string, int64, int) (Timeline, error)
 	CancelThread(context.Context, Scope, string) error
 	CreateWorker(context.Context, Scope, string, string, string) (Thread, error)
+}
+
+func (s *Service) ResetContext(ctx context.Context, actor, tenant, agent, thread, requestID string) (Thread, error) {
+	scope, err := s.scope(ctx, actor, tenant, agent, true)
+	if err != nil {
+		return Thread{}, err
+	}
+	return s.Store.ResetContext(ctx, scope, thread, requestID)
 }
 
 type Service struct {

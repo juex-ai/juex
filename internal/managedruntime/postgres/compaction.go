@@ -98,6 +98,17 @@ func admitCompactionAttempt(ctx context.Context, tx pgx.Tx, turn string, request
 	if job.Attempts >= 6 {
 		return managedruntime.ErrCompactionFailed
 	}
+	var thread string
+	if err := tx.QueryRow(ctx, `SELECT thread_id FROM runtime.turns WHERE id=$1`, turn).Scan(&thread); err != nil {
+		return err
+	}
+	state, err := readThreadState(ctx, tx, thread)
+	if err != nil {
+		return err
+	}
+	if state.Revision != draft.ThreadState.Revision {
+		return managedruntime.ErrConflict
+	}
 	_, err = tx.Exec(ctx, `UPDATE runtime.compactions SET attempts=attempts+1 WHERE id=$1`, job.ID)
 	return err
 }
@@ -160,7 +171,19 @@ func finishCompaction(ctx context.Context, tx pgx.Tx, turn, thread, input string
 	if result.RowsAffected() != 1 {
 		return managedruntime.ErrConflict
 	}
-	summary := llm.TextMessage(llm.RoleUser, managedruntime.CompactionText(response))
+	state, err := readThreadState(ctx, tx, thread)
+	if err != nil {
+		return err
+	}
+	if state.Revision != draft.ThreadState.Revision {
+		return managedruntime.ErrConflict
+	}
+	if draft.TasksEnabled {
+		if err := writeThreadState(ctx, tx, thread, state.RenewContext(false, true)); err != nil {
+			return err
+		}
+	}
+	summary := llm.TextMessage(llm.RoleUser, draft.Reconcile(managedruntime.CompactionText(response)))
 	summary.ID = response.Message.ID
 	summary.Kind = llm.MessageKindCompact
 	summary.Model = response.Message.Model

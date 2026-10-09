@@ -81,6 +81,10 @@ func prepareAgentConfig(source ResolvedConfig, definition legacy.AgentDefinition
 		{agentpolicy.Memory, source.Modules["memory"]},
 		{agentpolicy.Hooks, source.Modules["hooks"]},
 		{agentpolicy.Extensions, source.Modules["extensions"]},
+		{agentpolicy.Notes, source.Modules["notes"]},
+		{agentpolicy.Tasks, source.Modules["tasks"]},
+		{agentpolicy.ContextControl, source.Modules["context-control"]},
+		{agentpolicy.WorkingFiles, source.Modules["scratchpad"]},
 		// The old fleet-management module administered processes as Supervisor;
 		// it did not grant the target's cross-Agent messaging authority.
 		{agentpolicy.Collaboration, *bindings.CollaborationEnabled},

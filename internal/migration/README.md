@@ -61,8 +61,16 @@ preserves partial commits and maintenance. Ordinary backup/upgrade readiness is
 unchanged; a migration retry enters the helper only after independently verifying
 that writers and executors remain stopped, with PostgreSQL still available.
 
-Apply does not select a default environment, install/connect extensions or resume
-the platform. Those actions and application acceptance remain required. Captured
+Apply restores current Notes and Tasks without replaying completion rules. Execution
+atomically publishes Thread working files and converted extension manifests/private
+state before first Host enrollment; Runtime imports only the returned location
+references. Exact retries verify the source receipt, permissions and complete file
+set, and reject changed destinations. It does not overwrite live files.
+
+Apply does not select a default environment, authorize/connect extensions or resume
+the platform. After offline import, start only Management and Execution, use real
+extension inspection/configuration receipts, then start Runtime and applications.
+MCP connection, subscriptions and application acceptance remain required. Captured
 Calendar state requires the source Calendar MCP extension to have been selected;
 a leftover file cannot authorize reactivating an old schedule.
 

@@ -45,8 +45,13 @@ App 的 `WriteBundle` 用三个文件固定该快照、私有配置/认证/资�
 升级的就绪条件不变；迁移重试必须先独立确认写入服务和 executor 仍已停止、PostgreSQL
 仍可用，再进入该 helper。
 
-Apply 不选择默认执行环境、不安装或连接扩展、不恢复平台运行。这些步骤及应用行为
-验收仍须完成。捕获的 Calendar 状态要求源端已选择 Calendar MCP 扩展；残留文件不能
+Apply 直接恢复当前 Notes 和 Tasks，不重放完成规则。Execution 在首次 Host 绑定前，
+原子发布 Thread 工作文件、转换后的扩展 manifest 和私有状态；Runtime 只导入返回的位置
+引用。精确重试验证源回执、权限和完整文件集合，拒绝已变化的目标，不覆盖在线文件。
+
+Apply 不选择默认执行环境、不授予或连接扩展，也不恢复平台运行。离线导入后先仅启动
+Management 与 Execution，取得真实扩展检查与配置回执，再启动 Runtime 和应用。
+MCP 连接、订阅及应用行为验收仍须完成。捕获的 Calendar 状态要求源端已选择 Calendar MCP 扩展；残留文件不能
 授权重新启用旧日程。
 
 Agent 捕获包括被引用的媒体和 spool 文件内容，并验证其 hash。Fleet 捕获要求明确

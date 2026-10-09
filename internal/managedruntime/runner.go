@@ -6,12 +6,14 @@ import (
 	"errors"
 	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"log/slog"
+	"path"
 	"slices"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/foundation/maintenance"
 )
@@ -93,6 +95,7 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 	}
 	runner.tools = &toolRunner{admission: config.Admission, store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
 	runner.tools.hooks, _ = store.(HookStore)
+	runner.tools.threadState, _ = store.(ThreadStateStore)
 	runner.tools.instructions, _ = store.(InstructionStore)
 	runner.tools.applications = config.Applications
 	runner.tools.applicationStore, _ = store.(ApplicationStore)
@@ -344,6 +347,19 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 	}
 	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation", Tools: runtimeTools()}
+	if r.tools.threadState != nil && work.Application != "memory" {
+		request.Tools = append(request.Tools, threadStateTools()...)
+		if work.Config.Capabilities.Allows(agentpolicy.Notes) && scope.Capabilities.Allows(agentpolicy.Notes) {
+			if text := work.ThreadState.NotesContext(); text != "" {
+				request.System += "\n\n" + text
+			}
+		}
+		if work.Config.Capabilities.Allows(agentpolicy.Tasks) && scope.Capabilities.Allows(agentpolicy.Tasks) {
+			if text := work.ThreadState.TasksContext(); text != "" {
+				request.System += "\n\n" + text
+			}
+		}
+	}
 	if r.tools.collaboration != nil && (job == nil || job.Application != "memory") {
 		_, peers := r.authority.(AgentDirectory)
 		request.Tools = append(request.Tools, collaborationTools(peers)...)
@@ -386,6 +402,22 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 				return r.store.HoldInput(ctx, lease, pending.InputID, "authority_changed")
 			}
 			request.System += executionContext(environments)
+			if work.Config.Capabilities.Allows(agentpolicy.Files) && scope.Capabilities.Allows(agentpolicy.Files) && work.Config.Capabilities.Allows(agentpolicy.WorkingFiles) && scope.Capabilities.Allows(agentpolicy.WorkingFiles) {
+				if work.WorkingFiles == nil {
+					if store, ok := r.store.(WorkingFilesStore); ok {
+						if env := selectEnvironment(environments, ""); env != nil && env.WorkingFilesRoot != "" && slices.Contains(env.Capabilities, execprotocol.Files) {
+							location, err := store.BindWorkingFiles(ctx, lease, work, WorkingFiles{EnvironmentID: env.ID, Directory: path.Join(env.WorkingFilesRoot, work.ThreadID)})
+							if err != nil {
+								return err
+							}
+							work.WorkingFiles = &location
+						}
+					}
+				}
+				if work.WorkingFiles != nil {
+					request.System += work.WorkingFiles.Context(environments)
+				}
+			}
 		}
 		request.Tools = append(request.Tools, executionTools()...)
 		if r.tools.files != nil {

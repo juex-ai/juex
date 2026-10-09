@@ -2,6 +2,13 @@
 
 > English | [中文](README.zh.md)
 
+
+Thread working-file references retain their original Execution environment and
+directory across default selection changes, restart, compaction and reset. Runtime
+stores only this location, checks current and frozen Files/working-files policy,
+and projects guidance without reading file contents. New Threads bind on first
+use; Execution supplies the root and creates directories on the first real write.
+
 Application context/output budgets freeze with the job and narrow each catalog
 candidate without changing its authorization identity. Attempts retain that policy;
 persistent admission rechecks it, including summaries and recovered work.
@@ -10,6 +17,26 @@ Runtime owns the `runtime` PostgreSQL schema. An Agent is a durable identity;
 an Activation is a replaceable lease holder. Main and Workers have independent
 inputs, history, context generations and cancellation. The scheduler interleaves
 owners and limits active Threads; idle Activations do not consume execution slots.
+
+Thread working state stores current Notes and ordered Tasks with a revision;
+it is not frozen in Turn configuration or reconstructed from historical events.
+State tools commit their mutation, event and replayable tool receipt atomically.
+Within one tool batch they execute in model order. Notes, Tasks and model context
+control have independent capabilities; Memory review Workers expose none of them.
+Normal completion runs the Tasks gate after Stop Hooks. A subscribed Worker's
+outstanding work/result or any queued input defers continuation, so the existing
+Turn cannot starve new input. A committed continuation increments its selected
+task once without sharing the Stop Hook continuation limit.
+
+Compaction freezes the working-state revision, reconciles unfinished Tasks and
+Notes into the returned summary, then checks the complete projected context budget.
+Only a successful context transition prunes done Tasks; failure, cancellation and
+a no-op preserve state. Human context reset requires settled work and a stable
+request ID. A model context transition is a durable intent applied after the whole
+tool batch closes. Reset preserves history, identity, unfinished Tasks and known
+live connections; unprocessed input or unknown external effects prevent hiding
+work. Offline import restores current Notes/Tasks directly without running live
+completion rules or reviving historical state.
 
 Worker creation, its explicit first input and optional result subscription commit
 together under the calling tool's fence. Workers start with independent context.

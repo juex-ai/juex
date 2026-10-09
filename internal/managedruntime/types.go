@@ -127,6 +127,9 @@ type ModelConfig struct {
 }
 
 type Work struct {
+	Application     string
+	ThreadState     ThreadState
+	WorkingFiles    *WorkingFiles
 	ModelBudget     *ApplicationModelBudget
 	Deferred        bool
 	ContextSequence int64

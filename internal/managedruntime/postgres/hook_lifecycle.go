@@ -121,5 +121,8 @@ func resumeHookFinish(ctx context.Context, tx pgx.Tx, work *managedruntime.Work)
 		}
 		return false, nil
 	}
+	if pending.Event == hookpolicy.Stop {
+		return true, finishConversation(ctx, tx, work.ThreadID, work.TurnID, work.InputID, "completed", pending.FinalText, "")
+	}
 	return true, completeTurn(ctx, tx, work.ThreadID, work.TurnID, work.InputID, "completed", pending.FinalText, "")
 }

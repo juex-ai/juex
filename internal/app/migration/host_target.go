@@ -61,6 +61,10 @@ func HostTarget(directory string, target BundleTarget) (ApplyConfig, error) {
 	if host.Backend.Identity != config.Identity || host.Backend.Root != config.Workspace || host.Backend.ControlRoot != filepath.Join(directory, "control") || host.Backend.Server != config.PublicURL || host.KeyFile != filepath.Join(directory, "secrets/host.key") {
 		return empty, errors.New("host execution binding differs from deployment metadata")
 	}
+	verify, err = bindHostRoots(verify, host.Backend.Root, host.Backend.ControlRoot)
+	if err != nil {
+		return empty, err
+	}
 	info, err := root.Lstat("secrets")
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return empty, errors.New("host secrets must be a private real directory")
@@ -80,9 +84,38 @@ func HostTarget(directory string, target BundleTarget) (ApplyConfig, error) {
 	if err != nil || len(key) != 32 {
 		return empty, errors.New("invalid Host deployment key")
 	}
+	hostKey, err := readBundleFile(root, "secrets/host.key", 32)
+	if err != nil || len(hostKey) != 32 {
+		return empty, errors.New("invalid Host enrollment key")
+	}
 	address := url.URL{Scheme: "postgres", User: url.UserPassword("juex", string(password)), Path: "/juex", RawQuery: url.Values{"host": {filepath.Join(directory, "socket")}, "port": {"5432"}, "sslmode": {"disable"}}.Encode()}
 	target.DeploymentID = config.Identity
-	return ApplyConfig{Target: target, MaintenanceDirectory: filepath.Join(directory, "maintenance"), DatabaseURL: address.String(), MasterKey: key, PublicURL: config.PublicURL, BlobDirectory: filepath.Join(directory, "blobs"), BlobCapacity: 20 << 30, verifyTarget: verify}, nil
+	return ApplyConfig{Target: target, MaintenanceDirectory: filepath.Join(directory, "maintenance"), DatabaseURL: address.String(), MasterKey: key, PublicURL: config.PublicURL, BlobDirectory: filepath.Join(directory, "blobs"), BlobCapacity: 20 << 30, HostBackend: host.Backend, HostKey: hostKey, verifyTarget: verify}, nil
+}
+
+// Matching owner.json content does not prove a root is still the same directory.
+// Pin both Execution roots before any owner allocation or file publication.
+func bindHostRoots(previous func() error, roots ...string) (func() error, error) {
+	paths := map[string]os.FileInfo{}
+	for _, root := range roots {
+		info, err := os.Lstat(root)
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+			return nil, errors.New("host execution roots must be existing private real directories")
+		}
+		paths[root] = info
+	}
+	return func() error {
+		if err := previous(); err != nil {
+			return err
+		}
+		for root, expected := range paths {
+			actual, err := os.Lstat(root)
+			if err != nil || !actual.IsDir() || actual.Mode().Perm()&0077 != 0 || !os.SameFile(expected, actual) {
+				return errors.New("host execution root binding changed")
+			}
+		}
+		return nil
+	}, nil
 }
 
 // Keep database, Blob and maintenance bound to the same existing deployment.

@@ -18,6 +18,8 @@ type AgentImport struct {
 }
 
 type ImportedThread struct {
+	WorkingFiles *WorkingFiles          `json:"working_files,omitempty"`
+	State        ThreadState            `json:"state"`
 	Thread       Thread                 `json:"thread"`
 	Events       []Event                `json:"events"`
 	Inputs       []ImportedInput        `json:"inputs"`
@@ -51,6 +53,14 @@ func (v AgentImport) Validate(agent string) error {
 	events, inputs, messages, jobs := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	mains := 0
 	for _, imported := range v.Threads {
+		if imported.WorkingFiles != nil {
+			if err := imported.WorkingFiles.Validate(); err != nil {
+				return err
+			}
+		}
+		if err := imported.State.Validate(); err != nil {
+			return err
+		}
 		t := imported.Thread
 		if !importUUID(t.ID) || t.AgentID != agent || t.CreatedAt.IsZero() || t.UpdatedAt.Before(t.CreatedAt) || strings.TrimSpace(t.Name) == "" || len([]rune(t.Name)) > 100 || t.PendingInputs != 0 || t.HeldInputs != 0 || t.Generation < 1 || t.Sequence != int64(len(imported.Events)) {
 			return ErrInvalid

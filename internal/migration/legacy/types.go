@@ -118,10 +118,11 @@ type Input struct {
 }
 
 type SourceFile struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-	Size   int64  `json:"size"`
-	Mode   uint32 `json:"mode"`
+	ModifiedAt time.Time `json:"modified_at,omitempty"`
+	Path       string    `json:"path"`
+	SHA256     string    `json:"sha256"`
+	Size       int64     `json:"size"`
+	Mode       uint32    `json:"mode"`
 	// Data retains the exact original bytes for the private migration archive.
 	Data []byte `json:"-"`
 }

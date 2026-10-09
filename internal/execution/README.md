@@ -2,6 +2,14 @@
 
 > English | [中文](README.zh.md)
 
+
+Execution describes a working-file root independently of the selected cwd: managed
+environments use their persistent Home, and external devices use a directory below
+their enrolled workspace. Ordinary writes create missing parents under the same
+authorized, journaled operation. Offline Host import publishes complete private
+file sets before enrollment; retries verify ownership, source receipt, file hashes
+and permissions, and never overwrite changed or already provisioned environments.
+
 Execution owns environments, external operation identity and persistent results.
 An Agent Activation does not own a device connection or the lifetime of its
 processes. Location-dependent requests use an explicit environment; process and

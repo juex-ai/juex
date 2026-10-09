@@ -192,6 +192,17 @@ func (h *runtimeHandler) Compact(ctx context.Context, actor *platform.Actor, thr
 	return reply(v, err)
 }
 
+func (h *runtimeHandler) ResetContext(ctx context.Context, actor *platform.Actor, thread, requestID string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	if !validActor(actor) {
+		return invalid()
+	}
+	v, err := h.service.ResetContext(ctx, actor.UserID, actor.TenantID, actor.AgentID, thread, requestID)
+	return reply(v, err)
+}
+
 func (h *managementHandler) Peers(ctx context.Context, scopeJSON string) (*platform.Reply, error) {
 	if transport.CallerRole(ctx) != "runtime" {
 		return reply(nil, managedruntime.ErrDenied)

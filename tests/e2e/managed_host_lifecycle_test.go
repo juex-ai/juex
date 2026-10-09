@@ -58,6 +58,9 @@ func TestManagedHostAllocatesStableAgentOwnedDefaults(t *testing.T) {
 		if envs[0].WorkingDirectory != filepath.Join(backend.root, envs[0].ID, "workspace") {
 			t.Fatal(envs)
 		}
+		if envs[0].WorkingFilesRoot != filepath.Join(backend.root, envs[0].ID, "home", "thread-work") {
+			t.Fatal("working files escaped managed Home", envs)
+		}
 	}
 	if ids[f.agent.ID] == ids[agent2.ID] {
 		t.Fatal("Agents share a managed environment")

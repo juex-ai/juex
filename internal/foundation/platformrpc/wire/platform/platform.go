@@ -3132,6 +3132,8 @@ type Runtime interface {
 
 	Compact(ctx context.Context, actor *Actor, threadID string, requestID string, focus string) (r *Reply, err error)
 
+	ResetContext(ctx context.Context, actor *Actor, threadID string, requestID string) (r *Reply, err error)
+
 	Archive(ctx context.Context, actor *Actor, threadID string, archived bool) (r *Reply, err error)
 
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
@@ -4396,6 +4398,100 @@ func (p *RuntimeCompactResult) String() string {
 }
 
 var fieldIDToName_RuntimeCompactResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeResetContextArgs struct {
+	Actor     *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ThreadID  string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+	RequestID string `thrift:"requestID,3" frugal:"3,default,string" json:"requestID"`
+}
+
+func NewRuntimeResetContextArgs() *RuntimeResetContextArgs {
+	return &RuntimeResetContextArgs{}
+}
+
+func (p *RuntimeResetContextArgs) InitDefault() {
+}
+
+var RuntimeResetContextArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeResetContextArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeResetContextArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeResetContextArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *RuntimeResetContextArgs) GetRequestID() (v string) {
+	return p.RequestID
+}
+func (p *RuntimeResetContextArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeResetContextArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *RuntimeResetContextArgs) SetRequestID(val string) {
+	p.RequestID = val
+}
+
+func (p *RuntimeResetContextArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeResetContextArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeResetContextArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeResetContextArgs = map[int16]string{
+	1: "actor",
+	2: "threadID",
+	3: "requestID",
+}
+
+type RuntimeResetContextResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeResetContextResult() *RuntimeResetContextResult {
+	return &RuntimeResetContextResult{}
+}
+
+func (p *RuntimeResetContextResult) InitDefault() {
+}
+
+var RuntimeResetContextResult_Success_DEFAULT *Reply
+
+func (p *RuntimeResetContextResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeResetContextResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeResetContextResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeResetContextResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeResetContextResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeResetContextResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeResetContextResult = map[int16]string{
 	0: "success",
 }
 

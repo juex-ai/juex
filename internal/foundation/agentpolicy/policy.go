@@ -11,16 +11,20 @@ import (
 type Capability string
 
 const (
-	Files         Capability = "files"
-	Shell         Capability = "shell"
-	Workers       Capability = "workers"
-	Collaboration Capability = "collaboration"
-	MCP           Capability = "mcp"
-	Observations  Capability = "observations"
-	Memory        Capability = "memory"
-	Calendar      Capability = "calendar"
-	Hooks         Capability = "hooks"
-	Extensions    Capability = "extensions"
+	Files          Capability = "files"
+	Shell          Capability = "shell"
+	Workers        Capability = "workers"
+	Collaboration  Capability = "collaboration"
+	MCP            Capability = "mcp"
+	Observations   Capability = "observations"
+	Memory         Capability = "memory"
+	Calendar       Capability = "calendar"
+	Hooks          Capability = "hooks"
+	Extensions     Capability = "extensions"
+	Notes          Capability = "notes"
+	Tasks          Capability = "tasks"
+	ContextControl Capability = "context-control"
+	WorkingFiles   Capability = "working-files"
 )
 
 // The zero policy retains the existing Agent behavior. Unknown capabilities
@@ -31,7 +35,7 @@ type Policy struct {
 
 func known(capability Capability) bool {
 	switch capability {
-	case Files, Shell, Workers, Collaboration, MCP, Observations, Memory, Calendar, Hooks, Extensions:
+	case Files, Shell, Workers, Collaboration, MCP, Observations, Memory, Calendar, Hooks, Extensions, Notes, Tasks, ContextControl, WorkingFiles:
 		return true
 	default:
 		return false

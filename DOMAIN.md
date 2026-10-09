@@ -42,6 +42,13 @@ the next assistant message is not assumed to correspond one-to-one with an Input
 Context compaction preserves durable history and a checkpoint. Worker archival
 requires idle work and retains readable history.
 
+Notes and Tasks are mutable, Thread-owned working context, independent of Fleet
+Memory. Enabled Notes and Tasks are projected on every model iteration. Unfinished
+todo/doing Tasks prevent normal completion; pending/failed Tasks do not. Completing
+all remaining Tasks clears enabled Notes. Compaction retains Notes and unfinished
+Tasks; a new context clears enabled Notes and completed Tasks while preserving
+Thread identity, history and working files.
+
 An Agent's capability policy limits its tools and background activity independently
 of Fleet application enablement and environment grants. Ordinary Worker delegation
 and application-owned Workers have separate capability checks. Tightening any

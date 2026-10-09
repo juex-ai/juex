@@ -120,6 +120,7 @@ type Environment struct {
 	Online               bool         `json:"online"`
 	Capabilities         []Capability `json:"capabilities"`
 	WorkingDirectory     string       `json:"working_directory"`
+	WorkingFilesRoot     string       `json:"working_files_root,omitempty"`
 	PermissionMode       string       `json:"permission_mode"`
 	AuthorizationVersion int64        `json:"authorization_version"`
 	Availability         string       `json:"availability,omitempty"`

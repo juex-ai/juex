@@ -57,6 +57,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		return work, err
 	}
 	work.ThreadID, work.Generation = thread.ID, thread.Generation
+	work.Application = thread.Application
 	switch state {
 	case "active":
 		var encoded []byte
@@ -70,6 +71,11 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 			if err := consumeToolResults(ctx, tx, work.TurnID, thread.ID, false); err != nil {
 				return work, err
 			}
+			thread, err = readThread(ctx, tx, scope.AgentID, threadID)
+			if err != nil {
+				return work, err
+			}
+			work.Generation = thread.Generation
 		} else if oldEpoch == lease.Epoch {
 			var started bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.attempts WHERE turn_id=$1 AND state='started')`, work.TurnID).Scan(&started); err != nil {
@@ -179,6 +185,14 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		return work, err
 	}
 	work.ModelOrigins, err = modelOrigins(ctx, tx, thread.ID, work.History)
+	if err != nil {
+		return work, err
+	}
+	work.ThreadState, err = readThreadState(ctx, tx, thread.ID)
+	if err != nil {
+		return work, err
+	}
+	work.WorkingFiles, err = readWorkingFiles(ctx, tx, thread.ID)
 	if err != nil {
 		return work, err
 	}
@@ -452,7 +466,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 			return tx.Commit(ctx)
 		}
 	}
-	if err := completeTurn(ctx, tx, threadID, turnID, inputID, state, finalText.String(), failure); err != nil {
+	if err := finishConversation(ctx, tx, threadID, turnID, inputID, state, finalText.String(), failure); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

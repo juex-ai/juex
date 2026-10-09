@@ -10,6 +10,7 @@ import (
 )
 
 type Runtime interface {
+	ResetContext(context.Context, string, string, string, string, string) (managedruntime.Thread, error)
 	Usage(context.Context, string, managedruntime.UsageQuery) (managedruntime.UsageReport, error)
 	Archive(context.Context, string, string, string, string, bool) (managedruntime.Thread, error)
 	Compact(context.Context, string, string, string, string, managedruntime.CompactionRequest) (managedruntime.InputReceipt, error)
@@ -18,6 +19,20 @@ type Runtime interface {
 	Events(context.Context, string, string, string, string, int64, int) (managedruntime.Timeline, error)
 	Cancel(context.Context, string, string, string, string) error
 	Worker(context.Context, string, string, string, string, string, string) (managedruntime.Thread, error)
+}
+
+type ResetContextRequest struct {
+	RequestID string `json:"request_id"`
+}
+
+func (s *Server) resetThreadContext(w http.ResponseWriter, r *http.Request, user management.User) {
+	var body ResetContextRequest
+	if err := decode(r, &body); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	v, err := s.options.Runtime.ResetContext(r.Context(), user.ID, r.PathValue("tenant"), r.PathValue("agent"), r.PathValue("thread"), body.RequestID)
+	respond(w, v, err)
 }
 
 type WorkerRequest struct {

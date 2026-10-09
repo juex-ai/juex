@@ -297,7 +297,7 @@ func captureProjection(parent []SourceFile, parentAbsent []string, prefix string
 	}
 	for _, file := range files {
 		got, ok := byPath[path.Join(prefix, file.Path)]
-		if !ok || got.SHA256 != file.SHA256 || got.Size != file.Size || got.Mode != file.Mode {
+		if !ok || got.SHA256 != file.SHA256 || got.Size != file.Size || got.Mode != file.Mode || !got.ModifiedAt.Equal(file.ModifiedAt) {
 			return errors.New("capture owner file projections disagree")
 		}
 	}

@@ -24,6 +24,7 @@ type RuntimeBindings struct {
 	Artifacts    map[string]execution.Artifact
 	Applications map[string]managedruntime.ImportedApplication
 	ModelOrigins map[string]map[string]managedruntime.ModelConfig
+	WorkingFiles map[string]managedruntime.WorkingFiles
 }
 
 type IdentityMap struct {
@@ -87,6 +88,11 @@ func ConvertRuntime(scope managedruntime.Scope, source legacy.Agent, bindings Ru
 			return RuntimeConversion{}, errors.New("model binding names an unknown source Thread")
 		}
 	}
+	for thread := range bindings.WorkingFiles {
+		if _, exists := c.threads[thread]; !exists {
+			return RuntimeConversion{}, errors.New("working files name an unknown source Thread")
+		}
+	}
 	result := RuntimeConversion{
 		Import:      managedruntime.AgentImport{Source: "juex/281889e5/agent/" + source.Definition.ID, SourceSHA256: bindings.SourceSHA256},
 		Identities:  IdentityMap{Threads: map[string]string{}, Messages: map[string]map[string]string{}, Inputs: map[string]map[string]string{}, Turns: map[string]map[string]string{}},
@@ -99,6 +105,13 @@ func ConvertRuntime(scope managedruntime.Scope, source legacy.Agent, bindings Ru
 		result.Identities.Messages[id], result.Identities.Inputs[id], result.Identities.Turns[id] = map[string]string{}, map[string]string{}, map[string]string{}
 		if err := tc.convert(thread, bindings); err != nil {
 			return RuntimeConversion{}, fmt.Errorf("source Thread %s: %w", id, err)
+		}
+		tc.value.State, err = currentThreadState(thread, source.Files)
+		if err != nil {
+			return RuntimeConversion{}, fmt.Errorf("source Thread %s state: %w", id, err)
+		}
+		if location, ok := bindings.WorkingFiles[id]; ok {
+			tc.value.WorkingFiles = &location
 		}
 		if role, exists := roles[id]; exists {
 			if err := tc.appendEvent("application", role.AssignmentID, "import.application", tc.value.Thread.Generation, tc.value.Thread.UpdatedAt, role); err != nil {

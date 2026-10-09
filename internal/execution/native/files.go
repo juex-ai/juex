@@ -85,6 +85,11 @@ func RunFileOperation(ctx context.Context, directory, kind string, args FileArgu
 		_, err = io.Copy(writer, io.NewSectionReader(file, args.Offset, int64(args.Limit)))
 		return err
 	case "write":
+		// New Threads create working directories on their first real write.
+		// This stays inside the existing journaled file operation and identity.
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
 		file, err := openRegular(path, os.O_WRONLY|os.O_CREATE, 0644)
 		if err != nil {
 			return err
