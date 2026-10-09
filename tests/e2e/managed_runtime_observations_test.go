@@ -464,3 +464,70 @@ func TestManagedRuntimeObservationSourceFencesAndPersistsPartialRecord(t *testin
 		t.Fatal("closed observer reclaimed", err)
 	}
 }
+
+func TestManagedRuntimeObservationAcknowledgmentDuringCursorAdvance(t *testing.T) {
+	f := executionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	device, _ := f.pairDevice(t, execprotocol.MCP)
+	_, job := prepareRuntimeTool(t, f, device.ID)
+	request := execprotocol.Request{Version: execprotocol.Version, ID: job.ID, AgentID: f.agent.ID, Kind: "mcp_connect", Arguments: json.RawMessage(`{"command":"fixture"}`)}
+	if err := f.store.PrepareTool(ctx, job, device.ID, request); err != nil {
+		t.Fatal(err)
+	}
+	source, err := f.store.ClaimObservation(ctx, "observer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.FinishObservation(ctx, source, managedruntime.ObservationBatch{Cursor: 4, More: true}); err != nil {
+		t.Fatal(err)
+	}
+	acks, err := f.store.ObservationAcks(ctx, 100)
+	if err != nil || len(acks) != 1 || acks[0].Cursor != 4 {
+		t.Fatal("missing first acknowledgment", acks, err)
+	}
+
+	// Hold the next page's cursor update until the previous acknowledgment is
+	// waiting on that row, so concurrency does not depend on scheduler timing.
+	writer, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = writer.Rollback(context.Background()) }()
+	var writerPID uint32
+	if err := writer.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&writerPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Exec(ctx, `UPDATE runtime.observation_sources SET cursor=8 WHERE id=$1`, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	confirmed := make(chan error, 1)
+	go func() { confirmed <- f.store.ConfirmObservationAck(ctx, acks[0]) }()
+	runtimeEventually(t, func() bool {
+		var waiting bool
+		return f.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) AND query LIKE 'UPDATE runtime.observation_sources SET confirmed_cursor=%')`, writerPID).Scan(&waiting) == nil && waiting
+	})
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-confirmed; err != nil {
+		t.Fatal("concurrent page update prevented acknowledgment", err)
+	}
+	var cursor, confirmedCursor int64
+	if err := f.pool.QueryRow(ctx, `SELECT cursor,confirmed_cursor FROM runtime.observation_sources WHERE id=$1`, source.ID).Scan(&cursor, &confirmedCursor); err != nil || cursor != 8 || confirmedCursor != 4 {
+		t.Fatal("acknowledgment changed the unread page boundary", cursor, confirmedCursor, err)
+	}
+	next, err := f.store.ObservationAcks(ctx, 100)
+	if err != nil || len(next) != 1 || next[0].Cursor != 8 {
+		t.Fatal("next page was not acknowledged independently", next, err)
+	}
+	if err := f.store.ConfirmObservationAck(ctx, next[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.ConfirmObservationAck(ctx, acks[0]); err != nil {
+		t.Fatal("delayed acknowledgment retry", err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT cursor,confirmed_cursor FROM runtime.observation_sources WHERE id=$1`, source.ID).Scan(&cursor, &confirmedCursor); err != nil || cursor != 8 || confirmedCursor != 8 {
+		t.Fatal("delayed acknowledgment moved the confirmed cursor backward", cursor, confirmedCursor, err)
+	}
+}

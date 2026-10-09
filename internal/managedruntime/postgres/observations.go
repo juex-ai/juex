@@ -104,7 +104,14 @@ func (s *Store) ObservationAcks(ctx context.Context, limit int) ([]managedruntim
 	if limit < 1 || limit > 100 {
 		return nil, managedruntime.ErrInvalid
 	}
-	rows, err := s.pool.Query(ctx, `WITH candidate AS (SELECT id FROM runtime.observation_sources WHERE kind IN ('mcp_connect','observe_command') AND confirmed_cursor<cursor AND ack_next_check<=clock_timestamp() ORDER BY ack_next_check,id FOR UPDATE SKIP LOCKED LIMIT $1)
+	// Acknowledgments race with pagination on the same source row. Use Runtime's
+	// lock-based isolation rather than inheriting the connection default.
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	rows, err := tx.Query(ctx, `WITH candidate AS (SELECT id FROM runtime.observation_sources WHERE kind IN ('mcp_connect','observe_command') AND confirmed_cursor<cursor AND ack_next_check<=clock_timestamp() ORDER BY ack_next_check,id FOR UPDATE SKIP LOCKED LIMIT $1)
  UPDATE runtime.observation_sources o SET ack_next_check=clock_timestamp()+interval '5 seconds' FROM candidate c WHERE o.id=c.id RETURNING o.id,o.environment_id,o.operation_id,o.scope,o.cursor`, limit)
 	if err != nil {
 		return nil, err
@@ -122,12 +129,22 @@ func (s *Store) ObservationAcks(ctx context.Context, limit int) ([]managedruntim
 		}
 		acknowledgments = append(acknowledgments, ack)
 	}
-	return acknowledgments, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return acknowledgments, tx.Commit(ctx)
 }
 
 func (s *Store) ConfirmObservationAck(ctx context.Context, ack managedruntime.ObservationAck) error {
-	_, err := s.pool.Exec(ctx, `UPDATE runtime.observation_sources SET confirmed_cursor=greatest(confirmed_cursor,$2),ack_next_check='-infinity' WHERE id=$1 AND cursor>=$2`, ack.SourceID, ack.Cursor)
-	return err
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if _, err := tx.Exec(ctx, `UPDATE runtime.observation_sources SET confirmed_cursor=greatest(confirmed_cursor,$2),ack_next_check='-infinity' WHERE id=$1 AND cursor>=$2`, ack.SourceID, ack.Cursor); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) Observation(ctx context.Context, scope managedruntime.Scope, id string) (managedruntime.Observation, error) {
