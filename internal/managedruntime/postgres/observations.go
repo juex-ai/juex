@@ -13,10 +13,20 @@ func (s *Store) ReleaseObservationClaims(ctx context.Context, holder string) err
 	if holder == "" {
 		return managedruntime.ErrInvalid
 	}
-	_, err := s.pool.Exec(ctx, `WITH sources AS (
+	// Read Committed preserves the final concurrent wake while relinquishing
+	// ownership; inheriting Repeatable Read can leave a stopped worker's lease.
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	_, err = tx.Exec(ctx, `WITH sources AS (
  UPDATE runtime.observation_sources SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1)
  UPDATE runtime.observation_deliveries SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity' WHERE lease_holder=$1`, holder)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ClaimObservation(ctx context.Context, holder string) (managedruntime.ObservationSource, error) {

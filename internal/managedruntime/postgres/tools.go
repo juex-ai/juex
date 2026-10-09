@@ -41,8 +41,15 @@ func (s *Store) ReleaseToolClaims(ctx context.Context, holder string) error {
 	if holder == "" {
 		return managedruntime.ErrInvalid
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE runtime.tools SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder)
-	return err
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if _, err := tx.Exec(ctx, `UPDATE runtime.tools SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.ToolWork, error) {
