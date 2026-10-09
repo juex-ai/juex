@@ -182,6 +182,9 @@ func (s *Store) Dispatch(ctx context.Context, environment string, epoch int64, i
 		return execution.Operation{}, err
 	}
 	defer rollback(tx)
+	if err := lockManagedLifecycle(ctx, tx, environment); err != nil {
+		return execution.Operation{}, err
+	}
 	if err := fence(ctx, tx, environment, epoch); err != nil {
 		return execution.Operation{}, err
 	}

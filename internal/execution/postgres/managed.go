@@ -119,12 +119,12 @@ func (s *Store) LockManaged(ctx context.Context, id string, action func(executio
 		return err
 	}
 	defer rollback(tx)
-	// Match operation admission's environment-first lock order. Admission can
-	// wait for a bounded container stop, then persist work for the next wake.
-	if _, err := tx.Exec(ctx, `SELECT id FROM execution.environments WHERE id=$1 FOR UPDATE`, id); err != nil {
+	// External start/stop work must fence dispatch without holding the rows
+	// needed to accept new waiting operations or record device shutdown.
+	if err := lockManagedLifecycle(ctx, tx, id); err != nil {
 		return err
 	}
-	h, err := scanManaged(tx.QueryRow(ctx, `SELECT `+managedColumns+` FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE e.id=$1 FOR UPDATE OF h`, id))
+	h, err := scanManaged(tx.QueryRow(ctx, `SELECT `+managedColumns+` FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE e.id=$1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent reconciler may have finished permanent cleanup after
 		// ManagedIDs took its snapshot.
@@ -141,6 +141,11 @@ func (s *Store) LockManaged(ctx context.Context, id string, action func(executio
 		if !h.Purging || !h.PurgeData || result.Running || h.Backend == "host" && h.Unconfirmed {
 			return execprotocol.ErrConflict
 		}
+		// Receipt mutations lock environment before activity. Reacquire that
+		// order only after external deletion, before removing the managed row.
+		if _, err := tx.Exec(ctx, `SELECT id FROM execution.environments WHERE id=$1 FOR UPDATE`, id); err != nil {
+			return err
+		}
 		if _, err = tx.Exec(ctx, `DELETE FROM execution.managed_environments WHERE environment_id=$1`, id); err != nil {
 			return err
 		}
@@ -156,6 +161,11 @@ func (s *Store) LockManaged(ctx context.Context, id string, action func(executio
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func lockManagedLifecycle(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.lifecycle.'||$1))`, id)
+	return err
 }
 
 var _ execution.ManagedRepository = (*Store)(nil)
