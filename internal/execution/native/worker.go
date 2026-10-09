@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/command"
 )
@@ -50,12 +49,10 @@ func (e *Engine) fileWorker(ctx context.Context, op *operation) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, e.config.ProcessUser.Helper, "file-tool", "--working-directory", directory)
-	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
-	if err := configureProcessUser(cmd, e.config.ProcessUser); err != nil {
+	cmd, err := fileHelperCommand(ctx, e.config.ProcessUser.Helper, directory, environment, e.config.ProcessUser, "file-tool", "--working-directory", directory)
+	if err != nil {
 		return err
 	}
-	command.ConfigureContext(cmd)
 	cmd.Stdin = bytes.NewReader(payload)
 	cmd.Stdout = outputWriter{engine: e, operation: op}
 	stderr := &workerError{}
@@ -67,6 +64,18 @@ func (e *Engine) fileWorker(ctx context.Context, op *operation) error {
 		return fmt.Errorf("file operation: %w: %s", err, stderr.String())
 	}
 	return nil
+}
+
+func fileHelperCommand(ctx context.Context, executable, directory string, environment []string, user *ProcessUser, args ...string) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, executable, args...)
+	// These fixed file helpers spawn no descendants. Wait for complete output,
+	// including slow journal fsyncs or transfer receivers, after the helper exits.
+	cmd.Dir, cmd.Env = directory, environment
+	if err := configureProcessUser(cmd, user); err != nil {
+		return nil, err
+	}
+	command.ConfigureContext(cmd)
+	return cmd, nil
 }
 
 type workerError struct{ buffer bytes.Buffer }

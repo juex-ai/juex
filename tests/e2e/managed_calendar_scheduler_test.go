@@ -31,7 +31,13 @@ func TestManagedCalendarStepRecoversOnceThenDeliversPostRecoveryInstant(t *testi
 			t.Fatal(err)
 		}
 	}
-	setDue(time.Now().Add(-48 * time.Hour))
+	var databaseNow time.Time
+	if err := f.pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the next minute well after recovery so this assertion only observes
+	// missed work, not a legitimate due instant crossed during the first Step.
+	setDue(databaseNow.Add(-48*time.Hour - 30*time.Second))
 	if err := service.Step(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -480,8 +480,18 @@ func TestManagedThreadStateToolsOrderReceiptContinuationAndReset(t *testing.T) {
 		t.Fatal("reset identity", reset, err)
 	}
 	again, err := store.ResetContext(ctx, scope, main.ID, "reset-once")
-	if err != nil || !reflect.DeepEqual(reset, again) {
-		t.Fatal("reset replay", again, err)
+	if err != nil {
+		t.Fatal("reset replay", err)
+	}
+	// PostgreSQL and JSON can represent the same UTC instant with different
+	// time.Location objects. The persisted public receipt must remain identical.
+	wantReceipt, err := json.Marshal(reset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotReceipt, err := json.Marshal(again)
+	if err != nil || string(gotReceipt) != string(wantReceipt) {
+		t.Fatalf("reset replay: got %s, want %s, error %v", gotReceipt, wantReceipt, err)
 	}
 	input, err = store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: "after-reset", Text: "Fresh context"})
 	if err != nil {
