@@ -7,9 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"strconv"
-	"time"
 
-	"github.com/juex-ai/juex/internal/foundation/command"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
@@ -22,13 +20,7 @@ func (e *Engine) transferWorker(ctx context.Context, directory, path, direction 
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, e.config.ProcessUser.Helper, "transfer-tool", "--direction="+direction, "--working-directory="+directory, "--path="+path)
-	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
-	if err := configureProcessUser(cmd, e.config.ProcessUser); err != nil {
-		return nil, err
-	}
-	command.ConfigureContext(cmd)
-	return cmd, nil
+	return fileHelperCommand(ctx, e.config.ProcessUser.Helper, directory, environment, e.config.ProcessUser, "transfer-tool", "--direction="+direction, "--working-directory="+directory, "--path="+path)
 }
 
 func (e *Engine) exportWorker(ctx context.Context, directory, path string, out io.Writer) error {
