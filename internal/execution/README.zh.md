@@ -53,7 +53,7 @@ Linux 需要可用的用户服务管理器；CLI 不自动启用 lingering 或�
 
 部署管理的 Host 与 Hosted 环境共享同一生命周期，每个 Agent 拥有一个持久环境身份、
 Workspace 与 Home。列出环境不会启动执行器，待执行操作按需启动它；
-未完成进程、MCP 连接和未确认结果阻止空闲回收。默认空闲五分钟后回收，环境行锁将回收与新操作接纳串行化。
+未完成进程、MCP 连接和未确认结果阻止空闲回收。默认空闲五分钟后回收，生命周期锁在回收期间阻止派发，新操作仍可提交到持久队列。
 用户重新加入 Tenant 后保留其 Workspace，但不会重新授权较早代际的操作。
 
 `juex-execution serve --host-config /absolute/operator-config.json` 在 Linux/macOS

@@ -40,8 +40,9 @@ type ManagedResult struct {
 type ManagedRepository interface {
 	EnsureManaged(context.Context, Scope, ManagedResource) (ManagedResource, error)
 	ManagedIDs(context.Context) ([]string, error)
-	// LockManaged serializes lifecycle effects against admission and device
-	// writes. A crash can repeat Ensure/Stop, never an operation's side effects.
+	// LockManaged serializes lifecycle effects against dispatch. Admission and
+	// device receipts remain available while work waits for the next wake.
+	// A crash can repeat Ensure/Stop, never an operation's side effects.
 	LockManaged(context.Context, string, func(ManagedResource) (ManagedResult, error)) error
 }
 
