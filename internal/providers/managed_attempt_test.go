@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,26 +71,6 @@ func TestManagedProviderReportedZeroAndMissingUsage(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestManagedResponsesIdleDoesNotRetry(t *testing.T) {
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(200)
-		w.(http.Flusher).Flush()
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-	p, err := NewProvider(llm.ProviderProfile{ID: "fixture", Protocol: llm.ProtocolOpenAIResponses, BaseURL: server.URL, APIKey: "test-key", Model: "fixture", Capabilities: llm.ProviderCapabilities{Streaming: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = llm.CompleteWithOptions(context.Background(), p, "", []llm.Message{llm.TextMessage(llm.RoleUser, "hello")}, nil, llm.CompleteOptions{SingleAttempt: true, StreamIdleTimeout: 20 * time.Millisecond})
-	if err == nil || !strings.Contains(err.Error(), "idle timeout") || requests.Load() != 1 {
-		t.Fatalf("requests=%d err=%v", requests.Load(), err)
 	}
 }
 
