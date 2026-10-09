@@ -16,6 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/foundation/clientip"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
 )
@@ -340,6 +341,8 @@ func respond(w http.ResponseWriter, value any, err error) {
 			status, code, message = http.StatusInsufficientStorage, "storage_full", "Platform file storage is full; remove unused files or ask the operator to increase capacity"
 		case errors.Is(err, execprotocol.ErrUnavailable):
 			status, code, message = 503, "execution_unavailable", err.Error()
+		case errors.Is(err, platformrpc.ErrUnavailable):
+			status, code, message = 503, "service_unavailable", platformrpc.ErrUnavailable.Error()
 		case errors.Is(err, management.ErrMailUnavailable):
 			status, code, message = 503, "email_unavailable", err.Error()
 		case errors.Is(err, managedruntime.ErrModelUnavailable):

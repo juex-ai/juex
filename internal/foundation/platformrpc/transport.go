@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +22,9 @@ import (
 	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/remote"
 	"github.com/cloudwego/kitex/pkg/remote/trans/gonet"
+	transheader "github.com/cloudwego/kitex/pkg/remote/transmeta"
 	"github.com/cloudwego/kitex/pkg/rpcinfo"
+	"github.com/cloudwego/kitex/pkg/transmeta"
 	"github.com/cloudwego/kitex/server"
 	"github.com/cloudwego/kitex/transport"
 	"github.com/juex-ai/juex/internal/foundation/platformrpc/wire/platform"
@@ -69,7 +72,7 @@ func ServerOptions(listener net.Listener, credentials Credentials, clients ...st
 		return errors.New("service identity not authorized")
 	}
 	secured := &drainingListener{Listener: tls.NewListener(listener, config), connections: make(map[*drainingConnection]struct{})}
-	return []server.Option{server.WithListener(secured), server.WithTransServerFactory(gonet.NewTransServerFactory()), server.WithTransHandlerFactory(gonet.NewSvrTransHandlerFactory()), server.WithBoundHandler(&peerIdentity{listener: secured}), server.WithExitWaitTime(10 * time.Second), server.WithExitSignal(func() <-chan error { return make(chan error) })}, nil
+	return []server.Option{server.WithListener(secured), server.WithTransServerFactory(gonet.NewTransServerFactory()), server.WithTransHandlerFactory(gonet.NewSvrTransHandlerFactory()), server.WithMetaHandler(transmeta.ServerTTHeaderHandler), server.WithEnableContextTimeout(true), server.WithBoundHandler(&peerIdentity{listener: secured}), server.WithExitWaitTime(10 * time.Second), server.WithExitSignal(func() <-chan error { return make(chan error) })}, nil
 }
 
 type identityKey struct{}
@@ -238,7 +241,34 @@ func ClientOptions(address, service string, credentials Credentials) ([]client.O
 			return discovery.Result{Cacheable: true, CacheKey: address, Instances: []discovery.Instance{discovery.NewInstance("tcp", address, discovery.DefaultWeight, nil)}}, nil
 		},
 	}
-	return []client.Option{client.WithResolver(resolver), client.WithDialer(tlsDialer{config: config}), client.WithTransHandlerFactory(gonet.NewCliTransHandlerFactory()), client.WithTransportProtocol(transport.TTHeader), client.WithConnectTimeout(3 * time.Second), client.WithRPCTimeout(10 * time.Second)}, nil
+	return []client.Option{client.WithResolver(resolver), client.WithDialer(tlsDialer{config: config}), client.WithTransHandlerFactory(gonet.NewCliTransHandlerFactory()), client.WithTransportProtocol(transport.TTHeader), client.WithMetaHandler(deadlineMetadata{transmeta.ClientTTHeaderHandler}), client.WithConnectTimeout(3 * time.Second), client.WithRPCTimeout(10 * time.Second)}, nil
+}
+
+type deadlineMetadata struct{ remote.MetaHandler }
+
+func (m deadlineMetadata) WriteMeta(ctx context.Context, message remote.Message) (context.Context, error) {
+	if err := ctx.Err(); err != nil {
+		return ctx, err
+	}
+	ctx, err := m.MetaHandler.WriteMeta(ctx, message)
+	if err != nil {
+		return ctx, err
+	}
+	// Kitex's standard header carries the configured budget, not the remaining
+	// parent deadline. Each RPC hop must preserve the caller's shorter budget.
+	budget := message.RPCInfo().Config().RPCTimeout()
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if budget <= 0 || remaining < budget {
+			budget = remaining
+		}
+	}
+	if budget < time.Millisecond {
+		// A zero millisecond header disables server cancellation.
+		return ctx, context.DeadlineExceeded
+	}
+	message.TransInfo().PutTransIntInfo(map[uint16]string{transheader.RPCTimeout: strconv.FormatInt(budget.Milliseconds(), 10)})
+	return ctx, nil
 }
 
 func Reply(value any, code string) *platform.Reply {
