@@ -46,7 +46,7 @@ func TestLegacyRuntimeConversionPreservesAPIHistoryAndContinuation(t *testing.T)
 		t.Fatal(err)
 	}
 	original := strings.Repeat("完整正文", 1200) + "PRESERVED-MIDDLE" + strings.Repeat("末尾正文", 1200)
-	source := legacyRuntimeSource(original)
+	source := legacyRuntimeSourceWithEarlyFacts(original)
 	converted, err := migration.ConvertRuntime(scope, source, migration.RuntimeBindings{SourceSHA256: strings.Repeat("a", 64)})
 	if err != nil {
 		t.Fatal(err)
@@ -174,14 +174,10 @@ func TestLegacyRuntimeConversionPreservesAPIHistoryAndContinuation(t *testing.T)
 	}
 }
 
-func legacyRuntimeSource(original string) legacy.Agent {
-	at := time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC)
-	stamp := at.Format("2006-01-02T15:04:05.000Z")
-	gen1, gen2 := legacy.Generation{ID: "g000001", Ordinal: 1, BoundarySeq: 1}, legacy.Generation{ID: "g000002", Ordinal: 2, BoundarySeq: 4}
-	text := llm.Message{ID: "source-text", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "old bounded preview", Artifact: &llm.ContextArtifactProjection{SourceKind: "user_input", MessageID: "source-text", StoredPath: "text.txt", SHA256: execprotocol.FileDigest([]byte(original)), OriginalBytes: len(original)}}}}
-	summary := llm.Message{ID: "source-summary", Role: llm.RoleUser, Kind: llm.MessageKindCompact, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\nimported summary\n\nRetained Input References\n\nMessage source-text:\nold bounded preview"}}, Compaction: &llm.CompactionMetadata{SummaryChars: len("imported summary"), RetainedInputReferences: []llm.Message{text}}}
-	input := llm.TextMessage(llm.RoleUser, "cancelled-old-input")
-	input.ID = "original-input-message"
+func legacyRuntimeSourceWithEarlyFacts(original string) legacy.Agent {
+	source := legacyRuntimeSource(original)
+	thread := &source.Threads[0]
+	at := thread.Inputs[0].CreatedAt
 	// A denied source tool has ownership metadata but no lifecycle event.
 	failedWriteUse := llm.Message{ID: "failed-write-use", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "denied-write", ToolName: "write_begin", Input: map[string]any{"path": "../outside"}}}}
 	failedWriteResult := llm.Message{ID: "failed-write-result", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "denied-write", ToolName: "write_begin", IsError: true, Content: "write_begin: path escapes workspace", ResultFact: &llm.ResultFact{Owner: "chunked-write"}}}}
@@ -193,21 +189,33 @@ func legacyRuntimeSource(original string) legacy.Agent {
 		raw, _ := json.Marshal(map[string]any{"type": kind, "turn_id": turn, "payload": payload})
 		return legacy.Fact{Type: "event.recorded", Event: raw}
 	}
-	// Compaction changes the generation while retaining the original input scope.
-	thread := legacy.Thread{ContextScopeID: gen1.ID, Metadata: legacy.ThreadMetadata{ThreadID: "0", Alias: "main", CreatedAt: stamp, UpdatedAt: stamp, RetentionState: "active", ExecutionState: "idle", CurrentGeneration: gen2, Generations: []legacy.Generation{gen1, gen2}}, Context: []llm.Message{summary}, Inputs: []legacy.Input{{ID: "old-input", TurnID: "old-turn", MessageID: input.ID, Message: input, State: "settled", CreatedAt: at}}, Commits: []legacy.Commit{
-		{Version: 1, Seq: 1, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "thread.created", ThreadID: "0", Alias: "main"}}},
-		{Version: 1, Seq: 2, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "message.appended", Message: &text}, {Type: "message.appended", Message: &input}, {Type: "message.appended", Message: &failedWriteUse}, {Type: "message.appended", Message: &failedWriteResult}}},
-		{Version: 1, Seq: 3, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "event.recorded", Event: json.RawMessage(`{"type":"turn.cancelled","turn_id":"old-turn","payload":{"input_ids":["old-input"]}}`)}}},
-		{Version: 1, Seq: 4, At: stamp, GenerationID: gen2.ID, Facts: []legacy.Fact{{Type: "context.compacted", Summary: &summary, Seed: &legacy.GenerationSeed{ContextScopeID: gen1.ID, ProviderMessages: []llm.Message{summary}}}}},
-	}}
+	thread.Commits[1].Facts = append(thread.Commits[1].Facts, legacy.Fact{Type: "message.appended", Message: &failedWriteUse}, legacy.Fact{Type: "message.appended", Message: &failedWriteResult})
 	thread.Commits[1].Facts = append(thread.Commits[1].Facts,
 		factEvent("turn.admitted", "historic-turn", map[string]any{"message_id": historic.ID}),
 		legacy.Fact{Type: "message.appended", Message: &historic},
 		factEvent("turn.started", "historic-turn", map[string]any{"message_id": historic.ID, "kind": "direct"}),
 		factEvent("turn.completed", "historic-turn", map[string]any{"input_ids": []string{"pruned-checked-input"}}),
 		legacy.Fact{Type: "message.appended", Message: &check},
-		factEvent("input.checked", "historic-check-turn", map[string]any{"input_ids": []string{"pruned-checked-input"}, "scope_id": gen1.ID, "checked_at": at, "tool_use_id": "historic-check", "message_id": check.ID}),
+		factEvent("input.checked", "historic-check-turn", map[string]any{"input_ids": []string{"pruned-checked-input"}, "scope_id": thread.ContextScopeID, "checked_at": at, "tool_use_id": "historic-check", "message_id": check.ID}),
 	)
+	return source
+}
+
+func legacyRuntimeSource(original string) legacy.Agent {
+	at := time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC)
+	stamp := at.Format("2006-01-02T15:04:05.000Z")
+	gen1, gen2 := legacy.Generation{ID: "g000001", Ordinal: 1, BoundarySeq: 1}, legacy.Generation{ID: "g000002", Ordinal: 2, BoundarySeq: 4}
+	text := llm.Message{ID: "source-text", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "old bounded preview", Artifact: &llm.ContextArtifactProjection{SourceKind: "user_input", MessageID: "source-text", StoredPath: "text.txt", SHA256: execprotocol.FileDigest([]byte(original)), OriginalBytes: len(original)}}}}
+	summary := llm.Message{ID: "source-summary", Role: llm.RoleUser, Kind: llm.MessageKindCompact, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\nimported summary\n\nRetained Input References\n\nMessage source-text:\nold bounded preview"}}, Compaction: &llm.CompactionMetadata{SummaryChars: len("imported summary"), RetainedInputReferences: []llm.Message{text}}}
+	input := llm.TextMessage(llm.RoleUser, "cancelled-old-input")
+	input.ID = "original-input-message"
+	// Compaction changes the generation while retaining the original input scope.
+	thread := legacy.Thread{ContextScopeID: gen1.ID, Metadata: legacy.ThreadMetadata{ThreadID: "0", Alias: "main", CreatedAt: stamp, UpdatedAt: stamp, RetentionState: "active", ExecutionState: "idle", CurrentGeneration: gen2, Generations: []legacy.Generation{gen1, gen2}}, Context: []llm.Message{summary}, Inputs: []legacy.Input{{ID: "old-input", TurnID: "old-turn", MessageID: input.ID, Message: input, State: "settled", CreatedAt: at}}, Commits: []legacy.Commit{
+		{Version: 1, Seq: 1, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "thread.created", ThreadID: "0", Alias: "main"}}},
+		{Version: 1, Seq: 2, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "message.appended", Message: &text}, {Type: "message.appended", Message: &input}}},
+		{Version: 1, Seq: 3, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "event.recorded", Event: json.RawMessage(`{"type":"turn.cancelled","turn_id":"old-turn","payload":{"input_ids":["old-input"]}}`)}}},
+		{Version: 1, Seq: 4, At: stamp, GenerationID: gen2.ID, Facts: []legacy.Fact{{Type: "context.compacted", Summary: &summary, Seed: &legacy.GenerationSeed{ContextScopeID: gen1.ID, ProviderMessages: []llm.Message{summary}}}}},
+	}}
 	continued := legacy.Commit{Version: 1, Seq: 5, At: stamp, GenerationID: gen2.ID}
 	for i := range 8 {
 		message := llm.TextMessage(llm.RoleAssistant, strings.Repeat("Visible retained detail. ", 100))
