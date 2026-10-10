@@ -12,7 +12,7 @@ async function fixture(page, toolBoundary = false) {
   if (toolBoundary) {
     events[18] = { ...events[18], kind: 'turn.started', data: { turn_id: 'turn' } };
     events[19] = { ...events[19], data: { id: 'call', role: 'assistant', blocks: [{ type: 'reasoning', text: 'Earlier reasoning' }, { type: 'tool_use', tool_use_id: 'read-call', tool_name: 'read', input: { path: '/work/example.txt' } }] } };
-    events[20] = { ...events[20], turn_id: 'turn', tool_attempt_id: 'call', data: { id: 'result', role: 'user', kind: 'tool_result', blocks: [{ type: 'tool_result', tool_use_id: 'read-call', tool_name: 'read', content: 'A retained orphan result' }] } };
+    events[20] = { ...events[20], turn_id: 'turn', tool_attempt_id: toolBoundary === 'canonical' ? undefined : 'call', data: { id: 'result', role: 'user', kind: 'tool_result', blocks: [{ type: 'tool_result', tool_use_id: 'read-call', tool_name: 'read', content: 'A retained orphan result' }] } };
   }
   let failOlder = false;
   let delayOlder = null;
@@ -85,11 +85,12 @@ test('failed older-page loading preserves current messages and can be retried', 
   await expect(page.getByText(/更早的历史未加载，可重试/)).toHaveCount(0);
 });
 
-test('prepending a missing tool request preserves the expanded result and reading anchor', async ({ page }) => {
-  await fixture(page, true);
+for (const identity of ['explicit', 'canonical']) test(`prepending a missing tool request preserves expanded output and anchor (${identity})`, async ({ page }) => {
+  await fixture(page, identity);
   await page.goto('/t/tenant/agents/agent');
   await expect(page.getByText(/^History 40:/)).toBeVisible();
   await page.locator('.management-transcript').evaluate(element => { element.scrollTop = 0; });
+  await expect(page.locator('.management-work-group > summary')).toContainText('1 项记录');
   await page.locator('.management-work-group > summary').click();
   await page.locator('.management-tool-row > summary').click();
   await expect(page.getByText('A retained orphan result', { exact: true })).toBeVisible();
@@ -99,4 +100,7 @@ test('prepending a missing tool request preserves the expanded result and readin
   await expect(page.locator('.management-tool-row[open] > summary')).toContainText('read');
   expect(Math.abs((await page.locator('.management-work-group > summary').boundingBox()).y - groupY)).toBeLessThan(3);
   await expect(page.getByText('A retained orphan result', { exact: true })).toHaveCount(1);
+  await expect(page.locator('.management-work-group > summary')).toContainText('1 次工具调用');
+  await expect(page.locator('.management-tool-state')).toHaveCount(1);
+  await expect(page.getByText('等待结果', { exact: true })).toHaveCount(0);
 });

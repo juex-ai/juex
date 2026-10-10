@@ -1,6 +1,6 @@
 import type { Event, InputImage, InputReceipt, Message, ModelProgress, Timeline } from './schema'
 
-export type TranscriptRow = ({ kind: 'message'; id: string; message: Message; status: string; observationIDs?: string[] } | { kind: 'notice'; id: string; text: string } | { kind: 'hook'; id: string; hook: string; event: string; state: string; detail: string }) & { createdAt?: string; turnID?: string; sequence?: number; toolAttemptID?: string }
+export type TranscriptRow = ({ kind: 'message'; id: string; message: Message; status: string; observationIDs?: string[] } | { kind: 'notice'; id: string; text: string } | { kind: 'hook'; id: string; hook: string; event: string; state: string; detail: string }) & { createdAt?: string; turnID?: string; sequence?: number; toolAttemptID?: string; generation?: number }
 
 export function reconcileProgress(previous: ModelProgress[], page: Timeline): ModelProgress[] {
   const current = page.progress ?? []
@@ -34,7 +34,7 @@ export function projectTranscript(events: Event[], progress: ModelProgress[] = [
       const message = event.data as Message
       const id = message.id ?? event.id
       const existing = messages.get(id)
-      if (existing) { existing.message = message; existing.status = ''; existing.turnID = turnID; existing.sequence = event.sequence; existing.createdAt = event.created_at; existing.observationIDs = event.observation_ids } else {
+      if (existing) { existing.message = message; existing.status = ''; existing.turnID = turnID; existing.sequence = event.sequence; existing.createdAt = event.created_at; existing.generation = event.generation; existing.toolAttemptID = event.tool_attempt_id; existing.observationIDs = event.observation_ids } else {
         const row: Extract<TranscriptRow, { kind: 'message' }> = { kind: 'message', id, message, status: '', observationIDs: event.observation_ids }
         rows.push(row); messages.set(id, row)
       }
@@ -78,12 +78,12 @@ export function projectTranscript(events: Event[], progress: ModelProgress[] = [
     } else if (event.kind === 'turn.recovered') {
       rows.push({ kind: 'notice', id: event.id, text: '服务已恢复，正在继续原来的对话。' })
     }
-    for (const row of rows.slice(start)) { row.createdAt = event.created_at; row.turnID = turnID; row.sequence = event.sequence; row.toolAttemptID = event.tool_attempt_id }
+    for (const row of rows.slice(start)) { row.createdAt = event.created_at; row.turnID = turnID; row.sequence = event.sequence; row.toolAttemptID = event.tool_attempt_id; row.generation = event.generation }
   }
   for (const preview of progress) {
     if (messages.has(preview.attempt_id) || !preview.snapshot.blocks.length) continue
     const outcome: Record<string, string> = { running: '正在输出…', settling: '正在同步最终状态…', failed: '未完成 · 模型请求失败', cancelled: '未完成 · 已取消', unknown: '未完成 · 服务中断，结果未知' }
-    rows.push({ kind: 'message', id: preview.attempt_id, turnID: preview.turn_id, sequence: preview.sequence, createdAt: preview.started_at,
+    rows.push({ kind: 'message', id: preview.attempt_id, turnID: preview.turn_id, sequence: preview.sequence, generation: preview.generation, createdAt: preview.started_at,
       message: { id: preview.attempt_id, role: 'assistant', model: preview.model, blocks: preview.snapshot.blocks.map(block => ({ type: block.kind, text: block.text })) },
       status: `${outcome[preview.state] ?? '未完成'}${preview.snapshot.truncated ? ' · 预览已达容量上限，完整结果完成后显示' : ''}` })
   }

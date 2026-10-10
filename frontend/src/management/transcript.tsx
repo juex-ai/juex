@@ -61,9 +61,10 @@ export function TranscriptItem({ base, row, application }: { base: string; row: 
   if (row.kind === 'hook') return <ActivityView base={base} activity={row} />
   if (row.kind === 'activity') {
     const tools = row.items.filter(item => item.kind === 'tool')
+    const calls = tools.filter(tool => tool.call)
     const statuses = [...new Set(row.items.flatMap(item => item.kind === 'reasoning' && item.status ? [item.status] : []))]
     const keys = row.items.flatMap(activityKeys).map(key => `work:${key}`)
-    return <Disclosure keys={keys} className="management-work-group"><summary data-transcript-anchors={JSON.stringify(keys)}><Wrench size={13} /><span>工作过程</span><small>{tools.length ? `${tools.length} 次工具调用` : `${row.items.length} 项记录`}</small>{statuses.map(status => <span key={status}>{status}</span>)}{tools.some(tool => tool.state === 'unknown') && <span>结果未知</span>}{tools.some(tool => tool.state === 'waiting') && <span>等待结果</span>}</summary><div>{row.items.map(activity => <ActivityView key={activity.id} base={base} activity={activity} />)}</div></Disclosure>
+    return <Disclosure keys={keys} className="management-work-group"><summary data-transcript-anchors={JSON.stringify(keys)}><Wrench size={13} /><span>工作过程</span><small>{calls.length ? `${calls.length} 次工具调用` : `${row.items.length} 项记录`}</small>{statuses.map(status => <span key={status}>{status}</span>)}{tools.some(tool => tool.state === 'unknown') && <span>结果未知</span>}{tools.some(tool => tool.state === 'waiting') && <span>等待结果</span>}</summary><div>{row.items.map(activity => <ActivityView key={activity.id} base={base} activity={activity} />)}</div></Disclosure>
   }
   return <MessageView base={base} message={row.message} status={row.status} createdAt={row.createdAt} application={application} observationIDs={row.observationIDs} />
 }

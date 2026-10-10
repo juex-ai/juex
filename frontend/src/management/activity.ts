@@ -12,6 +12,10 @@ export function projectActivity(rows: TranscriptRow[], events: Event[]): Display
   const tools = new Map<string, ToolActivity>()
   const operations = new Map<string, ToolActivity>()
   const receipts = new Set<ToolActivity>()
+  const batch = new Map<string, ToolActivity | null>()
+  const boundaries = new Set(['turn.started', 'turn.completed', 'turn.failed', 'turn.cancelled', 'thread.cancelled', 'context.reset', 'context.compacted'])
+  let generation: number | undefined
+  let turnID: string | undefined
   const turnTools = new Map<string, ToolActivity[]>()
   const key = (turn: string | undefined, call: string) => `${turn ?? ''}:${call}`
   const append = (row: TranscriptRow, activity: Activity) => {
@@ -21,11 +25,16 @@ export function projectActivity(rows: TranscriptRow[], events: Event[]): Display
   }
   const nodes = [
     ...rows.map(row => ({ sequence: row.sequence ?? 0, row, event: null })),
-    ...events.filter(event => ['tool.ready', 'tool.unknown', 'tool.cancelled', 'turn.cancelled', 'thread.cancelled'].includes(event.kind)).map(event => ({ sequence: event.sequence, row: null, event })),
+    ...events.filter(event => ['tool.ready', 'tool.unknown', 'tool.cancelled'].includes(event.kind) || boundaries.has(event.kind)).map(event => ({ sequence: event.sequence, row: null, event })),
   ].sort((a, b) => a.sequence - b.sequence)
   for (const node of nodes) {
+    const scopeGeneration = node.event?.generation ?? node.row?.generation
+    const scopeTurn = node.row ? node.row.turnID : node.event?.turn_id ?? (node.event?.data as { turn_id?: string }).turn_id ?? turnID
+    if (generation !== scopeGeneration || turnID !== scopeTurn) batch.clear()
+    generation = scopeGeneration; turnID = scopeTurn
     if (node.event) {
       const event = node.event
+      if (boundaries.has(event.kind)) batch.clear()
       const data = event.data as { id?: string; turn_id?: string; call?: Block; result?: Block }
       if (event.kind === 'thread.cancelled' || event.kind === 'turn.cancelled') {
         const candidates = event.kind === 'thread.cancelled' ? [...tools.values()] : turnTools.get(data.turn_id ?? '') ?? []
@@ -53,6 +62,10 @@ export function projectActivity(rows: TranscriptRow[], events: Event[]): Display
     const row = node.row!
     if (row.kind === 'hook') { append(row, row); continue }
     if (row.kind !== 'message' || ['compact', 'system_notice'].includes(row.message.kind ?? '')) { result.push(row); continue }
+    // Canonical history need not have Runtime operations. Match only within a
+    // single assistant batch; explicit attempt receipts remain authoritative.
+    const resultsOnly = row.message.role === 'user' && row.message.blocks.length > 0 && row.message.blocks.every(block => block.type === 'tool_result')
+    if (row.message.role === 'assistant' || row.message.role === 'user' && !resultsOnly) batch.clear()
     let visible: Block[] = []
     const flush = (index: number) => {
       if (visible.length) { result.push({ ...row, id: `${row.id}:body:${index}`, message: { ...row.message, blocks: visible } }); visible = [] }
@@ -63,12 +76,14 @@ export function projectActivity(rows: TranscriptRow[], events: Event[]): Display
       else if (block.type === 'tool_use') {
         flush(index)
         const tool: ToolActivity = { kind: 'tool', id, call: block, state: 'waiting', startedAt: row.createdAt }
+        if (block.tool_use_id) batch.set(block.tool_use_id, batch.has(block.tool_use_id) ? null : tool)
         if (block.tool_use_id && row.message.id) tools.set(key(row.message.id, block.tool_use_id), tool)
         const list = turnTools.get(row.turnID ?? '') ?? []; list.push(tool); turnTools.set(row.turnID ?? '', list)
         append(row, tool)
       } else if (block.type === 'tool_result') {
         flush(index)
-        const tool = block.tool_use_id && row.toolAttemptID ? tools.get(key(row.toolAttemptID, block.tool_use_id)) : undefined
+        const tool = block.tool_use_id ? row.toolAttemptID ? tools.get(key(row.toolAttemptID, block.tool_use_id)) : batch.get(block.tool_use_id) : undefined
+        if (block.tool_use_id && tool && batch.get(block.tool_use_id) === tool) batch.delete(block.tool_use_id)
         if (tool) { tool.aliases = [...new Set([...(tool.aliases ?? []), id])]; if (!receipts.has(tool)) { tool.result = block; tool.state = block.is_error ? 'failed' : 'completed'; tool.finishedAt ??= row.createdAt } }
         else {
           const orphan: ToolActivity = { kind: 'tool', id, result: block, state: block.is_error ? 'failed' : 'completed', finishedAt: row.createdAt }

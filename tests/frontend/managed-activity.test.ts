@@ -120,3 +120,74 @@ test('orphan result identity remains an alias after its earlier request is loade
   if (group.kind !== 'activity' || group.items[0].kind !== 'tool') assert.fail('missing tool')
   assert.ok(group.items[0].aliases?.includes('result:0'))
 })
+
+const canonicalEvent = (sequence: number, kind: string, data: unknown, extra = {}): Event => ({ id: `c${sequence}`, thread_id: 'main', generation: 1, sequence, kind, data, ...extra })
+const canonicalCall = (sequence = 1, ids = ['call']) => canonicalEvent(sequence, 'message.appended', { id: `request-${sequence}`, role: 'assistant', blocks: ids.map(id => ({ type: 'tool_use', tool_use_id: id, tool_name: 'read', input: { path: id } })) })
+const canonicalResult = (sequence = 2, id = 'call', extra = {}) => canonicalEvent(sequence, 'message.appended', { id: `result-${sequence}`, role: 'user', kind: 'tool_result', blocks: [{ type: 'tool_result', tool_use_id: id, tool_name: 'read', content: `output-${sequence}`, ...extra }] })
+const canonicalTools = (events: Event[]) => projectActivity(projectTranscript(events), events).flatMap(row => row.kind === 'activity' ? row.items.filter(item => item.kind === 'tool') : [])
+
+test('canonical parallel calls pair unique IDs without Runtime attempt metadata', () => {
+  const tools = canonicalTools([canonicalCall(1, ['a', 'b']), canonicalResult(2, 'b', { is_error: true }), canonicalResult(3, 'a')])
+  assert.deepEqual(tools.map(tool => [tool.call?.tool_use_id, tool.result?.content, tool.state]), [['a', 'output-3', 'completed'], ['b', 'output-2', 'failed']])
+})
+
+test('canonical result pagination preserves its alias when the missing call is prepended', () => {
+  const result = canonicalResult()
+  const orphan = canonicalTools([result])[0]
+  assert.equal(orphan.call, undefined)
+  const paired = canonicalTools([canonicalCall(), result])
+  assert.equal(paired.length, 1)
+  assert.ok(paired[0].aliases?.includes(orphan.id))
+  assert.equal(paired[0].result?.content, orphan.result?.content)
+})
+
+test('canonical calls are consumed once and later model batches may reuse their IDs', () => {
+  const tools = canonicalTools([canonicalCall(), canonicalResult(), canonicalResult(3), canonicalCall(4), canonicalResult(5)])
+  assert.deepEqual(tools.map(tool => [!!tool.call, tool.result?.content]), [[true, 'output-2'], [false, 'output-3'], [true, 'output-5']])
+})
+
+test('duplicate canonical call IDs remain ambiguous instead of guessing', () => {
+  const tools = canonicalTools([canonicalCall(1, ['call', 'call']), canonicalResult()])
+  assert.deepEqual(tools.map(tool => tool.state), ['waiting', 'waiting', 'completed'])
+  assert.equal(tools[2].call, undefined)
+})
+
+test('canonical fallback never replaces explicit attempt identity', () => {
+  const tools = canonicalTools([canonicalCall(), { ...canonicalResult(), tool_attempt_id: 'unloaded-attempt' }])
+  assert.equal(tools.length, 2)
+  assert.equal(tools[0].result, undefined)
+  assert.equal(tools[1].call, undefined)
+})
+
+test('canonical matching stops at ordinary inputs, assistant batches and explicit Turn boundaries', () => {
+  const boundaries = [
+    canonicalEvent(2, 'message.appended', { role: 'user', blocks: [{ type: 'text', text: 'A new request' }] }),
+    canonicalEvent(2, 'input.accepted', { receipt: { id: 'input' }, text: 'A queued request' }),
+    canonicalEvent(2, 'message.appended', { id: 'new-attempt', role: 'assistant', blocks: [{ type: 'text', text: 'A new response' }] }),
+    ...['turn.started', 'turn.completed', 'turn.failed', 'turn.cancelled', 'thread.cancelled', 'context.reset', 'context.compacted'].map(kind => canonicalEvent(2, kind, { turn_id: 'other' })),
+  ]
+  for (const boundary of boundaries) {
+    const tools = canonicalTools([canonicalCall(), boundary, canonicalResult(3)])
+    assert.equal(tools.length, 2, boundary.kind)
+    assert.equal(tools[0].result, undefined, boundary.kind)
+    assert.equal(tools[1].call, undefined, boundary.kind)
+  }
+})
+
+test('canonical matching never crosses generation or row Turn identity', () => {
+  for (const extra of [{ generation: 2 }, { turn_id: 'different-turn' }]) {
+    const tools = canonicalTools([{ ...canonicalCall(), turn_id: 'original-turn' }, { ...canonicalResult(), ...extra }])
+    assert.equal(tools.length, 2)
+    assert.equal(tools[1].call, undefined)
+  }
+})
+
+test('canonical result does not weaken an authoritative unknown or cancelled receipt', () => {
+  for (const state of ['unknown', 'cancelled']) {
+    const receipt = canonicalEvent(2, `tool.${state}`, { id: 'operation', call: { tool_use_id: 'call' }, result: { content: 'Authoritative receipt', is_error: true } }, { tool_attempt_id: 'request-1' })
+    const tools = canonicalTools([canonicalCall(), receipt, canonicalResult(3)])
+    assert.equal(tools.length, 1)
+    assert.equal(tools[0].state, state)
+    assert.equal(tools[0].result?.content, 'Authoritative receipt')
+  }
+})
