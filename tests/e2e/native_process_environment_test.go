@@ -96,7 +96,9 @@ func privatePathProcesses(t *testing.T, config native.Config, uid int) {
 		t.Fatal(err)
 	}
 	probe := "juex-private-path-probe"
-	if err := os.WriteFile(filepath.Join(bin, probe), []byte("#!/bin/sh\nprintf 'private-path:'; /usr/bin/id -u"), 0755); err != nil {
+	// Exercise PATH selection without adding a newly written script's launch
+	// policy to this identity test, especially on macOS under a full race suite.
+	if err := os.Symlink("/usr/bin/id", filepath.Join(bin, probe)); err != nil {
 		t.Fatal(err)
 	}
 	wrong := t.TempDir()
@@ -115,9 +117,9 @@ func privatePathProcesses(t *testing.T, config native.Config, uid int) {
 	values := map[string]string{"PATH": bin + ":/usr/bin:/bin", "TEST_HELPER_BINARY": binary}
 	engine := openNative(t, config)
 	for _, kind := range []string{"run_hook", "observe_command"} {
-		var args any = execprotocol.HookCommand{Command: []string{probe}, Input: json.RawMessage(`{}`), TimeoutMS: 3000, MaxOutputBytes: 4096}
+		var args any = execprotocol.HookCommand{Command: []string{probe, "-u"}, Input: json.RawMessage(`{}`), TimeoutMS: 3000, MaxOutputBytes: 4096}
 		if kind == "observe_command" {
-			args = execprotocol.ObservableCommand{Command: []string{probe}}
+			args = execprotocol.ObservableCommand{Command: []string{probe, "-u"}}
 		}
 		req := nativeRequest(t, kind, kind, args)
 		if _, err := engine.SubmitWithEnvironment(req, values); err != nil {
@@ -125,7 +127,16 @@ func privatePathProcesses(t *testing.T, config native.Config, uid int) {
 		}
 		snapshot := nativeEventually(t, engine, req.ID, func(s execprotocol.Snapshot) bool { return s.State.Terminal() })
 		output := snapshot.Text()
-		if kind == "observe_command" {
+		if kind == "run_hook" {
+			var result execprotocol.HookOutput
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Stderr != "" || result.Overflow {
+				t.Fatal("PATH probe produced unexpected hook output", result)
+			}
+			output = result.Stdout
+		} else {
 			output = ""
 			for _, line := range strings.Split(strings.TrimSpace(snapshot.Text()), "\n") {
 				var event struct {
@@ -137,7 +148,7 @@ func privatePathProcesses(t *testing.T, config native.Config, uid int) {
 				output += event.Text
 			}
 		}
-		if snapshot.State != execprotocol.Completed || !strings.Contains(output, "private-path:"+strconv.Itoa(uid)) || strings.Contains(output, "connector-path") {
+		if snapshot.State != execprotocol.Completed || snapshot.ExitCode == nil || *snapshot.ExitCode != 0 || strings.TrimSpace(output) != strconv.Itoa(uid) {
 			t.Fatal(kind, snapshot)
 		}
 	}

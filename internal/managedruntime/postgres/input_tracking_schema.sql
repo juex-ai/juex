@@ -17,5 +17,9 @@ CREATE TABLE runtime.input_tracking (
     OR (checked_at IS NOT NULL AND check_action_id IS NOT NULL AND check_message_id IS NOT NULL AND tool_use_id IS NOT NULL AND delivery='delivered'))
 );
 CREATE INDEX input_tracking_unchecked ON runtime.input_tracking(thread_id,scope_id,accepted_order) WHERE checked_at IS NULL;
--- The new default must not expand tools in a previously frozen Turn.
-UPDATE runtime.turns SET config=jsonb_set(config,'{capabilities}',jsonb_build_object('disabled',COALESCE(NULLIF(config->'capabilities'->'disabled','null'),'[]'::jsonb)||'["input_tracking"]'::jsonb));
+-- Recoverable plans must not gain tools; terminal plans remain historical facts.
+UPDATE runtime.turns SET config=jsonb_set(config,'{capabilities}',
+ COALESCE(NULLIF(config->'capabilities','null'),'{}'::jsonb) ||
+ jsonb_build_object('disabled',COALESCE(NULLIF(config->'capabilities'->'disabled','null'),'[]'::jsonb)||'["input_tracking"]'::jsonb))
+WHERE state IN ('running','waiting')
+ AND NOT (COALESCE(NULLIF(config->'capabilities'->'disabled','null'),'[]'::jsonb) ? 'input_tracking');

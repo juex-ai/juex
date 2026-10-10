@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -47,31 +48,46 @@ func TestManagedInputTrackingUpgradeFreezesExistingTurns(t *testing.T) {
 	type record struct {
 		turn, attempt string
 		before        string
+		plan          string
+		want          managedruntime.TurnConfig
+		recoverable   bool
 	}
 	var records []record
-	for _, state := range []string{"running", "waiting", "completed"} {
-		thread, input, turn, attempt := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-		config := runtimeConfig()
-		config.Capabilities.Disabled = []agentpolicy.Capability{agentpolicy.Notes}
-		queries := []struct {
-			sql  string
-			args []any
-		}{
-			{`INSERT INTO runtime.threads(id,agent_id,kind,name) VALUES($1,$2,'worker','Old')`, []any{thread, agent}},
-			{`INSERT INTO runtime.inputs(id,request_id,thread_id,actor_id,actor_authorization_epoch,membership_version,membership_execution_epoch,agent_execution_epoch,text,state) VALUES($1::uuid,$1::text,$2,$3,1,1,1,1,'old','completed')`, []any{input, thread, uuid.NewString()}},
-			{`INSERT INTO runtime.turns(id,input_id,thread_id,generation,config,activation_epoch,state) VALUES($1,$2,$3,1,$4,1,$5)`, []any{turn, input, thread, config, state}},
-			{`INSERT INTO runtime.attempts(id,turn_id,ordinal,request,state) VALUES($1,$2,0,$3,'completed')`, []any{attempt, turn, request}},
-		}
-		for _, q := range queries {
-			if _, err := pool.Exec(ctx, q.sql, q.args...); err != nil {
+	for _, state := range []string{"running", "waiting", "completed", "cancelled", "failed"} {
+		for _, policy := range []agentpolicy.Policy{
+			{Disabled: []agentpolicy.Capability{agentpolicy.Notes}, Enabled: []agentpolicy.Capability{agentpolicy.ApplyPatch}},
+			{Version: 1, SkillSources: true, Disabled: []agentpolicy.Capability{agentpolicy.Notes, agentpolicy.FileSearch}, Enabled: []agentpolicy.Capability{agentpolicy.ApplyPatch}},
+		} {
+			thread, input, turn, attempt := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+			config := runtimeConfig()
+			config.Capabilities = policy
+			queries := []struct {
+				sql  string
+				args []any
+			}{
+				{`INSERT INTO runtime.threads(id,agent_id,kind,name) VALUES($1,$2,'worker','Old')`, []any{thread, agent}},
+				{`INSERT INTO runtime.inputs(id,request_id,thread_id,actor_id,actor_authorization_epoch,membership_version,membership_execution_epoch,agent_execution_epoch,text,state) VALUES($1::uuid,$1::text,$2,$3,1,1,1,1,'old','completed')`, []any{input, thread, uuid.NewString()}},
+				{`INSERT INTO runtime.turns(id,input_id,thread_id,generation,config,activation_epoch,state) VALUES($1,$2,$3,1,$4,1,$5)`, []any{turn, input, thread, config, state}},
+				{`INSERT INTO runtime.attempts(id,turn_id,ordinal,request,state) VALUES($1,$2,0,$3,'completed')`, []any{attempt, turn, request}},
+			}
+			for _, q := range queries {
+				if _, err := pool.Exec(ctx, q.sql, q.args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var before, plan string
+			if err := pool.QueryRow(ctx, `SELECT request::text FROM runtime.attempts WHERE id=$1`, attempt).Scan(&before); err != nil {
 				t.Fatal(err)
 			}
+			if err := pool.QueryRow(ctx, `SELECT config::text FROM runtime.turns WHERE id=$1`, turn).Scan(&plan); err != nil {
+				t.Fatal(err)
+			}
+			recoverable := state == "running" || state == "waiting"
+			if recoverable {
+				config.Capabilities.Disabled = append(config.Capabilities.Disabled, agentpolicy.InputTracking)
+			}
+			records = append(records, record{turn, attempt, before, plan, config, recoverable})
 		}
-		var before string
-		if err := pool.QueryRow(ctx, `SELECT request::text FROM runtime.attempts WHERE id=$1`, attempt).Scan(&before); err != nil {
-			t.Fatal(err)
-		}
-		records = append(records, record{turn, attempt, before})
 	}
 	if err := runtimepg.Migrate(ctx, pool); err != nil {
 		t.Fatal(err)
@@ -81,15 +97,15 @@ func TestManagedInputTrackingUpgradeFreezesExistingTurns(t *testing.T) {
 	}
 	for _, record := range records {
 		var config managedruntime.TurnConfig
-		var after string
-		if err := pool.QueryRow(ctx, `SELECT t.config,a.request::text FROM runtime.turns t JOIN runtime.attempts a ON a.turn_id=t.id WHERE t.id=$1 AND a.id=$2`, record.turn, record.attempt).Scan(&config, &after); err != nil {
+		var after, plan string
+		if err := pool.QueryRow(ctx, `SELECT t.config,t.config::text,a.request::text FROM runtime.turns t JOIN runtime.attempts a ON a.turn_id=t.id WHERE t.id=$1 AND a.id=$2`, record.turn, record.attempt).Scan(&config, &plan, &after); err != nil {
 			t.Fatal(err)
 		}
-		if config.Capabilities.Allows(agentpolicy.InputTracking) || config.Capabilities.Allows(agentpolicy.Notes) || record.before != after {
-			t.Fatal("upgrade expanded frozen tools or rewrote dispatched request")
+		if !reflect.DeepEqual(config, record.want) || record.before != after {
+			t.Fatal("upgrade changed frozen authority, model plan or dispatched request", config.Capabilities, record.want.Capabilities)
 		}
-		if len(config.Models) != 1 {
-			t.Fatal("upgrade lost model plan")
+		if !record.recoverable && plan != record.plan {
+			t.Fatal("upgrade rewrote terminal plan")
 		}
 	}
 	var rows int

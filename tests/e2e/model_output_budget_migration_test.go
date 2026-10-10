@@ -114,8 +114,8 @@ func TestManagedOutputBudgetMigrationPreservesRecoveryAndHistory(t *testing.T) {
 			if err := pool.QueryRow(ctx, `INSERT INTO runtime.inputs(request_id,thread_id,actor_id,actor_authorization_epoch,membership_version,membership_execution_epoch,agent_execution_epoch,text,state) VALUES('upgrade',$1,$2,$3,$4,$5,$6,'Keep this work',$7) RETURNING id`, threadID, scope.ActorID, scope.ActorAuthorizationEpoch, scope.MembershipVersion, scope.MembershipExecutionEpoch, scope.AgentExecutionEpoch, inputState).Scan(&input.ID); err != nil {
 				t.Fatal(err)
 			}
-			lease, err := store.Claim(ctx, scope.AgentID, "before-upgrade", time.Minute)
-			if err != nil {
+			lease := managedruntime.Lease{AgentID: scope.AgentID, Holder: "before-upgrade"}
+			if err := pool.QueryRow(ctx, `UPDATE runtime.agents SET holder=$2,epoch=epoch+1,lease_until=clock_timestamp()+interval '1 minute',last_scheduled_at=clock_timestamp() WHERE id=$1 RETURNING epoch,lease_until`, scope.AgentID, lease.Holder).Scan(&lease.Epoch, &lease.ExpiresAt); err != nil {
 				t.Fatal(err)
 			}
 			config := runtimeConfig()
@@ -181,7 +181,7 @@ func TestManagedOutputBudgetMigrationPreservesRecoveryAndHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			restarted := runtimepg.New(pool)
-			lease, err = restarted.Claim(ctx, scope.AgentID, "after-upgrade", time.Minute)
+			lease, err := restarted.Claim(ctx, scope.AgentID, "after-upgrade", time.Minute)
 			if err != nil {
 				t.Fatal(err)
 			}

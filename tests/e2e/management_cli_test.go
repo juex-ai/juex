@@ -152,7 +152,10 @@ func TestManagementOperatorCLIAndHTTP(t *testing.T) {
 		}
 		return false
 	})
-	updated := managementCall[management.Agent](t, client, "PUT", apiBase+"/agents/"+agent.ID, "http://localhost:8680", map[string]any{"name": "Updated Agent", "instructions": "Be concise", "model_id": model.ID, "version": agent.Version}, 200)
+	updated := managementCall[management.Agent](t, client, "PUT", apiBase+"/agents/"+agent.ID, "http://localhost:8680", map[string]any{"name": "Updated Agent", "instructions": "Be concise", "configuration": management.Configuration{Models: []string{model.ID}}, "version": agent.Version}, 200)
+	if updated.Name != "Updated Agent" || updated.Instructions != "Be concise" || len(updated.Configuration.Models) != 1 || updated.Configuration.Models[0] != model.ID || updated.Version != agent.Version+1 {
+		t.Fatal("Agent configuration update did not persist", updated)
+	}
 	managementCall[any](t, client, "POST", apiBase+"/agents/"+agent.ID+"/archive", "http://localhost:8680", map[string]any{"version": updated.Version, "archived": true}, 200)
 	fleet = managementCall[management.FleetOverview](t, client, "GET", apiBase+"/fleet", "", nil, 200)
 	if len(fleet.Agents) != 1 || fleet.Agents[0].Status != management.AgentArchived {
