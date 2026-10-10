@@ -23,6 +23,32 @@ import (
 	runtimepg "github.com/juex-ai/juex/internal/managedruntime/postgres"
 )
 
+func TestManagedRuntimeObservationShutdownDuringSourceWake(t *testing.T) {
+	f := executionDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	device, _ := f.pairDevice(t, execprotocol.MCP)
+	_, job := prepareRuntimeTool(t, f, device.ID)
+	request := execprotocol.Request{Version: execprotocol.Version, ID: job.ID, AgentID: f.agent.ID, Kind: "mcp_connect", Arguments: json.RawMessage(`{"command":"fixture"}`)}
+	if err := f.store.PrepareTool(ctx, job, device.ID, request); err != nil {
+		t.Fatal(err)
+	}
+	source, err := f.store.ClaimObservation(ctx, "stopping-observer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseDuringRuntimeWake(t, ctx, f, "observation_sources", source.ID, "WITH sources AS%", func() error {
+		return f.store.ReleaseObservationClaims(ctx, "stopping-observer")
+	})
+	next, err := f.store.ClaimObservation(ctx, "restarted-observer")
+	if err != nil || next.ID != source.ID || next.LeaseEpoch <= source.LeaseEpoch || next.WakeVersion != source.WakeVersion+1 {
+		t.Fatal("restart could not reclaim the preserved wake immediately", next, err)
+	}
+	if err := f.store.FinishObservation(ctx, source, managedruntime.ObservationBatch{}); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("stopped worker retained its write fence", err)
+	}
+}
+
 func TestManagedRuntimeMCPObservationsOutliveActivationAndRestart(t *testing.T) {
 	ctx := context.Background()
 	var calls atomic.Int32
