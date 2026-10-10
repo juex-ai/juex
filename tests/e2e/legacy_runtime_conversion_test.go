@@ -72,7 +72,7 @@ func TestLegacyRuntimeConversionPreservesAPIHistoryAndContinuation(t *testing.T)
 		t.Fatal("API replaced the imported Main or queued historical input", threads)
 	}
 	timeline := managementCall[managedruntime.Timeline](t, f.client, "GET", base+"/threads/"+main+"/events", f.origin, nil, 200)
-	var foundText, foundCommit, foundInput bool
+	var foundText, foundCommit, foundInput, foundFailedWrite bool
 	policyHistory := map[string]bool{}
 	for _, event := range timeline.Events {
 		switch event.Kind {
@@ -83,6 +83,10 @@ func TestLegacyRuntimeConversionPreservesAPIHistoryAndContinuation(t *testing.T)
 			}
 			if message.ID == converted.Identities.Messages["0"]["source-text"] {
 				foundText = message.FirstText() == original && message.Blocks[0].Artifact == nil
+			}
+			if message.ID == converted.Identities.Messages["0"]["failed-write-result"] {
+				block := message.Blocks[0]
+				foundFailedWrite = block.Type == llm.BlockToolResult && block.IsError && block.ResultFact != nil && block.ResultFact.Owner == "chunked-write" && len(block.ResultFact.Data) == 0 && block.Content == "write_begin: path escapes workspace"
 			}
 			for _, oldID := range []string{"blocked", "policy"} {
 				if message.ID == converted.Identities.Messages["0"][oldID] {
@@ -107,8 +111,12 @@ func TestLegacyRuntimeConversionPreservesAPIHistoryAndContinuation(t *testing.T)
 			foundInput = record.Receipt.State == "cancelled"
 		}
 	}
-	if !foundText || !foundCommit || !foundInput || len(policyHistory) != 2 {
-		t.Fatal("API lost original text, historical facts or input outcome", foundText, foundCommit, foundInput)
+	if !foundText || !foundCommit || !foundInput || !foundFailedWrite || len(policyHistory) != 2 {
+		t.Fatal("API lost original text, historical facts or input outcome", foundText, foundCommit, foundInput, foundFailedWrite)
+	}
+	checks := managementCall[managedruntime.InputCheckPage](t, f.client, http.MethodPost, base+"/threads/"+main+"/input-checks", f.origin, managedruntime.InputCheckQuery{MessageIDs: []string{converted.Identities.Messages["0"]["historical-tracked-message"]}}, http.StatusOK)
+	if len(checks.Items) != 1 || checks.Items[0].InputID != converted.Identities.Inputs["0"]["pruned-checked-input"] || checks.Items[0].CheckedAt == nil || checks.Items[0].CheckMessageID != converted.Identities.Messages["0"]["historic-check-message"] {
+		t.Fatal("API lost proven historical check", checks)
 	}
 	// A reopened owner store resolves generated references to canonical messages,
 	// without any legacy spool directory or historical request replay.
@@ -174,13 +182,32 @@ func legacyRuntimeSource(original string) legacy.Agent {
 	summary := llm.Message{ID: "source-summary", Role: llm.RoleUser, Kind: llm.MessageKindCompact, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\nimported summary\n\nRetained Input References\n\nMessage source-text:\nold bounded preview"}}, Compaction: &llm.CompactionMetadata{SummaryChars: len("imported summary"), RetainedInputReferences: []llm.Message{text}}}
 	input := llm.TextMessage(llm.RoleUser, "cancelled-old-input")
 	input.ID = "original-input-message"
+	// A denied source tool has ownership metadata but no lifecycle event.
+	failedWriteUse := llm.Message{ID: "failed-write-use", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "denied-write", ToolName: "write_begin", Input: map[string]any{"path": "../outside"}}}}
+	failedWriteResult := llm.Message{ID: "failed-write-result", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "denied-write", ToolName: "write_begin", IsError: true, Content: "write_begin: path escapes workspace", ResultFact: &llm.ResultFact{Owner: "chunked-write"}}}}
+	historic := llm.TextMessage(llm.RoleUser, "Historical handled request")
+	historic.ID = "historical-tracked-message"
+	historic.Kind = llm.MessageKindDirect
+	check := llm.Message{ID: "historic-check-message", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "historic-check", ToolName: "check_inputs", Input: map[string]any{"input_ids": []string{"pruned-checked-input"}}}}}
+	factEvent := func(kind, turn string, payload any) legacy.Fact {
+		raw, _ := json.Marshal(map[string]any{"type": kind, "turn_id": turn, "payload": payload})
+		return legacy.Fact{Type: "event.recorded", Event: raw}
+	}
 	// Compaction changes the generation while retaining the original input scope.
 	thread := legacy.Thread{ContextScopeID: gen1.ID, Metadata: legacy.ThreadMetadata{ThreadID: "0", Alias: "main", CreatedAt: stamp, UpdatedAt: stamp, RetentionState: "active", ExecutionState: "idle", CurrentGeneration: gen2, Generations: []legacy.Generation{gen1, gen2}}, Context: []llm.Message{summary}, Inputs: []legacy.Input{{ID: "old-input", TurnID: "old-turn", MessageID: input.ID, Message: input, State: "settled", CreatedAt: at}}, Commits: []legacy.Commit{
 		{Version: 1, Seq: 1, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "thread.created", ThreadID: "0", Alias: "main"}}},
-		{Version: 1, Seq: 2, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "message.appended", Message: &text}, {Type: "message.appended", Message: &input}}},
+		{Version: 1, Seq: 2, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "message.appended", Message: &text}, {Type: "message.appended", Message: &input}, {Type: "message.appended", Message: &failedWriteUse}, {Type: "message.appended", Message: &failedWriteResult}}},
 		{Version: 1, Seq: 3, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "event.recorded", Event: json.RawMessage(`{"type":"turn.cancelled","turn_id":"old-turn","payload":{"input_ids":["old-input"]}}`)}}},
 		{Version: 1, Seq: 4, At: stamp, GenerationID: gen2.ID, Facts: []legacy.Fact{{Type: "context.compacted", Summary: &summary, Seed: &legacy.GenerationSeed{ContextScopeID: gen1.ID, ProviderMessages: []llm.Message{summary}}}}},
 	}}
+	thread.Commits[1].Facts = append(thread.Commits[1].Facts,
+		factEvent("turn.admitted", "historic-turn", map[string]any{"message_id": historic.ID}),
+		legacy.Fact{Type: "message.appended", Message: &historic},
+		factEvent("turn.started", "historic-turn", map[string]any{"message_id": historic.ID, "kind": "direct"}),
+		factEvent("turn.completed", "historic-turn", map[string]any{"input_ids": []string{"pruned-checked-input"}}),
+		legacy.Fact{Type: "message.appended", Message: &check},
+		factEvent("input.checked", "historic-check-turn", map[string]any{"input_ids": []string{"pruned-checked-input"}, "scope_id": gen1.ID, "checked_at": at, "tool_use_id": "historic-check", "message_id": check.ID}),
+	)
 	continued := legacy.Commit{Version: 1, Seq: 5, At: stamp, GenerationID: gen2.ID}
 	for i := range 8 {
 		message := llm.TextMessage(llm.RoleAssistant, strings.Repeat("Visible retained detail. ", 100))

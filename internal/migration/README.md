@@ -201,13 +201,18 @@ their source values and require an explicit target Files policy. Source journals
 are checked for active buffered writes across compaction; unsettled or unproven
 sessions require separate staged-session migration or source completion before
 import. Preserving historical tool facts does not restore their active bytes.
+A paired failed call with only the source owner marker leaves buffered-write state
+unchanged; successful calls still require the complete owned result fact.
 Retained policy 2 keeps its original declarations and payload hashes on replay,
 rejects new private configuration declarations and never backfills an already-used target.
 
 The source input-tracking switch and its
 proven scopes, message associations and checks enter the original Runtime import
 transaction. Committed history restores checks even when settled queue rows were
-pruned or a queue write was interrupted. Ended scopes remain distinct from checks;
+pruned or a queue write was interrupted. Earlier journals without an input association
+require a unique admitted, started and completed direct Turn before the committed
+check; conflicting terminal facts or message ownership reject recovery.
+Ended scopes remain distinct from checks;
 missing evidence fails conversion. Apply
 reports the conversion policy and the number of Threads with restored tracking.
 

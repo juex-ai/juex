@@ -52,6 +52,12 @@ func InspectSourceBufferedWrites(thread legacy.Thread) ([]SourceBufferedWrite, e
 				if block.ResultFact == nil || block.ResultFact.Owner != "chunked-write" {
 					continue
 				}
+				// The fixed source runtime attaches an owner even when the tool
+				// failed before producing a lifecycle event. Such a receipt
+				// neither creates a buffer nor commits/aborts an existing one.
+				if len(block.ResultFact.Data) == 0 && block.IsError && slices.Contains([]string{"write_begin", "write_chunk", "write_commit", "write_abort"}, use.ToolName) {
+					continue
+				}
 				var event struct {
 					Kind    string `json:"kind"`
 					WriteID string `json:"write_id"`

@@ -41,6 +41,19 @@ func sourceInputTracking(thread legacy.Thread) (sourceTracking, error) {
 	messageOrder := map[string]int64{}
 	position := int64(0)
 	validScopes := map[string]bool{}
+	// Early source journals can retain a completed direct Turn before the
+	// input.tracked event existed. Recover only its uniquely proven association
+	// when a later committed check explicitly names that input.
+	type deliveredTurn struct {
+		message, scope, input                 string
+		order                                 int64
+		admitted, started, completed, invalid bool
+	}
+	turns := map[string]*deliveredTurn{}
+	delivered := map[string]*sourceTrackedInput{}
+	ambiguous := map[string]bool{}
+	recovered := map[string]bool{}
+	deliveredMessages := map[string]string{}
 	for _, commit := range thread.Commits {
 		for _, fact := range commit.Facts {
 			position++
@@ -86,12 +99,80 @@ func sourceInputTracking(thread legacy.Thread) (sourceTracking, error) {
 			case "event.recorded":
 				var event struct {
 					Type    string          `json:"type"`
+					TurnID  string          `json:"turn_id"`
 					Payload json.RawMessage `json:"payload"`
 				}
 				if json.Unmarshal(fact.Event, &event) != nil {
 					return result, errors.New("invalid tracking event")
 				}
 				switch event.Type {
+				case "turn.admitted", "turn.started", "turn.completed", "turn.cancelled", "turn.errored":
+					if event.TurnID == "" {
+						continue
+					}
+					var p struct {
+						MessageID string   `json:"message_id"`
+						Kind      string   `json:"kind"`
+						InputIDs  []string `json:"input_ids"`
+					}
+					turn := turns[event.TurnID]
+					if turn == nil {
+						turn = &deliveredTurn{}
+						turns[event.TurnID] = turn
+					}
+					if turn.completed && turn.input != "" {
+						ambiguous[turn.input] = true
+					}
+					if json.Unmarshal(event.Payload, &p) != nil {
+						turn.invalid = true
+						continue
+					}
+					switch event.Type {
+					case "turn.admitted":
+						if turn.admitted || turn.started || p.MessageID == "" {
+							turn.invalid = true
+						}
+						turn.admitted = true
+						turn.message = p.MessageID
+						turn.scope = result.scope
+					case "turn.started":
+						m, ok := messages[p.MessageID]
+						if !turn.admitted || turn.started || turn.message != p.MessageID || turn.scope != result.scope || p.Kind != "direct" || !ok || messageOrder[p.MessageID] > position || m.Role != llm.RoleUser || m.Kind != llm.MessageKindDirect || m.PolicyBlocked {
+							turn.invalid = true
+						}
+						turn.started = true
+						turn.order = position
+					case "turn.cancelled", "turn.errored":
+						turn.invalid = true
+						for _, id := range p.InputIDs {
+							if delivered[id] != nil {
+								ambiguous[id] = true
+							}
+						}
+					case "turn.completed":
+						if turn.completed {
+							turn.invalid = true
+						}
+						turn.completed = true
+						if turn.invalid || !turn.started || turn.scope != result.scope || len(p.InputIDs) != 1 {
+							continue
+						}
+						id := p.InputIDs[0]
+						if id == "" || strings.TrimSpace(id) != id {
+							continue
+						}
+						if delivered[id] != nil {
+							ambiguous[id] = true
+							continue
+						}
+						if other := deliveredMessages[turn.message]; other != "" && other != id {
+							ambiguous[other] = true
+							ambiguous[id] = true
+						}
+						deliveredMessages[turn.message] = id
+						turn.input = id
+						delivered[id] = &sourceTrackedInput{input: id, message: turn.message, scope: turn.scope, delivery: "delivered", order: turn.order}
+					}
 				case "input.tracked":
 					var p struct {
 						InputID   string `json:"input_id"`
@@ -142,6 +223,20 @@ func sourceInputTracking(thread legacy.Thread) (sourceTracking, error) {
 					pending := 0
 					for id := range requested {
 						row := rows[id]
+						if row == nil && delivered[id] != nil && !ambiguous[id] {
+							candidate := delivered[id]
+							if candidate.scope == p.ScopeID {
+								for _, prior := range rows {
+									if prior.message == candidate.message {
+										return result, errors.New("completed Turn message belongs to another input")
+									}
+								}
+								copy := *candidate
+								row = &copy
+								rows[id] = row
+								recovered[id] = true
+							}
+						}
 						if row == nil || row.scope != p.ScopeID || row.delivery != "delivered" {
 							return result, errors.New("check parameters could not atomically succeed")
 						}
@@ -171,6 +266,11 @@ func sourceInputTracking(thread legacy.Thread) (sourceTracking, error) {
 					}
 				}
 			}
+		}
+	}
+	for id := range recovered {
+		if ambiguous[id] {
+			return result, errors.New("checked input has contradictory completed Turn associations")
 		}
 	}
 	if result.scope == "" || thread.ContextScopeID != result.scope {
