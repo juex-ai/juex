@@ -52,7 +52,7 @@ func TestManagementAgentOwnershipModelsAndLifecycle(t *testing.T) {
 		t.Fatal(overview, err)
 	}
 	settings := overview.Settings
-	settings.DefaultModelID = model.ID
+	settings.Configuration.Models = []string{model.ID}
 	settings, err = d.ConfigureFleet(ctx, member.ID, tenant.ID, member.ID, settings)
 	if err != nil || settings.Version != 2 {
 		t.Fatal(settings, err)
@@ -65,7 +65,7 @@ func TestManagementAgentOwnershipModelsAndLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, err := d.AuthorizeAgent(ctx, member.ID, tenant.ID, agent.ID)
-	if err != nil || authority.ModelID != model.ID || authority.Fleet.UserID != member.ID {
+	if err != nil || len(authority.Effective.Models) != 1 || authority.Effective.Models[0] != model.ID || authority.Fleet.UserID != member.ID {
 		t.Fatal(authority, err)
 	}
 	if _, err := d.FleetOverview(ctx, outside.ID, tenant.ID, member.ID); !errors.Is(err, management.ErrDenied) {
@@ -74,7 +74,7 @@ func TestManagementAgentOwnershipModelsAndLifecycle(t *testing.T) {
 	if _, err := d.CreateAgent(ctx, member.ID, tenant.ID, admin.ID, management.AgentConfig{Name: "Intruder"}); !errors.Is(err, management.ErrDenied) {
 		t.Fatal("cross-user creation", err)
 	}
-	updated, err := d.ConfigureAgent(ctx, admin.ID, tenant.ID, agent.ID, agent.Version, management.AgentConfig{Name: "Assistant", ModelID: model.ID})
+	updated, err := d.ConfigureAgent(ctx, admin.ID, tenant.ID, agent.ID, agent.Version, management.AgentConfig{Name: "Assistant", Configuration: &management.Configuration{Models: []string{model.ID}}})
 	if err != nil || updated.Version != 2 {
 		t.Fatal(updated, err)
 	}

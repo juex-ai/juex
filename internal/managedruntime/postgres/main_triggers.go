@@ -25,7 +25,7 @@ func (s *Store) AdmitMainTrigger(ctx context.Context, scope managedruntime.Scope
 		return managedruntime.MainTriggerReceipt{}, err
 	}
 	defer rollback(tx)
-	if err := checkScope(ctx, tx, scope); err != nil {
+	if err := lockAgentAdmission(ctx, tx, scope); err != nil {
 		return managedruntime.MainTriggerReceipt{}, err
 	}
 	encodedScope, _ := json.Marshal(scope)

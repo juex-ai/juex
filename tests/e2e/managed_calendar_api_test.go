@@ -34,7 +34,7 @@ func TestManagedCalendarFirstWakeUsesOrdinaryAgentWorker(t *testing.T) {
 		streamManagedReply(w, "The scheduled check is complete.")
 	})
 	ctx := context.Background()
-	agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Never opened", ModelID: f.agent.ModelID})
+	agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Never opened", Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

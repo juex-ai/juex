@@ -14,13 +14,17 @@ import (
 
 func (e *Engine) extensionCommand(cmd *exec.Cmd, agent string, extension *execprotocol.ExtensionContext) error {
 	if extension == nil {
-		if e.config.HomeDirectory != "" {
-			// exec.Command initially searches the connector's PATH. Managed
-			// Host commands must use the Agent's per-process package locations.
-			cmd.Path, cmd.Err = ExtensionExecutable(cmd.Args[0], cmd.Dir, cmd.Env)
-			return cmd.Err
+		if e.config.ProcessUser != nil {
+			// PATH lookup belongs to the child identity, including access checks
+			// on user-controlled directories that the controller must not inspect.
+			cmd.Path = e.config.ProcessUser.Helper
+			cmd.Args = append([]string{cmd.Path, "process-exec", "--"}, cmd.Args...)
+			cmd.Err = nil
+			return nil
 		}
-		return nil
+		// exec.Command searched the connector's PATH before cmd.Env was set.
+		cmd.Path, cmd.Err = ExtensionExecutable(cmd.Args[0], cmd.Dir, cmd.Env)
+		return cmd.Err
 	}
 	if extension.Validate() != nil {
 		return execprotocol.ErrInvalid

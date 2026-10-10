@@ -58,7 +58,7 @@ func managedRuntimeHTTP(t *testing.T, provider http.HandlerFunc) *managedRuntime
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent, err := d.CreateAgent(ctx, u.ID, tenant.ID, u.ID, management.AgentConfig{Name: "Assistant", Instructions: "Be precise", ModelID: model.ID})
+	agent, err := d.CreateAgent(ctx, u.ID, tenant.ID, u.ID, management.AgentConfig{Name: "Assistant", Instructions: "Be precise", Configuration: &management.Configuration{Models: []string{model.ID}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -31,6 +32,11 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 		request.Model = model
 		request.ModelBudget = work.ModelBudget
 		limits := request.ContextModel()
+		if work.Application != "memory" && work.Config.Capabilities.Allows(agentpolicy.InputTracking) && work.Scope.Capabilities.Allows(agentpolicy.InputTracking) {
+			if reminder := InputReminderContext(work.InputReminders, limits); reminder != "" {
+				request.System += "\n\n" + reminder
+			}
+		}
 		request.Generation = work.Generation
 		request.MaxOutputTokens = limits.MaxOutput
 		request.Messages = projectModelHistory(work, model)
@@ -43,7 +49,16 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 		reason := "model_unavailable"
 		var planErr error
 		if work.Source.Kind == "compaction" || work.Compaction != nil || compactionNeeded(work, request, model) {
-			request, planErr = planCompaction(work, base, model)
+			candidateBase := base
+			candidateBase.System = request.System
+			request, planErr = planCompaction(work, candidateBase, model)
+			if planErr == nil {
+				// The summary body contains textual references. Validate the source
+				// before that projection can summarize an unavailable image away.
+				if _, err := hydrateMedia(ctx, r.config.Media, work.Scope, work.History); err != nil {
+					return nil, request, err
+				}
+			}
 			if errors.Is(planErr, ErrNoCompaction) && work.Source.Kind != "compaction" {
 				planErr = ErrContextLimit
 			}
@@ -66,7 +81,20 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 			return nil, request, planErr
 		}
 		if planErr == nil && llm.EstimateContextTokens(request.System, request.Tools, request.Messages)+outputBudget(request)+contextSafety(limits) <= limits.ContextWindow {
-			provider, err := r.authority.Provider(ctx, work.Scope, model)
+			messages, err := hydrateMedia(ctx, r.config.Media, work.Scope, request.Messages)
+			if err != nil {
+				return nil, request, err
+			}
+			request.Messages = messages
+			requirements := ModelRequirements{OutputLimit: request.MaxOutputTokens > 0}
+			for _, message := range request.Messages {
+				for _, block := range message.Blocks {
+					if block.Type == llm.BlockImage || block.Media != nil {
+						requirements.Vision = true
+					}
+				}
+			}
+			provider, err := r.authority.Provider(ctx, work.Scope, model, requirements)
 			if err == nil {
 				return provider, request, nil
 			}
@@ -92,6 +120,9 @@ func (r *Runner) selectModel(ctx context.Context, lease Lease, work Work, reques
 func projectModelHistory(work Work, model ModelConfig) []llm.Message {
 	limits := (ModelRequest{Model: model, ModelBudget: work.ModelBudget}).ContextModel()
 	work.History = projectContext(work.History, limits)
+	if toolAllowed(work.Config.Capabilities, "write_begin") && toolAllowed(work.Scope.Capabilities, "write_begin") {
+		work.History = projectWrites(work.History, limits)
+	}
 	return modelHistory(work, model)
 }
 

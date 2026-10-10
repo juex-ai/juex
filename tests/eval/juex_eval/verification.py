@@ -248,7 +248,7 @@ def file_fingerprint(path: pathlib.Path) -> dict[str, Any]:
 
 
 def artifact_fingerprints(repo_root: pathlib.Path) -> dict[str, dict[str, Any]]:
-    binaries = ("juex", "juex-executor", "juex-management", "juex-runtime", "juex-execution", "juex-memory", "juex-calendar", "juex-guest", "juex-service-log")
+    binaries = ("juex", "juex-executor", "juex-management", "juex-runtime", "juex-execution", "juex-memory", "juex-calendar", "juex-guest", "juex-service-log", "juex-migrate")
     return {"dist/" + name: file_fingerprint(repo_root / "dist" / name) for name in binaries}
 
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/artifact"
+	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
@@ -20,7 +21,20 @@ func ImageDataURL(mediaDir string, media *llm.MediaRef) (string, bool) {
 }
 
 func ReadImageBase64(mediaDir string, media *llm.MediaRef) (string, string, bool) {
-	if media == nil || media.ArtifactPath == "" {
+	if media == nil {
+		return "", "", false
+	}
+	if media.ArtifactID != "" {
+		if len(media.Data) == 0 || len(media.Data) > llm.MaxProviderImageArtifactBytes || execprotocol.FileDigest(media.Data) != media.SHA256 {
+			return "", "", false
+		}
+		mediaType := normalizeImageMediaType(media.MediaType, "", media.Data)
+		if !supportedImageMediaType(mediaType) {
+			return "", "", false
+		}
+		return base64.StdEncoding.EncodeToString(media.Data), mediaType, true
+	}
+	if media.ArtifactPath == "" {
 		return "", "", false
 	}
 	store, err := artifact.NewStore(mediaDir)

@@ -98,6 +98,17 @@ func admitCompactionAttempt(ctx context.Context, tx pgx.Tx, turn string, request
 	if job.Attempts >= 6 {
 		return managedruntime.ErrCompactionFailed
 	}
+	var thread string
+	if err := tx.QueryRow(ctx, `SELECT thread_id FROM runtime.turns WHERE id=$1`, turn).Scan(&thread); err != nil {
+		return err
+	}
+	state, err := readThreadState(ctx, tx, thread)
+	if err != nil {
+		return err
+	}
+	if state.Revision != draft.ThreadState.Revision {
+		return managedruntime.ErrConflict
+	}
 	_, err = tx.Exec(ctx, `UPDATE runtime.compactions SET attempts=attempts+1 WHERE id=$1`, job.ID)
 	return err
 }
@@ -160,7 +171,19 @@ func finishCompaction(ctx context.Context, tx pgx.Tx, turn, thread, input string
 	if result.RowsAffected() != 1 {
 		return managedruntime.ErrConflict
 	}
-	summary := llm.TextMessage(llm.RoleUser, managedruntime.CompactionText(response))
+	state, err := readThreadState(ctx, tx, thread)
+	if err != nil {
+		return err
+	}
+	if state.Revision != draft.ThreadState.Revision {
+		return managedruntime.ErrConflict
+	}
+	if draft.TasksEnabled {
+		if err := writeThreadState(ctx, tx, thread, state.RenewContext(false, true)); err != nil {
+			return err
+		}
+	}
+	summary := llm.TextMessage(llm.RoleUser, draft.Reconcile(managedruntime.CompactionText(response)))
 	summary.ID = response.Message.ID
 	summary.Kind = llm.MessageKindCompact
 	summary.Model = response.Message.Model
@@ -169,11 +192,8 @@ func finishCompaction(ctx context.Context, tx pgx.Tx, turn, thread, input string
 	if err := appendEvent(ctx, tx, thread, "message.appended", summary); err != nil {
 		return err
 	}
-	ids := draft.RetainedIDs
-	if ids == nil {
-		ids = []string{}
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO runtime.context_checkpoints(thread_id,generation,compaction_id,summary_id,retained_ids) VALUES($1,$2,$3,$4,$5)`, thread, generation, job.ID, summary.ID, ids); err != nil {
+	ids := append([]string{summary.ID}, draft.RetainedIDs...)
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.context_checkpoints(thread_id,generation,compaction_id,message_ids,through_sequence) SELECT $1,$2,$3,$4,sequence FROM runtime.threads WHERE id=$1`, thread, generation, job.ID, ids); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.compactions SET state='completed',completed_at=clock_timestamp() WHERE id=$1`, job.ID); err != nil {

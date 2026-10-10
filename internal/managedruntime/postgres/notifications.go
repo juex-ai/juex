@@ -56,7 +56,7 @@ func stageNotification(ctx context.Context, tx pgx.Tx, thread, input, turn, key,
 	err := tx.QueryRow(ctx, `SELECT a.tenant_id,a.user_id,a.fleet_id,a.id,i.actor_id,i.actor_authorization_epoch,i.membership_execution_epoch,i.membership_version,i.agent_execution_epoch,t.name,t.generation
  FROM runtime.threads t JOIN runtime.agents a ON a.id=t.agent_id JOIN runtime.inputs i ON i.thread_id=t.id
  WHERE t.id=$1 AND (i.id::text=$2 OR i.id=(SELECT input_id FROM runtime.turns WHERE id::text=$3))
- AND ($4 OR NOT EXISTS(SELECT 1 FROM runtime.application_jobs j WHERE j.thread_id=t.id))`, thread, input, turn, allowApplications).Scan(&scope.TenantID, &scope.UserID, &scope.FleetID, &scope.AgentID, &scope.ActorID, &scope.ActorEpoch, &scope.MemberEpoch, &scope.MemberVersion, &scope.AgentEpoch, &name, &generation)
+ AND ($4 OR t.application='')`, thread, input, turn, allowApplications).Scan(&scope.TenantID, &scope.UserID, &scope.FleetID, &scope.AgentID, &scope.ActorID, &scope.ActorEpoch, &scope.MemberEpoch, &scope.MemberVersion, &scope.AgentEpoch, &name, &generation)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}

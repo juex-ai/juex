@@ -75,24 +75,29 @@ func (h *ManagedManager) credential(id, backend string) string {
 }
 
 func (h *ManagedManager) Ensure(ctx context.Context, scope Scope) error {
+	_, err := h.ensureResource(ctx, scope)
+	return err
+}
+
+func (h *ManagedManager) ensureResource(ctx context.Context, scope Scope) (ManagedResource, error) {
 	if len(h.Key) != 32 || h.Backend == nil || h.Store == nil || !scope.CanExecute {
-		return execprotocol.ErrUnavailable
+		return ManagedResource{}, execprotocol.ErrUnavailable
 	}
 	id := uuid.NewString()
 	candidate, err := h.Backend.Resource(id)
 	if err != nil {
-		return err
+		return ManagedResource{}, err
 	}
 	if err := candidate.validate(); err != nil || candidate.EnvironmentID != id {
-		return execprotocol.ErrInvalid
+		return ManagedResource{}, execprotocol.ErrInvalid
 	}
 	candidate.AgentID, candidate.TenantID, candidate.UserID = scope.AgentID, scope.TenantID, scope.UserID
 	candidate.CredentialHash = Digest(h.credential(id, candidate.Backend))
 	resource, err := h.Store.EnsureManaged(ctx, scope, candidate)
 	if err != nil {
-		return err
+		return ManagedResource{}, err
 	}
-	return h.matches(resource)
+	return resource, h.matches(resource)
 }
 
 func (r ManagedResource) validate() error {

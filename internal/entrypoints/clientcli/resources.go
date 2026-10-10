@@ -329,9 +329,9 @@ func addThreads(root *cobra.Command, command commandFactory, in io.Reader) {
 	})
 	events.Flags().Int64Var(&after, "after", 0, "Last seen durable sequence")
 	threads.AddCommand(events)
-	for _, operation := range []string{"worker", "compact"} {
+	for _, operation := range []string{"worker", "compact", "reset-context"} {
 		var requestID, detail string
-		cmd := command(operation+" THREAD_ID", "Create a Worker or request compaction with a stable request identity", cobra.ExactArgs(1), true, func(cmd *cobra.Command, c *client, args []string) (any, error) {
+		cmd := command(operation+" THREAD_ID", "Create a Worker, compact, or reset idle Thread context with a stable request identity", cobra.ExactArgs(1), true, func(cmd *cobra.Command, c *client, args []string) (any, error) {
 			id, err := checkedID(args[0])
 			if err != nil {
 				return nil, err
@@ -349,6 +349,10 @@ func addThreads(root *cobra.Command, command commandFactory, in io.Reader) {
 				action = "workers"
 				body = map[string]string{"request_id": requestID, "name": detail}
 			}
+			if operation == "reset-context" {
+				action = operation
+				body = map[string]string{"request_id": requestID}
+			}
 			data, err := c.request(cmd.Context(), "POST", path+"/threads/"+id+"/"+action, body)
 			if err != nil {
 				return nil, fmt.Errorf("%s request %s: %w", operation, requestID, err)
@@ -356,9 +360,10 @@ func addThreads(root *cobra.Command, command commandFactory, in io.Reader) {
 			return data, nil
 		})
 		cmd.Flags().StringVar(&requestID, "request-id", "", "Stable request identity; reuse after an uncertain response")
-		if operation == "worker" {
+		switch operation {
+		case "worker":
 			cmd.Flags().StringVar(&detail, "name", "", "Worker name")
-		} else {
+		case "compact":
 			cmd.Flags().StringVar(&detail, "focus", "", "Optional compaction focus")
 		}
 		threads.AddCommand(cmd)

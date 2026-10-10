@@ -3,6 +3,7 @@ package managedruntime
 import (
 	"context"
 	"encoding/json"
+	"github.com/juex-ai/juex/internal/foundation/agentcontrol"
 	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"time"
@@ -14,6 +15,10 @@ import (
 // ToolWork is a durable delivery, independent of an Agent Activation. Its ID
 // becomes the external operation ID before any dispatch can occur.
 type ToolWork struct {
+	FrozenAgentManagement                      bool
+	AgentControl                               *agentcontrol.Action
+	AgentLifecycle                             *AgentLifecycleReceipt
+	InputScopeID                               string
 	FrozenCapabilities                         agentpolicy.Policy
 	Extensions                                 []extensionpolicy.Binding
 	DeferredResult                             *ToolOutcome
@@ -53,6 +58,7 @@ type ToolStore interface {
 }
 
 type ToolOutcome struct {
+	ResultFact             *llm.ResultFact
 	WaitReason             string
 	State                  string
 	Content                string

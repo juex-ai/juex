@@ -16,7 +16,7 @@ func lockIdleApplicationSource(ctx context.Context, tx pgx.Tx, scope managedrunt
 		return classify(err)
 	}
 	var active, idle bool
-	err := tx.QueryRow(ctx, `SELECT retention='active' AND NOT EXISTS(SELECT 1 FROM runtime.application_jobs WHERE thread_id=t.id),
+	err := tx.QueryRow(ctx, `SELECT retention='active' AND application='',
  state='idle' AND updated_at<=clock_timestamp()-interval '60 seconds'
  AND NOT EXISTS(SELECT 1 FROM runtime.inputs WHERE thread_id=t.id AND state IN ('queued','active','held'))
  AND NOT EXISTS(SELECT 1 FROM runtime.turns WHERE thread_id=t.id AND state IN ('running','waiting'))

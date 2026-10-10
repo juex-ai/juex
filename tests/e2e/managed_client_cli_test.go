@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -118,6 +119,16 @@ func TestManagedClientCLIConversationAndTenantSelection(t *testing.T) {
 		t.Fatal(fleet)
 	}
 	cliValue[any](c, "", "tenant", "use", f.tenant)
+	settings := cliValue[management.ConfigurationLayer](c, "", "tenant", "settings")
+	settings.Declaration = management.Configuration{Models: f.agent.Configuration.Models}
+	encodedSettings, _ := json.Marshal(settings)
+	configured := cliValue[management.ConfigurationLayer](c, string(encodedSettings), "tenant", "configure")
+	if configured.Version != settings.Version+1 || !reflect.DeepEqual(configured.Declaration.Models, settings.Declaration.Models) {
+		t.Fatal("CLI Tenant declaration changed", configured)
+	}
+	if _, err := c.invoke(string(encodedSettings), "tenant", "configure"); err == nil || !strings.Contains(err.Error(), "409") {
+		t.Fatal("stale Tenant configuration accepted", err)
+	}
 	agent := cliValue[management.Agent](c, `{"name":"CLI-created"}`, "agent", "create")
 	archived := cliValue[management.Agent](c, "", "agent", "archive", agent.ID, "--version", strconv.FormatInt(agent.Version, 10))
 	if archived.Status != management.AgentArchived {

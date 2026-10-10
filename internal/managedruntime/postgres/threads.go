@@ -19,7 +19,7 @@ func (s *Store) CreateWorker(ctx context.Context, scope managedruntime.Scope, pa
 		return managedruntime.Thread{}, err
 	}
 	defer rollback(tx)
-	if err := checkScope(ctx, tx, scope); err != nil {
+	if err := lockAgentAdmission(ctx, tx, scope); err != nil {
 		return managedruntime.Thread{}, err
 	}
 	if err := threadGraph(ctx, tx, scope.AgentID); err != nil {
@@ -40,11 +40,7 @@ func createWorker(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, pa
 	if !scope.Capabilities.Allows(agentpolicy.Workers) {
 		return managedruntime.Thread{}, managedruntime.ErrDenied
 	}
-	var applicationParent bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs WHERE thread_id=$1)`, parent.ID).Scan(&applicationParent); err != nil {
-		return managedruntime.Thread{}, err
-	}
-	if applicationParent {
+	if parent.Application != "" {
 		return managedruntime.Thread{}, managedruntime.ErrDenied
 	}
 	if strings.TrimSpace(name) == "" || len([]rune(name)) > 100 {
@@ -66,6 +62,22 @@ func createWorker(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, pa
 	}
 	if parent.Retention != "active" {
 		return managedruntime.Thread{}, managedruntime.ErrDenied
+	}
+	var deleted bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.thread_deletions WHERE agent_id=$1 AND request_id=$2)`, scope.AgentID, requestID).Scan(&deleted); err != nil {
+		return managedruntime.Thread{}, err
+	}
+	if deleted {
+		return managedruntime.Thread{}, managedruntime.ErrConflict
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.threads WHERE agent_id=$1 AND request_id=$2)`, scope.AgentID, requestID).Scan(&exists); err != nil {
+		return managedruntime.Thread{}, err
+	}
+	if !exists {
+		if err := requireAgentRunning(ctx, tx, scope.AgentID); err != nil {
+			return managedruntime.Thread{}, err
+		}
 	}
 	var id string
 	err := tx.QueryRow(ctx, `INSERT INTO runtime.threads(agent_id,parent_id,kind,name,request_id) VALUES($1,$2,'worker',$3,$4) ON CONFLICT(agent_id,request_id) DO NOTHING RETURNING id`, scope.AgentID, parentID, name, requestID).Scan(&id)
@@ -153,6 +165,15 @@ func cancelThread(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, th
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET state='cancelled',completed_at=clock_timestamp() WHERE thread_id=$1 AND state IN ('running','waiting')`, thread.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.observer_subscriptions SET enabled=false WHERE thread_id=$1`, thread.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.observer_controls SET desired='stopped',next_check=clock_timestamp() WHERE thread_id=$1`, thread.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.observation_sources SET stop_requested=true WHERE thread_id=$1`, thread.ID); err != nil {
 		return err
 	}
 	// A completed Turn can still own a live shell/MCP handle. Cancel its

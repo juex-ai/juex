@@ -18,7 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 )
 
-const MaxCatalogBytes = 256 << 10
+const MaxCatalogBytes = 1 << 20
 
 var ErrInvalid = errors.New("invalid extension resource declaration")
 var variable = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -47,6 +47,24 @@ type ObservableResource struct {
 	Options execprotocol.ObservableOptions `json:"options"`
 }
 
+type MCPResource struct {
+	CommandResource
+	execprotocol.MCPRemote
+}
+
+func (m MCPResource) Validate() error {
+	if m.MCPRemote.Validate() != nil {
+		return ErrInvalid
+	}
+	if m.Kind() == "stdio" {
+		return m.CommandResource.Validate()
+	}
+	if !identifier.MatchString(m.ID) || len(m.Description) > 4096 || len(m.Command) != 0 || len(m.Environment) != 0 {
+		return ErrInvalid
+	}
+	return nil
+}
+
 type Manifest struct {
 	ManifestVersion int                      `json:"manifest_version"`
 	Name            string                   `json:"name"`
@@ -55,14 +73,22 @@ type Manifest struct {
 	Environment     map[string]string        `json:"environment,omitempty"`
 	Skills          []SkillResource          `json:"skills"`
 	Hooks           []hookpolicy.Declaration `json:"hooks"`
-	MCP             []CommandResource        `json:"mcp"`
+	MCP             []MCPResource            `json:"mcp"`
 	Observables     []ObservableResource     `json:"observables"`
 }
 
 type Catalog struct {
-	Manifest Manifest       `json:"manifest"`
-	Skills   []SkillContent `json:"skills"`
-	Revision string         `json:"revision"`
+	Manifest   Manifest        `json:"manifest"`
+	Skills     []SkillContent  `json:"skills"`
+	Revision   string          `json:"revision"`
+	SourceKind string          `json:"source_kind,omitempty"`
+	Skipped    []SkippedSource `json:"skipped,omitempty"`
+}
+
+type SkippedSource struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+	Target string `json:"target,omitempty"`
 }
 
 type Binding struct {
@@ -90,7 +116,11 @@ func (c Catalog) Digest() string {
 }
 
 func (m Manifest) Validate() error {
-	if m.ManifestVersion != 2 || !identifier.MatchString(m.Name) || len(m.Version) == 0 || len(m.Version) > 64 || len(m.Description) > 4096 || len(m.Skills) > 32 || len(m.Hooks) > 16 || len(m.MCP) > 16 || len(m.Observables) > 16 || ValidateEnvironment(m.Environment) != nil {
+	return m.validate(32)
+}
+
+func (m Manifest) validate(skillLimit int) error {
+	if m.ManifestVersion != 2 || !identifier.MatchString(m.Name) || len(m.Version) == 0 || len(m.Version) > 64 || len(m.Description) > 4096 || len(m.Skills) > skillLimit || len(m.Hooks) > 16 || len(m.MCP) > 16 || len(m.Observables) > 16 || ValidateEnvironment(m.Environment) != nil {
 		return ErrInvalid
 	}
 	if hookpolicy.Validate(m.Hooks) != nil {
@@ -151,7 +181,25 @@ func ValidateEnvironment(values map[string]string) error {
 	return nil
 }
 func (c Catalog) Validate() error {
-	if c.Manifest.Validate() != nil || len(c.Skills) != len(c.Manifest.Skills) || c.Revision != c.Digest() {
+	if len(c.Skipped) > 256 || c.SourceKind != "skills" && len(c.Skipped) > 0 {
+		return ErrInvalid
+	}
+	for _, item := range c.Skipped {
+		if !fs.ValidPath(item.Path) || len(item.Reason) > 256 || len(item.Target) > 4096 || strings.ContainsRune(item.Target, 0) {
+			return ErrInvalid
+		}
+	}
+	if c.SourceKind != "" && c.SourceKind != "skills" {
+		return ErrInvalid
+	}
+	if c.SourceKind == "skills" && (len(c.Manifest.Skills) == 0 && len(c.Skipped) == 0 || len(c.Manifest.Environment) != 0 || len(c.Manifest.Hooks) != 0 || len(c.Manifest.MCP) != 0 || len(c.Manifest.Observables) != 0) {
+		return ErrInvalid
+	}
+	skillLimit, byteLimit := 32, 256<<10
+	if c.SourceKind == "skills" {
+		skillLimit, byteLimit = 256, MaxCatalogBytes
+	}
+	if c.Manifest.validate(skillLimit) != nil || len(c.Skills) != len(c.Manifest.Skills) || c.Revision != c.Digest() {
 		return ErrInvalid
 	}
 	for i, skill := range c.Skills {
@@ -160,13 +208,13 @@ func (c Catalog) Validate() error {
 		}
 	}
 	encoded, err := json.Marshal(c)
-	if err != nil || len(encoded) > MaxCatalogBytes {
+	if err != nil || len(encoded) > byteLimit {
 		return ErrInvalid
 	}
 	return nil
 }
 func Validate(bindings []Binding) error {
-	if len(bindings) > 8 {
+	if len(bindings) > 32 {
 		return ErrInvalid
 	}
 	seen := map[string]bool{}
@@ -197,7 +245,7 @@ func Validate(bindings []Binding) error {
 		}
 	}
 	encoded, err := json.Marshal(bindings)
-	if err != nil || len(encoded) > 512<<10 || hookpolicy.Validate(Hooks(bindings)) != nil {
+	if err != nil || len(encoded) > 4<<20 || hookpolicy.Validate(Hooks(bindings)) != nil {
 		return ErrInvalid
 	}
 	return nil

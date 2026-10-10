@@ -57,3 +57,12 @@ trigger mode is the separate waking input. Its receipt notice goes only to Inbox
 Notification preferences and verified-email delivery belong to Management.
 
 Agent cleanup pauses its schedules and preserves shared definitions and occurrence history. Undelivered work is fenced; uncertain external effects stay explicitly unresolved. New and resumed schedules check their target against cleanup tombstones inside the Fleet transaction. Whole-Fleet cleanup erases Calendar state and prevents late initialization.
+
+Offline Fleet import accepts complete definitions and scheduling cursors under
+fresh target authority, without creating occurrences, commands or notifications.
+The operator stops the scheduler and all writers first. Import requires an absent
+or exactly default-empty Fleet and checks both Fleet and target-Agent cleanup
+barriers. Matching source and payload retries preserve later edits; conflicts
+never overwrite them. Source clocks and next instants are validated together,
+while Calendar creates its own epochs and versions. Completed one-shot rules
+remain completed. This is a private operator boundary, not an application RPC.

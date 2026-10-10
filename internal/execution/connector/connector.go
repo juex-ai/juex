@@ -198,11 +198,15 @@ func serve(ctx context.Context, connection *websocket.Conn, config Config, ready
 				} else {
 					err = config.Engine.AcknowledgeFile(request.AgentID, request.OperationID, *request.FileManifest)
 				}
-			case "submit":
+			case "submit", "submit_environment":
 				if request.Request == nil {
 					err = execprotocol.ErrInvalid
 				} else {
-					snapshot, err = config.Engine.Submit(*request.Request)
+					if request.Type == "submit_environment" {
+						snapshot, err = config.Engine.SubmitWithEnvironment(*request.Request, request.ProcessEnvironment)
+					} else {
+						snapshot, err = config.Engine.Submit(*request.Request)
+					}
 					reply.Snapshot = &snapshot
 				}
 			case "query":

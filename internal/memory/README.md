@@ -63,7 +63,17 @@ no pending/held input and no uncertain tool operation. Runtime serializes automa
 Memory admission per Fleet; a busy source does not block other eligible sources.
 Retries recover the same Worker. Failed ranges retain their outcome and cannot be
 silently repackaged by later input. Terminal review evidence is removed after seven
-days; receipt identities and shared knowledge provenance remain.
+days; receipt identities and shared knowledge provenance remain. Offline-imported
+history is retained until explicit forgetting or owner cleanup.
+
+Offline imports require an empty owner state and preserve knowledge revisions,
+terminal receipts and source evidence without creating jobs or notifications.
+Historical review authority cannot authorize new decisions. Imported source
+opt-outs survive configuration changes; retained evidence is not an active
+participation buffer. Forgetting and owner cleanup also apply to this history.
+Repeated historical attempts keep distinct receipts; only the source index's
+current receipt owns its proposal key. Human administration receipts belong to
+the Fleet without an invented Agent, Thread or current decision authorization.
 
 Advanced recall prepares one bounded keyword-search snapshot per original human
 input. Runtime persists even an unavailable outcome, so recovery, retries and tool

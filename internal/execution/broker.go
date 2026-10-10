@@ -3,13 +3,16 @@ package execution
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
+	"path"
 	"reflect"
 	"slices"
 	"time"
 
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/maintenance"
+	"github.com/juex-ai/juex/internal/foundation/processenv"
 )
 
 // Exchange is one correlated request/reply on an outbound device connection.
@@ -147,7 +150,34 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 		}
 		// A dispatch lost before acknowledgment is resent only with its original
 		// identity, on the same durable device journal, after a negative query.
-		reply, err = callDevice(ctx, exchange, execprotocol.Envelope{Type: "submit", Request: &operation.Request})
+		dispatch := execprotocol.Envelope{Type: "submit", Request: &operation.Request}
+		if s.ProcessEnvironments != nil && requestCreatesProcess(operation.Request) {
+			var args struct {
+				WorkingDirectory string `json:"working_directory"`
+			}
+			if json.Unmarshal(operation.Request.Arguments, &args) != nil {
+				return execprotocol.ErrInvalid
+			}
+			if args.WorkingDirectory == "" {
+				args.WorkingDirectory = device.WorkingDirectory
+			}
+			values, resolveErr := s.ProcessEnvironments.ResolveProcessEnvironment(ctx, operation.Scope, device.ID, path.Clean(args.WorkingDirectory))
+			if resolveErr != nil {
+				if errors.Is(resolveErr, execprotocol.ErrDenied) {
+					return s.Store.Settle(ctx, device.ID, device.ConnectionEpoch, operation.ID, execprotocol.Cancelled, "process environment authority changed before acceptance")
+				}
+				return resolveErr
+			}
+			if processenv.Validate(values) != nil {
+				return execprotocol.ErrInvalid
+			}
+			if len(values) > 0 {
+				// Older connectors reject this dispatch type rather than silently
+				// running a command without its configured environment.
+				dispatch.Type, dispatch.ProcessEnvironment = "submit_environment", values
+			}
+		}
+		reply, err = callDevice(ctx, exchange, dispatch)
 		if err != nil {
 			if errors.Is(err, execprotocol.ErrQuota) || errors.Is(err, execprotocol.ErrInvalid) || errors.Is(err, execprotocol.ErrDenied) {
 				return s.Store.Settle(ctx, device.ID, device.ConnectionEpoch, operation.ID, execprotocol.Failed, execprotocol.ErrorCode(err))
@@ -174,6 +204,14 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 		return err
 	}
 	return nil
+}
+
+func requestCreatesProcess(request execprotocol.Request) bool {
+	if request.Kind != "mcp_connect" {
+		return processenv.Uses(request.Kind)
+	}
+	var remote execprotocol.MCPRemote
+	return json.Unmarshal(request.Arguments, &remote) == nil && remote.Kind() == "stdio"
 }
 
 // Reconcile also visits disconnected devices: queued work expires without an

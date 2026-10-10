@@ -76,7 +76,7 @@ func (e *Engine) command(ctx context.Context, operation *operation) (*int, error
 	if err != nil {
 		return nil, err
 	}
-	environment, err := e.processEnvironment(args.Environment)
+	environment, err := e.operationEnvironment(operation, args.Environment)
 	if err != nil {
 		return nil, err
 	}

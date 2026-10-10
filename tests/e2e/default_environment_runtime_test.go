@@ -42,7 +42,7 @@ func TestDefaultEnvironmentTwoAgentsUseTheirDirectoriesForToolsAndHooks(t *testi
 	ctx := context.Background()
 	hooks := []hookpolicy.Declaration{managedHook("directory", "", hookpolicy.UserPromptSubmit, "pwd > hook-directory")}
 	configureManagedHooks(t, f, hooks)
-	second, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Second", ModelID: f.agent.ModelID, Hooks: hooks})
+	second, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Second", Hooks: hooks, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

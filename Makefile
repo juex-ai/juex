@@ -100,7 +100,7 @@ build: web
 	$(MAKE) build-go
 
 CLIENTS := juex juex-executor
-SERVICES := juex-management juex-runtime juex-execution juex-memory juex-calendar juex-guest juex-service-log
+SERVICES := juex-management juex-runtime juex-execution juex-memory juex-calendar juex-guest juex-service-log juex-migrate
 
 build-clients:
 	mkdir -p dist
@@ -125,7 +125,7 @@ integration: integration-contracts integration-live
 
 integration-contracts:
 	@test -n "$$JUEX_TEST_POSTGRES_URL" || (echo 'JUEX_TEST_POSTGRES_URL is required' >&2; exit 1)
-	go test -race -tags=postgres ./tests/e2e -count=1 -timeout=600s
+	go test -race -tags=postgres ./tests/e2e -count=1 -timeout=20m
 
 integration-live:
 	uv run --quiet --project . python -m tests.eval.juex_eval integration

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,6 +16,14 @@ import (
 func digest(value any) string {
 	data, _ := json.Marshal(value)
 	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+func proposalKey(scope application.Scope, thread, key string, automatic bool) string {
+	key = scope.AgentID + "/" + thread + "/" + key
+	if automatic {
+		return "automatic/" + key
+	}
+	return key
 }
 
 func overlaps(a, b mc.Source) bool {
@@ -58,7 +67,7 @@ func (s *State) Propose(scope application.Scope, thread string, p mc.Proposal, a
 	if !scope.Valid() || scope.AgentID == "" || thread == "" || p.Key == "" || len(p.Key) > 128 || strings.TrimSpace(p.Text) == "" || len(p.Text)+len(p.Reason) > mc.MaxBatchBytes || len(p.Sources) == 0 || len(p.Sources) > 100 || len(p.Evidence) == 0 || len(p.Evidence) > mc.MaxBatchEvents {
 		return mc.Receipt{}, application.ErrInvalid
 	}
-	if automatic && s.Strategy != mc.Advanced {
+	if automatic && (s.Strategy != mc.Advanced || s.ParticipationExcluded[scope.AgentID+"/"+thread]) {
 		return mc.Receipt{}, application.ErrDenied
 	}
 	for _, ref := range p.Sources {
@@ -79,7 +88,7 @@ func (s *State) Propose(scope application.Scope, thread string, p mc.Proposal, a
 	if bytes > mc.MaxBatchBytes {
 		return mc.Receipt{}, application.ErrInvalid
 	}
-	key := scope.AgentID + "/" + thread + "/" + p.Key
+	key := proposalKey(scope, thread, p.Key, automatic)
 	hash := digest(struct {
 		Proposal  mc.Proposal
 		Automatic bool
@@ -104,7 +113,7 @@ func (s *State) Propose(scope application.Scope, thread string, p mc.Proposal, a
 
 func (s *State) Review(scope application.Scope, binding Binding) (*Review, error) {
 	w := s.Reviews[binding.ReviewID]
-	if w == nil || !w.Scope.SameAuthority(scope) || w.Epoch != binding.Epoch || w.Fence != binding.Fence {
+	if w == nil || w.Imported != nil || !w.Scope.SameAuthority(scope) || w.Epoch != binding.Epoch || w.Fence != binding.Fence {
 		return nil, application.ErrDenied
 	}
 	if !s.Control.Enabled {
@@ -118,6 +127,9 @@ func (s *State) Review(scope application.Scope, binding Binding) (*Review, error
 
 func (s *State) Decide(scope application.Scope, binding Binding, decision mc.Decision, now time.Time) (mc.Receipt, error) {
 	w := s.Reviews[binding.ReviewID]
+	if w != nil && w.Imported != nil {
+		return mc.Receipt{}, application.ErrDenied
+	}
 	hash := digest(decision)
 	// A receipt may be read again after disable/correction; this cannot apply a
 	// second mutation or resurrect knowledge removed by human administration.
@@ -161,6 +173,10 @@ func (s *State) Result(scope application.Scope, thread, id string) (mc.Receipt, 
 }
 
 func (s *State) scrub(sources []mc.Source) {
+	for key, source := range s.ImportedSources {
+		source.Evidence = slices.DeleteFunc(source.Evidence, func(e mc.Evidence) bool { return intersects(e.Source, sources) })
+		s.ImportedSources[key] = source
+	}
 	for _, p := range s.Participation {
 		retained := p.Evidence[:0]
 		for _, e := range p.Evidence {

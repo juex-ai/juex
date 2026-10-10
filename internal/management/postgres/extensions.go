@@ -12,7 +12,7 @@ import (
 
 // ConfigureExtension receives an inspected snapshot from the composition-layer
 // adapter. The public request carries a receipt identity, never resource bodies.
-func (d *Directory) ConfigureExtension(ctx context.Context, actor, tenant, agentID string, version int64, binding extensionpolicy.Binding, remove bool) (management.Agent, error) {
+func (d *Directory) ConfigureExtension(ctx context.Context, actor, tenant, agentID string, version int64, binding extensionpolicy.Binding, remove bool, inspection *management.ExtensionInspectionAuthority) (management.Agent, error) {
 	tx, err := d.begin(ctx)
 	if err != nil {
 		return management.Agent{}, err
@@ -29,6 +29,15 @@ func (d *Directory) ConfigureExtension(ctx context.Context, actor, tenant, agent
 	prior, err := scanAgent(tx.QueryRow(ctx, `SELECT `+agentColumns+` FROM management.agents WHERE id=$1`, agentID))
 	if err != nil {
 		return management.Agent{}, err
+	}
+	if !remove && binding.Enabled && binding.Catalog.SourceKind == "skills" {
+		authority, err := agentAuthority(ctx, tx, actor, tenant, agentID, true)
+		if err != nil {
+			return management.Agent{}, err
+		}
+		if !authority.Effective.Policy().CanInspectSkills() || inspection == nil || inspection.ActorID != actor || inspection.ActorEpoch != authority.ActorAuthorizationEpoch || inspection.MembershipEpoch != authority.MembershipExecutionEpoch || inspection.AgentEpoch != prior.ExecutionEpoch {
+			return management.Agent{}, management.ErrDenied
+		}
 	}
 	bindings := slices.Clone(prior.Extensions)
 	at := slices.IndexFunc(bindings, func(b extensionpolicy.Binding) bool { return b.ID == binding.ID })

@@ -28,7 +28,7 @@ type NotificationRepository interface {
 // transition. The frozen notice never derives success from Worker shutdown.
 func (s *State) StageNotifications() {
 	for _, review := range s.Reviews {
-		if !terminal(review.Receipt.State) || review.Notification != nil {
+		if review.Imported != nil || !terminal(review.Receipt.State) || review.Notification != nil {
 			continue
 		}
 		kind, title := "completed", "Memory 审核已完成"

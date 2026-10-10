@@ -34,6 +34,19 @@ Main 投递输入；接纳后输入归 Runtime 所有，不代表模型执行完
 Activation 是可替换的运行容量，不是 Agent 身份。输入先持久提交，再返回接纳回执。
 请求 ID 对接纳去重，不能假设下一条 assistant 消息与某条 Input 一一对应。
 上下文压缩保留持久历史和检查点。Worker 归档要求工作空闲，并保留可读历史。
+已归档的普通 Worker 在子节点删除、待完成职责结算后可以永久删除。
+Main 与应用 Worker 继续遵循各自所有者的生命周期。删除对话保留用量账本、
+独立产物、Workspace 文件，以及已经共享至 Memory 的知识。
+
+Notes 和 Tasks 是 Thread 拥有的可变工作上下文，独立于 Fleet Memory。
+启用的 Notes 和 Tasks 在每次模型迭代时投影。未完成的 todo/doing Tasks 阻止正常结束；
+pending/failed Tasks 不阻止。全部剩余 Tasks 完成时清空启用的 Notes。
+压缩保留 Notes 和未完成 Tasks；新上下文清理启用的 Notes 和已完成 Tasks，
+同时保留 Thread 身份、历史和工作文件。
+
+输入清单记录 Agent 对直接用户输入的明确处理判断，独立于执行成功与 Tasks 完成。
+工作范围跨压缩保留。只有已交付模型的输入可以确认；Turn 结束既不自动确认，也不强制续跑。
+用户主动新开上下文会结束原范围，不编造确认记录；模型主动重置不能丢弃尚未确认的输入。
 
 Agent 能力策略限制其工具与后台活动，独立于 Fleet 应用启用状态和环境许可。
 普通 Worker 委派与应用所拥有的 Worker 分别检查对应能力。收紧任何能力都会撤销

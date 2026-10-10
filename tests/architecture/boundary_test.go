@@ -23,7 +23,8 @@ var dependencies = map[string]map[string]bool{
 	"execution":      {"foundation": true, "execution": true},
 	"memory":         {"foundation": true, "memory": true},
 	"calendar":       {"foundation": true, "calendar": true},
-	"app":            {"foundation": true, "providers": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "calendar": true, "app": true},
+	"migration":      {"foundation": true, "migration": true},
+	"app":            {"foundation": true, "providers": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "calendar": true, "migration": true, "app": true},
 	"entrypoints":    {"foundation": true, "providers": true, "management": true, "managedruntime": true, "execution": true, "memory": true, "calendar": true, "app": true, "entrypoints": true},
 	"cmd":            {"foundation": true, "entrypoints": true},
 }
@@ -103,6 +104,7 @@ func TestPackageOwnershipClassifiesNestedAndUnknownRoots(t *testing.T) {
 		"internal/providers/internal/protocol": "providers",
 		"internal/management/postgres":         "management",
 		"internal/app/managed":                 "app",
+		"internal/migration/legacy":            "migration",
 		"internal/entrypoints/managementhttp":  "entrypoints",
 		"cmd/juex":                             "cmd",
 		"internal/unclassified":                "",

@@ -32,7 +32,7 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 	usesManaged := binding.EnvironmentID == "" || slices.ContainsFunc(devices, func(device Device) bool {
 		return device.ID == binding.EnvironmentID && device.Managed
 	})
-	if s.Managed != nil && usesManaged && (scope.Capabilities.Allows(agentpolicy.Files) || scope.Capabilities.Allows(agentpolicy.Shell) || scope.Capabilities.Allows(agentpolicy.MCP)) {
+	if s.Managed != nil && usesManaged && (scope.Capabilities.Allows(agentpolicy.Files) || scope.Capabilities.Allows(agentpolicy.FileSearch) || scope.Capabilities.CanInspectSkills() || scope.Capabilities.Allows(agentpolicy.Shell) || scope.Capabilities.Allows(agentpolicy.MCP)) {
 		done, err := maintenance.Enter(s.Admission)
 		if err == nil {
 			err = s.Managed.Ensure(ctx, scope)
@@ -57,18 +57,9 @@ func (s *Service) Environments(ctx context.Context, actor, tenant, agent string)
 	}
 	environments := []execprotocol.Environment{}
 	for _, device := range devices {
-		if device.Status != "active" || device.RemovalEpoch != scope.RemovalEpoch || len(device.Grants[agent]) == 0 {
-			continue
+		if environment, visible := projectEnvironment(device, scope, binding); visible {
+			environments = append(environments, environment)
 		}
-		environment := device.Environment
-		environment.Default = device.ID == binding.EnvironmentID || binding.EnvironmentID == "" && device.Managed
-		if environment.Default && binding.WorkingDirectory != "" {
-			environment.WorkingDirectory = binding.WorkingDirectory
-		}
-		environment.AuthorizationVersion = device.Version
-		environment.Capabilities = permittedCapabilities(scope.Capabilities, device.Grants[agent])
-		environment.JournalID = ""
-		environments = append(environments, environment)
 	}
 	return environments, nil
 }

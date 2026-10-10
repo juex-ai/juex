@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/juex-ai/juex/internal/managedruntime"
@@ -24,7 +23,7 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	defer rollback(tx)
-	if err := checkScope(ctx, tx, scope); err != nil {
+	if err := lockAgentAdmission(ctx, tx, scope); err != nil {
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	if job.IdleSourceThread != "" {
@@ -43,7 +42,7 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 	var storedScope []byte
 	var matches, cancelled bool
 	var threadID string
-	if err := tx.QueryRow(ctx, `SELECT scope,request IS NULL OR request=$4::jsonb,cancelled,COALESCE(thread_id::text,'') FROM runtime.application_jobs WHERE application=$1 AND fleet_id=$2 AND job_id=$3 FOR UPDATE`, job.Application, scope.FleetID, job.ID, encodedJob).Scan(&storedScope, &matches, &cancelled, &threadID); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT scope,import_state='' AND (request IS NULL OR request=$4::jsonb),cancelled,COALESCE(thread_id::text,'') FROM runtime.application_jobs WHERE application=$1 AND fleet_id=$2 AND job_id=$3 FOR UPDATE`, job.Application, scope.FleetID, job.ID, encodedJob).Scan(&storedScope, &matches, &cancelled, &threadID); err != nil {
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	var original managedruntime.Scope
@@ -57,6 +56,9 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	if threadID == "" && !cancelled {
+		if err := requireAgentRunning(ctx, tx, scope.AgentID); err != nil {
+			return managedruntime.ApplicationReceipt{}, err
+		}
 		if job.IdleSourceThread != "" {
 			var busy bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs j JOIN runtime.inputs i ON i.id=j.input_id WHERE j.fleet_id=$1 AND j.application='memory' AND NOT j.cancelled AND i.state IN ('queued','active'))`, scope.FleetID).Scan(&busy); err != nil {
@@ -79,7 +81,7 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 		// Application idempotency lives in its job row. Ordinary user-selected
 		// Worker request IDs must never be able to pre-create this private context.
 		var created string
-		if err := tx.QueryRow(ctx, `INSERT INTO runtime.threads(agent_id,parent_id,kind,name) VALUES($1,$2,'worker',$3) RETURNING id`, scope.AgentID, parent.ID, job.Name).Scan(&created); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO runtime.threads(agent_id,parent_id,kind,name,application) VALUES($1,$2,'worker',$3,$4) RETURNING id`, scope.AgentID, parent.ID, job.Name, job.Application).Scan(&created); err != nil {
 			return managedruntime.ApplicationReceipt{}, err
 		}
 		if err := appendEvent(ctx, tx, created, "thread.created", map[string]string{"kind": "worker", "parent_id": parent.ID, "application": job.Application, "job_id": job.ID}); err != nil {
@@ -161,7 +163,8 @@ func applicationReceipt(ctx context.Context, tx pgx.Tx, scope managedruntime.Sco
 	// Cancellation revokes future work immediately, but cannot assert that an
 	// external process has stopped before the executor acknowledges its outcome.
 	err := tx.QueryRow(ctx, `SELECT COALESCE(j.thread_id::text,''),COALESCE(j.input_id::text,''),
- CASE WHEN tools.unknown THEN 'outcome_unknown'
+ CASE WHEN j.import_state<>'' THEN j.import_state
+ WHEN tools.unknown THEN 'outcome_unknown'
  WHEN j.cancelled AND tools.unsettled THEN 'cancel_requested'
  WHEN j.cancelled THEN 'cancelled' ELSE COALESCE(i.state,'pending') END,
  COALESCE(tools.operations,'[]'::jsonb)
@@ -209,12 +212,16 @@ func (s *Store) ThreadApplication(ctx context.Context, scope managedruntime.Scop
 	}
 	var encoded, stored []byte
 	var cancelled bool
-	err = tx.QueryRow(ctx, `SELECT request,scope,cancelled FROM runtime.application_jobs WHERE thread_id=$1 AND agent_id=$2`, thread, scope.AgentID).Scan(&encoded, &stored, &cancelled)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, tx.Commit(ctx)
-	}
+	var purpose, app, imported string
+	err = tx.QueryRow(ctx, `SELECT t.application,COALESCE(j.application,''),j.request,j.scope,COALESCE(j.cancelled,false),COALESCE(j.import_state,'') FROM runtime.threads t LEFT JOIN runtime.application_jobs j ON j.thread_id=t.id WHERE t.id=$1 AND t.agent_id=$2`, thread, scope.AgentID).Scan(&purpose, &app, &encoded, &stored, &cancelled, &imported)
 	if err != nil {
 		return nil, classify(err)
+	}
+	if purpose == "" && app == "" {
+		return nil, tx.Commit(ctx)
+	}
+	if purpose == "" || purpose != app || imported != "" {
+		return nil, managedruntime.ErrDenied
 	}
 	var job managedruntime.ApplicationJob
 	var original managedruntime.Scope
@@ -231,18 +238,18 @@ func (s *Store) ThreadApplication(ctx context.Context, scope managedruntime.Scop
 }
 
 func applicationInput(ctx context.Context, tx pgx.Tx, thread string, source managedruntime.InputSource) error {
-	var app, id string
-	err := tx.QueryRow(ctx, `SELECT application,job_id FROM runtime.application_jobs WHERE thread_id=$1`, thread).Scan(&app, &id)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var purpose, app, id, imported string
+	err := tx.QueryRow(ctx, `SELECT t.application,COALESCE(j.application,''),COALESCE(j.job_id,''),COALESCE(j.import_state,'') FROM runtime.threads t LEFT JOIN runtime.application_jobs j ON j.thread_id=t.id WHERE t.id=$1`, thread).Scan(&purpose, &app, &id, &imported)
+	if err != nil {
+		return classify(err)
+	}
+	if purpose == "" && app == "" {
 		if source.Kind == "application" {
 			return managedruntime.ErrDenied
 		}
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if source.Kind != "application" || source.Application != app || source.ApplicationJobID != id {
+	if purpose == "" || purpose != app || imported != "" || source.Kind != "application" || source.Application != app || source.ApplicationJobID != id {
 		return managedruntime.ErrDenied
 	}
 	return nil
@@ -252,14 +259,15 @@ func applicationAttempt(ctx context.Context, tx pgx.Tx, thread string, request m
 	var encoded []byte
 	var cancelled bool
 	var attempts int
-	err := tx.QueryRow(ctx, `SELECT j.request,j.cancelled,(SELECT count(*) FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE t.thread_id=j.thread_id) FROM runtime.application_jobs j WHERE j.thread_id=$1`, thread).Scan(&encoded, &cancelled, &attempts)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var purpose, app, imported string
+	err := tx.QueryRow(ctx, `SELECT th.application,COALESCE(j.application,''),COALESCE(j.import_state,''),j.request,COALESCE(j.cancelled,false),(SELECT count(*) FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE t.thread_id=j.thread_id) FROM runtime.threads th LEFT JOIN runtime.application_jobs j ON j.thread_id=th.id WHERE th.id=$1`, thread).Scan(&purpose, &app, &imported, &encoded, &cancelled, &attempts)
+	if err != nil {
+		return classify(err)
+	}
+	if purpose == "" && app == "" {
 		return request.ValidateModelBudget(nil)
 	}
-	if err != nil {
-		return err
-	}
-	if cancelled {
+	if purpose == "" || purpose != app || imported != "" || cancelled {
 		return managedruntime.ErrDenied
 	}
 	var job managedruntime.ApplicationJob

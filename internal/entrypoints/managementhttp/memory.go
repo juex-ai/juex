@@ -18,6 +18,7 @@ type Memory interface {
 	Search(context.Context, application.Access, mc.Query) (mc.Page, error)
 	Read(context.Context, application.Access, mc.ReadRequest) (mc.Entry, error)
 	Facts(context.Context, application.Access, mc.Query) (mc.FactPage, error)
+	Domains(context.Context, application.Access, mc.DomainRequest) ([]mc.Domain, error)
 	Reviews(context.Context, application.Access, int, int) (memory.ReviewPage, error)
 	StorageRules(context.Context, application.Access, int, int) (memory.StorageRules, error)
 	Administer(context.Context, application.Access, mc.AdminRequest) (mc.Receipt, error)
@@ -81,6 +82,11 @@ func (s *Server) memoryFacts(w http.ResponseWriter, r *http.Request, u managemen
 		return
 	}
 	v, e := s.options.Memory.Facts(r.Context(), appAccess(r, u), q)
+	respond(w, v, e)
+}
+
+func (s *Server) memoryDomains(w http.ResponseWriter, r *http.Request, u management.User) {
+	v, e := s.options.Memory.Domains(r.Context(), appAccess(r, u), mc.DomainRequest{ID: r.URL.Query().Get("id")})
 	respond(w, v, e)
 }
 func (s *Server) memoryRead(w http.ResponseWriter, r *http.Request, u management.User) {

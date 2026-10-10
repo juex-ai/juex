@@ -1,0 +1,43 @@
+{
+  "epoch_id": "epoch-fixture",
+  "purpose": "turn",
+  "iter": 0,
+  "attempt": 1,
+  "provider": {
+    "id": "fixture",
+    "protocol": "openai/chat",
+    "model": "fixture-model",
+    "endpoint_digest": "98f1135d88f966d90fea9ed48479654d42412012c210f4b21cc312c6d19c9801",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "streaming": true,
+      "reasoning_effort": true,
+      "reasoning_replay": true,
+      "max_output_tokens": true
+    },
+    "reasoning_replay_fields": ["reasoning_content", "reasoning", "thinking"]
+  },
+  "context_window": 8192,
+  "max_output_tokens": 512,
+  "cache_policy": {},
+  "system_prompt": {
+    "digest": "61cf3009ca2e8ab89a0fb64b98f22c6296b460ab157e4a488216dfc8a5bfa4b0",
+    "bytes": 17,
+    "content": "Fixture system."
+  },
+  "tool_catalog": {
+    "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "bytes": 2,
+    "content": []
+  },
+  "history_digest": "05e7af3056c43b0999c740b4f0ed3e178d8169a5197f8a9db748db471c008f26",
+  "history_message_ids": ["fixture-user"],
+  "messages": [{
+    "id": "fixture-user",
+    "source": "transcript",
+    "content_digest": "52a94d2b4629861842d8d214c495abf1d859002c54b514a098e0efd5e87e83a2"
+  }],
+  "compaction": {},
+  "request_digest": "695fff469ac0874046fbac952635f033404997a4a739877327684a87c9fae0a0"
+}

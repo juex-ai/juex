@@ -1,0 +1,16 @@
+{
+  "expected_fleet_id": "a54f2f66-7d1c-4d6d-8e42-4a09f30c8245",
+  "source": "proof-fixture",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "agents": [
+    {
+      "source_agent_id": "source-a",
+      "config": {
+        "worker_depth": 2,
+        "name": "保留身份",
+        "instructions": "Original instructions",
+        "model_id": "c31b08bf-7a0c-4c8b-9b02-d3124c10f7ab"
+      }
+    }
+  ]
+}
