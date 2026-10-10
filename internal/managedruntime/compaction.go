@@ -23,6 +23,8 @@ type CompactionJob struct {
 // The draft is part of the durable attempt, so a returned summary is checked
 // against exactly the context and candidate budget used for that request.
 type CompactionDraft struct {
+	InputScopeID       string         `json:"input_scope_id,omitempty"`
+	UncheckedInputIDs  []string       `json:"unchecked_input_ids,omitempty"`
 	ThreadState        ThreadState    `json:"thread_state"`
 	NotesEnabled       bool           `json:"notes_enabled"`
 	TasksEnabled       bool           `json:"tasks_enabled"`
@@ -48,6 +50,10 @@ func planCompaction(work Work, base ModelRequest, model ModelConfig) (ModelReque
 	history := projectModelHistory(work, model)
 	catalog := model
 	model = (ModelRequest{Model: model, ModelBudget: work.ModelBudget}).ContextModel()
+	var foldedWriteMessages map[string]bool
+	if toolAllowed(work.Config.Capabilities, "write_begin") && toolAllowed(work.Scope.Capabilities, "write_begin") {
+		_, foldedWriteMessages = projectWritesWithChanges(work.History, model)
+	}
 	if work.Source.Kind == "compaction" && llm.EstimateMessageTokens(history) <= max(256, model.ContextWindow*5/64) {
 		return ModelRequest{}, ErrNoCompaction
 	}
@@ -74,7 +80,7 @@ func planCompaction(work Work, base ModelRequest, model ModelConfig) (ModelReque
 		}
 	}
 	for i, message := range history {
-		if message.ID == inputID || message.Kind == llm.MessageKindSystemNotice && i > lastAssistant {
+		if !foldedWriteMessages[message.ID] && (message.ID == inputID || message.Kind == llm.MessageKindSystemNotice && i > lastAssistant) {
 			keep[message.ID] = true
 		}
 	}
@@ -90,6 +96,13 @@ func planCompaction(work Work, base ModelRequest, model ModelConfig) (ModelReque
 		cost := 0
 		skip := false
 		for _, message := range unit {
+			// A checkpoint retains original event IDs. A folded write summary is
+			// a provider projection, so retaining its original result ID alone
+			// could resurrect an unpaired tool result. Summarize this whole unit;
+			// active buffers are independently reconstructed from owned receipts.
+			if foldedWriteMessages[message.ID] {
+				skip = true
+			}
 			if message.Kind == llm.MessageKindCompact {
 				skip = true
 			}
@@ -110,6 +123,12 @@ func planCompaction(work Work, base ModelRequest, model ModelConfig) (ModelReque
 	draft.ThreadState.Tasks = slices.Clone(work.ThreadState.Tasks)
 	draft.NotesEnabled = work.Application != "memory" && work.Config.Capabilities.Allows(agentpolicy.Notes) && work.Scope.Capabilities.Allows(agentpolicy.Notes)
 	draft.TasksEnabled = work.Application != "memory" && work.Config.Capabilities.Allows(agentpolicy.Tasks) && work.Scope.Capabilities.Allows(agentpolicy.Tasks)
+	if work.Application != "memory" && work.Config.Capabilities.Allows(agentpolicy.InputTracking) && work.Scope.Capabilities.Allows(agentpolicy.InputTracking) {
+		draft.InputScopeID = work.InputScopeID
+		for _, item := range work.InputReminders {
+			draft.UncheckedInputIDs = append(draft.UncheckedInputIDs, item.InputID)
+		}
+	}
 	if draft.TasksEnabled && len(work.ThreadState.Tasks) > 0 {
 		draft.ConversationSystem = strings.Replace(draft.ConversationSystem, work.ThreadState.TasksContext(), work.ThreadState.RenewContext(false, true).TasksContext(), 1)
 	}

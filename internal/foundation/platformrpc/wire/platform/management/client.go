@@ -11,12 +11,16 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	ControlAgents(ctx context.Context, sourceJSON string, agentID string, after string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ControlAgent(ctx context.Context, sourceJSON string, actionJSON string, cancel bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ResolveProcessEnvironment(ctx context.Context, accessJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AuthorizeUsage(ctx context.Context, actorID string, tenantID string, ownerID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	RecordNotification(ctx context.Context, eventJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ApplicationAuthority(ctx context.Context, accessJSON string, execute bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AuthorizeFleet(ctx context.Context, actorID string, tenantID string, ownerID string, execute bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Authorize(ctx context.Context, actor *platform.Actor, execute bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Peers(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ExtensionCatalog(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Snapshot(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	ModelProfile(ctx context.Context, scopeJSON string, configJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 }
@@ -50,6 +54,21 @@ type kManagementClient struct {
 	*kClient
 }
 
+func (p *kManagementClient) ControlAgents(ctx context.Context, sourceJSON string, agentID string, after string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ControlAgents(ctx, sourceJSON, agentID, after)
+}
+
+func (p *kManagementClient) ControlAgent(ctx context.Context, sourceJSON string, actionJSON string, cancel bool, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ControlAgent(ctx, sourceJSON, actionJSON, cancel)
+}
+
+func (p *kManagementClient) ResolveProcessEnvironment(ctx context.Context, accessJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ResolveProcessEnvironment(ctx, accessJSON)
+}
+
 func (p *kManagementClient) AuthorizeUsage(ctx context.Context, actorID string, tenantID string, ownerID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.AuthorizeUsage(ctx, actorID, tenantID, ownerID)
@@ -78,6 +97,11 @@ func (p *kManagementClient) Authorize(ctx context.Context, actor *platform.Actor
 func (p *kManagementClient) Peers(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Peers(ctx, scopeJSON)
+}
+
+func (p *kManagementClient) ExtensionCatalog(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ExtensionCatalog(ctx, scopeJSON)
 }
 
 func (p *kManagementClient) Snapshot(ctx context.Context, scopeJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {

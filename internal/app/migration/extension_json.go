@@ -16,7 +16,7 @@ import (
 var extensionSemVer = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
 var errExtensionJSON = errors.New("source extension JSON is invalid or requires separate conversion")
 
-func stdioSourceManifest(data []byte, directoryName string) (extensionpolicy.Manifest, error) {
+func mcpSourceManifest(data []byte, directoryName string) (extensionpolicy.Manifest, error) {
 	var result extensionpolicy.Manifest
 	fields, err := extensionObject(data, "manifest_version", "name", "version", "description", "display_name", "author", "homepage", "repository", "license", "requirements", "agent")
 	if err != nil {

@@ -14,10 +14,12 @@ import (
 // PreparedBundle contains private configuration and grants no runtime authority.
 // Agent configs intentionally have no model UUID until Management publishes it.
 type PreparedBundle struct {
-	Models     ModelPublicationPlan                  `json:"-"`
-	Agents     map[string]management.AgentConfig     `json:"-"`
-	Extensions map[string][]extensionpolicy.Manifest `json:"-"`
-	origins    map[string]sourceOrigins
+	Models          ModelPublicationPlan                  `json:"-"`
+	Agents          map[string]management.AgentConfig     `json:"-"`
+	Extensions      map[string][]extensionpolicy.Manifest `json:"-"`
+	Environments    map[string]map[string]string          `json:"-"`
+	AgentManagement map[string]bool                       `json:"-"`
+	origins         map[string]sourceOrigins
 }
 
 // Prepare resolves frozen configuration without source, environment, clock or
@@ -48,7 +50,7 @@ func (b *Bundle) Prepare() (PreparedBundle, error) {
 		reserves[p.Key] = p.OutputReserve
 		endpoints[p.Key] = p.Endpoint
 	}
-	plan := PreparedBundle{Agents: map[string]management.AgentConfig{}, Extensions: map[string][]extensionpolicy.Manifest{}}
+	plan := PreparedBundle{Agents: map[string]management.AgentConfig{}, Extensions: map[string][]extensionpolicy.Manifest{}, Environments: map[string]map[string]string{}, AgentManagement: map[string]bool{}}
 	models := make([]ResolvedModels, 0, len(configs))
 	originalModels := make([]ResolvedModels, 0, len(configs))
 	byAgent := make(map[string]ResolvedConfig, len(configs))
@@ -65,6 +67,19 @@ func (b *Bundle) Prepare() (PreparedBundle, error) {
 		}
 		if !agent.Definition.Enabled || policy.Activation != "on_demand" {
 			return empty, errors.New("enabled source Agents require an explicit on-demand target lifecycle")
+		}
+		if b.conversionPolicy >= 3 {
+			if c.AgentManagement && policy.AgentManagement == nil || policy.AgentManagement != nil && *policy.AgentManagement != c.AgentManagement {
+				return empty, errors.New("source Supervisor requires explicit matching target Agent management acceptance")
+			}
+			plan.AgentManagement[c.AgentID] = c.AgentManagement
+			values, err := convertProcessEnvironment(b.source, c, evidence[c.AgentID])
+			if err != nil {
+				return empty, fmt.Errorf("source Agent %s process environment: %w", c.AgentID, err)
+			}
+			plan.Environments[c.AgentID] = values
+		} else if c.EnvironmentDeclared || policy.AgentManagement != nil {
+			return empty, errors.New("retained conversion policy cannot accept new environment or Agent management declarations")
 		}
 		for _, file := range agent.Files {
 			if file.Path == "extensions/calendar/calendar.json" && (!c.Modules["extensions"] || !c.Modules["mcp"] || !slices.Contains(c.ExtensionAllow, "calendar")) {
@@ -91,15 +106,32 @@ func (b *Bundle) Prepare() (PreparedBundle, error) {
 			}
 		}
 		models = append(models, m)
-		config, err := prepareAgentConfig(c, agent.Definition, AgentConfigBindings{Instructions: policy.Instructions, FilesEnabled: policy.FilesEnabled, ShellEnabled: policy.ShellEnabled, CalendarEnabled: policy.CalendarEnabled, CollaborationEnabled: policy.CollaborationEnabled, GlobalInstructionPath: policy.GlobalInstructionPath})
+		config, err := prepareAgentConfigForPolicy(c, agent.Definition, AgentConfigBindings{Instructions: policy.Instructions, FilesEnabled: policy.FilesEnabled, ShellEnabled: policy.ShellEnabled, CalendarEnabled: policy.CalendarEnabled, CollaborationEnabled: policy.CollaborationEnabled, GlobalInstructionPath: policy.GlobalInstructionPath}, b.conversionPolicy)
 		if err != nil {
 			return empty, err
+		}
+		if b.conversionPolicy >= 3 {
+			for _, thread := range agent.Threads {
+				if err := requireSettledSourceWrites(thread); err != nil {
+					return empty, err
+				}
+				if _, err := sourceInputTracking(thread); err != nil {
+					return empty, fmt.Errorf("source Agent %s Thread %s tracking: %w", c.AgentID, thread.Metadata.ThreadID, err)
+				}
+			}
 		}
 		plan.Agents[c.AgentID] = config
 	}
 	plan.Models, err = ConvertModels(models, reserves)
 	if err != nil {
 		return empty, err
+	}
+	// Existing bundles retain their conversion contract. New policy 3 permits
+	// independent model tails for Agents sharing a primary catalog entry.
+	if b.conversionPolicy == 2 {
+		if _, err := sharedModelTails(plan.Models); err != nil {
+			return empty, err
+		}
 	}
 	plan.origins = map[string]sourceOrigins{}
 	usedOrigins := map[ModelKey]bool{}
@@ -130,7 +162,7 @@ func (b *Bundle) Prepare() (PreparedBundle, error) {
 		if !ok || !c.Modules["extensions"] || !selection.MCP || e.Snapshot.Selection != selection {
 			return empty, errors.New("extension selection must match the source Agent's enabled resource modules")
 		}
-		manifest, err := ConvertStdioExtension(e.Snapshot, e.Bindings)
+		manifest, err := ConvertMCPExtension(e.Snapshot, e.Bindings, e.HeaderEnvironment)
 		if err != nil {
 			return empty, fmt.Errorf("source Agent %s extension: %w", e.AgentID, err)
 		}

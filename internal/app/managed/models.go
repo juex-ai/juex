@@ -7,6 +7,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
 	"github.com/juex-ai/juex/internal/management"
+	"github.com/juex-ai/juex/internal/management/importproof"
 	"github.com/juex-ai/juex/internal/management/postgres"
 	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 )
@@ -30,10 +31,36 @@ func ImportModels(ctx context.Context, directory *postgres.Directory, value mana
 		if err != nil {
 			return nil, err
 		}
-		models[i] = management.ImportedModel{Configuration: config, Fallbacks: item.Fallbacks}
+		models[i] = management.ImportedModel{Configuration: config}
 	}
 	value.Models = models
 	return directory.ImportModels(ctx, value)
+}
+
+func RecoverModelsV1(ctx context.Context, directory *postgres.Directory, proof importproof.ModelsV1) (map[management.ModelKey]management.ModelImportIdentity, error) {
+	// The composition boundary historically canonicalized this header before
+	// Management hashed it. Reproduce that spelling without contacting an adapter.
+	for i := range proof.Models {
+		config := &proof.Models[i].Configuration
+		if config.Protocol != llm.ProtocolOpenAICodexResponses {
+			continue
+		}
+		headers := maps.Clone(config.Options.Headers)
+		count, account := 0, ""
+		for key, value := range headers {
+			if strings.EqualFold(key, "ChatGPT-Account-ID") {
+				count++
+				account = strings.TrimSpace(value)
+				delete(headers, key)
+			}
+		}
+		if count != 1 || account == "" || strings.Contains(account, "${") {
+			return nil, management.ErrInvalid
+		}
+		headers["ChatGPT-Account-ID"] = account
+		config.Options.Headers = headers
+	}
+	return directory.RecoverModelImportV1(ctx, proof)
 }
 
 func prepareModelConfiguration(config management.ModelConfiguration) (management.ModelConfiguration, error) {

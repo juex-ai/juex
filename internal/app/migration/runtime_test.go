@@ -33,10 +33,10 @@ func runtimeFixture() (managedruntime.Scope, legacy.Agent, RuntimeBindings) {
 		{Version: 1, Seq: 1, At: at, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "thread.created", ThreadID: "0", Alias: "main", GenerationID: gen1.ID}}},
 		{Version: 1, Seq: 2, At: at, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "message.appended", Message: &old}, {Type: "message.appended", Message: &kept}}},
 		{Version: 1, Seq: 3, At: at, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "event.recorded", Event: json.RawMessage(`{"type":"turn.cancelled","turn_id":"turn-old","payload":{"input_ids":["input-old"]}}`)}}},
-		{Version: 1, Seq: 4, At: at, GenerationID: gen2.ID, Facts: []legacy.Fact{{Type: "context.compacted", Summary: &summary, Seed: &legacy.GenerationSeed{ProviderMessages: []llm.Message{summary, kept}}}}},
+		{Version: 1, Seq: 4, At: at, GenerationID: gen2.ID, Facts: []legacy.Fact{{Type: "context.compacted", Summary: &summary, Seed: &legacy.GenerationSeed{ContextScopeID: "g000001", ProviderMessages: []llm.Message{summary, kept}}}}},
 	}
-	main := legacy.Thread{Metadata: legacy.ThreadMetadata{ThreadID: "0", Alias: "main", CreatedAt: at, UpdatedAt: at, RetentionState: "active", ExecutionState: "idle", CurrentGeneration: gen2, Generations: []legacy.Generation{gen1, gen2}}, Commits: commits, Context: []llm.Message{summary, kept}, Inputs: []legacy.Input{{ID: "input-old", MessageID: old.ID, TurnID: "turn-old", Message: old, State: "settled", CreatedAt: created}}}
-	worker := legacy.Thread{Metadata: legacy.ThreadMetadata{ThreadID: "abcdef", Alias: "review", ParentThreadID: "0", CreatedAt: at, UpdatedAt: at, RetentionState: "archived", CurrentGeneration: gen1, Generations: []legacy.Generation{gen1}}, Commits: []legacy.Commit{{Version: 1, Seq: 1, At: at, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "thread.created", ThreadID: "abcdef", ParentThreadID: "0"}}}}}
+	main := legacy.Thread{ContextScopeID: "g000001", Metadata: legacy.ThreadMetadata{ThreadID: "0", Alias: "main", CreatedAt: at, UpdatedAt: at, RetentionState: "active", ExecutionState: "idle", CurrentGeneration: gen2, Generations: []legacy.Generation{gen1, gen2}}, Commits: commits, Context: []llm.Message{summary, kept}, Inputs: []legacy.Input{{ID: "input-old", MessageID: old.ID, TurnID: "turn-old", Message: old, State: "settled", CreatedAt: created}}}
+	worker := legacy.Thread{ContextScopeID: "g000001", Metadata: legacy.ThreadMetadata{ThreadID: "abcdef", Alias: "review", ParentThreadID: "0", CreatedAt: at, UpdatedAt: at, RetentionState: "archived", CurrentGeneration: gen1, Generations: []legacy.Generation{gen1}}, Commits: []legacy.Commit{{Version: 1, Seq: 1, At: at, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "thread.created", ThreadID: "abcdef", ParentThreadID: "0"}}}}}
 	return scope, legacy.Agent{Definition: legacy.AgentDefinition{ID: "abcdef"}, Threads: []legacy.Thread{main, worker}}, RuntimeBindings{SourceSHA256: strings.Repeat("a", 64)}
 }
 
@@ -186,7 +186,8 @@ func TestRuntimeConversionMaterializesTextReferencesAndRejectsMetadataOnlyActive
 
 func TestRuntimeConversionPreservesEmptyRenewedContext(t *testing.T) {
 	scope, source, bindings := runtimeFixture()
-	source.Threads[0].Commits[3].Facts = []legacy.Fact{{Type: "context.renewed", Seed: &legacy.GenerationSeed{}}}
+	source.Threads[0].Commits[3].Facts = []legacy.Fact{{Type: "context.renewed", Seed: &legacy.GenerationSeed{ContextScopeID: "g000002"}}}
+	source.Threads[0].ContextScopeID = "g000002"
 	source.Threads[0].Context = nil
 	value, err := ConvertRuntime(scope, source, bindings)
 	if err != nil || len(value.Import.Threads[0].Context) != 0 || len(value.Identities.Messages["0"]) != 2 {

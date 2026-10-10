@@ -29,7 +29,7 @@ func (b *Bundle) hostFiles(agent legacy.Agent, target string, prepared PreparedB
 			prefix = "archive/" + prefix
 		}
 		// Existing files are preserved even when their guidance was disabled.
-		if prepared.Agents[agent.Definition.ID].Capabilities.Allows(agentpolicy.WorkingFiles) {
+		if prepared.Agents[agent.Definition.ID].Configuration.Modules[agentpolicy.WorkingFiles] {
 			request.Threads[id] = []execution.HostImportFile{}
 		}
 		for _, file := range agent.Files {

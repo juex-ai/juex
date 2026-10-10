@@ -25,7 +25,7 @@ import (
 
 func configureManagedHooks(t *testing.T, f *executionFixture, hooks []hookpolicy.Declaration) {
 	t.Helper()
-	agent, err := f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Instructions: f.agent.Instructions, ModelID: f.agent.ModelID, Hooks: hooks})
+	agent, err := f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Instructions: f.agent.Instructions, Hooks: hooks, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -67,6 +67,9 @@ func beginTurnHooks(ctx context.Context, tx pgx.Tx, work managedruntime.Work, te
 			return true, waitHooks(ctx, tx, work.TurnID, work.ThreadID, decision.Unknown)
 		}
 		if decision.Reject {
+			if _, err := tx.Exec(ctx, `UPDATE runtime.input_tracking SET delivery='blocked' WHERE thread_id=$1 AND input_id=$2 AND delivery='registered'`, work.ThreadID, work.InputID); err != nil {
+				return false, err
+			}
 			return true, completeTurn(ctx, tx, work.ThreadID, work.TurnID, work.InputID, "failed", "", decision.Reason)
 		}
 		if err := applyHookContext(ctx, tx, work.TurnID, work.ThreadID, event, work.InputID, decision); err != nil {

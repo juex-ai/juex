@@ -173,7 +173,7 @@ func TestManagedInstructionsRegrantBeforeDispatchDoesNotReviveSnapshot(t *testin
 	connectExecutionDevice(t, f, device, token, engine)
 	config := instructionpolicy.DynamicInstructions{Enabled: true}
 	var err error
-	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, DynamicInstructions: &config})
+	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, DynamicInstructions: &config, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestManagedInstructionsOfflinePreparationKeepsOriginalLocation(t *testing.T
 		t.Fatal(err)
 	}
 	config := instructionpolicy.DynamicInstructions{Enabled: true}
-	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, DynamicInstructions: &config})
+	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, DynamicInstructions: &config, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestManagedInstructionsDisabledAndFilesDeniedDoNotRead(t *testing.T) {
 				policy.Disabled = []agentpolicy.Capability{agentpolicy.Files}
 			}
 			var err error
-			f.agent, err = f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Capabilities: &policy, DynamicInstructions: &config})
+			f.agent, err = f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, DynamicInstructions: &config, Configuration: &management.Configuration{Models: f.agent.Configuration.Models, Modules: modulesForPolicy(&policy)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -318,7 +318,7 @@ func TestManagedInstructionsCancelOfflineAndMemoryWorkerCannotRead(t *testing.T)
 	}
 	policy := instructionpolicy.DynamicInstructions{Enabled: true}
 	var err error
-	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, DynamicInstructions: &policy})
+	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, DynamicInstructions: &policy, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestManagedInstructionsInvalidFileHoldsInputWithoutProviderCall(t *testing.
 	connectExecutionDevice(t, f, device, token, engine)
 	policy := instructionpolicy.DynamicInstructions{Enabled: true}
 	var err error
-	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, DynamicInstructions: &policy})
+	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, DynamicInstructions: &policy, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestManagedInstructionsReadSelectedDeviceBeforeEveryModelRequest(t *testing
 	engine := openNative(t, native.Config{StateDirectory: filepath.Join(t.TempDir(), "journal"), EnvironmentID: device.ID, WorkingDirectory: t.TempDir(), Grants: device.Ceiling})
 	connectExecutionDevice(t, f, device, token, engine)
 	policy := instructionpolicy.DynamicInstructions{Enabled: true, GlobalPath: global}
-	agent, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Instructions: "static guidance", ModelID: f.agent.ModelID, DynamicInstructions: &policy})
+	agent, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Instructions: "static guidance", DynamicInstructions: &policy, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

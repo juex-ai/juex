@@ -26,19 +26,20 @@ func (d *Directory) SnapshotPlan(ctx context.Context, scope management.ModelCall
 	if !modelScopeMatches(scope, authority) {
 		return plan, management.ErrDenied
 	}
-	if authority.ModelID == "" {
+	if len(authority.Effective.Models) == 0 {
 		return plan, management.ErrModelUnavailable
 	}
 	plan.WorkerDepth = authority.Agent.WorkerDepth
-	plan.Capabilities = authority.Agent.Capabilities
+	plan.AgentManagement = authority.Agent.AgentManagement
+	plan.Capabilities = authority.Effective.Policy()
 	plan.DynamicInstructions = authority.Agent.DynamicInstructions
 	plan.Hooks = authority.Agent.Hooks
 	plan.Extensions = authority.Agent.Extensions
-	plan.AgentVersion, plan.Instructions, plan.RequestedModelID = authority.Agent.Version, authority.Agent.Instructions, authority.ModelID
-	rows, err := tx.Query(ctx, `WITH wanted AS (SELECT $2::uuid AS id,0 AS ordinal UNION ALL SELECT fallback_id,ordinal FROM management.model_fallbacks WHERE model_id=$2)
+	plan.AgentVersion, plan.Instructions, plan.RequestedModelID = authority.Agent.Version, authority.Agent.Instructions, authority.Effective.Models[0]
+	rows, err := tx.Query(ctx, `WITH wanted AS (SELECT id,ordinal FROM unnest($2::uuid[]) WITH ORDINALITY AS w(id,ordinal))
  SELECT m.id,m.provider,m.name,m.protocol,m.endpoint,m.context_window,m.max_output,m.output_reserve,m.authorization_epoch,COALESCE(e.epoch,1)
  FROM wanted w JOIN management.models m ON m.id=w.id LEFT JOIN management.tenant_model_epochs e ON e.model_id=m.id AND e.tenant_id=$1
- WHERE m.enabled AND `+modelVisible+` ORDER BY w.ordinal`, scope.TenantID, authority.ModelID)
+ WHERE m.enabled AND `+modelVisible+` ORDER BY w.ordinal`, scope.TenantID, authority.Effective.Models)
 	if err != nil {
 		return plan, err
 	}

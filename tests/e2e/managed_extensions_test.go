@@ -49,7 +49,7 @@ func extensionManagement(t *testing.T, f *executionFixture) (managed.ManagementE
 	}
 	web := httptest.NewUnstartedServer(nil)
 	origin := "http://" + web.Listener.Addr().String()
-	handler, err := managementhttp.New(managementhttp.Options{Auth: auth, Directory: f.directory, Extensions: adapter, PublicURL: origin, InsecureHTTP: true})
+	handler, err := managementhttp.New(managementhttp.Options{Auth: auth, Directory: f.directory, Extensions: adapter, ProcessEnvironment: managed.ManagementProcessEnvironment{Execution: client, Directory: f.directory}, Execution: client, Workspace: managed.ManagementWorkspace{Execution: client, Directory: f.directory}, PublicURL: origin, InsecureHTTP: true})
 	if err != nil {
 		t.Fatal(err)
 	}

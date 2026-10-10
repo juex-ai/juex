@@ -91,7 +91,14 @@ func (s *Service) Facts(ctx context.Context, access application.Access, query mc
 
 func (s *Service) Domains(ctx context.Context, access application.Access, request mc.DomainRequest) ([]mc.Domain, error) {
 	var value []mc.Domain
-	err := s.transact(ctx, access, false, func(_ *State, _ application.Scope) (err error) { value, err = knowledge.Domains(request.ID); return })
+	err := s.transact(ctx, access, false, func(_ *State, _ application.Scope) error {
+		var err error
+		value, err = knowledge.Domains(request.ID)
+		if err != nil {
+			return invalid(err.Error())
+		}
+		return nil
+	})
 	return value, err
 }
 

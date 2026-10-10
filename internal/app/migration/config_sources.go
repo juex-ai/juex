@@ -190,6 +190,9 @@ func decodeConfig(data []byte) (configDocument, bool, error) {
 			if node.Content[0].Content[i].Value == "imports" {
 				nested = true
 			}
+			if node.Content[0].Content[i].Value == "environment" {
+				value.environmentPresent = true
+			}
 		}
 	}
 	return value, nested, nil

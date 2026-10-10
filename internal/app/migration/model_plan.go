@@ -24,13 +24,8 @@ type CatalogModel struct {
 }
 
 type AgentModelBinding struct {
-	SourceAgentID string   `json:"source_agent_id"`
-	Primary       ModelKey `json:"primary"`
-}
-
-type ModelFallbacks struct {
-	Primary    ModelKey   `json:"primary"`
-	Candidates []ModelKey `json:"candidates"`
+	SourceAgentID string     `json:"source_agent_id"`
+	Models        []ModelKey `json:"models"`
 }
 
 // ModelPublicationPlan proves consistency of supplied inputs only. Publishing
@@ -38,9 +33,8 @@ type ModelFallbacks struct {
 // tenant/Agent authority and mapping keys to the UUIDs returned by Management.
 // It grants no right to overwrite a catalog or change the platform default.
 type ModelPublicationPlan struct {
-	Catalog   []CatalogModel      `json:"catalog"`
-	Agents    []AgentModelBinding `json:"agents"`
-	Fallbacks []ModelFallbacks    `json:"fallbacks"`
+	Catalog []CatalogModel      `json:"catalog"`
+	Agents  []AgentModelBinding `json:"agents"`
 }
 
 // ConvertModels retains ordinary request caps and applies an explicit target
@@ -51,7 +45,6 @@ func ConvertModels(values []ResolvedModels, reserves map[ModelKey]int) (ModelPub
 	}
 	plan := ModelPublicationPlan{}
 	catalog := map[ModelKey]management.ModelConfiguration{}
-	tails := map[ModelKey][]ModelKey{}
 	agents := map[string]bool{}
 	for _, value := range values {
 		if strings.TrimSpace(value.AgentID) == "" || agents[value.AgentID] || len(value.Models) == 0 || len(value.Models) > 5 {
@@ -87,24 +80,13 @@ func ConvertModels(values []ResolvedModels, reserves map[ModelKey]int) (ModelPub
 			catalog[key], seen[key] = config, true
 			chain = append(chain, key)
 		}
-		primary := chain[0]
-		// Retain empty tails to detect conflicting source policies. Publication
-		// creates direct chains and never recursively expands them.
-		tail := append([]ModelKey{}, chain[1:]...)
-		if prior, exists := tails[primary]; exists && !slices.Equal(prior, tail) {
-			return ModelPublicationPlan{}, errors.New("shared primary model has conflicting ordered fallback policy")
-		}
-		tails[primary] = tail
-		plan.Agents = append(plan.Agents, AgentModelBinding{SourceAgentID: value.AgentID, Primary: primary})
+		plan.Agents = append(plan.Agents, AgentModelBinding{SourceAgentID: value.AgentID, Models: chain})
 	}
 	if len(reserves) != len(catalog) {
 		return ModelPublicationPlan{}, errors.New("reservation policy includes an unused model identity")
 	}
 	for _, key := range slices.SortedFunc(maps.Keys(catalog), compareModelKey) {
 		plan.Catalog = append(plan.Catalog, CatalogModel{Key: key, Configuration: catalog[key]})
-	}
-	for _, key := range slices.SortedFunc(maps.Keys(tails), compareModelKey) {
-		plan.Fallbacks = append(plan.Fallbacks, ModelFallbacks{Primary: key, Candidates: tails[key]})
 	}
 	slices.SortFunc(plan.Agents, func(a, b AgentModelBinding) int { return strings.Compare(a.SourceAgentID, b.SourceAgentID) })
 	return plan, nil

@@ -36,11 +36,15 @@ func serveManagement(ctx context.Context, app *managed.Management, config serveC
 	}
 	var execution managementhttp.Execution
 	var extensions managementhttp.ExtensionAPI
+	var workspace managementhttp.WorkspaceAPI
+	var processEnvironment managementhttp.ProcessEnvironmentAPI
 	if config.ExecutionAddress != "" {
 		var client *executionrpc.Client
 		client, err = executionrpc.NewClient(config.ExecutionAddress, config.Credentials)
 		execution = client
 		extensions = managed.ManagementExtensions{Directory: app.Directory, Execution: client}
+		workspace = managed.ManagementWorkspace{Execution: client, Directory: app.Directory}
+		processEnvironment = managed.ManagementProcessEnvironment{Execution: client, Directory: app.Directory}
 		if err != nil {
 			return err
 		}
@@ -66,7 +70,7 @@ func serveManagement(ctx context.Context, app *managed.Management, config serveC
 		}
 	}
 	app.Purger = &management.Purger{Repository: app.Directory, Services: participants}
-	handler, err := managementhttp.New(managementhttp.Options{Extensions: extensions, Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, Calendar: calendar, PublicURL: config.PublicURL, TrustedProxies: config.TrustedProxies, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
+	handler, err := managementhttp.New(managementhttp.Options{ProcessEnvironment: processEnvironment, Workspace: workspace, Extensions: extensions, Auth: app.Auth, Directory: app.Directory, Runtime: runtime, Execution: execution, Memory: memory, Calendar: calendar, PublicURL: config.PublicURL, TrustedProxies: config.TrustedProxies, InsecureHTTP: config.InsecureHTTP, MailEnabled: app.Mailer != nil, Static: webassets.Handler(), Health: app.Pool.Ping})
 	if err != nil {
 		return err
 	}

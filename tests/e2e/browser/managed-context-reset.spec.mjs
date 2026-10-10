@@ -21,7 +21,11 @@ test('new context preserves history and retries an uncertain reset with the same
     if (path.endsWith('/events')) return json({ thread, events: events.filter(event => event.sequence > Number(url.searchParams.get('after') || 0)), next_sequence: thread.sequence, has_more: false });
     if (path.endsWith('/reset-context')) {
       requests.push(route.request().postDataJSON());
-      if (requests.length === 1) { thread.generation = 2; return route.abort('failed'); }
+      if (requests.length === 1) {
+        thread.generation = 2; thread.sequence++;
+        events.push({ id: 'reset', sequence: thread.sequence, generation: 2, kind: 'context.reset', data: { request_id: requests[0].request_id } });
+        return route.abort('failed');
+      }
       expect(thread.generation).toBe(2);
       return json(thread);
     }
@@ -40,4 +44,5 @@ test('new context preserves history and retries an uncertain reset with the same
   expect(requests).toHaveLength(2);
   expect(requests[0]).toEqual(requests[1]);
   await expect(page.getByText('Retained historical work', { exact: true })).toBeVisible();
+  await expect(page.getByText('新上下文 · 后续消息从此处开始，完整历史仍然保留。', { exact: true })).toBeVisible();
 });

@@ -66,7 +66,7 @@ func TestMigrationAgentConfigPreservesResolvedPolicyThroughManagement(t *testing
 			}
 			stored := read.Agent
 			want := agentpolicy.Policy{Disabled: tc.wantDisabled}.Normalized()
-			if stored.Name != tc.name || stored.Instructions != instructions || stored.WorkerDepth != 2 || stored.ModelID != model.ID || !reflect.DeepEqual(stored.Capabilities, want) || stored.DynamicInstructions != *config.DynamicInstructions || len(stored.Hooks) != 0 || len(stored.Extensions) != 0 {
+			if stored.Name != tc.name || stored.Instructions != instructions || stored.WorkerDepth != 2 || !reflect.DeepEqual(stored.Configuration, *config.Configuration) || stored.DynamicInstructions != *config.DynamicInstructions || len(stored.Hooks) != 0 || len(stored.Extensions) != 0 {
 				t.Fatal("stored initial configuration changed")
 			}
 			authority := managed.RuntimeAuthority{Directory: directory}
@@ -122,7 +122,7 @@ func TestMigrationAgentConfigExplicitFilesChoiceReachesRuntimeCatalog(t *testing
 			})
 			resolved, definition := resolvedMigrationAgentConfig(t, tc.name, "preset: minimal\nenable_user_agents_resources: false\n"+tc.modules)
 			instructions, shell, calendar, collaboration := "", true, false, false
-			config, err := migration.ConvertAgentConfig(resolved, definition, migration.AgentConfigBindings{ModelID: f.agent.ModelID, Instructions: &instructions, FilesEnabled: &tc.files, ShellEnabled: &shell, CalendarEnabled: &calendar, CollaborationEnabled: &collaboration})
+			config, err := migration.ConvertAgentConfig(resolved, definition, migration.AgentConfigBindings{ModelID: f.agent.Configuration.Models[0], Instructions: &instructions, FilesEnabled: &tc.files, ShellEnabled: &shell, CalendarEnabled: &calendar, CollaborationEnabled: &collaboration})
 			if err != nil {
 				t.Fatal(err)
 			}

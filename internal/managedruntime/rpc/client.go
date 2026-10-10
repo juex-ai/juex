@@ -25,10 +25,14 @@ func ErrorCode(err error) string {
 		return "invalid"
 	case errors.Is(err, managedruntime.ErrConflict):
 		return "conflict"
+	case errors.Is(err, managedruntime.ErrPaused):
+		return "paused"
 	case errors.Is(err, managedruntime.ErrSourceBusy):
 		return "source_busy"
 	case errors.Is(err, managedruntime.ErrModelUnavailable):
 		return "model_unavailable"
+	case errors.Is(err, managedruntime.ErrMediaUnavailable):
+		return "media_unavailable"
 	default:
 		return "unavailable"
 	}
@@ -41,10 +45,14 @@ func decodeError(code string) error {
 		return managedruntime.ErrInvalid
 	case "conflict":
 		return managedruntime.ErrConflict
+	case "paused":
+		return managedruntime.ErrPaused
 	case "source_busy":
 		return managedruntime.ErrSourceBusy
 	case "model_unavailable":
 		return managedruntime.ErrModelUnavailable
+	case "media_unavailable":
+		return managedruntime.ErrMediaUnavailable
 	default:
 		return platformrpc.ErrUnavailable
 	}
@@ -80,7 +88,11 @@ func (c *Client) Health(ctx context.Context) error {
 	return platformrpc.Decode(reply, err, nil, decodeError)
 }
 func (c *Client) Submit(ctx context.Context, user, tenant, agent string, input managedruntime.InputRequest) (managedruntime.InputReceipt, error) {
-	reply, err := c.client.Submit(ctx, actor(user, tenant, agent), input.RequestID, input.ThreadID, input.Text)
+	data, err := json.Marshal(input)
+	if err != nil {
+		return managedruntime.InputReceipt{}, err
+	}
+	reply, err := c.client.Submit(ctx, actor(user, tenant, agent), string(data))
 	var result managedruntime.InputReceipt
 	err = platformrpc.Decode(reply, err, &result, decodeError)
 	return result, err
@@ -91,6 +103,44 @@ func (c *Client) Threads(ctx context.Context, user, tenant, agent string) ([]man
 	err = platformrpc.Decode(reply, err, &result, decodeError)
 	return result, err
 }
+func (c *Client) Status(ctx context.Context, user, tenant, agent string) (managedruntime.RuntimeStatus, error) {
+	reply, err := c.client.Status(ctx, actor(user, tenant, agent))
+	var result managedruntime.RuntimeStatus
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}
+
+func (c *Client) InputChecks(ctx context.Context, user, tenant, agent, thread string, query managedruntime.InputCheckQuery) (managedruntime.InputCheckPage, error) {
+	if err := query.Validate(); err != nil {
+		return managedruntime.InputCheckPage{}, err
+	}
+	encoded, err := json.Marshal(query)
+	if err != nil {
+		return managedruntime.InputCheckPage{}, err
+	}
+	reply, err := c.client.InputChecks(ctx, actor(user, tenant, agent), thread, string(encoded))
+	var result managedruntime.InputCheckPage
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}
+
+func (c *Client) Inspection(ctx context.Context, user, tenant, agent, thread string) (managedruntime.ThreadInspection, error) {
+	reply, err := c.client.Inspection(ctx, actor(user, tenant, agent), thread)
+	var result managedruntime.ThreadInspection
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}
+
+func (c *Client) History(ctx context.Context, user, tenant, agent, thread string, before int64, limit int) (managedruntime.Timeline, error) {
+	if before < 0 || limit < 1 || limit > 500 {
+		return managedruntime.Timeline{}, managedruntime.ErrInvalid
+	}
+	reply, err := c.client.History(ctx, actor(user, tenant, agent), thread, before, int32(limit))
+	var result managedruntime.Timeline
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}
+
 func (c *Client) Events(ctx context.Context, user, tenant, agent, thread string, after int64, limit int) (managedruntime.Timeline, error) {
 	if limit < 1 || limit > 500 {
 		return managedruntime.Timeline{}, managedruntime.ErrInvalid
@@ -191,6 +241,13 @@ func (a *Authority) Peers(ctx context.Context, scope managedruntime.Scope) ([]ma
 func (c *Client) Archive(ctx context.Context, user, tenant, agent, thread string, archived bool) (managedruntime.Thread, error) {
 	reply, err := c.client.Archive(ctx, actor(user, tenant, agent), thread, archived)
 	var result managedruntime.Thread
+	err = platformrpc.Decode(reply, err, &result, decodeError)
+	return result, err
+}
+
+func (c *Client) DeleteThread(ctx context.Context, user, tenant, agent, thread string) (managedruntime.ThreadDeletionReceipt, error) {
+	reply, err := c.client.DeleteThread(ctx, actor(user, tenant, agent), thread)
+	var result managedruntime.ThreadDeletionReceipt
 	err = platformrpc.Decode(reply, err, &result, decodeError)
 	return result, err
 }

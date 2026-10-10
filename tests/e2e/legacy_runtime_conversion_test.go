@@ -37,7 +37,7 @@ func TestLegacyRuntimeConversionPreservesAPIHistoryAndContinuation(t *testing.T)
 		streamManagedReply(w, "New turn completed")
 	})
 	ctx := context.Background()
-	agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Imported source", ModelID: f.agent.ModelID})
+	agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Imported source", Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

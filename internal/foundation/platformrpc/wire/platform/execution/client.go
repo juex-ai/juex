@@ -37,6 +37,9 @@ type Client interface {
 	Restrict(ctx context.Context, actorID string, tenantID string, environmentID string, version int64, grantsJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Revoke(ctx context.Context, actorID string, tenantID string, environmentID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Environments(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	InspectEnvironments(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	InspectMCP(ctx context.Context, actor *platform.Actor, after string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	RefreshMCPTools(ctx context.Context, actor *platform.Actor, environmentID string, connectionID string, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	DefaultEnvironment(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	SetDefaultEnvironment(ctx context.Context, actor *platform.Actor, configurationJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Submit(ctx context.Context, actor *platform.Actor, environmentID string, requestJSON string, waitMillis int64, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -203,6 +206,21 @@ func (p *kExecutionClient) Revoke(ctx context.Context, actorID string, tenantID 
 func (p *kExecutionClient) Environments(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Environments(ctx, actor)
+}
+
+func (p *kExecutionClient) InspectEnvironments(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.InspectEnvironments(ctx, actor)
+}
+
+func (p *kExecutionClient) InspectMCP(ctx context.Context, actor *platform.Actor, after string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.InspectMCP(ctx, actor, after)
+}
+
+func (p *kExecutionClient) RefreshMCPTools(ctx context.Context, actor *platform.Actor, environmentID string, connectionID string, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.RefreshMCPTools(ctx, actor, environmentID, connectionID, requestJSON)
 }
 
 func (p *kExecutionClient) DefaultEnvironment(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error) {

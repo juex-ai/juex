@@ -23,7 +23,7 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	defer rollback(tx)
-	if err := checkScope(ctx, tx, scope); err != nil {
+	if err := lockAgentAdmission(ctx, tx, scope); err != nil {
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	if job.IdleSourceThread != "" {
@@ -56,6 +56,9 @@ func (s *Store) AdmitApplication(ctx context.Context, scope managedruntime.Scope
 		return managedruntime.ApplicationReceipt{}, err
 	}
 	if threadID == "" && !cancelled {
+		if err := requireAgentRunning(ctx, tx, scope.AgentID); err != nil {
+			return managedruntime.ApplicationReceipt{}, err
+		}
 		if job.IdleSourceThread != "" {
 			var busy bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs j JOIN runtime.inputs i ON i.id=j.input_id WHERE j.fleet_id=$1 AND j.application='memory' AND NOT j.cancelled AND i.state IN ('queued','active'))`, scope.FleetID).Scan(&busy); err != nil {

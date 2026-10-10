@@ -38,6 +38,11 @@ func (s *Store) ApplyThreadStateAction(ctx context.Context, work managedruntime.
 		return nil, managedruntime.ErrInvalid
 	}
 	required := agentpolicy.Tasks
+	if action.Kind == "check_inputs" {
+		required = agentpolicy.InputTracking
+	} else if len(action.InputIDs) > 0 {
+		return nil, managedruntime.ErrInvalid
+	}
 	if action.Kind == "update_notes" {
 		required = agentpolicy.Notes
 	}
@@ -81,8 +86,14 @@ func (s *Store) ApplyThreadStateAction(ctx context.Context, work managedruntime.
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
-	if required == agentpolicy.ContextControl {
-		result, err := requestContextTransition(ctx, tx, work, action)
+	if required == agentpolicy.ContextControl || required == agentpolicy.InputTracking {
+		var result json.RawMessage
+		var err error
+		if required == agentpolicy.InputTracking {
+			result, err = checkInputs(ctx, tx, work, action)
+		} else {
+			result, err = requestContextTransition(ctx, tx, work, action)
+		}
 		if err != nil {
 			return nil, err
 		}

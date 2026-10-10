@@ -1,7 +1,6 @@
 package managedruntime
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -18,19 +17,21 @@ import (
 )
 
 type toolRunner struct {
-	threadState      ThreadStateStore
-	instructions     InstructionStore
-	admission        maintenance.Admission
-	hooks            HookStore
-	applications     ApplicationGateway
-	applicationStore ApplicationStore
-	collaboration    CollaborationStore
-	context          ContextStore
-	observations     ObservationStore
-	store            ToolStore
-	gateway          ToolGateway
-	files            FileGateway
-	authority        Authority
+	agentControl       AgentControlStore
+	observerManagement ObserverWorkerStore
+	threadState        ThreadStateStore
+	instructions       InstructionStore
+	admission          maintenance.Admission
+	hooks              HookStore
+	applications       ApplicationGateway
+	applicationStore   ApplicationStore
+	collaboration      CollaborationStore
+	context            ContextStore
+	observations       ObservationStore
+	store              ToolStore
+	gateway            ToolGateway
+	files              FileGateway
+	authority          Authority
 }
 
 func (r toolRunner) run(ctx context.Context) {
@@ -50,6 +51,10 @@ func (r toolRunner) run(ctx context.Context) {
 		workers.Go(func() { r.deliverThreadResults(ctx) })
 	}
 	if r.gateway != nil {
+		if r.observerManagement != nil {
+			workers.Go(func() { r.manageObservers(ctx) })
+			workers.Go(func() { r.cleanupStoppedObservers(ctx) })
+		}
 		workers.Go(func() { r.receive(ctx) })
 		workers.Go(func() { r.observe(ctx) })
 		workers.Go(func() { r.deliverObservations(ctx) })
@@ -126,6 +131,12 @@ func releaseWorkerClaims(holder, kind string, release func(context.Context, stri
 }
 
 func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
+	if work.AgentLifecycle != nil {
+		return toolResult(work.Call, *work.AgentLifecycle, false)
+	}
+	if work.AgentControl != nil {
+		return r.recoverAgentControl(ctx, *work)
+	}
 	if work.Cancelled {
 		if strings.HasPrefix(work.Call.ToolName, "memory_") || strings.HasPrefix(work.Call.ToolName, "calendar_") {
 			if r.applications == nil || r.applications.Cancel(ctx, *work) != nil {
@@ -144,7 +155,15 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			if err != nil {
 				return retryTool()
 			}
-			return cancellationOutcome(state)
+			outcome := cancellationOutcome(state)
+			if execprotocol.IsChunkedWrite(work.Request.Kind) && state.Terminal() {
+				operation, err := r.gateway.Operation(ctx, work.Scope, work.EnvironmentID, work.ID, 0)
+				if err != nil {
+					return retryTool()
+				}
+				outcome.ResultFact = writeFact(*work, operation.Snapshot)
+			}
+			return outcome
 		}
 		return ToolOutcome{State: "cancelled"}
 	}
@@ -214,6 +233,7 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 		return toolResult(work.Call, map[string]string{"error": "capability_disabled"}, true)
 	}
 	work.Scope.Capabilities = fresh.Capabilities
+	work.Scope.AgentManagement = fresh.AgentManagement
 	if r.hooks != nil {
 		decision, err := r.hooks.ToolHooks(ctx, *work, hookpolicy.PreToolUse, nil)
 		if err != nil {
@@ -229,6 +249,9 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 		if decision.Reject {
 			return toolResult(work.Call, map[string]string{"error": decision.Reason}, true)
 		}
+	}
+	if isAgentControlTool(work.Call.ToolName) {
+		return r.agentControlTool(ctx, work)
 	}
 	if outcome, handled := extensionSkill(*work); handled {
 		return outcome
@@ -268,6 +291,9 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 			return retryTool()
 		}
 		environment, request, err := prepareExecution(*work, environments)
+		if execprotocol.IsChunkedWrite(work.Call.ToolName) {
+			environment, request, err = r.prepareWrite(ctx, *work, environments)
+		}
 		if err != nil {
 			return toolResult(work.Call, map[string]string{"error": err.Error()}, true)
 		}
@@ -314,12 +340,12 @@ func (r toolRunner) execute(ctx context.Context, work *ToolWork) ToolOutcome {
 		return executionFailure(err)
 	}
 	if operation.State == "unknown" {
-		return ToolOutcome{State: "unknown", Content: "External outcome unknown. Inspect the original operation; do not repeat it.", IsError: true, OperationLive: true}
+		return ToolOutcome{State: "unknown", Content: "External outcome unknown. Inspect the original operation; do not repeat it.", IsError: true, OperationLive: true, ResultFact: writeFact(*work, operation.Snapshot)}
 	}
 	if execprotocol.State(operation.State).Terminal() {
 		return operationResult(*work, operation, work.ID)
 	}
-	if (work.Request.Kind == "exec_command" || work.Request.Kind == "observe_command") && operation.State == "running" || work.Request.Kind == "mcp_connect" && bytes.Contains(operation.Snapshot.Output, []byte(`"type":"connected"`)) {
+	if operation.State == "running" && (work.Request.Kind == "exec_command" || work.Request.Kind == "observe_command" || work.Request.Kind == "mcp_connect" && operation.Snapshot.MCP != nil) {
 		return operationResult(*work, operation, work.ID)
 	}
 	return ToolOutcome{State: "waiting", OperationLive: true, WaitReason: executionWaitReason(operation.State)}
@@ -368,6 +394,11 @@ func operationResult(work ToolWork, operation ToolOperation, id string) ToolOutc
 	snapshot := operation.Snapshot
 	outcome := toolResult(work.Call, map[string]any{"handle": map[string]string{"environment_id": work.EnvironmentID, "operation_id": id}, "state": operation.State, "output": snapshot.Text(), "next_cursor": snapshot.NextCursor, "output_bytes": snapshot.OutputBytes, "truncated": snapshot.Truncated, "output_expired": snapshot.OutputExpired, "exit_code": snapshot.ExitCode, "error": snapshot.Error, "cancel_requested": operation.CancelRequested}, operation.State == "failed" || operation.State == "cancelled" || operation.State == "unknown")
 	outcome.OperationLive = !execprotocol.State(operation.State).Terminal()
+	outcome.ResultFact = writeFact(work, snapshot)
+	if snapshot.Write != nil {
+		value, _ := json.Marshal(map[string]any{"handle": map[string]string{"environment_id": work.EnvironmentID, "operation_id": id}, "state": operation.State, "write": snapshot.Write, "error": snapshot.Error})
+		outcome.Content = string(value)
+	}
 	if outcome.OperationLive {
 		outcome.RetryAfter = 15 * time.Second
 	}

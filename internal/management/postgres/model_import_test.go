@@ -16,7 +16,6 @@ func modelImportFixture() management.ModelsImport {
 	for _, name := range []string{"a", "b", "c"} {
 		value.Models = append(value.Models, management.ImportedModel{Configuration: management.ModelConfiguration{Provider: "fixture", Name: name, Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://example.test/v1", APIKey: "secret-fixture-token", ContextWindow: 32768, OutputReserve: 8192, Enabled: true, Options: management.ModelOptions{Headers: map[string]string{"X-Private": "secret-fixture-header"}}}})
 	}
-	value.Models[0].Fallbacks = []management.ModelKey{{Provider: "fixture", Name: "b"}, {Provider: "fixture", Name: "c"}}
 	return value
 }
 
@@ -30,9 +29,6 @@ func TestModelImportCanonicalPrivateIdentity(t *testing.T) {
 	slices.Reverse(equivalent.Models)
 	for i := range equivalent.Models {
 		equivalent.Models[i].Configuration.Options.Authentication = "api_key"
-		if equivalent.Models[i].Fallbacks == nil {
-			equivalent.Models[i].Fallbacks = []management.ModelKey{}
-		}
 	}
 	_, got, err := prepareModelImport(equivalent)
 	if err != nil || got != hash {
@@ -44,7 +40,6 @@ func TestModelImportCanonicalPrivateIdentity(t *testing.T) {
 		"endpoint":    func(v *management.ModelsImport) { v.Models[0].Configuration.Endpoint += "/new" },
 		"reservation": func(v *management.ModelsImport) { v.Models[0].Configuration.OutputReserve++ },
 		"cap":         func(v *management.ModelsImport) { v.Models[0].Configuration.MaxOutput = 100 },
-		"order":       func(v *management.ModelsImport) { slices.Reverse(v.Models[0].Fallbacks) },
 		"enabled":     func(v *management.ModelsImport) { v.Models[0].Configuration.Enabled = false },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -88,9 +83,6 @@ func TestModelImportRejectsLossyOrUnboundedInput(t *testing.T) {
 		"large options": func(v *management.ModelsImport) {
 			v.Models[0].Configuration.Options.Headers["X-Private"] = strings.Repeat("x", 64<<10)
 		},
-		"missing fallback":   func(v *management.ModelsImport) { v.Models[0].Fallbacks[0].Name = "missing" },
-		"self fallback":      func(v *management.ModelsImport) { v.Models[0].Fallbacks[0].Name = "a" },
-		"duplicate fallback": func(v *management.ModelsImport) { v.Models[0].Fallbacks[1] = v.Models[0].Fallbacks[0] },
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := modelImportFixture()

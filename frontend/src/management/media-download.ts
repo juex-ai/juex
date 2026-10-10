@@ -1,4 +1,5 @@
 import type { MediaRef } from './schema'
+import { sha256 } from '@noble/hashes/sha2.js'
 
 const maxImageBytes = 10 * 1024 * 1024
 
@@ -27,8 +28,8 @@ export async function downloadMedia(base: string, media: MediaRef, signal: Abort
   } finally { await reader.cancel(); reader.releaseLock() }
   signal.throwIfAborted()
   const blob = new Blob(chunks, { type })
-  const hash = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
-  const digest = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('')
+	const hash = sha256(new Uint8Array(await blob.arrayBuffer()))
+	const digest = Array.from(hash, byte => byte.toString(16).padStart(2, '0')).join('')
   if (size === 0 || digest !== media.sha256) throw new Error('图片校验失败，未显示内容。')
   signal.throwIfAborted()
   return blob

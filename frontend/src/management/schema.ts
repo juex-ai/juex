@@ -4,8 +4,10 @@ export type Role = "admin" | "member";
 export type MembershipStatus = "active" | "suspended" | "removed";
 
 export interface Agent {
+  agent_management?: boolean;
   dynamic_instructions: DynamicInstructions;
-  capabilities: Policy;
+  configuration: Configuration;
+  workspace_configuration: WorkspaceConfiguration | null;
   extensions: Array<Binding>;
   hooks: Array<Declaration>;
   purging: boolean;
@@ -14,7 +16,6 @@ export interface Agent {
   fleet_id: string;
   name: string;
   instructions: string;
-  model_id: string;
   status: string;
   version: number;
   created_at: string;
@@ -23,19 +24,47 @@ export interface Agent {
 
 export interface AgentConfig {
   dynamic_instructions?: DynamicInstructions | null;
-  capabilities?: Policy | null;
+  configuration?: Configuration | null;
   hooks?: Array<Declaration>;
   worker_depth?: number;
   name: string;
   instructions: string;
-  model_id: string;
 }
 
 export interface AgentDetail {
   agent: Agent;
   owner_id: string;
   can_execute: boolean;
-  effective_model_id: string;
+  layers: ConfigurationLayers;
+  effective: EffectiveConfiguration;
+}
+
+export interface AgentLifecycleChange {
+  request_id: string;
+  action: string;
+  version: number;
+  interrupt: boolean;
+}
+
+export interface AgentLifecycleReceipt {
+  request_id: string;
+  action: string;
+  outcome: string;
+  state: AgentRunState;
+}
+
+export interface AgentManagementRequest {
+  version: number;
+  enabled: boolean;
+}
+
+export interface AgentRunState {
+  initialized: boolean;
+  agent_id: string;
+  mode: string;
+  version: number;
+  activation_epoch: number;
+  busy: Array<string>;
 }
 
 export interface ArchiveAgentRequest {
@@ -216,13 +245,8 @@ export interface Catalog {
   manifest: Manifest;
   skills: Array<SkillContent>;
   revision: string;
-}
-
-export interface CommandResource {
-  id: string;
-  description?: string;
-  command: Array<string>;
-  environment?: Record<string, string>;
+  source_kind?: string;
+  skipped?: Array<SkippedSource>;
 }
 
 export interface CompactionMetadata {
@@ -244,14 +268,38 @@ export interface CompactionRequest {
   focus: string;
 }
 
+export interface Configuration {
+  module_preset?: string;
+  models?: Array<string>;
+  modules?: Record<string, boolean>;
+}
+
+export interface ConfigurationLayer {
+  version: number;
+  declaration: Configuration;
+}
+
+export interface ConfigurationLayers {
+  tenant: ConfigurationLayer;
+  fleet: ConfigurationLayer;
+  workspace: ConfigurationLayer;
+  agent: ConfigurationLayer;
+}
+
+export interface ConfigurationSource {
+  layer: string;
+  version: number;
+  derived_from?: string;
+  preset?: string;
+}
+
 export interface ConfigureAgentRequest {
   dynamic_instructions?: DynamicInstructions | null;
-  capabilities?: Policy | null;
+  configuration?: Configuration | null;
   hooks?: Array<Declaration>;
   worker_depth?: number;
   name: string;
   instructions: string;
-  model_id: string;
   version: number;
 }
 
@@ -266,6 +314,12 @@ export interface ContextArtifactProjection {
   head_bytes: number;
   tail_bytes: number;
   truncated: boolean;
+}
+
+export interface ContextUsagePart {
+  key: string;
+  label: string;
+  tokens: number;
 }
 
 export interface Declaration {
@@ -324,6 +378,17 @@ export interface DynamicInstructions {
   global_path: string;
 }
 
+export interface EffectiveConfiguration {
+  models: Array<string>;
+  model_source: ConfigurationSource;
+  modules: Record<string, EffectiveModule>;
+}
+
+export interface EffectiveModule {
+  enabled: boolean;
+  source: ConfigurationSource;
+}
+
 export interface Environment {
   default: boolean;
   id: string;
@@ -341,7 +406,36 @@ export interface Environment {
   error?: string;
 }
 
+export interface EnvironmentInspection {
+  binding: DefaultEnvironment;
+  default_state: string;
+  environments: Array<EnvironmentStatus>;
+  observed_at: string;
+}
+
+export interface EnvironmentStatus {
+  default: boolean;
+  id: string;
+  journal_id: string;
+  name: string;
+  kind: string;
+  os: string;
+  online: boolean;
+  capabilities: Array<string>;
+  working_directory: string;
+  working_files_root?: string;
+  permission_mode: string;
+  authorization_version: number;
+  availability?: string;
+  error?: string;
+  managed: boolean;
+  last_seen: string | null;
+}
+
 export interface Event {
+  observation_ids?: Array<string>;
+  tool_attempt_id?: string;
+  turn_id?: string;
   id: string;
   thread_id: string;
   sequence: number;
@@ -370,6 +464,7 @@ export interface ExtensionContext {
 }
 
 export interface ExtensionInspection {
+  source_kind?: string;
   operation_id: string;
   environment_id: string;
   authorization_version: number;
@@ -380,6 +475,7 @@ export interface ExtensionInspection {
 }
 
 export interface ExtensionInspectionRequest {
+  source_kind?: string;
   request_id: string;
   environment_id: string;
   directory: string;
@@ -415,7 +511,7 @@ export interface FleetOverview {
   user_id: string;
   purged: boolean;
   purging: boolean;
-  platform_default_model_id: string;
+  tenant_settings: ConfigurationLayer;
   owner: User;
   membership: Membership;
   settings: FleetSettings;
@@ -423,8 +519,43 @@ export interface FleetOverview {
 }
 
 export interface FleetSettings {
-  default_model_id: string;
+  configuration: Configuration;
   version: number;
+}
+
+export interface InputCheck {
+  input_id: string;
+  scope_id: string;
+  message_id?: string;
+  accepted_order: number;
+  delivery: string;
+  checked_at?: string | null;
+  check_action_id?: string;
+  check_message_id?: string;
+  tool_use_id?: string;
+}
+
+export interface InputCheckPage {
+  enabled: boolean;
+  scope_id: string;
+  items: Array<InputCheck>;
+}
+
+export interface InputCheckQuery {
+  message_ids: Array<string>;
+}
+
+export interface InputChecklist {
+  enabled: boolean;
+  scope_id: string;
+  items: Array<InputCheck>;
+}
+
+export interface InputImage {
+  artifact_id: string;
+  sha256: string;
+  media_type: string;
+  size: number;
 }
 
 export interface InputReceipt {
@@ -439,6 +570,7 @@ export interface InputRequest {
   request_id: string;
   thread_id: string;
   text: string;
+  images?: Array<InputImage>;
 }
 
 export interface InvitationPreview {
@@ -461,6 +593,66 @@ export interface InvitationView {
   delivery_status: string;
 }
 
+export interface MCPConnection {
+  transport: string;
+  connected_at: string;
+  server_name: string;
+  server_version: string;
+  protocol_version: string;
+}
+
+export interface MCPPage {
+  items: Array<MCPStatus>;
+  next: string;
+  observed_at: string;
+}
+
+export interface MCPRefresh {
+  id: string;
+  cursor: string;
+}
+
+export interface MCPResource {
+  id: string;
+  description?: string;
+  command: Array<string>;
+  environment?: Record<string, string>;
+  transport?: string;
+  url?: string;
+  headers?: Record<string, string>;
+}
+
+export interface MCPStatus {
+  id: string;
+  environment_id: string;
+  environment: string;
+  state: string;
+  observed_state: string;
+  created_at: string;
+  can_refresh: boolean;
+  binding_id: string;
+  directory: string;
+  handshake: MCPConnection | null;
+  latest_tools: MCPToolList | null;
+}
+
+export interface MCPTool {
+  name: string;
+  description: string;
+  input_schema: unknown;
+}
+
+export interface MCPToolList {
+  id: string;
+  state: string;
+  requested_at: string;
+  cursor: string;
+  next_cursor: string;
+  tools: Array<MCPTool>;
+  output_expired: boolean;
+  incomplete: boolean;
+}
+
 export interface Manifest {
   manifest_version: number;
   name: string;
@@ -469,7 +661,7 @@ export interface Manifest {
   environment?: Record<string, string>;
   skills: Array<SkillResource>;
   hooks: Array<Declaration>;
-  mcp: Array<CommandResource>;
+  mcp: Array<MCPResource>;
   observables: Array<ObservableResource>;
 }
 
@@ -521,6 +713,14 @@ export interface MemoryConfiguration {
   version: number;
   enabled: boolean;
   strategy: string;
+}
+
+export interface MemoryDomain {
+  id: string;
+  name: string;
+  description: string;
+  relations?: Array<MemoryRelation>;
+  policy: string;
 }
 
 export interface MemoryEntity {
@@ -586,6 +786,24 @@ export interface MemoryPage {
   entries: Array<MemoryEntry>;
   next: number;
   fence: number;
+}
+
+export interface MemoryRelation {
+  optional_qualifiers?: Array<string>;
+  source_types: Array<string>;
+  predicate: string;
+  description: string;
+  subjects: Array<string>;
+  objects?: Array<string>;
+  value_type?: string;
+  qualifiers?: Array<string>;
+  cardinality: string;
+  competition: Array<string>;
+  temporal: string;
+  updates: Array<string>;
+  evidence: string;
+  positive: string;
+  negative: string;
 }
 
 export interface MemoryReviewPage {
@@ -658,6 +876,18 @@ export interface Model {
   enabled: boolean;
 }
 
+export interface ModelProgress {
+  attempt_id: string;
+  turn_id: string;
+  generation: number;
+  sequence: number;
+  model: string;
+  state: string;
+  started_at: string;
+  updated_at: string;
+  snapshot: ProgressSnapshot;
+}
+
 export interface Notification {
   id: string;
   sequence: number;
@@ -726,6 +956,108 @@ export interface ObservableResource {
   options: ObservableOptions;
 }
 
+export interface ObservationContent {
+  id: string;
+  kind: string;
+  environment_id: string;
+  operation_id?: string;
+  created_at: string;
+  data: string;
+  offset: number;
+  next_offset: number;
+  total_characters: number;
+  has_more: boolean;
+}
+
+export interface ObservationPage {
+  targets: Array<ObserverTarget>;
+  targets_truncated: boolean;
+  sources: Array<ObservationStatus>;
+  controls: Array<ObserverControl>;
+  next: string;
+}
+
+export interface ObservationStatus {
+  subscriptions_truncated: boolean;
+  id: string;
+  thread_id: string;
+  origin: string;
+  control_id: string;
+  environment_id: string;
+  operation_id: string;
+  kind: string;
+  directory: string;
+  cursor: number;
+  closed: boolean;
+  stop_requested: boolean;
+  subscriptions: Array<Subscription>;
+}
+
+export interface ObservedEvent {
+  id: string;
+  kind: string;
+  environment_id: string;
+  operation_id?: string;
+  offset?: number;
+  data: unknown;
+  created_at: string;
+  data_truncated: boolean;
+  pending: number;
+  delivered: number;
+  skipped: number;
+}
+
+export interface ObservedEvents {
+  items: Array<ObservedEvent>;
+  next: string;
+}
+
+export interface ObserverControl {
+  request_id: string;
+  id: string;
+  thread_id: string;
+  binding_id: string;
+  resource_id: string;
+  kind: string;
+  revision: string;
+  mode: string;
+  desired: string;
+  source_id: string;
+  state: string;
+  attempt: number;
+  created_at: string;
+}
+
+export interface ObserverStart {
+  request_id: string;
+  thread_id: string;
+  binding_id: string;
+  resource_id: string;
+  kind: string;
+  agent_version: number;
+  revision: string;
+  mode: string;
+  subscribe: boolean;
+}
+
+export interface ObserverTarget {
+  id: string;
+  name: string;
+}
+
+export interface OperationOutput {
+  id: string;
+  environment_id: string;
+  state: string;
+  output: string;
+  next_cursor: number;
+  output_bytes: number;
+  truncated: boolean;
+  output_expired: boolean;
+  exit_code: number | null;
+  error: string;
+}
+
 export interface OwnerScope {
   tenant_id: string;
   user_id: string;
@@ -756,6 +1088,47 @@ export interface Pairing {
 
 export interface Policy {
   disabled: Array<string>;
+  enabled?: Array<string>;
+  version?: number;
+  skill_sources?: boolean;
+}
+
+export interface ProcessEnvironmentChange {
+  version: number;
+  set: Record<string, string>;
+  remove: Array<string>;
+  environment_id?: string;
+  working_directory?: string;
+}
+
+export interface ProcessEnvironmentLayer {
+  version: number;
+  keys: Array<string>;
+  environment_id?: string;
+  working_directory?: string;
+}
+
+export interface ProcessEnvironmentVariable {
+  name: string;
+  source: string;
+}
+
+export interface ProcessEnvironmentView {
+  layers: Record<string, ProcessEnvironmentLayer>;
+  effective: Array<ProcessEnvironmentVariable>;
+  tenant_writable: boolean;
+}
+
+export interface ProgressBlock {
+  kind: string;
+  index: number;
+  text: string;
+}
+
+export interface ProgressSnapshot {
+  revision: number;
+  blocks: Array<ProgressBlock>;
+  truncated: boolean;
 }
 
 export interface PurgeJob {
@@ -788,6 +1161,23 @@ export interface Receipt {
   environments_pending: number;
 }
 
+export interface RequestInspection {
+  attempt_id: string;
+  turn_id: string;
+  recorded_at: string;
+  generation: number;
+  purpose: string;
+  model: string;
+  provider: string;
+  context_window: number;
+  output_reserve: number;
+  estimated_tokens: number;
+  breakdown: Array<ContextUsagePart>;
+  system: string;
+  tools: Array<ToolSpec>;
+  message_count: number;
+}
+
 export interface ResetContextRequest {
   request_id: string;
 }
@@ -795,6 +1185,18 @@ export interface ResetContextRequest {
 export interface ResultFact {
   owner: string;
   data?: unknown;
+}
+
+export interface RuntimeStatus {
+  initialized: boolean;
+  main_thread_id: string;
+  active_threads: number;
+  archived_threads: number;
+  pending_inputs: number;
+  held_inputs: number;
+  states: Record<string, number>;
+  last_activity: string | null;
+  observed_at: string;
 }
 
 export interface Scope {
@@ -829,6 +1231,27 @@ export interface SkillResource {
   path: string;
 }
 
+export interface SkippedSource {
+  path: string;
+  reason: string;
+  target?: string;
+}
+
+export interface SourceSubscriptionChange {
+  enabled: boolean;
+}
+
+export interface Subscription {
+  id: string;
+  thread_id: string;
+  kind: string;
+  environment_id: string;
+  operation_id?: string;
+  method?: string;
+  generation: number;
+  enabled: boolean;
+}
+
 export interface TenantAccess {
   id: string;
   name: string;
@@ -848,16 +1271,65 @@ export interface Thread {
   generation: number;
   sequence: number;
   pending_inputs: number;
+  queued_inputs?: number;
   held_inputs: number;
   created_at: string;
   updated_at: string;
 }
 
+export interface ThreadDeletionReceipt {
+  thread_id: string;
+  deleted: boolean;
+}
+
+export interface ThreadInspection {
+  input_checklist: InputChecklist;
+  working_files: WorkingFiles | null;
+  thread: Thread;
+  state: ThreadState;
+  capabilities: Policy;
+  latest_request: RequestInspection | null;
+  usage: UsageCounts;
+  imported_history: boolean;
+}
+
+export interface ThreadNotes {
+  content: string;
+  updated_at?: string;
+}
+
+export interface ThreadState {
+  notes: ThreadNotes;
+  tasks: Array<ThreadTask>;
+  revision: number;
+}
+
+export interface ThreadTask {
+  id: string;
+  title: string;
+  description: string;
+  acceptance: string;
+  status: string;
+  status_reason: string;
+  priority: string;
+  continuation_count: number;
+  updated_at: string;
+}
+
 export interface Timeline {
+  previous_sequence?: number;
+  has_previous?: boolean;
+  progress: Array<ModelProgress>;
   thread: Thread;
   events: Array<Event>;
   next_sequence: number;
   has_more: boolean;
+}
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
 }
 
 export interface Transfer {
@@ -948,4 +1420,85 @@ export interface User {
 export interface WorkerRequest {
   request_id: string;
   name: string;
+}
+
+export interface WorkingFiles {
+  environment_id: string;
+  directory: string;
+}
+
+export interface WorkspaceConfiguration {
+  version: number;
+  declaration: Configuration;
+  path: string;
+  read_started_at: string;
+  environment_id: string;
+  working_directory: string;
+  operation_id: string;
+  sha256: string;
+  authorization_version: number;
+}
+
+export interface WorkspaceConfigurationChange {
+  version: number;
+  environment_id: string;
+  operation_id: string;
+  sha256: string;
+  remove: boolean;
+}
+
+export interface WorkspaceConfigurationPreview {
+  receipt: WorkspaceReadReceipt;
+  configuration?: WorkspaceConfiguration | null;
+  effective?: EffectiveConfiguration | null;
+}
+
+export interface WorkspaceEntry {
+  path: string;
+  name: string;
+  kind: string;
+  size: number;
+  modified_at: string;
+}
+
+export interface WorkspaceListing {
+  entries: Array<WorkspaceEntry>;
+  next_cursor: string;
+  scan_limited: boolean;
+  preview?: WorkspacePreview | null;
+}
+
+export interface WorkspacePreview {
+  entry: WorkspaceEntry;
+  text: string;
+  media_type: string;
+  binary: boolean;
+  truncated: boolean;
+}
+
+export interface WorkspaceQuery {
+  path: string;
+  search?: string;
+  hidden: boolean;
+  after?: string;
+  read: boolean;
+}
+
+export interface WorkspaceReadReceipt {
+  authorization_version: number;
+  read_started_at: string;
+  operation_id: string;
+  environment_id: string;
+  directory: string;
+  query: WorkspaceQuery;
+  state: string;
+  error: string;
+  listing?: WorkspaceListing | null;
+}
+
+export interface WorkspaceReadRequest {
+  request_id: string;
+  environment_id: string;
+  directory: string;
+  query: WorkspaceQuery;
 }

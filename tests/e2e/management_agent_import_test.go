@@ -43,8 +43,8 @@ func agentImportRequest(fleetID string) management.AgentsImport {
 	for i := range 4 {
 		value.Agents = append(value.Agents, management.ImportedAgent{SourceAgentID: fmt.Sprintf("source-%d", i), Config: management.AgentConfig{
 			Name: "Shared name", Instructions: fmt.Sprintf("Original instructions %d", i), WorkerDepth: 2,
-			Capabilities:        &agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Collaboration}},
-			DynamicInstructions: &instructionpolicy.DynamicInstructions{Enabled: true, GlobalPath: "/target/AGENTS.md"},
+
+			DynamicInstructions: &instructionpolicy.DynamicInstructions{Enabled: true, GlobalPath: "/target/AGENTS.md"}, Configuration: &management.Configuration{Modules: modulesForPolicy(&agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Collaboration}})},
 		}})
 	}
 	return value
@@ -65,7 +65,7 @@ func TestManagementAgentImportRetryPreservesIdentitiesAndLaterState(t *testing.T
 	}
 	value := agentImportRequest(fleet.ID)
 	for i := range value.Agents {
-		value.Agents[i].Config.ModelID = model.ID
+		value.Agents[i].Config.Configuration.Models = []string{model.ID}
 	}
 	first, err := d.ImportAgents(ctx, user.ID, tenant.ID, user.ID, value)
 	if err != nil || len(first) != 4 {
@@ -79,7 +79,7 @@ func TestManagementAgentImportRetryPreservesIdentitiesAndLaterState(t *testing.T
 		}
 		seen[id] = true
 		read, err := d.ReadAgent(ctx, user.ID, tenant.ID, id)
-		if err != nil || read.Agent.Version != 1 || read.Agent.ExecutionEpoch != 1 || read.Agent.Instructions != item.Config.Instructions || read.Agent.WorkerDepth != 2 || read.Agent.ModelID != model.ID || !reflect.DeepEqual(read.Agent.Capabilities, *item.Config.Capabilities) || read.Agent.DynamicInstructions != *item.Config.DynamicInstructions {
+		if err != nil || read.Agent.Version != 1 || read.Agent.ExecutionEpoch != 1 || read.Agent.Instructions != item.Config.Instructions || read.Agent.WorkerDepth != 2 || !reflect.DeepEqual(read.Agent.Configuration, *item.Config.Configuration) || read.Agent.DynamicInstructions != *item.Config.DynamicInstructions {
 			t.Fatal("imported initial state differs", err)
 		}
 	}
@@ -108,7 +108,7 @@ func TestManagementAgentImportRetryPreservesIdentitiesAndLaterState(t *testing.T
 		t.Fatal("lost-response retry changed identity", retried, err)
 	}
 	after, err := d.FleetOverview(ctx, user.ID, tenant.ID, user.ID)
-	if err != nil || !reflect.DeepEqual(later.Agents, after.Agents) || after.Settings != before.Settings {
+	if err != nil || !reflect.DeepEqual(later.Agents, after.Agents) || !reflect.DeepEqual(after.Settings, before.Settings) {
 		t.Fatal("retry overwrote later state or Fleet settings", err)
 	}
 	var agents, receipts, audits int
@@ -157,7 +157,7 @@ func TestManagementAgentImportRollsBackAndRequiresFreshFleet(t *testing.T) {
 	user, tenant, fleet := agentImportOwner(t, d)
 	value := agentImportRequest(fleet.ID)
 	// The final model is missing after three otherwise valid creations.
-	value.Agents[3].Config.ModelID = uuid.NewString()
+	value.Agents[3].Config.Configuration.Models = []string{uuid.NewString()}
 	if result, err := d.ImportAgents(ctx, user.ID, tenant.ID, user.ID, value); !errors.Is(err, management.ErrDenied) || len(result) != 0 {
 		t.Fatal("unavailable model accepted", result, err)
 	}
@@ -172,7 +172,7 @@ func TestManagementAgentImportRollsBackAndRequiresFreshFleet(t *testing.T) {
 	if _, err := d.SetAgentArchived(ctx, user.ID, tenant.ID, existing.ID, existing.Version, true); err != nil {
 		t.Fatal(err)
 	}
-	value.Agents[3].Config.ModelID = ""
+	value.Agents[3].Config.Configuration.Models = nil
 	if result, err := d.ImportAgents(ctx, user.ID, tenant.ID, user.ID, value); !errors.Is(err, management.ErrConflict) || len(result) != 0 {
 		t.Fatal("archived Agent ignored by freshness check", result, err)
 	}

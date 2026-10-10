@@ -1,26 +1,41 @@
-import type { Event, InputReceipt, Message } from './schema'
+import type { Event, InputImage, InputReceipt, Message, ModelProgress, Timeline } from './schema'
 
-export type TranscriptRow = { kind: 'message'; id: string; message: Message; status: string } | { kind: 'notice'; id: string; text: string } | { kind: 'hook'; id: string; hook: string; event: string; state: string; detail: string }
+export type TranscriptRow = ({ kind: 'message'; id: string; message: Message; status: string; observationIDs?: string[] } | { kind: 'notice'; id: string; text: string } | { kind: 'hook'; id: string; hook: string; event: string; state: string; detail: string }) & { createdAt?: string; turnID?: string; sequence?: number; toolAttemptID?: string }
 
-export function projectTranscript(events: Event[]): TranscriptRow[] {
+export function reconcileProgress(previous: ModelProgress[], page: Timeline): ModelProgress[] {
+  const current = page.progress ?? []
+  if (!page.has_more) return current
+  const known = new Set(current.map(item => item.attempt_id))
+  const settled = new Set(page.events.filter(event => event.kind === 'message.appended').map(event => (event.data as Message).id))
+  // Successful completion removes the server preview before a later event page
+  // reaches the browser. Keep already visible text until that page is loaded.
+  return [...current, ...previous.filter(item => item.generation === page.thread.generation && !known.has(item.attempt_id) && !settled.has(item.attempt_id)).map(item => ({ ...item, state: 'settling' }))]
+}
+
+export function projectTranscript(events: Event[], progress: ModelProgress[] = []): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   const messages = new Map<string, Extract<TranscriptRow, { kind: 'message' }>>()
   const seen = new Set<string>()
   const held = new Set<string>()
   const hooks = new Map<string, Extract<TranscriptRow, { kind: 'hook' }>>()
+  let turnID = ''
   for (const event of events) {
     if (seen.has(event.id)) continue
     seen.add(event.id)
-    const data = event.data as { receipt?: InputReceipt; text?: string; input_id?: string; reason?: string; error?: string; to_model?: string; source?: { kind?: string } }
+    const start = rows.length
+    const data = event.data as { receipt?: InputReceipt; text?: string; images?: InputImage[]; input_id?: string; reason?: string; error?: string; to_model?: string; turn_id?: string; source?: { kind?: string } }
+    if (event.turn_id !== undefined) turnID = event.turn_id
+    if (event.kind === 'turn.started') turnID = data.turn_id ?? ''
     if (event.kind === 'input.accepted' && data.receipt && typeof data.text === 'string') {
       const row: Extract<TranscriptRow, { kind: 'message' }> = { kind: 'message', id: data.receipt.id, message: { id: data.receipt.id, role: 'user', kind: data.source?.kind === 'application_trigger' ? 'system_notice' : undefined, blocks: [{ type: 'text', text: data.text }] }, status: '已接收，等待执行' }
+      for (const media of data.images ?? []) row.message.blocks.push({ type: 'image', media: { artifact_id: media.artifact_id, sha256: media.sha256, media_type: media.media_type, original_bytes: media.size } })
       rows.push(row); messages.set(row.id, row)
     } else if (event.kind === 'message.appended') {
       const message = event.data as Message
       const id = message.id ?? event.id
       const existing = messages.get(id)
-      if (existing) { existing.message = message; existing.status = '' } else {
-        const row: Extract<TranscriptRow, { kind: 'message' }> = { kind: 'message', id, message, status: '' }
+      if (existing) { existing.message = message; existing.status = ''; existing.turnID = turnID; existing.sequence = event.sequence; existing.createdAt = event.created_at; existing.observationIDs = event.observation_ids } else {
+        const row: Extract<TranscriptRow, { kind: 'message' }> = { kind: 'message', id, message, status: '', observationIDs: event.observation_ids }
         rows.push(row); messages.set(id, row)
       }
     } else if (event.kind.startsWith('hook.')) {
@@ -43,6 +58,8 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
       rows.push({ kind: 'notice', id: event.id, text: '正在整理上下文摘要…' })
     } else if (event.kind === 'context.compacted') {
       rows.push({ kind: 'notice', id: event.id, text: '上下文已压缩，完整历史仍然保留。' })
+    } else if (event.kind === 'context.reset') {
+      rows.push({ kind: 'notice', id: event.id, text: '新上下文 · 后续消息从此处开始，完整历史仍然保留。' })
     } else if (event.kind === 'context.unchanged') {
       rows.push({ kind: 'notice', id: event.id, text: '当前上下文较短，无需压缩。' })
     } else if (event.kind === 'model.fallback') {
@@ -61,6 +78,14 @@ export function projectTranscript(events: Event[]): TranscriptRow[] {
     } else if (event.kind === 'turn.recovered') {
       rows.push({ kind: 'notice', id: event.id, text: '服务已恢复，正在继续原来的对话。' })
     }
+    for (const row of rows.slice(start)) { row.createdAt = event.created_at; row.turnID = turnID; row.sequence = event.sequence; row.toolAttemptID = event.tool_attempt_id }
   }
-  return rows
+  for (const preview of progress) {
+    if (messages.has(preview.attempt_id) || !preview.snapshot.blocks.length) continue
+    const outcome: Record<string, string> = { running: '正在输出…', settling: '正在同步最终状态…', failed: '未完成 · 模型请求失败', cancelled: '未完成 · 已取消', unknown: '未完成 · 服务中断，结果未知' }
+    rows.push({ kind: 'message', id: preview.attempt_id, turnID: preview.turn_id, sequence: preview.sequence, createdAt: preview.started_at,
+      message: { id: preview.attempt_id, role: 'assistant', model: preview.model, blocks: preview.snapshot.blocks.map(block => ({ type: block.kind, text: block.text })) },
+      status: `${outcome[preview.state] ?? '未完成'}${preview.snapshot.truncated ? ' · 预览已达容量上限，完整结果完成后显示' : ''}` })
+  }
+  return rows.sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
 }

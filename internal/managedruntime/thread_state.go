@@ -41,16 +41,17 @@ type ThreadState struct {
 }
 
 type ThreadStateAction struct {
-	Instructions *string `json:"instructions,omitempty"`
-	Kind         string  `json:"kind"`
-	ID           string  `json:"id,omitempty"`
-	Content      *string `json:"content,omitempty"`
-	Title        *string `json:"title,omitempty"`
-	Description  *string `json:"description,omitempty"`
-	Acceptance   *string `json:"acceptance,omitempty"`
-	Status       *string `json:"status,omitempty"`
-	StatusReason *string `json:"status_reason,omitempty"`
-	Priority     *string `json:"priority,omitempty"`
+	InputIDs     []string `json:"input_ids,omitempty"`
+	Instructions *string  `json:"instructions,omitempty"`
+	Kind         string   `json:"kind"`
+	ID           string   `json:"id,omitempty"`
+	Content      *string  `json:"content,omitempty"`
+	Title        *string  `json:"title,omitempty"`
+	Description  *string  `json:"description,omitempty"`
+	Acceptance   *string  `json:"acceptance,omitempty"`
+	Status       *string  `json:"status,omitempty"`
+	StatusReason *string  `json:"status_reason,omitempty"`
+	Priority     *string  `json:"priority,omitempty"`
 }
 
 type ThreadStateStore interface {
@@ -62,7 +63,7 @@ func IsThreadStateTool(name string) bool {
 }
 
 func ThreadStateToolNames() []string {
-	return []string{"update_notes", "list_tasks", "create_task", "update_task", "delete_task", "context_new", "context_compact"}
+	return []string{"check_inputs", "update_notes", "list_tasks", "create_task", "update_task", "delete_task", "context_new", "context_compact"}
 }
 
 func ParseThreadStateAction(call llm.Block) (ThreadStateAction, error) {

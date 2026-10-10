@@ -51,7 +51,7 @@ func TestManagementOutputBudgetPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Budget", ModelID: model.ID})
+	agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Budget", Configuration: &management.Configuration{Models: []string{model.ID}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestManagedOutputBudgetFallbackThroughRPCAndProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{model.ID}); err != nil {
+	if err := f.configureModels(ctx, []string{f.agent.Configuration.Models[0], model.ID}); err != nil {
 		t.Fatal(err)
 	}
 	pki := filepath.Join(t.TempDir(), "pki")

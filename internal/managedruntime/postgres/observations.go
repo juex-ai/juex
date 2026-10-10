@@ -37,8 +37,8 @@ func (s *Store) ClaimObservation(ctx context.Context, holder string) (managedrun
 	var scope, options, command []byte
 	err := s.pool.QueryRow(ctx, `WITH candidate AS (
  SELECT id FROM runtime.observation_sources WHERE NOT closed AND lease_until<=clock_timestamp() AND next_check<=clock_timestamp() ORDER BY next_check,id FOR UPDATE SKIP LOCKED LIMIT 1)
- UPDATE runtime.observation_sources o SET lease_epoch=o.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds' FROM candidate c,runtime.tools j WHERE o.id=c.id AND j.id=o.id
- RETURNING o.id,o.thread_id,o.environment_id,o.operation_id,o.kind,o.scope,o.cursor,o.pending,o.discarding,o.lease_epoch,o.wake_version,j.state IN ('pending','waiting'),o.options,o.command_batch,o.working_directory,o.authorization_version`, holder).Scan(&source.ID, &source.ThreadID, &source.EnvironmentID, &source.OperationID, &source.Kind, &scope, &source.Cursor, &source.Pending, &source.Discarding, &source.LeaseEpoch, &source.WakeVersion, &source.DeliveryPending, &options, &command, &source.WorkingDirectory, &source.AuthorizationVersion)
+ UPDATE runtime.observation_sources o SET lease_epoch=o.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds' FROM candidate c WHERE o.id=c.id
+ RETURNING o.id,o.thread_id,o.environment_id,o.operation_id,o.kind,o.scope,o.cursor,o.pending,o.discarding,o.lease_epoch,o.wake_version,(EXISTS(SELECT 1 FROM runtime.tools j WHERE j.id=o.origin_tool_id AND j.state IN ('pending','waiting')) OR EXISTS(SELECT 1 FROM runtime.observer_controls m WHERE m.id=o.control_id AND m.source_id=o.id AND NOT m.admitted)),o.options,o.command_batch,o.working_directory,o.authorization_version`, holder).Scan(&source.ID, &source.ThreadID, &source.EnvironmentID, &source.OperationID, &source.Kind, &scope, &source.Cursor, &source.Pending, &source.Discarding, &source.LeaseEpoch, &source.WakeVersion, &source.DeliveryPending, &options, &command, &source.WorkingDirectory, &source.AuthorizationVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return source, managedruntime.ErrNoWork
 	}

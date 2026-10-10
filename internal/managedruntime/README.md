@@ -18,6 +18,27 @@ an Activation is a replaceable lease holder. Main and Workers have independent
 inputs, history, context generations and cancellation. The scheduler interleaves
 owners and limits active Threads; idle Activations do not consume execution slots.
 
+Agent processing can be paused independently of archival or service health.
+Pause closes new-input admission and model scheduling; accepted Execution work
+continues settling under its original identity. Resume retains queued work and
+frozen configuration. Restart replaces only the Activation lease, using ordinary
+lease-loss recovery; it does not restart shared services or replay tools. Default
+pause/restart defers while durable responsibilities remain. Deferred requests
+never run later without a new explicit request. An explicit interrupt preserves
+unfinished work and unknown model attempts rather than cancelling the Thread.
+Agent admission locks precede graph, job and Thread locks. Lifecycle changes and
+their replayable receipts commit together; background delivery retains its outbox
+while paused, and continuous observers rearm only after resume. State inspection
+does not initialize a new Agent.
+
+Explicit Agent management authority is frozen per Turn and checked again at
+dispatch. Only ordinary Main work can prepare a management intent; Workers and
+application inputs cannot. Once prepared, the original intent is reconciled even
+after cancellation or revocation, without granting a new mutation. Management
+owns configuration receipts; Runtime owns lifecycle receipts and saves the tool's
+recoverable result in the same transaction as the target's state change. Neither
+tool can edit its source Agent or another owner's Fleet.
+
 Thread working state stores current Notes and ordered Tasks with a revision;
 it is not frozen in Turn configuration or reconstructed from historical events.
 State tools commit their mutation, event and replayable tool receipt atomically.
@@ -38,6 +59,15 @@ live connections; unprocessed input or unknown external effects prevent hiding
 work. Offline import restores current Notes/Tasks directly without running live
 completion rules or reviving historical state.
 
+The bounded input checklist belongs to a work scope independent of context
+generations. Admission registers direct inputs; successful input Hooks make them
+eligible for explicit checks. A check cannot share its assistant response with
+other tools. Checks and their original assistant/tool evidence commit atomically
+with the action receipt. All unchecked identities and original context references
+remain in model admission budgets, including fallback and compaction. Disabling
+the module hides reminders and stops new registrations without erasing history or
+waking work. Historical message checks are bounded, scoped, read-only queries.
+
 Worker creation, its explicit first input and optional result subscription commit
 together under the calling tool's fence. Workers start with independent context.
 The Agent's default depth limit is one; it can allow two levels. The Turn freezes
@@ -51,6 +81,12 @@ replays automatically; its separate count keeps explicit cancellation available
 when the Thread is idle and lets automatic Memory review resume after discard.
 Idle Workers can be archived and restored
 without losing history or replaying work; active descendants prevent archival.
+Permanent deletion requires an archived ordinary leaf Worker and settled model,
+tool, output ACK, subscription and outbox responsibilities. Runtime erases its
+conversation content atomically, retaining only the scoped identity receipt to
+deduplicate deletion and prevent late creation retries from resurrecting it.
+Other Threads' accepted inputs, usage, Execution artifacts, Workspace files and
+shared application data retain their independent lifetimes.
 
 Cross-Agent collaboration sends explicit messages only to a peer's Main in the
 same Tenant, owner and Fleet, including when an administrator acts on behalf of
@@ -162,6 +198,15 @@ offline. Execution facts enter a deduplicated durable inbox before acknowledgmen
 late commits cannot be skipped by a sequence cursor. Results resume the original
 Turn under its current Activation fence, preserving configuration and tool-result
 ordering. Unknown external outcomes block the Thread for a human decision.
+
+Buffered write handles belong to one Thread reset scope and retain their original
+Execution environment, directory and authority. Confirmed buffers survive Runtime
+restart and compaction; `/new` and revoked execution epochs invalidate old handles.
+Owned execution facts survive PostToolUse rejection and cancellation. Runtime
+reconstructs active handle guidance from those receipts without maintaining another
+mutable byte buffer. Provider replay folds complete tool pairs, keeps four recent
+active chunk calls, and leaves original history unchanged. Folded summaries are
+not retained by original event IDs during compaction.
 
 File publication, Artifact import and explicit environment-to-environment copy
 freeze both authorized locations before admission. Their durable transfer IDs

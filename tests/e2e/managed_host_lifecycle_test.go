@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/juex-ai/juex/internal/execution"
+	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/lifecycle"
 	"github.com/juex-ai/juex/internal/management"
@@ -20,6 +21,37 @@ import (
 type hostLifecycleProbe struct {
 	root                  string
 	starts, stops, purges int
+}
+
+func TestManagedHostProvisionForIndependentFileOperations(t *testing.T) {
+	f := executionDatabase(t)
+	ctx := context.Background()
+	backend := &hostLifecycleProbe{root: t.TempDir()}
+	f.execution.Managed = &execution.ManagedManager{Store: f.executionStore, Backend: backend, Authority: f.execution.Authority, Key: make([]byte, 32)}
+	for _, capability := range []agentpolicy.Capability{agentpolicy.FileSearch, agentpolicy.Skills, "none"} {
+		modules := map[agentpolicy.Capability]bool{}
+		for _, cap := range agentpolicy.Capabilities() {
+			modules[cap] = cap == capability
+		}
+		agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: string(capability), Configuration: &management.Configuration{Modules: modules}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := backend.starts
+		environments, err := f.execution.Environments(ctx, f.actor, f.tenant, agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if capability == "none" {
+			if len(environments) != 0 || backend.starts != before {
+				t.Fatal("disabled execution provisioned", environments, backend.starts)
+			}
+			continue
+		}
+		if len(environments) != 1 || !environments[0].Default || len(environments[0].Capabilities) != 1 || environments[0].Capabilities[0] != execprotocol.Files {
+			t.Fatal("independent operation lacks narrow default environment", capability, environments, backend.starts)
+		}
+	}
 }
 
 func (p *hostLifecycleProbe) Resource(id string) (execution.ManagedResource, error) {

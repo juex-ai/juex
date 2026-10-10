@@ -127,7 +127,7 @@ func TestManagementOperatorCLIAndHTTP(t *testing.T) {
 	}
 	fleet := managementCall[management.FleetOverview](t, client, "GET", apiBase+"/fleet", "", nil, 200)
 	settings := fleet.Settings
-	settings.DefaultModelID = model.ID
+	settings.Configuration.Models = []string{model.ID}
 	managementCall[management.FleetSettings](t, client, "PUT", apiBase+"/users/"+user.ID+"/fleet/settings", "http://localhost:8680", settings, 200)
 	agent := managementCall[management.Agent](t, client, "POST", apiBase+"/users/"+user.ID+"/agents", "http://localhost:8680", management.AgentConfig{Name: "HTTP Agent"}, 200)
 	runtimeBase := apiBase + "/agents/" + agent.ID

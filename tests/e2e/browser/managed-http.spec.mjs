@@ -61,6 +61,7 @@ test('LAN HTTP supports Calendar creation, file upload and copying references', 
   expect(schedule.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   await page.goto(`${origin}/t/tenant/agents/agent?thread=main`);
   await page.getByRole('button', { name: '文件与产物' }).click();
+  await page.getByRole('button', { name: '文件产物', exact: true }).click();
   await page.getByLabel('选择文件').setInputFiles({ name: 'http.txt', mimeType: 'text/plain', buffer: content });
   await page.getByRole('button', { name: '上传文件' }).click();
   await expect(page.getByText('http.txt 已上传。可复制文件引用发送给 Agent。')).toBeVisible();

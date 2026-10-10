@@ -57,7 +57,7 @@ func TestMigrationStdioExtensionNativeProtocol(t *testing.T) {
 	}
 	args := []string{"-test.run=^TestMigrationStdioMCPHelper$", "--", "two words", "quote'\"", "", "$HOME", "$(touch marker)", ";literal", "${WORKDIR}/file", "$WORKDIR_X"}
 	source := migrationExtensionCapture(t, args, map[string]string{"MIGRATION_EXTENSION_HELPER": "1", "STATE": "$JUEX_EXT_DATA_DIR/private", "WORKDIR": "ignored", "JUEX_WORKDIR": "ignored", "JUEX_EXT_DIR": "ignored", "juex_ext_data_dir": "ignored", "BASH_ENV": startup, "ENV": startup})
-	manifest, err := migration.ConvertStdioExtension(source, map[string]migration.MCPProcessBinding{"wire": {Executable: executable, WorkingDirectory: cwd, RuntimeWorkDir: workspace}})
+	manifest, err := migration.ConvertMCPExtension(source, map[string]migration.MCPProcessBinding{"wire": {Executable: executable, WorkingDirectory: cwd, RuntimeWorkDir: workspace}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestMigrationStdioExtensionNativeProtocol(t *testing.T) {
 		} else {
 			binding.Executable = filepath.Join(base, "missing executable")
 		}
-		manifest, err := migration.ConvertStdioExtension(source, map[string]migration.MCPProcessBinding{"wire": binding})
+		manifest, err := migration.ConvertMCPExtension(source, map[string]migration.MCPProcessBinding{"wire": binding}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -327,7 +327,7 @@ func TestMigrationStdioExtensionRejectsChangedProcessEnvironment(t *testing.T) {
 	for key, value := range values {
 		t.Run(key, func(t *testing.T) {
 			source := migrationExtensionCapture(t, nil, map[string]string{key: value})
-			_, err := migration.ConvertStdioExtension(source, map[string]migration.MCPProcessBinding{"wire": {Executable: executable, WorkingDirectory: t.TempDir(), RuntimeWorkDir: t.TempDir()}})
+			_, err := migration.ConvertMCPExtension(source, map[string]migration.MCPProcessBinding{"wire": {Executable: executable, WorkingDirectory: t.TempDir(), RuntimeWorkDir: t.TempDir()}}, nil)
 			if err == nil {
 				t.Fatal("accepted a launcher that changes the observed source environment")
 			}

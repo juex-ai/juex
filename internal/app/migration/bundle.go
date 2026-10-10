@@ -51,6 +51,9 @@ type BundleAgentPolicy struct {
 	GlobalInstructionPath string  `json:"global_instruction_path"`
 	// Workspace stays externally owned; capture does not authorize its deletion.
 	Workspace string `json:"workspace"`
+	// Explicit operator acceptance of the source Supervisor's narrower target
+	// authority. Ordinary Agent configuration cannot grant this permission.
+	AgentManagement *bool `json:"agent_management,omitempty"`
 }
 
 type BundleModelPolicy struct {
@@ -61,9 +64,17 @@ type BundleModelPolicy struct {
 }
 
 type BundleExtension struct {
-	AgentID  string                       `json:"agent_id"`
-	Snapshot legacy.ExtensionSnapshot     `json:"snapshot"`
-	Bindings map[string]MCPProcessBinding `json:"bindings"`
+	AgentID           string                       `json:"agent_id"`
+	Snapshot          legacy.ExtensionSnapshot     `json:"snapshot"`
+	Bindings          map[string]MCPProcessBinding `json:"bindings"`
+	HeaderEnvironment map[string]*string           `json:"-"`
+}
+
+type bundleExtensionEvidence struct {
+	AgentID           string                       `json:"agent_id"`
+	Snapshot          legacy.ExtensionSnapshot     `json:"snapshot"`
+	Bindings          map[string]MCPProcessBinding `json:"bindings"`
+	HeaderEnvironment map[string]*string           `json:"header_environment,omitempty"`
 }
 
 // BundleInputs is deliberately not a printable transport. The private wire
@@ -77,10 +88,11 @@ type BundleInputs struct {
 }
 
 type Bundle struct {
-	header BundleHeader
-	source legacy.Fleet
-	inputs BundleInputs
-	digest string
+	conversionPolicy int
+	header           BundleHeader
+	source           legacy.Fleet
+	inputs           BundleInputs
+	digest           string
 }
 
 type bundlePayload struct {
@@ -110,7 +122,7 @@ type bundlePrivate struct {
 	Models       []bundleModelEvidence        `json:"models"`
 	Agents       map[string]BundleAgentPolicy `json:"agents"`
 	ModelsPolicy []BundleModelPolicy          `json:"models_policy"`
-	Extensions   []BundleExtension            `json:"extensions"`
+	Extensions   []bundleExtensionEvidence    `json:"extensions"`
 	Blobs        map[string][]byte            `json:"blobs"`
 }
 
@@ -151,7 +163,7 @@ func WriteBundle(directory string, source legacy.Fleet, inputs BundleInputs, hea
 	if err != nil {
 		return "", err
 	}
-	manifest, err := json.Marshal(bundleManifest{1, bundleSourceRevision, 2, header, bundlePayload{fleetHash, int64(len(fleet))}, bundlePayload{bundleDigest(private), int64(len(private))}})
+	manifest, err := json.Marshal(bundleManifest{1, bundleSourceRevision, 3, header, bundlePayload{fleetHash, int64(len(fleet))}, bundlePayload{bundleDigest(private), int64(len(private))}})
 	if err != nil {
 		return "", errors.New("cannot encode bundle manifest")
 	}
@@ -215,7 +227,7 @@ func LoadBundle(directory, expectedSHA256 string, target BundleTarget) (*Bundle,
 		return nil, errors.New("bundle manifest digest mismatch")
 	}
 	var m bundleManifest
-	if decodeBundleJSON(manifest, &m) != nil || m.Version != 1 || m.SourceRevision != bundleSourceRevision || m.ConversionPolicy != 2 || m.Header.validate() != nil || m.Header.Target != target {
+	if decodeBundleJSON(manifest, &m) != nil || m.Version != 1 || m.SourceRevision != bundleSourceRevision || (m.ConversionPolicy != 2 && m.ConversionPolicy != 3) || m.Header.validate() != nil || m.Header.Target != target {
 		return nil, errors.New("unsupported bundle or destination mismatch")
 	}
 	read := func(name string, p bundlePayload, limit int64) ([]byte, error) {
@@ -247,7 +259,7 @@ func LoadBundle(directory, expectedSHA256 string, target BundleTarget) (*Bundle,
 	if err != nil {
 		return nil, err
 	}
-	return &Bundle{header: m.Header, source: source, inputs: inputs, digest: expectedSHA256}, nil
+	return &Bundle{conversionPolicy: m.ConversionPolicy, header: m.Header, source: source, inputs: inputs, digest: expectedSHA256}, nil
 }
 
 func openBundleRoot(directory string) (*os.Root, error) {

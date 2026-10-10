@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/execution/blob"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/processenv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -33,15 +35,17 @@ type Config struct {
 }
 
 type operation struct {
-	record    record
-	cancel    context.CancelFunc
-	stdin     io.WriteCloser
-	stdinMu   sync.Mutex
-	session   *mcp.ClientSession
-	fileReady chan struct{}
+	environment map[string]string
+	record      record
+	cancel      context.CancelFunc
+	stdin       io.WriteCloser
+	stdinMu     sync.Mutex
+	session     *mcp.ClientSession
+	fileReady   chan struct{}
 }
 
 type Engine struct {
+	writeMu     sync.Mutex
 	config      Config
 	mu          sync.Mutex
 	operations  map[string]*operation
@@ -189,6 +193,19 @@ func (e *Engine) Close() error {
 }
 
 func (e *Engine) Submit(request execprotocol.Request) (execprotocol.Snapshot, error) {
+	return e.submit(request, nil)
+}
+
+// SubmitWithEnvironment accepts trusted dispatch-only defaults. They are never
+// copied into Request, the durable journal or public operation snapshots.
+func (e *Engine) SubmitWithEnvironment(request execprotocol.Request, values map[string]string) (execprotocol.Snapshot, error) {
+	if !processenv.Uses(request.Kind) || len(values) == 0 || processenv.Validate(values) != nil {
+		return execprotocol.Snapshot{}, execprotocol.ErrInvalid
+	}
+	return e.submit(request, values)
+}
+
+func (e *Engine) submit(request execprotocol.Request, values map[string]string) (execprotocol.Snapshot, error) {
 	if err := request.Validate(); err != nil {
 		return execprotocol.Snapshot{}, err
 	}
@@ -203,6 +220,11 @@ func (e *Engine) Submit(request execprotocol.Request) (execprotocol.Snapshot, er
 	if err != nil {
 		return execprotocol.Snapshot{}, execprotocol.ErrInvalid
 	}
+	environmentDigest := ""
+	if len(values) > 0 {
+		encodedValues, _ := json.Marshal(values)
+		environmentDigest = digest(encodedValues)
+	}
 	fileStatus, fileReserve, err := fileAdmission(request)
 	if err != nil {
 		return execprotocol.Snapshot{}, err
@@ -216,7 +238,7 @@ func (e *Engine) Submit(request execprotocol.Request) (execprotocol.Snapshot, er
 		return execprotocol.Snapshot{}, execprotocol.ErrDenied
 	}
 	if existing := e.operations[request.ID]; existing != nil {
-		if existing.record.Hash != digest(encoded) {
+		if existing.record.Hash != digest(encoded) || existing.record.EnvironmentDigest != environmentDigest {
 			return execprotocol.Snapshot{}, execprotocol.ErrConflict
 		}
 		return e.snapshotLocked(existing, 0, 64<<10)
@@ -234,7 +256,7 @@ func (e *Engine) Submit(request execprotocol.Request) (execprotocol.Snapshot, er
 	if err := output.Close(); err != nil {
 		return execprotocol.Snapshot{}, execprotocol.ErrUnavailable
 	}
-	op := &operation{record: record{Request: request, Hash: digest(encoded), State: execprotocol.Accepted, CreatedAt: time.Now().UTC(), File: fileStatus, FileReserved: fileReserve}}
+	op := &operation{environment: maps.Clone(values), record: record{Request: request, Hash: digest(encoded), EnvironmentDigest: environmentDigest, State: execprotocol.Accepted, CreatedAt: time.Now().UTC(), File: fileStatus, FileReserved: fileReserve}}
 	if err := e.save(&op.record); err != nil {
 		return execprotocol.Snapshot{}, err
 	}
@@ -308,6 +330,14 @@ func (e *Engine) snapshotLocked(operation *operation, cursor int64, limit int) (
 		snapshot.File = &status
 		snapshot.FileExpired = r.FileExpired
 	}
+	if r.MCP != nil {
+		connection := *r.MCP
+		snapshot.MCP = &connection
+	}
+	if r.Write != nil {
+		receipt := *r.Write
+		snapshot.Write = &receipt
+	}
 	if r.OutputExpired {
 		return snapshot, nil
 	}
@@ -379,6 +409,7 @@ func (e *Engine) Cancel(agent, id string) error {
 }
 
 func (e *Engine) execute(op *operation) {
+	defer func() { op.environment = nil }()
 	if op.fileReady != nil {
 		ctx, cancel := context.WithCancel(e.ctx)
 		defer cancel()
@@ -439,6 +470,8 @@ func (e *Engine) execute(op *operation) {
 		err = e.useMCP(ctx, op)
 	case "export_file", "import_file":
 		err = e.transferFile(ctx, op)
+	case "write_begin", "write_chunk", "write_commit", "write_abort":
+		err = e.chunkedWrite(ctx, op)
 	default:
 		err = e.fileOperation(ctx, op)
 	}

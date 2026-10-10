@@ -42,7 +42,7 @@ const (
 
 func RequiredCapability(kind string) Capability {
 	switch kind {
-	case "read_agent_instructions", "inspect_extension", "read", "write", "edit", "glob", "grep", "export_file", "import_file":
+	case "browse_workspace", "read_agent_instructions", "inspect_extension", "read", "write", "edit", "apply_patch", "write_begin", "write_chunk", "write_commit", "write_abort", "glob", "grep", "export_file", "import_file":
 		return Files
 	case "observe_command", "exec_command", "write_stdin", "run_hook":
 		return Shell
@@ -54,6 +54,7 @@ func RequiredCapability(kind string) Capability {
 }
 
 type Request struct {
+	WriteContext         *WriteContext   `json:"write_context,omitempty"`
 	AuthorizationVersion int64           `json:"authorization_version,omitempty"`
 	Version              int             `json:"version"`
 	ID                   string          `json:"id"`
@@ -67,6 +68,13 @@ func (r Request) Validate() error {
 		return ErrVersion
 	}
 	if r.AuthorizationVersion < 0 || r.ID == "" || len(r.ID) > 256 || r.AgentID == "" || len(r.AgentID) > 128 || RequiredCapability(r.Kind) == "" || len(r.Arguments) > 2<<20 || !json.Valid(r.Arguments) {
+		return ErrInvalid
+	}
+	if IsChunkedWrite(r.Kind) {
+		if r.WriteContext == nil || r.WriteContext.ThreadID == "" || r.WriteContext.ResetID == "" || len(r.WriteContext.ThreadID) > 128 || len(r.WriteContext.ResetID) > 128 {
+			return ErrInvalid
+		}
+	} else if r.WriteContext != nil {
 		return ErrInvalid
 	}
 	return nil
@@ -88,23 +96,25 @@ func (s State) Terminal() bool {
 }
 
 type Snapshot struct {
-	Version       int         `json:"version"`
-	EnvironmentID string      `json:"environment_id"`
-	ID            string      `json:"id"`
-	AgentID       string      `json:"agent_id"`
-	Kind          string      `json:"kind"`
-	State         State       `json:"state"`
-	Output        []byte      `json:"output"`
-	NextCursor    int64       `json:"next_cursor"`
-	OutputBytes   int64       `json:"output_bytes"`
-	Truncated     bool        `json:"truncated"`
-	OutputExpired bool        `json:"output_expired"`
-	ExitCode      *int        `json:"exit_code"`
-	Error         string      `json:"error"`
-	CreatedAt     time.Time   `json:"created_at"`
-	UpdatedAt     time.Time   `json:"updated_at"`
-	File          *FileStatus `json:"file,omitempty"`
-	FileExpired   bool        `json:"file_expired,omitempty"`
+	Write         *WriteReceipt  `json:"write,omitempty"`
+	MCP           *MCPConnection `json:"mcp,omitempty"`
+	Version       int            `json:"version"`
+	EnvironmentID string         `json:"environment_id"`
+	ID            string         `json:"id"`
+	AgentID       string         `json:"agent_id"`
+	Kind          string         `json:"kind"`
+	State         State          `json:"state"`
+	Output        []byte         `json:"output"`
+	NextCursor    int64          `json:"next_cursor"`
+	OutputBytes   int64          `json:"output_bytes"`
+	Truncated     bool           `json:"truncated"`
+	OutputExpired bool           `json:"output_expired"`
+	ExitCode      *int           `json:"exit_code"`
+	Error         string         `json:"error"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	File          *FileStatus    `json:"file,omitempty"`
+	FileExpired   bool           `json:"file_expired,omitempty"`
 }
 
 func (s Snapshot) Text() string { return string(s.Output) }

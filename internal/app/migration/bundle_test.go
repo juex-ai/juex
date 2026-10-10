@@ -283,7 +283,8 @@ func TestBundlePrepareRequiresSelectedSourceCalendar(t *testing.T) {
 	}
 }
 
-func TestBundlePrepareBindsAgentsByIdentity(t *testing.T) {
+func bundleTwoAgentsFixture(t *testing.T) (legacy.Fleet, BundleInputs, BundleHeader) {
+	t.Helper()
 	source, inputs, header := bundleFixture(t)
 	second := source.Agents[0].Definition
 	second.ID, second.Name = "abc235", "Second"
@@ -307,6 +308,11 @@ func TestBundlePrepareBindsAgentsByIdentity(t *testing.T) {
 	model := inputs.Models[0]
 	model.AgentID = second.ID
 	inputs.Models = append(inputs.Models, model)
+	return source, inputs, header
+}
+
+func TestBundlePrepareBindsAgentsByIdentity(t *testing.T) {
+	source, inputs, header := bundleTwoAgentsFixture(t)
 	b := Bundle{source: source, inputs: inputs, header: header}
 	want, err := b.Prepare()
 	if err != nil {
@@ -324,6 +330,72 @@ func TestBundlePrepareBindsAgentsByIdentity(t *testing.T) {
 	got, err := b.Prepare()
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatal("Agent order changed target identity or policy", err)
+	}
+}
+
+func TestBundleConversionPolicyPreservesIndependentModelOrderBoundary(t *testing.T) {
+	source, inputs, header := bundleTwoAgentsFixture(t)
+	config := "preset: minimal\nmodels: [local:model, local:second]\nproviders:\n  - id: local\n    protocol: openai/chat\n    base_url: https://model.example\n    api_key: private-model-key\n    models: [{id: model, context_window: 8192}, {id: second, context_window: 8192}, {id: third, context_window: 8192}]\n"
+	if err := os.WriteFile(filepath.Join(source.SourceHome, "juex.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	source, err = legacy.ReadFleet(source.SourceHome, source.DefaultHome.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := inputs.Config.Contexts["abc235"]
+	second.ModelRefs = []string{"local:model", "local:third"}
+	inputs.Config.Contexts["abc235"] = second
+	for _, name := range []string{"second", "third"} {
+		inputs.ModelsPolicy = append(inputs.ModelsPolicy, BundleModelPolicy{Key: ModelKey{Provider: "local", Name: name}, OutputReserve: 2048})
+	}
+	dir := filepath.Join(t.TempDir(), "bundle")
+	digest, err := WriteBundle(dir, source, inputs, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := LoadBundle(dir, digest, header.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.conversionPolicy != 3 {
+		t.Fatal("new bundle does not bind its conversion policy")
+	}
+	plan, err := current.Prepare()
+	if err != nil || len(plan.Models.Agents) != 2 || plan.Models.Agents[0].Models[1].Name != "second" || plan.Models.Agents[1].Models[1].Name != "third" {
+		t.Fatal("independent choices lost", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest bundleManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, policy := range []int{2, 4} {
+		manifest.ConversionPolicy = policy
+		data, err = json.Marshal(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		old, err := LoadBundle(dir, bundleDigest(data), header.Target)
+		if policy == 4 {
+			if err == nil {
+				t.Fatal("unknown policy accepted")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal("retained policy 2 rejected before validation", err)
+		}
+		if _, err := old.Prepare(); err == nil {
+			t.Fatal("old bundle silently acquired independent tail semantics")
+		}
 	}
 }
 

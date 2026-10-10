@@ -156,7 +156,7 @@ func TestManagedMemoryRuntimeWorkerWorkflow(t *testing.T) {
 	if err != nil || !result.Committed {
 		t.Fatal(result, err)
 	}
-	peer, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Knowledge reader", ModelID: f.agent.ModelID})
+	peer, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Knowledge reader", Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

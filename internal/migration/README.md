@@ -93,12 +93,17 @@ Symlink installations or selected resources need separate proven handling and
 are rejected. This capture does not create target extension authority or prove
 command, environment or private-state compatibility.
 
-`ConvertStdioExtension` turns a selected v1 stdio declaration into the existing v2
-manifest. Explicit executable, process cwd and Runtime WorkDir bindings preserve
+`ConvertMCPExtension` turns selected v1 stdio and Streamable HTTP declarations
+into the existing v2 manifest. Explicit executable, process cwd and Runtime WorkDir bindings preserve
 separate source locations through a fixed argv launcher. Execution still owns
 extension-private paths. Unsupported transports, Agent-wide defaults, unproved
 resource absence, shell-managed environment values and unresolved argument paths
 require separate conversion.
+HTTP preserves the literal endpoint and resolves headers once from frozen source
+Agent environment evidence; unknown values cannot select a fallback. This evidence
+is private and bound to the bundle digest. Loopback reachability and redirect
+dependence require target-environment acceptance; conversion performs no network
+I/O and the target rejects redirects.
 Conversion does not install dependencies, copy private state, connect MCP or
 subscribe notifications; those require installation and behavior acceptance.
 
@@ -109,6 +114,18 @@ identity; conversion never fetches or republishes configuration. Reports omit
 private provider values. The result describes disk configuration, not proven
 inherited environment, authentication or target resource bindings. Unsupported
 fields and missing or contradictory capture evidence stop resolution explicitly.
+
+Current bundle policy preserves declared process environment keys using the same
+Agent's captured effective environment, including empty values. The final merged
+`load_dotenv` switch decides whether captured Workspace `.env` participates;
+unknown or absent effective values stop conversion. Management encrypts these
+initial values in the Agent layer with its definition and import receipt. This
+is an initial effective snapshot, not a live link to source files. The operator
+must prove that the captured configuration matches the source process and check
+inherited-only dependencies separately; the importing process's environment is
+never evidence. Source Supervisor authority requires explicit operator acceptance
+and becomes the independent Main-only, same-Fleet Agent-management grant. It does
+not grant raw YAML edits, secret access or operating-system process control.
 
 `ResolveModels` then applies explicitly supplied effective source environment and
 captured Codex credentials. Unknown environment values are distinct from absent
@@ -121,13 +138,13 @@ successful source resolution alone is not a deployable target configuration.
 
 `ConvertModels` builds a private publication plan from resolved profiles and
 explicit reservations. Effective provider/model identities deduplicate only when
-all private settings agree. Shared primary models require identical ordered,
-direct fallback chains, including an explicit empty chain. Source request caps
+all private settings agree. Each Agent retains its independent ordered model
+chain; retained policy 2 proofs still require matching shared-primary tails. Source request caps
 and effective capabilities remain unchanged; an implicit endpoint must be resolved
 before planning. The plan omits secrets from JSON and grants no authority to
 overwrite existing catalog entries. `PublishModels` applies adapter validation and
 Management's atomic offline import to an empty deployment catalog and an unset
-Tenant model policy. It writes direct fallback chains and the catalog allowlist,
+Tenant model policy. It writes catalog entries and the catalog allowlist,
 preserves the platform default, and records stable UUIDs with their first route
 authorization epochs. Exact retries return that receipt without resetting later
 operator edits or rebinding historical messages to a newly authorized route.
@@ -178,6 +195,21 @@ one business review; conversion never invents jobs or combines their outcomes.
 Other application job relationships require explicit verified bindings.
 Current compaction metadata containing an image without a usable provider
 path is rejected.
+
+New bundles bind conversion policy 3: patch and buffered-write switches preserve
+their source values and require an explicit target Files policy. Source journals
+are checked for active buffered writes across compaction; unsettled or unproven
+sessions require separate staged-session migration or source completion before
+import. Preserving historical tool facts does not restore their active bytes.
+Retained policy 2 keeps its original declarations and payload hashes on replay,
+rejects new private configuration declarations and never backfills an already-used target.
+
+The source input-tracking switch and its
+proven scopes, message associations and checks enter the original Runtime import
+transaction. Committed history restores checks even when settled queue rows were
+pruned or a queue write was interrupted. Ended scopes remain distinct from checks;
+missing evidence fails conversion. Apply
+reports the conversion policy and the number of Threads with restored tracking.
 
 Memory conversion uses those same Runtime identities and complete Commit
 intervals for entry/fact provenance, review evidence, source cursors and no-store

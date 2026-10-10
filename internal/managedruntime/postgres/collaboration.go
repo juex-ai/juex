@@ -49,7 +49,7 @@ func (s *Store) ApplyThreadAction(ctx context.Context, work managedruntime.ToolW
 		return nil, err
 	}
 	defer rollback(tx)
-	if err = checkScope(ctx, tx, work.Scope); err != nil {
+	if err = lockAgentAdmission(ctx, tx, work.Scope, target); err != nil {
 		return nil, err
 	}
 	if err = checkScope(ctx, tx, target); err != nil {
@@ -81,7 +81,7 @@ func (s *Store) ApplyThreadAction(ctx context.Context, work managedruntime.ToolW
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(threads) != len(ids) {
+	if _, exists := threads[work.ThreadID]; !exists {
 		return nil, managedruntime.ErrDenied
 	}
 	if err = subscriptionAction(ctx, tx, work); err != nil {
@@ -98,6 +98,9 @@ func (s *Store) ApplyThreadAction(ctx context.Context, work managedruntime.ToolW
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
+	}
+	if len(threads) != len(ids) {
+		return nil, managedruntime.ErrDenied
 	}
 	thread := threads[action.ThreadID]
 	if action.Kind != "thread_create" && (thread.AgentID != target.AgentID || thread.Retention != "active" && action.Kind != "thread_archive" && action.Kind != "thread_restore") {
@@ -221,6 +224,9 @@ func (s *Store) FinishThreadDelivery(ctx context.Context, delivery managedruntim
 		return err
 	}
 	defer rollback(tx)
+	if err = lockAgentAdmission(ctx, tx, delivery.Scope); err != nil {
+		return err
+	}
 	thread, err := readThread(ctx, tx, delivery.Scope.AgentID, delivery.ThreadID)
 	if err != nil {
 		return err

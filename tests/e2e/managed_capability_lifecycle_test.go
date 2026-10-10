@@ -32,7 +32,7 @@ func setApplicationAgentCapabilities(t *testing.T, f memoryFixture, disabled ...
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.directory.ConfigureAgent(ctx, f.human.ActorID, f.human.TenantID, f.scope.AgentID, view.Agent.Version, management.AgentConfig{Name: view.Agent.Name, Capabilities: &agentpolicy.Policy{Disabled: disabled}})
+	_, err = f.directory.ConfigureAgent(ctx, f.human.ActorID, f.human.TenantID, f.scope.AgentID, view.Agent.Version, management.AgentConfig{Name: view.Agent.Name, Configuration: &management.Configuration{Modules: modulesForPolicy(&agentpolicy.Policy{Disabled: disabled})}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,11 +187,11 @@ func TestAgentSkillsRemainAvailableWithoutExecutionCapabilities(t *testing.T) {
 	catalog := extensionpolicy.Catalog{Manifest: extensionpolicy.Manifest{ManifestVersion: 2, Name: "guide", Version: "1", Skills: []extensionpolicy.SkillResource{{ID: "guide", Path: "SKILL.md"}}}, Skills: []extensionpolicy.SkillContent{{ID: "guide", Content: "saved skill instructions"}}}
 	catalog.Revision = catalog.Digest()
 	var err error
-	f.agent, err = f.directory.ConfigureExtension(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, extensionpolicy.Binding{ID: bindingID, Enabled: true, EnvironmentID: uuid.NewString(), AuthorizationVersion: 1, Directory: "/saved/guide", InspectionID: "prior-inspection", Resources: []string{"skill/guide"}, Catalog: catalog}, false)
+	f.agent, err = f.directory.ConfigureExtension(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, extensionpolicy.Binding{ID: bindingID, Enabled: true, EnvironmentID: uuid.NewString(), AuthorizationVersion: 1, Directory: "/saved/guide", InspectionID: "prior-inspection", Resources: []string{"skill/guide"}, Catalog: catalog}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Capabilities: &agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Files, agentpolicy.Shell, agentpolicy.MCP}}})
+	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Configuration: &management.Configuration{Models: f.agent.Configuration.Models, Modules: modulesForPolicy(&agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Files, agentpolicy.Shell, agentpolicy.MCP}})}})
 	if err != nil {
 		t.Fatal(err)
 	}

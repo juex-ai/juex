@@ -13,7 +13,13 @@ func encodeBundleInputs(inputs BundleInputs) ([]byte, error) {
 	if !bundleText(reflect.ValueOf(inputs)) {
 		return nil, errors.New("private inputs contain non-UTF-8 text")
 	}
-	w := bundlePrivate{Config: inputs.Config, Agents: inputs.Agents, ModelsPolicy: inputs.ModelsPolicy, Extensions: inputs.Extensions, Blobs: map[string][]byte{}}
+	w := bundlePrivate{Config: inputs.Config, Agents: inputs.Agents, ModelsPolicy: inputs.ModelsPolicy, Blobs: map[string][]byte{}}
+	if inputs.Extensions != nil {
+		w.Extensions = make([]bundleExtensionEvidence, 0, len(inputs.Extensions))
+	}
+	for _, extension := range inputs.Extensions {
+		w.Extensions = append(w.Extensions, bundleExtensionEvidence(extension))
+	}
 	if inputs.Models != nil {
 		w.Models = make([]bundleModelEvidence, 0, len(inputs.Models))
 	}
@@ -59,7 +65,13 @@ func decodeBundleInputs(data []byte) (BundleInputs, error) {
 	}); err != nil || len(used) != len(w.Blobs) {
 		return BundleInputs{}, invalid
 	}
-	result := BundleInputs{Config: w.Config, Agents: w.Agents, ModelsPolicy: w.ModelsPolicy, Extensions: w.Extensions}
+	result := BundleInputs{Config: w.Config, Agents: w.Agents, ModelsPolicy: w.ModelsPolicy}
+	if w.Extensions != nil {
+		result.Extensions = make([]BundleExtension, 0, len(w.Extensions))
+	}
+	for _, extension := range w.Extensions {
+		result.Extensions = append(result.Extensions, BundleExtension(extension))
+	}
 	if w.Models != nil {
 		result.Models = make([]ModelEvidence, 0, len(w.Models))
 	}

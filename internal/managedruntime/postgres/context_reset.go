@@ -60,7 +60,7 @@ func (s *Store) ResetContext(ctx context.Context, scope managedruntime.Scope, th
 	if err := writeThreadState(ctx, tx, thread.ID, state); err != nil {
 		return thread, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET generation=generation+1,state='idle' WHERE id=$1`, thread.ID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET generation=generation+1,input_scope=gen_random_uuid(),state='idle' WHERE id=$1`, thread.ID); err != nil {
 		return thread, err
 	}
 	if err := appendEvent(ctx, tx, thread.ID, "context.reset", map[string]any{"request_id": requestID, "revision": state.Revision}); err != nil {

@@ -92,7 +92,7 @@ func TestDynamicInstructionsHTTPAndTurnSnapshot(t *testing.T) {
 	f := executionDatabase(t)
 	ctx := context.Background()
 	config := instructionConfig(t, `{"name":"with guidance","dynamic_instructions":{"enabled":true,"global_path":"/workspace/guidance/AGENTS.md"}}`)
-	config.ModelID = f.agent.ModelID
+	config.Configuration = &management.Configuration{Models: f.agent.Configuration.Models}
 	f.agent = managementCall[management.Agent](t, f.client, "PUT", f.base, f.origin, managementhttp.ConfigureAgentRequest{Version: f.agent.Version, AgentConfig: config}, 200)
 	checkInstructionConfig(t, f.agent, true, "/workspace/guidance/AGENTS.md")
 	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
@@ -105,7 +105,7 @@ func TestDynamicInstructionsHTTPAndTurnSnapshot(t *testing.T) {
 	}
 	checkInstructionConfig(t, plan, true, "/workspace/guidance/AGENTS.md")
 	config = instructionConfig(t, `{"name":"disabled","dynamic_instructions":{"enabled":false}}`)
-	config.ModelID = f.agent.ModelID
+	config.Configuration = &management.Configuration{Models: f.agent.Configuration.Models}
 	f.agent = managementCall[management.Agent](t, f.client, "PUT", f.base, f.origin, managementhttp.ConfigureAgentRequest{Version: f.agent.Version, AgentConfig: config}, 200)
 	checkInstructionConfig(t, f.agent, false, "")
 	if _, err := f.authority.Provider(ctx, scope, plan.Models[0], managedruntime.ModelRequirements{}); !errors.Is(err, managedruntime.ErrDenied) {

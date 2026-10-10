@@ -94,8 +94,50 @@ func runRuntimeToolsStore(t *testing.T, f *executionFixture, gateway managedrunt
 
 func assertRuntimeTranscript(t *testing.T, f *executionFixture) {
 	t.Helper()
+	ctx := context.Background()
+	rows, err := f.pool.Query(ctx, `SELECT j.id,j.attempt_id FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id WHERE t.thread_id=$1`, f.main.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := map[string]string{}
+	for rows.Next() {
+		var id, attempt string
+		if err := rows.Scan(&id, &attempt); err != nil {
+			t.Fatal(err)
+		}
+		attempts[id] = attempt
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	assertIdentity := func(events []managedruntime.Event) {
+		t.Helper()
+		for _, event := range events {
+			var identity struct {
+				ID   string `json:"id"`
+				Kind string `json:"kind"`
+			}
+			if err := json.Unmarshal(event.Data, &identity); err != nil {
+				t.Fatal(err)
+			}
+			id := identity.ID
+			if event.Kind == "message.appended" && identity.Kind == "tool_result" {
+				id = strings.TrimSuffix(id, "-result")
+			} else if !strings.HasPrefix(event.Kind, "tool.") {
+				continue
+			}
+			if attempt := attempts[id]; attempt != "" && event.ToolAttemptID != attempt {
+				t.Fatalf("%s: tool %s belongs to attempt %s, got %s", event.Kind, id, attempt, event.ToolAttemptID)
+			}
+		}
+	}
+	timeline := f.timeline(t, f.main.ID)
+	assertIdentity(timeline.Events)
+	recent := managementCall[managedruntime.Timeline](t, f.client, "GET", f.base+"/threads/"+f.main.ID+"/events?before=0", f.origin, nil, 200)
+	assertIdentity(recent.Events)
 	var history []llm.Message
-	for _, event := range f.timeline(t, f.main.ID).Events {
+	for _, event := range timeline.Events {
 		if event.Kind == "message.appended" {
 			var message llm.Message
 			if err := json.Unmarshal(event.Data, &message); err != nil {
@@ -206,6 +248,19 @@ func TestManagedRuntimeOfflineToolsReleaseSlotAndResumeAfterRestart(t *testing.T
 	if err := f.pool.QueryRow(ctx, `SELECT consumed_at IS NULL FROM runtime.observations WHERE event_id=$1`, observationID).Scan(&observationPending); err != nil || observationPending {
 		t.Fatal("Main did not consume its durable observation", err)
 	}
+	// An imported event may carry an operation ID from another Thread. The
+	// read model must not infer that operation's attempt ownership for it.
+	if _, err := f.pool.Exec(ctx, `WITH bumped AS (UPDATE runtime.threads SET sequence=sequence+1 WHERE id=$1 RETURNING sequence,generation)
+INSERT INTO runtime.events(id,thread_id,sequence,generation,kind,data) SELECT gen_random_uuid(),$1,sequence,generation,'tool.completed',jsonb_build_object('id',$2::text) FROM bumped`, worker.ID, operationID); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"?before=0", "?after=0"} {
+		page := managementCall[managedruntime.Timeline](t, f.client, "GET", f.base+"/threads/"+worker.ID+"/events"+query, f.origin, nil, 200)
+		last := page.Events[len(page.Events)-1]
+		if last.Kind != "tool.completed" || last.ToolAttemptID != "" {
+			t.Fatal("enriched foreign Thread's operation", last)
+		}
+	}
 }
 
 func TestManagedRuntimeCancellationClosesToolTranscriptAndStopsOfflineWork(t *testing.T) {
@@ -240,6 +295,25 @@ func TestManagedRuntimeCancellationClosesToolTranscriptAndStopsOfflineWork(t *te
 	connectExecutionDevice(t, f, device, token, engine)
 	f.submit(t, "after-cancel", f.main.ID, "Continue with this new instruction")
 	runtimeEventually(t, func() bool { return calls.Load() == 2 && f.timeline(t, f.main.ID).Thread.State == "idle" })
+	var cancelledTool bool
+	for _, event := range f.timeline(t, f.main.ID).Events {
+		if event.Kind != "tool.cancelled" {
+			continue
+		}
+		var receipt struct {
+			ID     string    `json:"id"`
+			TurnID string    `json:"turn_id"`
+			Call   llm.Block `json:"call"`
+			Result llm.Block `json:"result"`
+		}
+		if err := json.Unmarshal(event.Data, &receipt); err != nil {
+			t.Fatal(err)
+		}
+		cancelledTool = receipt.ID != "" && receipt.TurnID != "" && receipt.Call.ToolName == "write" && receipt.Result.ToolUseID == receipt.Call.ToolUseID
+	}
+	if !cancelledTool {
+		t.Fatal("cancelled delivery has no durable tool identity")
+	}
 	if _, err := os.Stat(filepath.Join(work, "must-not-exist")); !os.IsNotExist(err) {
 		t.Fatal("cancelled offline effect ran", err)
 	}

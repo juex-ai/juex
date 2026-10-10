@@ -89,7 +89,9 @@ func TestRequestMediaBoundsRepeatedWireBytesAndHonorsCancellation(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		history[0].Blocks = append(history[0].Blocks, history[0].Blocks[0], history[0].Blocks[0])
+		for len(history[0].Blocks) <= MaxInputImages {
+			history[0].Blocks = append(history[0].Blocks, history[0].Blocks[0])
+		}
 		if _, err := hydrateMedia(context.Background(), reader, Scope{}, history); !errors.Is(err, ErrMediaUnavailable) {
 			t.Fatal("cached image bypassed total wire size limit", err)
 		}
