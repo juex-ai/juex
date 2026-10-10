@@ -105,6 +105,21 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 		c.session.TenantID = id
 		return map[string]string{"tenant_id": id}, c.saveSession()
 	}))
+	tenant.AddCommand(tenantRead(command, "settings", "Inspect Tenant model order and module defaults", "/settings"))
+	var tenantConfigFile string
+	configureTenant := command("configure", "Set Tenant declarations with their current version (admin)", cobra.NoArgs, true, func(cmd *cobra.Command, c *client, _ []string) (any, error) {
+		path, err := c.tenantPath(cmd.Context())
+		if err != nil {
+			return nil, err
+		}
+		body, err := readJSONFile(tenantConfigFile, in)
+		if err != nil {
+			return nil, err
+		}
+		return c.request(cmd.Context(), "PUT", path+"/settings", body)
+	})
+	configureTenant.Flags().StringVar(&tenantConfigFile, "data-file", "-", "Configuration layer JSON file; - reads stdin")
+	tenant.AddCommand(configureTenant)
 	root.AddCommand(tenant)
 	addResources(root, command, in)
 	var dataFile string

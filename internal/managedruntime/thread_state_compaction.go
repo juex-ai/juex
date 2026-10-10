@@ -8,6 +8,12 @@ import (
 // Only authoritative state replaces these sections. Historical messages and
 // model prose cannot resurrect completed tasks or drop an unfinished note.
 func (d CompactionDraft) Reconcile(text string) string {
+	if d.InputScopeID != "" {
+		encoded, _ := json.Marshal(map[string]any{"scope_id": d.InputScopeID, "unchecked_input_ids": append([]string{}, d.UncheckedInputIDs...)})
+		text = reconcileSummarySection(text, "Input Checks", func(string) string {
+			return "Authoritative unchecked inputs at compaction. Summary prose cannot confirm handling; consult the current Runtime checklist.\n```json\n" + string(encoded) + "\n```"
+		})
+	}
 	if d.TasksEnabled && len(d.ThreadState.Tasks) > 0 {
 		state := d.ThreadState.RenewContext(false, true)
 		encoded, _ := json.Marshal(map[string]any{"tasks": append([]ThreadTask{}, state.Tasks...)})

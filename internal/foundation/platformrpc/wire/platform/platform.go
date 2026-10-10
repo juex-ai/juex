@@ -93,6 +93,12 @@ var fieldIDToName_Reply = map[int16]string{
 }
 
 type Management interface {
+	ControlAgents(ctx context.Context, sourceJSON string, agentID string, after string) (r *Reply, err error)
+
+	ControlAgent(ctx context.Context, sourceJSON string, actionJSON string, cancel bool) (r *Reply, err error)
+
+	ResolveProcessEnvironment(ctx context.Context, accessJSON string) (r *Reply, err error)
+
 	AuthorizeUsage(ctx context.Context, actorID string, tenantID string, ownerID string) (r *Reply, err error)
 
 	RecordNotification(ctx context.Context, eventJSON string) (r *Reply, err error)
@@ -105,9 +111,248 @@ type Management interface {
 
 	Peers(ctx context.Context, scopeJSON string) (r *Reply, err error)
 
+	ExtensionCatalog(ctx context.Context, scopeJSON string) (r *Reply, err error)
+
 	Snapshot(ctx context.Context, scopeJSON string) (r *Reply, err error)
 
 	ModelProfile(ctx context.Context, scopeJSON string, configJSON string) (r *Reply, err error)
+}
+
+type ManagementControlAgentsArgs struct {
+	SourceJSON string `thrift:"sourceJSON,1" frugal:"1,default,string" json:"sourceJSON"`
+	AgentID    string `thrift:"agentID,2" frugal:"2,default,string" json:"agentID"`
+	After      string `thrift:"after,3" frugal:"3,default,string" json:"after"`
+}
+
+func NewManagementControlAgentsArgs() *ManagementControlAgentsArgs {
+	return &ManagementControlAgentsArgs{}
+}
+
+func (p *ManagementControlAgentsArgs) InitDefault() {
+}
+
+func (p *ManagementControlAgentsArgs) GetSourceJSON() (v string) {
+	return p.SourceJSON
+}
+
+func (p *ManagementControlAgentsArgs) GetAgentID() (v string) {
+	return p.AgentID
+}
+
+func (p *ManagementControlAgentsArgs) GetAfter() (v string) {
+	return p.After
+}
+func (p *ManagementControlAgentsArgs) SetSourceJSON(val string) {
+	p.SourceJSON = val
+}
+func (p *ManagementControlAgentsArgs) SetAgentID(val string) {
+	p.AgentID = val
+}
+func (p *ManagementControlAgentsArgs) SetAfter(val string) {
+	p.After = val
+}
+
+func (p *ManagementControlAgentsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementControlAgentsArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementControlAgentsArgs = map[int16]string{
+	1: "sourceJSON",
+	2: "agentID",
+	3: "after",
+}
+
+type ManagementControlAgentsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementControlAgentsResult() *ManagementControlAgentsResult {
+	return &ManagementControlAgentsResult{}
+}
+
+func (p *ManagementControlAgentsResult) InitDefault() {
+}
+
+var ManagementControlAgentsResult_Success_DEFAULT *Reply
+
+func (p *ManagementControlAgentsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementControlAgentsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementControlAgentsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementControlAgentsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementControlAgentsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementControlAgentsResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementControlAgentsResult = map[int16]string{
+	0: "success",
+}
+
+type ManagementControlAgentArgs struct {
+	SourceJSON string `thrift:"sourceJSON,1" frugal:"1,default,string" json:"sourceJSON"`
+	ActionJSON string `thrift:"actionJSON,2" frugal:"2,default,string" json:"actionJSON"`
+	Cancel     bool   `thrift:"cancel,3" frugal:"3,default,bool" json:"cancel"`
+}
+
+func NewManagementControlAgentArgs() *ManagementControlAgentArgs {
+	return &ManagementControlAgentArgs{}
+}
+
+func (p *ManagementControlAgentArgs) InitDefault() {
+}
+
+func (p *ManagementControlAgentArgs) GetSourceJSON() (v string) {
+	return p.SourceJSON
+}
+
+func (p *ManagementControlAgentArgs) GetActionJSON() (v string) {
+	return p.ActionJSON
+}
+
+func (p *ManagementControlAgentArgs) GetCancel() (v bool) {
+	return p.Cancel
+}
+func (p *ManagementControlAgentArgs) SetSourceJSON(val string) {
+	p.SourceJSON = val
+}
+func (p *ManagementControlAgentArgs) SetActionJSON(val string) {
+	p.ActionJSON = val
+}
+func (p *ManagementControlAgentArgs) SetCancel(val bool) {
+	p.Cancel = val
+}
+
+func (p *ManagementControlAgentArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementControlAgentArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementControlAgentArgs = map[int16]string{
+	1: "sourceJSON",
+	2: "actionJSON",
+	3: "cancel",
+}
+
+type ManagementControlAgentResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementControlAgentResult() *ManagementControlAgentResult {
+	return &ManagementControlAgentResult{}
+}
+
+func (p *ManagementControlAgentResult) InitDefault() {
+}
+
+var ManagementControlAgentResult_Success_DEFAULT *Reply
+
+func (p *ManagementControlAgentResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementControlAgentResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementControlAgentResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementControlAgentResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementControlAgentResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementControlAgentResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementControlAgentResult = map[int16]string{
+	0: "success",
+}
+
+type ManagementResolveProcessEnvironmentArgs struct {
+	AccessJSON string `thrift:"accessJSON,1" frugal:"1,default,string" json:"accessJSON"`
+}
+
+func NewManagementResolveProcessEnvironmentArgs() *ManagementResolveProcessEnvironmentArgs {
+	return &ManagementResolveProcessEnvironmentArgs{}
+}
+
+func (p *ManagementResolveProcessEnvironmentArgs) InitDefault() {
+}
+
+func (p *ManagementResolveProcessEnvironmentArgs) GetAccessJSON() (v string) {
+	return p.AccessJSON
+}
+func (p *ManagementResolveProcessEnvironmentArgs) SetAccessJSON(val string) {
+	p.AccessJSON = val
+}
+
+func (p *ManagementResolveProcessEnvironmentArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementResolveProcessEnvironmentArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementResolveProcessEnvironmentArgs = map[int16]string{
+	1: "accessJSON",
+}
+
+type ManagementResolveProcessEnvironmentResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementResolveProcessEnvironmentResult() *ManagementResolveProcessEnvironmentResult {
+	return &ManagementResolveProcessEnvironmentResult{}
+}
+
+func (p *ManagementResolveProcessEnvironmentResult) InitDefault() {
+}
+
+var ManagementResolveProcessEnvironmentResult_Success_DEFAULT *Reply
+
+func (p *ManagementResolveProcessEnvironmentResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementResolveProcessEnvironmentResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementResolveProcessEnvironmentResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementResolveProcessEnvironmentResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementResolveProcessEnvironmentResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementResolveProcessEnvironmentResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementResolveProcessEnvironmentResult = map[int16]string{
+	0: "success",
 }
 
 type ManagementAuthorizeUsageArgs struct {
@@ -581,6 +826,73 @@ func (p *ManagementPeersResult) String() string {
 }
 
 var fieldIDToName_ManagementPeersResult = map[int16]string{
+	0: "success",
+}
+
+type ManagementExtensionCatalogArgs struct {
+	ScopeJSON string `thrift:"scopeJSON,1" frugal:"1,default,string" json:"scopeJSON"`
+}
+
+func NewManagementExtensionCatalogArgs() *ManagementExtensionCatalogArgs {
+	return &ManagementExtensionCatalogArgs{}
+}
+
+func (p *ManagementExtensionCatalogArgs) InitDefault() {
+}
+
+func (p *ManagementExtensionCatalogArgs) GetScopeJSON() (v string) {
+	return p.ScopeJSON
+}
+func (p *ManagementExtensionCatalogArgs) SetScopeJSON(val string) {
+	p.ScopeJSON = val
+}
+
+func (p *ManagementExtensionCatalogArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementExtensionCatalogArgs(%+v)", *p)
+}
+
+var fieldIDToName_ManagementExtensionCatalogArgs = map[int16]string{
+	1: "scopeJSON",
+}
+
+type ManagementExtensionCatalogResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewManagementExtensionCatalogResult() *ManagementExtensionCatalogResult {
+	return &ManagementExtensionCatalogResult{}
+}
+
+func (p *ManagementExtensionCatalogResult) InitDefault() {
+}
+
+var ManagementExtensionCatalogResult_Success_DEFAULT *Reply
+
+func (p *ManagementExtensionCatalogResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ManagementExtensionCatalogResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ManagementExtensionCatalogResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ManagementExtensionCatalogResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ManagementExtensionCatalogResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ManagementExtensionCatalogResult(%+v)", *p)
+}
+
+var fieldIDToName_ManagementExtensionCatalogResult = map[int16]string{
 	0: "success",
 }
 
@@ -3100,6 +3412,18 @@ var fieldIDToName_CalendarCancelCommandResult = map[int16]string{
 }
 
 type Runtime interface {
+	ObservationSources(ctx context.Context, actor *Actor, after string) (r *Reply, err error)
+
+	ObservedEvents(ctx context.Context, actor *Actor, sourceID string, after string) (r *Reply, err error)
+
+	ObservationContent(ctx context.Context, actor *Actor, observationID string, offset int32, limit int32) (r *Reply, err error)
+
+	StartObserver(ctx context.Context, actor *Actor, requestJSON string) (r *Reply, err error)
+
+	StopObserver(ctx context.Context, actor *Actor, sourceID string) (r *Reply, err error)
+
+	SetSourceSubscription(ctx context.Context, actor *Actor, sourceID string, threadID string, enabled bool) (r *Reply, err error)
+
 	AdmitMainTrigger(ctx context.Context, scopeJSON string, triggerJSON string) (r *Reply, err error)
 
 	MainTriggerReceipt(ctx context.Context, scopeJSON string, triggerID string) (r *Reply, err error)
@@ -3124,21 +3448,590 @@ type Runtime interface {
 
 	Health(ctx context.Context) (r *Reply, err error)
 
-	Submit(ctx context.Context, actor *Actor, requestID string, threadID string, text string) (r *Reply, err error)
+	Submit(ctx context.Context, actor *Actor, requestJSON string) (r *Reply, err error)
 
 	Threads(ctx context.Context, actor *Actor) (r *Reply, err error)
 
+	Status(ctx context.Context, actor *Actor) (r *Reply, err error)
+
+	AgentRunState(ctx context.Context, actor *Actor) (r *Reply, err error)
+
+	ChangeAgentLifecycle(ctx context.Context, actor *Actor, requestJSON string) (r *Reply, err error)
+
+	Inspection(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
+
+	InputChecks(ctx context.Context, actor *Actor, threadID string, queryJSON string) (r *Reply, err error)
+
 	Timeline(ctx context.Context, actor *Actor, threadID string, after int64, limit int32) (r *Reply, err error)
+
+	History(ctx context.Context, actor *Actor, threadID string, before int64, limit int32) (r *Reply, err error)
 
 	Compact(ctx context.Context, actor *Actor, threadID string, requestID string, focus string) (r *Reply, err error)
 
 	ResetContext(ctx context.Context, actor *Actor, threadID string, requestID string) (r *Reply, err error)
+
+	DeleteThread(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
 	Archive(ctx context.Context, actor *Actor, threadID string, archived bool) (r *Reply, err error)
 
 	Cancel(ctx context.Context, actor *Actor, threadID string) (r *Reply, err error)
 
 	CreateWorker(ctx context.Context, actor *Actor, parentID string, requestID string, name string) (r *Reply, err error)
+}
+
+type RuntimeObservationSourcesArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	After string `thrift:"after,2" frugal:"2,default,string" json:"after"`
+}
+
+func NewRuntimeObservationSourcesArgs() *RuntimeObservationSourcesArgs {
+	return &RuntimeObservationSourcesArgs{}
+}
+
+func (p *RuntimeObservationSourcesArgs) InitDefault() {
+}
+
+var RuntimeObservationSourcesArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeObservationSourcesArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeObservationSourcesArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeObservationSourcesArgs) GetAfter() (v string) {
+	return p.After
+}
+func (p *RuntimeObservationSourcesArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeObservationSourcesArgs) SetAfter(val string) {
+	p.After = val
+}
+
+func (p *RuntimeObservationSourcesArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeObservationSourcesArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeObservationSourcesArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeObservationSourcesArgs = map[int16]string{
+	1: "actor",
+	2: "after",
+}
+
+type RuntimeObservationSourcesResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeObservationSourcesResult() *RuntimeObservationSourcesResult {
+	return &RuntimeObservationSourcesResult{}
+}
+
+func (p *RuntimeObservationSourcesResult) InitDefault() {
+}
+
+var RuntimeObservationSourcesResult_Success_DEFAULT *Reply
+
+func (p *RuntimeObservationSourcesResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeObservationSourcesResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeObservationSourcesResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeObservationSourcesResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeObservationSourcesResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeObservationSourcesResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeObservationSourcesResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeObservedEventsArgs struct {
+	Actor    *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	SourceID string `thrift:"sourceID,2" frugal:"2,default,string" json:"sourceID"`
+	After    string `thrift:"after,3" frugal:"3,default,string" json:"after"`
+}
+
+func NewRuntimeObservedEventsArgs() *RuntimeObservedEventsArgs {
+	return &RuntimeObservedEventsArgs{}
+}
+
+func (p *RuntimeObservedEventsArgs) InitDefault() {
+}
+
+var RuntimeObservedEventsArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeObservedEventsArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeObservedEventsArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeObservedEventsArgs) GetSourceID() (v string) {
+	return p.SourceID
+}
+
+func (p *RuntimeObservedEventsArgs) GetAfter() (v string) {
+	return p.After
+}
+func (p *RuntimeObservedEventsArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeObservedEventsArgs) SetSourceID(val string) {
+	p.SourceID = val
+}
+func (p *RuntimeObservedEventsArgs) SetAfter(val string) {
+	p.After = val
+}
+
+func (p *RuntimeObservedEventsArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeObservedEventsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeObservedEventsArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeObservedEventsArgs = map[int16]string{
+	1: "actor",
+	2: "sourceID",
+	3: "after",
+}
+
+type RuntimeObservedEventsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeObservedEventsResult() *RuntimeObservedEventsResult {
+	return &RuntimeObservedEventsResult{}
+}
+
+func (p *RuntimeObservedEventsResult) InitDefault() {
+}
+
+var RuntimeObservedEventsResult_Success_DEFAULT *Reply
+
+func (p *RuntimeObservedEventsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeObservedEventsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeObservedEventsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeObservedEventsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeObservedEventsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeObservedEventsResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeObservedEventsResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeObservationContentArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ObservationID string `thrift:"observationID,2" frugal:"2,default,string" json:"observationID"`
+	Offset        int32  `thrift:"offset,3" frugal:"3,default,i32" json:"offset"`
+	Limit         int32  `thrift:"limit,4" frugal:"4,default,i32" json:"limit"`
+}
+
+func NewRuntimeObservationContentArgs() *RuntimeObservationContentArgs {
+	return &RuntimeObservationContentArgs{}
+}
+
+func (p *RuntimeObservationContentArgs) InitDefault() {
+}
+
+var RuntimeObservationContentArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeObservationContentArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeObservationContentArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeObservationContentArgs) GetObservationID() (v string) {
+	return p.ObservationID
+}
+
+func (p *RuntimeObservationContentArgs) GetOffset() (v int32) {
+	return p.Offset
+}
+
+func (p *RuntimeObservationContentArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *RuntimeObservationContentArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeObservationContentArgs) SetObservationID(val string) {
+	p.ObservationID = val
+}
+func (p *RuntimeObservationContentArgs) SetOffset(val int32) {
+	p.Offset = val
+}
+func (p *RuntimeObservationContentArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *RuntimeObservationContentArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeObservationContentArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeObservationContentArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeObservationContentArgs = map[int16]string{
+	1: "actor",
+	2: "observationID",
+	3: "offset",
+	4: "limit",
+}
+
+type RuntimeObservationContentResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeObservationContentResult() *RuntimeObservationContentResult {
+	return &RuntimeObservationContentResult{}
+}
+
+func (p *RuntimeObservationContentResult) InitDefault() {
+}
+
+var RuntimeObservationContentResult_Success_DEFAULT *Reply
+
+func (p *RuntimeObservationContentResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeObservationContentResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeObservationContentResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeObservationContentResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeObservationContentResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeObservationContentResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeObservationContentResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeStartObserverArgs struct {
+	Actor       *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
+}
+
+func NewRuntimeStartObserverArgs() *RuntimeStartObserverArgs {
+	return &RuntimeStartObserverArgs{}
+}
+
+func (p *RuntimeStartObserverArgs) InitDefault() {
+}
+
+var RuntimeStartObserverArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeStartObserverArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeStartObserverArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeStartObserverArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *RuntimeStartObserverArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeStartObserverArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *RuntimeStartObserverArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeStartObserverArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeStartObserverArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeStartObserverArgs = map[int16]string{
+	1: "actor",
+	2: "requestJSON",
+}
+
+type RuntimeStartObserverResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeStartObserverResult() *RuntimeStartObserverResult {
+	return &RuntimeStartObserverResult{}
+}
+
+func (p *RuntimeStartObserverResult) InitDefault() {
+}
+
+var RuntimeStartObserverResult_Success_DEFAULT *Reply
+
+func (p *RuntimeStartObserverResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeStartObserverResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeStartObserverResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeStartObserverResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeStartObserverResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeStartObserverResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeStartObserverResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeStopObserverArgs struct {
+	Actor    *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	SourceID string `thrift:"sourceID,2" frugal:"2,default,string" json:"sourceID"`
+}
+
+func NewRuntimeStopObserverArgs() *RuntimeStopObserverArgs {
+	return &RuntimeStopObserverArgs{}
+}
+
+func (p *RuntimeStopObserverArgs) InitDefault() {
+}
+
+var RuntimeStopObserverArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeStopObserverArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeStopObserverArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeStopObserverArgs) GetSourceID() (v string) {
+	return p.SourceID
+}
+func (p *RuntimeStopObserverArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeStopObserverArgs) SetSourceID(val string) {
+	p.SourceID = val
+}
+
+func (p *RuntimeStopObserverArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeStopObserverArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeStopObserverArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeStopObserverArgs = map[int16]string{
+	1: "actor",
+	2: "sourceID",
+}
+
+type RuntimeStopObserverResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeStopObserverResult() *RuntimeStopObserverResult {
+	return &RuntimeStopObserverResult{}
+}
+
+func (p *RuntimeStopObserverResult) InitDefault() {
+}
+
+var RuntimeStopObserverResult_Success_DEFAULT *Reply
+
+func (p *RuntimeStopObserverResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeStopObserverResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeStopObserverResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeStopObserverResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeStopObserverResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeStopObserverResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeStopObserverResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeSetSourceSubscriptionArgs struct {
+	Actor    *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	SourceID string `thrift:"sourceID,2" frugal:"2,default,string" json:"sourceID"`
+	ThreadID string `thrift:"threadID,3" frugal:"3,default,string" json:"threadID"`
+	Enabled  bool   `thrift:"enabled,4" frugal:"4,default,bool" json:"enabled"`
+}
+
+func NewRuntimeSetSourceSubscriptionArgs() *RuntimeSetSourceSubscriptionArgs {
+	return &RuntimeSetSourceSubscriptionArgs{}
+}
+
+func (p *RuntimeSetSourceSubscriptionArgs) InitDefault() {
+}
+
+var RuntimeSetSourceSubscriptionArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeSetSourceSubscriptionArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeSetSourceSubscriptionArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeSetSourceSubscriptionArgs) GetSourceID() (v string) {
+	return p.SourceID
+}
+
+func (p *RuntimeSetSourceSubscriptionArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *RuntimeSetSourceSubscriptionArgs) GetEnabled() (v bool) {
+	return p.Enabled
+}
+func (p *RuntimeSetSourceSubscriptionArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeSetSourceSubscriptionArgs) SetSourceID(val string) {
+	p.SourceID = val
+}
+func (p *RuntimeSetSourceSubscriptionArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *RuntimeSetSourceSubscriptionArgs) SetEnabled(val bool) {
+	p.Enabled = val
+}
+
+func (p *RuntimeSetSourceSubscriptionArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeSetSourceSubscriptionArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeSetSourceSubscriptionArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeSetSourceSubscriptionArgs = map[int16]string{
+	1: "actor",
+	2: "sourceID",
+	3: "threadID",
+	4: "enabled",
+}
+
+type RuntimeSetSourceSubscriptionResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeSetSourceSubscriptionResult() *RuntimeSetSourceSubscriptionResult {
+	return &RuntimeSetSourceSubscriptionResult{}
+}
+
+func (p *RuntimeSetSourceSubscriptionResult) InitDefault() {
+}
+
+var RuntimeSetSourceSubscriptionResult_Success_DEFAULT *Reply
+
+func (p *RuntimeSetSourceSubscriptionResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeSetSourceSubscriptionResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeSetSourceSubscriptionResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeSetSourceSubscriptionResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeSetSourceSubscriptionResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeSetSourceSubscriptionResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeSetSourceSubscriptionResult = map[int16]string{
+	0: "success",
 }
 
 type RuntimeAdmitMainTriggerArgs struct {
@@ -4017,10 +4910,8 @@ var fieldIDToName_RuntimeHealthResult = map[int16]string{
 }
 
 type RuntimeSubmitArgs struct {
-	Actor     *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
-	RequestID string `thrift:"requestID,2" frugal:"2,default,string" json:"requestID"`
-	ThreadID  string `thrift:"threadID,3" frugal:"3,default,string" json:"threadID"`
-	Text      string `thrift:"text,4" frugal:"4,default,string" json:"text"`
+	Actor       *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
 }
 
 func NewRuntimeSubmitArgs() *RuntimeSubmitArgs {
@@ -4039,28 +4930,14 @@ func (p *RuntimeSubmitArgs) GetActor() (v *Actor) {
 	return p.Actor
 }
 
-func (p *RuntimeSubmitArgs) GetRequestID() (v string) {
-	return p.RequestID
-}
-
-func (p *RuntimeSubmitArgs) GetThreadID() (v string) {
-	return p.ThreadID
-}
-
-func (p *RuntimeSubmitArgs) GetText() (v string) {
-	return p.Text
+func (p *RuntimeSubmitArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
 }
 func (p *RuntimeSubmitArgs) SetActor(val *Actor) {
 	p.Actor = val
 }
-func (p *RuntimeSubmitArgs) SetRequestID(val string) {
-	p.RequestID = val
-}
-func (p *RuntimeSubmitArgs) SetThreadID(val string) {
-	p.ThreadID = val
-}
-func (p *RuntimeSubmitArgs) SetText(val string) {
-	p.Text = val
+func (p *RuntimeSubmitArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
 }
 
 func (p *RuntimeSubmitArgs) IsSetActor() bool {
@@ -4076,9 +4953,7 @@ func (p *RuntimeSubmitArgs) String() string {
 
 var fieldIDToName_RuntimeSubmitArgs = map[int16]string{
 	1: "actor",
-	2: "requestID",
-	3: "threadID",
-	4: "text",
+	2: "requestJSON",
 }
 
 type RuntimeSubmitResult struct {
@@ -4195,6 +5070,422 @@ var fieldIDToName_RuntimeThreadsResult = map[int16]string{
 	0: "success",
 }
 
+type RuntimeStatusArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+}
+
+func NewRuntimeStatusArgs() *RuntimeStatusArgs {
+	return &RuntimeStatusArgs{}
+}
+
+func (p *RuntimeStatusArgs) InitDefault() {
+}
+
+var RuntimeStatusArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeStatusArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeStatusArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+func (p *RuntimeStatusArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+
+func (p *RuntimeStatusArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeStatusArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeStatusArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeStatusArgs = map[int16]string{
+	1: "actor",
+}
+
+type RuntimeStatusResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeStatusResult() *RuntimeStatusResult {
+	return &RuntimeStatusResult{}
+}
+
+func (p *RuntimeStatusResult) InitDefault() {
+}
+
+var RuntimeStatusResult_Success_DEFAULT *Reply
+
+func (p *RuntimeStatusResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeStatusResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeStatusResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeStatusResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeStatusResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeStatusResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeStatusResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeAgentRunStateArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+}
+
+func NewRuntimeAgentRunStateArgs() *RuntimeAgentRunStateArgs {
+	return &RuntimeAgentRunStateArgs{}
+}
+
+func (p *RuntimeAgentRunStateArgs) InitDefault() {
+}
+
+var RuntimeAgentRunStateArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeAgentRunStateArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeAgentRunStateArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+func (p *RuntimeAgentRunStateArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+
+func (p *RuntimeAgentRunStateArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeAgentRunStateArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeAgentRunStateArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeAgentRunStateArgs = map[int16]string{
+	1: "actor",
+}
+
+type RuntimeAgentRunStateResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeAgentRunStateResult() *RuntimeAgentRunStateResult {
+	return &RuntimeAgentRunStateResult{}
+}
+
+func (p *RuntimeAgentRunStateResult) InitDefault() {
+}
+
+var RuntimeAgentRunStateResult_Success_DEFAULT *Reply
+
+func (p *RuntimeAgentRunStateResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeAgentRunStateResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeAgentRunStateResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeAgentRunStateResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeAgentRunStateResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeAgentRunStateResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeAgentRunStateResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeChangeAgentLifecycleArgs struct {
+	Actor       *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	RequestJSON string `thrift:"requestJSON,2" frugal:"2,default,string" json:"requestJSON"`
+}
+
+func NewRuntimeChangeAgentLifecycleArgs() *RuntimeChangeAgentLifecycleArgs {
+	return &RuntimeChangeAgentLifecycleArgs{}
+}
+
+func (p *RuntimeChangeAgentLifecycleArgs) InitDefault() {
+}
+
+var RuntimeChangeAgentLifecycleArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeChangeAgentLifecycleArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeChangeAgentLifecycleArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeChangeAgentLifecycleArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *RuntimeChangeAgentLifecycleArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeChangeAgentLifecycleArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *RuntimeChangeAgentLifecycleArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeChangeAgentLifecycleArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeChangeAgentLifecycleArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeChangeAgentLifecycleArgs = map[int16]string{
+	1: "actor",
+	2: "requestJSON",
+}
+
+type RuntimeChangeAgentLifecycleResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeChangeAgentLifecycleResult() *RuntimeChangeAgentLifecycleResult {
+	return &RuntimeChangeAgentLifecycleResult{}
+}
+
+func (p *RuntimeChangeAgentLifecycleResult) InitDefault() {
+}
+
+var RuntimeChangeAgentLifecycleResult_Success_DEFAULT *Reply
+
+func (p *RuntimeChangeAgentLifecycleResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeChangeAgentLifecycleResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeChangeAgentLifecycleResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeChangeAgentLifecycleResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeChangeAgentLifecycleResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeChangeAgentLifecycleResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeChangeAgentLifecycleResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeInspectionArgs struct {
+	Actor    *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ThreadID string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+}
+
+func NewRuntimeInspectionArgs() *RuntimeInspectionArgs {
+	return &RuntimeInspectionArgs{}
+}
+
+func (p *RuntimeInspectionArgs) InitDefault() {
+}
+
+var RuntimeInspectionArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeInspectionArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeInspectionArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeInspectionArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+func (p *RuntimeInspectionArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeInspectionArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+
+func (p *RuntimeInspectionArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeInspectionArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeInspectionArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeInspectionArgs = map[int16]string{
+	1: "actor",
+	2: "threadID",
+}
+
+type RuntimeInspectionResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeInspectionResult() *RuntimeInspectionResult {
+	return &RuntimeInspectionResult{}
+}
+
+func (p *RuntimeInspectionResult) InitDefault() {
+}
+
+var RuntimeInspectionResult_Success_DEFAULT *Reply
+
+func (p *RuntimeInspectionResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeInspectionResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeInspectionResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeInspectionResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeInspectionResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeInspectionResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeInspectionResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeInputChecksArgs struct {
+	Actor     *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ThreadID  string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+	QueryJSON string `thrift:"queryJSON,3" frugal:"3,default,string" json:"queryJSON"`
+}
+
+func NewRuntimeInputChecksArgs() *RuntimeInputChecksArgs {
+	return &RuntimeInputChecksArgs{}
+}
+
+func (p *RuntimeInputChecksArgs) InitDefault() {
+}
+
+var RuntimeInputChecksArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeInputChecksArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeInputChecksArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeInputChecksArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *RuntimeInputChecksArgs) GetQueryJSON() (v string) {
+	return p.QueryJSON
+}
+func (p *RuntimeInputChecksArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeInputChecksArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *RuntimeInputChecksArgs) SetQueryJSON(val string) {
+	p.QueryJSON = val
+}
+
+func (p *RuntimeInputChecksArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeInputChecksArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeInputChecksArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeInputChecksArgs = map[int16]string{
+	1: "actor",
+	2: "threadID",
+	3: "queryJSON",
+}
+
+type RuntimeInputChecksResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeInputChecksResult() *RuntimeInputChecksResult {
+	return &RuntimeInputChecksResult{}
+}
+
+func (p *RuntimeInputChecksResult) InitDefault() {
+}
+
+var RuntimeInputChecksResult_Success_DEFAULT *Reply
+
+func (p *RuntimeInputChecksResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeInputChecksResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeInputChecksResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeInputChecksResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeInputChecksResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeInputChecksResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeInputChecksResult = map[int16]string{
+	0: "success",
+}
+
 type RuntimeTimelineArgs struct {
 	Actor    *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
 	ThreadID string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
@@ -4295,6 +5586,109 @@ func (p *RuntimeTimelineResult) String() string {
 }
 
 var fieldIDToName_RuntimeTimelineResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeHistoryArgs struct {
+	Actor    *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ThreadID string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+	Before   int64  `thrift:"before,3" frugal:"3,default,i64" json:"before"`
+	Limit    int32  `thrift:"limit,4" frugal:"4,default,i32" json:"limit"`
+}
+
+func NewRuntimeHistoryArgs() *RuntimeHistoryArgs {
+	return &RuntimeHistoryArgs{}
+}
+
+func (p *RuntimeHistoryArgs) InitDefault() {
+}
+
+var RuntimeHistoryArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeHistoryArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeHistoryArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeHistoryArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+
+func (p *RuntimeHistoryArgs) GetBefore() (v int64) {
+	return p.Before
+}
+
+func (p *RuntimeHistoryArgs) GetLimit() (v int32) {
+	return p.Limit
+}
+func (p *RuntimeHistoryArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeHistoryArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+func (p *RuntimeHistoryArgs) SetBefore(val int64) {
+	p.Before = val
+}
+func (p *RuntimeHistoryArgs) SetLimit(val int32) {
+	p.Limit = val
+}
+
+func (p *RuntimeHistoryArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeHistoryArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeHistoryArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeHistoryArgs = map[int16]string{
+	1: "actor",
+	2: "threadID",
+	3: "before",
+	4: "limit",
+}
+
+type RuntimeHistoryResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeHistoryResult() *RuntimeHistoryResult {
+	return &RuntimeHistoryResult{}
+}
+
+func (p *RuntimeHistoryResult) InitDefault() {
+}
+
+var RuntimeHistoryResult_Success_DEFAULT *Reply
+
+func (p *RuntimeHistoryResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeHistoryResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeHistoryResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeHistoryResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeHistoryResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeHistoryResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeHistoryResult = map[int16]string{
 	0: "success",
 }
 
@@ -4492,6 +5886,91 @@ func (p *RuntimeResetContextResult) String() string {
 }
 
 var fieldIDToName_RuntimeResetContextResult = map[int16]string{
+	0: "success",
+}
+
+type RuntimeDeleteThreadArgs struct {
+	Actor    *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	ThreadID string `thrift:"threadID,2" frugal:"2,default,string" json:"threadID"`
+}
+
+func NewRuntimeDeleteThreadArgs() *RuntimeDeleteThreadArgs {
+	return &RuntimeDeleteThreadArgs{}
+}
+
+func (p *RuntimeDeleteThreadArgs) InitDefault() {
+}
+
+var RuntimeDeleteThreadArgs_Actor_DEFAULT *Actor
+
+func (p *RuntimeDeleteThreadArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return RuntimeDeleteThreadArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *RuntimeDeleteThreadArgs) GetThreadID() (v string) {
+	return p.ThreadID
+}
+func (p *RuntimeDeleteThreadArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *RuntimeDeleteThreadArgs) SetThreadID(val string) {
+	p.ThreadID = val
+}
+
+func (p *RuntimeDeleteThreadArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *RuntimeDeleteThreadArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeDeleteThreadArgs(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeDeleteThreadArgs = map[int16]string{
+	1: "actor",
+	2: "threadID",
+}
+
+type RuntimeDeleteThreadResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewRuntimeDeleteThreadResult() *RuntimeDeleteThreadResult {
+	return &RuntimeDeleteThreadResult{}
+}
+
+func (p *RuntimeDeleteThreadResult) InitDefault() {
+}
+
+var RuntimeDeleteThreadResult_Success_DEFAULT *Reply
+
+func (p *RuntimeDeleteThreadResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return RuntimeDeleteThreadResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *RuntimeDeleteThreadResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *RuntimeDeleteThreadResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *RuntimeDeleteThreadResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("RuntimeDeleteThreadResult(%+v)", *p)
+}
+
+var fieldIDToName_RuntimeDeleteThreadResult = map[int16]string{
 	0: "success",
 }
 
@@ -4829,6 +6308,12 @@ type Execution interface {
 	Revoke(ctx context.Context, actorID string, tenantID string, environmentID string) (r *Reply, err error)
 
 	Environments(ctx context.Context, actor *Actor) (r *Reply, err error)
+
+	InspectEnvironments(ctx context.Context, actor *Actor) (r *Reply, err error)
+
+	InspectMCP(ctx context.Context, actor *Actor, after string) (r *Reply, err error)
+
+	RefreshMCPTools(ctx context.Context, actor *Actor, environmentID string, connectionID string, requestJSON string) (r *Reply, err error)
 
 	DefaultEnvironment(ctx context.Context, actor *Actor) (r *Reply, err error)
 
@@ -7078,6 +8563,270 @@ func (p *ExecutionEnvironmentsResult) String() string {
 }
 
 var fieldIDToName_ExecutionEnvironmentsResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionInspectEnvironmentsArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+}
+
+func NewExecutionInspectEnvironmentsArgs() *ExecutionInspectEnvironmentsArgs {
+	return &ExecutionInspectEnvironmentsArgs{}
+}
+
+func (p *ExecutionInspectEnvironmentsArgs) InitDefault() {
+}
+
+var ExecutionInspectEnvironmentsArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionInspectEnvironmentsArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionInspectEnvironmentsArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+func (p *ExecutionInspectEnvironmentsArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+
+func (p *ExecutionInspectEnvironmentsArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionInspectEnvironmentsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionInspectEnvironmentsArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionInspectEnvironmentsArgs = map[int16]string{
+	1: "actor",
+}
+
+type ExecutionInspectEnvironmentsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionInspectEnvironmentsResult() *ExecutionInspectEnvironmentsResult {
+	return &ExecutionInspectEnvironmentsResult{}
+}
+
+func (p *ExecutionInspectEnvironmentsResult) InitDefault() {
+}
+
+var ExecutionInspectEnvironmentsResult_Success_DEFAULT *Reply
+
+func (p *ExecutionInspectEnvironmentsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionInspectEnvironmentsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionInspectEnvironmentsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionInspectEnvironmentsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionInspectEnvironmentsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionInspectEnvironmentsResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionInspectEnvironmentsResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionInspectMCPArgs struct {
+	Actor *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	After string `thrift:"after,2" frugal:"2,default,string" json:"after"`
+}
+
+func NewExecutionInspectMCPArgs() *ExecutionInspectMCPArgs {
+	return &ExecutionInspectMCPArgs{}
+}
+
+func (p *ExecutionInspectMCPArgs) InitDefault() {
+}
+
+var ExecutionInspectMCPArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionInspectMCPArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionInspectMCPArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionInspectMCPArgs) GetAfter() (v string) {
+	return p.After
+}
+func (p *ExecutionInspectMCPArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionInspectMCPArgs) SetAfter(val string) {
+	p.After = val
+}
+
+func (p *ExecutionInspectMCPArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionInspectMCPArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionInspectMCPArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionInspectMCPArgs = map[int16]string{
+	1: "actor",
+	2: "after",
+}
+
+type ExecutionInspectMCPResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionInspectMCPResult() *ExecutionInspectMCPResult {
+	return &ExecutionInspectMCPResult{}
+}
+
+func (p *ExecutionInspectMCPResult) InitDefault() {
+}
+
+var ExecutionInspectMCPResult_Success_DEFAULT *Reply
+
+func (p *ExecutionInspectMCPResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionInspectMCPResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionInspectMCPResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionInspectMCPResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionInspectMCPResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionInspectMCPResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionInspectMCPResult = map[int16]string{
+	0: "success",
+}
+
+type ExecutionRefreshMCPToolsArgs struct {
+	Actor         *Actor `thrift:"actor,1" frugal:"1,default,Actor" json:"actor"`
+	EnvironmentID string `thrift:"environmentID,2" frugal:"2,default,string" json:"environmentID"`
+	ConnectionID  string `thrift:"connectionID,3" frugal:"3,default,string" json:"connectionID"`
+	RequestJSON   string `thrift:"requestJSON,4" frugal:"4,default,string" json:"requestJSON"`
+}
+
+func NewExecutionRefreshMCPToolsArgs() *ExecutionRefreshMCPToolsArgs {
+	return &ExecutionRefreshMCPToolsArgs{}
+}
+
+func (p *ExecutionRefreshMCPToolsArgs) InitDefault() {
+}
+
+var ExecutionRefreshMCPToolsArgs_Actor_DEFAULT *Actor
+
+func (p *ExecutionRefreshMCPToolsArgs) GetActor() (v *Actor) {
+	if !p.IsSetActor() {
+		return ExecutionRefreshMCPToolsArgs_Actor_DEFAULT
+	}
+	return p.Actor
+}
+
+func (p *ExecutionRefreshMCPToolsArgs) GetEnvironmentID() (v string) {
+	return p.EnvironmentID
+}
+
+func (p *ExecutionRefreshMCPToolsArgs) GetConnectionID() (v string) {
+	return p.ConnectionID
+}
+
+func (p *ExecutionRefreshMCPToolsArgs) GetRequestJSON() (v string) {
+	return p.RequestJSON
+}
+func (p *ExecutionRefreshMCPToolsArgs) SetActor(val *Actor) {
+	p.Actor = val
+}
+func (p *ExecutionRefreshMCPToolsArgs) SetEnvironmentID(val string) {
+	p.EnvironmentID = val
+}
+func (p *ExecutionRefreshMCPToolsArgs) SetConnectionID(val string) {
+	p.ConnectionID = val
+}
+func (p *ExecutionRefreshMCPToolsArgs) SetRequestJSON(val string) {
+	p.RequestJSON = val
+}
+
+func (p *ExecutionRefreshMCPToolsArgs) IsSetActor() bool {
+	return p.Actor != nil
+}
+
+func (p *ExecutionRefreshMCPToolsArgs) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionRefreshMCPToolsArgs(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionRefreshMCPToolsArgs = map[int16]string{
+	1: "actor",
+	2: "environmentID",
+	3: "connectionID",
+	4: "requestJSON",
+}
+
+type ExecutionRefreshMCPToolsResult struct {
+	Success *Reply `thrift:"success,0,optional" frugal:"0,optional,Reply" json:"success,omitempty"`
+}
+
+func NewExecutionRefreshMCPToolsResult() *ExecutionRefreshMCPToolsResult {
+	return &ExecutionRefreshMCPToolsResult{}
+}
+
+func (p *ExecutionRefreshMCPToolsResult) InitDefault() {
+}
+
+var ExecutionRefreshMCPToolsResult_Success_DEFAULT *Reply
+
+func (p *ExecutionRefreshMCPToolsResult) GetSuccess() (v *Reply) {
+	if !p.IsSetSuccess() {
+		return ExecutionRefreshMCPToolsResult_Success_DEFAULT
+	}
+	return p.Success
+}
+func (p *ExecutionRefreshMCPToolsResult) SetSuccess(x interface{}) {
+	p.Success = x.(*Reply)
+}
+
+func (p *ExecutionRefreshMCPToolsResult) IsSetSuccess() bool {
+	return p.Success != nil
+}
+
+func (p *ExecutionRefreshMCPToolsResult) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("ExecutionRefreshMCPToolsResult(%+v)", *p)
+}
+
+var fieldIDToName_ExecutionRefreshMCPToolsResult = map[int16]string{
 	0: "success",
 }
 

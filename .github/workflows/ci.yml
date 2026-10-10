@@ -97,7 +97,7 @@ jobs:
       - name: Verify managed service transactions against PostgreSQL
         env:
           JUEX_TEST_POSTGRES_URL: postgres://postgres:juex-ci-only@localhost:5432/postgres?sslmode=disable
-        run: go test -race -tags postgres ./tests/e2e -count=1 -timeout=600s
+        run: make integration-contracts
 
   test:
     runs-on: ${{ matrix.os }}

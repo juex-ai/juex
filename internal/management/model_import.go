@@ -14,10 +14,8 @@ type ModelImportIdentity struct {
 }
 
 // ImportedModel carries private operator input, never a public read model.
-// Fallbacks are direct, ordered references within this import's catalog.
 type ImportedModel struct {
 	Configuration ModelConfiguration `json:"configuration"`
-	Fallbacks     []ModelKey         `json:"fallbacks"`
 }
 
 // ModelsImport initializes an empty deployment catalog and an explicit Tenant

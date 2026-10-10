@@ -22,7 +22,17 @@ import (
 func GenerateTypeScript() ([]byte, error) {
 	g := typeGenerator{types: map[string]reflect.Type{}}
 	for _, typ := range []reflect.Type{
+		reflect.TypeFor[management.ProcessEnvironmentView](), reflect.TypeFor[management.ProcessEnvironmentChange](),
+		reflect.TypeFor[execution.EnvironmentInspection](), reflect.TypeFor[managedruntime.RuntimeStatus](), reflect.TypeFor[managedruntime.AgentRunState](), reflect.TypeFor[managedruntime.AgentLifecycleChange](), reflect.TypeFor[managedruntime.AgentLifecycleReceipt](),
+		reflect.TypeFor[managedruntime.ObserverStart](), reflect.TypeFor[managedruntime.ObservationPage](), reflect.TypeFor[managedruntime.ObservedEvents](), reflect.TypeFor[managedruntime.ObservationContent](), reflect.TypeFor[SourceSubscriptionChange](),
+		reflect.TypeFor[execution.MCPPage](), reflect.TypeFor[execution.MCPRefresh](),
+		reflect.TypeFor[mc.Domain](),
+		reflect.TypeFor[OperationOutput](),
+		reflect.TypeFor[management.WorkspaceConfigurationPreview](), reflect.TypeFor[management.WorkspaceConfigurationChange](), reflect.TypeFor[management.WorkspaceReadRequest](), reflect.TypeFor[management.WorkspaceReadReceipt](),
 		reflect.TypeFor[ResetContextRequest](),
+		reflect.TypeFor[managedruntime.ThreadInspection](),
+		reflect.TypeFor[managedruntime.InputCheckQuery](),
+		reflect.TypeFor[managedruntime.InputCheckPage](),
 		reflect.TypeFor[management.PurgeJob](), reflect.TypeFor[management.PurgeRequest](),
 		reflect.TypeFor[managedruntime.UsageReport](),
 		reflect.TypeFor[management.NotificationPage](), reflect.TypeFor[management.NotificationPreferences](), reflect.TypeFor[NotificationReadRequest](),
@@ -40,8 +50,8 @@ func GenerateTypeScript() ([]byte, error) {
 		reflect.TypeFor[execution.DefaultEnvironment](),
 		reflect.TypeFor[execution.Artifact](), reflect.TypeFor[execution.ArtifactUpload](), reflect.TypeFor[execprotocol.FileChunk](),
 		reflect.TypeFor[execution.Transfer](), reflect.TypeFor[ExtendTransferRequest](),
-		reflect.TypeFor[management.AgentConfig](), reflect.TypeFor[ConfigureAgentRequest](), reflect.TypeFor[ArchiveAgentRequest](),
-		reflect.TypeFor[managedruntime.Thread](), reflect.TypeFor[managedruntime.Timeline](), reflect.TypeFor[managedruntime.CompactionRequest](), reflect.TypeFor[managedruntime.InputRequest](), reflect.TypeFor[managedruntime.InputReceipt](), reflect.TypeFor[WorkerRequest](), reflect.TypeFor[ArchiveThreadRequest](), reflect.TypeFor[llm.Message](),
+		reflect.TypeFor[management.AgentConfig](), reflect.TypeFor[ConfigureAgentRequest](), reflect.TypeFor[ArchiveAgentRequest](), reflect.TypeFor[AgentManagementRequest](),
+		reflect.TypeFor[managedruntime.Thread](), reflect.TypeFor[managedruntime.ThreadDeletionReceipt](), reflect.TypeFor[managedruntime.Timeline](), reflect.TypeFor[managedruntime.CompactionRequest](), reflect.TypeFor[managedruntime.InputRequest](), reflect.TypeFor[managedruntime.InputReceipt](), reflect.TypeFor[WorkerRequest](), reflect.TypeFor[ArchiveThreadRequest](), reflect.TypeFor[llm.Message](),
 	} {
 		if _, err := g.render(typ); err != nil {
 			return nil, err

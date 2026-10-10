@@ -17,14 +17,17 @@ import (
 )
 
 type FileArguments struct {
-	Path             string `json:"path"`
-	WorkingDirectory string `json:"working_directory"`
-	Content          string `json:"content"`
-	OldText          string `json:"old_text"`
-	NewText          string `json:"new_text"`
-	Pattern          string `json:"pattern"`
-	Offset           int64  `json:"offset"`
-	Limit            int    `json:"limit"`
+	SourceKind       string                       `json:"source_kind,omitempty"`
+	Browse           *execprotocol.WorkspaceQuery `json:"browse,omitempty"`
+	Path             string                       `json:"path"`
+	WorkingDirectory string                       `json:"working_directory"`
+	Content          string                       `json:"content"`
+	OldText          string                       `json:"old_text"`
+	NewText          string                       `json:"new_text"`
+	Pattern          string                       `json:"pattern"`
+	PatchText        string                       `json:"patch_text,omitempty"`
+	Offset           int64                        `json:"offset"`
+	Limit            int                          `json:"limit"`
 }
 
 func (e *Engine) fileOperation(ctx context.Context, operation *operation) error {
@@ -65,9 +68,19 @@ func RunFileOperation(ctx context.Context, directory, kind string, args FileArgu
 		return err
 	}
 	switch kind {
+	case "apply_patch":
+		return runPatch(ctx, directory, args.PatchText, writer)
+	case "browse_workspace":
+		return workspaceFiles(ctx, directory, args.Browse, writer)
 	case "read_agent_instructions":
 		return readAgentInstructions(ctx, directory, args.Path, writer)
 	case "inspect_extension":
+		if args.SourceKind == "skills" {
+			return inspectSkills(ctx, path, writer)
+		}
+		if args.SourceKind != "" {
+			return execprotocol.ErrInvalid
+		}
 		return inspectExtension(ctx, path, writer)
 	case "read":
 		file, err := openRegular(path, os.O_RDONLY, 0)

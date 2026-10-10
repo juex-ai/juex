@@ -41,6 +41,10 @@ func ConvertAgentConfig(source ResolvedConfig, definition legacy.AgentDefinition
 
 // Preparation validates policy before publication allocates a model UUID.
 func prepareAgentConfig(source ResolvedConfig, definition legacy.AgentDefinition, bindings AgentConfigBindings) (management.AgentConfig, error) {
+	return prepareAgentConfigForPolicy(source, definition, bindings, 3)
+}
+
+func prepareAgentConfigForPolicy(source ResolvedConfig, definition legacy.AgentDefinition, bindings AgentConfigBindings, policy int) (management.AgentConfig, error) {
 	if strings.TrimSpace(source.AgentID) == "" || source.AgentID != definition.ID {
 		return management.AgentConfig{}, errors.New("agent configuration requires matching source identity")
 	}
@@ -68,7 +72,7 @@ func prepareAgentConfig(source ResolvedConfig, definition legacy.AgentDefinition
 	if !*bindings.ShellEnabled && (source.Modules["hooks"] || source.Modules["observables"]) {
 		return management.AgentConfig{}, errors.New("source hooks and command observers require target Shell or separate resource-policy conversion")
 	}
-	policy := agentpolicy.Policy{}
+	modules := map[agentpolicy.Capability]bool{}
 	for _, pair := range []struct {
 		capability agentpolicy.Capability
 		enabled    bool
@@ -90,12 +94,23 @@ func prepareAgentConfig(source ResolvedConfig, definition legacy.AgentDefinition
 		{agentpolicy.Collaboration, *bindings.CollaborationEnabled},
 		{agentpolicy.Calendar, *bindings.CalendarEnabled},
 	} {
-		if !pair.enabled {
-			policy.Disabled = append(policy.Disabled, pair.capability)
-		}
+		modules[pair.capability] = pair.enabled
 	}
-	policy = policy.Normalized()
-	config := management.AgentConfig{Name: definition.Name, ModelID: bindings.ModelID, Instructions: *bindings.Instructions, WorkerDepth: source.WorkerDepth, Capabilities: &policy, DynamicInstructions: &instructions}
+	declaration := management.Configuration{Modules: modules}
+	if policy >= 3 {
+		declaration.Modules[agentpolicy.InputTracking] = source.Modules["input-tracking"]
+		if !*bindings.FilesEnabled && (source.Modules["apply-patch"] || source.Modules["chunked-write"]) {
+			return management.AgentConfig{}, errors.New("source patch and buffered writes require target Files or an explicit source policy change")
+		}
+		declaration.Modules[agentpolicy.ApplyPatch] = source.Modules["apply-patch"]
+		declaration.Modules[agentpolicy.ChunkedWrite] = source.Modules["chunked-write"]
+		declaration.Modules[agentpolicy.FileSearch] = source.Modules["file-search"]
+		declaration.Modules[agentpolicy.Skills] = source.Modules["skills"]
+	}
+	if bindings.ModelID != "" {
+		declaration.Models = []string{bindings.ModelID}
+	}
+	config := management.AgentConfig{Name: definition.Name, Configuration: &declaration, Instructions: *bindings.Instructions, WorkerDepth: source.WorkerDepth, DynamicInstructions: &instructions}
 	if err := config.Validate(); err != nil {
 		return management.AgentConfig{}, err
 	}

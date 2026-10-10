@@ -39,6 +39,10 @@ test('conversation images and tool attachments load verified bytes or show an ex
   await page.getByRole('button', { name: '查看图片', exact: true }).first().click();
   await expect(page.getByRole('img', { name: '对话图片' })).toBeVisible();
   await expect.poll(() => page.getByRole('img', { name: '对话图片' }).evaluate(img => img.naturalWidth)).toBe(1);
+  await page.getByRole('button', { name: '放大对话图片', exact: true }).click();
+  await expect(page.getByRole('img', { name: '放大的对话图片', exact: true })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByText('工作过程', { exact: false }).click();
   await page.getByText('执行结果 · read', { exact: true }).click();
   await page.getByRole('button', { name: '查看图片', exact: true }).first().click();
   await expect(page.getByRole('img', { name: '对话图片' })).toHaveCount(2);

@@ -271,9 +271,27 @@ func TestManagedThreadStateModelResetPreservesUnknownHookAndInstruction(t *testi
 					t.Fatal(err)
 				}
 			}
-			if _, err := f.store.ApplyThreadStateAction(ctx, work, managedruntime.ThreadStateAction{Kind: "context_new"}); err != nil {
-				t.Fatal("confirmed old outcome still blocked reset", err)
+			if _, err := f.store.ApplyThreadStateAction(ctx, work, managedruntime.ThreadStateAction{Kind: "context_new"}); !errors.Is(err, managedruntime.ErrConflict) {
+				t.Fatal("confirmed external effect bypassed unchecked inputs", err)
 			}
+			if err := f.store.FinishTool(ctx, work, managedruntime.ToolOutcome{State: "ready", IsError: true, Content: "Check outstanding inputs first"}); err != nil {
+				t.Fatal(err)
+			}
+			lease, err := f.store.Claim(ctx, scope.AgentID, "checked-reset", time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var currentInput string
+			if err := f.pool.QueryRow(ctx, `SELECT input_id FROM runtime.turns WHERE id=$1`, work.TurnID).Scan(&currentInput); err != nil {
+				t.Fatal(err)
+			}
+			current, err := f.store.BeginTurn(ctx, lease, scope, currentInput, managedruntime.TurnConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			current = checkStateInputs(t, f.store, lease, scope, current)
+			stateToolBatch(t, f.store, lease, current, llm.Block{ToolUseID: "checked-new", ToolName: "context_new", Input: map[string]any{}})
+			applyStateTool(t, f.store, "context_new")
 		})
 	}
 }
@@ -288,6 +306,9 @@ func TestManagedThreadStateContextToolSettlesWholeBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			work := seedCompaction(t, store, scope, lease)
+			if kind == "context_new" {
+				work = checkStateInputs(t, store, lease, scope, work)
+			}
 			stateToolBatch(t, store, lease, work, llm.Block{ToolUseID: "transition", ToolName: kind, Input: map[string]any{}}, llm.Block{ToolUseID: "notes", ToolName: "update_notes", Input: map[string]any{"content": "after request, before transition"}})
 			applyStateTool(t, store, kind)
 			var generation int64
@@ -379,6 +400,27 @@ func TestManagedThreadStateCompactionCommitsOnlyOnSuccess(t *testing.T) {
 			}
 		})
 	}
+}
+
+func checkStateInputs(t *testing.T, store *runtimepg.Store, lease managedruntime.Lease, scope managedruntime.Scope, work managedruntime.Work) managedruntime.Work {
+	t.Helper()
+	ids := make([]string, 0, len(work.InputReminders))
+	for _, reminder := range work.InputReminders {
+		ids = append(ids, reminder.InputID)
+	}
+	if len(ids) == 0 {
+		t.Fatal("fixture has no outstanding inputs to check")
+	}
+	stateToolBatch(t, store, lease, work, llm.Block{ToolUseID: "check-reset-inputs", ToolName: "check_inputs", Input: map[string]any{"input_ids": ids}})
+	applyStateTool(t, store, "check_inputs")
+	current, err := store.BeginTurn(context.Background(), lease, scope, work.InputID, managedruntime.TurnConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.InputReminders) != 0 {
+		t.Fatal("checks did not settle")
+	}
+	return current
 }
 
 func applyStateTool(t *testing.T, store *runtimepg.Store, name string) (managedruntime.ToolWork, json.RawMessage) {

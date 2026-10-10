@@ -49,7 +49,7 @@ func requestContextTransition(ctx context.Context, tx pgx.Tx, work managedruntim
 
 func resetWouldHideWork(ctx context.Context, tx pgx.Tx, thread string) (bool, error) {
 	var blocked bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.inputs WHERE thread_id=$1 AND state IN ('queued','held')) OR
+	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.input_tracking i JOIN runtime.threads th ON th.id=i.thread_id WHERE i.thread_id=$1 AND i.scope_id=th.input_scope AND i.checked_at IS NULL AND i.delivery<>'blocked') OR EXISTS(SELECT 1 FROM runtime.inputs WHERE thread_id=$1 AND state IN ('queued','held')) OR
 	 EXISTS(SELECT 1 FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id WHERE t.thread_id=$1 AND (j.state='unknown' OR j.cancel_requested AND j.operation_live)) OR
 	 EXISTS(SELECT 1 FROM runtime.hooks WHERE thread_id=$1 AND state IN ('pending','waiting','unknown')) OR
 	 EXISTS(SELECT 1 FROM runtime.instruction_preparations WHERE thread_id=$1 AND (state IN ('pending','waiting','unknown') OR NOT output_acknowledged))`, thread).Scan(&blocked)
@@ -86,7 +86,7 @@ func applyContextTransition(ctx context.Context, tx pgx.Tx, turn, thread string)
 		return err
 	}
 	if blocked {
-		message := llm.TextMessage(llm.RoleUser, "Context reset was not applied because another input or an unknown external outcome arrived. Current context is preserved; process the pending work before requesting context_new again.")
+		message := llm.TextMessage(llm.RoleUser, "Context reset was not applied because unchecked inputs, pending input or an unknown external outcome remain. Current context is preserved; process the pending work before requesting context_new again.")
 		message.ID, message.Kind = uuid.NewString(), llm.MessageKindSystemNotice
 		return appendEvent(ctx, tx, thread, "message.appended", message)
 	}
@@ -99,7 +99,7 @@ func applyContextTransition(ctx context.Context, tx pgx.Tx, turn, thread string)
 		return err
 	}
 	var generation int64
-	if err := tx.QueryRow(ctx, `UPDATE runtime.threads SET generation=generation+1 WHERE id=$1 RETURNING generation`, thread).Scan(&generation); err != nil {
+	if err := tx.QueryRow(ctx, `UPDATE runtime.threads SET generation=generation+1,input_scope=gen_random_uuid() WHERE id=$1 RETURNING generation`, thread).Scan(&generation); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.turns SET generation=$2 WHERE id=$1`, turn, generation); err != nil {

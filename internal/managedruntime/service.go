@@ -9,10 +9,11 @@ import (
 // ModelRequirements describes capabilities needed by the constructed request.
 type ModelRequirements struct {
 	OutputLimit bool
+	Vision      bool
 }
 
 func (r ModelRequirements) Check(profile llm.ProviderProfile) error {
-	if r.OutputLimit && !profile.Capabilities.MaxOutputTokens {
+	if r.OutputLimit && !profile.Capabilities.MaxOutputTokens || r.Vision && !profile.Capabilities.Vision {
 		return ErrModelUnavailable
 	}
 	return nil
@@ -32,6 +33,7 @@ type ConversationStore interface {
 	EnsureAgent(context.Context, Scope) (Thread, error)
 	AcceptCompaction(context.Context, Scope, string, CompactionRequest) (InputReceipt, error)
 	AcceptInput(context.Context, Scope, InputRequest) (InputReceipt, error)
+	ExistingInput(context.Context, Scope, InputRequest) (InputReceipt, bool, error)
 	Threads(context.Context, Scope) ([]Thread, error)
 	Timeline(context.Context, Scope, string, int64, int) (Timeline, error)
 	CancelThread(context.Context, Scope, string) error
@@ -47,10 +49,12 @@ func (s *Service) ResetContext(ctx context.Context, actor, tenant, agent, thread
 }
 
 type Service struct {
+	Tools        ToolGateway
 	Store        ConversationStore
 	Authority    Authority
 	Applications ApplicationGateway
 	Triggers     TriggerAuthority
+	Media        MediaGateway
 }
 
 func (s *Service) scope(ctx context.Context, actor, tenant, agent string, execute bool) (Scope, error) {
@@ -67,8 +71,26 @@ func (s *Service) Submit(ctx context.Context, actor, tenant, agent string, input
 	if err != nil {
 		return InputReceipt{}, err
 	}
-	if _, err := s.Authority.Snapshot(ctx, scope); err != nil {
+	if err := input.Validate(); err != nil {
 		return InputReceipt{}, err
+	}
+	if receipt, found, err := s.Store.ExistingInput(ctx, scope, input); found || err != nil {
+		return receipt, err
+	}
+	if err := s.validateNewInput(ctx, scope, input); err != nil {
+		// Another copy may have committed while this copy validated media. The
+		// durable receipt survives later deletion or model configuration changes.
+		if receipt, found, lookupErr := s.Store.ExistingInput(ctx, scope, input); found || lookupErr != nil {
+			return receipt, lookupErr
+		}
+		return InputReceipt{}, err
+	}
+	fresh, err := s.Authority.Authorize(ctx, actor, tenant, agent, true)
+	if err != nil {
+		return InputReceipt{}, err
+	}
+	if !scope.SameAuthority(fresh) {
+		return InputReceipt{}, ErrDenied
 	}
 	return s.Store.AcceptInput(ctx, scope, input)
 }

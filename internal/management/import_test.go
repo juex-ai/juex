@@ -65,10 +65,12 @@ func TestAgentsImportValidation(t *testing.T) {
 		"duplicate identity":     func(v *AgentsImport) { v.Agents = append(v.Agents, v.Agents[0]) },
 		"invalid configuration":  func(v *AgentsImport) { v.Agents[0].Config.Name = "" },
 		"invalid policy": func(v *AgentsImport) {
-			v.Agents[0].Config.Capabilities = &agentpolicy.Policy{Disabled: []agentpolicy.Capability{"unknown"}}
+			v.Agents[0].Config.Configuration = &Configuration{Modules: map[agentpolicy.Capability]bool{"unknown": true}}
 		},
-		"invalid model": func(v *AgentsImport) { v.Agents[0].Config.ModelID = "model" },
-		"zero model":    func(v *AgentsImport) { v.Agents[0].Config.ModelID = uuid.Nil.String() },
+		"invalid model": func(v *AgentsImport) { v.Agents[0].Config.Configuration = &Configuration{Models: []string{"model"}} },
+		"zero model": func(v *AgentsImport) {
+			v.Agents[0].Config.Configuration = &Configuration{Models: []string{uuid.Nil.String()}}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := valid()

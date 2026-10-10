@@ -43,11 +43,11 @@ func TestMigrationAgentConfigPreservesResolvedPolicyThroughManagement(t *testing
 	for _, tc := range []struct {
 		name, yaml, globalPath string
 		calendar               bool
-		wantDisabled           []agentpolicy.Capability
+		wantPolicy             agentpolicy.Policy
 	}{
-		{"standard", "preset: standard\nenable_user_agents_resources: false\nmodules: {worker-threads: {max_depth: 2}}\n", "", true, []agentpolicy.Capability{agentpolicy.Collaboration}},
-		{"minimal", "preset: minimal\nenable_user_agents_resources: false\nmodules: {worker-threads: {max_depth: 2}}\n", "", false, []agentpolicy.Capability{agentpolicy.Calendar, agentpolicy.Collaboration, agentpolicy.ContextControl, agentpolicy.Extensions, agentpolicy.Hooks, agentpolicy.MCP, agentpolicy.Memory, agentpolicy.Notes, agentpolicy.Observations, agentpolicy.Tasks, agentpolicy.Workers, agentpolicy.WorkingFiles}},
-		{"global guidance", "preset: standard\nmodules: {worker-threads: {max_depth: 2}}\n", "/target/user/.agents/AGENTS.md", true, []agentpolicy.Capability{agentpolicy.Collaboration}},
+		{"standard", "preset: standard\nenable_user_agents_resources: false\nmodules: {worker-threads: {max_depth: 2}}\n", "", true, agentpolicy.Policy{Version: 1, SkillSources: true, Disabled: []agentpolicy.Capability{agentpolicy.Collaboration}, Enabled: []agentpolicy.Capability{agentpolicy.ApplyPatch, agentpolicy.ChunkedWrite}}},
+		{"minimal", "preset: minimal\nenable_user_agents_resources: false\nmodules: {worker-threads: {max_depth: 2}}\n", "", false, agentpolicy.Policy{Version: 1, Disabled: []agentpolicy.Capability{agentpolicy.Calendar, agentpolicy.Collaboration, agentpolicy.ContextControl, agentpolicy.Extensions, agentpolicy.FileSearch, agentpolicy.Skills, agentpolicy.Hooks, agentpolicy.InputTracking, agentpolicy.MCP, agentpolicy.Memory, agentpolicy.Notes, agentpolicy.Observations, agentpolicy.Tasks, agentpolicy.Workers, agentpolicy.WorkingFiles}}},
+		{"global guidance", "preset: standard\nmodules: {worker-threads: {max_depth: 2}}\n", "/target/user/.agents/AGENTS.md", true, agentpolicy.Policy{Version: 1, SkillSources: true, Disabled: []agentpolicy.Capability{agentpolicy.Collaboration}, Enabled: []agentpolicy.Capability{agentpolicy.ApplyPatch, agentpolicy.ChunkedWrite}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resolved, definition := resolvedMigrationAgentConfig(t, tc.name, tc.yaml)
@@ -65,8 +65,8 @@ func TestMigrationAgentConfigPreservesResolvedPolicyThroughManagement(t *testing
 				t.Fatal(err)
 			}
 			stored := read.Agent
-			want := agentpolicy.Policy{Disabled: tc.wantDisabled}.Normalized()
-			if stored.Name != tc.name || stored.Instructions != instructions || stored.WorkerDepth != 2 || stored.ModelID != model.ID || !reflect.DeepEqual(stored.Capabilities, want) || stored.DynamicInstructions != *config.DynamicInstructions || len(stored.Hooks) != 0 || len(stored.Extensions) != 0 {
+			want := tc.wantPolicy.Normalized()
+			if stored.Name != tc.name || stored.Instructions != instructions || stored.WorkerDepth != 2 || !reflect.DeepEqual(stored.Configuration, *config.Configuration) || stored.DynamicInstructions != *config.DynamicInstructions || len(stored.Hooks) != 0 || len(stored.Extensions) != 0 {
 				t.Fatal("stored initial configuration changed")
 			}
 			authority := managed.RuntimeAuthority{Directory: directory}
@@ -76,7 +76,7 @@ func TestMigrationAgentConfigPreservesResolvedPolicyThroughManagement(t *testing
 			}
 			frozen, err := authority.Snapshot(ctx, scope)
 			if err != nil || !reflect.DeepEqual(frozen.Capabilities, want) || frozen.DynamicInstructions != stored.DynamicInstructions || frozen.WorkerDepth != 2 || frozen.Instructions != instructions || len(frozen.Models) != 1 || frozen.Models[0].ModelID != model.ID {
-				t.Fatal("Runtime policy differs from stored converted configuration", err)
+				t.Fatalf("Runtime policy differs from stored converted configuration: got %+v, want %+v, error %v", frozen.Capabilities, want, err)
 			}
 		})
 	}
@@ -85,12 +85,12 @@ func TestMigrationAgentConfigPreservesResolvedPolicyThroughManagement(t *testing
 func TestMigrationAgentConfigExplicitFilesChoiceReachesRuntimeCatalog(t *testing.T) {
 	for _, tc := range []struct {
 		name, modules string
-		files         bool
+		files, search bool
 	}{
-		{"minimal files enabled", "", true},
-		{"minimal files disabled", "", false},
-		{"search-only files enabled", "modules: {basic-file-tools: {enabled: false}, file-search: {enabled: true}}\n", true},
-		{"search-only files disabled", "modules: {basic-file-tools: {enabled: false}, file-search: {enabled: true}}\n", false},
+		{"minimal files enabled", "", true, false},
+		{"minimal files disabled", "", false, false},
+		{"search-only files enabled", "modules: {basic-file-tools: {enabled: false}, file-search: {enabled: true}}\n", true, true},
+		{"search-only files disabled", "modules: {basic-file-tools: {enabled: false}, file-search: {enabled: true}}\n", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -107,9 +107,14 @@ func TestMigrationAgentConfigExplicitFilesChoiceReachesRuntimeCatalog(t *testing
 				for _, tool := range body.Tools {
 					names = append(names, tool.Function.Name)
 				}
-				for _, name := range []string{"read", "write", "edit", "grep", "glob"} {
+				for _, name := range []string{"read", "write", "edit"} {
 					if slices.Contains(names, name) != tc.files {
 						t.Errorf("target Files=%v did not govern %s", tc.files, name)
+					}
+				}
+				for _, name := range []string{"grep", "glob"} {
+					if slices.Contains(names, name) != tc.search {
+						t.Errorf("source FileSearch=%v did not govern %s independently of Files=%v", tc.search, name, tc.files)
 					}
 				}
 				for _, name := range []string{"update_notes", "list_tasks", "create_task", "update_task", "delete_task", "context_new", "context_compact"} {
@@ -122,7 +127,7 @@ func TestMigrationAgentConfigExplicitFilesChoiceReachesRuntimeCatalog(t *testing
 			})
 			resolved, definition := resolvedMigrationAgentConfig(t, tc.name, "preset: minimal\nenable_user_agents_resources: false\n"+tc.modules)
 			instructions, shell, calendar, collaboration := "", true, false, false
-			config, err := migration.ConvertAgentConfig(resolved, definition, migration.AgentConfigBindings{ModelID: f.agent.ModelID, Instructions: &instructions, FilesEnabled: &tc.files, ShellEnabled: &shell, CalendarEnabled: &calendar, CollaborationEnabled: &collaboration})
+			config, err := migration.ConvertAgentConfig(resolved, definition, migration.AgentConfigBindings{ModelID: f.agent.Configuration.Models[0], Instructions: &instructions, FilesEnabled: &tc.files, ShellEnabled: &shell, CalendarEnabled: &calendar, CollaborationEnabled: &collaboration})
 			if err != nil {
 				t.Fatal(err)
 			}

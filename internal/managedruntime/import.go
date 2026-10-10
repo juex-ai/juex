@@ -18,14 +18,22 @@ type AgentImport struct {
 }
 
 type ImportedThread struct {
-	WorkingFiles *WorkingFiles          `json:"working_files,omitempty"`
-	State        ThreadState            `json:"state"`
-	Thread       Thread                 `json:"thread"`
-	Events       []Event                `json:"events"`
-	Inputs       []ImportedInput        `json:"inputs"`
-	Context      []string               `json:"context"`
-	Application  *ImportedApplication   `json:"application,omitempty"`
-	ModelOrigins map[string]ModelConfig `json:"model_origins,omitempty"`
+	InputTracking *ImportedInputTracking `json:"input_tracking,omitempty"`
+	WorkingFiles  *WorkingFiles          `json:"working_files,omitempty"`
+	State         ThreadState            `json:"state"`
+	Thread        Thread                 `json:"thread"`
+	Events        []Event                `json:"events"`
+	Inputs        []ImportedInput        `json:"inputs"`
+	Context       []string               `json:"context"`
+	Application   *ImportedApplication   `json:"application,omitempty"`
+	ModelOrigins  map[string]ModelConfig `json:"model_origins,omitempty"`
+}
+
+// Optional only for exact replay of an older offline import. A new conversion
+// supplies the proven scope even when its checklist is empty.
+type ImportedInputTracking struct {
+	ScopeID string       `json:"scope_id"`
+	Entries []InputCheck `json:"entries"`
 }
 
 type ImportedInput struct {
@@ -62,7 +70,7 @@ func (v AgentImport) Validate(agent string) error {
 			return err
 		}
 		t := imported.Thread
-		if !importUUID(t.ID) || t.AgentID != agent || t.CreatedAt.IsZero() || t.UpdatedAt.Before(t.CreatedAt) || strings.TrimSpace(t.Name) == "" || len([]rune(t.Name)) > 100 || t.PendingInputs != 0 || t.HeldInputs != 0 || t.Generation < 1 || t.Sequence != int64(len(imported.Events)) {
+		if !importUUID(t.ID) || t.AgentID != agent || t.CreatedAt.IsZero() || t.UpdatedAt.Before(t.CreatedAt) || strings.TrimSpace(t.Name) == "" || len([]rune(t.Name)) > 100 || t.PendingInputs != 0 || t.QueuedInputs != 0 || t.HeldInputs != 0 || t.Generation < 1 || t.Sequence != int64(len(imported.Events)) {
 			return ErrInvalid
 		}
 		if _, exists := threads[t.ID]; exists || (t.Retention != "active" && t.Retention != "archived") || (t.State != "idle" && t.State != "failed") {
@@ -119,6 +127,9 @@ func (v AgentImport) Validate(agent string) error {
 			}
 			inputs[input.ID], requests[input.RequestID] = true, true
 			threadInputs[input.ID] = input
+		}
+		if err := validateImportedTracking(imported.InputTracking, threadMessages, threadInputs, t.Sequence); err != nil {
+			return err
 		}
 		if app := imported.Application; app != nil {
 			if (app.Application != "memory" && app.Application != "calendar") || t.Application != app.Application {

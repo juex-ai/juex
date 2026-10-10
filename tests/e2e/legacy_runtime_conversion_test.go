@@ -37,7 +37,7 @@ func TestLegacyRuntimeConversionPreservesAPIHistoryAndContinuation(t *testing.T)
 		streamManagedReply(w, "New turn completed")
 	})
 	ctx := context.Background()
-	agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Imported source", ModelID: f.agent.ModelID})
+	agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Imported source", Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,11 +174,12 @@ func legacyRuntimeSource(original string) legacy.Agent {
 	summary := llm.Message{ID: "source-summary", Role: llm.RoleUser, Kind: llm.MessageKindCompact, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\nimported summary\n\nRetained Input References\n\nMessage source-text:\nold bounded preview"}}, Compaction: &llm.CompactionMetadata{SummaryChars: len("imported summary"), RetainedInputReferences: []llm.Message{text}}}
 	input := llm.TextMessage(llm.RoleUser, "cancelled-old-input")
 	input.ID = "original-input-message"
-	thread := legacy.Thread{Metadata: legacy.ThreadMetadata{ThreadID: "0", Alias: "main", CreatedAt: stamp, UpdatedAt: stamp, RetentionState: "active", ExecutionState: "idle", CurrentGeneration: gen2, Generations: []legacy.Generation{gen1, gen2}}, Context: []llm.Message{summary}, Inputs: []legacy.Input{{ID: "old-input", TurnID: "old-turn", MessageID: input.ID, Message: input, State: "settled", CreatedAt: at}}, Commits: []legacy.Commit{
+	// Compaction changes the generation while retaining the original input scope.
+	thread := legacy.Thread{ContextScopeID: gen1.ID, Metadata: legacy.ThreadMetadata{ThreadID: "0", Alias: "main", CreatedAt: stamp, UpdatedAt: stamp, RetentionState: "active", ExecutionState: "idle", CurrentGeneration: gen2, Generations: []legacy.Generation{gen1, gen2}}, Context: []llm.Message{summary}, Inputs: []legacy.Input{{ID: "old-input", TurnID: "old-turn", MessageID: input.ID, Message: input, State: "settled", CreatedAt: at}}, Commits: []legacy.Commit{
 		{Version: 1, Seq: 1, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "thread.created", ThreadID: "0", Alias: "main"}}},
 		{Version: 1, Seq: 2, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "message.appended", Message: &text}, {Type: "message.appended", Message: &input}}},
 		{Version: 1, Seq: 3, At: stamp, GenerationID: gen1.ID, Facts: []legacy.Fact{{Type: "event.recorded", Event: json.RawMessage(`{"type":"turn.cancelled","turn_id":"old-turn","payload":{"input_ids":["old-input"]}}`)}}},
-		{Version: 1, Seq: 4, At: stamp, GenerationID: gen2.ID, Facts: []legacy.Fact{{Type: "context.compacted", Summary: &summary, Seed: &legacy.GenerationSeed{ProviderMessages: []llm.Message{summary}}}}},
+		{Version: 1, Seq: 4, At: stamp, GenerationID: gen2.ID, Facts: []legacy.Fact{{Type: "context.compacted", Summary: &summary, Seed: &legacy.GenerationSeed{ContextScopeID: gen1.ID, ProviderMessages: []llm.Message{summary}}}}},
 	}}
 	continued := legacy.Commit{Version: 1, Seq: 5, At: stamp, GenerationID: gen2.ID}
 	for i := range 8 {

@@ -13,6 +13,27 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"ControlAgents": kitex.NewMethodInfo(
+		controlAgentsHandler,
+		newManagementControlAgentsArgs,
+		newManagementControlAgentsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ControlAgent": kitex.NewMethodInfo(
+		controlAgentHandler,
+		newManagementControlAgentArgs,
+		newManagementControlAgentResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ResolveProcessEnvironment": kitex.NewMethodInfo(
+		resolveProcessEnvironmentHandler,
+		newManagementResolveProcessEnvironmentArgs,
+		newManagementResolveProcessEnvironmentResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"AuthorizeUsage": kitex.NewMethodInfo(
 		authorizeUsageHandler,
 		newManagementAuthorizeUsageArgs,
@@ -52,6 +73,13 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		peersHandler,
 		newManagementPeersArgs,
 		newManagementPeersResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ExtensionCatalog": kitex.NewMethodInfo(
+		extensionCatalogHandler,
+		newManagementExtensionCatalogArgs,
+		newManagementExtensionCatalogResult,
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
@@ -133,6 +161,60 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func controlAgentsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ManagementControlAgentsArgs)
+	realResult := result.(*platform.ManagementControlAgentsResult)
+	success, err := handler.(platform.Management).ControlAgents(ctx, realArg.SourceJSON, realArg.AgentID, realArg.After)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newManagementControlAgentsArgs() interface{} {
+	return platform.NewManagementControlAgentsArgs()
+}
+
+func newManagementControlAgentsResult() interface{} {
+	return platform.NewManagementControlAgentsResult()
+}
+
+func controlAgentHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ManagementControlAgentArgs)
+	realResult := result.(*platform.ManagementControlAgentResult)
+	success, err := handler.(platform.Management).ControlAgent(ctx, realArg.SourceJSON, realArg.ActionJSON, realArg.Cancel)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newManagementControlAgentArgs() interface{} {
+	return platform.NewManagementControlAgentArgs()
+}
+
+func newManagementControlAgentResult() interface{} {
+	return platform.NewManagementControlAgentResult()
+}
+
+func resolveProcessEnvironmentHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ManagementResolveProcessEnvironmentArgs)
+	realResult := result.(*platform.ManagementResolveProcessEnvironmentResult)
+	success, err := handler.(platform.Management).ResolveProcessEnvironment(ctx, realArg.AccessJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newManagementResolveProcessEnvironmentArgs() interface{} {
+	return platform.NewManagementResolveProcessEnvironmentArgs()
+}
+
+func newManagementResolveProcessEnvironmentResult() interface{} {
+	return platform.NewManagementResolveProcessEnvironmentResult()
 }
 
 func authorizeUsageHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -243,6 +325,24 @@ func newManagementPeersResult() interface{} {
 	return platform.NewManagementPeersResult()
 }
 
+func extensionCatalogHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ManagementExtensionCatalogArgs)
+	realResult := result.(*platform.ManagementExtensionCatalogResult)
+	success, err := handler.(platform.Management).ExtensionCatalog(ctx, realArg.ScopeJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newManagementExtensionCatalogArgs() interface{} {
+	return platform.NewManagementExtensionCatalogArgs()
+}
+
+func newManagementExtensionCatalogResult() interface{} {
+	return platform.NewManagementExtensionCatalogResult()
+}
+
 func snapshotHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.ManagementSnapshotArgs)
 	realResult := result.(*platform.ManagementSnapshotResult)
@@ -287,6 +387,40 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) ControlAgents(ctx context.Context, sourceJSON string, agentID string, after string) (r *platform.Reply, err error) {
+	var _args platform.ManagementControlAgentsArgs
+	_args.SourceJSON = sourceJSON
+	_args.AgentID = agentID
+	_args.After = after
+	var _result platform.ManagementControlAgentsResult
+	if err = p.c.Call(ctx, "ControlAgents", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ControlAgent(ctx context.Context, sourceJSON string, actionJSON string, cancel bool) (r *platform.Reply, err error) {
+	var _args platform.ManagementControlAgentArgs
+	_args.SourceJSON = sourceJSON
+	_args.ActionJSON = actionJSON
+	_args.Cancel = cancel
+	var _result platform.ManagementControlAgentResult
+	if err = p.c.Call(ctx, "ControlAgent", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ResolveProcessEnvironment(ctx context.Context, accessJSON string) (r *platform.Reply, err error) {
+	var _args platform.ManagementResolveProcessEnvironmentArgs
+	_args.AccessJSON = accessJSON
+	var _result platform.ManagementResolveProcessEnvironmentResult
+	if err = p.c.Call(ctx, "ResolveProcessEnvironment", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) AuthorizeUsage(ctx context.Context, actorID string, tenantID string, ownerID string) (r *platform.Reply, err error) {
@@ -351,6 +485,16 @@ func (p *kClient) Peers(ctx context.Context, scopeJSON string) (r *platform.Repl
 	_args.ScopeJSON = scopeJSON
 	var _result platform.ManagementPeersResult
 	if err = p.c.Call(ctx, "Peers", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ExtensionCatalog(ctx context.Context, scopeJSON string) (r *platform.Reply, err error) {
+	var _args platform.ManagementExtensionCatalogArgs
+	_args.ScopeJSON = scopeJSON
+	var _result platform.ManagementExtensionCatalogResult
+	if err = p.c.Call(ctx, "ExtensionCatalog", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

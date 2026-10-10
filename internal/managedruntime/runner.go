@@ -95,6 +95,7 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 	}
 	runner.tools = &toolRunner{admission: config.Admission, store: toolStore, context: contextStore, gateway: config.Tools, files: config.Files, authority: authority}
 	runner.tools.hooks, _ = store.(HookStore)
+	runner.tools.agentControl, _ = store.(AgentControlStore)
 	runner.tools.threadState, _ = store.(ThreadStateStore)
 	runner.tools.instructions, _ = store.(InstructionStore)
 	runner.tools.applications = config.Applications
@@ -106,6 +107,7 @@ func NewRunner(store ExecutionStore, authority Authority, config RunnerConfig) (
 			return nil, ErrInvalid
 		}
 		runner.tools.observations = observations
+		runner.tools.observerManagement, _ = store.(ObserverWorkerStore)
 	}
 	return runner, nil
 }
@@ -251,6 +253,9 @@ func (r *Runner) Run(ctx context.Context) {
 			}
 			items, err := r.store.NextInputs(ctx, a.lease, excluded, r.config.Concurrency-active)
 			if err != nil {
+				if errors.Is(err, ErrFence) {
+					a.cancel()
+				}
 				continue
 			}
 			for _, item := range items {
@@ -347,6 +352,11 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 	}
 	request := ModelRequest{System: work.Config.Instructions, Messages: work.History, Purpose: "conversation", Tools: runtimeTools()}
+	if toolAllowed(work.Config.Capabilities, "write_begin") && toolAllowed(scope.Capabilities, "write_begin") && work.Application != "memory" {
+		if text := activeWriteContext(work.ActiveWrites); text != "" {
+			request.System += "\n\n" + text
+		}
+	}
 	if r.tools.threadState != nil && work.Application != "memory" {
 		request.Tools = append(request.Tools, threadStateTools()...)
 		if work.Config.Capabilities.Allows(agentpolicy.Notes) && scope.Capabilities.Allows(agentpolicy.Notes) {
@@ -368,6 +378,11 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 		}
 		if work.Config.Capabilities.Allows(agentpolicy.Collaboration) {
 			request.System += "\n\nOther Agents receive only explicit messages."
+		}
+	}
+	if r.tools.agentControl != nil && work.ThreadKind == "main" && work.Application == "" && work.Source.Application == "" && work.Config.AgentManagement && scope.AgentManagement {
+		if _, ok := r.authority.(AgentController); ok {
+			request.Tools = append(request.Tools, agentControlTools()...)
 		}
 	}
 	if work.Source.Kind == "observation" {
@@ -424,7 +439,7 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 			request.Tools = append(request.Tools, fileTools()...)
 		}
 	}
-	if len(work.Config.Extensions) > 0 && work.Config.Capabilities.Allows(agentpolicy.Extensions) && (job == nil || job.Application != "memory") {
+	if len(work.Config.Extensions) > 0 && (work.Config.Capabilities.Allows(agentpolicy.Extensions) || work.Config.Capabilities.Allows(agentpolicy.Skills)) && (job == nil || job.Application != "memory") {
 		request.System += extensionContext(work.Config.Extensions, work.Config.Capabilities)
 		request.Tools = append(request.Tools, extensionTools()...)
 	}
@@ -499,8 +514,14 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	defer cancel(nil)
 	watchDone := make(chan struct{})
 	go func() { defer close(watchDone); r.watch(callCtx, cancel, lease, work) }()
+	progressStore, _ := r.store.(ProgressStore)
+	if request.Compaction != nil {
+		progressStore = nil
+	}
+	onDelta, finishProgress := streamProgress(ctx, progressStore, lease, attempt.ID)
 	response, callErr := llm.CompleteWithOptions(callCtx, provider, request.System, request.Messages, request.Tools, llm.CompleteOptions{SingleAttempt: true, MaxOutputTokens: request.MaxOutputTokens, Purpose: request.Purpose,
-		Identity: llm.RequestIdentity{AgentID: scope.AgentID, ThreadID: work.ThreadID, GenerationID: strconv.FormatInt(request.Generation, 10), ContextScopeID: work.TurnID}})
+		OnDelta: onDelta, Identity: llm.RequestIdentity{AgentID: scope.AgentID, ThreadID: work.ThreadID, GenerationID: strconv.FormatInt(request.Generation, 10), ContextScopeID: work.TurnID}})
+	streamed := finishProgress()
 	// Shutdown or lease loss preserves recovery authority. The next Activation
 	// records an unacknowledged attempt as unknown before continuing the Turn.
 	if ctx.Err() != nil {
@@ -518,7 +539,7 @@ func (r *Runner) execute(ctx context.Context, lease Lease, pending PendingWork) 
 	if callErr != nil {
 		failure = "provider_error"
 		reason, allowed := llm.ClassifyFallbackError(callErr)
-		if allowed {
+		if allowed && !streamed {
 			failure = "provider_fallback"
 		}
 		// Provider bodies may echo credentials or private prompts. Log only

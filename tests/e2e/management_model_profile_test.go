@@ -43,7 +43,7 @@ func TestManagedModelProfilePreservesCodexIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal("operator rejected supported Codex adapter", err)
 	}
-	agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Codex", ModelID: model.ID})
+	agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Codex", Configuration: &management.Configuration{Models: []string{model.ID}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestManagedModelProfileRetainsExplicitProtocol(t *testing.T) {
 	ctx := context.Background()
 	// This was a valid stored configuration before private options existed:
 	// provider labels were operator-defined, and explicit protocol was authority.
-	if _, err := f.pool.Exec(ctx, `UPDATE management.models SET provider='openai',options_cipher=NULL WHERE id=$1`, f.agent.ModelID); err != nil {
+	if _, err := f.pool.Exec(ctx, `UPDATE management.models SET provider='openai',options_cipher=NULL WHERE id=$1`, f.agent.Configuration.Models[0]); err != nil {
 		t.Fatal(err)
 	}
 	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
@@ -244,7 +244,7 @@ func TestManagedModelProfileExplicitNoAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Local", ModelID: model.ID})
+	agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Local", Configuration: &management.Configuration{Models: []string{model.ID}}})
 	if err != nil {
 		t.Fatal(err)
 	}

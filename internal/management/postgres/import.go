@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/juex-ai/juex/internal/management"
+	"github.com/juex-ai/juex/internal/management/importproof"
 )
 
 // ImportAgents atomically creates initial definitions and their source mapping.
@@ -22,6 +23,19 @@ func (d *Directory) ImportAgents(ctx context.Context, actorID, tenantID, ownerID
 	if err != nil {
 		return nil, err
 	}
+	return d.importAgents(ctx, actorID, tenantID, ownerID, value, hash, 2)
+}
+
+// RecoverAgentImportV1 only verifies an existing v1 receipt and returns its IDs.
+func (d *Directory) RecoverAgentImportV1(ctx context.Context, actorID, tenantID, ownerID string, proof importproof.AgentsV1) (map[string]string, error) {
+	value, hash, err := proof.Prepare()
+	if err != nil {
+		return nil, err
+	}
+	return d.importAgents(ctx, actorID, tenantID, ownerID, value, hash, 1)
+}
+
+func (d *Directory) importAgents(ctx context.Context, actorID, tenantID, ownerID string, value management.AgentsImport, hash string, version int) (map[string]string, error) {
 	tx, err := d.begin(ctx)
 	if err != nil {
 		return nil, err
@@ -34,10 +48,17 @@ func (d *Directory) ImportAgents(ctx context.Context, actorID, tenantID, ownerID
 	if fleet.ID != value.ExpectedFleetID {
 		return nil, management.ErrConflict
 	}
+	var proofVersion int
 	var source, sourceHash, payloadHash string
 	var ids map[string]string
-	err = tx.QueryRow(ctx, `SELECT source,source_sha256,payload_sha256,agents FROM management.agent_imports WHERE fleet_id=$1`, fleet.ID).Scan(&source, &sourceHash, &payloadHash, &ids)
+	err = tx.QueryRow(ctx, `SELECT source,source_sha256,payload_sha256,agents,proof_version FROM management.agent_imports WHERE fleet_id=$1`, fleet.ID).Scan(&source, &sourceHash, &payloadHash, &ids, &proofVersion)
 	if err == nil {
+		if version == 2 && proofVersion == 1 {
+			return nil, management.ErrImportProofVersion
+		}
+		if proofVersion != version {
+			return nil, management.ErrConflict
+		}
 		if source != value.Source || sourceHash != value.SourceSHA256 || payloadHash != hash || len(ids) != len(value.Agents) {
 			return nil, management.ErrConflict
 		}
@@ -67,6 +88,9 @@ func (d *Directory) ImportAgents(ctx context.Context, actorID, tenantID, ownerID
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
+	if version != 2 {
+		return nil, management.ErrConflict
+	}
 	var used bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM management.agents WHERE fleet_id=$1) OR EXISTS(SELECT 1 FROM management.purges WHERE fleet_id=$1)`, fleet.ID).Scan(&used); err != nil {
 		return nil, err
@@ -80,9 +104,30 @@ func (d *Directory) ImportAgents(ctx context.Context, actorID, tenantID, ownerID
 		if err != nil {
 			return nil, err
 		}
+		if len(item.Environment) > 0 {
+			plain, err := json.Marshal(item.Environment)
+			if err != nil {
+				return nil, management.ErrInvalid
+			}
+			cipher, err := d.config.Secrets.Seal(environmentPurpose(tenantID, "agent", agent.ID), plain)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO management.process_environments(tenant_id,layer,scope_id,fleet_id,agent_id,version,values_cipher) VALUES($1,'agent',$2,$3,$2,1,$4)`, tenantID, agent.ID, fleet.ID, cipher); err != nil {
+				return nil, err
+			}
+		}
+		if item.AgentManagement {
+			if _, err := tx.Exec(ctx, `UPDATE management.agents SET agent_management=true WHERE id=$1`, agent.ID); err != nil {
+				return nil, err
+			}
+			if err := recordResource(ctx, tx, actorID, fleet, member, "agent.management_grant", agent.ID, agent.Version); err != nil {
+				return nil, err
+			}
+		}
 		ids[item.SourceAgentID] = agent.ID
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO management.agent_imports(fleet_id,source,source_sha256,payload_sha256,agents) VALUES($1,$2,$3,$4,$5)`, fleet.ID, value.Source, value.SourceSHA256, hash, ids); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO management.agent_imports(fleet_id,source,source_sha256,payload_sha256,agents,proof_version) VALUES($1,$2,$3,$4,$5,2)`, fleet.ID, value.Source, value.SourceSHA256, hash, ids); err != nil {
 		return nil, classify(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -108,6 +153,6 @@ func prepareAgentImport(value management.AgentsImport) (management.AgentsImport,
 	if err != nil {
 		return value, "", err
 	}
-	hash := sha256.Sum256(encoded)
+	hash := sha256.Sum256(append([]byte("juex.agent-import/2\x00"), encoded...))
 	return detached, hex.EncodeToString(hash[:]), nil
 }

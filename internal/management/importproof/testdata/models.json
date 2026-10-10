@@ -1,0 +1,115 @@
+{
+  "tenant_id": "370b8a1a-690f-4c27-9813-6b1be9fe99bc",
+  "source": "fixture",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "models": [
+    {
+      "configuration": {
+        "Provider": "fixture",
+        "Name": "a",
+        "Endpoint": "https://example.test/v1",
+        "APIKey": "secret-fixture-token",
+        "Protocol": "openai/chat",
+        "ContextWindow": 32768,
+        "MaxOutput": 0,
+        "OutputReserve": 8192,
+        "Enabled": true,
+        "Options": {
+          "authentication": "api_key",
+          "headers": {
+            "X-Private": "secret-fixture-header"
+          },
+          "capabilities": {
+            "Tools": null,
+            "Vision": null,
+            "Streaming": null,
+            "ReasoningEffort": null,
+            "ReasoningReplay": null,
+            "MaxOutputTokens": null
+          },
+          "compat": {
+            "ReasoningReplayFields": null,
+            "CodexTransport": "",
+            "MaxTokensField": ""
+          }
+        }
+      },
+      "fallbacks": [
+        {
+          "provider": "fixture",
+          "name": "b"
+        },
+        {
+          "provider": "fixture",
+          "name": "c"
+        }
+      ]
+    },
+    {
+      "configuration": {
+        "Provider": "fixture",
+        "Name": "b",
+        "Endpoint": "https://example.test/v1",
+        "APIKey": "secret-fixture-token",
+        "Protocol": "openai/chat",
+        "ContextWindow": 32768,
+        "MaxOutput": 0,
+        "OutputReserve": 8192,
+        "Enabled": true,
+        "Options": {
+          "authentication": "api_key",
+          "headers": {
+            "X-Private": "secret-fixture-header"
+          },
+          "capabilities": {
+            "Tools": null,
+            "Vision": null,
+            "Streaming": null,
+            "ReasoningEffort": null,
+            "ReasoningReplay": null,
+            "MaxOutputTokens": null
+          },
+          "compat": {
+            "ReasoningReplayFields": null,
+            "CodexTransport": "",
+            "MaxTokensField": ""
+          }
+        }
+      },
+      "fallbacks": []
+    },
+    {
+      "configuration": {
+        "Provider": "fixture",
+        "Name": "c",
+        "Endpoint": "https://example.test/v1",
+        "APIKey": "secret-fixture-token",
+        "Protocol": "openai/chat",
+        "ContextWindow": 32768,
+        "MaxOutput": 0,
+        "OutputReserve": 8192,
+        "Enabled": true,
+        "Options": {
+          "authentication": "api_key",
+          "headers": {
+            "X-Private": "secret-fixture-header"
+          },
+          "capabilities": {
+            "Tools": null,
+            "Vision": null,
+            "Streaming": null,
+            "ReasoningEffort": null,
+            "ReasoningReplay": null,
+            "MaxOutputTokens": null
+          },
+          "compat": {
+            "ReasoningReplayFields": null,
+            "CodexTransport": "",
+            "MaxTokensField": ""
+          }
+        }
+      },
+      "fallbacks": []
+    }
+  ]
+}

@@ -24,14 +24,13 @@ func modelImportRequest(tenant string) management.ModelsImport {
 	for _, name := range []string{"a", "b", "c"} {
 		v.Models = append(v.Models, management.ImportedModel{Configuration: management.ModelConfiguration{Provider: "fixture", Name: name, Endpoint: "https://example.test/v1", APIKey: "private-fixture-key", Protocol: llm.ProtocolOpenAIChat, ContextWindow: 32768, OutputReserve: 8192, Enabled: true, Options: management.ModelOptions{Headers: map[string]string{"X-Fixture": "private-fixture-header"}, Query: map[string]string{"route": "private-fixture-query"}}}})
 	}
-	v.Models[0].Fallbacks = []management.ModelKey{{Provider: "fixture", Name: "b"}, {Provider: "fixture", Name: "c"}}
 	return v
 }
 
-func modelImportCounts(t *testing.T, pool *pgxpool.Pool) [6]int {
+func modelImportCounts(t *testing.T, pool *pgxpool.Pool) [5]int {
 	t.Helper()
-	var counts [6]int
-	err := pool.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM management.models),(SELECT count(*) FROM management.model_fallbacks),(SELECT count(*) FROM management.tenant_model_policy),(SELECT count(*) FROM management.tenant_model_access),(SELECT count(*) FROM management.model_imports),(SELECT count(*) FROM management.operator_audit WHERE action LIKE 'model.%')`).Scan(&counts[0], &counts[1], &counts[2], &counts[3], &counts[4], &counts[5])
+	var counts [5]int
+	err := pool.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM management.models),(SELECT count(*) FROM management.tenant_model_policy),(SELECT count(*) FROM management.tenant_model_access),(SELECT count(*) FROM management.model_imports),(SELECT count(*) FROM management.operator_audit WHERE action LIKE 'model.%')`).Scan(&counts[0], &counts[1], &counts[2], &counts[3], &counts[4])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +46,13 @@ func TestManagementModelImportRetryKeepsPrivateChangesAndFreshAuthority(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := modelImportCounts(t, pool); got != [6]int{3, 2, 1, 3, 1, 4} {
+	if got := modelImportCounts(t, pool); got != [5]int{3, 1, 3, 1, 4} {
 		t.Fatal("incomplete publication", got)
 	}
 	// A lost response recovers the committed identities without creating rows.
 	recovered := managed.RuntimeAuthority{Directory: d}
 	again, err := managed.ImportModels(ctx, d, value)
-	if err != nil || !reflect.DeepEqual(ids, again) || modelImportCounts(t, pool) != [6]int{3, 2, 1, 3, 1, 4} {
+	if err != nil || !reflect.DeepEqual(ids, again) || modelImportCounts(t, pool) != [5]int{3, 1, 3, 1, 4} {
 		t.Fatal("retry changed identities or created records", err)
 	}
 	var receipt string
@@ -72,15 +71,14 @@ func TestManagementModelImportRetryKeepsPrivateChangesAndFreshAuthority(t *testi
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*management.ModelsImport){
-		"key":            func(v *management.ModelsImport) { v.Models[0].Configuration.APIKey += "changed" },
-		"headers":        func(v *management.ModelsImport) { v.Models[0].Configuration.Options.Headers["X-Fixture"] += "changed" },
-		"query":          func(v *management.ModelsImport) { v.Models[0].Configuration.Options.Query["route"] += "changed" },
-		"endpoint":       func(v *management.ModelsImport) { v.Models[0].Configuration.Endpoint += "/changed" },
-		"reserve":        func(v *management.ModelsImport) { v.Models[0].Configuration.OutputReserve++ },
-		"fallback order": func(v *management.ModelsImport) { slices.Reverse(v.Models[0].Fallbacks) },
-		"tenant":         func(v *management.ModelsImport) { v.TenantID = other.ID },
-		"source":         func(v *management.ModelsImport) { v.Source += "changed" },
-		"source hash":    func(v *management.ModelsImport) { v.SourceSHA256 = strings.Repeat("b", 64) },
+		"key":         func(v *management.ModelsImport) { v.Models[0].Configuration.APIKey += "changed" },
+		"headers":     func(v *management.ModelsImport) { v.Models[0].Configuration.Options.Headers["X-Fixture"] += "changed" },
+		"query":       func(v *management.ModelsImport) { v.Models[0].Configuration.Options.Query["route"] += "changed" },
+		"endpoint":    func(v *management.ModelsImport) { v.Models[0].Configuration.Endpoint += "/changed" },
+		"reserve":     func(v *management.ModelsImport) { v.Models[0].Configuration.OutputReserve++ },
+		"tenant":      func(v *management.ModelsImport) { v.TenantID = other.ID },
+		"source":      func(v *management.ModelsImport) { v.Source += "changed" },
+		"source hash": func(v *management.ModelsImport) { v.SourceSHA256 = strings.Repeat("b", 64) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := modelImportRequest(tenant.ID)
@@ -92,7 +90,7 @@ func TestManagementModelImportRetryKeepsPrivateChangesAndFreshAuthority(t *testi
 		})
 	}
 	primary := ids[management.ModelKey{Provider: "fixture", Name: "a"}].ID
-	agent, err := d.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Imported", ModelID: primary})
+	agent, err := d.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Imported", Configuration: &management.Configuration{Models: []string{primary, ids[management.ModelKey{Provider: "fixture", Name: "b"}].ID, ids[management.ModelKey{Provider: "fixture", Name: "c"}].ID}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,13 +107,17 @@ func TestManagementModelImportRetryKeepsPrivateChangesAndFreshAuthority(t *testi
 	if _, err := managed.ConfigureModel(ctx, d, rotated); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.SetModelFallbacks(ctx, primary, nil); err != nil {
+	if _, err := d.ConfigureAgent(ctx, user.ID, tenant.ID, agent.ID, agent.Version, management.AgentConfig{Name: agent.Name, Configuration: &management.Configuration{Models: []string{primary}}}); err != nil {
 		t.Fatal(err)
 	}
 	before := modelImportCounts(t, pool)
 	again, err = managed.ImportModels(ctx, d, value)
 	if err != nil || !reflect.DeepEqual(ids, again) || before != modelImportCounts(t, pool) {
 		t.Fatal("retry reset later operator changes", err)
+	}
+	current, err := d.ReadAgent(ctx, user.ID, tenant.ID, agent.ID)
+	if err != nil || !slices.Equal(current.Agent.Configuration.Models, []string{primary}) {
+		t.Fatal("retry changed Agent model selection", err)
 	}
 	profile, err := recovered.Profile(ctx, scope, plan.Models[0])
 	if err != nil || profile.APIKey != rotated.APIKey {
@@ -260,13 +262,13 @@ CREATE TRIGGER reject_import BEFORE INSERT ON management.model_imports FOR EACH 
 	}
 	value := modelImportRequest(tenant.ID)
 	ids, err := managed.ImportModels(ctx, d, value)
-	if err == nil || ids != nil || modelImportCounts(t, pool) != [6]int{} {
+	if err == nil || ids != nil || modelImportCounts(t, pool) != [5]int{} {
 		t.Fatal("partial publication survived receipt failure", err)
 	}
 	if _, err := pool.Exec(ctx, `DROP TRIGGER reject_import ON management.model_imports`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := managed.ImportModels(ctx, d, value); err != nil || modelImportCounts(t, pool) != [6]int{3, 2, 1, 3, 1, 4} {
+	if _, err := managed.ImportModels(ctx, d, value); err != nil || modelImportCounts(t, pool) != [5]int{3, 1, 3, 1, 4} {
 		t.Fatal("rolled back import could not be retried", err)
 	}
 }
@@ -377,15 +379,15 @@ func TestManagementModelImportSerializesWithOrdinaryOperators(t *testing.T) {
 			err = <-second
 			switch kind {
 			case "same import":
-				if err != nil || !reflect.DeepEqual(firstIDs, secondIDs) || modelImportCounts(t, pool) != [6]int{3, 2, 1, 3, 1, 4} {
+				if err != nil || !reflect.DeepEqual(firstIDs, secondIDs) || modelImportCounts(t, pool) != [5]int{3, 1, 3, 1, 4} {
 					t.Fatal("concurrent retry changed publication", err)
 				}
 			case "configure":
-				if !errors.Is(err, management.ErrConflict) || modelImportCounts(t, pool) != [6]int{1, 0, 0, 0, 0, 1} {
+				if !errors.Is(err, management.ErrConflict) || modelImportCounts(t, pool) != [5]int{1, 0, 0, 0, 1} {
 					t.Fatal("import overwrote concurrent catalog", err)
 				}
 			case "policy":
-				if !errors.Is(err, management.ErrConflict) || modelImportCounts(t, pool) != [6]int{0, 0, 1, 0, 0, 1} {
+				if !errors.Is(err, management.ErrConflict) || modelImportCounts(t, pool) != [5]int{0, 1, 0, 0, 1} {
 					t.Fatal("import overwrote concurrent tenant policy", err)
 				}
 			}
@@ -398,7 +400,6 @@ func TestManagementModelImportCodexCanonicalAccount(t *testing.T) {
 	_, tenant, _ := agentImportOwner(t, d)
 	value := modelImportRequest(tenant.ID)
 	value.Models = value.Models[:1]
-	value.Models[0].Fallbacks = nil
 	config := &value.Models[0].Configuration
 	config.Provider, config.Protocol = "openai-codex", llm.ProtocolOpenAICodexResponses
 	config.Endpoint = "https://chatgpt.com/backend-api/codex"
@@ -409,7 +410,7 @@ func TestManagementModelImportCodexCanonicalAccount(t *testing.T) {
 	}
 	config.Options.Headers = map[string]string{"ChatGPT-Account-ID": "explicit-fixture-account"}
 	again, err := managed.ImportModels(context.Background(), d, value)
-	if err != nil || !reflect.DeepEqual(first, again) || modelImportCounts(t, pool) != [6]int{1, 0, 1, 1, 1, 2} {
+	if err != nil || !reflect.DeepEqual(first, again) || modelImportCounts(t, pool) != [5]int{1, 1, 1, 1, 2} {
 		t.Fatal("canonical account retry changed import", err)
 	}
 }

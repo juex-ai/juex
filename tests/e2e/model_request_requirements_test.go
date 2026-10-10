@@ -27,7 +27,7 @@ func TestManagedMemoryOutputRequirementPreservesSingleAttemptBudget(t *testing.T
 			})
 			ctx := context.Background()
 			var endpoint string
-			if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.ModelID).Scan(&endpoint); err != nil {
+			if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.Configuration.Models[0]).Scan(&endpoint); err != nil {
 				t.Fatal(err)
 			}
 			disabled := false
@@ -51,7 +51,7 @@ func TestManagedMemoryOutputRequirementPreservesSingleAttemptBudget(t *testing.T
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{model.ID}); err != nil {
+				if err := f.configureModels(ctx, []string{f.agent.Configuration.Models[0], model.ID}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -119,7 +119,7 @@ func TestManagedRequestOutputRequirementSelectsBeforeAttempt(t *testing.T) {
 			})
 			ctx := context.Background()
 			var endpoint string
-			if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.ModelID).Scan(&endpoint); err != nil {
+			if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.Configuration.Models[0]).Scan(&endpoint); err != nil {
 				t.Fatal(err)
 			}
 			disabled := false
@@ -143,7 +143,7 @@ func TestManagedRequestOutputRequirementSelectsBeforeAttempt(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{model.ID}); err != nil {
+				if err := f.configureModels(ctx, []string{f.agent.Configuration.Models[0], model.ID}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -184,7 +184,7 @@ func TestManagedCompactionOutputRequirementKeepsFallbackAcrossRestart(t *testing
 	})
 	ctx := context.Background()
 	var endpoint string
-	if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.ModelID).Scan(&endpoint); err != nil {
+	if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.Configuration.Models[0]).Scan(&endpoint); err != nil {
 		t.Fatal(err)
 	}
 	disabled := false
@@ -230,7 +230,7 @@ func TestManagedCompactionOutputRequirementKeepsFallbackAcrossRestart(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{model.ID}); err != nil {
+	if err := f.configureModels(ctx, []string{f.agent.Configuration.Models[0], model.ID}); err != nil {
 		t.Fatal(err)
 	}
 	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)

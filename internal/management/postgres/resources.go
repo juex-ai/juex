@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 	"github.com/juex-ai/juex/internal/foundation/instructionpolicy"
@@ -79,7 +78,7 @@ func (d *Directory) FleetOverview(ctx context.Context, actorID, tenantID, ownerI
 	if err != nil {
 		return result, err
 	}
-	result.PlatformDefaultModelID, err = platformModel(ctx, tx)
+	result.TenantSettings, err = tenantSettings(ctx, tx, tenantID)
 	if err != nil {
 		return result, err
 	}
@@ -109,7 +108,7 @@ func (d *Directory) FleetOverview(ctx context.Context, actorID, tenantID, ownerI
 
 func fleetSettings(ctx context.Context, tx pgx.Tx, fleetID string) (management.FleetSettings, error) {
 	var settings management.FleetSettings
-	err := tx.QueryRow(ctx, `SELECT COALESCE(default_model_id::text,''),version FROM management.fleet_settings WHERE fleet_id=$1`, fleetID).Scan(&settings.DefaultModelID, &settings.Version)
+	err := tx.QueryRow(ctx, `SELECT configuration,version FROM management.fleet_settings WHERE fleet_id=$1`, fleetID).Scan(&settings.Configuration, &settings.Version)
 	return settings, err
 }
 
@@ -138,11 +137,15 @@ func (d *Directory) ConfigureFleet(ctx context.Context, actorID, tenantID, owner
 	if err != nil {
 		return settings, err
 	}
-	if err := enabledModel(ctx, tx, tenantID, settings.DefaultModelID); err != nil {
+	if err := enabledConfiguration(ctx, tx, tenantID, settings.Configuration); err != nil {
+		return settings, err
+	}
+	before, err := effectivePolicies(ctx, tx, tenantID, fleet.ID)
+	if err != nil {
 		return settings, err
 	}
 	var version int64
-	err = tx.QueryRow(ctx, `UPDATE management.fleet_settings SET default_model_id=NULLIF($2,'')::uuid,version=version+1 WHERE fleet_id=$1 AND version=$3 RETURNING version`, fleet.ID, settings.DefaultModelID, settings.Version).Scan(&version)
+	err = tx.QueryRow(ctx, `UPDATE management.fleet_settings SET configuration=$2,version=version+1 WHERE fleet_id=$1 AND version=$3 RETURNING version`, fleet.ID, settings.Configuration, settings.Version).Scan(&version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return settings, management.ErrConflict
 	}
@@ -150,19 +153,22 @@ func (d *Directory) ConfigureFleet(ctx context.Context, actorID, tenantID, owner
 		return settings, err
 	}
 	settings.Version = version
+	if err := fenceConfigurationChanges(ctx, tx, tenantID, fleet.ID, before); err != nil {
+		return settings, err
+	}
 	if err := recordResource(ctx, tx, actorID, fleet, member, "fleet.configured", "", version); err != nil {
 		return settings, err
 	}
 	return settings, tx.Commit(ctx)
 }
 
-const agentColumns = `extensions,id,fleet_id,name,instructions,COALESCE(model_id::text,''),status,version,created_at,updated_at,execution_epoch,worker_depth,purging,hooks,capabilities,dynamic_instructions`
+const agentColumns = `extensions,id,fleet_id,name,instructions,configuration,status,version,created_at,updated_at,execution_epoch,worker_depth,purging,hooks,workspace_configuration,dynamic_instructions,agent_management`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanAgent(row rowScanner) (management.Agent, error) {
 	var a management.Agent
-	err := row.Scan(&a.Extensions, &a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.ModelID, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth, &a.Purging, &a.Hooks, &a.Capabilities, &a.DynamicInstructions)
+	err := row.Scan(&a.Extensions, &a.ID, &a.FleetID, &a.Name, &a.Instructions, &a.Configuration, &a.Status, &a.Version, &a.CreatedAt, &a.UpdatedAt, &a.ExecutionEpoch, &a.WorkerDepth, &a.Purging, &a.Hooks, &a.WorkspaceConfiguration, &a.DynamicInstructions, &a.AgentManagement)
 	return a, classify(err)
 }
 
@@ -188,18 +194,18 @@ func (d *Directory) CreateAgent(ctx context.Context, actorID, tenantID, ownerID 
 
 // The caller validates configuration and holds the Tenant lock before creation.
 func createAgent(ctx context.Context, tx pgx.Tx, actorID string, fleet management.Fleet, member management.Membership, config management.AgentConfig) (management.Agent, error) {
-	if err := enabledModel(ctx, tx, fleet.TenantID, config.ModelID); err != nil {
-		return management.Agent{}, err
+	declaration := management.Configuration{}
+	if config.Configuration != nil {
+		declaration = config.Configuration.Clone()
 	}
-	policy := agentpolicy.Policy{}
-	if config.Capabilities != nil {
-		policy = *config.Capabilities
+	if err := enabledConfiguration(ctx, tx, fleet.TenantID, declaration); err != nil {
+		return management.Agent{}, err
 	}
 	instructions := instructionpolicy.DynamicInstructions{}
 	if config.DynamicInstructions != nil {
 		instructions = *config.DynamicInstructions
 	}
-	agent, err := scanAgent(tx.QueryRow(ctx, `INSERT INTO management.agents(fleet_id,name,instructions,model_id,worker_depth,hooks,capabilities,dynamic_instructions) VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8) RETURNING `+agentColumns, fleet.ID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...), policy.Normalized(), instructions))
+	agent, err := scanAgent(tx.QueryRow(ctx, `INSERT INTO management.agents(fleet_id,name,instructions,configuration,worker_depth,hooks,dynamic_instructions) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING `+agentColumns, fleet.ID, strings.TrimSpace(config.Name), config.Instructions, declaration, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...), instructions))
 	if err != nil {
 		return agent, err
 	}
@@ -224,15 +230,20 @@ func (d *Directory) ConfigureAgent(ctx context.Context, actorID, tenantID, agent
 		return management.Agent{}, err
 	}
 	defer rollback(tx)
+	agent, err := configureAgent(ctx, tx, actorID, tenantID, agentID, version, config)
+	if err != nil {
+		return agent, err
+	}
+	return agent, tx.Commit(ctx)
+}
+
+func configureAgent(ctx context.Context, tx pgx.Tx, actorID, tenantID, agentID string, version int64, config management.AgentConfig) (management.Agent, error) {
 	owner, err := agentOwner(ctx, tx, tenantID, agentID)
 	if err != nil {
 		return management.Agent{}, err
 	}
 	fleet, member, err := authorizeFleet(ctx, tx, actorID, tenantID, owner, true)
 	if err != nil {
-		return management.Agent{}, err
-	}
-	if err := enabledModel(ctx, tx, tenantID, config.ModelID); err != nil {
 		return management.Agent{}, err
 	}
 	prior, err := scanAgent(tx.QueryRow(ctx, `SELECT `+agentColumns+` FROM management.agents WHERE id=$1`, agentID))
@@ -242,16 +253,26 @@ func (d *Directory) ConfigureAgent(ctx context.Context, actorID, tenantID, agent
 	if hookpolicy.Validate(append(slices.Clone(config.Hooks), extensionpolicy.Hooks(prior.Extensions)...)) != nil {
 		return management.Agent{}, management.ErrInvalid
 	}
-	policy := prior.Capabilities
-	if config.Capabilities != nil {
-		policy = config.Capabilities.Normalized()
+	declaration := prior.Configuration
+	if config.Configuration != nil {
+		declaration = config.Configuration.Clone()
+		if err := enabledConfiguration(ctx, tx, tenantID, declaration); err != nil {
+			return management.Agent{}, err
+		}
 	}
+	layers, err := configurationLayers(ctx, tx, tenantID, prior)
+	if err != nil {
+		return management.Agent{}, err
+	}
+	before := layers.Resolve().Policy()
+	layers.Agent.Declaration = declaration
+	policy := layers.Resolve().Policy()
 	instructions := prior.DynamicInstructions
 	if config.DynamicInstructions != nil {
 		instructions = *config.DynamicInstructions
 	}
-	revoke := hookpolicy.Revokes(prior.Hooks, config.Hooks) || policy.Restricts(prior.Capabilities) || instructions.Revokes(prior.DynamicInstructions)
-	agent, err := scanAgent(tx.QueryRow(ctx, `UPDATE management.agents SET name=$2,instructions=$3,model_id=NULLIF($4,'')::uuid,worker_depth=$6,hooks=$7,execution_epoch=execution_epoch+CASE WHEN $8 THEN 1 ELSE 0 END,capabilities=$9,dynamic_instructions=$10,version=version+1,updated_at=clock_timestamp() WHERE id=$1 AND version=$5 AND status='active' RETURNING `+agentColumns, agentID, strings.TrimSpace(config.Name), config.Instructions, config.ModelID, version, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...), revoke, policy, instructions))
+	revoke := hookpolicy.Revokes(prior.Hooks, config.Hooks) || policy.Restricts(before) || instructions.Revokes(prior.DynamicInstructions)
+	agent, err := scanAgent(tx.QueryRow(ctx, `UPDATE management.agents SET name=$2,instructions=$3,configuration=$4,worker_depth=$6,hooks=$7,execution_epoch=execution_epoch+CASE WHEN $8 THEN 1 ELSE 0 END,dynamic_instructions=$9,version=version+1,updated_at=clock_timestamp() WHERE id=$1 AND version=$5 AND status='active' RETURNING `+agentColumns, agentID, strings.TrimSpace(config.Name), config.Instructions, declaration, version, config.EffectiveWorkerDepth(), append([]hookpolicy.Declaration{}, config.Hooks...), revoke, instructions))
 	if errors.Is(err, management.ErrDenied) {
 		return agent, management.ErrConflict
 	}
@@ -261,7 +282,7 @@ func (d *Directory) ConfigureAgent(ctx context.Context, actorID, tenantID, agent
 	if err := recordResource(ctx, tx, actorID, fleet, member, "agent.configured", agent.ID, agent.Version); err != nil {
 		return agent, err
 	}
-	return agent, tx.Commit(ctx)
+	return agent, nil
 }
 
 func (d *Directory) SetAgentArchived(ctx context.Context, actorID, tenantID, agentID string, version int64, archived bool) (management.Agent, error) {
@@ -338,21 +359,11 @@ func agentAuthority(ctx context.Context, tx pgx.Tx, actorID, tenantID, agentID s
 	if execute && agent.Status != management.AgentActive {
 		return management.AgentAuthority{}, management.ErrDenied
 	}
-	modelID := agent.ModelID
-	if modelID == "" {
-		settings, err := fleetSettings(ctx, tx, fleet.ID)
-		if err != nil {
-			return management.AgentAuthority{}, err
-		}
-		modelID = settings.DefaultModelID
+	layers, err := configurationLayers(ctx, tx, tenantID, agent)
+	if err != nil {
+		return management.AgentAuthority{}, err
 	}
-	if modelID == "" {
-		modelID, err = platformModel(ctx, tx)
-		if err != nil {
-			return management.AgentAuthority{}, err
-		}
-	}
-	result := management.AgentAuthority{Agent: agent, Fleet: fleet, ActorID: actorID, MembershipVersion: member.Version, MembershipExecutionEpoch: member.ExecutionEpoch, ModelID: modelID}
+	result := management.AgentAuthority{Agent: agent, Fleet: fleet, ActorID: actorID, MembershipVersion: member.Version, MembershipExecutionEpoch: member.ExecutionEpoch, Layers: layers, Effective: layers.Resolve()}
 	result.CanExecute = member.Status == management.Active && agent.Status == management.AgentActive
 	result.ActorAuthorizationEpoch = member.ExecutionEpoch
 	if actorID != owner {

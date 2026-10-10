@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
+	"github.com/juex-ai/juex/internal/management"
 	"github.com/juex-ai/juex/internal/migration/legacy"
 )
 
@@ -27,15 +28,18 @@ func TestConvertAgentConfigPreservesPolicyWithoutInferringNewAuthority(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Name != definition.Name || got.ModelID != bindings.ModelID || got.Instructions != *bindings.Instructions || got.WorkerDepth != 2 || got.Capabilities == nil || got.DynamicInstructions == nil || got.DynamicInstructions.Enabled == minimal || got.DynamicInstructions.GlobalPath != "" || len(got.Hooks) != 0 {
+		if got.Name != definition.Name || got.Configuration.Models[0] != bindings.ModelID || got.Instructions != *bindings.Instructions || got.WorkerDepth != 2 || got.Configuration == nil || got.DynamicInstructions == nil || got.DynamicInstructions.Enabled == minimal || got.DynamicInstructions.GlobalPath != "" || len(got.Hooks) != 0 {
 			t.Fatal("initial Agent configuration changed", minimal)
 		}
-		want := agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Calendar, agentpolicy.Collaboration}}
-		if minimal {
-			want.Disabled = append(want.Disabled, agentpolicy.Workers, agentpolicy.MCP, agentpolicy.Observations, agentpolicy.Memory, agentpolicy.Hooks, agentpolicy.Extensions, agentpolicy.Notes, agentpolicy.Tasks, agentpolicy.ContextControl, agentpolicy.WorkingFiles)
+		want := agentpolicy.Policy{Version: 1, SkillSources: !minimal, Disabled: []agentpolicy.Capability{agentpolicy.Calendar, agentpolicy.Collaboration}}
+		if !minimal {
+			want.Enabled = []agentpolicy.Capability{agentpolicy.ApplyPatch, agentpolicy.ChunkedWrite}
 		}
-		if !reflect.DeepEqual(*got.Capabilities, want.Normalized()) {
-			t.Fatal("incorrect grouped policy", minimal, got.Capabilities)
+		if minimal {
+			want.Disabled = append(want.Disabled, agentpolicy.FileSearch, agentpolicy.Skills, agentpolicy.Workers, agentpolicy.MCP, agentpolicy.Observations, agentpolicy.Memory, agentpolicy.Hooks, agentpolicy.Extensions, agentpolicy.Notes, agentpolicy.Tasks, agentpolicy.ContextControl, agentpolicy.WorkingFiles, agentpolicy.InputTracking)
+		}
+		if !reflect.DeepEqual(configurationPolicy(got), want.Normalized()) {
+			t.Fatal("incorrect grouped policy", minimal, configurationPolicy(got))
 		}
 		// Source Supervisor tools do not decide permission for peer messaging;
 		// Calendar likewise has no equivalent source module switch.
@@ -44,10 +48,10 @@ func TestConvertAgentConfigPreservesPolicyWithoutInferringNewAuthority(t *testin
 		*bindings.CalendarEnabled, *bindings.CollaborationEnabled = true, true
 		*bindings.Instructions = ""
 		next, err := ConvertAgentConfig(source, definition, bindings)
-		if err != nil || !next.Capabilities.Allows(agentpolicy.Calendar) || !next.Capabilities.Allows(agentpolicy.Collaboration) || next.Capabilities.Allows(agentpolicy.MCP) || next.Instructions != "" {
+		if err != nil || !configurationPolicy(next).Allows(agentpolicy.Calendar) || !configurationPolicy(next).Allows(agentpolicy.Collaboration) || configurationPolicy(next).Allows(agentpolicy.MCP) || next.Instructions != "" {
 			t.Fatal("explicit target policies were ignored", err)
 		}
-		if got.Instructions != "Resolved static instructions" || got.Capabilities.Allows(agentpolicy.Calendar) {
+		if got.Instructions != "Resolved static instructions" || configurationPolicy(got).Allows(agentpolicy.Calendar) {
 			t.Fatal("converted value aliases bindings")
 		}
 	}
@@ -60,8 +64,13 @@ func TestConvertAgentConfigDisabledModulesAndDynamicSources(t *testing.T) {
 		source.Modules[name] = false
 	}
 	got, err := ConvertAgentConfig(source, definition, bindings)
-	if err != nil || len(got.Capabilities.Disabled) != 14 || got.DynamicInstructions.Enabled {
+	if err != nil || got.DynamicInstructions.Enabled {
 		t.Fatal("disabled capabilities were re-enabled", err)
+	}
+	for _, capability := range agentpolicy.Capabilities() {
+		if configurationPolicy(got).Allows(capability) {
+			t.Fatal("disabled capability re-enabled", capability)
+		}
 	}
 	*bindings.FilesEnabled = true
 	source.Modules["basic-file-tools"], source.Modules["agents-md"], source.UserResources = true, true, true
@@ -109,7 +118,7 @@ func TestConvertAgentConfigDoesNotSilentlyDisableSourceCommands(t *testing.T) {
 	}
 	shell = true
 	got, err := ConvertAgentConfig(source, definition, bindings)
-	if err != nil || !got.Capabilities.Allows(agentpolicy.Shell) {
+	if err != nil || !configurationPolicy(got).Allows(agentpolicy.Shell) {
 		t.Fatal("explicit target Shell choice ignored", err)
 	}
 }
@@ -121,7 +130,7 @@ func TestConvertAgentConfigUsesExplicitFilesChoiceForIndependentSourceTools(t *t
 			source.Modules["basic-file-tools"], source.Modules["file-search"] = basic, !basic
 			bindings.FilesEnabled = &files
 			got, err := ConvertAgentConfig(source, definition, bindings)
-			if err != nil || got.Capabilities.Allows(agentpolicy.Files) != files {
+			if err != nil || configurationPolicy(got).Allows(agentpolicy.Files) != files {
 				t.Fatal("source tool switches overrode explicit target Files choice", basic, files, err)
 			}
 		}
@@ -199,4 +208,8 @@ func TestConvertAgentConfigRejectsIncompleteOrUnrepresentableBindings(t *testing
 			}
 		})
 	}
+}
+
+func configurationPolicy(config management.AgentConfig) agentpolicy.Policy {
+	return (management.ConfigurationLayers{Agent: management.ConfigurationLayer{Declaration: *config.Configuration}}).Resolve().Policy()
 }

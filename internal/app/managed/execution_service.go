@@ -64,7 +64,7 @@ func OpenExecution(ctx context.Context, config ExecutionConfig) (*Execution, err
 		return nil, err
 	}
 	store := executionpg.New(pool)
-	app := &Execution{Pool: pool, Service: &execution.Service{Admission: config.Admission, Store: store, Authority: authority, Transfers: store}, blobDirectory: config.BlobDirectory, auditDays: auditDays, store: store}
+	app := &Execution{Pool: pool, Service: &execution.Service{Admission: config.Admission, Store: store, Authority: authority, ProcessEnvironments: authority, Transfers: store}, blobDirectory: config.BlobDirectory, auditDays: auditDays, store: store}
 	app.blobs, err = blob.Open(config.BlobDirectory)
 	if err != nil {
 		app.Close()

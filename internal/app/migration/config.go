@@ -32,17 +32,21 @@ type ConfigContext struct {
 // cutover: inherited environment, authentication, resources and target bindings
 // must still be verified. Private provider values are deliberately not JSON.
 type ResolvedConfig struct {
-	AgentID                   string          `json:"agent_id"`
-	StartupModelOverride      bool            `json:"startup_model_override"`
-	Models                    []ConfigModel   `json:"models"`
-	Preset                    string          `json:"preset"`
-	Modules                   map[string]bool `json:"modules"`
-	MemoryProfile             string          `json:"memory_profile"`
-	WorkerDepth               int             `json:"worker_depth"`
-	UserResources             bool            `json:"user_resources"`
-	ExtensionPolicyConfigured bool            `json:"extension_policy_configured"`
-	ExtensionAllow            []string        `json:"extension_allow"`
-	Sources                   []ConfigSource  `json:"sources"`
+	AgentID                   string            `json:"agent_id"`
+	StartupModelOverride      bool              `json:"startup_model_override"`
+	Models                    []ConfigModel     `json:"models"`
+	Preset                    string            `json:"preset"`
+	Modules                   map[string]bool   `json:"modules"`
+	MemoryProfile             string            `json:"memory_profile"`
+	WorkerDepth               int               `json:"worker_depth"`
+	UserResources             bool              `json:"user_resources"`
+	ExtensionPolicyConfigured bool              `json:"extension_policy_configured"`
+	ExtensionAllow            []string          `json:"extension_allow"`
+	Sources                   []ConfigSource    `json:"sources"`
+	AgentManagement           bool              `json:"agent_management"`
+	Environment               map[string]string `json:"-"`
+	LoadDotenv                bool              `json:"-"`
+	EnvironmentDeclared       bool              `json:"-"`
 }
 
 type ConfigModel struct {
@@ -169,7 +173,7 @@ func resolveAgentConfig(source legacy.Fleet, agent legacy.Agent, evidence Config
 	if err := add("agent", filepath.Join(source.SourceHome, "agents", agent.Definition.ID), "juex.yaml", agent.Files, agent.AbsentFiles); err != nil {
 		return ResolvedConfig{}, err
 	}
-	s := configSettings{value: ResolvedConfig{AgentID: agent.Definition.ID, Preset: "standard", WorkerDepth: 1, UserResources: true}, providers: map[string]configProvider{}, modules: map[string]bool{}, fleetProfile: "agent"}
+	s := configSettings{value: ResolvedConfig{AgentID: agent.Definition.ID, Preset: "standard", WorkerDepth: 1, UserResources: true, LoadDotenv: true, Environment: map[string]string{}}, providers: map[string]configProvider{}, modules: map[string]bool{}, fleetProfile: "agent"}
 	loaded := map[string]configLayer{}
 	for _, layer := range layers {
 		if err := r.apply(&s, layer, false); err != nil {

@@ -57,12 +57,16 @@ func TestMigrationModelPlanPreservesProfilesAndFallbacksThroughManagement(t *tes
 		t.Fatal(err)
 	}
 	overview, err := directory.FleetOverview(ctx, user.ID, tenant.ID, user.ID)
-	if err != nil || overview.PlatformDefaultModelID != "" {
-		t.Fatal("publication changed platform default", err)
+	if err != nil || len(overview.TenantSettings.Declaration.Models) != 0 {
+		t.Fatal("publication changed Tenant defaults", err)
 	}
 	authority := managed.RuntimeAuthority{Directory: directory}
 	for _, binding := range plan.Agents {
-		agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: binding.SourceAgentID, ModelID: ids[binding.Primary].ID})
+		selected := make([]string, len(binding.Models))
+		for i, key := range binding.Models {
+			selected[i] = ids[key].ID
+		}
+		agent, err := directory.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: binding.SourceAgentID, Configuration: &management.Configuration{Models: selected}})
 		if err != nil {
 			t.Fatal(err)
 		}

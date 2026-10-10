@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/juex-ai/juex/internal/management"
+	"github.com/juex-ai/juex/internal/management/importproof"
 )
 
 type importedModelIdentity struct {
@@ -21,14 +22,39 @@ type importedModelIdentity struct {
 	management.ModelImportIdentity
 }
 
+// ModelImportProofVersion is an offline routing hint. The import/recovery
+// transaction rechecks the version, source and complete payload under its lock.
+func (d *Directory) ModelImportProofVersion(ctx context.Context, tenant string) (int, error) {
+	var version int
+	err := d.pool.QueryRow(ctx, `SELECT proof_version FROM management.model_imports WHERE singleton AND tenant_id=$1`, tenant).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return version, err
+}
+
 // ImportModels is an offline operator boundary, not a Fleet or HTTP operation.
-// Configuration, direct fallbacks, tenant access and recovery identity commit
+// Configuration, tenant access and recovery identity commit
 // together. An exact retry only returns identities; it never undoes later edits.
 func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImport) (map[management.ModelKey]management.ModelImportIdentity, error) {
 	value, hash, err := prepareModelImport(value)
 	if err != nil {
 		return nil, err
 	}
+	return d.importModels(ctx, value, hash, 2)
+}
+
+// RecoverModelImportV1 verifies historical private input without current adapter
+// validation or any attempt to enable, configure or create a model.
+func (d *Directory) RecoverModelImportV1(ctx context.Context, proof importproof.ModelsV1) (map[management.ModelKey]management.ModelImportIdentity, error) {
+	value, hash, err := proof.Prepare()
+	if err != nil {
+		return nil, err
+	}
+	return d.importModels(ctx, value, hash, 1)
+}
+
+func (d *Directory) importModels(ctx context.Context, value management.ModelsImport, hash string, version int) (map[management.ModelKey]management.ModelImportIdentity, error) {
 	tx, err := d.begin(ctx)
 	if err != nil {
 		return nil, err
@@ -40,10 +66,17 @@ func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImp
 	if err := lockTenant(ctx, tx, value.TenantID); err != nil {
 		return nil, err
 	}
+	var proofVersion int
 	var tenant, source, sourceHash, payloadHash string
 	var receipt []importedModelIdentity
-	err = tx.QueryRow(ctx, `SELECT tenant_id,source,source_sha256,payload_sha256,models FROM management.model_imports WHERE singleton`).Scan(&tenant, &source, &sourceHash, &payloadHash, &receipt)
+	err = tx.QueryRow(ctx, `SELECT tenant_id,source,source_sha256,payload_sha256,models,proof_version FROM management.model_imports WHERE singleton`).Scan(&tenant, &source, &sourceHash, &payloadHash, &receipt, &proofVersion)
 	if err == nil {
+		if version == 2 && proofVersion == 1 {
+			return nil, management.ErrImportProofVersion
+		}
+		if proofVersion != version {
+			return nil, management.ErrConflict
+		}
 		if tenant != value.TenantID || source != value.Source || sourceHash != value.SourceSHA256 || payloadHash != hash || len(receipt) != len(value.Models) {
 			return nil, management.ErrConflict
 		}
@@ -67,6 +100,9 @@ func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImp
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
+	}
+	if version != 2 {
+		return nil, management.ErrConflict
 	}
 	var used bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM management.models) OR EXISTS(SELECT 1 FROM management.tenant_model_policy WHERE tenant_id=$1)`, value.TenantID).Scan(&used); err != nil {
@@ -111,16 +147,11 @@ func (d *Directory) ImportModels(ctx context.Context, value management.ModelsImp
 		if _, err := tx.Exec(ctx, `INSERT INTO management.tenant_model_access(tenant_id,model_id) VALUES($1,$2)`, value.TenantID, id); err != nil {
 			return nil, err
 		}
-		for i, candidate := range item.Fallbacks {
-			if _, err := tx.Exec(ctx, `INSERT INTO management.model_fallbacks(model_id,fallback_id,ordinal) VALUES($1,$2,$3)`, id, ids[candidate].ID, i+1); err != nil {
-				return nil, err
-			}
-		}
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO management.operator_audit(action,resource_id) VALUES('model.catalog_imported',$1)`, value.TenantID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO management.model_imports(tenant_id,source,source_sha256,payload_sha256,models) VALUES($1,$2,$3,$4,$5)`, value.TenantID, value.Source, value.SourceSHA256, hash, receipt); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO management.model_imports(tenant_id,source,source_sha256,payload_sha256,models,proof_version) VALUES($1,$2,$3,$4,$5,2)`, value.TenantID, value.Source, value.SourceSHA256, hash, receipt); err != nil {
 		return nil, classify(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -149,21 +180,11 @@ func prepareModelImport(value management.ModelsImport) (management.ModelsImport,
 			return value, "", err
 		}
 		key := management.ModelKey{Provider: config.Provider, Name: config.Name}
-		if keys[key] || len(item.Fallbacks) > 4 {
+		if keys[key] {
 			return value, "", management.ErrInvalid
 		}
 		keys[key] = true
 		value.Models[i].Configuration = config
-		value.Models[i].Fallbacks = append([]management.ModelKey{}, item.Fallbacks...)
-	}
-	for _, item := range value.Models {
-		seen := map[management.ModelKey]bool{{Provider: item.Configuration.Provider, Name: item.Configuration.Name}: true}
-		for _, candidate := range item.Fallbacks {
-			if !keys[candidate] || seen[candidate] {
-				return value, "", management.ErrInvalid
-			}
-			seen[candidate] = true
-		}
 	}
 	slices.SortFunc(value.Models, func(a, b management.ImportedModel) int {
 		if order := cmp.Compare(a.Configuration.Provider, b.Configuration.Provider); order != 0 {
@@ -181,7 +202,7 @@ func prepareModelImport(value management.ModelsImport) (management.ModelsImport,
 	if err := json.Unmarshal(encoded, &detached); err != nil {
 		return value, "", management.ErrInvalid
 	}
-	hash := sha256.Sum256(encoded)
+	hash := sha256.Sum256(append([]byte("juex.model-import/2\x00"), encoded...))
 	return detached, hex.EncodeToString(hash[:]), nil
 }
 

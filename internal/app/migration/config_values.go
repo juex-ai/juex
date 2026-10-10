@@ -13,7 +13,8 @@ import (
 )
 
 type configDocument struct {
-	Imports []struct {
+	environmentPresent bool
+	Imports            []struct {
 		Source string `yaml:"source"`
 	} `yaml:"imports"`
 	Models        *[]string               `yaml:"models"`
@@ -38,7 +39,10 @@ type configDocument struct {
 	Shell       yaml.Node `yaml:"shell"`
 	Sandbox     yaml.Node `yaml:"sandbox"`
 	Skills      yaml.Node `yaml:"skills"`
-	Environment yaml.Node `yaml:"environment"`
+	Environment struct {
+		LoadDotenv *configBool       `yaml:"load_dotenv"`
+		Variables  map[string]string `yaml:"variables"`
+	} `yaml:"environment"`
 }
 
 type configBool bool
@@ -116,18 +120,28 @@ var sourceModules = map[string]bool{
 }
 
 func (s *configSettings) apply(value configDocument, scope string, replay bool) error {
+	s.value.EnvironmentDeclared = s.value.EnvironmentDeclared || value.environmentPresent
 	for _, unsupported := range []struct {
 		name string
 		node yaml.Node
 	}{
 		{"compaction", value.Compaction}, {"tool_output", value.ToolOutput},
 		{"hooks", value.Hooks}, {"runtime", value.Runtime}, {"shell", value.Shell},
-		{"sandbox", value.Sandbox}, {"skills", value.Skills}, {"environment", value.Environment},
+		{"sandbox", value.Sandbox}, {"skills", value.Skills},
 	} {
 		if unsupported.node.Kind != 0 {
 			return fmt.Errorf("configuration field %s requires explicit conversion", unsupported.name)
 		}
 	}
+	if value.Environment.LoadDotenv != nil {
+		s.value.LoadDotenv = bool(*value.Environment.LoadDotenv)
+	}
+	for key, value := range value.Environment.Variables {
+		if !validSourceEnvironment(key, value) {
+			return errors.New("invalid source environment declaration")
+		}
+	}
+	maps.Copy(s.value.Environment, value.Environment.Variables)
 	if value.Fleet != nil && scope != "default-home" && scope != "instance-home" {
 		return errors.New("source Fleet configuration is only valid in a source Home")
 	}
@@ -249,6 +263,7 @@ func (s *configSettings) resolve() (ResolvedConfig, error) {
 	if s.value.MemoryProfile == "" {
 		s.value.MemoryProfile = s.fleetProfile
 	}
+	s.value.AgentManagement = s.fleetProfile == "supervisor" && s.value.Modules["fleet-management"]
 	seen := map[string]bool{}
 	for _, raw := range s.models {
 		parts := strings.SplitN(strings.TrimSpace(raw), ":", 2)

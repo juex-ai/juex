@@ -25,14 +25,16 @@ type MCPProcessBinding struct {
 
 const stdioLauncher = `export WORKDIR="$1" JUEX_WORKDIR="$1" && cd -- "$2" && shift 2 && exec "$@"`
 
-// ConvertStdioExtension converts an explicitly selected v1 installation without
+// ConvertMCPExtension converts an explicitly selected v1 installation without
 // I/O. The caller proves source activation, target executable compatibility and
 // path ownership. Agent-wide environment defaults and other enabled resources
 // need separate conversion; declarations alone do not connect or subscribe MCP.
-func ConvertStdioExtension(source legacy.ExtensionSnapshot, bindings map[string]MCPProcessBinding) (extensionpolicy.Manifest, error) {
+// Header environment evidence is the source Agent's effective environment:
+// unknown keys differ from proven missing (nil) and proven empty values.
+func ConvertMCPExtension(source legacy.ExtensionSnapshot, bindings map[string]MCPProcessBinding, headerEnvironment map[string]*string) (extensionpolicy.Manifest, error) {
 	var empty extensionpolicy.Manifest
 	if !extensionAbsolutePath(source.Directory) || !source.Selection.MCP {
-		return empty, errors.New("stdio conversion requires a selected absolute extension installation")
+		return empty, errors.New("MCP conversion requires a selected absolute extension installation")
 	}
 	for _, item := range []struct {
 		name     string
@@ -55,7 +57,7 @@ func ConvertStdioExtension(source legacy.ExtensionSnapshot, bindings map[string]
 	if err != nil || manifestFile == nil {
 		return empty, errors.New("captured extension manifest is missing or invalid")
 	}
-	manifest, err := stdioSourceManifest(manifestFile.Data, path.Base(source.Directory))
+	manifest, err := mcpSourceManifest(manifestFile.Data, path.Base(source.Directory))
 	if err != nil {
 		return empty, err
 	}
@@ -68,16 +70,33 @@ func ConvertStdioExtension(source legacy.ExtensionSnapshot, bindings map[string]
 		return empty, errors.New("source MCP configuration is invalid")
 	}
 	servers, err := extensionObject(fields["mcpServers"])
-	if err != nil || len(servers) == 0 || len(servers) != len(bindings) {
-		return empty, errors.New("every source MCP server requires exactly one target binding")
+	if err != nil || len(servers) == 0 {
+		return empty, errors.New("source MCP servers are missing or invalid")
 	}
 	names := make([]string, 0, len(servers))
 	for name := range servers {
 		names = append(names, name)
 	}
 	slices.Sort(names)
+	processes := 0
 	for _, name := range names {
+		kind, err := sourceMCPTransport(servers[name])
+		if err != nil {
+			return empty, err
+		}
 		binding, ok := bindings[name]
+		if kind == "http" {
+			if ok {
+				return empty, errors.New("remote MCP cannot have a process binding")
+			}
+			resource, err := convertHTTPServer(name, servers[name], headerEnvironment)
+			if err != nil {
+				return empty, err
+			}
+			manifest.MCP = append(manifest.MCP, resource)
+			continue
+		}
+		processes++
 		if !ok || !extensionAbsolutePath(binding.Executable) || !extensionAbsolutePath(binding.WorkingDirectory) || !extensionAbsolutePath(binding.RuntimeWorkDir) || hasExtensionRuntimeRef(binding.RuntimeWorkDir) {
 			return empty, errors.New("MCP binding requires explicit absolute executable, process cwd and Runtime WorkDir")
 		}
@@ -86,6 +105,9 @@ func ConvertStdioExtension(source legacy.ExtensionSnapshot, bindings map[string]
 			return empty, err
 		}
 		manifest.MCP = append(manifest.MCP, command)
+	}
+	if processes != len(bindings) {
+		return empty, errors.New("every stdio server requires exactly one target binding")
 	}
 	encoded, err := json.Marshal(manifest)
 	if err != nil || len(encoded) > 64<<10 || manifest.Validate() != nil {
@@ -98,15 +120,15 @@ func extensionAbsolutePath(value string) bool {
 	return path.IsAbs(value) && path.Clean(value) == value && len(value) <= 4096 && utf8.ValidString(value) && !strings.ContainsRune(value, 0)
 }
 
-func convertStdioServer(name string, data []byte, binding MCPProcessBinding) (extensionpolicy.CommandResource, error) {
-	var empty extensionpolicy.CommandResource
+func convertStdioServer(name string, data []byte, binding MCPProcessBinding) (extensionpolicy.MCPResource, error) {
+	var empty extensionpolicy.MCPResource
 	fields, err := extensionObject(data, "type", "command", "args", "env")
 	if err != nil {
 		return empty, errors.New("source MCP server requires explicit stdio conversion")
 	}
 	if raw, ok := fields["type"]; ok {
 		kind, err := extensionString(raw)
-		if err != nil || kind != "stdio" {
+		if err != nil || strings.TrimSpace(kind) != "stdio" {
 			return empty, errors.New("only source stdio MCP is supported")
 		}
 	}
@@ -126,7 +148,7 @@ func convertStdioServer(name string, data []byte, binding MCPProcessBinding) (ex
 			return empty, errors.New("source MCP environment is invalid")
 		}
 	}
-	result := extensionpolicy.CommandResource{ID: name, Command: []string{"/bin/sh", "-p", "-c", stdioLauncher, "juex-stdio", binding.RuntimeWorkDir, binding.WorkingDirectory, binding.Executable}, Environment: map[string]string{}}
+	result := extensionpolicy.MCPResource{CommandResource: extensionpolicy.CommandResource{ID: name, Command: []string{"/bin/sh", "-p", "-c", stdioLauncher, "juex-stdio", binding.RuntimeWorkDir, binding.WorkingDirectory, binding.Executable}, Environment: map[string]string{}}}
 	for _, arg := range args {
 		if hasExtensionDirectoryRef(arg) {
 			return empty, errors.New("MCP argument extension paths require separate target bindings")

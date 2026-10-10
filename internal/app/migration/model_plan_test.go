@@ -21,16 +21,16 @@ func TestConvertModelsPreservesSharedCatalogAndDirectChains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Catalog) != 3 || len(got.Agents) != 4 || len(got.Fallbacks) != 2 {
+	if len(got.Catalog) != 3 || len(got.Agents) != 4 {
 		t.Fatal(got)
 	}
-	for _, tail := range got.Fallbacks {
-		want := []ModelKey{}
-		if tail.Primary.Provider == "primary" {
-			want = []ModelKey{{"backup", "fallback"}}
+	for _, binding := range got.Agents {
+		want := []ModelKey{{"primary", "model"}, {"backup", "fallback"}}
+		if binding.SourceAgentID == "minimal" {
+			want = []ModelKey{{"local", "small"}}
 		}
-		if !reflect.DeepEqual(tail.Candidates, want) {
-			t.Fatal("fallback changed", tail)
+		if !reflect.DeepEqual(binding.Models, want) {
+			t.Fatal("Agent model order changed", binding)
 		}
 	}
 	for _, item := range got.Catalog {
@@ -65,17 +65,14 @@ func TestConvertModelsUsesEffectiveIdentityAndStableOrder(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(left, right) {
 		t.Fatal("unordered plan", err)
 	}
-	if left.Agents[0].Primary != (ModelKey{"effective", "one"}) {
+	if left.Agents[0].Models[0] != (ModelKey{"effective", "one"}) {
 		t.Fatal(left.Agents)
 	}
-	// Direct fallback chains can point at one another; Runtime never expands them.
-	if len(left.Fallbacks) != 2 {
-		t.Fatal(left.Fallbacks)
-	}
+
 }
 
-func TestConvertModelsRejectsPrivateAndChainConflicts(t *testing.T) {
-	for _, field := range []string{"credential", "endpoint", "header", "query", "capability", "compat", "thinking", "context", "cap", "protocol", "tail", "tail order"} {
+func TestConvertModelsRejectsPrivateCatalogConflicts(t *testing.T) {
+	for _, field := range []string{"credential", "endpoint", "header", "query", "capability", "compat", "thinking", "context", "cap", "protocol"} {
 		t.Run(field, func(t *testing.T) {
 			a, b, c := planModel("primary", "model"), planModel("backup", "one"), planModel("backup", "two")
 			other := planModel("primary", "model")
@@ -101,10 +98,6 @@ func TestConvertModelsRejectsPrivateAndChainConflicts(t *testing.T) {
 				other.MaxOutputTokens = 1024
 			case "protocol":
 				other.Profile.Protocol = llm.ProtocolOpenAIResponses
-			case "tail":
-				tail = []ResolvedModel{}
-			case "tail order":
-				tail = []ResolvedModel{c, b}
 			}
 			_, err := ConvertModels([]ResolvedModels{{AgentID: "one", Models: []ResolvedModel{a, b, c}}, {AgentID: "two", Models: append([]ResolvedModel{other}, tail...)}}, map[ModelKey]int{{"primary", "model"}: 4096, {"backup", "one"}: 4096, {"backup", "two"}: 4096})
 			if err == nil || strings.Contains(err.Error(), "private-") {
@@ -169,5 +162,27 @@ func TestConvertModelsKeepsPositiveCapSeparateFromReserve(t *testing.T) {
 	got := plan.Catalog[0].Configuration
 	if got.MaxOutput != 1024 || got.OutputReserve != 4096 {
 		t.Fatal("cap replaced by reserve")
+	}
+}
+
+func TestConvertModelsPreservesIndependentAgentModelOrder(t *testing.T) {
+	a, b, c := planModel("p", "a"), planModel("p", "b"), planModel("p", "c")
+	values := []ResolvedModels{{AgentID: "one", Models: []ResolvedModel{a, b, c}}, {AgentID: "two", Models: []ResolvedModel{a, c, b}}, {AgentID: "three", Models: []ResolvedModel{a}}}
+	result, err := ConvertModels(values, map[ModelKey]int{{"p", "a"}: 4096, {"p", "b"}: 4096, {"p", "c"}: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, binding := range result.Agents {
+		for _, original := range values {
+			if binding.SourceAgentID == original.AgentID {
+				want := make([]ModelKey, len(original.Models))
+				for i, m := range original.Models {
+					want[i] = ModelKey{m.Profile.ID, m.Profile.Model}
+				}
+				if !reflect.DeepEqual(binding.Models, want) {
+					t.Fatal(binding)
+				}
+			}
+		}
 	}
 }

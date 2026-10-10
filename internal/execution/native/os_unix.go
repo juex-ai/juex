@@ -4,13 +4,20 @@ package native
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"syscall"
 
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 )
+
+func fileIdentity(info os.FileInfo) string {
+	stat := info.Sys().(*syscall.Stat_t)
+	return fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
+}
 
 func acquireLock(path string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
@@ -33,6 +40,19 @@ func openRegular(path string, flags int, permission os.FileMode) (*os.File, erro
 	if err != nil || !info.Mode().IsRegular() {
 		_ = file.Close()
 		return nil, errors.New("file tools require a regular file")
+	}
+	return file, nil
+}
+
+func openRootRegular(root *os.Root, path string) (*os.File, error) {
+	file, err := root.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errors.New("file preview requires a regular file")
 	}
 	return file, nil
 }

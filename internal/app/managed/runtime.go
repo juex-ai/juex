@@ -24,7 +24,7 @@ func (a RuntimeAuthority) AuthorizeFleet(ctx context.Context, actor, tenant, own
 }
 
 func runtimeScope(a management.AgentAuthority) managedruntime.Scope {
-	return managedruntime.Scope{Capabilities: a.Agent.Capabilities, WorkerDepth: a.Agent.WorkerDepth, TenantID: a.Fleet.TenantID, UserID: a.Fleet.UserID, FleetID: a.Fleet.ID, AgentID: a.Agent.ID, ActorID: a.ActorID,
+	return managedruntime.Scope{AgentManagement: a.Agent.AgentManagement, Capabilities: a.Effective.Policy(), WorkerDepth: a.Agent.WorkerDepth, TenantID: a.Fleet.TenantID, UserID: a.Fleet.UserID, FleetID: a.Fleet.ID, AgentID: a.Agent.ID, ActorID: a.ActorID,
 		ActorAuthorizationEpoch: a.ActorAuthorizationEpoch, MembershipVersion: a.MembershipVersion, MembershipExecutionEpoch: a.MembershipExecutionEpoch, AgentExecutionEpoch: a.Agent.ExecutionEpoch}
 }
 
@@ -37,6 +37,9 @@ func runtimeError(err error) error {
 	}
 	if errors.Is(err, management.ErrInvalid) {
 		return managedruntime.ErrInvalid
+	}
+	if errors.Is(err, management.ErrConflict) {
+		return managedruntime.ErrConflict
 	}
 	return err
 }
@@ -57,7 +60,7 @@ func (a RuntimeAuthority) Snapshot(ctx context.Context, scope managedruntime.Sco
 	if err != nil {
 		return managedruntime.TurnConfig{}, runtimeError(err)
 	}
-	config := managedruntime.TurnConfig{Capabilities: plan.Capabilities, Extensions: plan.Extensions, Hooks: append(plan.Hooks, extensionpolicy.Hooks(plan.Extensions)...), WorkerDepth: plan.WorkerDepth, AgentVersion: plan.AgentVersion, Instructions: plan.Instructions, RequestedModelID: plan.RequestedModelID}
+	config := managedruntime.TurnConfig{AgentManagement: plan.AgentManagement, Capabilities: plan.Capabilities, Extensions: plan.Extensions, Hooks: append(plan.Hooks, extensionpolicy.Hooks(plan.Extensions)...), WorkerDepth: plan.WorkerDepth, AgentVersion: plan.AgentVersion, Instructions: plan.Instructions, RequestedModelID: plan.RequestedModelID}
 	config.DynamicInstructions = plan.DynamicInstructions
 	for _, candidate := range plan.Candidates {
 		config.Models = append(config.Models, managedruntime.ModelConfig(candidate))
@@ -102,4 +105,20 @@ func (a RuntimeAuthority) Peers(ctx context.Context, scope managedruntime.Scope)
 		result = append(result, managedruntime.PeerAgent(value))
 	}
 	return result, nil
+}
+
+func (a RuntimeAuthority) ExtensionCatalog(ctx context.Context, scope managedruntime.Scope) (managedruntime.ExtensionCatalog, error) {
+	authority, err := a.Directory.AuthorizeAgent(ctx, scope.ActorID, scope.TenantID, scope.AgentID)
+	if err != nil {
+		return managedruntime.ExtensionCatalog{}, runtimeError(err)
+	}
+	if !scope.SameAuthority(runtimeScope(authority)) {
+		return managedruntime.ExtensionCatalog{}, managedruntime.ErrDenied
+	}
+	return managedruntime.ExtensionCatalog{AgentVersion: authority.Agent.Version, Bindings: authority.Agent.Extensions}, nil
+}
+
+func (a RuntimeAuthority) ResolveProcessEnvironment(ctx context.Context, access management.ProcessEnvironmentAccess) (map[string]string, error) {
+	values, err := a.Directory.ResolveProcessEnvironment(ctx, access)
+	return values, runtimeError(err)
 }

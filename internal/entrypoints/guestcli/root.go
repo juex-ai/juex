@@ -2,6 +2,8 @@
 package guestcli
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/juex-ai/juex/internal/execution/connector"
 	"github.com/juex-ai/juex/internal/execution/native"
@@ -107,6 +110,15 @@ func Execute(ctx context.Context, args []string, in io.Reader, out io.Writer) er
 		if !filepath.IsAbs(directory) {
 			return execprotocol.ErrInvalid
 		}
+		if request.Kind == "apply_patch" {
+			var output strings.Builder
+			err := native.RunFileOperation(cmd.Context(), directory, request.Kind, args, &output)
+			reply := native.PatchWorkerReply{Output: output.String(), Unknown: errors.Is(err, execprotocol.ErrOutcomeUnknown)}
+			if err != nil {
+				reply.Error = err.Error()
+			}
+			return json.NewEncoder(out).Encode(reply)
+		}
 		return native.RunFileOperation(cmd.Context(), directory, request.Kind, args, out)
 	}}
 	file.Flags().StringVar(&directory, "working-directory", "/workspace", "Default file tool working directory")
@@ -138,6 +150,23 @@ func Execute(ctx context.Context, args []string, in io.Reader, out io.Writer) er
 	transfer.Flags().StringVar(&direction, "direction", "", "export or import")
 	transfer.Flags().StringVar(&sha256, "sha256", "", "Expected import SHA-256")
 	transfer.Flags().Int64Var(&size, "size", 0, "Expected import bytes")
-	root.AddCommand(serve, file, transfer, extensionCommand())
+	write := &cobra.Command{Use: "write-tool", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if os.Geteuid() == 0 {
+			return errors.New("file writes must run as an unprivileged user")
+		}
+		stream := bufio.NewReaderSize(in, 16<<10)
+		header, err := stream.ReadSlice('\n')
+		if err != nil {
+			return err
+		}
+		decoder := json.NewDecoder(bytes.NewReader(header))
+		decoder.DisallowUnknownFields()
+		var request native.WriteWorkerInput
+		if err := decoder.Decode(&request); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(native.RunWriteWorker(cmd.Context(), request, stream))
+	}}
+	root.AddCommand(serve, file, transfer, write, extensionCommand(), processCommand())
 	return root.ExecuteContext(ctx)
 }

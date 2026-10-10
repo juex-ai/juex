@@ -2,6 +2,7 @@ package managed
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/juex-ai/juex/internal/execution"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
@@ -59,4 +60,18 @@ func (a *ExecutionAuthority) Agent(ctx context.Context, actor, tenant, agent str
 		return execution.Scope{}, execprotocol.ErrDenied
 	}
 	return execution.Scope{Capabilities: authority.Capabilities, OwnerScope: owner, AgentID: authority.AgentID, AgentExecutionEpoch: authority.AgentExecutionEpoch}, nil
+}
+
+func (a *ExecutionAuthority) ResolveProcessEnvironment(ctx context.Context, scope execution.Scope, environment, directory string) (map[string]string, error) {
+	access := management.ProcessEnvironmentAccess{Scope: management.ModelCallScope{ActorID: scope.ActorID, TenantID: scope.TenantID, AgentID: scope.AgentID, UserID: scope.UserID, FleetID: scope.FleetID, ActorAuthorizationEpoch: scope.ActorAuthorizationEpoch, MembershipExecutionEpoch: scope.MembershipExecutionEpoch, AgentExecutionEpoch: scope.AgentExecutionEpoch}, EnvironmentID: environment, WorkingDirectory: directory}
+	raw, err := json.Marshal(access)
+	if err != nil {
+		return nil, err
+	}
+	reply, err := a.client.ResolveProcessEnvironment(ctx, string(raw))
+	var values map[string]string
+	if err := platformrpc.Decode(reply, err, &values, executionCode); err != nil {
+		return nil, err
+	}
+	return values, nil
 }

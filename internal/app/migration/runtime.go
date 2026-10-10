@@ -59,6 +59,10 @@ type SourceCommit struct {
 // ConvertRuntime converts a snapshot returned by legacy.ReadAgent/ReadFleet.
 // It has no I/O, live authority lookup or store recovery behavior.
 func ConvertRuntime(scope managedruntime.Scope, source legacy.Agent, bindings RuntimeBindings) (RuntimeConversion, error) {
+	return convertRuntimeForPolicy(scope, source, bindings, 3)
+}
+
+func convertRuntimeForPolicy(scope managedruntime.Scope, source legacy.Agent, bindings RuntimeBindings, policy int) (RuntimeConversion, error) {
 	c, err := newMessageConverter(scope, source, bindings.Artifacts)
 	if err != nil {
 		return RuntimeConversion{}, err
@@ -99,12 +103,24 @@ func ConvertRuntime(scope managedruntime.Scope, source legacy.Agent, bindings Ru
 		CommitSpans: map[string]map[uint64]SequenceSpan{},
 	}
 	for _, thread := range source.Threads {
+		if policy >= 3 {
+			if err := requireSettledSourceWrites(thread); err != nil {
+				return RuntimeConversion{}, err
+			}
+		}
 		id := thread.Metadata.ThreadID
 		tc := threadConverter{messages: c, originalID: id, canonical: map[string]json.RawMessage{}, identities: &result.Identities, spans: map[uint64]SequenceSpan{}}
 		result.Identities.Threads[id] = c.threadID(id).String()
 		result.Identities.Messages[id], result.Identities.Inputs[id], result.Identities.Turns[id] = map[string]string{}, map[string]string{}, map[string]string{}
 		if err := tc.convert(thread, bindings); err != nil {
 			return RuntimeConversion{}, fmt.Errorf("source Thread %s: %w", id, err)
+		}
+		if policy >= 3 {
+			tracking, err := sourceInputTracking(thread)
+			if err != nil {
+				return RuntimeConversion{}, fmt.Errorf("source Thread %s tracking: %w", id, err)
+			}
+			tc.value.InputTracking = tc.convertInputTracking(tracking)
 		}
 		tc.value.State, err = currentThreadState(thread, source.Files)
 		if err != nil {

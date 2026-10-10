@@ -19,12 +19,17 @@ func Digest(secret string) string {
 }
 
 type Service struct {
-	Admission maintenance.Admission
-	Store     Repository
-	Authority Authority
-	Managed   *ManagedManager
-	Blobs     *ArtifactManager
-	Transfers TransferRepository
+	ProcessEnvironments ProcessEnvironmentResolver
+	Admission           maintenance.Admission
+	Store               Repository
+	Authority           Authority
+	Managed             *ManagedManager
+	Blobs               *ArtifactManager
+	Transfers           TransferRepository
+}
+
+type ProcessEnvironmentResolver interface {
+	ResolveProcessEnvironment(context.Context, Scope, string, string) (map[string]string, error)
 }
 
 func validDigest(value string) bool {

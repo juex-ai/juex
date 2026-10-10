@@ -41,9 +41,9 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		return work, managedruntime.ErrDenied
 	}
 	var text, actor, state string
-	var source []byte
+	var source, encodedImages []byte
 	var memberEpoch, agentEpoch, actorEpoch int64
-	err = tx.QueryRow(ctx, `SELECT text,actor_id,state,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch,source FROM runtime.inputs WHERE id=$1 FOR UPDATE`, inputID).Scan(&text, &actor, &state, &memberEpoch, &agentEpoch, &actorEpoch, &source)
+	err = tx.QueryRow(ctx, `SELECT text,actor_id,state,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch,source,images FROM runtime.inputs WHERE id=$1 FOR UPDATE`, inputID).Scan(&text, &actor, &state, &memberEpoch, &agentEpoch, &actorEpoch, &source, &encodedImages)
 	if err != nil {
 		return work, err
 	}
@@ -58,6 +58,7 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 	}
 	work.ThreadID, work.Generation = thread.ID, thread.Generation
 	work.Application = thread.Application
+	work.ThreadKind = thread.Kind
 	switch state {
 	case "active":
 		var encoded []byte
@@ -138,7 +139,17 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 			}
 			text = "Explicit collaboration message; source metadata: " + string(provenance) + "\n\n" + text
 		}
-		message := llm.TextMessage(llm.RoleUser, text)
+		message := llm.Message{Role: llm.RoleUser}
+		if text != "" {
+			message.Blocks = append(message.Blocks, llm.Block{Type: llm.BlockText, Text: text})
+		}
+		var images []managedruntime.InputImage
+		if err := json.Unmarshal(encodedImages, &images); err != nil {
+			return work, err
+		}
+		for _, image := range images {
+			message.Blocks = append(message.Blocks, llm.Block{Type: llm.BlockImage, Media: image.MediaRef()})
+		}
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
 		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" || work.Source.Kind == "application_trigger" {
@@ -163,6 +174,20 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 	} else if deferred {
 		work.Deferred = true
 		return work, tx.Commit(ctx)
+	}
+	if err = deliverTrackedInput(ctx, tx, thread.ID, inputID); err != nil {
+		return work, err
+	}
+	work.InputReminders, err = readInputReminders(ctx, tx, thread.ID)
+	if err != nil {
+		return work, err
+	}
+	if err := tx.QueryRow(ctx, `SELECT input_scope FROM runtime.threads WHERE id=$1`, thread.ID).Scan(&work.InputScopeID); err != nil {
+		return work, err
+	}
+	work.ActiveWrites, err = readActiveWrites(ctx, tx, work)
+	if err != nil {
+		return work, err
 	}
 	work.Compaction, err = readCompaction(ctx, tx, work.TurnID)
 	if err != nil {
@@ -312,6 +337,9 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 	if err := appendEvent(ctx, tx, threadID, "model.started", map[string]any{"attempt_id": attempt.ID, "turn_id": turnID, "ordinal": attempt.Ordinal, "model_id": request.Model.ModelID, "model": request.Model.Provider + ":" + request.Model.Model}); err != nil {
 		return attempt, err
 	}
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.attempt_progress(attempt_id,start_sequence) SELECT $1,sequence FROM runtime.threads WHERE id=$2`, attempt.ID, threadID); err != nil {
+		return attempt, err
+	}
 	return attempt, tx.Commit(ctx)
 }
 
@@ -391,6 +419,11 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.attempts SET response=$2,state=$3,usage=$4,usage_status=$5,completed_at=clock_timestamp() WHERE id=$1`, attemptID, encoded, state, usage, response.UsageStatus); err != nil {
 		return err
+	}
+	if failure == "" {
+		if _, err := tx.Exec(ctx, `DELETE FROM runtime.attempt_progress WHERE attempt_id=$1`, attemptID); err != nil {
+			return err
+		}
 	}
 	if err := appendEvent(ctx, tx, threadID, "model.completed", map[string]any{"attempt_id": attemptID, "turn_id": turnID, "model": response.Message.Model, "usage_status": response.UsageStatus, "usage": json.RawMessage(usage), "error": failure}); err != nil {
 		return err

@@ -29,7 +29,7 @@ func validateLiveDynamicInstructions(t *testing.T) {
 	connectExecutionDevice(t, f, device, token, engine)
 	config := instructionpolicy.DynamicInstructions{Enabled: true}
 	var err error
-	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Instructions: "Use the current Agent guidance to answer the validation prompt. Never call tools for this validation.", DynamicInstructions: &config})
+	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Instructions: "Use the current Agent guidance to answer the validation prompt. Never call tools for this validation.", DynamicInstructions: &config, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

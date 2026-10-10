@@ -27,7 +27,7 @@ import (
 func TestLegacyMemoryConversionPreservesAPIProvenanceWithoutReplay(t *testing.T) {
 	ctx := context.Background()
 	f := managedRuntimeHTTP(t, func(http.ResponseWriter, *http.Request) { t.Error("historical Memory invoked provider") })
-	agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Imported Memory source", ModelID: f.agent.ModelID})
+	agent, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Imported Memory source", Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

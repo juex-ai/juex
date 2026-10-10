@@ -100,6 +100,16 @@ func importThread(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, im
 			return err
 		}
 	}
+	if tracking := imported.InputTracking; tracking != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.threads SET input_scope=$2 WHERE id=$1`, t.ID, tracking.ScopeID); err != nil {
+			return err
+		}
+		for _, item := range tracking.Entries {
+			if _, err := tx.Exec(ctx, `INSERT INTO runtime.input_tracking(thread_id,input_id,scope_id,accepted_order,message_id,delivery,checked_at,check_action_id,check_message_id,tool_use_id) VALUES($1,$2,$3,$4,NULLIF($5,'')::uuid,$6,$7,NULLIF($8,'')::uuid,NULLIF($9,'')::uuid,NULLIF($10,''))`, t.ID, item.InputID, item.ScopeID, item.AcceptedOrder, item.MessageID, item.Delivery, item.CheckedAt, item.CheckActionID, item.CheckMessageID, item.ToolUseID); err != nil {
+				return err
+			}
+		}
+	}
 	ids := imported.Context
 	if ids == nil {
 		ids = []string{}

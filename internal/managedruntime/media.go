@@ -15,7 +15,8 @@ import (
 
 var ErrMediaUnavailable = errors.New("referenced media is unavailable or exceeds the request limit")
 
-const maxRequestMediaBytes = 20 << 20
+// Match one full eight-image input while keeping historical wire bytes bounded.
+const maxRequestMediaBytes = MaxInputImages * llm.MaxProviderImageArtifactBytes
 
 type MediaGateway interface {
 	ReadMedia(context.Context, Scope, llm.MediaRef) ([]byte, error)

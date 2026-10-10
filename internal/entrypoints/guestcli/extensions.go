@@ -38,3 +38,21 @@ func extensionCommand() *cobra.Command {
 	command.Flags().StringVar(&directory, "directory", "", "Installed resource directory")
 	return command
 }
+
+func processCommand() *cobra.Command {
+	return &cobra.Command{Use: "process-exec", Hidden: true, Args: cobra.MinimumNArgs(1), RunE: func(_ *cobra.Command, args []string) error {
+		if os.Geteuid() == 0 {
+			return errors.New("process commands must run as an unprivileged user")
+		}
+		directory, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		values := os.Environ()
+		executable, err := native.ExtensionExecutable(args[0], directory, values)
+		if err != nil {
+			return err
+		}
+		return syscall.Exec(executable, args, values)
+	}}
+}

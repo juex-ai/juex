@@ -69,17 +69,6 @@ func modelCommand(open func(*cobra.Command) (*managed.Management, error), out io
 	put.Flags().IntVar(&maxOutput, "max-output", 4096, "Normal request output cap; zero uses the provider default and requires --output-reserve")
 	put.Flags().IntVar(&outputReserve, "output-reserve", 0, "Positive context reservation for output; defaults to max-output when omitted")
 	root.AddCommand(put)
-	root.AddCommand(&cobra.Command{Use: "default <model-id>", Short: "Set the deployment default inherited by Fleets", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		app, err := open(cmd)
-		if err != nil {
-			return err
-		}
-		defer app.Close()
-		if err := app.Directory.SetPlatformModel(cmd.Context(), args[0]); err != nil {
-			return err
-		}
-		return json.NewEncoder(out).Encode(map[string]string{"default_model_id": args[0]})
-	}})
 	var inherit bool
 	var allowed []string
 	access := &cobra.Command{Use: "access <tenant-id>", Short: "Set tenant model access; an empty allow list denies all models", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -99,17 +88,6 @@ func modelCommand(open func(*cobra.Command) (*managed.Management, error), out io
 	access.Flags().BoolVar(&inherit, "inherit", false, "Inherit the deployment model catalog")
 	access.Flags().StringSliceVar(&allowed, "allow", nil, "Comma-separated permitted model IDs; empty denies all")
 	root.AddCommand(access)
-	root.AddCommand(&cobra.Command{Use: "fallback <model-id> [fallback-model-id...]", Short: "Set an ordered fallback list (at most four); omit candidates to clear it", Args: cobra.RangeArgs(1, 5), RunE: func(cmd *cobra.Command, args []string) error {
-		app, err := open(cmd)
-		if err != nil {
-			return err
-		}
-		defer app.Close()
-		if err := app.Directory.SetModelFallbacks(cmd.Context(), args[0], args[1:]); err != nil {
-			return err
-		}
-		return json.NewEncoder(out).Encode(map[string]any{"model_id": args[0], "fallback_model_ids": args[1:]})
-	}})
 	for _, enabled := range []bool{true, false} {
 		use := "disable"
 		if enabled {

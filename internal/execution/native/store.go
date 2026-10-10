@@ -17,25 +17,30 @@ import (
 )
 
 type record struct {
-	Request            execprotocol.Request     `json:"request"`
-	Hash               string                   `json:"hash"`
-	State              execprotocol.State       `json:"state"`
-	OutputBytes        int64                    `json:"output_bytes"`
-	Truncated          bool                     `json:"truncated"`
-	OutputExpired      bool                     `json:"output_expired"`
-	ExitCode           *int                     `json:"exit_code"`
-	Error              string                   `json:"error"`
-	PID                int                      `json:"pid"`
-	ProcessIdentity    string                   `json:"process_identity"`
-	CreatedAt          time.Time                `json:"created_at"`
-	UpdatedAt          time.Time                `json:"updated_at"`
-	AcknowledgedAt     *time.Time               `json:"acknowledged_at"`
-	CancelRequested    bool                     `json:"cancel_requested"`
-	File               *execprotocol.FileStatus `json:"file,omitempty"`
-	FileReserved       int64                    `json:"file_reserved,omitempty"`
-	FileExpired        bool                     `json:"file_expired,omitempty"`
-	FileAcknowledgedAt *time.Time               `json:"file_acknowledged_at,omitempty"`
-	FileDiscarded      bool                     `json:"file_discarded,omitempty"`
+	EnvironmentDigest  string                      `json:"environment_digest,omitempty"`
+	Write              *execprotocol.WriteReceipt  `json:"write,omitempty"`
+	WriteTarget        *WriteTarget                `json:"write_target,omitempty"`
+	WriteAttempted     bool                        `json:"write_attempted,omitempty"`
+	MCP                *execprotocol.MCPConnection `json:"mcp,omitempty"`
+	Request            execprotocol.Request        `json:"request"`
+	Hash               string                      `json:"hash"`
+	State              execprotocol.State          `json:"state"`
+	OutputBytes        int64                       `json:"output_bytes"`
+	Truncated          bool                        `json:"truncated"`
+	OutputExpired      bool                        `json:"output_expired"`
+	ExitCode           *int                        `json:"exit_code"`
+	Error              string                      `json:"error"`
+	PID                int                         `json:"pid"`
+	ProcessIdentity    string                      `json:"process_identity"`
+	CreatedAt          time.Time                   `json:"created_at"`
+	UpdatedAt          time.Time                   `json:"updated_at"`
+	AcknowledgedAt     *time.Time                  `json:"acknowledged_at"`
+	CancelRequested    bool                        `json:"cancel_requested"`
+	File               *execprotocol.FileStatus    `json:"file,omitempty"`
+	FileReserved       int64                       `json:"file_reserved,omitempty"`
+	FileExpired        bool                        `json:"file_expired,omitempty"`
+	FileAcknowledgedAt *time.Time                  `json:"file_acknowledged_at,omitempty"`
+	FileDiscarded      bool                        `json:"file_discarded,omitempty"`
 }
 
 type stateIdentity struct {
@@ -159,6 +164,9 @@ func (e *Engine) load() error {
 		}
 		if r.FileReserved < 0 || r.FileReserved > execprotocol.MaxFileBytes+4096 || r.File != nil && (r.File.Manifest.Validate() != nil || r.File.Cursor < 0 || r.File.Cursor > r.File.Manifest.Size) {
 			return errors.New("invalid durable file transfer record")
+		}
+		if r.Write != nil && r.Write.Validate(r.Request) != nil || r.WriteAttempted && r.Request.Kind != "write_commit" || r.WriteTarget != nil && (r.Request.Kind != "write_begin" || r.Write == nil) || execprotocol.IsChunkedWrite(r.Request.Kind) && r.State == execprotocol.Completed && r.Write == nil {
+			return errors.New("invalid durable write receipt")
 		}
 		if r.State == execprotocol.Completed && r.File != nil && !r.FileExpired {
 			status, err := e.files.Status(e.fileID(r.Request.ID))

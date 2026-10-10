@@ -75,7 +75,7 @@ func TestManagedRuntimeUsageOwnerPermissionsAndHTTP(t *testing.T) {
 	if _, err := f.directory.AcceptInvitation(ctx, member.ID, token); err != nil {
 		t.Fatal(err)
 	}
-	agent, err := f.directory.CreateAgent(ctx, member.ID, f.tenant, member.ID, management.AgentConfig{Name: "Usage owner", ModelID: f.agent.ModelID})
+	agent, err := f.directory.CreateAgent(ctx, member.ID, f.tenant, member.ID, management.AgentConfig{Name: "Usage owner", Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

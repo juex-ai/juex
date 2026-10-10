@@ -17,8 +17,7 @@ func TestHostFilesMapCurrentAndArchivedThreadsAndStableExtensionState(t *testing
 		data := []byte(name)
 		source.Files = append(source.Files, legacy.SourceFile{Path: name, Data: data, Mode: 0600, Size: int64(len(data)), SHA256: bundleDigest(data)})
 	}
-	policy := agentpolicy.Policy{}
-	prepared := PreparedBundle{Agents: map[string]management.AgentConfig{"source": {Capabilities: &policy}}, Extensions: map[string][]extensionpolicy.Manifest{"source": {{Name: "chat"}}}}
+	prepared := PreparedBundle{Agents: map[string]management.AgentConfig{"source": {Configuration: &management.Configuration{Modules: map[agentpolicy.Capability]bool{agentpolicy.WorkingFiles: true}}}}, Extensions: map[string][]extensionpolicy.Manifest{"source": {{Name: "chat"}}}}
 	bag := &Bundle{digest: bundleDigest([]byte("source"))}
 	namespace := uuid.New()
 	request, err := bag.hostFiles(source, namespace.String(), prepared)

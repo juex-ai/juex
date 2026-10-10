@@ -2,17 +2,26 @@ package management
 
 import (
 	"encoding/hex"
+	"errors"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/juex-ai/juex/internal/foundation/processenv"
 )
 
+// ErrImportProofVersion requires explicit recovery against the retained v1 payload.
+var ErrImportProofVersion = errors.New("retained import uses proof version 1")
+
 // ImportedAgent binds a source identity to initial configuration. It carries
-// neither old execution authority nor a caller-selected target identity.
+// neither old execution epochs nor a caller-selected target identity.
 type ImportedAgent struct {
 	SourceAgentID string      `json:"source_agent_id"`
 	Config        AgentConfig `json:"config"`
+	// Private offline payload, never exposed by HTTP or a model tool. These
+	// initial declarations are covered by the same immutable import receipt.
+	Environment     map[string]string `json:"environment,omitempty"`
+	AgentManagement bool              `json:"agent_management,omitempty"`
 }
 
 // AgentsImport is an offline creation request for an empty retained Fleet.
@@ -36,16 +45,11 @@ func (v AgentsImport) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, item := range v.Agents {
-		if strings.TrimSpace(item.SourceAgentID) != item.SourceAgentID || item.SourceAgentID == "" || len(item.SourceAgentID) > 128 || seen[item.SourceAgentID] || item.Config.Validate() != nil || !validImportedText(item) {
+		if strings.TrimSpace(item.SourceAgentID) != item.SourceAgentID || item.SourceAgentID == "" || len(item.SourceAgentID) > 128 || seen[item.SourceAgentID] || item.Config.Validate() != nil || processenv.Validate(item.Environment) != nil || !validImportedText(item) {
 			return ErrInvalid
 		}
 		seen[item.SourceAgentID] = true
-		if item.Config.ModelID != "" {
-			id, err := uuid.Parse(item.Config.ModelID)
-			if err != nil || id == uuid.Nil || id.String() != item.Config.ModelID {
-				return ErrInvalid
-			}
-		}
+
 	}
 	return nil
 }

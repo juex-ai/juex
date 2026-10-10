@@ -51,13 +51,15 @@ type ApplyConfig struct {
 // ApplyReport records inert imports. Environment selection, extension resource
 // installation and actual application acceptance are separate cutover steps.
 type ApplyReport struct {
-	BundleSHA256 string                                 `json:"bundle_sha256"`
-	Agents       map[string]string                      `json:"agents,omitempty"`
-	Threads      map[string]map[string]string           `json:"threads,omitempty"`
-	Stages       []string                               `json:"stages,omitempty"`
-	Artifacts    int                                    `json:"artifacts"`
-	Files        map[string]execution.HostImportReceipt `json:"files,omitempty"`
-	Imported     bool                                   `json:"imported"`
+	ConversionPolicy     int                                    `json:"conversion_policy"`
+	InputTrackingThreads int                                    `json:"input_tracking_threads"`
+	BundleSHA256         string                                 `json:"bundle_sha256"`
+	Agents               map[string]string                      `json:"agents,omitempty"`
+	Threads              map[string]map[string]string           `json:"threads,omitempty"`
+	Stages               []string                               `json:"stages,omitempty"`
+	Artifacts            int                                    `json:"artifacts"`
+	Files                map[string]execution.HostImportReceipt `json:"files,omitempty"`
+	Imported             bool                                   `json:"imported"`
 }
 
 // Apply imports owner state while keeping source locks and destination
@@ -151,7 +153,8 @@ func Apply(ctx context.Context, b *Bundle, config ApplyConfig) (report ApplyRepo
 		return report, errors.New("target Fleet identity changed")
 	}
 	report.BundleSHA256 = b.digest
-	modelIDs, err := PublishModels(ctx, directory, target.TenantID, "juex/281889e5/fleet/"+b.source.ID, b.digest, prepared.Models)
+	report.ConversionPolicy = b.conversionPolicy
+	modelIDs, recoveredV1, err := publishModels(ctx, directory, target.TenantID, "juex/281889e5/fleet/"+b.source.ID, b.digest, prepared.Models)
 	if err != nil {
 		return report, err
 	}
@@ -162,10 +165,25 @@ func Apply(ctx context.Context, b *Bundle, config ApplyConfig) (report ApplyRepo
 	request := management.AgentsImport{ExpectedFleetID: target.FleetID, Source: "juex/281889e5/fleet/" + b.source.ID, SourceSHA256: b.digest}
 	for _, binding := range prepared.Models.Agents {
 		value := prepared.Agents[binding.SourceAgentID]
-		value.ModelID = modelIDs[binding.Primary].ID
-		request.Agents = append(request.Agents, management.ImportedAgent{SourceAgentID: binding.SourceAgentID, Config: value})
+		value.Configuration.Models = nil
+		for _, key := range binding.Models {
+			value.Configuration.Models = append(value.Configuration.Models, modelIDs[key].ID)
+		}
+		request.Agents = append(request.Agents, management.ImportedAgent{SourceAgentID: binding.SourceAgentID, Config: value, Environment: prepared.Environments[binding.SourceAgentID], AgentManagement: prepared.AgentManagement[binding.SourceAgentID]})
+	}
+	if recoveredV1 && b.conversionPolicy == 2 {
+		if _, err := agentProofV1(request); err != nil {
+			return report, err
+		}
 	}
 	report.Agents, err = directory.ImportAgents(ctx, target.ActorID, target.TenantID, target.UserID, request)
+	if errors.Is(err, management.ErrImportProofVersion) && recoveredV1 && b.conversionPolicy == 2 {
+		proof, proofErr := agentProofV1(request)
+		if proofErr != nil {
+			return report, proofErr
+		}
+		report.Agents, err = directory.RecoverAgentImportV1(ctx, target.ActorID, target.TenantID, target.UserID, proof)
+	}
 	if err != nil {
 		return report, err
 	}
@@ -280,12 +298,17 @@ func Apply(ctx context.Context, b *Bundle, config ApplyConfig) (report ApplyRepo
 		if err != nil {
 			return report, err
 		}
-		converted, err := ConvertRuntime(scope, agent, RuntimeBindings{SourceSHA256: b.digest, Artifacts: artifacts, ModelOrigins: origins, WorkingFiles: restoredWorkingFiles(agent, id, restored)})
+		converted, err := convertRuntimeForPolicy(scope, agent, RuntimeBindings{SourceSHA256: b.digest, Artifacts: artifacts, ModelOrigins: origins, WorkingFiles: restoredWorkingFiles(agent, id, restored)}, b.conversionPolicy)
 		if err != nil {
 			return report, err
 		}
 		if err := runtimepg.New(pool).ImportAgent(ctx, scope, converted.Import); err != nil {
 			return report, err
+		}
+		for _, thread := range converted.Import.Threads {
+			if thread.InputTracking != nil {
+				report.InputTrackingThreads++
+			}
 		}
 		report.Threads[agent.Definition.ID] = converted.Identities.Threads
 		report.Stages = append(report.Stages, "runtime/"+agent.Definition.ID)
