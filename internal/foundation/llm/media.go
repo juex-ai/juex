@@ -33,6 +33,9 @@ func mediaReferenceText(label string, media *MediaRef) string {
 		return "[" + label + ": missing media reference]"
 	}
 	parts := make([]string, 0, 6)
+	if media.ArtifactID != "" {
+		parts = append(parts, "artifact_id="+media.ArtifactID)
+	}
 	if media.ArtifactPath != "" {
 		parts = append(parts, "path="+media.ArtifactPath)
 	}

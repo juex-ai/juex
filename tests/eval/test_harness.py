@@ -115,8 +115,11 @@ class CandidateIdentityTest(unittest.TestCase):
             binary.write_bytes(b'second')
             second = verification.artifact_fingerprints(root)
             self.assertNotEqual(first, second)
-            self.assertEqual(len(first), 9)
+            self.assertEqual(len(first), 10)
             self.assertEqual(first['dist/juex-management']['status'], 'missing')
+            migration = root / 'dist/juex-migrate'
+            migration.write_bytes(b'importer')
+            self.assertNotEqual(second, verification.artifact_fingerprints(root))
 
     def test_runtime_requires_race_live_and_compaction(self):
         plan = validation_plan.plan_for_changes('final', [validation_plan.ChangedFile('M', 'internal/managedruntime/engine.go')], base_sha='a' * 40, head_sha='b' * 40, dirty=False)

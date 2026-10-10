@@ -56,6 +56,7 @@ func setThreadArchived(ctx context.Context, tx pgx.Tx, scope managedruntime.Scop
  EXISTS(SELECT 1 FROM runtime.inputs WHERE thread_id=$1 AND state IN ('queued','active')) OR
  EXISTS(SELECT 1 FROM runtime.turns WHERE thread_id=$1 AND state IN ('running','waiting')) OR
  EXISTS(SELECT 1 FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id WHERE t.thread_id=$1 AND (j.state IN ('pending','waiting','unknown') OR j.operation_live)) OR
+ EXISTS(SELECT 1 FROM runtime.observer_controls WHERE thread_id=$1 AND (desired='running' AND mode='continuous' OR state NOT IN ('completed','failed','cancelled'))) OR
  EXISTS(SELECT 1 FROM runtime.hooks WHERE thread_id=$1 AND state IN ('pending','waiting','unknown')) OR
  EXISTS(SELECT 1 FROM runtime.instruction_preparations WHERE thread_id=$1 AND (state IN ('pending','waiting','unknown') OR NOT output_acknowledged)) OR
  EXISTS(SELECT 1 FROM runtime.threads WHERE parent_id=$1 AND retention='active') OR
@@ -64,6 +65,9 @@ func setThreadArchived(ctx context.Context, tx pgx.Tx, scope managedruntime.Scop
 		}
 		if busy {
 			return thread, managedruntime.ErrConflict
+		}
+		if _, err = tx.Exec(ctx, `UPDATE runtime.observer_subscriptions SET enabled=false WHERE thread_id=$1`, id); err != nil {
+			return thread, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE runtime.subscriptions SET enabled=false,generation=generation+1 WHERE thread_id=$1 AND enabled`, id); err != nil {
 			return thread, err

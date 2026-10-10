@@ -371,12 +371,12 @@ func TestManagedCalendarTriggerCannotUseRestoredAgentAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Calendar}}
-	changed, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Capabilities: &policy})
+	changed, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Configuration: &management.Configuration{Models: f.agent.Configuration.Models, Modules: modulesForPolicy(&policy)}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	policy.Disabled = nil
-	if _, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, changed.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Capabilities: &policy}); err != nil {
+	if _, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, changed.Version, management.AgentConfig{Name: f.agent.Name, Configuration: &management.Configuration{Models: f.agent.Configuration.Models, Modules: modulesForPolicy(&policy)}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.service.AdmitMainTrigger(ctx, runtimeScope, trigger); !errors.Is(err, managedruntime.ErrDenied) {

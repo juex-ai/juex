@@ -93,6 +93,40 @@ func (h *executionHandler) Environments(ctx context.Context, actor *platform.Act
 	return executionReply(v, err)
 }
 
+func (h *executionHandler) InspectEnvironments(ctx context.Context, actor *platform.Actor) (*platform.Reply, error) {
+	if !managementCaller(ctx) {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
+	if !validActor(actor) {
+		return executionReply(nil, execprotocol.ErrInvalid)
+	}
+	v, err := h.service.InspectEnvironments(ctx, actor.UserID, actor.TenantID, actor.AgentID)
+	return executionReply(v, err)
+}
+
+func (h *executionHandler) InspectMCP(ctx context.Context, actor *platform.Actor, after string) (*platform.Reply, error) {
+	if !managementCaller(ctx) {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
+	if !validActor(actor) {
+		return executionReply(nil, execprotocol.ErrInvalid)
+	}
+	v, err := h.service.InspectMCP(ctx, actor.UserID, actor.TenantID, actor.AgentID, after)
+	return executionReply(v, err)
+}
+
+func (h *executionHandler) RefreshMCPTools(ctx context.Context, actor *platform.Actor, environment, connection, encoded string) (*platform.Reply, error) {
+	if !managementCaller(ctx) {
+		return executionReply(nil, execprotocol.ErrDenied)
+	}
+	var change execution.MCPRefresh
+	if !validActor(actor) || len(encoded) > 8192 || json.Unmarshal([]byte(encoded), &change) != nil {
+		return executionReply(nil, execprotocol.ErrInvalid)
+	}
+	v, err := h.service.RefreshMCPTools(ctx, actor.UserID, actor.TenantID, actor.AgentID, environment, connection, change)
+	return executionReply(v, err)
+}
+
 func (h *executionHandler) DefaultEnvironment(ctx context.Context, actor *platform.Actor) (*platform.Reply, error) {
 	if !managementCaller(ctx) {
 		return executionReply(nil, execprotocol.ErrDenied)

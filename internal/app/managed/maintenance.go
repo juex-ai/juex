@@ -21,7 +21,7 @@ func InspectMaintenance(ctx context.Context, address string, offline bool) ([]ma
 	}
 	defer pool.Close()
 	if offline {
-		if err := requireOffline(ctx, pool); err != nil {
+		if err := RequireOffline(ctx, pool); err != nil {
 			return nil, err
 		}
 	}
@@ -36,7 +36,10 @@ func InspectMaintenance(ctx context.Context, address string, offline bool) ([]ma
 	return reports, nil
 }
 
-func requireOffline(ctx context.Context, pool *pgxpool.Pool) error {
+// RequireOffline checks that no other business database connection is open.
+// The caller must also hold the deployment maintenance barrier; this query
+// alone cannot prevent a service from connecting immediately afterwards.
+func RequireOffline(ctx context.Context, pool *pgxpool.Pool) error {
 	var others int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND pid<>pg_backend_pid()`).Scan(&others); err != nil {
 		return err

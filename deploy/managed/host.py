@@ -9,6 +9,7 @@ from platform import machine, system as platform_system
 import secrets
 import shutil
 import socket
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -19,7 +20,7 @@ from common import (HERE, SERVICES, absolute, digest, durable, environment, pack
 import processes
 import common
 
-BINARIES = ("juex", *("juex-" + name for name in (*SERVICES, "executor", "service-log")))
+BINARIES = ("juex", *("juex-" + name for name in (*SERVICES, "executor", "service-log", "migrate")))
 OPERATOR_FILES = ("operator.py", "common.py", "host.py", "hosted.py", "processes.py", "nginx.conf")
 service_status = processes.service_status
 
@@ -320,9 +321,13 @@ def start_database(config):
 def healthy(config):
     deadline = time.monotonic() + 90
     while True:
-        if (management(config, "services", "check", check=False, timeout=15).returncode == 0
-                and common.ingress_healthy(config)):
-            return
+        try:
+            if (management(config, "services", "check", check=False, timeout=15).returncode == 0
+                    and common.ingress_healthy(config)):
+                return
+        except subprocess.TimeoutExpired:
+            # A cold probe can exceed its own limit before startup expires.
+            pass
         if time.monotonic() >= deadline:
             raise RuntimeError("services or public gateway did not become healthy; maintenance retained")
         time.sleep(1)

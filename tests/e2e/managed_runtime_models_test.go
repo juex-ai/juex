@@ -53,7 +53,7 @@ func TestManagedRuntimeProviderFallbackUsesActualModel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := f.directory.SetModelFallbacks(context.Background(), f.agent.ModelID, []string{model.ID}); err != nil {
+			if err := f.configureModels(context.Background(), []string{f.agent.Configuration.Models[0], model.ID}); err != nil {
 				t.Fatal(err)
 			}
 			f.submit(t, "fallback", f.main.ID, "Hello")
@@ -205,7 +205,7 @@ func TestManagedRuntimeFallbackAfterToolWaitRechecksTenantAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{backup.ID}); err != nil {
+	if err := f.configureModels(ctx, []string{f.agent.Configuration.Models[0], backup.ID}); err != nil {
 		t.Fatal(err)
 	}
 	gateway := runtimeExecutionGateway(t, f)
@@ -220,7 +220,7 @@ func TestManagedRuntimeFallbackAfterToolWaitRechecksTenantAccess(t *testing.T) {
 	if err := f.directory.SetTenantModels(ctx, f.tenant, false, []string{backup.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, nil); err != nil {
+	if err := f.configureModels(ctx, []string{backup.ID}); err != nil {
 		t.Fatal(err)
 	}
 	work := t.TempDir()
@@ -256,10 +256,7 @@ func TestManagedRuntimeContextFallbackDoesNotLeaveUnusableCompaction(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.directory.SetModelFallbacks(ctx, model.ID, []string{f.agent.ModelID}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: model.ID, Instructions: strings.Repeat("fixed instruction ", 1000)}); err != nil {
+	if _, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Instructions: strings.Repeat("fixed instruction ", 1000), Configuration: &management.Configuration{Models: []string{model.ID, f.agent.Configuration.Models[0]}}}); err != nil {
 		t.Fatal(err)
 	}
 	f.submit(t, "large-fallback", f.main.ID, "Hello")
@@ -280,12 +277,12 @@ func TestManagedRuntimeFallbackContextLimitHoldsWithoutRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.directory.SetModelFallbacks(context.Background(), f.agent.ModelID, []string{model.ID}); err != nil {
+	if err := f.configureModels(context.Background(), []string{f.agent.Configuration.Models[0], model.ID}); err != nil {
 		t.Fatal(err)
 	}
 	// Original user/tool text can be projected into readable references. Agent
 	// instructions are authoritative and cannot be truncated to make a call fit.
-	if _, err := f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Instructions: strings.Repeat("context ", 1000)}); err != nil {
+	if _, err := f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Instructions: strings.Repeat("context ", 1000), Configuration: &management.Configuration{Models: f.agent.Configuration.Models}}); err != nil {
 		t.Fatal(err)
 	}
 	f.submit(t, "oversized", f.main.ID, "Hello")

@@ -13,6 +13,48 @@ import (
 var errInvalidMessageType = errors.New("invalid message type for service method handler")
 
 var serviceMethods = map[string]kitex.MethodInfo{
+	"ObservationSources": kitex.NewMethodInfo(
+		observationSourcesHandler,
+		newRuntimeObservationSourcesArgs,
+		newRuntimeObservationSourcesResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ObservedEvents": kitex.NewMethodInfo(
+		observedEventsHandler,
+		newRuntimeObservedEventsArgs,
+		newRuntimeObservedEventsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ObservationContent": kitex.NewMethodInfo(
+		observationContentHandler,
+		newRuntimeObservationContentArgs,
+		newRuntimeObservationContentResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"StartObserver": kitex.NewMethodInfo(
+		startObserverHandler,
+		newRuntimeStartObserverArgs,
+		newRuntimeStartObserverResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"StopObserver": kitex.NewMethodInfo(
+		stopObserverHandler,
+		newRuntimeStopObserverArgs,
+		newRuntimeStopObserverResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"SetSourceSubscription": kitex.NewMethodInfo(
+		setSourceSubscriptionHandler,
+		newRuntimeSetSourceSubscriptionArgs,
+		newRuntimeSetSourceSubscriptionResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"AdmitMainTrigger": kitex.NewMethodInfo(
 		admitMainTriggerHandler,
 		newRuntimeAdmitMainTriggerArgs,
@@ -111,6 +153,41 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"Status": kitex.NewMethodInfo(
+		statusHandler,
+		newRuntimeStatusArgs,
+		newRuntimeStatusResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"AgentRunState": kitex.NewMethodInfo(
+		agentRunStateHandler,
+		newRuntimeAgentRunStateArgs,
+		newRuntimeAgentRunStateResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ChangeAgentLifecycle": kitex.NewMethodInfo(
+		changeAgentLifecycleHandler,
+		newRuntimeChangeAgentLifecycleArgs,
+		newRuntimeChangeAgentLifecycleResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"Inspection": kitex.NewMethodInfo(
+		inspectionHandler,
+		newRuntimeInspectionArgs,
+		newRuntimeInspectionResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"InputChecks": kitex.NewMethodInfo(
+		inputChecksHandler,
+		newRuntimeInputChecksArgs,
+		newRuntimeInputChecksResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Timeline": kitex.NewMethodInfo(
 		timelineHandler,
 		newRuntimeTimelineArgs,
@@ -118,10 +195,31 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"History": kitex.NewMethodInfo(
+		historyHandler,
+		newRuntimeHistoryArgs,
+		newRuntimeHistoryResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"Compact": kitex.NewMethodInfo(
 		compactHandler,
 		newRuntimeCompactArgs,
 		newRuntimeCompactResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"ResetContext": kitex.NewMethodInfo(
+		resetContextHandler,
+		newRuntimeResetContextArgs,
+		newRuntimeResetContextResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"DeleteThread": kitex.NewMethodInfo(
+		deleteThreadHandler,
+		newRuntimeDeleteThreadArgs,
+		newRuntimeDeleteThreadResult,
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
@@ -210,6 +308,114 @@ func newServiceInfo(hasStreaming bool, keepStreamingMethods bool, keepNonStreami
 		Extra:           extra,
 	}
 	return svcInfo
+}
+
+func observationSourcesHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeObservationSourcesArgs)
+	realResult := result.(*platform.RuntimeObservationSourcesResult)
+	success, err := handler.(platform.Runtime).ObservationSources(ctx, realArg.Actor, realArg.After)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeObservationSourcesArgs() interface{} {
+	return platform.NewRuntimeObservationSourcesArgs()
+}
+
+func newRuntimeObservationSourcesResult() interface{} {
+	return platform.NewRuntimeObservationSourcesResult()
+}
+
+func observedEventsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeObservedEventsArgs)
+	realResult := result.(*platform.RuntimeObservedEventsResult)
+	success, err := handler.(platform.Runtime).ObservedEvents(ctx, realArg.Actor, realArg.SourceID, realArg.After)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeObservedEventsArgs() interface{} {
+	return platform.NewRuntimeObservedEventsArgs()
+}
+
+func newRuntimeObservedEventsResult() interface{} {
+	return platform.NewRuntimeObservedEventsResult()
+}
+
+func observationContentHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeObservationContentArgs)
+	realResult := result.(*platform.RuntimeObservationContentResult)
+	success, err := handler.(platform.Runtime).ObservationContent(ctx, realArg.Actor, realArg.ObservationID, realArg.Offset, realArg.Limit)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeObservationContentArgs() interface{} {
+	return platform.NewRuntimeObservationContentArgs()
+}
+
+func newRuntimeObservationContentResult() interface{} {
+	return platform.NewRuntimeObservationContentResult()
+}
+
+func startObserverHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeStartObserverArgs)
+	realResult := result.(*platform.RuntimeStartObserverResult)
+	success, err := handler.(platform.Runtime).StartObserver(ctx, realArg.Actor, realArg.RequestJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeStartObserverArgs() interface{} {
+	return platform.NewRuntimeStartObserverArgs()
+}
+
+func newRuntimeStartObserverResult() interface{} {
+	return platform.NewRuntimeStartObserverResult()
+}
+
+func stopObserverHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeStopObserverArgs)
+	realResult := result.(*platform.RuntimeStopObserverResult)
+	success, err := handler.(platform.Runtime).StopObserver(ctx, realArg.Actor, realArg.SourceID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeStopObserverArgs() interface{} {
+	return platform.NewRuntimeStopObserverArgs()
+}
+
+func newRuntimeStopObserverResult() interface{} {
+	return platform.NewRuntimeStopObserverResult()
+}
+
+func setSourceSubscriptionHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeSetSourceSubscriptionArgs)
+	realResult := result.(*platform.RuntimeSetSourceSubscriptionResult)
+	success, err := handler.(platform.Runtime).SetSourceSubscription(ctx, realArg.Actor, realArg.SourceID, realArg.ThreadID, realArg.Enabled)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeSetSourceSubscriptionArgs() interface{} {
+	return platform.NewRuntimeSetSourceSubscriptionArgs()
+}
+
+func newRuntimeSetSourceSubscriptionResult() interface{} {
+	return platform.NewRuntimeSetSourceSubscriptionResult()
 }
 
 func admitMainTriggerHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -431,7 +637,7 @@ func newRuntimeHealthResult() interface{} {
 func submitHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.RuntimeSubmitArgs)
 	realResult := result.(*platform.RuntimeSubmitResult)
-	success, err := handler.(platform.Runtime).Submit(ctx, realArg.Actor, realArg.RequestID, realArg.ThreadID, realArg.Text)
+	success, err := handler.(platform.Runtime).Submit(ctx, realArg.Actor, realArg.RequestJSON)
 	if err != nil {
 		return err
 	}
@@ -464,6 +670,96 @@ func newRuntimeThreadsResult() interface{} {
 	return platform.NewRuntimeThreadsResult()
 }
 
+func statusHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeStatusArgs)
+	realResult := result.(*platform.RuntimeStatusResult)
+	success, err := handler.(platform.Runtime).Status(ctx, realArg.Actor)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeStatusArgs() interface{} {
+	return platform.NewRuntimeStatusArgs()
+}
+
+func newRuntimeStatusResult() interface{} {
+	return platform.NewRuntimeStatusResult()
+}
+
+func agentRunStateHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeAgentRunStateArgs)
+	realResult := result.(*platform.RuntimeAgentRunStateResult)
+	success, err := handler.(platform.Runtime).AgentRunState(ctx, realArg.Actor)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeAgentRunStateArgs() interface{} {
+	return platform.NewRuntimeAgentRunStateArgs()
+}
+
+func newRuntimeAgentRunStateResult() interface{} {
+	return platform.NewRuntimeAgentRunStateResult()
+}
+
+func changeAgentLifecycleHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeChangeAgentLifecycleArgs)
+	realResult := result.(*platform.RuntimeChangeAgentLifecycleResult)
+	success, err := handler.(platform.Runtime).ChangeAgentLifecycle(ctx, realArg.Actor, realArg.RequestJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeChangeAgentLifecycleArgs() interface{} {
+	return platform.NewRuntimeChangeAgentLifecycleArgs()
+}
+
+func newRuntimeChangeAgentLifecycleResult() interface{} {
+	return platform.NewRuntimeChangeAgentLifecycleResult()
+}
+
+func inspectionHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeInspectionArgs)
+	realResult := result.(*platform.RuntimeInspectionResult)
+	success, err := handler.(platform.Runtime).Inspection(ctx, realArg.Actor, realArg.ThreadID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeInspectionArgs() interface{} {
+	return platform.NewRuntimeInspectionArgs()
+}
+
+func newRuntimeInspectionResult() interface{} {
+	return platform.NewRuntimeInspectionResult()
+}
+
+func inputChecksHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeInputChecksArgs)
+	realResult := result.(*platform.RuntimeInputChecksResult)
+	success, err := handler.(platform.Runtime).InputChecks(ctx, realArg.Actor, realArg.ThreadID, realArg.QueryJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeInputChecksArgs() interface{} {
+	return platform.NewRuntimeInputChecksArgs()
+}
+
+func newRuntimeInputChecksResult() interface{} {
+	return platform.NewRuntimeInputChecksResult()
+}
+
 func timelineHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.RuntimeTimelineArgs)
 	realResult := result.(*platform.RuntimeTimelineResult)
@@ -482,6 +778,24 @@ func newRuntimeTimelineResult() interface{} {
 	return platform.NewRuntimeTimelineResult()
 }
 
+func historyHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeHistoryArgs)
+	realResult := result.(*platform.RuntimeHistoryResult)
+	success, err := handler.(platform.Runtime).History(ctx, realArg.Actor, realArg.ThreadID, realArg.Before, realArg.Limit)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeHistoryArgs() interface{} {
+	return platform.NewRuntimeHistoryArgs()
+}
+
+func newRuntimeHistoryResult() interface{} {
+	return platform.NewRuntimeHistoryResult()
+}
+
 func compactHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.RuntimeCompactArgs)
 	realResult := result.(*platform.RuntimeCompactResult)
@@ -498,6 +812,42 @@ func newRuntimeCompactArgs() interface{} {
 
 func newRuntimeCompactResult() interface{} {
 	return platform.NewRuntimeCompactResult()
+}
+
+func resetContextHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeResetContextArgs)
+	realResult := result.(*platform.RuntimeResetContextResult)
+	success, err := handler.(platform.Runtime).ResetContext(ctx, realArg.Actor, realArg.ThreadID, realArg.RequestID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeResetContextArgs() interface{} {
+	return platform.NewRuntimeResetContextArgs()
+}
+
+func newRuntimeResetContextResult() interface{} {
+	return platform.NewRuntimeResetContextResult()
+}
+
+func deleteThreadHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.RuntimeDeleteThreadArgs)
+	realResult := result.(*platform.RuntimeDeleteThreadResult)
+	success, err := handler.(platform.Runtime).DeleteThread(ctx, realArg.Actor, realArg.ThreadID)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newRuntimeDeleteThreadArgs() interface{} {
+	return platform.NewRuntimeDeleteThreadArgs()
+}
+
+func newRuntimeDeleteThreadResult() interface{} {
+	return platform.NewRuntimeDeleteThreadResult()
 }
 
 func archiveHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
@@ -562,6 +912,77 @@ func newServiceClient(c client.Client) *kClient {
 	return &kClient{
 		c: c,
 	}
+}
+
+func (p *kClient) ObservationSources(ctx context.Context, actor *platform.Actor, after string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeObservationSourcesArgs
+	_args.Actor = actor
+	_args.After = after
+	var _result platform.RuntimeObservationSourcesResult
+	if err = p.c.Call(ctx, "ObservationSources", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ObservedEvents(ctx context.Context, actor *platform.Actor, sourceID string, after string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeObservedEventsArgs
+	_args.Actor = actor
+	_args.SourceID = sourceID
+	_args.After = after
+	var _result platform.RuntimeObservedEventsResult
+	if err = p.c.Call(ctx, "ObservedEvents", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ObservationContent(ctx context.Context, actor *platform.Actor, observationID string, offset int32, limit int32) (r *platform.Reply, err error) {
+	var _args platform.RuntimeObservationContentArgs
+	_args.Actor = actor
+	_args.ObservationID = observationID
+	_args.Offset = offset
+	_args.Limit = limit
+	var _result platform.RuntimeObservationContentResult
+	if err = p.c.Call(ctx, "ObservationContent", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) StartObserver(ctx context.Context, actor *platform.Actor, requestJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeStartObserverArgs
+	_args.Actor = actor
+	_args.RequestJSON = requestJSON
+	var _result platform.RuntimeStartObserverResult
+	if err = p.c.Call(ctx, "StartObserver", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) StopObserver(ctx context.Context, actor *platform.Actor, sourceID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeStopObserverArgs
+	_args.Actor = actor
+	_args.SourceID = sourceID
+	var _result platform.RuntimeStopObserverResult
+	if err = p.c.Call(ctx, "StopObserver", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) SetSourceSubscription(ctx context.Context, actor *platform.Actor, sourceID string, threadID string, enabled bool) (r *platform.Reply, err error) {
+	var _args platform.RuntimeSetSourceSubscriptionArgs
+	_args.Actor = actor
+	_args.SourceID = sourceID
+	_args.ThreadID = threadID
+	_args.Enabled = enabled
+	var _result platform.RuntimeSetSourceSubscriptionResult
+	if err = p.c.Call(ctx, "SetSourceSubscription", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
 }
 
 func (p *kClient) AdmitMainTrigger(ctx context.Context, scopeJSON string, triggerJSON string) (r *platform.Reply, err error) {
@@ -692,12 +1113,10 @@ func (p *kClient) Health(ctx context.Context) (r *platform.Reply, err error) {
 	return _result.GetSuccess(), nil
 }
 
-func (p *kClient) Submit(ctx context.Context, actor *platform.Actor, requestID string, threadID string, text string) (r *platform.Reply, err error) {
+func (p *kClient) Submit(ctx context.Context, actor *platform.Actor, requestJSON string) (r *platform.Reply, err error) {
 	var _args platform.RuntimeSubmitArgs
 	_args.Actor = actor
-	_args.RequestID = requestID
-	_args.ThreadID = threadID
-	_args.Text = text
+	_args.RequestJSON = requestJSON
 	var _result platform.RuntimeSubmitResult
 	if err = p.c.Call(ctx, "Submit", &_args, &_result); err != nil {
 		return
@@ -710,6 +1129,60 @@ func (p *kClient) Threads(ctx context.Context, actor *platform.Actor) (r *platfo
 	_args.Actor = actor
 	var _result platform.RuntimeThreadsResult
 	if err = p.c.Call(ctx, "Threads", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Status(ctx context.Context, actor *platform.Actor) (r *platform.Reply, err error) {
+	var _args platform.RuntimeStatusArgs
+	_args.Actor = actor
+	var _result platform.RuntimeStatusResult
+	if err = p.c.Call(ctx, "Status", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) AgentRunState(ctx context.Context, actor *platform.Actor) (r *platform.Reply, err error) {
+	var _args platform.RuntimeAgentRunStateArgs
+	_args.Actor = actor
+	var _result platform.RuntimeAgentRunStateResult
+	if err = p.c.Call(ctx, "AgentRunState", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ChangeAgentLifecycle(ctx context.Context, actor *platform.Actor, requestJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeChangeAgentLifecycleArgs
+	_args.Actor = actor
+	_args.RequestJSON = requestJSON
+	var _result platform.RuntimeChangeAgentLifecycleResult
+	if err = p.c.Call(ctx, "ChangeAgentLifecycle", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) Inspection(ctx context.Context, actor *platform.Actor, threadID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeInspectionArgs
+	_args.Actor = actor
+	_args.ThreadID = threadID
+	var _result platform.RuntimeInspectionResult
+	if err = p.c.Call(ctx, "Inspection", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) InputChecks(ctx context.Context, actor *platform.Actor, threadID string, queryJSON string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeInputChecksArgs
+	_args.Actor = actor
+	_args.ThreadID = threadID
+	_args.QueryJSON = queryJSON
+	var _result platform.RuntimeInputChecksResult
+	if err = p.c.Call(ctx, "InputChecks", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil
@@ -728,6 +1201,19 @@ func (p *kClient) Timeline(ctx context.Context, actor *platform.Actor, threadID 
 	return _result.GetSuccess(), nil
 }
 
+func (p *kClient) History(ctx context.Context, actor *platform.Actor, threadID string, before int64, limit int32) (r *platform.Reply, err error) {
+	var _args platform.RuntimeHistoryArgs
+	_args.Actor = actor
+	_args.ThreadID = threadID
+	_args.Before = before
+	_args.Limit = limit
+	var _result platform.RuntimeHistoryResult
+	if err = p.c.Call(ctx, "History", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
 func (p *kClient) Compact(ctx context.Context, actor *platform.Actor, threadID string, requestID string, focus string) (r *platform.Reply, err error) {
 	var _args platform.RuntimeCompactArgs
 	_args.Actor = actor
@@ -736,6 +1222,29 @@ func (p *kClient) Compact(ctx context.Context, actor *platform.Actor, threadID s
 	_args.Focus = focus
 	var _result platform.RuntimeCompactResult
 	if err = p.c.Call(ctx, "Compact", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) ResetContext(ctx context.Context, actor *platform.Actor, threadID string, requestID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeResetContextArgs
+	_args.Actor = actor
+	_args.ThreadID = threadID
+	_args.RequestID = requestID
+	var _result platform.RuntimeResetContextResult
+	if err = p.c.Call(ctx, "ResetContext", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) DeleteThread(ctx context.Context, actor *platform.Actor, threadID string) (r *platform.Reply, err error) {
+	var _args platform.RuntimeDeleteThreadArgs
+	_args.Actor = actor
+	_args.ThreadID = threadID
+	var _result platform.RuntimeDeleteThreadResult
+	if err = p.c.Call(ctx, "DeleteThread", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

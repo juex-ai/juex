@@ -1,6 +1,6 @@
 import { randomUUID } from '@/lib/uuid'
 import { useState, type FormEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { BookOpen, RefreshCw, Search, Settings2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,6 +10,7 @@ import { APIError, api, errorText } from './api'
 import { Empty, Failure, Field, Loading, Notice, PageHeading } from './components'
 import { useResource } from './use-resource'
 import { correctMemoryEntry } from './memory-correction'
+import { MemoryKnowledge } from './memory-knowledge'
 import type { FleetOverview, MemoryAdminRequest, MemoryConfiguration, MemoryEntry, MemoryPage as EntryPage, MemoryReviewPage, MemoryStatus, MemoryStorageRules, TenantAccess, User } from './schema'
 
 const states: Record<string, string> = { pending: '等待审核', applied: '已记住', no_change: '无需变更', rejected: '未采纳', failed: '审核未完成' }
@@ -19,12 +20,18 @@ const factStates: Record<string, string> = { valid: '有效断言', superseded: 
 export function MemoryPage({ tenant, user, delegated = false }: { tenant: TenantAccess; user: User; delegated?: boolean }) {
   const { ownerId } = useParams()
   const owner = delegated ? ownerId! : user.id
+  return <MemoryContent key={`${tenant.id}:${owner}`} tenant={tenant} user={user} owner={owner} delegated={delegated}/>
+}
+
+function MemoryContent({tenant,user,owner,delegated}:{tenant:TenantAccess;user:User;owner:string;delegated:boolean}) {
   const base = `/tenants/${tenant.id}/users/${owner}/memory`
   const [revision, setRevision] = useState(0)
   const refresh = () => setRevision(value => value + 1)
   const fleet = useResource<FleetOverview>(`/tenants/${tenant.id}/users/${owner}/fleet`, revision)
   const status = useResource<MemoryStatus>(base, revision)
-  const [tab, setTab] = useState<'knowledge' | 'reviews' | 'rules'>('knowledge')
+  const [params,setParams] = useSearchParams()
+  const requestedTab=params.get('tab')
+  const tab = requestedTab==='facts'||requestedTab==='reviews'||requestedTab==='rules'?requestedTab:'knowledge'
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
   const [offset, setOffset] = useState(0)
@@ -39,7 +46,7 @@ export function MemoryPage({ tenant, user, delegated = false }: { tenant: Tenant
   const writable = fleet.data?.membership.status === 'active' && status.data?.enabled === true
   const canConfigure = fleet.data?.membership.status === 'active'
   const agentName = (id: string) => fleet.data?.agents.find(agent => agent.id === id)?.name ?? '已移除的 Agent'
-  const list = useResource<EntryPage | MemoryReviewPage | MemoryStorageRules>(`${base}/${tab === 'knowledge' ? `entries?text=${encodeURIComponent(query)}&` : tab === 'reviews' ? 'reviews?' : 'storage-rules?'}offset=${offset}&limit=20`, revision)
+  const list = useResource<EntryPage | MemoryReviewPage | MemoryStorageRules>(tab==='facts'?null:`${base}/${tab === 'knowledge' ? `entries?text=${encodeURIComponent(query)}&` : tab === 'reviews' ? 'reviews?' : 'storage-rules?'}offset=${offset}&limit=20`, revision)
   const entries = tab === 'knowledge' ? list.data as EntryPage | undefined : undefined
   const reviews = tab === 'reviews' ? list.data as MemoryReviewPage | undefined : undefined
   const rules = tab === 'rules' ? list.data as MemoryStorageRules | undefined : undefined
@@ -69,7 +76,7 @@ export function MemoryPage({ tenant, user, delegated = false }: { tenant: Tenant
     catch (err) { setError(errorText(err)) } finally { setBusy(false) }
   }
   function searchEntries(event: FormEvent) { event.preventDefault(); setQuery(search); setOffset(0) }
-  function changeTab(next: typeof tab) { setTab(next); setOffset(0) }
+  function changeTab(next: typeof tab) { const values=new URLSearchParams(params);values.set('tab',next);setParams(values);setOffset(0) }
 
   return <>
     <PageHeading title={delegated ? `${fleet.data?.owner.email ?? ''} 的 Memory` : 'Memory'} description="同一 Fleet 的 Agents 共享持久知识，原始对话仍各自独立。" actions={<><Button variant="outline" onClick={refresh}><RefreshCw />刷新</Button><Button variant="outline" disabled={!canConfigure || !status.data} onClick={() => { setError(''); setSettings({ version: status.data!.version, enabled: status.data!.enabled, strategy: status.data!.strategy }) }}><Settings2 />应用设置</Button></>} />
@@ -78,14 +85,19 @@ export function MemoryPage({ tenant, user, delegated = false }: { tenant: Tenant
       <div className="management-fleet-summary"><div><span>应用状态</span><strong>{status.data.enabled ? '已启用' : '已停用 · 只读'}</strong></div><div><span>共享知识</span><strong>{status.data.entries} 条</strong></div><div><span>待审核</span><strong>{status.data.pending} 项</strong></div></div>
       {!status.data.enabled && <Notice>保留的知识仍可查看。Agent 查询、写入和后台审核已停止；重新启用后不会恢复旧审核。</Notice>}
       {fleet.data && !canConfigure && <Notice>成员已停用或移除，当前只能查看保留的知识。</Notice>}
-      <section className="management-panel"><div className="management-panel-heading"><div className="management-tabs" role="group" aria-label="Memory 内容"><Button variant={tab === 'knowledge' ? 'secondary' : 'ghost'} onClick={() => changeTab('knowledge')}>知识</Button><Button variant={tab === 'reviews' ? 'secondary' : 'ghost'} onClick={() => changeTab('reviews')}>审核记录</Button><Button variant={tab === 'rules' ? 'secondary' : 'ghost'} onClick={() => changeTab('rules')}>禁止重新学习</Button></div></div>
+      <section className="management-panel"><div className="management-panel-heading"><div className="management-tabs" role="group" aria-label="Memory 内容"><Button variant={tab === 'knowledge' ? 'secondary' : 'ghost'} onClick={() => changeTab('knowledge')}>知识</Button><Button variant={tab === 'facts' ? 'secondary' : 'ghost'} onClick={() => changeTab('facts')}>领域与事实</Button><Button variant={tab === 'reviews' ? 'secondary' : 'ghost'} onClick={() => changeTab('reviews')}>审核记录</Button><Button variant={tab === 'rules' ? 'secondary' : 'ghost'} onClick={() => changeTab('rules')}>禁止重新学习</Button></div></div>
+        {tab==='facts'&&<MemoryKnowledge base={base} tenant={tenant.id} revision={revision} read={id=>void read(id)} busy={busy}/>}
         {tab === 'knowledge' && <form className="management-memory-search" onSubmit={searchEntries}><Input aria-label="搜索知识" placeholder="搜索偏好、项目和参考知识" value={search} onChange={event => setSearch(event.target.value)} /><Button type="submit" variant="outline"><Search />搜索</Button></form>}
-        {list.error ? <Failure message={list.error} retry={refresh} /> : !list.data ? <Loading /> : <>
+        {tab!=='facts'&&(list.error ? <Failure message={list.error} retry={refresh} /> : !list.data ? <Loading /> : <>
           {entries && (entries.entries.length ? <div className="management-agents">{entries.entries.map(value => <article className="management-agent-row" key={value.id}><div className="management-agent-mark"><BookOpen size={22} /></div><div className="management-agent-info"><h2>{entryName(value)}</h2><p>{value.summary}</p><small>{value.scope.project || value.scope.workspace || 'Fleet 知识'}</small></div><Button variant="outline" disabled={busy} onClick={() => void read(value.id)}>查看</Button></article>)}</div> : <Empty title="暂无匹配的知识">在对话中明确告诉 Agent 需要记住的内容，审核完成后会出现在这里。</Empty>)}
-          {reviews && (reviews.reviews.length ? <div className="management-agents">{reviews.reviews.map(value => <article className="management-agent-row" key={value.id}><div className="management-agent-info"><h2>{states[value.state] ?? value.state}</h2><p>{value.reason}</p><small>{agentName(value.agent_id)} · {new Date(value.updated_at).toLocaleString()}</small></div><div className="management-row-actions"><Button variant="ghost" asChild><Link to={threadLink(value.agent_id, value.thread_id)}>来源对话</Link></Button>{value.worker_id && <Button variant="outline" asChild><Link to={threadLink(value.agent_id, value.worker_id)}>查看审核</Link></Button>}</div></article>)}</div> : <Empty title="暂无审核记录">提交成功表示已经进入审核，只有“已记住”表示知识完成变更。</Empty>)}
+          {reviews && (reviews.reviews.length ? <div className="management-agents">{reviews.reviews.map(value => {
+            const human = !value.agent_id && !value.thread_id
+            const label = human && value.state === 'applied' ? '管理操作已完成' : human && value.state === 'failed' ? '管理操作未完成' : states[value.state] ?? value.state
+            return <article className="management-agent-row" key={value.id}><div className="management-agent-info"><h2>{label}</h2><p>{value.reason}</p><small>{human ? '人类管理' : agentName(value.agent_id)} · {new Date(value.updated_at).toLocaleString()}</small></div><div className="management-row-actions">{value.agent_id && value.thread_id && <Button variant="ghost" asChild><Link to={threadLink(value.agent_id, value.thread_id)}>来源对话</Link></Button>}{value.agent_id && value.worker_id && <Button variant="outline" asChild><Link to={threadLink(value.agent_id, value.worker_id)}>查看审核</Link></Button>}</div></article>
+          })}</div> : <Empty title="暂无审核记录">提交成功表示已经进入审核，只有“已记住”表示知识完成变更。</Empty>)}
           {rules && <><Notice>遗忘后，相关来源不会再次被自动写入知识。明确允许重新学习后，仍需发起新的记忆请求。</Notice>{rules.entries.length + rules.sources.length === 0 ? <Empty title="暂无限制">在知识详情中遗忘条目时，会保留禁止重新学习的约束。</Empty> : <div className="management-memory-rules">{rules.entries.map(id => <div key={id}><span>已遗忘条目 · {id}</span></div>)}{rules.sources.map((source, index) => <div key={`${source.agent_id}:${source.thread_id}:${source.from}:${index}`}><Link to={threadLink(source.agent_id, source.thread_id)}>{agentName(source.agent_id)} 的来源对话</Link></div>)}<Button variant="outline" disabled={!writable || busy || pending !== null} onClick={() => void administer({ key: randomUUID(), action: 'allow_store', entry_ids: rules.entries, sources: rules.sources })}>允许本页来源重新学习</Button></div>}</>}
           <div className="management-memory-pagination"><Button variant="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 20))}>上一页</Button><span>第 {Math.floor(offset / 20) + 1} 页</span><Button variant="ghost" disabled={list.data.next <= 0} onClick={() => setOffset(list.data!.next)}>下一页</Button></div>
-        </>}
+        </>)}
       </section>
     </>}
     {error && <Notice error>{error}{pending && <Button variant="link" disabled={busy} onClick={() => void administer(pending)}>恢复这次请求的结果</Button>}</Notice>}

@@ -17,12 +17,31 @@ func toolAllowed(policy agentpolicy.Policy, name string) bool {
 	case strings.HasPrefix(name, "thread_"):
 		return policy.Allows(agentpolicy.Workers)
 	}
+	// Agent management has a separate human grant checked at catalog,
+	// preparation and dispatch; ordinary module presets cannot grant it.
+	if isAgentControlTool(name) {
+		return true
+	}
 	switch name {
 	case "read_context":
 		return true
+	case "check_inputs":
+		return policy.Allows(agentpolicy.InputTracking)
+	case "update_notes":
+		return policy.Allows(agentpolicy.Notes)
+	case "context_new", "context_compact":
+		return policy.Allows(agentpolicy.ContextControl)
+	case "list_tasks", "create_task", "update_task", "delete_task":
+		return policy.Allows(agentpolicy.Tasks)
 	case "agent_list", "agent_send":
 		return policy.Allows(agentpolicy.Collaboration)
-	case "read", "write", "edit", "glob", "grep", "publish_file", "import_file", "copy_file", "list_artifacts", "file_transfer_status", "file_transfer_cancel":
+	case "apply_patch":
+		return policy.Allows(agentpolicy.Files) && policy.Allows(agentpolicy.ApplyPatch)
+	case "write_begin", "write_chunk", "write_commit", "write_abort":
+		return policy.Allows(agentpolicy.Files) && policy.Allows(agentpolicy.ChunkedWrite)
+	case "glob", "grep":
+		return policy.Allows(agentpolicy.FileSearch)
+	case "read", "write", "edit", "publish_file", "import_file", "copy_file", "list_artifacts", "file_transfer_status", "file_transfer_cancel":
 		return policy.Allows(agentpolicy.Files)
 	case "exec_command", "write_stdin", "process_status", "process_cancel":
 		return policy.Allows(agentpolicy.Shell)
@@ -31,7 +50,7 @@ func toolAllowed(policy agentpolicy.Policy, name string) bool {
 	case "subscribe", "unsubscribe", "list_subscriptions", "read_observation":
 		return policy.Allows(agentpolicy.Observations)
 	case "skill_search", "skill_load":
-		return policy.Allows(agentpolicy.Extensions)
+		return policy.Allows(agentpolicy.Skills)
 	case "extension_exec":
 		return policy.Allows(agentpolicy.Extensions) && policy.Allows(agentpolicy.Shell)
 	case "extension_mcp_connect":
@@ -44,5 +63,5 @@ func toolAllowed(policy agentpolicy.Policy, name string) bool {
 }
 
 func usesExecution(policy agentpolicy.Policy) bool {
-	return policy.Allows(agentpolicy.Files) || policy.Allows(agentpolicy.Shell) || policy.Allows(agentpolicy.MCP)
+	return policy.Allows(agentpolicy.Files) || policy.Allows(agentpolicy.FileSearch) || policy.Allows(agentpolicy.Shell) || policy.Allows(agentpolicy.MCP)
 }

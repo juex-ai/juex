@@ -13,10 +13,20 @@ func (s *Store) ReleaseObservationClaims(ctx context.Context, holder string) err
 	if holder == "" {
 		return managedruntime.ErrInvalid
 	}
-	_, err := s.pool.Exec(ctx, `WITH sources AS (
+	// Read Committed preserves the final concurrent wake while relinquishing
+	// ownership; inheriting Repeatable Read can leave a stopped worker's lease.
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	_, err = tx.Exec(ctx, `WITH sources AS (
  UPDATE runtime.observation_sources SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1)
  UPDATE runtime.observation_deliveries SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity' WHERE lease_holder=$1`, holder)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ClaimObservation(ctx context.Context, holder string) (managedruntime.ObservationSource, error) {
@@ -27,8 +37,8 @@ func (s *Store) ClaimObservation(ctx context.Context, holder string) (managedrun
 	var scope, options, command []byte
 	err := s.pool.QueryRow(ctx, `WITH candidate AS (
  SELECT id FROM runtime.observation_sources WHERE NOT closed AND lease_until<=clock_timestamp() AND next_check<=clock_timestamp() ORDER BY next_check,id FOR UPDATE SKIP LOCKED LIMIT 1)
- UPDATE runtime.observation_sources o SET lease_epoch=o.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds' FROM candidate c,runtime.tools j WHERE o.id=c.id AND j.id=o.id
- RETURNING o.id,o.thread_id,o.environment_id,o.operation_id,o.kind,o.scope,o.cursor,o.pending,o.discarding,o.lease_epoch,o.wake_version,j.state IN ('pending','waiting'),o.options,o.command_batch,o.working_directory,o.authorization_version`, holder).Scan(&source.ID, &source.ThreadID, &source.EnvironmentID, &source.OperationID, &source.Kind, &scope, &source.Cursor, &source.Pending, &source.Discarding, &source.LeaseEpoch, &source.WakeVersion, &source.DeliveryPending, &options, &command, &source.WorkingDirectory, &source.AuthorizationVersion)
+ UPDATE runtime.observation_sources o SET lease_epoch=o.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds' FROM candidate c WHERE o.id=c.id
+ RETURNING o.id,o.thread_id,o.environment_id,o.operation_id,o.kind,o.scope,o.cursor,o.pending,o.discarding,o.lease_epoch,o.wake_version,(EXISTS(SELECT 1 FROM runtime.tools j WHERE j.id=o.origin_tool_id AND j.state IN ('pending','waiting')) OR EXISTS(SELECT 1 FROM runtime.observer_controls m WHERE m.id=o.control_id AND m.source_id=o.id AND NOT m.admitted)),o.options,o.command_batch,o.working_directory,o.authorization_version`, holder).Scan(&source.ID, &source.ThreadID, &source.EnvironmentID, &source.OperationID, &source.Kind, &scope, &source.Cursor, &source.Pending, &source.Discarding, &source.LeaseEpoch, &source.WakeVersion, &source.DeliveryPending, &options, &command, &source.WorkingDirectory, &source.AuthorizationVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return source, managedruntime.ErrNoWork
 	}
@@ -94,7 +104,14 @@ func (s *Store) ObservationAcks(ctx context.Context, limit int) ([]managedruntim
 	if limit < 1 || limit > 100 {
 		return nil, managedruntime.ErrInvalid
 	}
-	rows, err := s.pool.Query(ctx, `WITH candidate AS (SELECT id FROM runtime.observation_sources WHERE kind IN ('mcp_connect','observe_command') AND confirmed_cursor<cursor AND ack_next_check<=clock_timestamp() ORDER BY ack_next_check,id FOR UPDATE SKIP LOCKED LIMIT $1)
+	// Acknowledgments race with pagination on the same source row. Use Runtime's
+	// lock-based isolation rather than inheriting the connection default.
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	rows, err := tx.Query(ctx, `WITH candidate AS (SELECT id FROM runtime.observation_sources WHERE kind IN ('mcp_connect','observe_command') AND confirmed_cursor<cursor AND ack_next_check<=clock_timestamp() ORDER BY ack_next_check,id FOR UPDATE SKIP LOCKED LIMIT $1)
  UPDATE runtime.observation_sources o SET ack_next_check=clock_timestamp()+interval '5 seconds' FROM candidate c WHERE o.id=c.id RETURNING o.id,o.environment_id,o.operation_id,o.scope,o.cursor`, limit)
 	if err != nil {
 		return nil, err
@@ -112,12 +129,22 @@ func (s *Store) ObservationAcks(ctx context.Context, limit int) ([]managedruntim
 		}
 		acknowledgments = append(acknowledgments, ack)
 	}
-	return acknowledgments, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return acknowledgments, tx.Commit(ctx)
 }
 
 func (s *Store) ConfirmObservationAck(ctx context.Context, ack managedruntime.ObservationAck) error {
-	_, err := s.pool.Exec(ctx, `UPDATE runtime.observation_sources SET confirmed_cursor=greatest(confirmed_cursor,$2),ack_next_check='-infinity' WHERE id=$1 AND cursor>=$2`, ack.SourceID, ack.Cursor)
-	return err
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if _, err := tx.Exec(ctx, `UPDATE runtime.observation_sources SET confirmed_cursor=greatest(confirmed_cursor,$2),ack_next_check='-infinity' WHERE id=$1 AND cursor>=$2`, ack.SourceID, ack.Cursor); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) Observation(ctx context.Context, scope managedruntime.Scope, id string) (managedruntime.Observation, error) {

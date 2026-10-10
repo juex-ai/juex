@@ -1,0 +1,180 @@
+package migration
+
+import (
+	"errors"
+	"fmt"
+	"path/filepath"
+	"slices"
+
+	"github.com/juex-ai/juex/internal/foundation/extensionpolicy"
+	"github.com/juex-ai/juex/internal/management"
+	"github.com/juex-ai/juex/internal/migration/legacy"
+)
+
+// PreparedBundle contains private configuration and grants no runtime authority.
+// Agent configs intentionally have no model UUID until Management publishes it.
+type PreparedBundle struct {
+	Models          ModelPublicationPlan                  `json:"-"`
+	Agents          map[string]management.AgentConfig     `json:"-"`
+	Extensions      map[string][]extensionpolicy.Manifest `json:"-"`
+	Environments    map[string]map[string]string          `json:"-"`
+	AgentManagement map[string]bool                       `json:"-"`
+	origins         map[string]sourceOrigins
+}
+
+// Prepare resolves frozen configuration without source, environment, clock or
+// target I/O. Runtime/application conversion still requires fresh target scopes
+// and real Artifact receipts; this step is not an activation or cutover check.
+func (b *Bundle) Prepare() (PreparedBundle, error) {
+	var empty PreparedBundle
+	configs, err := ResolveConfig(b.source, b.inputs.Config)
+	if err != nil {
+		return empty, err
+	}
+	if len(configs) == 0 || len(b.inputs.Config.Contexts) != len(configs) || len(b.inputs.Agents) != len(configs) || len(b.inputs.Models) != len(configs) {
+		return empty, errors.New("bundle must bind every source Agent exactly once")
+	}
+	evidence := map[string]ModelEvidence{}
+	for _, m := range b.inputs.Models {
+		if _, exists := evidence[m.AgentID]; exists {
+			return empty, errors.New("duplicate Agent model evidence")
+		}
+		evidence[m.AgentID] = m
+	}
+	reserves := map[ModelKey]int{}
+	endpoints := map[ModelKey]string{}
+	for _, p := range b.inputs.ModelsPolicy {
+		if _, exists := reserves[p.Key]; exists {
+			return empty, errors.New("duplicate model policy")
+		}
+		reserves[p.Key] = p.OutputReserve
+		endpoints[p.Key] = p.Endpoint
+	}
+	plan := PreparedBundle{Agents: map[string]management.AgentConfig{}, Extensions: map[string][]extensionpolicy.Manifest{}, Environments: map[string]map[string]string{}, AgentManagement: map[string]bool{}}
+	models := make([]ResolvedModels, 0, len(configs))
+	originalModels := make([]ResolvedModels, 0, len(configs))
+	byAgent := make(map[string]ResolvedConfig, len(configs))
+	sourceAgents := make(map[string]legacy.Agent, len(b.source.Agents))
+	for _, agent := range b.source.Agents {
+		sourceAgents[agent.Definition.ID] = agent
+	}
+	for _, c := range configs {
+		byAgent[c.AgentID] = c
+		agent := sourceAgents[c.AgentID]
+		policy, ok := b.inputs.Agents[c.AgentID]
+		if !ok || !filepath.IsAbs(policy.Workspace) || filepath.Clean(policy.Workspace) != policy.Workspace || policy.Workspace != agent.Definition.Workspace {
+			return empty, errors.New("source Agent requires an explicit unchanged external Workspace binding")
+		}
+		if !agent.Definition.Enabled || policy.Activation != "on_demand" {
+			return empty, errors.New("enabled source Agents require an explicit on-demand target lifecycle")
+		}
+		if b.conversionPolicy >= 3 {
+			if c.AgentManagement && policy.AgentManagement == nil || policy.AgentManagement != nil && *policy.AgentManagement != c.AgentManagement {
+				return empty, errors.New("source Supervisor requires explicit matching target Agent management acceptance")
+			}
+			plan.AgentManagement[c.AgentID] = c.AgentManagement
+			values, err := convertProcessEnvironment(b.source, c, evidence[c.AgentID])
+			if err != nil {
+				return empty, fmt.Errorf("source Agent %s process environment: %w", c.AgentID, err)
+			}
+			plan.Environments[c.AgentID] = values
+		} else if c.EnvironmentDeclared || policy.AgentManagement != nil {
+			return empty, errors.New("retained conversion policy cannot accept new environment or Agent management declarations")
+		}
+		for _, file := range agent.Files {
+			if file.Path == "extensions/calendar/calendar.json" && (!c.Modules["extensions"] || !c.Modules["mcp"] || !slices.Contains(c.ExtensionAllow, "calendar")) {
+				// The old Calendar scheduler lived behind the selected MCP
+				// extension. A leftover file does not prove it was enabled.
+				return empty, errors.New("captured Calendar state requires the selected source MCP extension")
+			}
+		}
+		m, err := ResolveModels(c, evidence[c.AgentID])
+		if err != nil {
+			return empty, err
+		}
+		originalModels = append(originalModels, m)
+		m.Models = slices.Clone(m.Models)
+		for i := range m.Models {
+			profile := &m.Models[i].Profile
+			key := ModelKey{Provider: profile.ID, Name: profile.Model}
+			endpoint := endpoints[key]
+			if endpoint != "" && profile.BaseURL != "" && endpoint != profile.BaseURL {
+				return empty, errors.New("endpoint resolution cannot replace a captured provider route")
+			}
+			if profile.BaseURL == "" {
+				profile.BaseURL = endpoint
+			}
+		}
+		models = append(models, m)
+		config, err := prepareAgentConfigForPolicy(c, agent.Definition, AgentConfigBindings{Instructions: policy.Instructions, FilesEnabled: policy.FilesEnabled, ShellEnabled: policy.ShellEnabled, CalendarEnabled: policy.CalendarEnabled, CollaborationEnabled: policy.CollaborationEnabled, GlobalInstructionPath: policy.GlobalInstructionPath}, b.conversionPolicy)
+		if err != nil {
+			return empty, err
+		}
+		if b.conversionPolicy >= 3 {
+			for _, thread := range agent.Threads {
+				if err := requireSettledSourceWrites(thread); err != nil {
+					return empty, err
+				}
+				if _, err := sourceInputTracking(thread); err != nil {
+					return empty, fmt.Errorf("source Agent %s Thread %s tracking: %w", c.AgentID, thread.Metadata.ThreadID, err)
+				}
+			}
+		}
+		plan.Agents[c.AgentID] = config
+	}
+	plan.Models, err = ConvertModels(models, reserves)
+	if err != nil {
+		return empty, err
+	}
+	// Existing bundles retain their conversion contract. New policy 3 permits
+	// independent model tails for Agents sharing a primary catalog entry.
+	if b.conversionPolicy == 2 {
+		if _, err := sharedModelTails(plan.Models); err != nil {
+			return empty, err
+		}
+	}
+	plan.origins = map[string]sourceOrigins{}
+	usedOrigins := map[ModelKey]bool{}
+	for _, agent := range b.source.Agents {
+		origins, err := sourceModelOrigins(agent, originalModels)
+		if err != nil {
+			return empty, err
+		}
+		plan.origins[agent.Definition.ID] = origins
+		for _, messages := range origins {
+			for _, key := range messages {
+				usedOrigins[key] = true
+			}
+		}
+	}
+	for _, original := range originalModels {
+		for _, model := range original.Models {
+			key := ModelKey{Provider: model.Profile.ID, Name: model.Profile.Model}
+			if usedOrigins[key] && !sourceReplayRoute(model.Profile, endpoints[key]) {
+				return empty, errors.New("reasoning replay requires a proven unchanged source endpoint")
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, e := range b.inputs.Extensions {
+		c, ok := byAgent[e.AgentID]
+		selection := legacy.ExtensionResources{MCP: c.Modules["mcp"], Hooks: c.Modules["hooks"], Observables: c.Modules["observables"], Skills: c.Modules["skills"]}
+		if !ok || !c.Modules["extensions"] || !selection.MCP || e.Snapshot.Selection != selection {
+			return empty, errors.New("extension selection must match the source Agent's enabled resource modules")
+		}
+		manifest, err := ConvertMCPExtension(e.Snapshot, e.Bindings, e.HeaderEnvironment)
+		if err != nil {
+			return empty, fmt.Errorf("source Agent %s extension: %w", e.AgentID, err)
+		}
+		if !slices.Contains(c.ExtensionAllow, manifest.Name) {
+			return empty, errors.New("extension is not selected by the source Agent")
+		}
+		key := e.AgentID + "/" + manifest.Name
+		if seen[key] {
+			return empty, errors.New("duplicate Agent extension binding")
+		}
+		seen[key] = true
+		plan.Extensions[e.AgentID] = append(plan.Extensions[e.AgentID], manifest)
+	}
+	return plan, nil
+}

@@ -22,7 +22,7 @@ func enqueueHooks(ctx context.Context, tx pgx.Tx, turn string, event hookpolicy.
 	var scope managedruntime.Scope
 	var thread string
 	var memory bool
-	err := tx.QueryRow(ctx, `SELECT t.config,t.thread_id,EXISTS(SELECT 1 FROM runtime.application_jobs j WHERE j.thread_id=t.thread_id AND j.application='memory'),
+	err := tx.QueryRow(ctx, `SELECT t.config,t.thread_id,th.application='memory',
  jsonb_build_object('tenant_id',a.tenant_id,'user_id',a.user_id,'fleet_id',a.fleet_id,'agent_id',a.id,'actor_id',i.actor_id,'actor_authorization_epoch',i.actor_authorization_epoch,'membership_version',i.membership_version,'membership_execution_epoch',i.membership_execution_epoch,'agent_execution_epoch',i.agent_execution_epoch)
  FROM runtime.turns t JOIN runtime.inputs i ON i.id=t.input_id JOIN runtime.threads th ON th.id=t.thread_id JOIN runtime.agents a ON a.id=th.agent_id WHERE t.id=$1`, turn).Scan(&config, &thread, &memory, &scope)
 	if err != nil {
@@ -138,8 +138,15 @@ func (s *Store) ReleaseHookClaims(ctx context.Context, holder string) error {
 	if holder == "" {
 		return managedruntime.ErrInvalid
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE runtime.hooks SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder)
-	return err
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if _, err := tx.Exec(ctx, `UPDATE runtime.hooks SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ClaimHook(ctx context.Context, holder string) (managedruntime.HookWork, error) {

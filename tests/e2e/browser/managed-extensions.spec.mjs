@@ -2,12 +2,13 @@ import { createRequire } from 'node:module';
 const require = createRequire(new URL('../../../frontend/package.json', import.meta.url));
 const { expect, test } = require('@playwright/test');
 
-test('Extension inspection retries completed failures, polls accepted, and saves receipt identities', async ({ page }) => {
+for (const sourceKind of ['', 'skills']) test(`${sourceKind || 'Extension'} inspection retries completed failures, polls accepted, and saves receipt identities`, async ({ page }) => {
   const user = { id: 'owner', email: 'owner@example.test', email_verified: true };
   const tenant = { id: 'tenant', name: 'Workspace', role: 'admin' };
-  const agent = { id: 'agent', name: 'Assistant', status: 'active', version: 1, instructions: '', model_id: '', hooks: [], extensions: [] };
+  const agent = { id: 'agent', name: 'Assistant', status: 'active', version: 1, instructions: '', configuration: {}, hooks: [], extensions: [] };
   const fleet = { fleet: { id: 'fleet' }, owner: user, membership: { status: 'active' }, settings: {}, agents: [agent] };
   const catalog = { revision: 'receipt-revision', skills: [{ id: 'guide', content: 'saved instructions' }], manifest: { manifest_version: 2, name: 'example', version: '1', skills: [{ id: 'guide', description: 'Read the guide', path: 'SKILL.md' }], hooks: [], mcp: [], observables: [] } };
+  if(sourceKind){catalog.source_kind=sourceKind;catalog.skipped=[{path:'linked-skill',reason:'symbolic link',target:'/plugins/linked-skill'}]}
   const requests = [], mutations = [];
   let polls = 0;
   await page.route('**/api/**', async route => {
@@ -38,6 +39,7 @@ test('Extension inspection retries completed failures, polls accepted, and saves
   });
   await page.goto('/t/tenant/fleet');
   await page.getByRole('button', { name: '扩展', exact: true }).click();
+  if(sourceKind) await page.getByRole('combobox',{name:'来源类型'}).selectOption('skills');
   await page.getByRole('textbox', { name: /^扩展目录/ }).fill('/workspace/extension');
   await page.getByRole('button', { name: '读取扩展目录', exact: true }).click();
   await expect(page.getByText('manifest missing', { exact: true })).toBeVisible();
@@ -45,6 +47,8 @@ test('Extension inspection retries completed failures, polls accepted, and saves
   await expect(page.getByRole('button', { name: '保存所选资源' })).toBeVisible({ timeout: 8000 });
   expect(requests).toHaveLength(2);
   expect(requests[0].request_id).not.toBe(requests[1].request_id);
+  expect(requests[1].source_kind).toBe(sourceKind||undefined);
+  if(sourceKind) await expect(page.getByText('linked-skill · /plugins/linked-skill',{exact:true})).toBeVisible();
   expect(polls).toBeGreaterThanOrEqual(2);
   await page.getByRole('button', { name: '保存所选资源' }).click();
   await expect(page.getByText('扩展配置已保存', { exact: true })).toBeVisible();
@@ -52,7 +56,18 @@ test('Extension inspection retries completed failures, polls accepted, and saves
   expect(mutations[0].resources).toEqual(['skill/guide']);
   expect(mutations[0].catalog).toBeUndefined();
   await page.getByRole('button', { name: '停用扩展' }).click();
-  await expect(page.getByRole('button', { name: '启用扩展' })).toBeVisible();
+  await expect(page.getByRole('button', { name: sourceKind?'重新检查并启用':'启用扩展' })).toBeVisible();
   expect(mutations[1].version).toBe(2);
   expect(mutations[1].enabled).toBe(false);
+  if(sourceKind){
+    await page.getByRole('button',{name:'重新检查并启用'}).click();
+    expect(mutations).toHaveLength(2);
+    await expect(page.getByRole('combobox',{name:'来源类型'})).toHaveValue('skills');
+    await page.getByRole('button',{name:'读取扩展目录',exact:true}).click();
+    await expect(page.getByRole('button',{name:'保存所选资源'})).toBeVisible();
+    await page.getByRole('button',{name:'保存所选资源'}).click();
+    await expect.poll(()=>mutations.length).toBe(3);
+    expect(mutations[2].inspection_id).toBe(requests[2].request_id);
+    expect(mutations[2].inspection_id).not.toBe(mutations[0].inspection_id);
+  }
 });

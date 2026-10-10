@@ -27,7 +27,8 @@ var (
 
 // Scope comes from current Management authority, never a browser request body.
 type Scope struct {
-	Capabilities agentpolicy.Policy `json:"capabilities"`
+	AgentManagement bool               `json:"agent_management,omitempty"`
+	Capabilities    agentpolicy.Policy `json:"capabilities"`
 	// WorkerDepth is descriptive policy, not part of the authorization identity.
 	WorkerDepth              int    `json:"worker_depth"`
 	TenantID                 string `json:"tenant_id"`
@@ -53,15 +54,30 @@ type Thread struct {
 	Generation    int64     `json:"generation"`
 	Sequence      int64     `json:"sequence"`
 	PendingInputs int64     `json:"pending_inputs"`
+	QueuedInputs  int64     `json:"queued_inputs,omitempty"`
 	HeldInputs    int64     `json:"held_inputs"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type InputRequest struct {
-	RequestID string `json:"request_id"`
-	ThreadID  string `json:"thread_id"`
-	Text      string `json:"text"`
+	RequestID string       `json:"request_id"`
+	ThreadID  string       `json:"thread_id"`
+	Text      string       `json:"text"`
+	Images    []InputImage `json:"images,omitempty"`
+}
+
+// InputImage identifies an immutable Execution Artifact, never inline bytes or
+// a path on the browser or Runtime host. Its order is part of input identity.
+type InputImage struct {
+	ArtifactID string `json:"artifact_id"`
+	SHA256     string `json:"sha256"`
+	MediaType  string `json:"media_type"`
+	Size       int64  `json:"size"`
+}
+
+func (i InputImage) MediaRef() *llm.MediaRef {
+	return &llm.MediaRef{ArtifactID: i.ArtifactID, SHA256: i.SHA256, MediaType: i.MediaType, OriginalBytes: int(i.Size)}
 }
 
 type CompactionRequest struct {
@@ -78,20 +94,26 @@ type InputReceipt struct {
 }
 
 type Event struct {
-	ID         string          `json:"id"`
-	ThreadID   string          `json:"thread_id"`
-	Sequence   int64           `json:"sequence"`
-	Generation int64           `json:"generation"`
-	Kind       string          `json:"kind"`
-	Data       json.RawMessage `json:"data"`
-	CreatedAt  time.Time       `json:"created_at"`
+	ObservationIDs []string        `json:"observation_ids,omitempty"`
+	ToolAttemptID  string          `json:"tool_attempt_id,omitempty"`
+	TurnID         string          `json:"turn_id,omitempty"`
+	ID             string          `json:"id"`
+	ThreadID       string          `json:"thread_id"`
+	Sequence       int64           `json:"sequence"`
+	Generation     int64           `json:"generation"`
+	Kind           string          `json:"kind"`
+	Data           json.RawMessage `json:"data"`
+	CreatedAt      time.Time       `json:"created_at"`
 }
 
 type Timeline struct {
-	Thread       Thread  `json:"thread"`
-	Events       []Event `json:"events"`
-	NextSequence int64   `json:"next_sequence"`
-	HasMore      bool    `json:"has_more"`
+	PreviousSequence int64           `json:"previous_sequence,omitempty"`
+	HasPrevious      bool            `json:"has_previous,omitempty"`
+	Progress         []ModelProgress `json:"progress"`
+	Thread           Thread          `json:"thread"`
+	Events           []Event         `json:"events"`
+	NextSequence     int64           `json:"next_sequence"`
+	HasMore          bool            `json:"has_more"`
 }
 
 type Lease struct {
@@ -102,6 +124,7 @@ type Lease struct {
 }
 
 type TurnConfig struct {
+	AgentManagement     bool                                  `json:"agent_management,omitempty"`
 	DynamicInstructions instructionpolicy.DynamicInstructions `json:"dynamic_instructions"`
 	Capabilities        agentpolicy.Policy                    `json:"capabilities"`
 	Extensions          []extensionpolicy.Binding             `json:"extensions,omitempty"`
@@ -127,6 +150,13 @@ type ModelConfig struct {
 }
 
 type Work struct {
+	ThreadKind      string
+	ActiveWrites    []ActiveWrite
+	InputReminders  []InputReminder
+	InputScopeID    string
+	Application     string
+	ThreadState     ThreadState
+	WorkingFiles    *WorkingFiles
 	ModelBudget     *ApplicationModelBudget
 	Deferred        bool
 	ContextSequence int64

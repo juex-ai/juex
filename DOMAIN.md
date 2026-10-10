@@ -41,6 +41,23 @@ Inputs commit before acceptance is returned. Request IDs deduplicate admission;
 the next assistant message is not assumed to correspond one-to-one with an Input.
 Context compaction preserves durable history and a checkpoint. Worker archival
 requires idle work and retains readable history.
+An archived ordinary Worker can be permanently deleted after its descendants
+are removed and its pending responsibilities have settled. Main and application
+Workers retain their owners' lifecycles. Deleting a conversation preserves usage,
+independent artifacts, Workspace files and knowledge already shared with Memory.
+
+Notes and Tasks are mutable, Thread-owned working context, independent of Fleet
+Memory. Enabled Notes and Tasks are projected on every model iteration. Unfinished
+todo/doing Tasks prevent normal completion; pending/failed Tasks do not. Completing
+all remaining Tasks clears enabled Notes. Compaction retains Notes and unfinished
+Tasks; a new context clears enabled Notes and completed Tasks while preserving
+Thread identity, history and working files.
+
+The input checklist records an Agent's explicit handling judgement for direct
+user inputs, separately from execution success and Tasks completion. A work scope
+survives compaction. Only delivered inputs can be checked; finishing a Turn never
+checks them or forces continuation. A user-started new context ends the scope
+without inventing checks; a model-started reset cannot discard unchecked inputs.
 
 An Agent's capability policy limits its tools and background activity independently
 of Fleet application enablement and environment grants. Ordinary Worker delegation

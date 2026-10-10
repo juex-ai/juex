@@ -6,30 +6,55 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/llm"
 )
 
+// ModelRequirements describes capabilities needed by the constructed request.
+type ModelRequirements struct {
+	OutputLimit bool
+	Vision      bool
+}
+
+func (r ModelRequirements) Check(profile llm.ProviderProfile) error {
+	if r.OutputLimit && !profile.Capabilities.MaxOutputTokens || r.Vision && !profile.Capabilities.Vision {
+		return ErrModelUnavailable
+	}
+	return nil
+}
+
 // Authority is implemented by the composition root using Management's current
 // directory. Runtime never reads another service's tables or stores API keys.
 type Authority interface {
 	Authorize(context.Context, string, string, string, bool) (Scope, error)
 	Snapshot(context.Context, Scope) (TurnConfig, error)
-	Provider(context.Context, Scope, ModelConfig) (llm.Provider, error)
+	Provider(context.Context, Scope, ModelConfig, ModelRequirements) (llm.Provider, error)
 }
 
 type ConversationStore interface {
+	ResetContext(context.Context, Scope, string, string) (Thread, error)
 	SetThreadArchived(context.Context, Scope, string, bool) (Thread, error)
 	EnsureAgent(context.Context, Scope) (Thread, error)
 	AcceptCompaction(context.Context, Scope, string, CompactionRequest) (InputReceipt, error)
 	AcceptInput(context.Context, Scope, InputRequest) (InputReceipt, error)
+	ExistingInput(context.Context, Scope, InputRequest) (InputReceipt, bool, error)
 	Threads(context.Context, Scope) ([]Thread, error)
 	Timeline(context.Context, Scope, string, int64, int) (Timeline, error)
 	CancelThread(context.Context, Scope, string) error
 	CreateWorker(context.Context, Scope, string, string, string) (Thread, error)
 }
 
+func (s *Service) ResetContext(ctx context.Context, actor, tenant, agent, thread, requestID string) (Thread, error) {
+	scope, err := s.scope(ctx, actor, tenant, agent, true)
+	if err != nil {
+		return Thread{}, err
+	}
+	return s.Store.ResetContext(ctx, scope, thread, requestID)
+}
+
 type Service struct {
+	Tools        ToolGateway
 	Store        ConversationStore
 	Authority    Authority
 	Applications ApplicationGateway
 	Triggers     TriggerAuthority
+	Media        MediaGateway
 }
 
 func (s *Service) scope(ctx context.Context, actor, tenant, agent string, execute bool) (Scope, error) {
@@ -46,8 +71,26 @@ func (s *Service) Submit(ctx context.Context, actor, tenant, agent string, input
 	if err != nil {
 		return InputReceipt{}, err
 	}
-	if _, err := s.Authority.Snapshot(ctx, scope); err != nil {
+	if err := input.Validate(); err != nil {
 		return InputReceipt{}, err
+	}
+	if receipt, found, err := s.Store.ExistingInput(ctx, scope, input); found || err != nil {
+		return receipt, err
+	}
+	if err := s.validateNewInput(ctx, scope, input); err != nil {
+		// Another copy may have committed while this copy validated media. The
+		// durable receipt survives later deletion or model configuration changes.
+		if receipt, found, lookupErr := s.Store.ExistingInput(ctx, scope, input); found || lookupErr != nil {
+			return receipt, lookupErr
+		}
+		return InputReceipt{}, err
+	}
+	fresh, err := s.Authority.Authorize(ctx, actor, tenant, agent, true)
+	if err != nil {
+		return InputReceipt{}, err
+	}
+	if !scope.SameAuthority(fresh) {
+		return InputReceipt{}, ErrDenied
 	}
 	return s.Store.AcceptInput(ctx, scope, input)
 }

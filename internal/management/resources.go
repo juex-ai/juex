@@ -34,6 +34,7 @@ type ModelCandidate struct {
 }
 
 type ModelPlan struct {
+	AgentManagement                bool
 	DynamicInstructions            instructionpolicy.DynamicInstructions
 	Capabilities                   agentpolicy.Policy
 	Extensions                     []extensionpolicy.Binding
@@ -57,41 +58,41 @@ type PeerAgent struct {
 }
 
 type Agent struct {
-	DynamicInstructions instructionpolicy.DynamicInstructions `json:"dynamic_instructions"`
-	Capabilities        agentpolicy.Policy                    `json:"capabilities"`
-	Extensions          []extensionpolicy.Binding             `json:"extensions"`
-	Hooks               []hookpolicy.Declaration              `json:"hooks"`
-	Purging             bool                                  `json:"purging"`
-	WorkerDepth         int                                   `json:"worker_depth"`
-	ID                  string                                `json:"id"`
-	FleetID             string                                `json:"fleet_id"`
-	Name                string                                `json:"name"`
-	Instructions        string                                `json:"instructions"`
-	ModelID             string                                `json:"model_id"`
-	Status              AgentStatus                           `json:"status"`
-	Version             int64                                 `json:"version"`
-	ExecutionEpoch      int64                                 `json:"-"`
-	CreatedAt           time.Time                             `json:"created_at"`
-	UpdatedAt           time.Time                             `json:"updated_at"`
+	AgentManagement        bool                                  `json:"agent_management,omitempty"`
+	DynamicInstructions    instructionpolicy.DynamicInstructions `json:"dynamic_instructions"`
+	Configuration          Configuration                         `json:"configuration"`
+	WorkspaceConfiguration *WorkspaceConfiguration               `json:"workspace_configuration"`
+	Extensions             []extensionpolicy.Binding             `json:"extensions"`
+	Hooks                  []hookpolicy.Declaration              `json:"hooks"`
+	Purging                bool                                  `json:"purging"`
+	WorkerDepth            int                                   `json:"worker_depth"`
+	ID                     string                                `json:"id"`
+	FleetID                string                                `json:"fleet_id"`
+	Name                   string                                `json:"name"`
+	Instructions           string                                `json:"instructions"`
+	Status                 AgentStatus                           `json:"status"`
+	Version                int64                                 `json:"version"`
+	ExecutionEpoch         int64                                 `json:"-"`
+	CreatedAt              time.Time                             `json:"created_at"`
+	UpdatedAt              time.Time                             `json:"updated_at"`
 }
 
 type AgentConfig struct {
 	// An omitted setting preserves the source policy during unrelated edits.
 	DynamicInstructions *instructionpolicy.DynamicInstructions `json:"dynamic_instructions,omitempty"`
-	// An omitted policy preserves the existing value on configuration updates.
-	Capabilities *agentpolicy.Policy      `json:"capabilities,omitempty"`
-	Hooks        []hookpolicy.Declaration `json:"hooks,omitempty"`
-	WorkerDepth  int                      `json:"worker_depth,omitempty"`
-	Name         string                   `json:"name"`
-	Instructions string                   `json:"instructions"`
-	ModelID      string                   `json:"model_id"`
+	// Omission preserves this layer during unrelated edits; an empty declaration inherits.
+	Configuration *Configuration           `json:"configuration,omitempty"`
+	Hooks         []hookpolicy.Declaration `json:"hooks,omitempty"`
+	WorkerDepth   int                      `json:"worker_depth,omitempty"`
+	Name          string                   `json:"name"`
+	Instructions  string                   `json:"instructions"`
 }
 
 func (c AgentConfig) Validate() error {
 	if c.DynamicInstructions != nil && c.DynamicInstructions.Validate() != nil {
 		return ErrInvalid
 	}
-	if c.Capabilities != nil && c.Capabilities.Validate() != nil {
+	if c.Configuration != nil && c.Configuration.Validate() != nil {
 		return ErrInvalid
 	}
 	if hookpolicy.Validate(c.Hooks) != nil {
@@ -117,29 +118,58 @@ type Model struct {
 	Enabled       bool         `json:"enabled"`
 }
 
-// ModelConfiguration is accepted only by the deployment operator. APIKey and
-// endpoint are intentionally absent from the public Model read model.
+// ModelConfiguration is accepted only by the deployment operator. Credentials,
+// options and endpoint are absent from the public Model read model.
 type ModelConfiguration struct {
 	Provider, Name, Endpoint, APIKey        string
 	Protocol                                llm.Protocol
 	ContextWindow, MaxOutput, OutputReserve int
 	Enabled                                 bool
+	Options                                 ModelOptions
+}
+
+// ModelOptions can contain account routing and secrets in headers or query
+// parameters. Management encrypts the whole value; frozen plans carry only the
+// model authorization epoch and never copy these options into Runtime events.
+type ModelOptions struct {
+	Authentication string                  `json:"authentication"`
+	ThinkingEffort string                  `json:"thinking_effort,omitempty"`
+	Headers        map[string]string       `json:"headers,omitempty"`
+	Query          map[string]string       `json:"query,omitempty"`
+	Capabilities   llm.CapabilityOverrides `json:"capabilities"`
+	Compat         llm.CompatOptions       `json:"compat"`
+}
+
+func (o ModelOptions) Normalized() ModelOptions {
+	if o.Authentication == "" {
+		o.Authentication = "api_key"
+	}
+	if len(o.Compat.ReasoningReplayFields) == 0 {
+		o.Compat.ReasoningReplayFields = nil
+	}
+	return o
+}
+
+// ModelConnection is returned only after fresh admission of a model call.
+type ModelConnection struct {
+	APIKey  string
+	Options ModelOptions
 }
 
 type FleetSettings struct {
-	DefaultModelID string `json:"default_model_id"`
-	Version        int64  `json:"version"`
+	Configuration Configuration `json:"configuration"`
+	Version       int64         `json:"version"`
 }
 
 type FleetOverview struct {
 	Fleet
-	Purged                 bool          `json:"purged"`
-	Purging                bool          `json:"purging"`
-	PlatformDefaultModelID string        `json:"platform_default_model_id"`
-	Owner                  User          `json:"owner"`
-	Membership             Membership    `json:"membership"`
-	Settings               FleetSettings `json:"settings"`
-	Agents                 []Agent       `json:"agents"`
+	Purged         bool               `json:"purged"`
+	Purging        bool               `json:"purging"`
+	TenantSettings ConfigurationLayer `json:"tenant_settings"`
+	Owner          User               `json:"owner"`
+	Membership     Membership         `json:"membership"`
+	Settings       FleetSettings      `json:"settings"`
+	Agents         []Agent            `json:"agents"`
 }
 
 // FleetAuthority is a current authorization snapshot for private services.
@@ -166,15 +196,17 @@ type AgentAuthority struct {
 	ActorAuthorizationEpoch  int64
 	MembershipVersion        int64
 	MembershipExecutionEpoch int64
-	ModelID                  string
+	Layers                   ConfigurationLayers
+	Effective                EffectiveConfiguration
 	CanExecute               bool
 }
 
 type AgentDetail struct {
-	Agent            Agent  `json:"agent"`
-	OwnerID          string `json:"owner_id"`
-	CanExecute       bool   `json:"can_execute"`
-	EffectiveModelID string `json:"effective_model_id"`
+	Agent      Agent                  `json:"agent"`
+	OwnerID    string                 `json:"owner_id"`
+	CanExecute bool                   `json:"can_execute"`
+	Layers     ConfigurationLayers    `json:"layers"`
+	Effective  EffectiveConfiguration `json:"effective"`
 }
 
 func (c AgentConfig) EffectiveWorkerDepth() int {

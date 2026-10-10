@@ -58,7 +58,7 @@ func TestApplicationModelBudgetRPCFallbackAndTools(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{model.ID}); err != nil {
+				if err := f.configureModels(ctx, []string{f.agent.Configuration.Models[0], model.ID}); err != nil {
 					t.Fatal(err)
 				}
 				gateway := &runtimeApplicationGateway{}
@@ -308,7 +308,7 @@ func TestApplicationModelBudgetSkipsUnusableCompactionCandidate(t *testing.T) {
 	})
 	ctx := context.Background()
 	var endpoint string
-	if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.ModelID).Scan(&endpoint); err != nil {
+	if err := f.pool.QueryRow(ctx, `SELECT endpoint FROM management.models WHERE id=$1`, f.agent.Configuration.Models[0]).Scan(&endpoint); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: "fixture", Name: "test-model", Protocol: llm.ProtocolOpenAIChat, Endpoint: endpoint, APIKey: "test-key", ContextWindow: 4096, OutputReserve: 1024, Enabled: true}); err != nil {
@@ -323,7 +323,7 @@ func TestApplicationModelBudgetSkipsUnusableCompactionCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.directory.SetModelFallbacks(ctx, f.agent.ModelID, []string{model.ID}); err != nil {
+	if err := f.configureModels(ctx, []string{f.agent.Configuration.Models[0], model.ID}); err != nil {
 		t.Fatal(err)
 	}
 	scope, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)

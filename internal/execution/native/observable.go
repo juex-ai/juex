@@ -37,7 +37,7 @@ func (e *Engine) observeCommand(ctx context.Context, op *operation) (*int, error
 	if err != nil {
 		return nil, err
 	}
-	environment, err := e.processEnvironment(args.Environment)
+	environment, err := e.operationEnvironment(op, args.Environment)
 	if err != nil {
 		return nil, err
 	}

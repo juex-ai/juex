@@ -89,6 +89,12 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal("Execution could not check Agent authority", err)
 	}
+	if _, err := executorAuthority.ExtensionCatalog(ctx, executorScope); !errors.Is(err, managedruntime.ErrDenied) {
+		t.Fatal("Execution obtained private extension credentials", err)
+	}
+	if catalog, err := authority.ExtensionCatalog(ctx, executorScope); err != nil || catalog.AgentVersion < 1 {
+		t.Fatal(catalog, err)
+	}
 	if _, err := executorAuthority.Snapshot(ctx, executorScope); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Execution obtained Runtime-only configuration", err)
 	}
@@ -98,7 +104,7 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	if peers, err := authority.Peers(ctx, executorScope); err != nil || len(peers) != 0 {
 		t.Fatal(peers, err)
 	}
-	if _, err := executorAuthority.Provider(ctx, executorScope, managedruntime.ModelConfig{}); !errors.Is(err, managedruntime.ErrDenied) {
+	if _, err := executorAuthority.Provider(ctx, executorScope, managedruntime.ModelConfig{}, managedruntime.ModelRequirements{}); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("Execution obtained model credentials", err)
 	}
 	threads, err := client.Threads(ctx, f.actor, f.tenant, f.agent.ID)
@@ -130,6 +136,9 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	if restored, err := client.Archive(ctx, f.actor, f.tenant, f.agent.ID, worker.ID, false); err != nil || restored.Retention != "active" {
 		t.Fatal(restored, err)
 	}
+	if reset, err := client.ResetContext(ctx, f.actor, f.tenant, f.agent.ID, worker.ID, "rpc-reset"); err != nil || reset.ID != worker.ID || reset.Generation != worker.Generation+1 {
+		t.Fatal("RPC context reset", reset, err)
+	}
 	if _, err := client.Threads(ctx, "00000000-0000-4000-8000-000000000001", f.tenant, f.agent.ID); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("RPC authority missing", err)
 	}
@@ -149,6 +158,20 @@ func TestManagedRuntimeKitexMutualTLSAndConversation(t *testing.T) {
 	usage, usageErr := client.Usage(ctx, f.actor, usageQuery(f.tenant, f.actor))
 	if usageErr != nil || usage.Totals.Attempts != 1 || usage.Totals.TotalTokens != 16 {
 		t.Fatal("usage did not cross Runtime and Management authority RPCs", usage, usageErr)
+	}
+	inspection, inspectionErr := client.Inspection(ctx, f.actor, f.tenant, f.agent.ID, threads[0].ID)
+	if inspectionErr != nil || inspection.LatestRequest == nil || inspection.Usage.TotalTokens != 16 {
+		t.Fatal("inspection did not cross authenticated RPC", inspection, inspectionErr)
+	}
+	history, historyErr := client.History(ctx, f.actor, f.tenant, f.agent.ID, threads[0].ID, 0, 2)
+	if historyErr != nil || len(history.Events) != 2 || !history.HasPrevious {
+		t.Fatal("history window did not cross authenticated RPC", history, historyErr)
+	}
+	if _, err := client.History(ctx, "00000000-0000-4000-8000-000000000001", f.tenant, f.agent.ID, threads[0].ID, 0, 2); !errors.Is(err, managedruntime.ErrDenied) {
+		t.Fatal("history authority missing", err)
+	}
+	if _, err := client.Inspection(ctx, "00000000-0000-4000-8000-000000000001", f.tenant, f.agent.ID, threads[0].ID); !errors.Is(err, managedruntime.ErrDenied) {
+		t.Fatal("inspection authority missing", err)
 	}
 	if err != nil {
 		t.Fatal(err)

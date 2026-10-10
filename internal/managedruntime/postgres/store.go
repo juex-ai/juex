@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
+	"slices"
 	"strings"
 	"time"
 
@@ -81,6 +82,36 @@ var applicationBudgetSchema string
 //go:embed main_triggers_schema.sql
 var mainTriggersSchema string
 
+//go:embed import_schema.sql
+var importSchema string
+
+//go:embed thread_application_schema.sql
+var threadApplicationSchema string
+
+//go:embed thread_state_schema.sql
+var threadStateSchema string
+
+//go:embed input_images_schema.sql
+var inputImagesSchema string
+
+//go:embed progress_schema.sql
+var progressSchema string
+
+//go:embed observer_management_schema.sql
+var observerManagementSchema string
+
+//go:embed thread_deletion_schema.sql
+var threadDeletionSchema string
+
+//go:embed lifecycle_schema.sql
+var lifecycleSchema string
+
+//go:embed agent_control_schema.sql
+var agentControlSchema string
+
+//go:embed input_tracking_schema.sql
+var inputTrackingSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -95,7 +126,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, outputBudgetSchema, mainTriggersSchema, applicationBudgetSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, outputBudgetSchema, mainTriggersSchema, applicationBudgetSchema, importSchema, threadApplicationSchema, threadStateSchema, inputImagesSchema, progressSchema, observerManagementSchema, threadDeletionSchema, inputTrackingSchema, lifecycleSchema, agentControlSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -212,8 +243,8 @@ func checkScope(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope) erro
 }
 
 func (s *Store) AcceptInput(ctx context.Context, scope managedruntime.Scope, request managedruntime.InputRequest) (managedruntime.InputReceipt, error) {
-	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 256<<10 {
-		return managedruntime.InputReceipt{}, managedruntime.ErrInvalid
+	if err := request.Validate(); err != nil {
+		return managedruntime.InputReceipt{}, err
 	}
 	return s.acceptInput(ctx, scope, request, managedruntime.InputSource{})
 }
@@ -235,7 +266,7 @@ func (s *Store) acceptInput(ctx context.Context, scope managedruntime.Scope, req
 		return managedruntime.InputReceipt{}, err
 	}
 	defer rollback(tx)
-	if err := checkScope(ctx, tx, scope); err != nil {
+	if err := lockAgentAdmission(ctx, tx, scope); err != nil {
 		return managedruntime.InputReceipt{}, err
 	}
 	thread, err := readThread(ctx, tx, scope.AgentID, request.ThreadID)
@@ -263,32 +294,40 @@ func acceptThreadInput(ctx context.Context, tx pgx.Tx, scope managedruntime.Scop
 	if thread.Retention != "active" {
 		return managedruntime.InputReceipt{}, managedruntime.ErrDenied
 	}
-	var result managedruntime.InputReceipt
-	var storedText, actor string
-	var storedSource []byte
-	err = tx.QueryRow(ctx, `INSERT INTO runtime.inputs(request_id,thread_id,actor_id,membership_version,text,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch,source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	images := request.Images
+	if images == nil {
+		images = []managedruntime.InputImage{}
+	}
+	encodedImages, err := json.Marshal(images)
+	if err != nil {
+		return managedruntime.InputReceipt{}, err
+	}
+	previous, previousErr := scanInputReceipt(tx.QueryRow(ctx, `SELECT `+inputReceiptColumns+` FROM runtime.inputs WHERE thread_id=$1 AND request_id=$2`, thread.ID, request.RequestID), scope, request, source)
+	if !errors.Is(previousErr, pgx.ErrNoRows) {
+		return previous, previousErr
+	}
+	if err := requireAgentRunning(ctx, tx, scope.AgentID); err != nil {
+		return managedruntime.InputReceipt{}, err
+	}
+	result, err := scanInputReceipt(tx.QueryRow(ctx, `INSERT INTO runtime.inputs(request_id,thread_id,actor_id,membership_version,text,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch,source,images) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 	ON CONFLICT(thread_id,request_id) DO NOTHING
-	RETURNING id,request_id,thread_id,state,accepted_at,text,actor_id,source`, request.RequestID, thread.ID, scope.ActorID, scope.MembershipVersion, request.Text, scope.MembershipExecutionEpoch, scope.AgentExecutionEpoch, scope.ActorAuthorizationEpoch, encodedSource).Scan(&result.ID, &result.RequestID, &result.ThreadID, &result.State, &result.AcceptedAt, &storedText, &actor, &storedSource)
+	RETURNING `+inputReceiptColumns, request.RequestID, thread.ID, scope.ActorID, scope.MembershipVersion, request.Text, scope.MembershipExecutionEpoch, scope.AgentExecutionEpoch, scope.ActorAuthorizationEpoch, encodedSource, encodedImages), scope, request, source)
 	created := err == nil
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `SELECT id,request_id,thread_id,state,accepted_at,text,actor_id,source FROM runtime.inputs WHERE thread_id=$1 AND request_id=$2`, thread.ID, request.RequestID).Scan(&result.ID, &result.RequestID, &result.ThreadID, &result.State, &result.AcceptedAt, &storedText, &actor, &storedSource)
+		result, err = scanInputReceipt(tx.QueryRow(ctx, `SELECT `+inputReceiptColumns+` FROM runtime.inputs WHERE thread_id=$1 AND request_id=$2`, thread.ID, request.RequestID), scope, request, source)
 	}
 	if err != nil {
 		return result, classify(err)
-	}
-	var origin managedruntime.InputSource
-	if err := json.Unmarshal(storedSource, &origin); err != nil {
-		return result, err
-	}
-	if storedText != request.Text || actor != scope.ActorID || origin != source {
-		return result, managedruntime.ErrConflict
 	}
 	if created {
 		kind := "input.accepted"
 		if source.Kind == "compaction" {
 			kind = "context.requested"
 		}
-		if err := appendEvent(ctx, tx, thread.ID, kind, map[string]any{"receipt": result, "text": request.Text, "source": source}); err != nil {
+		if err := appendEvent(ctx, tx, thread.ID, kind, map[string]any{"receipt": result, "text": request.Text, "images": images, "source": source}); err != nil {
+			return result, err
+		}
+		if err := trackInput(ctx, tx, scope, thread, result.ID, source); err != nil {
 			return result, err
 		}
 	}
@@ -300,15 +339,59 @@ func acceptThreadInput(ctx context.Context, tx pgx.Tx, scope managedruntime.Scop
 	return result, nil
 }
 
+const inputReceiptColumns = `id,request_id,thread_id,state,accepted_at,text,actor_id,source,images`
+
+func scanInputReceipt(row scanner, scope managedruntime.Scope, request managedruntime.InputRequest, source managedruntime.InputSource) (managedruntime.InputReceipt, error) {
+	var result managedruntime.InputReceipt
+	var text, actor string
+	var encodedSource, encodedImages []byte
+	if err := row.Scan(&result.ID, &result.RequestID, &result.ThreadID, &result.State, &result.AcceptedAt, &text, &actor, &encodedSource, &encodedImages); err != nil {
+		return result, err
+	}
+	var origin managedruntime.InputSource
+	var images []managedruntime.InputImage
+	if err := json.Unmarshal(encodedSource, &origin); err != nil {
+		return result, err
+	}
+	if err := json.Unmarshal(encodedImages, &images); err != nil {
+		return result, err
+	}
+	if text != request.Text || actor != scope.ActorID || source != origin || !slices.Equal(images, request.Images) {
+		return result, managedruntime.ErrConflict
+	}
+	return result, nil
+}
+
+func (s *Store) ExistingInput(ctx context.Context, scope managedruntime.Scope, request managedruntime.InputRequest) (managedruntime.InputReceipt, bool, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly, IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return managedruntime.InputReceipt{}, false, err
+	}
+	defer rollback(tx)
+	if err := checkScope(ctx, tx, scope); err != nil {
+		return managedruntime.InputReceipt{}, false, err
+	}
+	var thread string
+	if err := tx.QueryRow(ctx, `SELECT id FROM runtime.threads WHERE agent_id=$1 AND (($2='' AND kind='main') OR id::text=$2)`, scope.AgentID, request.ThreadID).Scan(&thread); err != nil {
+		return managedruntime.InputReceipt{}, false, classify(err)
+	}
+	receipt, err := scanInputReceipt(tx.QueryRow(ctx, `SELECT `+inputReceiptColumns+` FROM runtime.inputs WHERE thread_id=$1 AND request_id=$2`, thread, request.RequestID), scope, request, managedruntime.InputSource{})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return managedruntime.InputReceipt{}, false, nil
+	}
+	return receipt, err == nil, err
+}
+
 type scanner interface{ Scan(...any) error }
 
-const threadColumns = `COALESCE((SELECT j.application FROM runtime.application_jobs j WHERE j.thread_id=t.id),''),t.id,t.agent_id,COALESCE(t.parent_id::text,''),t.kind,t.name,t.retention,t.state,t.generation,t.sequence,
+const threadColumns = `t.application,t.id,t.agent_id,COALESCE(t.parent_id::text,''),t.kind,t.name,t.retention,t.state,t.generation,t.sequence,
 (SELECT count(*) FROM runtime.inputs i WHERE i.thread_id=t.id AND i.state IN ('queued','active')),
+(SELECT count(*) FROM runtime.inputs i WHERE i.thread_id=t.id AND i.state='queued'),
 (SELECT count(*) FROM runtime.inputs i WHERE i.thread_id=t.id AND i.state='held'),t.created_at,t.updated_at`
 
 func scanThread(row scanner) (managedruntime.Thread, error) {
 	var v managedruntime.Thread
-	err := row.Scan(&v.Application, &v.ID, &v.AgentID, &v.ParentID, &v.Kind, &v.Name, &v.Retention, &v.State, &v.Generation, &v.Sequence, &v.PendingInputs, &v.HeldInputs, &v.CreatedAt, &v.UpdatedAt)
+	err := row.Scan(&v.Application, &v.ID, &v.AgentID, &v.ParentID, &v.Kind, &v.Name, &v.Retention, &v.State, &v.Generation, &v.Sequence, &v.PendingInputs, &v.QueuedInputs, &v.HeldInputs, &v.CreatedAt, &v.UpdatedAt)
 	return v, classify(err)
 }
 func readThread(ctx context.Context, tx pgx.Tx, agentID, threadID string) (managedruntime.Thread, error) {
@@ -395,5 +478,12 @@ func (s *Store) Timeline(ctx context.Context, scope managedruntime.Scope, thread
 		return result, err
 	}
 	result.HasMore = result.NextSequence < thread.Sequence
+	if err := enrichToolAttempts(ctx, tx, thread.ID, result.Events); err != nil {
+		return result, err
+	}
+	result.Progress, err = readProgress(ctx, tx, thread)
+	if err != nil {
+		return result, err
+	}
 	return result, tx.Commit(ctx)
 }

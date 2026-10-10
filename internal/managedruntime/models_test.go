@@ -29,6 +29,11 @@ func TestModelHistoryPreservesToolPairsWithoutReplayingForeignReasoning(t *testi
 	if err := llm.ValidateToolTranscript(projected); err != nil {
 		t.Fatal(err)
 	}
+	changedAccount := model
+	changedAccount.ModelAuthorizationEpoch++
+	if len(modelHistory(work, changedAccount)[1].Blocks) != 1 {
+		t.Fatal("revoked account/configuration epoch retained private reasoning")
+	}
 	work.ModelOrigins = nil
 	if len(modelHistory(work, model)[1].Blocks) != 1 {
 		t.Fatal("unknown-origin reasoning replayed")

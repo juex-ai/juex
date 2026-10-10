@@ -5,7 +5,7 @@ const { expect, test } = require('@playwright/test');
 test('Agent settings preserve disabled capabilities through edits and reopen', async ({ page }) => {
   const user = { id: 'owner', email: 'owner@example.test', email_verified: true };
   const tenant = { id: 'tenant', name: 'Workspace', role: 'admin' };
-  let agent = { id: 'agent', name: 'minima', status: 'active', version: 1, instructions: '', model_id: '', worker_depth: 1, hooks: [], extensions: [], capabilities: { disabled: ['memory', 'mcp', 'workers'] } };
+  let agent = { id: 'agent', name: 'minima', status: 'active', version: 1, instructions: '', configuration: {modules:Object.fromEntries(['context-control','memory','mcp','notes','tasks','workers'].map(key=>[key,false]))}, worker_depth: 1, hooks: [], extensions: [] };
   const mutations = [];
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
@@ -26,18 +26,21 @@ test('Agent settings preserve disabled capabilities through edits and reopen', a
   });
   await page.goto('/t/tenant/fleet');
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(page.getByLabel('Memory 读写与学习')).not.toBeChecked();
-  await expect(page.getByLabel('Shell 命令')).toBeChecked();
-  await expect(page.getByLabel('Worker 委派')).not.toBeChecked();
+  await expect(page.getByLabel('Memory 读写与学习')).toHaveValue('off');
+  await expect(page.getByLabel('Shell 命令')).toHaveValue('inherit');
+  await expect(page.getByLabel('Notes 持续工作上下文')).toHaveValue('off');
+  await expect(page.getByLabel('Tasks 任务操作与完成门禁')).toHaveValue('off');
+  await expect(page.getByLabel('模型主动压缩与重置上下文')).toHaveValue('off');
+  await expect(page.getByLabel('Worker 委派')).toHaveValue('off');
   await page.getByLabel('名称', { exact: true }).fill('renamed minima');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(mutations[0].capabilities.disabled).toEqual(['memory', 'mcp', 'workers']);
+  expect(mutations[0].configuration.modules).toEqual({'context-control':false,memory:false,mcp:false,notes:false,tasks:false,workers:false});
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(page.getByLabel('Memory 读写与学习')).not.toBeChecked();
-  await page.getByLabel('Calendar 日程').uncheck();
-  await page.getByLabel('Memory 读写与学习').check();
+  await expect(page.getByLabel('Memory 读写与学习')).toHaveValue('off');
+  await page.getByLabel('Calendar 日程配置').selectOption('off');
+  await page.getByLabel('Memory 读写与学习配置').selectOption('on');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(mutations[1].capabilities.disabled).toEqual(['calendar', 'mcp', 'workers']);
+  expect(mutations[1].configuration.modules).toEqual({calendar:false,'context-control':false,memory:true,mcp:false,notes:false,tasks:false,workers:false});
 });

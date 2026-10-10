@@ -78,6 +78,15 @@ builds:
     goos: [darwin, linux]
     goarch: [amd64, arm64]
 
+  - id: juex-migrate
+    main: ./cmd/juex-migrate
+    binary: bin/juex-migrate
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: *metadata
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+
 archives:
   - id: clients
     ids: [juex, juex-executor]
@@ -87,7 +96,7 @@ archives:
     files: [README.md, README.zh.md]
 
   - id: platform
-    ids: [juex, juex-executor, juex-management, juex-runtime, juex-memory, juex-calendar, juex-execution, juex-service-log]
+    ids: [juex, juex-executor, juex-management, juex-runtime, juex-memory, juex-calendar, juex-execution, juex-service-log, juex-migrate]
     name_template: "{{.ProjectName}}_platform_{{.Version}}_{{.Os}}_{{.Arch}}"
     formats: [tar.gz]
     wrap_in_directory: true

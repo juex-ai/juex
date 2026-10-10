@@ -432,6 +432,9 @@ func TestNativeExecutorCrashNeverReplaysUnknownSideEffect(t *testing.T) {
 }
 
 func crashRequest(t *testing.T, directory, kind string) execprotocol.Request {
+	if kind == "private_environment" {
+		return nativeRequest(t, "crash-operation", "exec_command", native.CommandArguments{Command: "test -n \"$PRIVATE_PROCESS_VALUE\" && printf once >> marker; sleep 2"})
+	}
 	if kind == "run_hook" {
 		return nativeRequest(t, "crash-operation", kind, execprotocol.HookCommand{Command: []string{"/bin/sh", "-c", "printf once >> marker; sleep 2; printf finished"}, Input: json.RawMessage(`{}`), TimeoutMS: 10000, MaxOutputBytes: 8192})
 	}
@@ -448,7 +451,13 @@ func TestNativeExecutorCrashHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Submit(crashRequest(t, work, os.Getenv("JUEX_NATIVE_CRASH_KIND"))); err != nil {
+	request := crashRequest(t, work, os.Getenv("JUEX_NATIVE_CRASH_KIND"))
+	if os.Getenv("JUEX_NATIVE_CRASH_KIND") == "private_environment" {
+		_, err = engine.SubmitWithEnvironment(request, map[string]string{"PRIVATE_PROCESS_VALUE": "private-before-crash"})
+	} else {
+		_, err = engine.Submit(request)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {

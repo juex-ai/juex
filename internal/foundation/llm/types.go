@@ -99,16 +99,21 @@ type ResultFact struct {
 }
 
 // MediaRef keeps durable transcripts lightweight by storing a media reference
-// instead of inline bytes. Provider adapters read ArtifactPath only when the
-// selected model declares the matching capability. OriginalBytes describes the
-// source before any downsampling; SHA256 identifies the stored artifact bytes.
+// instead of inline bytes. ArtifactID names an Execution Artifact; authorized
+// request bytes are injected before provider projection. ArtifactPath is resolved
+// only by explicitly configured standalone provider stores. OriginalBytes describes
+// the source before downsampling; SHA256 identifies the stored artifact bytes.
 type MediaRef struct {
+	ArtifactID    string `json:"artifact_id,omitempty"`
 	ArtifactPath  string `json:"artifact_path,omitempty"`
 	MediaType     string `json:"media_type,omitempty"`
 	SHA256        string `json:"sha256,omitempty"`
 	OriginalBytes int    `json:"original_bytes,omitempty"`
 	Width         int    `json:"width,omitempty"`
 	Height        int    `json:"height,omitempty"`
+	// Data is scoped to one authorized provider request. Durable messages and
+	// attempts retain only the immutable reference, never a second media store.
+	Data []byte `json:"-"`
 }
 
 type ContextArtifactProjection struct {

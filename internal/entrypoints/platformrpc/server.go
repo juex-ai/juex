@@ -130,14 +130,15 @@ type runtimeHandler struct {
 func (h *runtimeHandler) Health(ctx context.Context) (*platform.Reply, error) {
 	return reply(map[string]int{"protocol_version": 1}, h.health(ctx))
 }
-func (h *runtimeHandler) Submit(ctx context.Context, actor *platform.Actor, requestID, threadID, text string) (*platform.Reply, error) {
+func (h *runtimeHandler) Submit(ctx context.Context, actor *platform.Actor, requestJSON string) (*platform.Reply, error) {
 	if transport.CallerRole(ctx) != "management" {
 		return reply(nil, managedruntime.ErrDenied)
 	}
-	if !validActor(actor) {
+	var input managedruntime.InputRequest
+	if !validActor(actor) || len(requestJSON) > 2<<20 || json.Unmarshal([]byte(requestJSON), &input) != nil {
 		return invalid()
 	}
-	v, err := h.service.Submit(ctx, actor.UserID, actor.TenantID, actor.AgentID, managedruntime.InputRequest{RequestID: requestID, ThreadID: threadID, Text: text})
+	v, err := h.service.Submit(ctx, actor.UserID, actor.TenantID, actor.AgentID, input)
 	return reply(v, err)
 }
 func (h *runtimeHandler) Threads(ctx context.Context, actor *platform.Actor) (*platform.Reply, error) {
@@ -150,6 +151,51 @@ func (h *runtimeHandler) Threads(ctx context.Context, actor *platform.Actor) (*p
 	v, err := h.service.Threads(ctx, actor.UserID, actor.TenantID, actor.AgentID)
 	return reply(v, err)
 }
+func (h *runtimeHandler) Status(ctx context.Context, actor *platform.Actor) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	if !validActor(actor) {
+		return invalid()
+	}
+	v, err := h.service.Status(ctx, actor.UserID, actor.TenantID, actor.AgentID)
+	return reply(v, err)
+}
+
+func (h *runtimeHandler) InputChecks(ctx context.Context, actor *platform.Actor, threadID, queryJSON string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	var query managedruntime.InputCheckQuery
+	if !validActor(actor) || json.Unmarshal([]byte(queryJSON), &query) != nil {
+		return invalid()
+	}
+	v, err := h.service.InputChecks(ctx, actor.UserID, actor.TenantID, actor.AgentID, threadID, query)
+	return reply(v, err)
+}
+
+func (h *runtimeHandler) Inspection(ctx context.Context, actor *platform.Actor, threadID string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	if !validActor(actor) {
+		return invalid()
+	}
+	v, err := h.service.Inspection(ctx, actor.UserID, actor.TenantID, actor.AgentID, threadID)
+	return reply(v, err)
+}
+
+func (h *runtimeHandler) History(ctx context.Context, actor *platform.Actor, threadID string, before int64, limit int32) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	if !validActor(actor) {
+		return invalid()
+	}
+	v, err := h.service.History(ctx, actor.UserID, actor.TenantID, actor.AgentID, threadID, before, int(limit))
+	return reply(v, err)
+}
+
 func (h *runtimeHandler) Timeline(ctx context.Context, actor *platform.Actor, threadID string, after int64, limit int32) (*platform.Reply, error) {
 	if transport.CallerRole(ctx) != "management" {
 		return reply(nil, managedruntime.ErrDenied)
@@ -192,6 +238,17 @@ func (h *runtimeHandler) Compact(ctx context.Context, actor *platform.Actor, thr
 	return reply(v, err)
 }
 
+func (h *runtimeHandler) ResetContext(ctx context.Context, actor *platform.Actor, thread, requestID string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	if !validActor(actor) {
+		return invalid()
+	}
+	v, err := h.service.ResetContext(ctx, actor.UserID, actor.TenantID, actor.AgentID, thread, requestID)
+	return reply(v, err)
+}
+
 func (h *managementHandler) Peers(ctx context.Context, scopeJSON string) (*platform.Reply, error) {
 	if transport.CallerRole(ctx) != "runtime" {
 		return reply(nil, managedruntime.ErrDenied)
@@ -212,5 +269,16 @@ func (h *runtimeHandler) Archive(ctx context.Context, actor *platform.Actor, thr
 		return invalid()
 	}
 	result, err := h.service.Archive(ctx, actor.UserID, actor.TenantID, actor.AgentID, thread, archived)
+	return reply(result, err)
+}
+
+func (h *runtimeHandler) DeleteThread(ctx context.Context, actor *platform.Actor, thread string) (*platform.Reply, error) {
+	if transport.CallerRole(ctx) != "management" {
+		return reply(nil, managedruntime.ErrDenied)
+	}
+	if !validActor(actor) || thread == "" {
+		return invalid()
+	}
+	result, err := h.service.DeleteThread(ctx, actor.UserID, actor.TenantID, actor.AgentID, thread)
 	return reply(result, err)
 }

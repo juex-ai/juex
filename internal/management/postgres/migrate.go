@@ -62,6 +62,24 @@ var outputBudgetSchema string
 //go:embed instructions_schema.sql
 var instructionsSchema string
 
+//go:embed model_options_schema.sql
+var modelOptionsSchema string
+
+//go:embed import_schema.sql
+var importSchema string
+
+//go:embed model_import_schema.sql
+var modelImportSchema string
+
+//go:embed configuration_schema.sql
+var configurationSchema string
+
+//go:embed process_environment_schema.sql
+var processEnvironmentSchema string
+
+//go:embed agent_management_schema.sql
+var agentManagementSchema string
+
 // Migrate runs explicit, transactional Management migrations. Runtime startup
 // must not infer a business schema from files or silently rewrite old versions.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -77,7 +95,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		CREATE TABLE IF NOT EXISTS management.schema_versions (version integer PRIMARY KEY, checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{initialSchema, authSchema, mailSchema, resourcesSchema, authoritySchema, modelPolicySchema, workersSchema, applicationsSchema, notificationsSchema, purgeSchema, retentionSchema, hooksSchema, extensionsSchema, managedEnvironmentReceiptsSchema, capabilitiesSchema, instructionsSchema, outputBudgetSchema}
+	migrations := []string{initialSchema, authSchema, mailSchema, resourcesSchema, authoritySchema, modelPolicySchema, workersSchema, applicationsSchema, notificationsSchema, purgeSchema, retentionSchema, hooksSchema, extensionsSchema, managedEnvironmentReceiptsSchema, capabilitiesSchema, instructionsSchema, outputBudgetSchema, modelOptionsSchema, importSchema, modelImportSchema, configurationSchema, processEnvironmentSchema, agentManagementSchema}
 	rows, err := tx.Query(ctx, `SELECT version, checksum FROM management.schema_versions ORDER BY version`)
 	if err != nil {
 		return err

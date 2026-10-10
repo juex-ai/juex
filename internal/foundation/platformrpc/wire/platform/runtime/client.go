@@ -11,6 +11,12 @@ import (
 
 // Client is designed to provide IDL-compatible methods with call-option parameter for kitex framework.
 type Client interface {
+	ObservationSources(ctx context.Context, actor *platform.Actor, after string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ObservedEvents(ctx context.Context, actor *platform.Actor, sourceID string, after string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ObservationContent(ctx context.Context, actor *platform.Actor, observationID string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	StartObserver(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	StopObserver(ctx context.Context, actor *platform.Actor, sourceID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	SetSourceSubscription(ctx context.Context, actor *platform.Actor, sourceID string, threadID string, enabled bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	AdmitMainTrigger(ctx context.Context, scopeJSON string, triggerJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	MainTriggerReceipt(ctx context.Context, scopeJSON string, triggerID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CancelMainTrigger(ctx context.Context, scopeJSON string, triggerID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -23,10 +29,18 @@ type Client interface {
 	ApplicationReceipt(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CancelApplication(ctx context.Context, scopeJSON string, application string, jobID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Health(ctx context.Context, callOptions ...callopt.Option) (r *platform.Reply, err error)
-	Submit(ctx context.Context, actor *platform.Actor, requestID string, threadID string, text string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Submit(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Threads(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Status(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	AgentRunState(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ChangeAgentLifecycle(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	Inspection(ctx context.Context, actor *platform.Actor, threadID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	InputChecks(ctx context.Context, actor *platform.Actor, threadID string, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Timeline(ctx context.Context, actor *platform.Actor, threadID string, after int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	History(ctx context.Context, actor *platform.Actor, threadID string, before int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Compact(ctx context.Context, actor *platform.Actor, threadID string, requestID string, focus string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	ResetContext(ctx context.Context, actor *platform.Actor, threadID string, requestID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
+	DeleteThread(ctx context.Context, actor *platform.Actor, threadID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Archive(ctx context.Context, actor *platform.Actor, threadID string, archived bool, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	Cancel(ctx context.Context, actor *platform.Actor, threadID string, callOptions ...callopt.Option) (r *platform.Reply, err error)
 	CreateWorker(ctx context.Context, actor *platform.Actor, parentID string, requestID string, name string, callOptions ...callopt.Option) (r *platform.Reply, err error)
@@ -59,6 +73,36 @@ func MustNewClient(destService string, opts ...client.Option) Client {
 
 type kRuntimeClient struct {
 	*kClient
+}
+
+func (p *kRuntimeClient) ObservationSources(ctx context.Context, actor *platform.Actor, after string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ObservationSources(ctx, actor, after)
+}
+
+func (p *kRuntimeClient) ObservedEvents(ctx context.Context, actor *platform.Actor, sourceID string, after string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ObservedEvents(ctx, actor, sourceID, after)
+}
+
+func (p *kRuntimeClient) ObservationContent(ctx context.Context, actor *platform.Actor, observationID string, offset int32, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ObservationContent(ctx, actor, observationID, offset, limit)
+}
+
+func (p *kRuntimeClient) StartObserver(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.StartObserver(ctx, actor, requestJSON)
+}
+
+func (p *kRuntimeClient) StopObserver(ctx context.Context, actor *platform.Actor, sourceID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.StopObserver(ctx, actor, sourceID)
+}
+
+func (p *kRuntimeClient) SetSourceSubscription(ctx context.Context, actor *platform.Actor, sourceID string, threadID string, enabled bool, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.SetSourceSubscription(ctx, actor, sourceID, threadID, enabled)
 }
 
 func (p *kRuntimeClient) AdmitMainTrigger(ctx context.Context, scopeJSON string, triggerJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
@@ -121,9 +165,9 @@ func (p *kRuntimeClient) Health(ctx context.Context, callOptions ...callopt.Opti
 	return p.kClient.Health(ctx)
 }
 
-func (p *kRuntimeClient) Submit(ctx context.Context, actor *platform.Actor, requestID string, threadID string, text string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+func (p *kRuntimeClient) Submit(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
-	return p.kClient.Submit(ctx, actor, requestID, threadID, text)
+	return p.kClient.Submit(ctx, actor, requestJSON)
 }
 
 func (p *kRuntimeClient) Threads(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error) {
@@ -131,14 +175,54 @@ func (p *kRuntimeClient) Threads(ctx context.Context, actor *platform.Actor, cal
 	return p.kClient.Threads(ctx, actor)
 }
 
+func (p *kRuntimeClient) Status(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Status(ctx, actor)
+}
+
+func (p *kRuntimeClient) AgentRunState(ctx context.Context, actor *platform.Actor, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.AgentRunState(ctx, actor)
+}
+
+func (p *kRuntimeClient) ChangeAgentLifecycle(ctx context.Context, actor *platform.Actor, requestJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ChangeAgentLifecycle(ctx, actor, requestJSON)
+}
+
+func (p *kRuntimeClient) Inspection(ctx context.Context, actor *platform.Actor, threadID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.Inspection(ctx, actor, threadID)
+}
+
+func (p *kRuntimeClient) InputChecks(ctx context.Context, actor *platform.Actor, threadID string, queryJSON string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.InputChecks(ctx, actor, threadID, queryJSON)
+}
+
 func (p *kRuntimeClient) Timeline(ctx context.Context, actor *platform.Actor, threadID string, after int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Timeline(ctx, actor, threadID, after, limit)
 }
 
+func (p *kRuntimeClient) History(ctx context.Context, actor *platform.Actor, threadID string, before int64, limit int32, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.History(ctx, actor, threadID, before, limit)
+}
+
 func (p *kRuntimeClient) Compact(ctx context.Context, actor *platform.Actor, threadID string, requestID string, focus string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
 	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
 	return p.kClient.Compact(ctx, actor, threadID, requestID, focus)
+}
+
+func (p *kRuntimeClient) ResetContext(ctx context.Context, actor *platform.Actor, threadID string, requestID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.ResetContext(ctx, actor, threadID, requestID)
+}
+
+func (p *kRuntimeClient) DeleteThread(ctx context.Context, actor *platform.Actor, threadID string, callOptions ...callopt.Option) (r *platform.Reply, err error) {
+	ctx = client.NewCtxWithCallOptions(ctx, callOptions)
+	return p.kClient.DeleteThread(ctx, actor, threadID)
 }
 
 func (p *kRuntimeClient) Archive(ctx context.Context, actor *platform.Actor, threadID string, archived bool, callOptions ...callopt.Option) (r *platform.Reply, err error) {

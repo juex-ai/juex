@@ -266,7 +266,7 @@ func TestManagedRuntimePeerMessageContinuesAfterSenderArchive(t *testing.T) {
 		streamManagedReply(w, "Target accepted")
 	})
 	ctx := context.Background()
-	peer, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Peer", ModelID: f.agent.ModelID})
+	peer, err := f.directory.CreateAgent(ctx, f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Peer", Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestManagedRuntimeWorkerDepthAndArchiveHTTP(t *testing.T) {
 	ctx := context.Background()
 	worker := managementCall[managedruntime.Thread](t, f.client, "POST", f.base+"/threads/"+f.main.ID+"/workers", f.origin, map[string]string{"request_id": "first-worker", "name": "Research"}, 200)
 	managementCall[any](t, f.client, "POST", f.base+"/threads/"+worker.ID+"/workers", f.origin, map[string]string{"request_id": "too-deep", "name": "Nested"}, 400)
-	updated, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, WorkerDepth: 2})
+	updated, err := f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, WorkerDepth: 2, Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil || updated.WorkerDepth != 2 {
 		t.Fatal(updated, err)
 	}
@@ -518,7 +518,7 @@ func TestManagedRuntimePeerDiscoveryPurposeAndSendTools(t *testing.T) {
 			streamManagedReply(w, "Message durably accepted")
 		}
 	})
-	peer, err := f.directory.CreateAgent(context.Background(), f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Peer", ModelID: f.agent.ModelID})
+	peer, err := f.directory.CreateAgent(context.Background(), f.actor, f.tenant, f.actor, management.AgentConfig{Name: "Peer", Configuration: &management.Configuration{Models: f.agent.Configuration.Models}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,7 +54,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
+          # The pinned analyzer cannot decode Go 1.27.2 export data. Other
+          # jobs still test stable; keep analysis on its verified compiler.
+          go-version: '1.26.4'
           cache: true
       - name: Prepare embedded web dist
         run: make web-stub
@@ -95,7 +97,7 @@ jobs:
       - name: Verify managed service transactions against PostgreSQL
         env:
           JUEX_TEST_POSTGRES_URL: postgres://postgres:juex-ci-only@localhost:5432/postgres?sslmode=disable
-        run: go test -race -tags postgres ./tests/e2e -count=1 -timeout=600s
+        run: make integration-contracts
 
   test:
     runs-on: ${{ matrix.os }}

@@ -35,7 +35,7 @@ const subscriptionColumns = `id,thread_id,kind,environment_id,operation_id,metho
 
 func observationInputActive(ctx context.Context, tx pgx.Tx, input string) error {
 	var active bool
-	err := tx.QueryRow(ctx, `SELECT COALESCE(i.source->>'kind','')<>'observation' OR EXISTS(SELECT 1 FROM runtime.subscriptions s WHERE s.id::text=i.source->>'subscription_id' AND s.enabled AND s.generation::text=i.source->>'generation') FROM runtime.inputs i WHERE i.id=$1`, input).Scan(&active)
+	err := tx.QueryRow(ctx, `SELECT COALESCE(i.source->>'kind','')<>'observation' OR EXISTS(SELECT 1 FROM runtime.subscriptions s WHERE s.id::text=i.source->>'subscription_id' AND s.enabled AND s.generation::text=i.source->>'generation' AND NOT EXISTS(SELECT 1 FROM runtime.observation_sources o WHERE o.agent_id=s.agent_id AND o.environment_id=s.environment_id AND o.operation_id=s.operation_id AND o.stop_requested)) FROM runtime.inputs i WHERE i.id=$1`, input).Scan(&active)
 	if err != nil {
 		return err
 	}
@@ -81,6 +81,9 @@ func (s *Store) ApplySubscription(ctx context.Context, work managedruntime.ToolW
 		return sub, err
 	}
 	defer rollback(tx)
+	if err = threadGraph(ctx, tx, work.Scope.AgentID); err != nil {
+		return sub, err
+	}
 	if err = subscriptionAction(ctx, tx, work); err != nil {
 		return sub, err
 	}
@@ -97,8 +100,22 @@ func (s *Store) ApplySubscription(ctx context.Context, work managedruntime.ToolW
 	}
 	if request.OperationID != "" {
 		var id string
-		if err := tx.QueryRow(ctx, `SELECT id FROM runtime.observation_sources WHERE environment_id=$1 AND operation_id=$2 AND agent_id=$3 FOR UPDATE`, request.EnvironmentID, request.OperationID, work.Scope.AgentID).Scan(&id); err != nil {
+		var control *string
+		if err = tx.QueryRow(ctx, `SELECT id,control_id FROM runtime.observation_sources WHERE environment_id=$1 AND operation_id=$2 AND agent_id=$3`, request.EnvironmentID, request.OperationID, work.Scope.AgentID).Scan(&id, &control); err != nil {
 			return sub, classify(err)
+		}
+		if control != nil {
+			if err = lockObserverControl(ctx, tx, *control, id, true); err != nil {
+				return sub, err
+			}
+		}
+		if err = tx.QueryRow(ctx, `SELECT id FROM runtime.observation_sources WHERE id=$1 AND NOT stop_requested FOR UPDATE`, id).Scan(&id); err != nil {
+			return sub, classify(err)
+		}
+		if control != nil {
+			if err = setObserverSubscriptionIntent(ctx, tx, work.Scope, *control, work.ThreadID, request.Kind, request.Method, true); err != nil {
+				return sub, err
+			}
 		}
 	}
 	encoded, err := json.Marshal(work.Scope)
@@ -128,8 +145,7 @@ func (s *Store) ApplySubscription(ctx context.Context, work managedruntime.ToolW
 	} else {
 		// The source lock orders registration with observer commits. Facts
 		// captured since the sampled offset cannot fall between both sides.
-		if _, err = tx.Exec(ctx, `INSERT INTO runtime.observation_deliveries(subscription_id,generation,observation_id,agent_id)
- SELECT $1,$2,o.event_id,o.agent_id FROM runtime.observations o WHERE o.agent_id=$3 AND o.environment_id=$4 AND o.operation_id=$5 AND (($6='operation.terminal' AND o.kind='operation.terminal') OR ($6='mcp.notification' AND o.source_offset>$7 AND o.kind IN ('mcp.notification','mcp.invalid_notification') AND ($8='' OR o.data->>'method'=$8 OR o.kind='mcp.invalid_notification')) OR ($6='command.observation' AND o.source_offset>$7 AND o.kind IN ('command.observation','command.invalid_observation','command.exit','operation.output_expired'))) ON CONFLICT DO NOTHING`, sub.ID, sub.Generation, work.Scope.AgentID, request.EnvironmentID, request.OperationID, request.Kind, offset, request.Method); err != nil {
+		if err = backfillSourceDelivery(ctx, tx, sub.ID); err != nil {
 			return sub, err
 		}
 	}
@@ -152,6 +168,9 @@ func (s *Store) Unsubscribe(ctx context.Context, work managedruntime.ToolWork, i
 		return err
 	}
 	defer rollback(tx)
+	if err = threadGraph(ctx, tx, work.Scope.AgentID); err != nil {
+		return err
+	}
 	if err = subscriptionAction(ctx, tx, work); err != nil {
 		return err
 	}
@@ -161,6 +180,19 @@ func (s *Store) Unsubscribe(ctx context.Context, work managedruntime.ToolWork, i
 	}
 	if applied {
 		return tx.Commit(ctx)
+	}
+	var control *string
+	var kind, method string
+	if err = tx.QueryRow(ctx, `SELECT o.control_id,s.kind,s.method FROM runtime.subscriptions s LEFT JOIN runtime.observation_sources o ON o.agent_id=s.agent_id AND o.environment_id=s.environment_id AND o.operation_id=s.operation_id WHERE s.id=$1 AND s.thread_id=$2`, id, work.ThreadID).Scan(&control, &kind, &method); err != nil {
+		return classify(err)
+	}
+	if control != nil {
+		if err = lockObserverControl(ctx, tx, *control, "", false); err != nil {
+			return err
+		}
+		if err = setObserverSubscriptionIntent(ctx, tx, work.Scope, *control, work.ThreadID, kind, method, false); err != nil {
+			return err
+		}
 	}
 	result, err := tx.Exec(ctx, `UPDATE runtime.subscriptions SET enabled=false,generation=generation+CASE WHEN enabled THEN 1 ELSE 0 END WHERE id=$1 AND thread_id=$2`, id, work.ThreadID)
 	if err != nil {
@@ -221,9 +253,20 @@ func (s *Store) FinishObservationDelivery(ctx context.Context, delivery managedr
 		return err
 	}
 	defer rollback(tx)
+	if err = lockAgentAdmission(ctx, tx, delivery.Scope); err != nil {
+		return err
+	}
 	thread, err := readThread(ctx, tx, delivery.Scope.AgentID, delivery.ThreadID)
 	if err != nil {
 		return err
+	}
+	// Stopping a producer prevents another delivery before asynchronous per-Thread cleanup.
+	var stopped bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.observation_sources WHERE agent_id=$1 AND environment_id=$2 AND operation_id=$3 AND stop_requested)`, delivery.Scope.AgentID, delivery.Observation.EnvironmentID, delivery.Observation.OperationID).Scan(&stopped); err != nil {
+		return err
+	}
+	if stopped {
+		valid = false
 	}
 	var enabled, changed bool
 	var generation int64
@@ -246,6 +289,13 @@ func (s *Store) FinishObservationDelivery(ctx context.Context, delivery managedr
 	if !enabled || generation != delivery.Generation || thread.Retention != "active" {
 		return tx.Commit(ctx)
 	}
+	if valid && thread.Application != "" {
+		// Calendar jobs can explicitly observe their environment within the same
+		// job budget. Historical purpose alone never grants that authority.
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.application_jobs WHERE thread_id=$1 AND application=$2 AND application='calendar' AND import_state='' AND NOT cancelled)`, thread.ID, thread.Application).Scan(&valid); err != nil {
+			return err
+		}
+	}
 	if !valid {
 		if _, err = tx.Exec(ctx, `UPDATE runtime.subscriptions SET enabled=false,generation=generation+1 WHERE id=$1`, delivery.SubscriptionID); err != nil {
 			return err
@@ -254,6 +304,9 @@ func (s *Store) FinishObservationDelivery(ctx context.Context, delivery managedr
 			return err
 		}
 		return tx.Commit(ctx)
+	}
+	if err = requireAgentRunning(ctx, tx, delivery.Scope.AgentID); err != nil {
+		return err
 	}
 	if delivery.Kind == "environment.presence" {
 		if !changed {
@@ -296,5 +349,14 @@ func cancelSubscriptionInputs(ctx context.Context, tx pgx.Tx, thread, id string,
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE runtime.threads SET state='idle' WHERE id=$1 AND state='queued' AND NOT EXISTS(SELECT 1 FROM runtime.inputs WHERE thread_id=$1 AND state IN ('queued','active'))`, thread)
+	return err
+}
+
+// Both model and manual registration close the same sampled-offset race while
+// holding the source lock. The unique delivery key makes a retry harmless.
+func backfillSourceDelivery(ctx context.Context, tx pgx.Tx, subscription string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO runtime.observation_deliveries(subscription_id,generation,observation_id,agent_id)
+ SELECT s.id,s.generation,o.event_id,o.agent_id FROM runtime.subscriptions s JOIN runtime.observations o ON o.agent_id=s.agent_id AND o.environment_id=s.environment_id AND o.operation_id=s.operation_id
+ WHERE s.id=$1 AND s.enabled AND ((s.kind='operation.terminal' AND o.kind='operation.terminal') OR (s.kind='mcp.notification' AND o.source_offset>s.start_offset AND o.kind IN ('mcp.notification','mcp.invalid_notification') AND (s.method='' OR o.data->>'method'=s.method OR o.kind='mcp.invalid_notification')) OR (s.kind='command.observation' AND o.source_offset>s.start_offset AND o.kind IN ('command.observation','command.invalid_observation','command.exit','operation.output_expired'))) ON CONFLICT DO NOTHING`, subscription)
 	return err
 }

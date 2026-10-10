@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"time"
 
@@ -182,6 +183,9 @@ func (s *Store) Dispatch(ctx context.Context, environment string, epoch int64, i
 		return execution.Operation{}, err
 	}
 	defer rollback(tx)
+	if err := lockManagedLifecycle(ctx, tx, environment); err != nil {
+		return execution.Operation{}, err
+	}
 	if err := fence(ctx, tx, environment, epoch); err != nil {
 		return execution.Operation{}, err
 	}
@@ -249,6 +253,9 @@ func (s *Store) Observe(ctx context.Context, environment string, epoch int64, sn
 		return execprotocol.ErrInvalid
 	}
 	fileOperation := snapshot.Kind == "import_file" || snapshot.Kind == "export_file"
+	if snapshot.MCP != nil && (snapshot.Kind != "mcp_connect" || snapshot.MCP.Validate() != nil) {
+		return execprotocol.ErrInvalid
+	}
 	if snapshot.File != nil && (!fileOperation || snapshot.File.Manifest.Validate() != nil || snapshot.File.Cursor < 0 || snapshot.File.Cursor > snapshot.File.Manifest.Size || snapshot.File.Ready && snapshot.File.Cursor != snapshot.File.Manifest.Size) || fileOperation && snapshot.State == execprotocol.Completed && (snapshot.File == nil || !snapshot.File.Ready) {
 		return execprotocol.ErrInvalid
 	}
@@ -272,6 +279,18 @@ func (s *Store) Observe(ctx context.Context, environment string, epoch int64, sn
 	if snapshot.AgentID != operation.Request.AgentID || snapshot.Kind != operation.Request.Kind {
 		return execprotocol.ErrDenied
 	}
+	if !operation.Purged {
+		if snapshot.Write != nil && snapshot.Write.Validate(operation.Request) != nil || execprotocol.IsChunkedWrite(snapshot.Kind) && snapshot.State == execprotocol.Completed && snapshot.Write == nil {
+			return execprotocol.ErrInvalid
+		}
+		if prior := operation.Snapshot.Write; prior != nil {
+			if snapshot.Write == nil {
+				snapshot.Write = prior
+			} else if !reflect.DeepEqual(snapshot.Write, prior) {
+				return execprotocol.ErrConflict
+			}
+		}
+	}
 	if operation.Purged {
 		if snapshot.NextCursor < operation.ResultCursor {
 			return execprotocol.ErrConflict
@@ -286,6 +305,13 @@ func (s *Store) Observe(ctx context.Context, environment string, epoch int64, sn
 			return err
 		}
 		return tx.Commit(ctx)
+	}
+	if prior := operation.Snapshot.MCP; prior != nil {
+		if snapshot.MCP == nil {
+			snapshot.MCP = prior
+		} else if snapshot.MCP.Transport != prior.Transport || !snapshot.MCP.ConnectedAt.Equal(prior.ConnectedAt) || snapshot.MCP.ServerName != prior.ServerName || snapshot.MCP.ServerVersion != prior.ServerVersion || snapshot.MCP.ProtocolVersion != prior.ProtocolVersion {
+			return execprotocol.ErrConflict
+		}
 	}
 	start := snapshot.NextCursor - int64(len(snapshot.Output))
 	if start > operation.ResultCursor {

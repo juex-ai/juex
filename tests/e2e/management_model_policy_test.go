@@ -36,7 +36,7 @@ func TestManagementModelDefaultsAndTenantVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.SetPlatformModel(ctx, one.ID); err != nil {
+	if err := configureTenantModels(ctx, d, user.ID, tenant.ID, []string{one.ID}); err != nil {
 		t.Fatal(err)
 	}
 	agent, err := d.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Inherits"})
@@ -44,20 +44,20 @@ func TestManagementModelDefaultsAndTenantVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority, err := d.AuthorizeAgent(ctx, user.ID, tenant.ID, agent.ID)
-	if err != nil || authority.ModelID != one.ID {
+	if err != nil || len(authority.Effective.Models) != 1 || authority.Effective.Models[0] != one.ID {
 		t.Fatal(authority, err)
 	}
 	overview, err := d.FleetOverview(ctx, user.ID, tenant.ID, user.ID)
-	if err != nil || overview.Settings.DefaultModelID != "" || overview.PlatformDefaultModelID != one.ID {
+	if err != nil || len(overview.Settings.Configuration.Models) != 0 || len(overview.TenantSettings.Declaration.Models) != 1 || overview.TenantSettings.Declaration.Models[0] != one.ID {
 		t.Fatal(overview, err)
 	}
 	settings := overview.Settings
-	settings.DefaultModelID = two.ID
+	settings.Configuration.Models = []string{two.ID}
 	if _, err := d.ConfigureFleet(ctx, user.ID, tenant.ID, user.ID, settings); err != nil {
 		t.Fatal(err)
 	}
 	authority, err = d.AuthorizeAgent(ctx, user.ID, tenant.ID, agent.ID)
-	if err != nil || authority.ModelID != two.ID {
+	if err != nil || len(authority.Effective.Models) != 1 || authority.Effective.Models[0] != two.ID {
 		t.Fatal(authority, err)
 	}
 	if err := d.SetTenantModels(ctx, tenant.ID, false, []string{one.ID}); err != nil {
@@ -67,7 +67,7 @@ func TestManagementModelDefaultsAndTenantVisibility(t *testing.T) {
 	if err != nil || len(models) != 1 || models[0].ID != one.ID {
 		t.Fatal(models, err)
 	}
-	if _, err := d.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Forbidden", ModelID: two.ID}); !errors.Is(err, management.ErrDenied) {
+	if _, err := d.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Forbidden", Configuration: &management.Configuration{Models: []string{two.ID}}}); !errors.Is(err, management.ErrDenied) {
 		t.Fatal("selected hidden model", err)
 	}
 	overview, err = d.FleetOverview(ctx, user.ID, tenant.ID, user.ID)
@@ -123,17 +123,10 @@ func TestManagementModelPlanRevocationAndCredentialRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.SetPlatformModel(ctx, one.ID); err != nil {
+	if err := configureTenantModels(ctx, d, user.ID, tenant.ID, []string{one.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.SetModelFallbacks(ctx, one.ID, []string{two.ID}); err != nil {
-		t.Fatal(err)
-	}
-	// Fallback lists are flat, even when another model has its own list.
-	if err := d.SetModelFallbacks(ctx, two.ID, []string{one.ID}); err != nil {
-		t.Fatal(err)
-	}
-	agent, err := d.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Plan", Instructions: "Original"})
+	agent, err := d.CreateAgent(ctx, user.ID, tenant.ID, user.ID, management.AgentConfig{Name: "Plan", Instructions: "Original", Configuration: &management.Configuration{Models: []string{one.ID, two.ID}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,9 +141,9 @@ func TestManagementModelPlanRevocationAndCredentialRouting(t *testing.T) {
 	}
 	resolve := func(candidate management.ModelCandidate, want string, wantErr error) {
 		t.Helper()
-		key, err := d.ResolveCandidate(ctx, scope, candidate)
-		if !errors.Is(err, wantErr) || key != want {
-			t.Fatalf("candidate admission failed: err=%v expected=%v; credential match=%v", err, wantErr, key == want)
+		connection, err := d.ResolveCandidate(ctx, scope, candidate)
+		if !errors.Is(err, wantErr) || connection.APIKey != want {
+			t.Fatalf("candidate admission failed: err=%v expected=%v; credential match=%v", err, wantErr, connection.APIKey == want)
 		}
 	}
 	resolve(plan.Candidates[0], config.APIKey, nil)
@@ -225,7 +218,7 @@ func TestManagementModelPlanRevocationAndCredentialRouting(t *testing.T) {
 	for _, alter := range []func(*management.ModelCallScope){func(s *management.ModelCallScope) { s.UserID = tenant.ID }, func(s *management.ModelCallScope) { s.FleetID = tenant.ID }, func(s *management.ModelCallScope) { s.ActorAuthorizationEpoch++ }, func(s *management.ModelCallScope) { s.MembershipExecutionEpoch++ }, func(s *management.ModelCallScope) { s.AgentExecutionEpoch++ }} {
 		foreign := scope
 		alter(&foreign)
-		if key, err := d.ResolveCandidate(ctx, foreign, fresh.Candidates[0]); !errors.Is(err, management.ErrDenied) || key != "" {
+		if connection, err := d.ResolveCandidate(ctx, foreign, fresh.Candidates[0]); !errors.Is(err, management.ErrDenied) || connection.APIKey != "" {
 			t.Fatal("scope bypass", err)
 		}
 		if _, err := d.SnapshotPlan(ctx, foreign); !errors.Is(err, management.ErrDenied) {
@@ -233,11 +226,11 @@ func TestManagementModelPlanRevocationAndCredentialRouting(t *testing.T) {
 		}
 	}
 	for _, ids := range [][]string{{one.ID}, {two.ID, two.ID}, {two.ID, two.ID, two.ID, two.ID, two.ID}} {
-		if err := d.SetModelFallbacks(ctx, one.ID, ids); !errors.Is(err, management.ErrInvalid) {
+		if _, err := d.ConfigureAgent(ctx, user.ID, tenant.ID, agent.ID, agent.Version, management.AgentConfig{Name: agent.Name, Instructions: agent.Instructions, Configuration: &management.Configuration{Models: append([]string{one.ID}, ids...)}}); !errors.Is(err, management.ErrInvalid) {
 			t.Fatal("invalid list", err)
 		}
 	}
-	if err := d.SetModelFallbacks(ctx, one.ID, nil); err != nil {
+	if _, err := d.ConfigureAgent(ctx, user.ID, tenant.ID, agent.ID, agent.Version, management.AgentConfig{Name: agent.Name, Instructions: agent.Instructions, Configuration: &management.Configuration{Models: []string{one.ID}}}); err != nil {
 		t.Fatal(err)
 	}
 	fresh, err = d.SnapshotPlan(ctx, scope)

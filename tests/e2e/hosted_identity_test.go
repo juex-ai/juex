@@ -125,6 +125,24 @@ func TestHostedWorkerIdentityProtectsControlState(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(control, "forbidden")); !os.IsNotExist(err) {
 		t.Fatal("import exposed control state", err)
 	}
+	if err := os.WriteFile(filepath.Join(work, "owned"), []byte("changed after success"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+	engine = openNative(t, config)
+	replayed := nativeRun(t, engine, nativeRequest(t, "file-write", "write", native.FileArguments{Path: "owned", Content: "worker"}))
+	if replayed.State != execprotocol.Completed || replayed.Text() != write.Text() {
+		t.Fatal("file result did not survive restart", replayed)
+	}
+	if data, err := os.ReadFile(filepath.Join(work, "owned")); err != nil || string(data) != "changed after success" {
+		t.Fatal("completed helper was repeated after restart", string(data), err)
+	}
+	replayed = nativeRun(t, engine, nativeRequest(t, "export-owned", "export_file", execprotocol.FileTransferArguments{Path: "owned"}))
+	if replayed.State != execprotocol.Completed || replayed.File == nil || replayed.File.Manifest != capture.File.Manifest {
+		t.Fatal("captured file did not survive restart", replayed)
+	}
 	for _, tty := range []bool{false, true} {
 		id := "shell"
 		if tty {

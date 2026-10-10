@@ -2,6 +2,14 @@
 
 > English | [中文](README.zh.md)
 
+
+Execution describes a working-file root independently of the selected cwd: managed
+environments use their persistent Home, and external devices use a directory below
+their enrolled workspace. Ordinary writes create missing parents under the same
+authorized, journaled operation. Offline Host import publishes complete private
+file sets before enrollment; retries verify ownership, source receipt, file hashes
+and permissions, and never overwrite changed or already provisioned environments.
+
 Execution owns environments, external operation identity and persistent results.
 An Agent Activation does not own a device connection or the lifetime of its
 processes. Location-dependent requests use an explicit environment; process and
@@ -87,6 +95,27 @@ security boundaries. Hosted isolation is the responsibility of the verified
 container backend. Platform model and service credentials are not inherited by
 child processes.
 
+Private process defaults are resolved from Management only before an authorized
+operation's first acceptance. They travel outside its persistent Request and
+remain in that operation's memory; journals retain identity digests, not values.
+Shell, Hook, Observable and stdio MCP receive defaults, followed by explicit
+operation overrides. Remote HTTP/SSE MCP, file helpers and inspections receive
+none. Each child resolves its executable using its own PATH; Hosted does so
+after dropping to the Agent UID. Existing or unknown receipts never replay with
+replacement values. Authorized commands can still print their own environment.
+
+Patch editing and buffered writes require Files plus their separate, default-off
+module grants. They bind a working directory, reject leaf symlinks and use the
+file execution identity, including the unprivileged Hosted helper. Patches validate
+the whole plan before editing and attempt ordinary-error rollback; they are not
+crash-atomic across files. Buffered writes retain confirmed chunks and typed
+receipts in the existing private operation journal, bounded by its quota. Commit
+validates the complete stream before atomic single-file publication; create never
+replaces an existing target. Uncertain publication keeps its original operation
+identity and cannot be retried as another commit. Output retention does not remove
+write receipts or active chunk content. This does not add OS isolation to native
+execution.
+
 Binary transfer uses a private immutable source capture and a separately staged
 destination. Chunks retain durable cursors across connection loss; command slots
 are used only for capture or final import, not while receiving bytes. Imports
@@ -100,8 +129,8 @@ Deployment-managed Host and Hosted environments share one lifecycle. Each Agent
 has one durable environment identity, Workspace and Home. Listing environments
 does not start executors. Pending operations start them on demand; unfinished
 processes, MCP connections and unacknowledged results prevent idle reclamation.
-The default idle timeout is five minutes. Environment row locks serialize
-reclamation with new operation admission. Rejoining a Tenant preserves the
+The default idle timeout is five minutes. Lifecycle locks fence dispatch during
+reclamation while new operations commit to the durable queue. Rejoining a Tenant preserves the
 owned Workspace but never reauthorizes operations from an earlier epoch.
 
 `juex-execution serve --host-config /absolute/operator-config.json` enables Host

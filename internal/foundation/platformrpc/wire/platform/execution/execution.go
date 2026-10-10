@@ -195,6 +195,27 @@ var serviceMethods = map[string]kitex.MethodInfo{
 		false,
 		kitex.WithStreamingMode(kitex.StreamingNone),
 	),
+	"InspectEnvironments": kitex.NewMethodInfo(
+		inspectEnvironmentsHandler,
+		newExecutionInspectEnvironmentsArgs,
+		newExecutionInspectEnvironmentsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"InspectMCP": kitex.NewMethodInfo(
+		inspectMCPHandler,
+		newExecutionInspectMCPArgs,
+		newExecutionInspectMCPResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
+	"RefreshMCPTools": kitex.NewMethodInfo(
+		refreshMCPToolsHandler,
+		newExecutionRefreshMCPToolsArgs,
+		newExecutionRefreshMCPToolsResult,
+		false,
+		kitex.WithStreamingMode(kitex.StreamingNone),
+	),
 	"DefaultEnvironment": kitex.NewMethodInfo(
 		defaultEnvironmentHandler,
 		newExecutionDefaultEnvironmentArgs,
@@ -778,6 +799,60 @@ func newExecutionEnvironmentsResult() interface{} {
 	return platform.NewExecutionEnvironmentsResult()
 }
 
+func inspectEnvironmentsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionInspectEnvironmentsArgs)
+	realResult := result.(*platform.ExecutionInspectEnvironmentsResult)
+	success, err := handler.(platform.Execution).InspectEnvironments(ctx, realArg.Actor)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionInspectEnvironmentsArgs() interface{} {
+	return platform.NewExecutionInspectEnvironmentsArgs()
+}
+
+func newExecutionInspectEnvironmentsResult() interface{} {
+	return platform.NewExecutionInspectEnvironmentsResult()
+}
+
+func inspectMCPHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionInspectMCPArgs)
+	realResult := result.(*platform.ExecutionInspectMCPResult)
+	success, err := handler.(platform.Execution).InspectMCP(ctx, realArg.Actor, realArg.After)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionInspectMCPArgs() interface{} {
+	return platform.NewExecutionInspectMCPArgs()
+}
+
+func newExecutionInspectMCPResult() interface{} {
+	return platform.NewExecutionInspectMCPResult()
+}
+
+func refreshMCPToolsHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
+	realArg := arg.(*platform.ExecutionRefreshMCPToolsArgs)
+	realResult := result.(*platform.ExecutionRefreshMCPToolsResult)
+	success, err := handler.(platform.Execution).RefreshMCPTools(ctx, realArg.Actor, realArg.EnvironmentID, realArg.ConnectionID, realArg.RequestJSON)
+	if err != nil {
+		return err
+	}
+	realResult.Success = success
+	return nil
+}
+func newExecutionRefreshMCPToolsArgs() interface{} {
+	return platform.NewExecutionRefreshMCPToolsArgs()
+}
+
+func newExecutionRefreshMCPToolsResult() interface{} {
+	return platform.NewExecutionRefreshMCPToolsResult()
+}
+
 func defaultEnvironmentHandler(ctx context.Context, handler interface{}, arg, result interface{}) error {
 	realArg := arg.(*platform.ExecutionDefaultEnvironmentArgs)
 	realResult := result.(*platform.ExecutionDefaultEnvironmentResult)
@@ -1207,6 +1282,40 @@ func (p *kClient) Environments(ctx context.Context, actor *platform.Actor) (r *p
 	_args.Actor = actor
 	var _result platform.ExecutionEnvironmentsResult
 	if err = p.c.Call(ctx, "Environments", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) InspectEnvironments(ctx context.Context, actor *platform.Actor) (r *platform.Reply, err error) {
+	var _args platform.ExecutionInspectEnvironmentsArgs
+	_args.Actor = actor
+	var _result platform.ExecutionInspectEnvironmentsResult
+	if err = p.c.Call(ctx, "InspectEnvironments", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) InspectMCP(ctx context.Context, actor *platform.Actor, after string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionInspectMCPArgs
+	_args.Actor = actor
+	_args.After = after
+	var _result platform.ExecutionInspectMCPResult
+	if err = p.c.Call(ctx, "InspectMCP", &_args, &_result); err != nil {
+		return
+	}
+	return _result.GetSuccess(), nil
+}
+
+func (p *kClient) RefreshMCPTools(ctx context.Context, actor *platform.Actor, environmentID string, connectionID string, requestJSON string) (r *platform.Reply, err error) {
+	var _args platform.ExecutionRefreshMCPToolsArgs
+	_args.Actor = actor
+	_args.EnvironmentID = environmentID
+	_args.ConnectionID = connectionID
+	_args.RequestJSON = requestJSON
+	var _result platform.ExecutionRefreshMCPToolsResult
+	if err = p.c.Call(ctx, "RefreshMCPTools", &_args, &_result); err != nil {
 		return
 	}
 	return _result.GetSuccess(), nil

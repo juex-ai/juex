@@ -38,23 +38,21 @@ func TestManagementAgentCapabilitiesPreservePolicyAndFenceRevocation(t *testing.
 	}
 	check := func(agent management.Agent, disabled []string, epoch int64) {
 		t.Helper()
-		data, err := json.Marshal(agent)
+		authority, err := directory.AuthorizeAgent(ctx, owner.ID, tenant.ID, agent.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var view struct {
-			Capabilities *struct {
-				Disabled []string `json:"disabled"`
-			} `json:"capabilities"`
+		actual := authority.Effective.Policy().Disabled
+		wanted := make([]agentpolicy.Capability, len(disabled))
+		for i, key := range disabled {
+			wanted[i] = agentpolicy.Capability(key)
 		}
-		if err := json.Unmarshal(data, &view); err != nil || view.Capabilities == nil {
-			t.Fatalf("Agent does not expose its effective capability policy: %s (%v)", data, err)
+		if !slices.Equal(actual, wanted) || agent.ExecutionEpoch != epoch {
+			t.Fatalf("disabled=%v epoch=%d, want %v epoch=%d", actual, agent.ExecutionEpoch, disabled, epoch)
 		}
-		if !slices.Equal(view.Capabilities.Disabled, disabled) || agent.ExecutionEpoch != epoch {
-			t.Fatalf("disabled=%v epoch=%d, want %v epoch=%d", view.Capabilities.Disabled, agent.ExecutionEpoch, disabled, epoch)
-		}
+
 	}
-	agent, err := directory.CreateAgent(ctx, owner.ID, tenant.ID, owner.ID, config(`{"name":"minima","capabilities":{"disabled":["workers","memory"]}}`))
+	agent, err := directory.CreateAgent(ctx, owner.ID, tenant.ID, owner.ID, config(`{"name":"minima","configuration":{"modules":{"workers":false,"memory":false}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,15 +73,14 @@ func TestManagementAgentCapabilitiesPreservePolicyAndFenceRevocation(t *testing.
 		t.Fatal(err)
 	}
 	check(authority.Agent, []string{"memory", "workers"}, initialEpoch)
-	update(`{"name":"minima","capabilities":{"disabled":["workers","memory","mcp"]}}`)
+	update(`{"name":"minima","configuration":{"modules":{"workers":false,"memory":false,"mcp":false}}}`)
 	check(agent, []string{"mcp", "memory", "workers"}, initialEpoch+1)
-	update(`{"name":"minima","capabilities":{"disabled":["memory","mcp","workers"]}}`)
+	update(`{"name":"minima","configuration":{"modules":{"memory":false,"mcp":false,"workers":false}}}`)
 	check(agent, []string{"mcp", "memory", "workers"}, initialEpoch+1)
-	update(`{"name":"minima","capabilities":{"disabled":[]}}`)
+	update(`{"name":"minima","configuration":{}}`)
 	check(agent, nil, initialEpoch+1)
 	for _, body := range []string{
-		`{"name":"invalid","capabilities":{"disabled":["unknown"]}}`,
-		`{"name":"invalid","capabilities":{"disabled":["memory","memory"]}}`,
+		`{"name":"invalid","configuration":{"modules":{"unknown":false}}}`,
 	} {
 		if _, err := directory.ConfigureAgent(ctx, owner.ID, tenant.ID, agent.ID, agent.Version, config(body)); !errors.Is(err, management.ErrInvalid) {
 			t.Fatalf("invalid policy accepted: %s (%v)", body, err)
@@ -124,7 +121,7 @@ func TestAgentCapabilitiesHTTPAuthorityAndExecutionAdmission(t *testing.T) {
 	policy := agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Workers, agentpolicy.Collaboration, agentpolicy.Memory, agentpolicy.Calendar, agentpolicy.MCP, agentpolicy.Observations, agentpolicy.Hooks, agentpolicy.Extensions}}
 	configure := func(policy *agentpolicy.Policy) {
 		t.Helper()
-		f.agent = managementCall[management.Agent](t, f.client, "PUT", f.base, f.origin, managementhttp.ConfigureAgentRequest{Version: f.agent.Version, AgentConfig: management.AgentConfig{Name: "minimal", ModelID: f.agent.ModelID, Capabilities: policy}}, 200)
+		f.agent = managementCall[management.Agent](t, f.client, "PUT", f.base, f.origin, managementhttp.ConfigureAgentRequest{Version: f.agent.Version, AgentConfig: management.AgentConfig{Name: "minimal", Configuration: &management.Configuration{Models: f.agent.Configuration.Models, Modules: modulesForPolicy(policy)}}}, 200)
 	}
 	configure(&policy)
 	fresh, err := f.authority.Authorize(ctx, f.actor, f.tenant, f.agent.ID, true)
@@ -143,7 +140,7 @@ func TestAgentCapabilitiesHTTPAuthorityAndExecutionAdmission(t *testing.T) {
 	if err != nil || appScope.Capabilities.Allows(agentpolicy.Calendar) {
 		t.Fatal("application authority lost capability policy", appScope, err)
 	}
-	if _, err := f.authority.Provider(ctx, oldScope, oldConfig.Models[0]); !errors.Is(err, managedruntime.ErrDenied) {
+	if _, err := f.authority.Provider(ctx, oldScope, oldConfig.Models[0], managedruntime.ModelRequirements{}); !errors.Is(err, managedruntime.ErrDenied) {
 		t.Fatal("old model admission survived revocation", err)
 	}
 	if _, err := f.service.Worker(ctx, f.actor, f.tenant, f.agent.ID, f.main.ID, "disabled-worker", "must not start"); !errors.Is(err, managedruntime.ErrDenied) {

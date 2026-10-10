@@ -79,6 +79,31 @@ func (c *Client) Environments(ctx context.Context, user, tenant, agent string) (
 	return result, err
 }
 
+func (c *Client) InspectEnvironments(ctx context.Context, user, tenant, agent string) (execution.EnvironmentInspection, error) {
+	reply, err := c.client.InspectEnvironments(ctx, actor(user, tenant, agent))
+	var result execution.EnvironmentInspection
+	err = decode(reply, err, &result)
+	return result, err
+}
+
+func (c *Client) InspectMCP(ctx context.Context, user, tenant, agent, after string) (execution.MCPPage, error) {
+	reply, err := c.client.InspectMCP(ctx, actor(user, tenant, agent), after)
+	var result execution.MCPPage
+	err = decode(reply, err, &result)
+	return result, err
+}
+
+func (c *Client) RefreshMCPTools(ctx context.Context, user, tenant, agent, environment, connection string, change execution.MCPRefresh) (*execution.MCPToolList, error) {
+	encoded, err := json.Marshal(change)
+	if err != nil {
+		return nil, err
+	}
+	reply, err := c.client.RefreshMCPTools(ctx, actor(user, tenant, agent), environment, connection, string(encoded))
+	var result execution.MCPToolList
+	err = decode(reply, err, &result)
+	return &result, err
+}
+
 func (c *Client) DefaultEnvironment(ctx context.Context, user, tenant, agent string) (execution.DefaultEnvironment, error) {
 	reply, err := c.client.DefaultEnvironment(ctx, actor(user, tenant, agent))
 	var result execution.DefaultEnvironment

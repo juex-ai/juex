@@ -41,9 +41,9 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		return work, managedruntime.ErrDenied
 	}
 	var text, actor, state string
-	var source []byte
+	var source, encodedImages []byte
 	var memberEpoch, agentEpoch, actorEpoch int64
-	err = tx.QueryRow(ctx, `SELECT text,actor_id,state,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch,source FROM runtime.inputs WHERE id=$1 FOR UPDATE`, inputID).Scan(&text, &actor, &state, &memberEpoch, &agentEpoch, &actorEpoch, &source)
+	err = tx.QueryRow(ctx, `SELECT text,actor_id,state,membership_execution_epoch,agent_execution_epoch,actor_authorization_epoch,source,images FROM runtime.inputs WHERE id=$1 FOR UPDATE`, inputID).Scan(&text, &actor, &state, &memberEpoch, &agentEpoch, &actorEpoch, &source, &encodedImages)
 	if err != nil {
 		return work, err
 	}
@@ -57,6 +57,8 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		return work, err
 	}
 	work.ThreadID, work.Generation = thread.ID, thread.Generation
+	work.Application = thread.Application
+	work.ThreadKind = thread.Kind
 	switch state {
 	case "active":
 		var encoded []byte
@@ -70,6 +72,11 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 			if err := consumeToolResults(ctx, tx, work.TurnID, thread.ID, false); err != nil {
 				return work, err
 			}
+			thread, err = readThread(ctx, tx, scope.AgentID, threadID)
+			if err != nil {
+				return work, err
+			}
+			work.Generation = thread.Generation
 		} else if oldEpoch == lease.Epoch {
 			var started bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.attempts WHERE turn_id=$1 AND state='started')`, work.TurnID).Scan(&started); err != nil {
@@ -132,7 +139,17 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 			}
 			text = "Explicit collaboration message; source metadata: " + string(provenance) + "\n\n" + text
 		}
-		message := llm.TextMessage(llm.RoleUser, text)
+		message := llm.Message{Role: llm.RoleUser}
+		if text != "" {
+			message.Blocks = append(message.Blocks, llm.Block{Type: llm.BlockText, Text: text})
+		}
+		var images []managedruntime.InputImage
+		if err := json.Unmarshal(encodedImages, &images); err != nil {
+			return work, err
+		}
+		for _, image := range images {
+			message.Blocks = append(message.Blocks, llm.Block{Type: llm.BlockImage, Media: image.MediaRef()})
+		}
 		message.ID = inputID
 		message.Kind = llm.MessageKindDirect
 		if work.Source.Kind == "observation" || work.Source.Kind == "worker_message" || work.Source.Kind == "peer_message" || work.Source.Kind == "thread_result" || work.Source.Kind == "application" || work.Source.Kind == "application_trigger" {
@@ -158,6 +175,20 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 		work.Deferred = true
 		return work, tx.Commit(ctx)
 	}
+	if err = deliverTrackedInput(ctx, tx, thread.ID, inputID); err != nil {
+		return work, err
+	}
+	work.InputReminders, err = readInputReminders(ctx, tx, thread.ID)
+	if err != nil {
+		return work, err
+	}
+	if err := tx.QueryRow(ctx, `SELECT input_scope FROM runtime.threads WHERE id=$1`, thread.ID).Scan(&work.InputScopeID); err != nil {
+		return work, err
+	}
+	work.ActiveWrites, err = readActiveWrites(ctx, tx, work)
+	if err != nil {
+		return work, err
+	}
 	work.Compaction, err = readCompaction(ctx, tx, work.TurnID)
 	if err != nil {
 		return work, err
@@ -178,7 +209,15 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 	if err != nil {
 		return work, err
 	}
-	work.ModelOrigins, err = modelOrigins(ctx, tx, work.History)
+	work.ModelOrigins, err = modelOrigins(ctx, tx, thread.ID, work.History)
+	if err != nil {
+		return work, err
+	}
+	work.ThreadState, err = readThreadState(ctx, tx, thread.ID)
+	if err != nil {
+		return work, err
+	}
+	work.WorkingFiles, err = readWorkingFiles(ctx, tx, thread.ID)
 	if err != nil {
 		return work, err
 	}
@@ -186,33 +225,30 @@ func (s *Store) BeginTurn(ctx context.Context, lease managedruntime.Lease, scope
 }
 
 func history(ctx context.Context, tx pgx.Tx, threadID string, generation int64) ([]llm.Message, error) {
-	var summaryID string
-	var retainedIDs []string
-	err := tx.QueryRow(ctx, `SELECT summary_id,retained_ids FROM runtime.context_checkpoints WHERE thread_id=$1 AND generation=$2`, threadID, generation).Scan(&summaryID, &retainedIDs)
+	var messageIDs []string
+	var through int64
+	err := tx.QueryRow(ctx, `SELECT message_ids,through_sequence FROM runtime.context_checkpoints WHERE thread_id=$1 AND generation=$2`, threadID, generation).Scan(&messageIDs, &through)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT data,generation FROM runtime.events WHERE thread_id=$1 AND kind='message.appended' AND (generation=$2 OR data->>'id'=ANY($3::text[])) ORDER BY sequence`, threadID, generation, retainedIDs)
+	rows, err := tx.Query(ctx, `SELECT data,sequence FROM runtime.events WHERE thread_id=$1 AND kind='message.appended' AND ((generation=$2 AND sequence>$4) OR (sequence<=$4 AND data->>'id'=ANY($3::text[]))) ORDER BY sequence`, threadID, generation, messageIDs, through)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	retained := map[string]llm.Message{}
 	current := []llm.Message{}
-	var summary llm.Message
 	for rows.Next() {
 		var encoded []byte
-		var gen int64
-		if err := rows.Scan(&encoded, &gen); err != nil {
+		var sequence int64
+		if err := rows.Scan(&encoded, &sequence); err != nil {
 			return nil, err
 		}
 		var message llm.Message
 		if err := json.Unmarshal(encoded, &message); err != nil {
 			return nil, err
 		}
-		if message.ID == summaryID {
-			summary = message
-		} else if gen == generation {
+		if sequence > through {
 			current = append(current, message)
 		} else {
 			retained[message.ID] = message
@@ -221,14 +257,8 @@ func history(ctx context.Context, tx pgx.Tx, threadID string, generation int64) 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if summaryID == "" {
-		return current, nil
-	}
-	if summary.ID == "" {
-		return nil, managedruntime.ErrConflict
-	}
-	result := []llm.Message{summary}
-	for _, id := range retainedIDs {
+	result := make([]llm.Message, 0, len(messageIDs)+len(current))
+	for _, id := range messageIDs {
 		message, ok := retained[id]
 		if !ok {
 			return nil, managedruntime.ErrConflict
@@ -305,6 +335,9 @@ func (s *Store) BeginAttempt(ctx context.Context, lease managedruntime.Lease, tu
 		return attempt, err
 	}
 	if err := appendEvent(ctx, tx, threadID, "model.started", map[string]any{"attempt_id": attempt.ID, "turn_id": turnID, "ordinal": attempt.Ordinal, "model_id": request.Model.ModelID, "model": request.Model.Provider + ":" + request.Model.Model}); err != nil {
+		return attempt, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.attempt_progress(attempt_id,start_sequence) SELECT $1,sequence FROM runtime.threads WHERE id=$2`, attempt.ID, threadID); err != nil {
 		return attempt, err
 	}
 	return attempt, tx.Commit(ctx)
@@ -387,6 +420,11 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 	if _, err := tx.Exec(ctx, `UPDATE runtime.attempts SET response=$2,state=$3,usage=$4,usage_status=$5,completed_at=clock_timestamp() WHERE id=$1`, attemptID, encoded, state, usage, response.UsageStatus); err != nil {
 		return err
 	}
+	if failure == "" {
+		if _, err := tx.Exec(ctx, `DELETE FROM runtime.attempt_progress WHERE attempt_id=$1`, attemptID); err != nil {
+			return err
+		}
+	}
 	if err := appendEvent(ctx, tx, threadID, "model.completed", map[string]any{"attempt_id": attemptID, "turn_id": turnID, "model": response.Message.Model, "usage_status": response.UsageStatus, "usage": json.RawMessage(usage), "error": failure}); err != nil {
 		return err
 	}
@@ -461,7 +499,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 			return tx.Commit(ctx)
 		}
 	}
-	if err := completeTurn(ctx, tx, threadID, turnID, inputID, state, finalText.String(), failure); err != nil {
+	if err := finishConversation(ctx, tx, threadID, turnID, inputID, state, finalText.String(), failure); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -470,7 +508,7 @@ func (s *Store) FinishAttempt(ctx context.Context, lease managedruntime.Lease, a
 // HoldInput prevents revoked work from automatically running after a later
 // membership/Agent restore. Releasing it requires a new authorized user action.
 func (s *Store) HoldInput(ctx context.Context, lease managedruntime.Lease, inputID, reason string) error {
-	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" && reason != "instructions_unavailable" {
+	if reason != "authority_changed" && reason != "model_unavailable" && reason != "context_limit" && reason != "compaction_failed" && reason != "application_revoked" && reason != "application_budget_exhausted" && reason != "instructions_unavailable" && reason != "media_unavailable" {
 		return managedruntime.ErrInvalid
 	}
 	tx, err := s.begin(ctx)

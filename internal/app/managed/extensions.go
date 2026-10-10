@@ -21,7 +21,7 @@ type ManagementExtensions struct {
 }
 
 func (s ManagementExtensions) Inspect(ctx context.Context, actor, tenant, agent string, request management.ExtensionInspectionRequest) (management.ExtensionInspection, error) {
-	if !path.IsAbs(request.Directory) || len(request.Directory) > 4096 || strings.ContainsRune(request.Directory, 0) {
+	if !path.IsAbs(request.Directory) || len(request.Directory) > 4096 || strings.ContainsRune(request.Directory, 0) || request.SourceKind != "" && request.SourceKind != "skills" {
 		return management.ExtensionInspection{}, management.ErrInvalid
 	}
 	envs, err := s.Execution.Environments(ctx, actor, tenant, agent)
@@ -34,7 +34,10 @@ func (s ManagementExtensions) Inspect(ctx context.Context, actor, tenant, agent 
 	if index < 0 {
 		return management.ExtensionInspection{}, management.ErrDenied
 	}
-	arguments, _ := json.Marshal(map[string]string{"path": request.Directory})
+	arguments, _ := json.Marshal(struct {
+		Path       string `json:"path"`
+		SourceKind string `json:"source_kind,omitempty"`
+	}{request.Directory, request.SourceKind})
 	op, err := s.Execution.Submit(ctx, actor, tenant, request.EnvironmentID, execprotocol.Request{Version: execprotocol.Version, ID: request.RequestID, AgentID: agent, Kind: "inspect_extension", Arguments: arguments, AuthorizationVersion: envs[index].AuthorizationVersion}, 0)
 	if err != nil {
 		return management.ExtensionInspection{}, err
@@ -54,12 +57,14 @@ func (s ManagementExtensions) inspection(ctx context.Context, actor, tenant, age
 		return result, management.ErrDenied
 	}
 	var arguments struct {
-		Path string `json:"path"`
+		Path       string `json:"path"`
+		SourceKind string `json:"source_kind,omitempty"`
 	}
 	if json.Unmarshal(op.Request.Arguments, &arguments) != nil {
 		return result, management.ErrInvalid
 	}
 	result.Directory = arguments.Path
+	result.SourceKind = arguments.SourceKind
 	if op.State != "completed" {
 		return result, nil
 	}
@@ -83,7 +88,7 @@ func (s ManagementExtensions) inspection(ctx context.Context, actor, tenant, age
 		data = append(data, op.Snapshot.Output...)
 	}
 	var catalog extensionpolicy.Catalog
-	if json.Unmarshal(data, &catalog) != nil || catalog.Validate() != nil {
+	if json.Unmarshal(data, &catalog) != nil || catalog.Validate() != nil || catalog.SourceKind != arguments.SourceKind {
 		return result, management.ErrInvalid
 	}
 	result.Catalog = &catalog
@@ -98,7 +103,7 @@ func (s ManagementExtensions) Configure(ctx context.Context, actor, tenant, agen
 	at := slices.IndexFunc(bindings, func(b extensionpolicy.Binding) bool { return b.ID == id })
 	binding := extensionpolicy.Binding{ID: id}
 	if change.Remove {
-		return s.Directory.ConfigureExtension(ctx, actor, tenant, agent, change.Version, binding, true)
+		return s.Directory.ConfigureExtension(ctx, actor, tenant, agent, change.Version, binding, true, nil)
 	}
 	if change.InspectionID == "" {
 		if at < 0 {
@@ -125,5 +130,25 @@ func (s ManagementExtensions) Configure(ctx context.Context, actor, tenant, agen
 		binding = extensionpolicy.Binding{ID: id, EnvironmentID: receipt.EnvironmentID, AuthorizationVersion: receipt.AuthorizationVersion, Directory: receipt.Directory, InspectionID: receipt.OperationID, Catalog: *receipt.Catalog}
 	}
 	binding.Enabled, binding.Resources = change.Enabled, slices.Clone(change.Resources)
-	return s.Directory.ConfigureExtension(ctx, actor, tenant, agent, change.Version, binding, false)
+	var inspection *management.ExtensionInspectionAuthority
+	if binding.Enabled && binding.Catalog.SourceKind == "skills" {
+		op, err := s.Execution.Operation(ctx, actor, tenant, agent, binding.EnvironmentID, binding.InspectionID, 0, 1)
+		if err != nil {
+			return management.Agent{}, err
+		}
+		if op.Request.Kind != "inspect_extension" || op.State != "completed" || op.Request.AuthorizationVersion != binding.AuthorizationVersion {
+			return management.Agent{}, management.ErrDenied
+		}
+		inspection = &management.ExtensionInspectionAuthority{ActorID: op.Scope.ActorID, ActorEpoch: op.Scope.ActorAuthorizationEpoch, MembershipEpoch: op.Scope.MembershipExecutionEpoch, AgentEpoch: op.Scope.AgentExecutionEpoch}
+		envs, err := s.Execution.Environments(ctx, actor, tenant, agent)
+		if err != nil {
+			return management.Agent{}, err
+		}
+		if !slices.ContainsFunc(envs, func(e execprotocol.Environment) bool {
+			return e.ID == binding.EnvironmentID && e.AuthorizationVersion == binding.AuthorizationVersion && slices.Contains(e.Capabilities, execprotocol.Files)
+		}) {
+			return management.Agent{}, management.ErrDenied
+		}
+	}
+	return s.Directory.ConfigureExtension(ctx, actor, tenant, agent, change.Version, binding, false, inspection)
 }

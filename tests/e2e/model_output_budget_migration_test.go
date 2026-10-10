@@ -97,15 +97,25 @@ func TestManagedOutputBudgetMigrationPreservesRecoveryAndHistory(t *testing.T) {
 			installPreOutputBudgetSchema(t, pool, "runtime", []string{"schema.sql", "tools_schema.sql", "tool_cancellation_schema.sql", "observations_schema.sql", "models_schema.sql", "compaction_schema.sql", "collaboration_schema.sql", "applications_schema.sql", "evidence_schema.sql", "recall_schema.sql", "notices_schema.sql", "notice_attempts_schema.sql", "notifications_schema.sql", "usage_schema.sql", "purge_schema.sql", "hooks_schema.sql", "extensions_schema.sql", "instructions_schema.sql"})
 			ctx := context.Background()
 			store := runtimepg.New(pool)
-			if _, err := store.EnsureAgent(ctx, scope); err != nil {
+			// Seed the published schema directly. Current store reads may require
+			// columns introduced by later migrations and cannot create old state.
+			if _, err := pool.Exec(ctx, `INSERT INTO runtime.agents(id,tenant_id,user_id,fleet_id) VALUES($1,$2,$3,$4)`, scope.AgentID, scope.TenantID, scope.UserID, scope.FleetID); err != nil {
 				t.Fatal(err)
 			}
-			input, err := store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: "upgrade", Text: "Keep this work"})
-			if err != nil {
+			var threadID string
+			if err := pool.QueryRow(ctx, `INSERT INTO runtime.threads(agent_id,kind,name,state) VALUES($1,'main','Main','running') RETURNING id`, scope.AgentID).Scan(&threadID); err != nil {
 				t.Fatal(err)
 			}
-			lease, err := store.Claim(ctx, scope.AgentID, "before-upgrade", time.Minute)
-			if err != nil {
+			input := managedruntime.InputReceipt{ThreadID: threadID}
+			inputState := "active"
+			if state == "completed" {
+				inputState = "completed"
+			}
+			if err := pool.QueryRow(ctx, `INSERT INTO runtime.inputs(request_id,thread_id,actor_id,actor_authorization_epoch,membership_version,membership_execution_epoch,agent_execution_epoch,text,state) VALUES('upgrade',$1,$2,$3,$4,$5,$6,'Keep this work',$7) RETURNING id`, threadID, scope.ActorID, scope.ActorAuthorizationEpoch, scope.MembershipVersion, scope.MembershipExecutionEpoch, scope.AgentExecutionEpoch, inputState).Scan(&input.ID); err != nil {
+				t.Fatal(err)
+			}
+			lease := managedruntime.Lease{AgentID: scope.AgentID, Holder: "before-upgrade"}
+			if err := pool.QueryRow(ctx, `UPDATE runtime.agents SET holder=$2,epoch=epoch+1,lease_until=clock_timestamp()+interval '1 minute',last_scheduled_at=clock_timestamp() WHERE id=$1 RETURNING epoch,lease_until`, scope.AgentID, lease.Holder).Scan(&lease.Epoch, &lease.ExpiresAt); err != nil {
 				t.Fatal(err)
 			}
 			config := runtimeConfig()
@@ -113,21 +123,19 @@ func TestManagedOutputBudgetMigrationPreservesRecoveryAndHistory(t *testing.T) {
 			backup.ModelID = "00000000-0000-4000-8000-000000000002"
 			backup.Model, backup.MaxOutput, backup.OutputReserve = "backup", 2048, 2048
 			config.Models = append(config.Models, backup)
-			work, err := store.BeginTurn(ctx, lease, scope, input.ID, config)
-			if err != nil {
+			encoded, _ := json.Marshal(config)
+			work := managedruntime.Work{ThreadID: threadID, InputID: input.ID, Generation: 1}
+			if err := pool.QueryRow(ctx, `INSERT INTO runtime.turns(input_id,thread_id,generation,config,activation_epoch,state,model_index) VALUES($1,$2,1,$3,$4,$5,1) RETURNING id`, input.ID, threadID, encoded, lease.Epoch, state).Scan(&work.TurnID); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.AdvanceModel(ctx, lease, work.TurnID, 0, "model_unavailable"); err != nil {
-				t.Fatal(err)
-			}
-			attempt, err := store.BeginAttempt(ctx, lease, work.TurnID, managedruntime.ModelRequest{Model: backup, MaxOutputTokens: 2048, Purpose: "conversation"})
-			if err != nil {
-				t.Fatal(err)
-			}
+			attempt := managedruntime.Attempt{TurnID: work.TurnID}
+			request, _ := json.Marshal(managedruntime.ModelRequest{Model: backup, MaxOutputTokens: 2048, Purpose: "conversation", Generation: 1})
+			attemptState := "started"
 			if state == "completed" {
-				if err := store.FinishAttempt(ctx, lease, attempt.ID, llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "Recorded answer"), StopReason: llm.StopEndTurn}, ""); err != nil {
-					t.Fatal(err)
-				}
+				attemptState = "completed"
+			}
+			if err := pool.QueryRow(ctx, `INSERT INTO runtime.attempts(turn_id,ordinal,request,state) VALUES($1,1,$2,$3) RETURNING id`, work.TurnID, request, attemptState).Scan(&attempt.ID); err != nil {
+				t.Fatal(err)
 			}
 			// Build the exact pre-upgrade JSON contract, which contains no reserve.
 			if _, err := pool.Exec(ctx, `UPDATE runtime.turns SET state=$2,config=config #- '{models,0,output_reserve}' #- '{models,1,output_reserve}' WHERE id=$1`, work.TurnID, state); err != nil {
@@ -173,7 +181,7 @@ func TestManagedOutputBudgetMigrationPreservesRecoveryAndHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			restarted := runtimepg.New(pool)
-			lease, err = restarted.Claim(ctx, scope.AgentID, "after-upgrade", time.Minute)
+			lease, err := restarted.Claim(ctx, scope.AgentID, "after-upgrade", time.Minute)
 			if err != nil {
 				t.Fatal(err)
 			}

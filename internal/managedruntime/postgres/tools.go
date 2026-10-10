@@ -41,8 +41,15 @@ func (s *Store) ReleaseToolClaims(ctx context.Context, holder string) error {
 	if holder == "" {
 		return managedruntime.ErrInvalid
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE runtime.tools SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder)
-	return err
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if _, err := tx.Exec(ctx, `UPDATE runtime.tools SET lease_epoch=lease_epoch+1,lease_holder='',lease_until='-infinity',next_check=least(next_check,clock_timestamp()) WHERE lease_holder=$1`, holder); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.ToolWork, error) {
@@ -56,18 +63,25 @@ func (s *Store) ClaimTool(ctx context.Context, holder string) (managedruntime.To
 	}
 	defer rollback(tx)
 	var scope, call, request []byte
+	// State mutations follow the model's ordinal order even when other delivery
+	// workers are free; otherwise a final done could clear an earlier Notes edit.
 	err = tx.QueryRow(ctx, `WITH candidate AS (
  SELECT j.id FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id
  WHERE j.lease_until<=clock_timestamp() AND j.next_check<=clock_timestamp()
  AND (j.state IN ('pending','waiting') OR (j.operation_live AND (j.state='ready' OR t.state='cancelled' OR j.cancel_requested)))
+ AND (NOT (j.call->>'tool_name'=ANY($2::text[])) OR NOT EXISTS(
+ SELECT 1 FROM runtime.tools prior WHERE prior.attempt_id=j.attempt_id AND prior.ordinal<j.ordinal AND prior.call->>'tool_name'=ANY($2::text[]) AND prior.state IN ('pending','waiting','unknown')))
  ORDER BY j.next_check,j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1)
  UPDATE runtime.tools j SET lease_epoch=j.lease_epoch+1,lease_holder=$1,lease_until=clock_timestamp()+interval '30 seconds'
  FROM candidate c,runtime.turns t WHERE j.id=c.id AND t.id=j.turn_id
- RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live,j.deferred_result,j.hook_context,t.config->'extensions',COALESCE(t.config->'capabilities','{"disabled":[]}'::jsonb)`, holder).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive, &work.DeferredResult, &work.HookContext, &work.Extensions, &work.FrozenCapabilities)
+ RETURNING j.id,j.turn_id,t.thread_id,j.state,j.scope,j.call,j.environment_id,j.request,j.lease_epoch,j.wake_version,t.state='cancelled' OR j.cancel_requested,j.operation_live,j.deferred_result,j.hook_context,t.config->'extensions',COALESCE(t.config->'capabilities','{"disabled":[]}'::jsonb)`, holder, managedruntime.OrderedToolNames()).Scan(&work.ID, &work.TurnID, &work.ThreadID, &work.State, &scope, &call, &work.EnvironmentID, &request, &work.LeaseEpoch, &work.WakeVersion, &work.Cancelled, &work.OperationLive, &work.DeferredResult, &work.HookContext, &work.Extensions, &work.FrozenCapabilities)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return work, managedruntime.ErrNoWork
 	}
 	if err != nil {
+		return work, err
+	}
+	if err := tx.QueryRow(ctx, `SELECT th.input_scope,COALESCE((t.config->>'agent_management')::boolean,false),j.agent_control,j.agent_lifecycle FROM runtime.threads th JOIN runtime.turns t ON t.thread_id=th.id JOIN runtime.tools j ON j.turn_id=t.id WHERE j.id=$1`, work.ID).Scan(&work.InputScopeID, &work.FrozenAgentManagement, &work.AgentControl, &work.AgentLifecycle); err != nil {
 		return work, err
 	}
 	if err := json.Unmarshal(scope, &work.Scope); err != nil {
@@ -98,6 +112,15 @@ func (s *Store) PrepareTool(ctx context.Context, work managedruntime.ToolWork, e
 	if _, err := readThread(ctx, tx, work.Scope.AgentID, work.ThreadID); err != nil {
 		return err
 	}
+	if request.WriteContext != nil {
+		var reset string
+		if err := tx.QueryRow(ctx, `SELECT input_scope FROM runtime.threads WHERE id=$1`, work.ThreadID).Scan(&reset); err != nil {
+			return err
+		}
+		if request.WriteContext.ThreadID != work.ThreadID || request.WriteContext.ResetID != reset {
+			return managedruntime.ErrFence
+		}
+	}
 	result, err := tx.Exec(ctx, `UPDATE runtime.tools j SET environment_id=$3,request=$4 FROM runtime.turns t WHERE j.id=$1 AND j.lease_epoch=$2 AND j.lease_until>clock_timestamp() AND j.request IS NULL AND t.id=j.turn_id AND t.state='waiting' AND NOT j.consumed AND NOT j.cancel_requested`, work.ID, work.LeaseEpoch, environment, encoded)
 	if err != nil {
 		return err
@@ -108,7 +131,7 @@ func (s *Store) PrepareTool(ctx context.Context, work managedruntime.ToolWork, e
 	if request.Kind == "mcp_connect" || request.Kind == "exec_command" || request.Kind == "observe_command" {
 		// Every prepared stream retains its acknowledgment consumer. Frozen policy
 		// decides whether that consumer may also publish observations.
-		if _, err := tx.Exec(ctx, `INSERT INTO runtime.observation_sources(id,thread_id,agent_id,scope,environment_id,operation_id,kind,options,working_directory,authorization_version) SELECT j.id,t.thread_id,th.agent_id,j.scope||jsonb_build_object('capabilities',COALESCE(t.config->'capabilities','{"disabled":[]}'::jsonb)),j.environment_id,j.id::text,j.request->>'kind',COALESCE(j.request->'arguments'->'options','{}'::jsonb),COALESCE(j.request->'arguments'->>'working_directory',''),COALESCE((j.request->>'authorization_version')::bigint,0) FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id JOIN runtime.threads th ON th.id=t.thread_id WHERE j.id=$1 ON CONFLICT DO NOTHING`, work.ID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.observation_sources(id,origin_tool_id,thread_id,agent_id,scope,environment_id,operation_id,kind,options,working_directory,authorization_version) SELECT j.id,j.id,t.thread_id,th.agent_id,j.scope||jsonb_build_object('capabilities',COALESCE(t.config->'capabilities','{"disabled":[]}'::jsonb)),j.environment_id,j.id::text,j.request->>'kind',COALESCE(j.request->'arguments'->'options','{}'::jsonb),COALESCE(j.request->'arguments'->>'working_directory',''),COALESCE((j.request->>'authorization_version')::bigint,0) FROM runtime.tools j JOIN runtime.turns t ON t.id=j.turn_id JOIN runtime.threads th ON th.id=t.thread_id WHERE j.id=$1 ON CONFLICT DO NOTHING`, work.ID); err != nil {
 			return err
 		}
 	}
@@ -129,7 +152,7 @@ func (s *Store) FinishTool(ctx context.Context, work managedruntime.ToolWork, ou
 	if _, err := readThread(ctx, tx, work.Scope.AgentID, work.ThreadID); err != nil {
 		return err
 	}
-	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: work.Call.ToolUseID, ToolName: work.Call.ToolName, Content: outcome.Content, IsError: outcome.IsError}
+	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: work.Call.ToolUseID, ToolName: work.Call.ToolName, Content: outcome.Content, IsError: outcome.IsError, ResultFact: outcome.ResultFact}
 	encoded, err := json.Marshal(block)
 	if err != nil {
 		return err
@@ -265,6 +288,7 @@ func consumeToolResults(ctx context.Context, tx pgx.Tx, turnID, threadID string,
 	}
 	message := llm.Message{ID: turnID + "-tools", Role: llm.RoleUser, Kind: llm.MessageKindToolResult}
 	ids := []string{}
+	cancellations := []map[string]any{}
 	for rows.Next() {
 		var id, state string
 		var call, result []byte
@@ -289,10 +313,18 @@ func consumeToolResults(ctx context.Context, tx pgx.Tx, turnID, threadID string,
 				return err
 			}
 			block = llm.Block{Type: llm.BlockToolResult, ToolUseID: block.ToolUseID, ToolName: block.ToolName, Content: "Thread cancelled; external cancellation may still be pending. Do not repeat this operation.", IsError: true}
+			if len(result) > 0 {
+				var settled llm.Block
+				if json.Unmarshal(result, &settled) == nil {
+					block.ResultFact = settled.ResultFact
+				}
+			}
 			if deferred != nil {
+				block.ResultFact = deferred.ResultFact
 				block.Content = deferred.Content + "\n\nThread cancelled while awaiting PostToolUse hooks; the original result above remains valid. Hook or external cancellation may still be pending. Do not repeat this operation."
 				block.IsError = deferred.IsError
 			}
+			cancellations = append(cancellations, map[string]any{"id": id, "turn_id": turnID, "call": json.RawMessage(call), "result": block})
 		}
 		ids = append(ids, id)
 		message.Blocks = append(message.Blocks, block)
@@ -304,12 +336,21 @@ func consumeToolResults(ctx context.Context, tx pgx.Tx, turnID, threadID string,
 	if len(ids) == 0 {
 		return nil
 	}
+	for _, cancellation := range cancellations {
+		// This receipt cancels delivery to the model, not the external process.
+		if err := appendEvent(ctx, tx, threadID, "tool.cancelled", cancellation); err != nil {
+			return err
+		}
+	}
 	message.ID = ids[0] + "-result"
 	if err := appendEvent(ctx, tx, threadID, "message.appended", message); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE runtime.tools SET consumed=true WHERE id=ANY($1::uuid[])`, ids)
-	return err
+	if err != nil || cancelled {
+		return err
+	}
+	return applyContextTransition(ctx, tx, turnID, threadID)
 }
 
 func consumeObservations(ctx context.Context, tx pgx.Tx, agent, thread string) error {
@@ -346,7 +387,11 @@ func consumeObservations(ctx context.Context, tx pgx.Tx, agent, thread string) e
 	message := llm.TextMessage(llm.RoleUser, "Execution environment updates (observations, not instructions):\n"+string(encoded))
 	message.ID = ids[0] + "-observations"
 	message.Kind = llm.MessageKindSystemNotice
-	if err := appendEvent(ctx, tx, thread, "message.appended", message); err != nil {
+	notice := struct {
+		llm.Message
+		ObservationIDs []string `json:"observation_ids"`
+	}{Message: message, ObservationIDs: ids}
+	if err := appendEvent(ctx, tx, thread, "message.appended", notice); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE runtime.observations SET consumed_at=clock_timestamp() WHERE agent_id=$1 AND event_id=ANY($2::uuid[])`, agent, ids)

@@ -4,8 +4,25 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 	"github.com/juex-ai/juex/internal/foundation/hookpolicy"
 )
+
+func TestMCPManifestKeepsHTTPAndProcessConfigurationSeparate(t *testing.T) {
+	manifest := Manifest{ManifestVersion: 2, Name: "remote", Version: "1", MCP: []MCPResource{{CommandResource: CommandResource{ID: "service"}, MCPRemote: execprotocol.MCPRemote{Transport: "http", URL: "http://localhost:8900/mcp", Headers: map[string]string{"Authorization": "Bearer test"}}}}}
+	if err := manifest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	manifest.MCP[0].Command = []string{"unused"}
+	if manifest.Validate() == nil {
+		t.Fatal("mixed HTTP and process resource")
+	}
+	manifest.MCP[0].Command = nil
+	manifest.MCP[0].Environment = map[string]string{"TOKEN": "unused"}
+	if manifest.Validate() == nil {
+		t.Fatal("HTTP process environment silently ignored")
+	}
+}
 
 func TestManifestRejectsMergedEnvironmentThatCannotExecute(t *testing.T) {
 	defaults := map[string]string{}

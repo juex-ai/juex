@@ -140,42 +140,31 @@ func TestHostedLazyAdmissionLifecycleAndCredentialBoundary(t *testing.T) {
 	}
 }
 
-func TestHostedStopSerializesAgainstNewAdmission(t *testing.T) {
+func TestHostedStopFencesDispatchWhileAcceptingNewWork(t *testing.T) {
 	f, _, environment := hostedFixture(t)
 	ctx := context.Background()
-	locked, release := make(chan struct{}), make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- f.executionStore.LockManaged(ctx, environment.ID, func(execution.ManagedResource) (execution.ManagedResult, error) {
-			close(locked)
-			<-release
-			return execution.ManagedResult{}, nil
-		})
-	}()
-	<-locked
+	release := holdManagedLifecycle(t, f, environment.ID)
+	defer release()
 	request := nativeRequest(t, "concurrent-wake", "exec_command", native.CommandArguments{Command: "printf new"})
 	request.AgentID = f.agent.ID
-	admitted := make(chan error, 1)
+	admission, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if _, err := f.execution.Submit(admission, f.actor, f.tenant, environment.ID, request, 0); err != nil {
+		t.Fatal("stop blocked durable admission", err)
+	}
+	dispatched := make(chan error, 1)
 	go func() {
-		_, err := f.execution.Submit(ctx, f.actor, f.tenant, environment.ID, request, 0)
-		admitted <- err
+		_, err := f.executionStore.Dispatch(ctx, environment.ID, 0, request.ID)
+		dispatched <- err
 	}()
-	select {
-	case err := <-admitted:
-		close(release)
-		t.Fatal("new work raced container stop", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-admitted; err != nil {
+	waitManagedDispatchLock(t, f)
+	release()
+	if err := <-dispatched; err != nil {
 		t.Fatal(err)
 	}
 	op, err := f.executionStore.Operation(ctx, environment.ID, request.ID, 0, 100)
-	if err != nil || op.State != "waiting" {
-		t.Fatal("admission lost after stop", op, err)
+	if err != nil || op.State != "dispatched" {
+		t.Fatal("queued work did not dispatch after stop", op, err)
 	}
 }
 

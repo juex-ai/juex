@@ -12,7 +12,7 @@ func (s *Store) ExpiredReviewEvidence(ctx context.Context, before time.Time, lim
 		return nil, application.ErrInvalid
 	}
 	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON(f.id) r.value->'scope' FROM memory.fleets f CROSS JOIN LATERAL jsonb_each(f.state->'reviews') r
- WHERE COALESCE((r.value->>'worker_finished')::boolean,false) AND (r.value->'receipt'->>'updated_at')::timestamptz<$1 AND COALESCE(r.value->'proposal'->>'text','')<>'' ORDER BY f.id LIMIT $2`, before, limit)
+ WHERE NOT r.value ? 'imported' AND COALESCE((r.value->>'worker_finished')::boolean,false) AND (r.value->'receipt'->>'updated_at')::timestamptz<$1 AND COALESCE(r.value->'proposal'->>'text','')<>'' ORDER BY f.id LIMIT $2`, before, limit)
 	if err != nil {
 		return nil, err
 	}

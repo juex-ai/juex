@@ -15,9 +15,13 @@ func ResolveProfile(cfg Config) (llm.ProviderProfile, error) {
 	}
 	profile.BaseURL = firstProfileValue(cfg.BaseURL, profile.BaseURL)
 	profile.APIKey = firstProfileValue(cfg.APIKey, profile.APIKey)
+	profile.Authentication = cfg.Authentication
 	profile.Model = firstProfileValue(cfg.Model, profile.Model)
 	profile.ThinkingEffort = firstProfileValue(cfg.ThinkingEffort, profile.ThinkingEffort)
 	profile.Headers = mergeStringMap(profile.Headers, cfg.Headers)
+	if err := ValidateAuthentication(profile); err != nil {
+		return llm.ProviderProfile{}, err
+	}
 	if err := ValidateHeaders(profile); err != nil {
 		return llm.ProviderProfile{}, err
 	}
@@ -48,6 +52,23 @@ func ResolveProfile(cfg Config) (llm.ProviderProfile, error) {
 		profile.Compat.ReasoningReplayFields = []string{"reasoning_content", "reasoning", "thinking"}
 	}
 	return profile, nil
+}
+
+func ValidateAuthentication(profile llm.ProviderProfile) error {
+	switch profile.Authentication {
+	case "", "api_key":
+		return nil
+	case "none":
+		if profile.APIKey == "" && (profile.Protocol == llm.ProtocolOpenAIChat || profile.Protocol == llm.ProtocolOpenAIResponses) {
+			for name := range profile.Headers {
+				if strings.EqualFold(name, "Authorization") {
+					return fmt.Errorf("llm: authentication none cannot include an Authorization header")
+				}
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("llm: invalid provider authentication configuration")
 }
 
 func CloneProviderProfile(p llm.ProviderProfile) llm.ProviderProfile {

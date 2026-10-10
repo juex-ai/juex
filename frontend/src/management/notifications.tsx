@@ -22,7 +22,7 @@ function refreshNotifications() { window.dispatchEvent(new Event('juex-notificat
 export function NotificationNav({ tenant }: { tenant: TenantAccess }) {
   const revision = useNotificationRevision()
   const inbox = useResource<InboxPage>(`/tenants/${tenant.id}/notifications`, revision)
-  return <NavLink to={`/t/${tenant.id}/notifications`}><Bell size={18} />通知{inbox.data && inbox.data.unread > 0 && <span className="management-unread-count" aria-label={`${inbox.data.unread} 条未读通知`}>{inbox.data.unread > 99 ? '99+' : inbox.data.unread}</span>}</NavLink>
+  return <NavLink title="通知" aria-label={inbox.data?.unread ? `通知 · ${inbox.data.unread} 条未读通知` : '通知'} to={`/t/${tenant.id}/notifications`}><Bell size={18} /><span className="management-nav-label">通知</span>{inbox.data && inbox.data.unread > 0 && <span className="management-unread-count" aria-label={`${inbox.data.unread} 条未读通知`}>{inbox.data.unread > 99 ? '99+' : inbox.data.unread}</span>}</NavLink>
 }
 
 export function NotificationsPage({ tenant, user, mailEnabled }: { tenant: TenantAccess; user: User; mailEnabled: boolean }) {

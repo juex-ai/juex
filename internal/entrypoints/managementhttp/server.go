@@ -16,6 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/application"
 	"github.com/juex-ai/juex/internal/foundation/clientip"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"github.com/juex-ai/juex/internal/foundation/platformrpc"
 	"github.com/juex-ai/juex/internal/managedruntime"
 	"github.com/juex-ai/juex/internal/management"
 )
@@ -32,6 +33,8 @@ type Auth interface {
 }
 
 type Directory interface {
+	TenantSettings(context.Context, string, string) (management.ConfigurationLayer, error)
+	ConfigureTenantSettings(context.Context, string, string, management.ConfigurationLayer) (management.ConfigurationLayer, error)
 	Notifications(context.Context, string, string, int64, int) (management.NotificationPage, error)
 	MarkNotification(context.Context, string, string, string, bool) error
 	NotificationPreferences(context.Context, string, string) (management.NotificationPreferences, error)
@@ -50,23 +53,26 @@ type Directory interface {
 	CreateAgent(context.Context, string, string, string, management.AgentConfig) (management.Agent, error)
 	ConfigureAgent(context.Context, string, string, string, int64, management.AgentConfig) (management.Agent, error)
 	SetAgentArchived(context.Context, string, string, string, int64, bool) (management.Agent, error)
+	SetAgentManagement(context.Context, string, string, string, int64, bool) (management.Agent, error)
 	ReadAgent(context.Context, string, string, string) (management.AgentAuthority, error)
 }
 
 type Options struct {
-	Extensions     ExtensionAPI
-	Auth           Auth
-	Directory      Directory
-	Runtime        Runtime
-	Execution      Execution
-	Memory         Memory
-	Calendar       Calendar
-	PublicURL      string
-	TrustedProxies string
-	InsecureHTTP   bool
-	MailEnabled    bool
-	Static         http.Handler
-	Health         func(context.Context) error
+	ProcessEnvironment ProcessEnvironmentAPI
+	Workspace          WorkspaceAPI
+	Extensions         ExtensionAPI
+	Auth               Auth
+	Directory          Directory
+	Runtime            Runtime
+	Execution          Execution
+	Memory             Memory
+	Calendar           Calendar
+	PublicURL          string
+	TrustedProxies     string
+	InsecureHTTP       bool
+	MailEnabled        bool
+	Static             http.Handler
+	Health             func(context.Context) error
 }
 
 type Server struct {
@@ -96,6 +102,16 @@ func New(options Options) (http.Handler, error) {
 	s := &Server{options: options, origin: origin, clientIPs: clientIPs, attempts: make(map[string]attempts)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	if options.ProcessEnvironment != nil {
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/process-environment", s.signedIn(s.processEnvironment))
+		mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/process-environment/{layer}", s.signedIn(s.configureProcessEnvironment))
+	}
+	if options.Workspace != nil {
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/workspace-configurations/{environment}/{operation}", s.signedIn(s.workspaceConfigurationPreview))
+		mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/workspace-configuration", s.signedIn(s.configureWorkspace))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/workspace-reads", s.signedIn(s.readWorkspace))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/workspace-reads/{environment}/{operation}", s.signedIn(s.workspaceReceipt))
+	}
 	if options.Extensions != nil {
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/extension-inspections", s.signedIn(s.inspectExtension))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/extension-inspections/{environment}/{operation}", s.signedIn(s.extensionInspection))
@@ -114,6 +130,8 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("GET /api/auth/session", s.signedIn(s.session))
 	mux.HandleFunc("POST /api/auth/request-verification", s.signedIn(s.requestVerification))
 	mux.HandleFunc("GET /api/tenants", s.signedIn(s.tenants))
+	mux.HandleFunc("GET /api/tenants/{tenant}/settings", s.signedIn(s.tenantSettings))
+	mux.HandleFunc("PUT /api/tenants/{tenant}/settings", s.signedIn(s.configureTenantSettings))
 	mux.HandleFunc("GET /api/tenants/{tenant}/notifications", s.signedIn(s.notifications))
 	mux.HandleFunc("PUT /api/tenants/{tenant}/notifications/{notification}", s.signedIn(s.markNotification))
 	mux.HandleFunc("GET /api/tenants/{tenant}/notification-preferences", s.signedIn(s.notificationPreferences))
@@ -135,6 +153,7 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}", s.signedIn(s.configureAgent))
 	mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}", s.signedIn(s.agentDetail))
 	mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/archive", s.signedIn(s.archiveAgent))
+	mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/agent-management", s.signedIn(s.agentManagement))
 	if options.Memory != nil {
 		base := "/api/tenants/{tenant}/users/{owner}/memory"
 		mux.HandleFunc("GET "+base, s.signedIn(s.memoryStatus))
@@ -142,6 +161,7 @@ func New(options Options) (http.Handler, error) {
 		mux.HandleFunc("GET "+base+"/entries", s.signedIn(s.memorySearch))
 		mux.HandleFunc("GET "+base+"/entries/{entry}", s.signedIn(s.memoryRead))
 		mux.HandleFunc("GET "+base+"/facts", s.signedIn(s.memoryFacts))
+		mux.HandleFunc("GET "+base+"/domains", s.signedIn(s.memoryDomains))
 		mux.HandleFunc("GET "+base+"/reviews", s.signedIn(s.memoryReviews))
 		mux.HandleFunc("GET "+base+"/storage-rules", s.signedIn(s.memoryRules))
 		mux.HandleFunc("POST "+base+"/administer", s.signedIn(s.memoryAdminister))
@@ -158,15 +178,32 @@ func New(options Options) (http.Handler, error) {
 		mux.HandleFunc("GET /api/tenants/{tenant}/usage", s.signedIn(s.usage))
 		mux.HandleFunc("GET /api/tenants/{tenant}/users/{owner}/usage", s.signedIn(s.usage))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads", s.signedIn(s.threads))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/run-state", s.signedIn(s.agentRunState))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/lifecycle", s.signedIn(s.changeAgentLifecycle))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/runtime-status", s.signedIn(s.runtimeStatus))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/observation-sources", s.signedIn(s.observationSources))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/observations/{observation}", s.signedIn(s.observationContent))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/observation-sources/{source}/events", s.signedIn(s.observedEvents))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/observers", s.signedIn(s.startObserver))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/observation-sources/{source}/stop", s.signedIn(s.stopObserver))
+		mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/observation-sources/{source}/subscriptions/{thread}", s.signedIn(s.sourceSubscription))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/inputs", s.signedIn(s.submitInput))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads/{thread}/events", s.signedIn(s.threadEvents))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/compact", s.signedIn(s.compactThread))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/reset-context", s.signedIn(s.resetThreadContext))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/threads/{thread}/inspection", s.signedIn(s.threadInspection))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/input-checks", s.signedIn(s.inputChecks))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/cancel", s.signedIn(s.cancelThread))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/workers", s.signedIn(s.createWorker))
+		mux.HandleFunc("DELETE /api/tenants/{tenant}/agents/{agent}/threads/{thread}", s.signedIn(s.deleteThread))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/threads/{thread}/archive", s.signedIn(s.archiveThread))
 	}
 	if options.Execution != nil {
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/environments/{environment}/operations/{operation}/output", s.signedIn(s.operationOutput))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/environments", s.signedIn(s.environments))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/environment-status", s.signedIn(s.environmentInspection))
+		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/mcp-connections", s.signedIn(s.mcpInspection))
+		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/environments/{environment}/mcp-connections/{connection}/tools", s.signedIn(s.refreshMCPTools))
 		mux.HandleFunc("GET /api/tenants/{tenant}/agents/{agent}/default-environment", s.signedIn(s.defaultEnvironment))
 		mux.HandleFunc("PUT /api/tenants/{tenant}/agents/{agent}/default-environment", s.signedIn(s.setDefaultEnvironment))
 		mux.HandleFunc("POST /api/tenants/{tenant}/agents/{agent}/artifacts", s.signedIn(s.beginArtifact))
@@ -227,6 +264,10 @@ func (s *Server) guard(next http.Handler) http.Handler {
 				var bodyLimit int64 = 64 << 10
 				if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/chunks") {
 					bodyLimit = 512 << 10
+				} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/inputs") {
+					// Escaped Unicode and image references add JSON overhead to the
+					// Runtime's 256 KiB text limit; match its private ingress bound.
+					bodyLimit = 2 << 20
 				}
 				r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 			}
@@ -330,6 +371,8 @@ func respond(w http.ResponseWriter, value any, err error) {
 			status, code, message = 400, "invitation_unavailable", err.Error()
 		case errors.Is(err, application.ErrDisabled), errors.Is(err, application.ErrConflict), errors.Is(err, management.ErrConflict), errors.Is(err, management.ErrLoginRequired), errors.Is(err, management.ErrLastAdmin), errors.Is(err, managedruntime.ErrConflict), errors.Is(err, execprotocol.ErrConflict):
 			status, code, message = 409, "conflict", err.Error()
+		case errors.Is(err, managedruntime.ErrPaused):
+			status, code, message = 409, "agent_paused", "Agent 已暂停。恢复运行后可接受新工作。"
 		case errors.Is(err, management.ErrRateLimit):
 			status, code, message = 429, "rate_limited", err.Error()
 			if w.Header().Get("Retry-After") == "" {
@@ -339,10 +382,14 @@ func respond(w http.ResponseWriter, value any, err error) {
 			status, code, message = http.StatusInsufficientStorage, "storage_full", "Platform file storage is full; remove unused files or ask the operator to increase capacity"
 		case errors.Is(err, execprotocol.ErrUnavailable):
 			status, code, message = 503, "execution_unavailable", err.Error()
+		case errors.Is(err, platformrpc.ErrUnavailable):
+			status, code, message = 503, "service_unavailable", platformrpc.ErrUnavailable.Error()
 		case errors.Is(err, management.ErrMailUnavailable):
 			status, code, message = 503, "email_unavailable", err.Error()
 		case errors.Is(err, managedruntime.ErrModelUnavailable):
 			status, code, message = 409, "model_unavailable", err.Error()
+		case errors.Is(err, managedruntime.ErrMediaUnavailable):
+			status, code, message = 422, "media_unavailable", err.Error()
 		}
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "error": message})

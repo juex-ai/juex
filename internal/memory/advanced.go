@@ -48,6 +48,9 @@ func (s *Service) Maintain(ctx context.Context, frozen application.Scope, thread
 				return mc.Receipt{}, application.ErrDenied
 			}
 			key := scope.AgentID + "/" + thread
+			if state.ParticipationExcluded[key] {
+				return mc.Receipt{}, application.ErrDenied
+			}
 			p := state.Participation[key]
 			if p == nil || !p.Scope.SameAuthority(scope) {
 				p = &Participation{Scope: scope, ThreadID: thread}
@@ -83,6 +86,9 @@ func (s *State) Contribute(scope application.Scope, batch Contribution, now time
 		return invalid("original evidence exceeds Memory budget")
 	}
 	key := scope.AgentID + "/" + e.Source.ThreadID
+	if s.ParticipationExcluded[key] {
+		return nil
+	}
 	p := s.Participation[key]
 	if p == nil || !p.Scope.SameAuthority(scope) {
 		p = &Participation{Scope: scope, ThreadID: e.Source.ThreadID}
@@ -126,7 +132,7 @@ func (s *Service) Contribute(ctx context.Context, frozen application.Scope, batc
 
 func (s *State) Advance(key string, now time.Time) (mc.Receipt, error) {
 	p := s.Participation[key]
-	if p == nil || !s.Control.Enabled || s.Strategy != mc.Advanced || len(p.Evidence) == 0 {
+	if p == nil || s.ParticipationExcluded[key] || !s.Control.Enabled || s.Strategy != mc.Advanced || len(p.Evidence) == 0 {
 		return mc.Receipt{}, nil
 	}
 	p.AttemptedAt = now

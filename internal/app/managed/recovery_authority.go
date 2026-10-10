@@ -37,7 +37,7 @@ func RevokeRecoveredAuthority(ctx context.Context, address, directory, tenant, u
 		return err
 	}
 	defer pool.Close()
-	if err := requireOffline(ctx, pool); err != nil {
+	if err := RequireOffline(ctx, pool); err != nil {
 		return err
 	}
 	if device != "" {

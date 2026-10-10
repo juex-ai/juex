@@ -29,7 +29,7 @@ func TestAgentObservationPolicyKeepsOutputAcknowledgmentWithoutPublication(t *te
 					policy.Disabled = []agentpolicy.Capability{agentpolicy.Observations}
 				}
 				var err error
-				f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Capabilities: &policy})
+				f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Configuration: &management.Configuration{Models: f.agent.Configuration.Models, Modules: modulesForPolicy(&policy)}})
 				if err != nil {
 					t.Fatal(err)
 				}

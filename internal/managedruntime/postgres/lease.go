@@ -15,7 +15,7 @@ func (s *Store) Claim(ctx context.Context, agentID, holder string, ttl time.Dura
 	}
 	lease := managedruntime.Lease{AgentID: agentID, Holder: holder}
 	err := s.pool.QueryRow(ctx, `UPDATE runtime.agents SET holder=$2,epoch=epoch+1,lease_until=clock_timestamp()+make_interval(secs=>$3),last_scheduled_at=clock_timestamp()
-	WHERE id=$1 AND NOT purging AND lease_until<=clock_timestamp() RETURNING epoch,lease_until`, agentID, holder, ttl.Seconds()).Scan(&lease.Epoch, &lease.ExpiresAt)
+	WHERE id=$1 AND NOT purging AND run_mode='running' AND lease_until<=clock_timestamp() RETURNING epoch,lease_until`, agentID, holder, ttl.Seconds()).Scan(&lease.Epoch, &lease.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return lease, managedruntime.ErrFence
 	}
@@ -27,7 +27,7 @@ func (s *Store) Renew(ctx context.Context, lease managedruntime.Lease, ttl time.
 		return lease, managedruntime.ErrInvalid
 	}
 	err := s.pool.QueryRow(ctx, `UPDATE runtime.agents SET lease_until=clock_timestamp()+make_interval(secs=>$4)
-	WHERE id=$1 AND holder=$2 AND epoch=$3 AND lease_until>clock_timestamp() RETURNING lease_until`, lease.AgentID, lease.Holder, lease.Epoch, ttl.Seconds()).Scan(&lease.ExpiresAt)
+	WHERE id=$1 AND holder=$2 AND epoch=$3 AND run_mode='running' AND lease_until>clock_timestamp() RETURNING lease_until`, lease.AgentID, lease.Holder, lease.Epoch, ttl.Seconds()).Scan(&lease.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return lease, managedruntime.ErrFence
 	}
@@ -51,7 +51,7 @@ func (s *Store) Release(ctx context.Context, lease managedruntime.Lease) error {
 // Thread row already locked, without inverting the Agent/Thread lock order.
 func fence(ctx context.Context, tx pgx.Tx, lease managedruntime.Lease) error {
 	var valid bool
-	err := tx.QueryRow(ctx, `SELECT holder=$2 AND epoch=$3 AND lease_until>clock_timestamp() FROM runtime.agents WHERE id=$1 FOR NO KEY UPDATE`, lease.AgentID, lease.Holder, lease.Epoch).Scan(&valid)
+	err := tx.QueryRow(ctx, `SELECT run_mode='running' AND holder=$2 AND epoch=$3 AND lease_until>clock_timestamp() FROM runtime.agents WHERE id=$1 FOR NO KEY UPDATE`, lease.AgentID, lease.Holder, lease.Epoch).Scan(&valid)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && !valid {
 		return managedruntime.ErrFence
 	}
@@ -65,7 +65,7 @@ func (s *Store) RunnableAgents(ctx context.Context, limit int) ([]string, error)
 		return nil, managedruntime.ErrInvalid
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id FROM (SELECT a.id,a.last_scheduled_at,row_number() OVER(PARTITION BY a.tenant_id,a.user_id ORDER BY a.last_scheduled_at,a.id) AS owner_rank
-	FROM runtime.agents a WHERE a.lease_until<=clock_timestamp() AND EXISTS(
+	FROM runtime.agents a WHERE a.run_mode='running' AND NOT a.purging AND a.lease_until<=clock_timestamp() AND EXISTS(
 	SELECT 1 FROM runtime.threads t JOIN runtime.inputs i ON i.thread_id=t.id WHERE t.agent_id=a.id AND t.retention='active' AND i.state IN ('queued','active') AND t.state NOT IN ('waiting','blocked'))) q
 	ORDER BY owner_rank,last_scheduled_at,id LIMIT $1`, limit)
 	if err != nil {

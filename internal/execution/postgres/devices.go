@@ -11,11 +11,11 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
-const deviceColumns = `id,tenant_id,user_id,fleet_id,kind,name,os,working_directory,removal_epoch,grants,ceiling,status,version,journal_id,connection_epoch,last_seen,COALESCE(online_until>clock_timestamp(),false),COALESCE((SELECT last_error FROM execution.managed_environments WHERE environment_id=execution.environments.id),''),COALESCE((SELECT CASE WHEN running THEN 'starting' ELSE 'sleeping' END FROM execution.managed_environments WHERE environment_id=execution.environments.id),'offline'),managed`
+const deviceColumns = `id,tenant_id,user_id,fleet_id,kind,name,os,working_directory,removal_epoch,grants,ceiling,status,version,journal_id,connection_epoch,last_seen,COALESCE(online_until>clock_timestamp(),false),COALESCE((SELECT last_error FROM execution.managed_environments WHERE environment_id=execution.environments.id),''),COALESCE((SELECT CASE WHEN running THEN 'starting' ELSE 'sleeping' END FROM execution.managed_environments WHERE environment_id=execution.environments.id),'offline'),managed,COALESCE(NULLIF((SELECT home_directory FROM execution.managed_environments WHERE environment_id=execution.environments.id),'')||'/thread-work',working_directory||'/.juex-thread-work')`
 
 func scanDevice(row pgx.Row) (execution.Device, error) {
 	var device execution.Device
-	err := row.Scan(&device.ID, &device.TenantID, &device.UserID, &device.FleetID, &device.Kind, &device.Name, &device.OS, &device.WorkingDirectory, &device.RemovalEpoch, &device.Grants, &device.Ceiling, &device.Status, &device.Version, &device.JournalID, &device.ConnectionEpoch, &device.LastSeen, &device.Online, &device.Error, &device.Availability, &device.Managed)
+	err := row.Scan(&device.ID, &device.TenantID, &device.UserID, &device.FleetID, &device.Kind, &device.Name, &device.OS, &device.WorkingDirectory, &device.RemovalEpoch, &device.Grants, &device.Ceiling, &device.Status, &device.Version, &device.JournalID, &device.ConnectionEpoch, &device.LastSeen, &device.Online, &device.Error, &device.Availability, &device.Managed, &device.WorkingFilesRoot)
 	if err != nil {
 		return device, classify(err)
 	}

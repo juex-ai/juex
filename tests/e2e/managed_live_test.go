@@ -69,7 +69,7 @@ func liveFixture(t *testing.T) (*executionFixture, liveModel) {
 	if err != nil {
 		t.Fatal("configure selected live model: ", err)
 	}
-	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: "Live validation", ModelID: configured.ID, Instructions: "Follow the user's test instructions precisely. Never claim a tool succeeded without its receipt."})
+	f.agent, err = f.directory.ConfigureAgent(ctx, f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: "Live validation", Instructions: "Follow the user's test instructions precisely. Never claim a tool succeeded without its receipt.", Configuration: &management.Configuration{Models: []string{configured.ID}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func validateLiveProviderTools(t *testing.T, minimal bool) {
 	if minimal {
 		policy := agentpolicy.Policy{Disabled: []agentpolicy.Capability{agentpolicy.Workers, agentpolicy.Collaboration, agentpolicy.MCP, agentpolicy.Observations, agentpolicy.Memory, agentpolicy.Calendar, agentpolicy.Hooks, agentpolicy.Extensions}}
 		var err error
-		f.agent, err = f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, ModelID: f.agent.ModelID, Instructions: f.agent.Instructions, Capabilities: &policy})
+		f.agent, err = f.directory.ConfigureAgent(context.Background(), f.actor, f.tenant, f.agent.ID, f.agent.Version, management.AgentConfig{Name: f.agent.Name, Instructions: f.agent.Instructions, Configuration: &management.Configuration{Models: f.agent.Configuration.Models, Modules: modulesForPolicy(&policy)}})
 		if err != nil {
 			t.Fatal(err)
 		}
