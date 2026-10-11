@@ -253,6 +253,11 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request, hostedOnly bool
 		_ = wsjson.Write(setup, connection, execprotocol.Envelope{Version: execprotocol.Version, Type: "error", Error: execprotocol.ErrorCode(err)})
 		return
 	}
+	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.service.Store.Touch(stop, device.ID, device.ConnectionEpoch, false)
+	}()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -272,7 +277,9 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request, hostedOnly bool
 	}()
 	grants, err := s.service.EffectiveGrants(setup, device)
 	if err != nil {
-		grants = map[string][]execprotocol.Capability{}
+		// Disconnect without changing the independent executor's grants.
+		// A transient authority failure does not revoke existing operations.
+		return
 	}
 	if err := wsjson.Write(setup, connection, execprotocol.Envelope{Version: execprotocol.Version, Type: "welcome", Grants: grants, Revoked: device.Status != "active"}); err != nil {
 		return

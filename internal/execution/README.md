@@ -213,6 +213,9 @@ The outbound connector negotiates the protocol over TLS and rejects incompatible
 versions. Reconnection preserves the engine. Platform grants can restrict the
 locally approved Agent/capability ceiling; they cannot expand it. Revocation
 stops related queued and running operations when received by the device.
+An unavailable authority check suspends dispatch and reconnects without changing
+device grants or cancelling existing operations. Only a confirmed denial or a
+changed authority epoch revokes work; recovery queries its original identity.
 
 Permanent Agent cleanup cancels owned operations and transfers depending on its
 Artifacts, including imports running in another Agent's environment. Their
