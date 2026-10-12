@@ -157,7 +157,10 @@ func (s *Store) LockManaged(ctx context.Context, id string, action func(executio
 		}
 		return tx.Commit(ctx)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE execution.managed_environments SET running=$2,last_error=$3,provisioned=provisioned OR $4 WHERE environment_id=$1`, id, result.Running, result.Error, result.Provisioned); err != nil {
+	// Reconciliation also polls stopped environments; unchanged results must not
+	// turn an idle deployment into a continuous source of tuple and WAL writes.
+	if _, err := tx.Exec(ctx, `UPDATE execution.managed_environments SET running=$2,last_error=$3,provisioned=provisioned OR $4
+ WHERE environment_id=$1 AND (running,last_error,provisioned) IS DISTINCT FROM ($2,$3,provisioned OR $4)`, id, result.Running, result.Error, result.Provisioned); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
