@@ -337,7 +337,7 @@ func TestManagementModelImportSerializesWithOrdinaryOperators(t *testing.T) {
 			defer func() { _ = gate.Rollback(context.Background()) }()
 			lock := `SELECT pg_advisory_xact_lock(hashtext('juex.management.models'))`
 			if kind == "policy" {
-				lock = `SELECT id FROM management.tenants WHERE id=$1 FOR UPDATE`
+				lock = tenantAuthorityLockSQL
 				_, err = gate.Exec(ctx, lock, tenant.ID)
 			} else {
 				_, err = gate.Exec(ctx, lock)

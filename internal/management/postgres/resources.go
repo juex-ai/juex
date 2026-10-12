@@ -16,7 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/management"
 )
 
-// authorizeFleet runs under the Tenant lock shared with membership writers.
+// authorizeFleet runs under the same Tenant lock as membership writers.
 // A retained Fleet remains readable to an admin; writes require an active owner.
 func authorizeFleet(ctx context.Context, tx pgx.Tx, actorID, tenantID, ownerID string, write bool) (management.Fleet, management.Membership, error) {
 	if err := lockTenant(ctx, tx, tenantID); err != nil {
