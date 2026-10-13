@@ -129,8 +129,11 @@ Deployment-managed Host and Hosted environments share one lifecycle. Each Agent
 has one durable environment identity, Workspace and Home. Listing environments
 does not start executors. Pending operations start them on demand; unfinished
 processes, MCP connections and unacknowledged results prevent idle reclamation.
-The default idle timeout is five minutes. Lifecycle locks fence dispatch during
-reclamation while new operations commit to the durable queue. Rejoining a Tenant preserves the
+The default idle timeout is five minutes. Reclamation commits a stop intent before
+stopping the executor; it fences dispatch across request timeouts and coordinator
+restarts while new operations commit to the durable queue. Confirming the stop
+invalidates the old connections before a new executor can consume that queue.
+Rejoining a Tenant preserves the
 owned Workspace but never reauthorizes operations from an earlier epoch.
 
 `juex-execution serve --host-config /absolute/operator-config.json` enables Host

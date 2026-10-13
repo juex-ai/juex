@@ -114,11 +114,11 @@ func (h *ManagedManager) RestoreHostFiles(ctx context.Context, scope Scope, requ
 	}
 	called := false
 	err = h.Store.LockManaged(ctx, resource.EnvironmentID, func(current ManagedResource) (ManagedResult, error) {
-		result := ManagedResult{Running: current.Running, Provisioned: current.Provisioned}
+		result := ManagedResult{Running: current.Running, Stopping: current.Stopping, Provisioned: current.Provisioned}
 		if err := h.matches(current); err != nil {
 			return result, err
 		}
-		if current.AgentID != scope.AgentID || current.TenantID != scope.TenantID || current.UserID != scope.UserID || current.Backend != "host" || current.Running || current.Online || current.Busy || current.Unconfirmed || current.Purging || current.Provisioned {
+		if current.AgentID != scope.AgentID || current.TenantID != scope.TenantID || current.UserID != scope.UserID || current.Backend != "host" || current.Running || current.Stopping || current.Online || current.Busy || current.Unconfirmed || current.Purging || current.Provisioned {
 			return result, execprotocol.ErrConflict
 		}
 		called = true

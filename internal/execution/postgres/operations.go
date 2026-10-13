@@ -186,6 +186,13 @@ func (s *Store) Dispatch(ctx context.Context, environment string, epoch int64, i
 	if err := lockManagedLifecycle(ctx, tx, environment); err != nil {
 		return execution.Operation{}, err
 	}
+	var stopping bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM execution.managed_environments WHERE environment_id=$1 AND stopping)`, environment).Scan(&stopping); err != nil {
+		return execution.Operation{}, err
+	}
+	if stopping {
+		return execution.Operation{}, execprotocol.ErrUnavailable
+	}
 	if err := fence(ctx, tx, environment, epoch); err != nil {
 		return execution.Operation{}, err
 	}
