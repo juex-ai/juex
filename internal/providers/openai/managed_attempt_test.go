@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -36,4 +37,42 @@ func TestManagedResponsesIdleDoesNotRetry(t *testing.T) {
 			t.Fatalf("requests=%d err=%v", requests.Load(), err)
 		}
 	})
+}
+
+func TestManagedCodexSSEDoesNotRetry(t *testing.T) {
+	for _, failure := range []string{"idle", "read", "http"} {
+		t.Run(failure, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var requests atomic.Int32
+				client := &http.Client{Transport: openaiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					requests.Add(1)
+					status := http.StatusOK
+					var body io.ReadCloser
+					switch failure {
+					case "idle":
+						reader, writer := io.Pipe()
+						go func() { <-r.Context().Done(); _ = writer.CloseWithError(r.Context().Err()) }()
+						body = reader
+					case "read":
+						body = openaiErrReadCloser{err: io.ErrUnexpectedEOF}
+					case "http":
+						status = http.StatusInternalServerError
+						body = io.NopCloser(strings.NewReader(`{"error":{"message":"unavailable"}}`))
+					}
+					return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body, Request: r}, nil
+				})}
+				p := NewOpenAICodexResponses(llm.ProviderProfile{ID: "fixture", Protocol: llm.ProtocolOpenAICodexResponses, BaseURL: "https://fixture.invalid", APIKey: "test-key", Model: "fixture"}, client)
+				_, err := llm.CompleteWithOptions(context.Background(), p, "", []llm.Message{llm.TextMessage(llm.RoleUser, "hello")}, nil, llm.CompleteOptions{SingleAttempt: true, StreamIdleTimeout: 20 * time.Millisecond})
+				if err == nil || requests.Load() != 1 {
+					t.Fatalf("requests=%d err=%v", requests.Load(), err)
+				}
+				if failure == "idle" {
+					openaiRequireStreamIdleTimeout(t, err)
+				}
+				if failure == "read" && !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
 }

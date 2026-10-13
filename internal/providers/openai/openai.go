@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -150,6 +151,11 @@ func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.Ch
 			return result, protocolsupport.NewStreamIdleTimeoutError("openai chat stream", idleTimeout, err)
 		}
 		return result, fmt.Errorf("openai chat stream: %w", err)
+	}
+	// A clean transport EOF (or [DONE]) does not finish a partial choice.
+	// Require the provider's terminal reason before Runtime can commit tools.
+	if len(acc.Choices) == 0 || acc.Choices[0].FinishReason == "" {
+		return result, fmt.Errorf("openai chat stream closed before finish_reason: %w", io.ErrUnexpectedEOF)
 	}
 	return result, conversionErr
 }
