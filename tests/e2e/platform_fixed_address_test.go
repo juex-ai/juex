@@ -59,14 +59,19 @@ func TestPlatformFixedEndpointsWithoutDNS(t *testing.T) {
 	}
 	for _, identity := range []string{"management", "memory"} {
 		t.Run(identity, func(t *testing.T) {
-			listener := platformListener(t)
+			// Reserve the exact test dial address. On Darwin a wildcard may
+			// share its port with an unrelated, more-specific HTTP listener.
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = listener.Close() })
 			service, err := serverrpc.NewManagement(listener, platformrpc.CredentialsAt(directory, identity), f.authority)
 			if err != nil {
 				t.Fatal(err)
 			}
 			runPlatformRPC(t, service)
-			_, port, _ := net.SplitHostPort(listener.Addr().String())
-			authority, err := runtimeclient.NewAuthority(net.JoinHostPort("127.0.0.1", port), platformrpc.CredentialsAt(directory, "runtime"), providers.NewProvider)
+			authority, err := runtimeclient.NewAuthority(listener.Addr().String(), platformrpc.CredentialsAt(directory, "runtime"), providers.NewProvider)
 			if err != nil {
 				t.Fatal(err)
 			}
