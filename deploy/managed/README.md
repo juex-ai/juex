@@ -146,7 +146,7 @@ recovery archive described below; restore requires the matching key.
 
 Ordinary process logs are in `logs/SERVICE/juex-*.log`: seven-day retention,
 10 MiB per file and seven files per service. Idle services expire logs hourly.
-Docker's duplicate process log storage is disabled. Business receipts, usage
+A 512 KiB buffer per service isolates ordinary log writes from service output, including the in-flight block. Slow or failed log storage can drop bytes; recovery and shutdown report the loss. Exit waits at most five seconds for buffered logs and preserves the service exit status. Docker's duplicate process log storage is disabled. Business receipts, usage
 and audit records have separate database retention contracts.
 
 ## Production HTTPS
