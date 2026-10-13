@@ -3,18 +3,57 @@ package openai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/juex-ai/juex/internal/foundation/llm"
+	providerprofile "github.com/juex-ai/juex/internal/providers/profile"
 	openaiclient "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
+
+func TestManagedCodexAutoDoesNotReplayAcceptedWebsocket(t *testing.T) {
+	var wsRequests, sseRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !openaiIsWebsocketRequest(r) {
+			sseRequests.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: %s\n\n", openaiCodexCompletedWebsocketEvent("replay", "unexpected replay"))
+			return
+		}
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		if _, _, err := conn.Read(ctx); err != nil {
+			t.Error(err)
+			return
+		}
+		wsRequests.Add(1)
+		if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial answer"}`)); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	p := NewOpenAICodexResponses(openaiTestProfile(t, providerprofile.Config{ID: "openai-codex", BaseURL: server.URL, APIKey: "fixture", Model: "m", Compat: llm.CompatOptions{CodexTransport: providerprofile.CodexTransportAuto}}), nil)
+	var preview string
+	_, err := llm.CompleteWithOptions(context.Background(), p, "", []llm.Message{llm.TextMessage(llm.RoleUser, "hello")}, nil, llm.CompleteOptions{SingleAttempt: true, OnDelta: func(delta llm.StreamDelta) { preview += delta.Text }})
+	if err == nil || wsRequests.Load() != 1 || sseRequests.Load() != 0 || preview != "partial answer" {
+		t.Fatalf("ws=%d sse=%d preview=%q err=%v", wsRequests.Load(), sseRequests.Load(), preview, err)
+	}
+}
 
 func TestManagedResponsesIdleDoesNotRetry(t *testing.T) {
 	// Advance virtual time only after the wire attempt is observed, so cold

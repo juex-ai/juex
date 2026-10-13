@@ -100,7 +100,7 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 	switch p.transport {
 	case providerprofile.CodexTransportAuto:
 		resp, err = p.ws.Complete(ctx, params, opts, codexResponsesHeaders(requestProfile, true))
-		if err != nil {
+		if err != nil && !opts.SingleAttempt {
 			resp, err = p.completeSSE(ctx, params, opts, requestOptions...)
 		}
 	case providerprofile.CodexTransportWebSocket, providerprofile.CodexTransportWebSocketCached:
