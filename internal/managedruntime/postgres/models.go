@@ -106,7 +106,7 @@ func modelOrigins(ctx context.Context, tx pgx.Tx, thread string, history []llm.M
 	if len(ids) == 0 {
 		return result, nil
 	}
-	rows, err := tx.Query(ctx, `SELECT a.id,a.request->'model' FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE a.id=ANY($1::uuid[]) AND t.thread_id=$2
+	rows, err := tx.Query(ctx, `SELECT a.id,a.request_model FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id WHERE a.id=ANY($1::uuid[]) AND t.thread_id=$2
 UNION ALL SELECT message_id,model FROM runtime.imported_message_models WHERE message_id=ANY($1::uuid[]) AND thread_id=$2`, ids, thread)
 	if err != nil {
 		return nil, err

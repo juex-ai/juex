@@ -177,6 +177,11 @@ with an explicit reason. The provider history projection strips incompatible
 reasoning signatures and IDs on model changes while preserving canonical messages
 and tool pairs. External unknown outcomes never trigger a model fallback.
 
+Historical model provenance uses a stored database projection of the immutable
+attempt request, so reconstructing context under the Agent fence does not read
+every full request body. Adding this projection rewrites the attempts table and
+indexes; upgrades must allow maintenance time and temporary disk space for them.
+
 Usage accounting commits with each attempt and its settlement. Independent owner
 records retain the actual model, actor and Main/Worker/application/compaction
 purpose without storing conversation content or credentials. Cached tokens are
