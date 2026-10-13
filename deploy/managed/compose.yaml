@@ -1,5 +1,12 @@
 name: juex
 
+# These endpoints already have deployment-owned addresses. Keep authority and
+# database connections available while Docker's embedded DNS is stalled.
+x-platform-hosts: &platform-hosts
+  management: '${JUEX_PLATFORM_PREFIX:-172.30.0}.10'
+  postgres: '${JUEX_PLATFORM_PREFIX:-172.30.0}.2'
+  execution: '${JUEX_PLATFORM_PREFIX:-172.30.0}.1'
+
 x-service: &service
   image: ${JUEX_PLATFORM_IMAGE:?Set the pinned platform image}
   runtime: runc
@@ -12,6 +19,7 @@ x-service: &service
   tmpfs: ['/tmp:size=64m,mode=1777']
   stop_grace_period: 60s
   logging: {driver: none}
+  extra_hosts: *platform-hosts
   depends_on:
     postgres: {condition: service_healthy}
 
@@ -43,7 +51,6 @@ services:
       - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
     networks:
       platform: {ipv4_address: '${JUEX_PLATFORM_PREFIX:-172.30.0}.10'}
-    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
 
   operator:
     <<: *service
@@ -55,7 +62,6 @@ services:
       - ${JUEX_DEPLOY_ROOT}/certificates/management:/run/juex/certificates:ro
       - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
     networks: [platform]
-    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
 
   runtime:
     <<: *service
@@ -66,7 +72,6 @@ services:
       - ${JUEX_DEPLOY_ROOT}/certificates/runtime:/run/juex/certificates:ro
       - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
     networks: [platform]
-    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
 
   memory:
     <<: *service
@@ -125,7 +130,7 @@ services:
       - ${JUEX_DEPLOY_ROOT}/tls:/run/juex/tls:ro
     networks:
       platform: {ipv4_address: '${JUEX_PLATFORM_PREFIX:-172.30.0}.11'}
-    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
+    extra_hosts: *platform-hosts
     depends_on: [management, execution]
     logging: {driver: none}
 

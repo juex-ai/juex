@@ -6,6 +6,7 @@ import tempfile
 import sys
 import subprocess
 import unittest
+import yaml
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -174,6 +175,7 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(ops.hosted, "mount_device", return_value="/dev/loop7"):
             ops.hosted.render(config, "password", "key")
             self.assertEqual((self.root / "compose.yaml").read_bytes(), (ops.hosted.HERE / "compose.yaml").read_bytes())
+            self.assert_platform_hosts(config)
             env = self.root / "secrets/management.env"
             for service in ("management", "execution"):
                 self.assertIn("JUEX_TRUSTED_PROXIES=172.30.0.11\n",
@@ -189,6 +191,7 @@ class RecoveryTests(unittest.TestCase):
             (self.root / "compose.yaml").write_text("old template")
             ops.hosted.render(config, "password", "key", preserve=True)
             self.assertEqual((self.root / "compose.yaml").read_bytes(), (ops.hosted.HERE / "compose.yaml").read_bytes())
+            self.assert_platform_hosts(config)
         self.assertIn("JUEX_SMTP_CONFIG=encrypted-smtp-settings\n", env.read_text())
         for service in ("management", "execution"):
             rendered = (self.root / "secrets" / (service + ".env")).read_text()
@@ -199,6 +202,18 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual((restored["memory_bytes"], restored["idle_seconds"]), (123456,900))
         self.assertEqual(restored["backend"]["control"], "10.0.2.101:8684")
         self.assertEqual(restored["backend"]["image"], "sha256:new-hosted")
+
+    def assert_platform_hosts(self, config):
+        # Resolve the deployment subnet while retaining YAML merge semantics.
+        template = (self.root / "compose.yaml").read_text()
+        document = yaml.safe_load(template.replace("${JUEX_PLATFORM_PREFIX:-172.30.0}", config["platform_prefix"]))
+        services = document["services"]
+        addresses = {name: services[name]["networks"]["platform"]["ipv4_address"]
+                     for name in ("management", "postgres")}
+        addresses["execution"] = document["networks"]["platform"]["ipam"]["config"][0]["gateway"]
+        for name in ("management", "operator", "runtime", "memory", "calendar", "gateway"):
+            with self.subTest(service=name, prefix=config["platform_prefix"]):
+                self.assertEqual(services[name]["extra_hosts"], addresses)
 
     def test_retention_counts_pairs_not_orphan_recovery_material(self):
         data,keys=self.root/"data",self.root/"keys"

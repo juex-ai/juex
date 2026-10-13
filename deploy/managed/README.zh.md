@@ -56,7 +56,11 @@ sudo python3 /opt/juex/operator.py --root /var/lib/juex-management init \
 sudo python3 /opt/juex/operator.py --root /var/lib/juex-management resume
 ```
 
-平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有公共网关端口绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
+平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有公共网关端口绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。
+平台容器将 Management、PostgreSQL 和 Execution 名称映射到部署拥有的固定地址，
+使这些连接无需 Docker DNS。Runtime、Memory 和 Calendar 的发现仍使用 Docker DNS；
+服务 mTLS 继续独立于地址验证服务身份。Guest DNS 仍使用显式的 Hosted 配置。
+直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
 
 ### 开机启动顺序
 

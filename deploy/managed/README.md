@@ -80,6 +80,11 @@ The default platform bridge is `172.30.0.0/24`; Hosted allocations use
 `172.31.0.0/16`. Override them if they overlap existing routes. Only the public gateway
 port binds publicly to `0.0.0.0`. Execution's host-network endpoints are fenced
 by the operator's firewall; database and other RPC ports are not published.
+Platform containers map Management, PostgreSQL and Execution names to their
+deployment-owned addresses, so those connections do not require Docker DNS.
+Runtime, Memory and Calendar discovery still uses Docker DNS; service mTLS
+continues to verify service identities independently of addresses. Guest DNS
+remains the explicit Hosted setting.
 Directly running `docker compose up` bypasses the operator's recovery checks:
 use `operator.py up/resume` for service startup.
 
