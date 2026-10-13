@@ -19,7 +19,10 @@ func (d *Directory) SnapshotPlan(ctx context.Context, scope management.ModelCall
 		return plan, err
 	}
 	defer rollback(tx)
-	authority, err := agentAuthority(ctx, tx, scope.ActorID, scope.TenantID, scope.AgentID, true)
+	if err := lockTenantShared(ctx, tx, scope.TenantID); err != nil {
+		return plan, err
+	}
+	authority, err := agentAuthorityLocked(ctx, tx, scope.ActorID, scope.TenantID, scope.AgentID, true)
 	if err != nil {
 		return plan, err
 	}
@@ -70,7 +73,10 @@ func (d *Directory) ResolveCandidate(ctx context.Context, scope management.Model
 		return connection, err
 	}
 	defer rollback(tx)
-	authority, err := agentAuthority(ctx, tx, scope.ActorID, scope.TenantID, scope.AgentID, true)
+	if err := lockTenantShared(ctx, tx, scope.TenantID); err != nil {
+		return connection, err
+	}
+	authority, err := agentAuthorityLocked(ctx, tx, scope.ActorID, scope.TenantID, scope.AgentID, true)
 	if err != nil {
 		return connection, err
 	}

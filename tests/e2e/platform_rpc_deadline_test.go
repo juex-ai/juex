@@ -59,6 +59,10 @@ func TestPlatformRPCDeadlineReleasesAuthorizationLockWait(t *testing.T) {
 	if _, err := blocker.Exec(ctx, tenantAuthorityLockSQL, f.tenant); err != nil {
 		t.Fatal(err)
 	}
+	var blockerPID int
+	if err := blocker.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
+		t.Fatal(err)
+	}
 	deadlineCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	result := make(chan error, 1)
@@ -68,7 +72,7 @@ func TestPlatformRPCDeadlineReleasesAuthorizationLockWait(t *testing.T) {
 	}()
 	var waitingPID int
 	runtimeEventually(t, func() bool {
-		return f.pool.QueryRow(ctx, `SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query=$1 LIMIT 1`, tenantAuthorityLockSQL).Scan(&waitingPID) == nil
+		return f.pool.QueryRow(ctx, `SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) LIMIT 1`, blockerPID).Scan(&waitingPID) == nil
 	})
 	select {
 	case err := <-result:

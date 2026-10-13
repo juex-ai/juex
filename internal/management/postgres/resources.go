@@ -22,6 +22,11 @@ func authorizeFleet(ctx context.Context, tx pgx.Tx, actorID, tenantID, ownerID s
 	if err := lockTenant(ctx, tx, tenantID); err != nil {
 		return management.Fleet{}, management.Membership{}, err
 	}
+	return authorizeFleetLocked(ctx, tx, actorID, tenantID, ownerID, write)
+}
+
+// authorizeFleetLocked requires a shared or exclusive Tenant authority fence.
+func authorizeFleetLocked(ctx context.Context, tx pgx.Tx, actorID, tenantID, ownerID string, write bool) (management.Fleet, management.Membership, error) {
 	actor, err := membership(ctx, tx, tenantID, actorID)
 	if err != nil {
 		return management.Fleet{}, management.Membership{}, err
@@ -333,7 +338,10 @@ func (d *Directory) agentAuthority(ctx context.Context, actorID, tenantID, agent
 		return management.AgentAuthority{}, err
 	}
 	defer rollback(tx)
-	result, err := agentAuthority(ctx, tx, actorID, tenantID, agentID, execute)
+	if err := lockTenantShared(ctx, tx, tenantID); err != nil {
+		return management.AgentAuthority{}, err
+	}
+	result, err := agentAuthorityLocked(ctx, tx, actorID, tenantID, agentID, execute)
 	if err != nil {
 		return result, err
 	}
@@ -341,11 +349,19 @@ func (d *Directory) agentAuthority(ctx context.Context, actorID, tenantID, agent
 }
 
 func agentAuthority(ctx context.Context, tx pgx.Tx, actorID, tenantID, agentID string, execute bool) (management.AgentAuthority, error) {
+	if err := lockTenant(ctx, tx, tenantID); err != nil {
+		return management.AgentAuthority{}, err
+	}
+	return agentAuthorityLocked(ctx, tx, actorID, tenantID, agentID, execute)
+}
+
+// agentAuthorityLocked requires a shared or exclusive Tenant authority fence.
+func agentAuthorityLocked(ctx context.Context, tx pgx.Tx, actorID, tenantID, agentID string, execute bool) (management.AgentAuthority, error) {
 	owner, err := agentOwner(ctx, tx, tenantID, agentID)
 	if err != nil {
 		return management.AgentAuthority{}, err
 	}
-	fleet, member, err := authorizeFleet(ctx, tx, actorID, tenantID, owner, execute)
+	fleet, member, err := authorizeFleetLocked(ctx, tx, actorID, tenantID, owner, execute)
 	if err != nil {
 		return management.AgentAuthority{}, err
 	}

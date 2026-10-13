@@ -313,12 +313,23 @@ func (d *Directory) Fleet(ctx context.Context, actorID, tenantID, ownerID string
 }
 
 func lockTenant(ctx context.Context, tx pgx.Tx, id string) error {
-	// Authority reads share the mutation fence without dirtying a Tenant tuple
-	// and waiting for WAL durability. PostgreSQL's UUID spelling is canonical,
-	// so equivalent input spellings cannot acquire different locks.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('juex.management.tenant:'||$1::uuid::text,0))`, id); err != nil {
 		return classify(err)
 	}
+	return checkTenant(ctx, tx, id)
+}
+
+func lockTenantShared(ctx context.Context, tx pgx.Tx, id string) error {
+	// Independent authority readers must not serialize behind a slow reader.
+	// They still fence membership/configuration writers on the same canonical
+	// UUID key; a transaction that will mutate authority must lock exclusively.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('juex.management.tenant:'||$1::uuid::text,0))`, id); err != nil {
+		return classify(err)
+	}
+	return checkTenant(ctx, tx, id)
+}
+
+func checkTenant(ctx context.Context, tx pgx.Tx, id string) error {
 	var locked string
 	return classify(tx.QueryRow(ctx, `SELECT id FROM management.tenants WHERE id=$1`, id).Scan(&locked))
 }
