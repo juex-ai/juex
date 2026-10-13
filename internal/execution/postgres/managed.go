@@ -40,7 +40,7 @@ func (s *Store) EnsureManaged(ctx context.Context, scope execution.Scope, candid
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.managed_environments.allocate'))`); err != nil {
 		return execution.ManagedResource{}, err
 	}
-	h, err := scanManaged(tx.QueryRow(ctx, `SELECT `+managedColumns+` FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE h.agent_id=$1 FOR UPDATE OF e`, scope.AgentID))
+	h, err := scanManaged(tx.QueryRow(ctx, `SELECT `+managedColumns+` FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE h.agent_id=$1`, scope.AgentID))
 	if err == nil {
 		if selected != "" && selected != h.EnvironmentID {
 			return h, execprotocol.ErrConflict
@@ -53,7 +53,9 @@ func (s *Store) EnsureManaged(ctx context.Context, scope execution.Scope, candid
 		}
 		// Rejoining restores the owned workspace, never an old external-device
 		// grant. Existing operations still carry their original authority epoch.
-		if _, err := tx.Exec(ctx, `UPDATE execution.environments SET removal_epoch=$2 WHERE id=$1 AND fleet_id=$3 AND status='active'`, h.EnvironmentID, scope.RemovalEpoch, scope.FleetID); err != nil {
+		// A delayed list must not roll back a newer epoch or lock/write the row
+		// when authority has not changed.
+		if _, err := tx.Exec(ctx, `UPDATE execution.environments SET removal_epoch=$2 WHERE id=$1 AND fleet_id=$3 AND status='active' AND removal_epoch<$2`, h.EnvironmentID, scope.RemovalEpoch, scope.FleetID); err != nil {
 			return h, err
 		}
 		return h, tx.Commit(ctx)

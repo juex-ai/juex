@@ -202,6 +202,10 @@ func TestHostedRejoinRetainsWorkspaceButFencesOldWork(t *testing.T) {
 	if _, err := f.execution.Submit(ctx, member.ID, f.tenant, environment.ID, request, 0); err != nil {
 		t.Fatal(err)
 	}
+	staleScope, err := f.execution.Authority.Agent(ctx, member.ID, f.tenant, agent.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.directory.ChangeMember(ctx, f.actor, f.tenant, member.ID, management.Member, management.Removed); err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +235,26 @@ func TestHostedRejoinRetainsWorkspaceButFencesOldWork(t *testing.T) {
 	request.ID = "after-rejoin"
 	if _, err := f.execution.Submit(ctx, member.ID, f.tenant, environment.ID, request, 0); err != nil {
 		t.Fatal(err)
+	}
+	// A list may have acquired its authority before removal and reached the
+	// execution service only after the owner rejoined.
+	if err := f.execution.Managed.Ensure(ctx, staleScope); err != nil {
+		t.Fatal(err)
+	}
+	current, err := f.executionStore.Device(ctx, environment.ID)
+	if err != nil || current.RemovalEpoch <= staleScope.RemovalEpoch || current.RemovalEpoch != device.RemovalEpoch {
+		t.Fatal("delayed listing rolled back rejoined authority", current.RemovalEpoch, device.RemovalEpoch, err)
+	}
+	grants, err = f.execution.EffectiveGrants(ctx, current)
+	if err != nil || len(grants[agent.ID]) == 0 {
+		t.Fatal("delayed listing revoked current authority", grants, err)
+	}
+	if err := f.execution.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	op, err = f.executionStore.Operation(ctx, environment.ID, request.ID, 0, 100)
+	if err != nil || op.State != "waiting" {
+		t.Fatal("delayed listing cancelled rejoined work", op, err)
 	}
 }
 
