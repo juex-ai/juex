@@ -23,8 +23,10 @@ func TestApplicationModelBudgetMigrationKeepsReceiptsAndAttempts(t *testing.T) {
 			store := runtimepg.New(pool)
 			job := applicationJob()
 			before := seedPreApplicationBudgetJob(t, pool, scope, job, state)
+			// Compare original receipts independently of the generated projection.
+			const history = `SELECT COALESCE(jsonb_agg(to_jsonb(a)-'request_model' ORDER BY a.id),'[]'::jsonb) FROM runtime.attempts a`
 			var historyBefore []byte
-			if err := pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.id),'[]'::jsonb) FROM runtime.attempts a`).Scan(&historyBefore); err != nil {
+			if err := pool.QueryRow(ctx, history).Scan(&historyBefore); err != nil {
 				t.Fatal(err)
 			}
 			for range 2 {
@@ -33,7 +35,7 @@ func TestApplicationModelBudgetMigrationKeepsReceiptsAndAttempts(t *testing.T) {
 				}
 			}
 			var historyAfter, encoded []byte
-			if err := pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.id),'[]'::jsonb) FROM runtime.attempts a`).Scan(&historyAfter); err != nil || !bytes.Equal(historyBefore, historyAfter) {
+			if err := pool.QueryRow(ctx, history).Scan(&historyAfter); err != nil || !bytes.Equal(historyBefore, historyAfter) {
 				t.Fatal("migration changed attempt history", err)
 			}
 			if err := pool.QueryRow(ctx, `SELECT request FROM runtime.application_jobs WHERE job_id=$1`, job.ID).Scan(&encoded); err != nil {
