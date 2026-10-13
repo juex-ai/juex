@@ -38,6 +38,19 @@ class SelectionTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     selection.validate_config(cfg)
 
+    def test_private_headers_are_validated_and_hashed_in_identity(self):
+        model = dict(MODEL, headers={'X-Account': 'private-header', 'X-Thread': '${juex_thread_id}'})
+        cfg = {'models': [model]}
+        self.assertEqual(selection.validate_config(cfg), cfg)
+        rotated = copy.deepcopy(cfg)
+        rotated['models'][0]['headers']['X-Account'] = 'rotated-header'
+        self.assertNotEqual(selection.redacted_config_hash([], cfg), selection.redacted_config_hash([], rotated))
+        _, evidence = selection.select(cfg, kind='provider-smoke', config_path='/tmp/models.json', seed='seed')
+        self.assertNotIn('private-header', json.dumps(evidence.as_dict()))
+        for headers in (None, [], {'X-Account': 1}, {'': 'value'}, {'X-Account': ''}):
+            with self.subTest(headers=headers), self.assertRaises(ValueError):
+                selection.validate_config({'models': [dict(MODEL, headers=headers)]})
+
     def test_output_cap_and_reserve_are_independent(self):
         for model in (dict(MODEL, max_output=0, output_reserve=4096), dict(MODEL, output_reserve=8192)):
             self.assertEqual(selection.validate_config({'models': [model]}), {'models': [model]})
@@ -50,11 +63,12 @@ class SelectionTest(unittest.TestCase):
 
 
 class LiveEvidenceTest(unittest.TestCase):
-    def run_case(self, stdout, returncode=0):
+    def run_case(self, stdout, returncode=0, model=None):
+        model = model or MODEL
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             config = root / 'config.json'
-            config.write_text(json.dumps({'models': [MODEL]}))
+            config.write_text(json.dumps({'models': [model]}))
             report = root / 'report'
             args = helper.live_parser().parse_args(['--config', str(config), '--report-dir', str(report)])
             selected_files = []
@@ -64,7 +78,7 @@ class LiveEvidenceTest(unittest.TestCase):
                 model_file = pathlib.Path(kwargs['env']['JUEX_LIVE_MODEL_FILE'])
                 selected_files.append(model_file)
                 self.assertEqual(model_file.stat().st_mode & 0o777, 0o600)
-                self.assertEqual(json.loads(model_file.read_text()), MODEL)
+                self.assertEqual(json.loads(model_file.read_text()), model)
                 return subprocess.CompletedProcess(command, returncode, stdout)
 
             with patch.dict(os.environ, {'JUEX_TEST_POSTGRES_URL': 'postgres://private@test/db'}), patch.object(helper.subprocess, 'run', side_effect=execute), contextlib.redirect_stdout(io.StringIO()):
@@ -73,6 +87,8 @@ class LiveEvidenceTest(unittest.TestCase):
             self.assertTrue(all(not path.exists() for path in selected_files))
             log = (report / '1.log').read_text()
             self.assertNotIn(MODEL['api_key'], log)
+            for value in model.get('headers', {}).values():
+                self.assertNotIn(value, log)
             summary = json.loads((report / 'summary.json').read_text())
             return code, summary
 
@@ -89,6 +105,12 @@ class LiveEvidenceTest(unittest.TestCase):
         code, summary = self.run_case('MANAGED_LIVE_EVIDENCE tools ' + MODEL['api_key'])
         self.assertEqual(code, 0)
         self.assertFalse(summary['blocks_merge'])
+
+    def test_header_credentials_reach_private_fixture_but_not_failure_logs(self):
+        model = dict(MODEL, headers={'X-Account': 'private-header'})
+        code, summary = self.run_case('provider rejected private-header ' + MODEL['api_key'], 1, model)
+        self.assertEqual(code, 1)
+        self.assertNotIn('private-header', json.dumps(summary))
 
     def test_missing_configuration_does_not_run(self):
         with tempfile.TemporaryDirectory() as report, patch.dict(os.environ, {}, clear=True), patch.object(helper.subprocess, 'run') as execute, contextlib.redirect_stdout(io.StringIO()):

@@ -37,7 +37,9 @@ def validate_config(cfg):
     seen=set()
     allowed={'provider','name','protocol','endpoint','api_key','context_window','max_output'}
     for model in cfg['models']:
-        if not isinstance(model,dict) or not allowed<=set(model) or set(model)-allowed-{'output_reserve'}:raise ValueError('each test model requires provider, name, protocol, endpoint, api_key, context_window and max_output; output_reserve is optional for a positive cap')
+        if not isinstance(model,dict) or not allowed<=set(model) or set(model)-allowed-{'output_reserve','headers'}:raise ValueError('each test model requires provider, name, protocol, endpoint, api_key, context_window and max_output; output_reserve and headers are optional')
+        headers=model.get('headers',{})
+        if not isinstance(headers,dict) or any(not isinstance(k,str) or not k.strip() or not isinstance(v,str) or not v.strip() for k,v in headers.items()):raise ValueError('model headers must map nonempty names to nonempty strings')
         if any(not isinstance(model[k],str) or not model[k].strip() for k in ('provider','name','protocol','endpoint','api_key')):raise ValueError('invalid model text field')
         if model['protocol'] not in ('openai/chat','openai/responses','anthropic/messages'):raise ValueError('unsupported test model protocol')
         context,cap,reserve=model['context_window'],model['max_output'],model.get('output_reserve',model['max_output'])

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,14 +22,15 @@ import (
 )
 
 type liveModel struct {
-	Provider      string       `json:"provider"`
-	Name          string       `json:"name"`
-	Protocol      llm.Protocol `json:"protocol"`
-	Endpoint      string       `json:"endpoint"`
-	APIKey        string       `json:"api_key"`
-	ContextWindow int          `json:"context_window"`
-	MaxOutput     int          `json:"max_output"`
-	OutputReserve int          `json:"output_reserve"`
+	Provider      string            `json:"provider"`
+	Name          string            `json:"name"`
+	Protocol      llm.Protocol      `json:"protocol"`
+	Endpoint      string            `json:"endpoint"`
+	APIKey        string            `json:"api_key"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	ContextWindow int               `json:"context_window"`
+	MaxOutput     int               `json:"max_output"`
+	OutputReserve int               `json:"output_reserve"`
 }
 
 func liveFixture(t *testing.T) (*executionFixture, liveModel) {
@@ -65,7 +67,7 @@ func liveFixture(t *testing.T) (*executionFixture, liveModel) {
 		http.Error(w, "unexpected fixture", 500)
 	})
 	ctx := context.Background()
-	configured, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: model.Provider, Name: model.Name, Protocol: model.Protocol, Endpoint: model.Endpoint, APIKey: model.APIKey, ContextWindow: model.ContextWindow, MaxOutput: model.MaxOutput, OutputReserve: model.OutputReserve, Enabled: true})
+	configured, err := f.directory.ConfigureModel(ctx, management.ModelConfiguration{Provider: model.Provider, Name: model.Name, Protocol: model.Protocol, Endpoint: model.Endpoint, APIKey: model.APIKey, ContextWindow: model.ContextWindow, MaxOutput: model.MaxOutput, OutputReserve: model.OutputReserve, Enabled: true, Options: management.ModelOptions{Headers: model.Headers}})
 	if err != nil {
 		t.Fatal("configure selected live model: ", err)
 	}
@@ -229,4 +231,46 @@ func TestManagedLiveConversation(t *testing.T) {
 		t.Fatal("live assistant response missing from public timeline")
 	}
 	liveEvidence(t, f, model, "public-api")
+}
+
+// This fixture-boundary regression is deterministic; only the separate live
+// tests above may produce MANAGED_LIVE_EVIDENCE for an external provider.
+func TestManagedLiveFixtureHeaders(t *testing.T) {
+	observed := make(chan http.Header, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed <- r.Header.Clone()
+		streamManagedReply(w, "fixture headers accepted")
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "model.json")
+	raw, err := json.Marshal(map[string]any{
+		"provider": "fixture", "name": "fixture-model", "protocol": "openai/chat",
+		"endpoint": server.URL, "api_key": "private-fixture-key", "context_window": 32768, "max_output": 2048,
+		"headers": map[string]string{"User-Agent": "juex/fixture", "X-Account": "private-header", "X-Session": "${juex_agent_id}-${juex_thread_id}-${juex_generation_id}"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JUEX_LIVE_MODEL_FILE", path)
+	f, _ := liveFixture(t)
+	stop := f.run(t)
+	defer stop()
+	input := f.submit(t, "fixture-headers", f.main.ID, "Reply without tools.")
+	awaitLiveInput(t, f, input)
+	select {
+	case headers := <-observed:
+		wantSession := fmt.Sprintf("%s-%s-%d", f.agent.ID, f.main.ID, f.main.Generation)
+		if headers.Get("User-Agent") != "juex/fixture" || headers.Get("X-Account") != "private-header" || headers.Get("X-Session") != wantSession {
+			t.Fatal("selected-model headers or runtime identity did not reach provider")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fixture provider received no request")
+	}
+	timeline, err := json.Marshal(f.timeline(t, f.main.ID))
+	if err != nil || strings.Contains(string(timeline), "private-header") {
+		t.Fatal("private header entered public timeline", err)
+	}
 }
