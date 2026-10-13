@@ -42,6 +42,9 @@ Runtime 可在接纳到达 Execution 前持久取消已准备的请求。取消�
 原生设备主动建立加密连接。配对先在 Dashboard 绑定所属用户选择的 Agent／能力，再在本机核对 Tenant 和账号并确认。
 仅 Web 批准不会激活设备凭据。设备凭据独立于人的登录会话；每个 Tenant/User 绑定使用独立私有状态目录。
 
+设备在线状态使用可续期租约，与操作授权分开。持久心跳合并写入，但每次交互仍检查连接代际。
+`last_seen` 记录最近持久化的心跳，而非每次派发轮询；断连立即清除在线状态。
+
 `juex-execution serve --blob-root /var/lib/juex/execution/blobs` 运行平台服务。`juex-executor --state /absolute/private/directory pair --server https://platform.example` 绑定 Linux/macOS 设备，`run` 维持前台连接。
 HTTPS 反向代理将 `/device/` 路由到 Execution，将 Dashboard/API 路由到 Management。
 

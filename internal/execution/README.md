@@ -73,6 +73,11 @@ confirmation showing Tenant and account. Browser approval alone creates no
 device credential. The device holds the credential independently of human
 sessions. Each Tenant/User enrollment has its own private state directory.
 
+Device presence is a renewable lease, separate from operation authorization.
+Durable heartbeats are coalesced while each exchange retains connection-epoch
+fencing. `last_seen` records the last persisted heartbeat, not each dispatch poll;
+disconnect clears presence immediately.
+
 `juex-execution serve --blob-root /var/lib/juex/execution/blobs` runs the platform service. `juex-executor --state
 /absolute/private/directory pair --server https://platform.example` enrolls a
 Linux/macOS device; `run` maintains its foreground connection. An HTTPS reverse

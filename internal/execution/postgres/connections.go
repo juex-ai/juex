@@ -45,12 +45,28 @@ func (s *Store) Connect(ctx context.Context, id, journal string) (execution.Devi
 }
 
 func (s *Store) Touch(ctx context.Context, id string, epoch int64, online bool) error {
-	result, err := s.exec(ctx, `UPDATE execution.environments SET online_until=CASE WHEN $3 THEN clock_timestamp()+interval '30 seconds' ELSE NULL END,last_seen=clock_timestamp() WHERE id=$1 AND connection_epoch=$2`, id, epoch, online)
+	tx, err := s.begin(ctx)
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() != 1 {
-		return execprotocol.ErrConflict
+	defer rollback(tx)
+	// Dispatch polls much faster than the presence lease. Renew with time to
+	// spare, without making each idle poll rewrite and sync the environment.
+	result, err := tx.Exec(ctx, `UPDATE execution.environments SET online_until=CASE WHEN $3 THEN clock_timestamp()+interval '30 seconds' ELSE NULL END,last_seen=clock_timestamp()
+WHERE id=$1 AND connection_epoch=$2 AND (NOT $3 OR online_until IS NULL OR online_until<=clock_timestamp()+interval '20 seconds')`, id, epoch, online)
+	if err != nil {
+		return err
 	}
-	return nil
+	if result.RowsAffected() == 0 {
+		// Use a new Read Committed statement snapshot: an UPDATE that waited
+		// for a replacement connection must not validate its previous epoch.
+		var current bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM execution.environments WHERE id=$1 AND connection_epoch=$2)`, id, epoch).Scan(&current); err != nil {
+			return err
+		}
+		if !current {
+			return execprotocol.ErrConflict
+		}
+	}
+	return tx.Commit(ctx)
 }
