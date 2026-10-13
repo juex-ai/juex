@@ -21,6 +21,7 @@ import (
 )
 
 func TestTerminalPreservesTailWhileOutputPersistenceIsBlocked(t *testing.T) {
+	started := time.Now()
 	work := t.TempDir()
 	for _, name := range []string{"start", "finish"} {
 		if err := unix.Mkfifo(filepath.Join(work, name), 0600); err != nil {
@@ -37,7 +38,7 @@ func TestTerminalPreservesTailWhileOutputPersistenceIsBlocked(t *testing.T) {
 			_ = engine.Close()
 		}
 	}()
-	arguments := CommandArguments{TTY: true, Command: `read -r start < start; printf 'first\n'; : > written; read -r finish < finish; printf 'tail\n'; printf once >> calls`}
+	arguments := CommandArguments{TTY: true, Command: `read -r start < start; printf X; : > written; read -r finish < finish; printf 'tail\n'; printf once >> calls`}
 	if runtime.GOOS == "linux" {
 		// Linux reaps the child before the blocked write finishes. Its later
 		// deadline must not turn a successful exit into cancellation.
@@ -49,6 +50,21 @@ func TestTerminalPreservesTailWhileOutputPersistenceIsBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	var pid, fd int
+	phase := "process start"
+	var pollCount int
+	var pollEvents int16
+	var pollErr error
+	defer func() {
+		if t.Failed() {
+			_, writtenErr := os.Stat(filepath.Join(work, "written"))
+			_, callsErr := os.Stat(filepath.Join(work, "calls"))
+			var pidErr error
+			if pid != 0 {
+				pidErr = syscall.Kill(pid, 0)
+			}
+			t.Logf("phase=%s elapsed=%s timeout_ms=%d pid=%d pid_error=%v written_error=%v calls_error=%v poll_count=%d revents=%#x poll_error=%v", phase, time.Since(started), arguments.TimeoutMS, pid, pidErr, writtenErr, callsErr, pollCount, pollEvents, pollErr)
+		}
+	}()
 	terminalEventually(t, func() bool {
 		engine.mu.Lock()
 		defer engine.mu.Unlock()
@@ -66,38 +82,47 @@ func TestTerminalPreservesTailWhileOutputPersistenceIsBlocked(t *testing.T) {
 		}
 		return true
 	})
-	// Hold the same lock as journal/fsync writes. The first chunk must leave
-	// the PTY before the shell may print its tail and exit.
+	// Hold the same lock as journal/fsync writes. Use a single byte for the
+	// handshake: PTY reads may split any longer prefix, leaving unread bytes
+	// while the reader is blocked on this lock.
 	func() {
 		engine.mu.Lock()
 		defer engine.mu.Unlock()
+		phase = "start FIFO"
 		terminalReleaseFIFO(t, filepath.Join(work, "start"))
+		phase = "first output read"
 		terminalEventually(t, func() bool {
 			if _, err := os.Stat(filepath.Join(work, "written")); err != nil {
 				return false
 			}
 			poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-			n, err := unix.Poll(poll, 0)
-			return err == nil && n == 0
+			pollCount, pollErr = unix.Poll(poll, 0)
+			pollEvents = poll[0].Revents
+			return pollErr == nil && pollCount == 0
 		})
+		phase = "finish FIFO"
 		terminalReleaseFIFO(t, filepath.Join(work, "finish"))
+		phase = "command completion marker"
 		terminalEventually(t, func() bool {
 			_, err := os.Stat(filepath.Join(work, "calls"))
 			return err == nil
 		})
 		if runtime.GOOS == "linux" {
+			phase = "process reaped"
 			terminalEventually(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) })
 		}
 		// Exceed the former close-after-exit window while persistence remains
 		// blocked; this does not depend on the machine's disk speed.
+		phase = "blocked persistence"
 		time.Sleep(1500 * time.Millisecond)
 	}()
 	terminalEventually(t, func() bool {
+		phase = "durable terminal receipt"
 		snapshot, err := engine.Snapshot("agent", request.ID, 0, 4096)
 		return err == nil && snapshot.State.Terminal()
 	})
 	snapshot, err := engine.Snapshot("agent", request.ID, 0, 4096)
-	if err != nil || snapshot.State != execprotocol.Completed || snapshot.ExitCode == nil || *snapshot.ExitCode != 0 || snapshot.Truncated || snapshot.Text() != "first\r\ntail\r\n" {
+	if err != nil || snapshot.State != execprotocol.Completed || snapshot.ExitCode == nil || *snapshot.ExitCode != 0 || snapshot.Truncated || snapshot.Text() != "Xtail\r\n" {
 		t.Fatalf("PTY lost output while persistence was blocked: state=%s output=%q error=%v", snapshot.State, snapshot.Text(), err)
 	}
 	if err := engine.Close(); err != nil {
