@@ -54,10 +54,13 @@ func (d *Directory) FleetOverview(ctx context.Context, actorID, tenantID, ownerI
 		return management.FleetOverview{}, err
 	}
 	defer rollback(tx)
-	fleet, member, err := authorizeFleet(ctx, tx, actorID, tenantID, ownerID, false)
+	if err := lockTenantShared(ctx, tx, tenantID); err != nil {
+		return management.FleetOverview{}, err
+	}
+	fleet, member, err := authorizeFleetLocked(ctx, tx, actorID, tenantID, ownerID, false)
 	purged := false
 	if errors.Is(err, management.ErrDenied) {
-		member, err = purgeOwner(ctx, tx, actorID, tenantID, ownerID)
+		member, err = purgeOwnerLocked(ctx, tx, actorID, tenantID, ownerID)
 		if err == nil && member.Status == management.Removed {
 			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM management.purges WHERE tenant_id=$1 AND user_id=$2 AND whole_fleet AND state='completed') AND NOT EXISTS(SELECT 1 FROM management.fleets WHERE tenant_id=$1 AND user_id=$2)`, tenantID, ownerID).Scan(&purged)
 			fleet = management.Fleet{TenantID: tenantID, UserID: ownerID}

@@ -42,6 +42,12 @@ func TestManagementOwnerAuthorityWithoutWrites(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 	directory := managementpg.NewDirectory(pool, managementpg.Config{})
+	t.Run("fleet overview", func(t *testing.T) {
+		value, err := directory.FleetOverview(ctx, f.actor, f.tenant, f.actor)
+		if err != nil || value.Owner.ID != f.actor || len(value.Agents) != 1 {
+			t.Fatal("owner Fleet overview needs a write transaction", value, err)
+		}
+	})
 	for _, execute := range []bool{false, true} {
 		name := "read"
 		if execute {
@@ -185,23 +191,26 @@ func managementAuthorityHTTP(t *testing.T, f *managedRuntimeFixture, directory *
 	return origin
 }
 
-type modelResolutionPauseKey struct{}
+type authorityReadPauseKey struct{}
 
-type modelResolutionPause struct {
+type authorityReadPause struct {
+	reader  string
 	paused  chan uint32
 	release chan struct{}
 	once    sync.Once
 }
 
-func (p *modelResolutionPause) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.HasPrefix(data.SQL, "SELECT m.id,m.provider") && strings.Contains(data.SQL, "m.key_cipher,m.options_cipher") {
-		return context.WithValue(ctx, modelResolutionPauseKey{}, true)
+func (p *authorityReadPause) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	model := p.reader == "model" && strings.HasPrefix(data.SQL, "SELECT m.id,m.provider") && strings.Contains(data.SQL, "m.key_cipher,m.options_cipher")
+	overview := p.reader == "overview" && strings.HasPrefix(data.SQL, "SELECT configuration,version FROM management.fleet_settings")
+	if model || overview {
+		return context.WithValue(ctx, authorityReadPauseKey{}, true)
 	}
 	return ctx
 }
 
-func (p *modelResolutionPause) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryEndData) {
-	if ctx.Value(modelResolutionPauseKey{}) != true || data.Err != nil {
+func (p *authorityReadPause) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryEndData) {
+	if ctx.Value(authorityReadPauseKey{}) != true || data.Err != nil {
 		return
 	}
 	p.once.Do(func() {
@@ -213,13 +222,15 @@ func (p *modelResolutionPause) TraceQueryEnd(ctx context.Context, conn *pgx.Conn
 	})
 }
 
-func TestManagementModelResolutionDoesNotSerializeAuthorityReaders(t *testing.T) {
-	for _, mutation := range []string{"membership", "configuration", "agent management"} {
-		t.Run(mutation, func(t *testing.T) { managementModelAuthorityFence(t, mutation) })
+func TestManagementReadsShareAuthorityFence(t *testing.T) {
+	for _, reader := range []string{"model", "overview"} {
+		for _, mutation := range []string{"membership", "configuration", "agent management"} {
+			t.Run(reader+"/"+mutation, func(t *testing.T) { managementReadAuthorityFence(t, reader, mutation) })
+		}
 	}
 }
 
-func managementModelAuthorityFence(t *testing.T, mutation string) {
+func managementReadAuthorityFence(t *testing.T, reader, mutation string) {
 	t.Helper()
 	f := managedRuntimeHTTP(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -258,7 +269,7 @@ func managementModelAuthorityFence(t *testing.T, mutation string) {
 	}
 	origin := managementAuthorityHTTP(t, f, f.directory)
 	config := f.pool.Config().Copy()
-	pause := &modelResolutionPause{paused: make(chan uint32, 1), release: make(chan struct{})}
+	pause := &authorityReadPause{reader: reader, paused: make(chan uint32, 1), release: make(chan struct{})}
 	config.ConnConfig.Tracer = pause
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -275,9 +286,19 @@ func managementModelAuthorityFence(t *testing.T, mutation string) {
 	defer release()
 	resolved := make(chan error, 1)
 	go func() {
-		connection, err := directory.ResolveCandidate(ctx, scope, plan.Candidates[0])
-		if err == nil && connection.APIKey != "test-key" {
-			err = errors.New("model resolution lost its original credential")
+		var err error
+		if reader == "overview" {
+			var value management.FleetOverview
+			value, err = directory.FleetOverview(ctx, f.actor, f.tenant, f.actor)
+			if err == nil && (value.Owner.ID != f.actor || len(value.Agents) != 2) {
+				err = errors.New("Fleet overview lost its original owner or Agents")
+			}
+		} else {
+			connection, resolveErr := directory.ResolveCandidate(ctx, scope, plan.Candidates[0])
+			err = resolveErr
+			if err == nil && connection.APIKey != "test-key" {
+				err = errors.New("model resolution lost its original credential")
+			}
 		}
 		resolved <- err
 	}()
@@ -285,12 +306,12 @@ func managementModelAuthorityFence(t *testing.T, mutation string) {
 	select {
 	case readerPID = <-pause.paused:
 	case err := <-resolved:
-		t.Fatal("model read did not reach transaction pause", err)
+		t.Fatal("authority read did not reach transaction pause", err)
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
 	if mutation == "membership" {
-		// Stop the real ResolveCandidate after its model SELECT, before Commit.
+		// Stop the real reader after its SELECT, before Commit.
 		// A slow reader must not serialize other readers, including another Agent's
 		// public Timeline through both authenticated RPC boundaries.
 		t.Run("HTTP Timeline for another Agent", func(t *testing.T) {
@@ -302,6 +323,10 @@ func managementModelAuthorityFence(t *testing.T, mutation string) {
 			}
 		})
 		checks := map[string]func(context.Context) error{
+			"Fleet overview": func(ctx context.Context) error {
+				_, err := f.directory.FleetOverview(ctx, f.actor, f.tenant, f.actor)
+				return err
+			},
 			"Agent read": func(ctx context.Context) error {
 				_, err := f.directory.ReadAgent(ctx, f.actor, strings.ToUpper(f.tenant), f.agent.ID)
 				return err
@@ -329,7 +354,7 @@ func managementModelAuthorityFence(t *testing.T, mutation string) {
 				readCtx, readCancel := context.WithTimeout(ctx, time.Second)
 				defer readCancel()
 				if err := check(readCtx); err != nil {
-					t.Fatal("independent authority reader waited for model reader", err)
+					t.Fatal("independent authority reader waited for another reader", err)
 				}
 			})
 		}
@@ -355,7 +380,12 @@ func managementModelAuthorityFence(t *testing.T, mutation string) {
 	})
 	afterWrite := make(chan error, 1)
 	go func() {
-		_, err := f.directory.ResolveCandidate(ctx, scope, plan.Candidates[0])
+		var err error
+		if reader == "overview" && mutation == "membership" {
+			_, err = f.directory.FleetOverview(ctx, f.actor, strings.ToUpper(f.tenant), f.actor)
+		} else {
+			_, err = f.directory.ResolveCandidate(ctx, scope, plan.Candidates[0])
+		}
 		afterWrite <- err
 	}()
 	runtimeEventually(t, func() bool {
@@ -364,12 +394,12 @@ func managementModelAuthorityFence(t *testing.T, mutation string) {
 	})
 	release()
 	if err := <-resolved; err != nil {
-		t.Fatal("admitted model read failed", err)
+		t.Fatal("admitted authority read failed", err)
 	}
 	if err := <-changed; err != nil {
 		t.Fatal("authority writer failed", err)
 	}
 	if err := <-afterWrite; !errors.Is(err, management.ErrDenied) {
-		t.Fatal("model admission retained authority after queued revocation", err)
+		t.Fatal("authority read retained access after queued revocation", err)
 	}
 }

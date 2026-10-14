@@ -17,7 +17,7 @@ proof of the caller's authority.
 
 Authority checks and membership writers acquire the same transaction-level Tenant
 advisory lock before reading permissions or checking the last active administrator.
-Agent/Fleet authorization and model plan/admission reads use shared locks so one
+Agent/Fleet authorization, Fleet overviews and model plan/admission reads use shared locks so one
 slow reader cannot serialize other readers. Authority mutations remain exclusive;
 waiting readers observe committed revocations before continuing.
 Pure owner authorization does not dirty a Tenant row or require a WAL commit.

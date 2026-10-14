@@ -296,6 +296,25 @@ func TestManagedPurgeFleetReinviteCreatesNewFleet(t *testing.T) {
 	if !found {
 		t.Fatal("removed membership disappeared")
 	}
+	t.Run("purged overview shares the authority fence", func(t *testing.T) {
+		gate, err := f.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = gate.Rollback(ctx) }()
+		if _, err := gate.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('juex.management.tenant:'||$1::uuid::text,0))`, f.tenant); err != nil {
+			t.Fatal(err)
+		}
+		readCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		value, err := f.directory.FleetOverview(readCtx, f.actor, f.tenant, member.ID)
+		if err != nil || !value.Purged || value.Owner.ID != member.ID || value.Fleet.ID != "" || len(value.Agents) != 0 {
+			t.Fatal("purged Fleet overview upgraded its fence or lost its projection", value, err)
+		}
+		if _, err := f.directory.FleetOverview(readCtx, member.ID, f.tenant, member.ID); !errors.Is(err, management.ErrDenied) {
+			t.Fatal("removed member retained purged Fleet access", err)
+		}
+	})
 	fresh, err := f.directory.AcceptInvitation(ctx, member.ID, token)
 	if err != nil || fresh.ID == fleet.ID {
 		t.Fatal(fresh, err)

@@ -35,6 +35,11 @@ func purgeOwner(ctx context.Context, tx pgx.Tx, actor, tenant, owner string) (ma
 	if err := lockTenant(ctx, tx, tenant); err != nil {
 		return management.Membership{}, err
 	}
+	return purgeOwnerLocked(ctx, tx, actor, tenant, owner)
+}
+
+// purgeOwnerLocked requires a shared or exclusive Tenant authority fence.
+func purgeOwnerLocked(ctx context.Context, tx pgx.Tx, actor, tenant, owner string) (management.Membership, error) {
 	member, err := membership(ctx, tx, tenant, actor)
 	if err != nil {
 		return member, err

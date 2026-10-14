@@ -120,6 +120,10 @@ func TestManagementAgentOwnershipModelsAndLifecycle(t *testing.T) {
 	if err != nil || len(retained.Agents) != 1 || retained.Owner.ID != member.ID {
 		t.Fatal(retained, err)
 	}
+	var reads int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM management.audit WHERE actor_id=$1 AND owner_id=$2 AND action='fleet.read'`, admin.ID, member.ID).Scan(&reads); err != nil || reads != 1 {
+		t.Fatal("delegated Fleet overview lost its audit", reads, err)
+	}
 	var audit int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM management.audit WHERE actor_id=$1 AND owner_id=$2 AND agent_id=$3`, admin.ID, member.ID, agent.ID).Scan(&audit); err != nil || audit < 3 {
 		t.Fatal("delegated changes have no audit", audit, err)
