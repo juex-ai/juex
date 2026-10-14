@@ -2,11 +2,43 @@ package execution
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/foundation/agentpolicy"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
+
+func TestRetainedHandleRequiresOriginalAuthority(t *testing.T) {
+	scope := Scope{AgentID: "agent", AgentExecutionEpoch: 1}
+	request := execprotocol.Request{Kind: "write_stdin", Arguments: json.RawMessage(`{"operation_id":"process"}`)}
+	for _, test := range []struct {
+		name   string
+		change func(*Operation)
+	}{
+		{"cancelled", func(op *Operation) { op.CancelRequested = true }},
+		{"different-agent", func(op *Operation) { op.Scope.AgentID = "other" }},
+		{"old-authority", func(op *Operation) { op.Scope.AgentExecutionEpoch = 0 }},
+		{"wrong-kind", func(op *Operation) { op.Request.Kind = "mcp_connect" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			original := Operation{Scope: scope, Request: execprotocol.Request{Kind: "exec_command", Arguments: json.RawMessage(`{}`)}}
+			lookup := func(id string) (Operation, error) {
+				if id != "process" {
+					t.Fatal("wrong handle", id)
+				}
+				return original, nil
+			}
+			if err := AuthorizeHandle(scope, request, lookup); err != nil {
+				t.Fatal("current handle rejected", err)
+			}
+			test.change(&original)
+			if err := AuthorizeHandle(scope, request, lookup); !errors.Is(err, execprotocol.ErrDenied) {
+				t.Fatal("retained handle expanded authority", err)
+			}
+		})
+	}
+}
 
 func TestIndependentSearchAndSkillSourceAuthority(t *testing.T) {
 	searchOnly := agentpolicy.Policy{Version: 1, Disabled: []agentpolicy.Capability{agentpolicy.Files, agentpolicy.Extensions, agentpolicy.Skills}}

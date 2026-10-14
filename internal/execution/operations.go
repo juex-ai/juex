@@ -113,9 +113,6 @@ func (s *Service) submit(ctx context.Context, actor, tenant, environment string,
 	if !permits(device, scope, request) {
 		return Operation{}, execprotocol.ErrDenied
 	}
-	if err := s.authorizeHandle(ctx, scope, environment, request); err != nil {
-		return Operation{}, err
-	}
 	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && (request.Kind == "mcp_connect" || request.Kind == "observe_command" || request.Kind == "read_agent_instructions"))
 }
 

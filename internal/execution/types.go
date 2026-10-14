@@ -115,6 +115,7 @@ type Repository interface {
 	AuthenticateDevice(context.Context, string) (Device, error)
 	Connect(context.Context, string, string) (Device, error)
 	Touch(context.Context, string, int64, bool) error
+	// Enqueue checks retained-handle authority atomically with first admission.
 	Enqueue(context.Context, Device, Scope, execprotocol.Request, time.Duration, bool) (Operation, error)
 	Operation(context.Context, string, string, int64, int) (Operation, error)
 	Pending(context.Context, string, int) ([]Operation, error)

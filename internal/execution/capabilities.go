@@ -2,7 +2,6 @@ package execution
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"slices"
 
@@ -70,9 +69,10 @@ func permittedCapabilities(policy agentpolicy.Policy, capabilities []execprotoco
 	})
 }
 
-// Retained process/connection IDs never authorize a new action. Check the
-// original operation's authority before accepting work against that handle.
-func (s *Service) authorizeHandle(ctx context.Context, scope Scope, environment string, request execprotocol.Request) error {
+// AuthorizeHandle checks the original operation before admitting work against
+// a retained handle. The caller must serialize lookup and admission with
+// cancellation of the original operation.
+func AuthorizeHandle(scope Scope, request execprotocol.Request, lookup func(string) (Operation, error)) error {
 	var args struct {
 		OperationID  string `json:"operation_id"`
 		ConnectionID string `json:"connection_id"`
@@ -96,7 +96,7 @@ func (s *Service) authorizeHandle(ctx context.Context, scope Scope, environment 
 	if id == "" {
 		return execprotocol.ErrInvalid
 	}
-	original, err := s.Store.Operation(ctx, environment, id, 0, 1)
+	original, err := lookup(id)
 	if err != nil {
 		return err
 	}

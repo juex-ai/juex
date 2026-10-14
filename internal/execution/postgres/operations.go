@@ -18,8 +18,12 @@ const operationColumns = `id,environment_id,scope,request,state,wait_until,cance
 
 func scanOperation(row pgx.Row) (execution.Operation, error) {
 	var operation execution.Operation
-	err := row.Scan(&operation.ID, &operation.EnvironmentID, &operation.Scope, &operation.Request, &operation.State, &operation.WaitUntil, &operation.CancelRequested, &operation.Snapshot, &operation.ResultCursor, &operation.Acknowledged, &operation.CreatedAt, &operation.Purged)
+	err := row.Scan(operationScanTargets(&operation)...)
 	return operation, classify(err)
+}
+
+func operationScanTargets(operation *execution.Operation) []any {
+	return []any{&operation.ID, &operation.EnvironmentID, &operation.Scope, &operation.Request, &operation.State, &operation.WaitUntil, &operation.CancelRequested, &operation.Snapshot, &operation.ResultCursor, &operation.Acknowledged, &operation.CreatedAt, &operation.Purged}
 }
 
 func (s *Store) Enqueue(ctx context.Context, device execution.Device, scope execution.Scope, request execprotocol.Request, wait time.Duration, hold bool) (execution.Operation, error) {
@@ -84,6 +88,15 @@ func (s *Store) enqueue(ctx context.Context, tx pgx.Tx, device execution.Device,
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return execution.Operation{}, err
 	}
+	if err := execution.AuthorizeHandle(scope, request, func(id string) (execution.Operation, error) {
+		original, err := scanOperation(tx.QueryRow(ctx, `SELECT `+operationColumns+` FROM execution.operations WHERE environment_id=$1 AND id=$2`, device.ID, id))
+		if errors.Is(err, execprotocol.ErrDenied) {
+			err = execprotocol.ErrNotFound
+		}
+		return original, err
+	}); err != nil {
+		return execution.Operation{}, err
+	}
 	cancelled, err := cancelledBeforeAdmission(ctx, tx, scope, "operation", device.ID, request.ID)
 	if err != nil {
 		return execution.Operation{}, err
@@ -125,7 +138,13 @@ func (s *Store) Operation(ctx context.Context, environment, id string, cursor in
 		return execution.Operation{}, err
 	}
 	defer rollback(tx)
-	operation, err := scanOperation(tx.QueryRow(ctx, `SELECT `+operationColumns+` FROM execution.operations WHERE environment_id=$1 AND id=$2 FOR SHARE`, environment, id))
+	// One snapshot keeps metadata and output consistent without waiting on an
+	// uncommitted observation. The transaction still serializes reads with purge.
+	var operation execution.Operation
+	var output []byte
+	err = classify(tx.QueryRow(ctx, `SELECT `+operationColumns+`,
+ substring(output FROM (LEAST($3::bigint,octet_length(output)::bigint)+1)::integer FOR $4::integer)
+ FROM execution.operations WHERE environment_id=$1 AND id=$2`, environment, id, cursor, limit).Scan(append(operationScanTargets(&operation), &output)...))
 	if err != nil {
 		if errors.Is(err, execprotocol.ErrDenied) {
 			err = execprotocol.ErrNotFound
@@ -139,9 +158,7 @@ func (s *Store) Operation(ctx context.Context, environment, id string, cursor in
 		operation.Snapshot.NextCursor = cursor
 		return operation, tx.Commit(ctx)
 	}
-	if err := tx.QueryRow(ctx, `SELECT substring(output FROM $3::integer FOR $4::integer) FROM execution.operations WHERE environment_id=$1 AND id=$2`, environment, id, cursor+1, limit).Scan(&operation.Snapshot.Output); err != nil {
-		return operation, err
-	}
+	operation.Snapshot.Output = output
 	operation.Snapshot.NextCursor = cursor + int64(len(operation.Snapshot.Output))
 	return operation, tx.Commit(ctx)
 }
