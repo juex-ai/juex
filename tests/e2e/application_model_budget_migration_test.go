@@ -23,8 +23,8 @@ func TestApplicationModelBudgetMigrationKeepsReceiptsAndAttempts(t *testing.T) {
 			store := runtimepg.New(pool)
 			job := applicationJob()
 			before := seedPreApplicationBudgetJob(t, pool, scope, job, state)
-			// Compare original receipts independently of the generated projection.
-			const history = `SELECT COALESCE(jsonb_agg(to_jsonb(a)-'request_model' ORDER BY a.id),'[]'::jsonb) FROM runtime.attempts a`
+			// Compare original receipts independently of generated projections.
+			const history = `SELECT COALESCE(jsonb_agg(to_jsonb(a)-'request_model'-'request_generation' ORDER BY a.id),'[]'::jsonb) FROM runtime.attempts a`
 			var historyBefore []byte
 			if err := pool.QueryRow(ctx, history).Scan(&historyBefore); err != nil {
 				t.Fatal(err)

@@ -52,8 +52,8 @@ func TestManagedAgentLifecycleUpgradePreservesLiveState(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The generated provenance projection is separate from original receipts.
-	const snapshot = `SELECT jsonb_build_object('agent',to_jsonb(a)-'run_mode'-'lifecycle_version','turn',to_jsonb(t),'attempt',to_jsonb(p)-'request_model')::text FROM runtime.agents a JOIN runtime.turns t ON t.id=$2 JOIN runtime.attempts p ON p.id=$3 WHERE a.id=$1`
+	// Generated request projections are separate from original receipts.
+	const snapshot = `SELECT jsonb_build_object('agent',to_jsonb(a)-'run_mode'-'lifecycle_version','turn',to_jsonb(t),'attempt',to_jsonb(p)-'request_model'-'request_generation')::text FROM runtime.agents a JOIN runtime.turns t ON t.id=$2 JOIN runtime.attempts p ON p.id=$3 WHERE a.id=$1`
 	var before, after string
 	if err := pool.QueryRow(ctx, snapshot, agent, turn, attempt).Scan(&before); err != nil {
 		t.Fatal(err)
