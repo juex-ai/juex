@@ -44,7 +44,7 @@ func (e *Engine) observeCommand(ctx context.Context, op *operation) (*int, error
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, args.Command[0], args.Command[1:]...)
-	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
+	cmd.Dir, cmd.Env = directory, environment
 	if err := e.extensionCommand(cmd, op.record.Request.AgentID, args.Extension); err != nil {
 		return nil, err
 	}
@@ -59,8 +59,8 @@ func (e *Engine) observeCommand(ctx context.Context, op *operation) (*int, error
 	}
 	stdout := &observableWriter{writer: output, stream: "stdout", enabled: slices.Contains(streams, "stdout"), jsonLines: args.Options.Parser.Type == "jsonl", cancel: cancel}
 	stderr := &observableWriter{writer: output, stream: "stderr", enabled: slices.Contains(streams, "stderr"), jsonLines: args.Options.Parser.Type == "jsonl", cancel: cancel}
-	cmd.Stdout, cmd.Stderr = stdout, stderr
-	if err := cmd.Start(); err != nil {
+	finishOutput, err := startProcessOutput(cmd, stdout, stderr, cancel)
+	if err != nil {
 		return nil, err
 	}
 	e.mu.Lock()
@@ -72,7 +72,8 @@ func (e *Engine) observeCommand(ctx context.Context, op *operation) (*int, error
 		cancel()
 	}
 	waitErr := cmd.Wait()
-	streamErr := errors.Join(stdout.finish(), stderr.finish())
+	contextErr := ctx.Err()
+	streamErr := errors.Join(finishOutput(), stdout.finish(), stderr.finish())
 	code := cmd.ProcessState.ExitCode()
 	if err != nil {
 		return &code, err
@@ -80,8 +81,8 @@ func (e *Engine) observeCommand(ctx context.Context, op *operation) (*int, error
 	if streamErr != nil {
 		return &code, streamErr
 	}
-	if ctx.Err() != nil {
-		return &code, ctx.Err()
+	if contextErr != nil {
+		return &code, contextErr
 	}
 	return &code, waitErr
 }

@@ -24,3 +24,7 @@ func openRootRegular(*os.Root, string) (*os.File, error) {
 func startTerminal(*exec.Cmd, io.Writer, int64, func()) (io.WriteCloser, func() error, error) {
 	return nil, nil, errors.New("PTY execution requires Linux or macOS")
 }
+
+func startProcessOutput(*exec.Cmd, io.Writer, io.Writer, func()) (func() error, error) {
+	return nil, errors.New("process execution requires Linux or macOS")
+}

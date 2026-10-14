@@ -81,7 +81,7 @@ func (e *Engine) command(ctx context.Context, operation *operation) (*int, error
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", args.Command)
-	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
+	cmd.Dir, cmd.Env = directory, environment
 	if err := e.extensionCommand(cmd, operation.record.Request.AgentID, args.Extension); err != nil {
 		return nil, err
 	}
@@ -96,10 +96,9 @@ func (e *Engine) command(ctx context.Context, operation *operation) (*int, error
 		input, finishOutput, err = startTerminal(cmd, writer, e.config.OutputLimit, cancel)
 	} else {
 		command.ConfigureContext(cmd)
-		cmd.Stdout, cmd.Stderr = writer, writer
 		input, err = cmd.StdinPipe()
 		if err == nil {
-			err = cmd.Start()
+			finishOutput, err = startProcessOutput(cmd, writer, writer, cancel)
 		}
 	}
 	if err != nil {

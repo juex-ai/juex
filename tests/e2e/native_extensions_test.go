@@ -5,11 +5,61 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/execution/native"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
+
+func TestNativeProcessOutputTerminalReceiptSurvivesRestart(t *testing.T) {
+	for _, kind := range []string{"observe_command", "exec_command"} {
+		t.Run(kind, func(t *testing.T) {
+			config := nativeConfig(t)
+			engine := openNative(t, config)
+			script := `printf once >> effects; printf '{"message":"first"}\n'; printf '{"message":"tail"}'; printf '{"message":"stderr"}\n' >&2`
+			var arguments any = native.CommandArguments{Command: script}
+			if kind == "observe_command" {
+				arguments = execprotocol.ObservableCommand{Command: []string{"/bin/sh", "-c", script}, Options: execprotocol.ObservableOptions{Parser: execprotocol.ObservableParser{Type: "jsonl"}}}
+			}
+			request := nativeRequest(t, "durable-process-output", kind, arguments)
+			result := nativeRun(t, engine, request)
+			if result.State != execprotocol.Completed || result.ExitCode == nil || *result.ExitCode != 0 || result.Error != "" {
+				t.Fatal("successful process receipt", result)
+			}
+			for _, text := range []string{"first", "tail", "stderr"} {
+				if !strings.Contains(result.Text(), text) {
+					t.Fatal("output stream or tail missing", result)
+				}
+			}
+			if kind == "observe_command" {
+				lines := strings.Split(strings.TrimSpace(result.Text()), "\n")
+				if len(lines) != 3 {
+					t.Fatal("wrong observation count", result)
+				}
+				for _, line := range lines {
+					var event struct{ Stream, Text string }
+					if err := json.Unmarshal([]byte(line), &event); err != nil || (event.Stream != "stdout" && event.Stream != "stderr") || !json.Valid([]byte(event.Text)) {
+						t.Fatal("invalid persisted observation", line, err)
+					}
+				}
+			}
+			if err := engine.Close(); err != nil {
+				t.Fatal(err)
+			}
+			engine = openNative(t, config)
+			recovered := nativeRun(t, engine, request)
+			if recovered.State != result.State || recovered.Error != result.Error || recovered.Text() != result.Text() || recovered.OutputBytes != result.OutputBytes || recovered.ExitCode == nil || *recovered.ExitCode != *result.ExitCode {
+				t.Fatal("recovery changed original output receipt", recovered)
+			}
+			if data, err := os.ReadFile(filepath.Join(config.WorkingDirectory, "effects")); err != nil || string(data) != "once" {
+				t.Fatal("recovery repeated original command", string(data), err)
+			}
+		})
+	}
+}
 
 func TestNativeObserversStreamWithoutNewlineAndLeaveExecutionSlotsFree(t *testing.T) {
 	engine := openNative(t, nativeConfig(t))
