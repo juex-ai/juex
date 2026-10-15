@@ -83,8 +83,10 @@ jobs:
           go-version: stable
           cache: true
       # uv is needed by the e2e Python MCP fixture and tests/eval contract tests.
-      # Keep the locked native dependencies on a Python version with wheels.
+      # macOS needs a Python version with wheels for the locked dependencies.
+      # Keep Linux's system Python and sandbox test environment unchanged.
       - uses: actions/setup-python@v5
+        if: matrix.os == 'macos-latest'
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v3
