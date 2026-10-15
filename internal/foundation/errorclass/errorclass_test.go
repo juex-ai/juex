@@ -1,0 +1,164 @@
+package errorclass
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/juex-ai/juex/internal/foundation/cancellation"
+)
+
+func TestClassifyTimeoutErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "sentinel", err: context.DeadlineExceeded},
+		{name: "wrapped", err: fmt.Errorf("openai codex responses: codex SSE read: %w", context.DeadlineExceeded)},
+		{name: "provider text", err: errors.New("provider returned deadline_exceeded")},
+		{name: "handshake timeout", err: errors.New("net/http: TLS handshake timeout")},
+		{name: "read deadline", err: errors.New("net/http: read deadline exceeded")},
+		{name: "write deadline", err: errors.New("net/http: write deadline exceeded")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(tt.err)
+			if got.Kind != KindTimeout || !got.TimedOut {
+				t.Fatalf("Classify(%v) = %+v, want timeout", tt.err, got)
+			}
+			if got.RawCause == "" {
+				t.Fatal("RawCause = empty, want original error text")
+			}
+			public := PublicMessage(tt.err, MessageOptions{})
+			if !strings.Contains(public, "timed out") {
+				t.Fatalf("PublicMessage = %q, want timed out", public)
+			}
+			for _, forbidden := range []string{"context deadline exceeded", "deadline_exceeded"} {
+				if strings.Contains(public, forbidden) {
+					t.Fatalf("PublicMessage = %q, should not expose %q", public, forbidden)
+				}
+			}
+		})
+	}
+}
+
+func TestPublicMessageTimeoutWithSubjectAndSeconds(t *testing.T) {
+	err := fmt.Errorf("tools: slow: %w", context.DeadlineExceeded)
+	got := PublicMessage(err, MessageOptions{Subject: "tools: slow", TimeoutSeconds: 2})
+	if got != "tools: slow timed out after 2s" {
+		t.Fatalf("PublicMessage = %q, want tools: slow timed out after 2s", got)
+	}
+}
+
+func TestPublicMessagePreservesExistingToolTimeout(t *testing.T) {
+	err := errors.New("tools: slow timed out after 1s")
+	got := PublicMessage(err, MessageOptions{})
+	if got != err.Error() {
+		t.Fatalf("PublicMessage = %q, want existing timeout text", got)
+	}
+}
+
+func TestClassifyCancellationIsNotTimeout(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", context.Canceled)
+	got := Classify(err)
+	if got.Kind != KindCancelled || got.TimedOut {
+		t.Fatalf("Classify(context.Canceled) = %+v, want cancelled", got)
+	}
+	if msg := PublicMessage(err, MessageOptions{}); msg != cancellation.ErrUserCancelled.Error() {
+		t.Fatalf("PublicMessage = %q, want normalized cancellation", msg)
+	}
+}
+
+func TestClassifySignalCancellation(t *testing.T) {
+	err := cancellation.NewSignalError(syscall.SIGTERM)
+	got := Classify(err)
+	if got.Kind != KindTerminated || got.TimedOut {
+		t.Fatalf("Classify(signal) = %+v, want terminated", got)
+	}
+	if msg := PublicMessage(err, MessageOptions{}); msg != "run terminated by signal SIGTERM (15)" {
+		t.Fatalf("PublicMessage = %q", msg)
+	}
+	if strings.Contains(PublicMessage(err, MessageOptions{}), "by user") {
+		t.Fatalf("signal cancellation should not blame user: %q", PublicMessage(err, MessageOptions{}))
+	}
+
+	interruptErr := cancellation.NewSignalError(syscall.SIGINT)
+	if got := Classify(interruptErr); got.Kind != KindInterrupted {
+		t.Fatalf("Classify(SIGINT) = %+v, want interrupted", got)
+	}
+}
+
+func TestClassifyRuntimeRestart(t *testing.T) {
+	got := Classify(cancellation.ErrRuntimeRestart)
+	if got.Kind != KindRuntimeRestart || got.TimedOut {
+		t.Fatalf("classification = %+v", got)
+	}
+	if message := PublicMessage(cancellation.ErrRuntimeRestart, MessageOptions{}); message != "turn interrupted by runtime restart" {
+		t.Fatalf("public message = %q", message)
+	}
+}
+
+func TestClassifyPermissionAndAuth(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want Kind
+	}{
+		{name: "permission text", raw: "open /root/secret: permission denied", want: KindPermission},
+		{name: "auth text", raw: "provider unauthorized", want: KindAuth},
+		{name: "status 401", raw: "codex websocket connect: status 401: handshake failed", want: KindAuth},
+		{name: "status code 403", raw: "provider request failed: status code 403", want: KindPermission},
+		{name: "error code 401", raw: "provider request failed: error code: 401", want: KindAuth},
+		{name: "http 403 forbidden", raw: "provider request failed: HTTP 403 Forbidden", want: KindPermission},
+		{name: "unrelated status", raw: "provider request failed: status 429", want: KindError},
+		{name: "unrelated exit code", raw: "provider helper exited with code 401", want: KindError},
+		{name: "unrelated port", raw: "connect tcp 127.0.0.1:403: connection refused", want: KindError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ClassifyText(tt.raw); got.Kind != tt.want {
+				t.Fatalf("ClassifyText(%q) kind = %q, want %q", tt.raw, got.Kind, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyExplicitKind(t *testing.T) {
+	cause := errors.New("dial tcp: connection refused")
+	err := fmt.Errorf("mcp[remote]: %w", WithKind(KindConnectivity, cause))
+	got := Classify(err)
+	if got.Kind != KindConnectivity || got.RawCause != err.Error() {
+		t.Fatalf("Classify(explicit kind) = %+v", got)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("explicit kind wrapper must preserve errors.Is traversal")
+	}
+	if kind, ok := ExplicitKind(err); !ok || kind != KindConnectivity {
+		t.Fatalf("ExplicitKind() = %q, %v", kind, ok)
+	}
+	if _, ok := ExplicitKind(cause); ok {
+		t.Fatal("plain error unexpectedly has an explicit kind")
+	}
+}
+
+func TestClassifyCancellationAndTimeoutTakePrecedenceOverExplicitKind(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want Kind
+	}{
+		{name: "cancelled", err: WithKind(KindRetryable, context.Canceled), want: KindCancelled},
+		{name: "timeout", err: WithKind(KindRetryable, context.DeadlineExceeded), want: KindTimeout},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := Classify(test.err); got.Kind != test.want {
+				t.Fatalf("Classify() kind = %q, want %q", got.Kind, test.want)
+			}
+		})
+	}
+}

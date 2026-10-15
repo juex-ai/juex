@@ -25,10 +25,7 @@ func New(cfg providerprofile.Config) (llm.Provider, error) {
 
 // NewProvider constructs the concrete provider for a resolved profile.
 func NewProvider(profile llm.ProviderProfile) (llm.Provider, error) {
-	if err := providerprofile.ValidateAuthentication(profile); err != nil {
-		return nil, err
-	}
-	if profile.APIKey == "" && profile.Authentication != "none" {
+	if profile.APIKey == "" {
 		return nil, fmt.Errorf("llm: missing API key")
 	}
 	if profile.Model == "" {

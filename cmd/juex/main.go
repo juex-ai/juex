@@ -1,20 +1,27 @@
+// Juex CLI entry point. All real work lives in github.com/juex-ai/juex/internal/entrypoints/cli.
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
-	"github.com/juex-ai/juex/internal/entrypoints/clientcli"
+	"github.com/juex-ai/juex/internal/entrypoints/cli"
+	"github.com/juex-ai/juex/internal/foundation/sandbox"
+
+	// Blank import installs DNS + TLS root fallbacks at startup so the
+	// binary works on environments that lack /etc/resolv.conf or a
+	// system CA bundle (notably Termux on Android). No-op on standard
+	// Linux/macOS/Windows.
+	_ "github.com/juex-ai/juex/internal/foundation/netbootstrap"
 )
 
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	if err := clientcli.Execute(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	if handled, err := sandbox.MaybeExecTarget(os.Args); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+		return
 	}
+	os.Exit(cli.Execute())
 }

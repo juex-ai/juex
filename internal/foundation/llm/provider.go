@@ -16,9 +16,6 @@ type Provider interface {
 }
 
 type CompleteOptions struct {
-	// SingleAttempt lets a durable caller own retries and account for every
-	// network attempt. SDK and transport-level retries must both be disabled.
-	SingleAttempt     bool
 	Identity          RequestIdentity
 	Purpose           string
 	MaxOutputTokens   int

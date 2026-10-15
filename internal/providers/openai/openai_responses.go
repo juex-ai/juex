@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -37,9 +36,6 @@ func NewOpenAIResponses(profile llm.ProviderProfile, _ any) llm.Provider {
 		option.WithAPIKey(profile.APIKey),
 		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
 	}
-	if profile.Authentication == "none" {
-		opts = append(opts, option.WithHeaderDel("Authorization"))
-	}
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
 	}
@@ -65,9 +61,6 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 		return llm.Response{}, err
 	}
 	requestOptions := make([]option.RequestOption, 0, len(headers))
-	if opts.SingleAttempt {
-		requestOptions = append(requestOptions, option.WithMaxRetries(0))
-	}
 	for name, value := range headers {
 		requestOptions = append(requestOptions, option.WithHeader(name, value))
 	}
@@ -124,11 +117,8 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 		if err == nil {
 			return resp, nil
 		}
-		if !idleExpired || opts.SingleAttempt {
-			if idleExpired {
-				err = protocolsupport.NewStreamIdleTimeoutError("openai responses stream", idleTimeout, err)
-			}
-			return resp, err
+		if !idleExpired {
+			return llm.Response{}, err
 		}
 		if ctx.Err() != nil {
 			return llm.Response{}, ctx.Err()
@@ -166,9 +156,9 @@ func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, 
 			return llm.Response{}, fmt.Errorf("openai responses stream error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON())), false
 		case "response.failed":
 			if msg := responseErrorMessage(event.Response); msg != "" {
-				return p.responseFromResponses(&event.Response), fmt.Errorf("openai responses: %s", msg), false
+				return llm.Response{}, fmt.Errorf("openai responses: %s", msg), false
 			}
-			return p.responseFromResponses(&event.Response), fmt.Errorf("openai responses failed"), false
+			return llm.Response{}, fmt.Errorf("openai responses failed"), false
 		case "response.output_item.done":
 			items = append(items, event.Item)
 		case "response.done", "response.completed", "response.incomplete":
@@ -185,7 +175,11 @@ func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, 
 		}
 		return llm.Response{}, fmt.Errorf("openai responses stream: %w", err), false
 	}
-	return llm.Response{}, fmt.Errorf("openai responses stream closed before terminal event: %w", io.ErrUnexpectedEOF), false
+	if len(items) == 0 {
+		return llm.Response{}, fmt.Errorf("openai responses stream closed before response.completed"), false
+	}
+	finalResp := responses.Response{Status: responses.ResponseStatusCompleted, Output: items}
+	return p.responseFromResponses(&finalResp), nil, false
 }
 
 func (p *openAIResponsesProvider) emitOpenAIResponsesRetryDiagnostic(opts llm.CompleteOptions, err error, attempt int, delay time.Duration, willRetry, exhausted bool) {
@@ -268,9 +262,8 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 		stop = llm.StopMaxTokens
 	}
 	return llm.Response{
-		Message:     out,
-		StopReason:  stop,
-		UsageStatus: llm.ReportedUsageStatus(resp.Usage.JSON.InputTokens.Valid(), resp.Usage.JSON.OutputTokens.Valid(), true),
+		Message:    out,
+		StopReason: stop,
 		Usage: llm.CanonicalUsage(
 			int(resp.Usage.InputTokens),
 			int(resp.Usage.OutputTokens),

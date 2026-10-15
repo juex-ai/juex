@@ -1,0 +1,177 @@
+import { marked } from "marked";
+
+import type { MediaRef } from "../types";
+
+type HTMLNode = {
+  children?: HTMLNode[];
+  properties?: Record<string, unknown>;
+  tagName?: string;
+  type?: string;
+  value?: string;
+};
+
+export function localMarkdownPath(value?: string | null): string | null {
+  const raw = value?.trim();
+  if (!raw || raw.startsWith("/") || raw.startsWith("//")) return null;
+  if (raw.startsWith("#") || raw.startsWith("?") || hasURLScheme(raw)) {
+    return null;
+  }
+
+  try {
+    const decoded = decodeURIComponent(raw);
+    if (
+      !decoded ||
+      decoded.startsWith("/") ||
+      decoded.startsWith("//") ||
+      hasURLScheme(decoded)
+    ) {
+      return null;
+    }
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+export function localMarkdownLinkTargets(markdown: string): string[] {
+  if (!markdown.trim()) return [];
+
+  const targets: string[] = [];
+  const seen = new Set<string>();
+  try {
+    marked.walkTokens(marked.lexer(markdown), (token) => {
+      if (token.type !== "paragraph") return;
+      const inlineTokens = (token.tokens ?? []).filter(
+        (item) => item.type !== "space",
+      );
+      if (inlineTokens.length !== 1 || inlineTokens[0]?.type !== "link") return;
+      const path = localMarkdownPath(inlineTokens[0].href);
+      if (!path || seen.has(path)) return;
+      seen.add(path);
+      targets.push(path);
+    });
+  } catch {
+    return [];
+  }
+  return targets;
+}
+
+const localImageProbeConcurrency = 4;
+
+export async function resolveLocalImageTargets(
+  targets: readonly string[],
+  probe: (path: string) => Promise<MediaRef>,
+  onResolved: (path: string, media: MediaRef) => void,
+  concurrency = localImageProbeConcurrency,
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(
+    targets.length,
+    Math.max(1, Math.floor(concurrency)),
+  );
+
+  async function worker() {
+    while (nextIndex < targets.length) {
+      const path = targets[nextIndex];
+      nextIndex += 1;
+      if (!path) continue;
+      try {
+        onResolved(path, await probe(path));
+      } catch {
+        // Missing, rejected, and non-image local links remain ordinary links.
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
+export type RewriteLocalMarkdownImagesOptions = {
+  imagePaths?: readonly string[];
+  mediaURL?: (path: string) => string;
+};
+
+export function rewriteLocalMarkdownImages(
+  options: RewriteLocalMarkdownImagesOptions = {},
+) {
+  const imagePaths = new Set(options.imagePaths ?? []);
+  const mediaURL = options.mediaURL ?? ((path: string) => path);
+  return (tree: HTMLNode) => {
+    rewriteLocalImages(tree, imagePaths, mediaURL);
+  };
+}
+
+function rewriteLocalImages(
+  node: HTMLNode,
+  imagePaths: ReadonlySet<string>,
+  mediaURL: (path: string) => string,
+) {
+  if (node.type === "element" && node.tagName === "p") {
+    const child = standaloneChild(node);
+    if (
+      child?.tagName === "a" &&
+      child.properties &&
+      rewriteConfirmedImageLink(child, imagePaths, mediaURL)
+    ) {
+      child.properties["data-juex-image-block"] = true;
+      node.tagName = "div";
+    } else if (child?.tagName === "img" && child.properties) {
+      const path = localMarkdownPath(stringProperty(child.properties.src));
+      if (path) {
+        child.properties.src = mediaURL(path);
+        child.properties["data-juex-image-block"] = true;
+        node.tagName = "div";
+      }
+    }
+  }
+
+  if (node.type === "element" && node.properties) {
+    if (node.tagName === "img") {
+      const path = stringProperty(node.properties.src);
+      const localPath = localMarkdownPath(path);
+      if (localPath) node.properties.src = mediaURL(localPath);
+    }
+  }
+  for (const child of node.children ?? []) {
+    rewriteLocalImages(child, imagePaths, mediaURL);
+  }
+}
+
+function rewriteConfirmedImageLink(
+  node: HTMLNode,
+  imagePaths: ReadonlySet<string>,
+  mediaURL: (path: string) => string,
+): boolean {
+  const path = localMarkdownPath(stringProperty(node.properties?.href));
+  if (!path || !imagePaths.has(path)) return false;
+
+  const title = node.properties?.title;
+  node.tagName = "img";
+  node.properties = {
+    src: mediaURL(path),
+    alt: htmlNodeText(node),
+    ...(typeof title === "string" ? { title } : {}),
+  };
+  node.children = [];
+  return true;
+}
+
+function standaloneChild(node: HTMLNode): HTMLNode | null {
+  const children = (node.children ?? []).filter(
+    (child) => child.type !== "text" || Boolean(child.value?.trim()),
+  );
+  return children.length === 1 ? children[0] : null;
+}
+
+function htmlNodeText(node: HTMLNode): string {
+  if (typeof node.value === "string") return node.value;
+  return node.children?.map(htmlNodeText).join("") ?? "";
+}
+
+function stringProperty(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function hasURLScheme(value: string): boolean {
+  return /^[a-z][a-z\d+.-]*:/i.test(value);
+}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/juex-ai/juex/internal/foundation/llm"
@@ -31,9 +30,6 @@ func NewOpenAI(profile llm.ProviderProfile, _ any) llm.Provider {
 		option.WithAPIKey(profile.APIKey),
 		option.WithMaxRetries(protocolsupport.ProviderMaxRetries),
 	}
-	if profile.Authentication == "none" {
-		opts = append(opts, option.WithHeaderDel("Authorization"))
-	}
 	if profile.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(profile.BaseURL))
 	}
@@ -59,9 +55,6 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 		return llm.Response{}, err
 	}
 	requestOptions := make([]option.RequestOption, 0, len(headers))
-	if opts.SingleAttempt {
-		requestOptions = append(requestOptions, option.WithMaxRetries(0))
-	}
 	for name, value := range headers {
 		requestOptions = append(requestOptions, option.WithHeader(name, value))
 	}
@@ -118,7 +111,6 @@ func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.Ch
 	var (
 		reasoning   strings.Builder
 		streamUsage openai.CompletionUsage
-		usageStatus = llm.UsageUnknown
 	)
 	for stream.Next() {
 		resetIdle()
@@ -138,33 +130,25 @@ func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.Ch
 		if !acc.AddChunk(chunk) {
 			return llm.Response{}, fmt.Errorf("openai chat stream accumulation failed")
 		}
-		if chunk.JSON.Usage.Valid() {
+		if chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 || chunk.Usage.PromptTokensDetails.CachedTokens != 0 {
 			streamUsage = chunk.Usage
-			usageStatus = llm.ReportedUsageStatus(chunk.Usage.JSON.PromptTokens.Valid(), chunk.Usage.JSON.CompletionTokens.Valid(), true)
 		}
 	}
-	acc.Usage = streamUsage
-	result, conversionErr := p.responseFromChatCompletion(&acc.ChatCompletion, reasoning.String())
-	result.UsageStatus = usageStatus
 	if err := stream.Err(); err != nil {
 		if idleExpired() {
-			return result, protocolsupport.NewStreamIdleTimeoutError("openai chat stream", idleTimeout, err)
+			return llm.Response{}, protocolsupport.NewStreamIdleTimeoutError("openai chat stream", idleTimeout, err)
 		}
-		return result, fmt.Errorf("openai chat stream: %w", err)
+		return llm.Response{}, fmt.Errorf("openai chat stream: %w", err)
 	}
-	// A clean transport EOF (or [DONE]) does not finish a partial choice.
-	// Require the provider's terminal reason before Runtime can commit tools.
-	if len(acc.Choices) == 0 || acc.Choices[0].FinishReason == "" {
-		return result, fmt.Errorf("openai chat stream closed before finish_reason: %w", io.ErrUnexpectedEOF)
+	if streamUsage.PromptTokens != 0 || streamUsage.CompletionTokens != 0 || streamUsage.PromptTokensDetails.CachedTokens != 0 {
+		acc.Usage = streamUsage
 	}
-	return result, conversionErr
+	return p.responseFromChatCompletion(&acc.ChatCompletion, reasoning.String())
 }
 
 func (p *openAIProvider) responseFromChatCompletion(completion *openai.ChatCompletion, streamedReasoning string) (llm.Response, error) {
-	result := llm.Response{Usage: llm.CanonicalUsage(int(completion.Usage.PromptTokens), int(completion.Usage.CompletionTokens), int(completion.Usage.PromptTokensDetails.CachedTokens)),
-		UsageStatus: llm.ReportedUsageStatus(completion.Usage.JSON.PromptTokens.Valid(), completion.Usage.JSON.CompletionTokens.Valid(), true)}
 	if len(completion.Choices) == 0 {
-		return result, fmt.Errorf("openai: empty choices")
+		return llm.Response{}, fmt.Errorf("openai: empty choices")
 	}
 	choice := completion.Choices[0]
 
@@ -188,8 +172,15 @@ func (p *openAIProvider) responseFromChatCompletion(completion *openai.ChatCompl
 		})
 	}
 
-	result.Message, result.StopReason = out, mapOpenAIStop(string(choice.FinishReason))
-	return result, nil
+	return llm.Response{
+		Message:    out,
+		StopReason: mapOpenAIStop(string(choice.FinishReason)),
+		Usage: llm.CanonicalUsage(
+			int(completion.Usage.PromptTokens),
+			int(completion.Usage.CompletionTokens),
+			int(completion.Usage.PromptTokensDetails.CachedTokens),
+		),
+	}, nil
 }
 
 // toOpenAIMessages converts Juex history into OpenAI-shaped messages,

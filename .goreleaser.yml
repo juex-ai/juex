@@ -3,9 +3,15 @@ version: 2
 
 before:
   hooks:
-    - pnpm --dir frontend install --frozen-lockfile
-    - pnpm --dir frontend build
-    - make web-sync
+    - make web
+    - go mod tidy
+    - ./scripts/prepare-ripgrep.sh --target darwin_amd64 --juex-version {{ .Version }} --output .tmp/release/darwin_amd64
+    - ./scripts/prepare-ripgrep.sh --target darwin_arm64 --juex-version {{ .Version }} --output .tmp/release/darwin_arm64
+    - ./scripts/prepare-ripgrep.sh --target linux_amd64 --juex-version {{ .Version }} --output .tmp/release/linux_amd64
+    - ./scripts/prepare-ripgrep.sh --target linux_arm64 --juex-version {{ .Version }} --output .tmp/release/linux_arm64
+    - ./scripts/prepare-ripgrep.sh --target linux_armv7 --juex-version {{ .Version }} --output .tmp/release/linux_armv7
+    - ./scripts/prepare-ripgrep.sh --target windows_amd64 --juex-version {{ .Version }} --output .tmp/release/windows_amd64
+    - ./scripts/prepare-ripgrep.sh --target windows_arm64 --juex-version {{ .Version }} --output .tmp/release/windows_arm64
 
 builds:
   - id: juex
@@ -13,105 +19,40 @@ builds:
     binary: bin/juex
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
-    ldflags: &metadata
+    ldflags:
       - -s -w
       - -X github.com/juex-ai/juex/internal/foundation/version.Version={{.Version}}
       - -X github.com/juex-ai/juex/internal/foundation/version.Commit={{.ShortCommit}}
       - -X github.com/juex-ai/juex/internal/foundation/version.BuildTime={{.Date}}
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-  - id: juex-executor
-    main: ./cmd/juex-executor
-    binary: bin/juex-executor
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: *metadata
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-
-  - id: juex-management
-    main: ./cmd/juex-management
-    binary: bin/juex-management
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: *metadata
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-  - id: juex-runtime
-    main: ./cmd/juex-runtime
-    binary: bin/juex-runtime
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: *metadata
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-  - id: juex-memory
-    main: ./cmd/juex-memory
-    binary: bin/juex-memory
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: *metadata
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-  - id: juex-calendar
-    main: ./cmd/juex-calendar
-    binary: bin/juex-calendar
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: *metadata
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-  - id: juex-execution
-    main: ./cmd/juex-execution
-    binary: bin/juex-execution
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: *metadata
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-  - id: juex-service-log
-    main: ./cmd/juex-service-log
-    binary: bin/juex-service-log
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: *metadata
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-
-  - id: juex-migrate
-    main: ./cmd/juex-migrate
-    binary: bin/juex-migrate
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: *metadata
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64, arm]
+    goarm: ["7"]
+    ignore:
+      # 32-bit arm only ships on linux; darwin and windows have no
+      # consumer hardware target for it.
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
 
 archives:
-  - id: clients
-    ids: [juex, juex-executor]
-    name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}_{{.Arch}}"
+  - id: juex
+    # `{{ .Arm }}` resolves to the GOARM number on arm builds (empty
+    # otherwise), so a v7 archive becomes juex_X.Y.Z_linux_armv7.tar.gz.
+    # This makes the ABI explicit so users on ARMv6 devices know to skip it.
+    name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}"
     formats: [tar.gz]
-    wrap_in_directory: true
-    files: [README.md, README.zh.md]
-
-  - id: platform
-    ids: [juex, juex-executor, juex-management, juex-runtime, juex-memory, juex-calendar, juex-execution, juex-service-log, juex-migrate]
-    name_template: "{{.ProjectName}}_platform_{{.Version}}_{{.Os}}_{{.Arch}}"
-    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     wrap_in_directory: true
     files:
-      - README.md
-      - README.zh.md
-      - deploy/managed/README.md
-      - deploy/managed/README.zh.md
-      - deploy/managed/operator.py
-      - deploy/managed/common.py
-      - deploy/managed/host.py
-      - deploy/managed/hosted.py
-      - deploy/managed/processes.py
-      - deploy/managed/nginx.conf
-      - deploy/managed/compose.yaml
+      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-package.json
+        dst: juex-package.json
+      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-path/*
+        dst: juex-path
+      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-resources/licenses/ripgrep/*
+        dst: juex-resources/licenses/ripgrep
 
 checksum:
   name_template: "checksums.txt"

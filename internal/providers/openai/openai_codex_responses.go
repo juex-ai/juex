@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"runtime"
 	"strings"
@@ -84,9 +83,6 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 	requestProfile.Headers = headers
 	httpHeaders := codexResponsesHeaders(requestProfile, false)
 	requestOptions := make([]option.RequestOption, 0, len(httpHeaders))
-	if opts.SingleAttempt {
-		requestOptions = append(requestOptions, option.WithMaxRetries(0))
-	}
 	for name := range httpHeaders {
 		requestOptions = append(requestOptions, option.WithHeader(name, httpHeaders.Get(name)))
 	}
@@ -100,7 +96,7 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 	switch p.transport {
 	case providerprofile.CodexTransportAuto:
 		resp, err = p.ws.Complete(ctx, params, opts, codexResponsesHeaders(requestProfile, true))
-		if err != nil && !opts.SingleAttempt {
+		if err != nil {
 			resp, err = p.completeSSE(ctx, params, opts, requestOptions...)
 		}
 	case providerprofile.CodexTransportWebSocket, providerprofile.CodexTransportWebSocketCached:
@@ -138,9 +134,6 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 			}
 			idleAttempts++
 			idleErr := protocolsupport.NewStreamIdleTimeoutError("codex SSE", idleTimeout, err)
-			if opts.SingleAttempt {
-				return nil, idleErr
-			}
 			if idleAttempts >= codexSSEIdleMaxAttempts {
 				p.emitCodexSSERetryDiagnostic(opts, idleErr, idleAttempts, codexSSEIdleMaxAttempts, 0, false, true, "codex_sse_idle_timeout")
 				return nil, idleErr
@@ -153,7 +146,7 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 			continue
 		}
 		attemptNumber := attempt + 1
-		if opts.SingleAttempt || ctx.Err() != nil || !isRetryableCodexSSEReadError(err) {
+		if ctx.Err() != nil || !isRetryableCodexSSEReadError(err) {
 			return nil, err
 		}
 		if attemptNumber >= maxAttempts {
@@ -248,7 +241,10 @@ func readCodexResponsesStream(stream codexResponsesStream, opts codexResponsesSt
 		return nil, &codexSSEReadError{cause: err}
 	}
 	if !hasFinal {
-		return nil, &codexSSEReadError{cause: fmt.Errorf("stream closed before terminal event: %w", io.ErrUnexpectedEOF)}
+		if len(items) > 0 {
+			return &responses.Response{Status: responses.ResponseStatusCompleted, Output: items}, nil
+		}
+		return nil, &codexSSEReadError{cause: errors.New("stream closed before response.completed")}
 	}
 	if len(finalResp.Output) == 0 && len(items) > 0 {
 		finalResp.Output = items
