@@ -1,9 +1,17 @@
 name: juex
 
+# These endpoints already have deployment-owned addresses. Keep authority and
+# database connections available while Docker's embedded DNS is stalled.
+x-platform-hosts: &platform-hosts
+  management: '${JUEX_PLATFORM_PREFIX:-172.30.0}.10'
+  postgres: '${JUEX_PLATFORM_PREFIX:-172.30.0}.2'
+  execution: '${JUEX_PLATFORM_PREFIX:-172.30.0}.1'
+
 x-service: &service
   image: ${JUEX_PLATFORM_IMAGE:?Set the pinned platform image}
   runtime: runc
-  restart: unless-stopped
+  # Daemon startup must pass the operator's storage and recovery checks.
+  restart: on-failure
   init: true
   read_only: true
   cap_drop: [ALL]
@@ -11,6 +19,7 @@ x-service: &service
   tmpfs: ['/tmp:size=64m,mode=1777']
   stop_grace_period: 60s
   logging: {driver: none}
+  extra_hosts: *platform-hosts
   depends_on:
     postgres: {condition: service_healthy}
 
@@ -18,7 +27,7 @@ services:
   postgres:
     image: ${JUEX_POSTGRES_IMAGE:-postgres:18-bookworm}
     runtime: runc
-    restart: unless-stopped
+    restart: on-failure
     entrypoint: [/usr/local/bin/juex-service-log, --, /usr/local/bin/docker-entrypoint.sh]
     command: [postgres]
     environment: {POSTGRES_DB: juex, POSTGRES_USER: juex, POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password}
@@ -42,7 +51,6 @@ services:
       - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
     networks:
       platform: {ipv4_address: '${JUEX_PLATFORM_PREFIX:-172.30.0}.10'}
-    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
 
   operator:
     <<: *service
@@ -54,7 +62,6 @@ services:
       - ${JUEX_DEPLOY_ROOT}/certificates/management:/run/juex/certificates:ro
       - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
     networks: [platform]
-    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
 
   runtime:
     <<: *service
@@ -65,7 +72,6 @@ services:
       - ${JUEX_DEPLOY_ROOT}/certificates/runtime:/run/juex/certificates:ro
       - ${JUEX_DEPLOY_ROOT}/maintenance:/run/juex/maintenance:ro
     networks: [platform]
-    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
 
   memory:
     <<: *service
@@ -113,7 +119,7 @@ services:
   gateway:
     image: ${JUEX_GATEWAY_IMAGE:-nginx:1.28-bookworm}
     runtime: runc
-    restart: unless-stopped
+    restart: on-failure
     entrypoint: [/usr/local/bin/juex-service-log, --, /docker-entrypoint.sh]
     command: [nginx, -g, 'daemon off;']
     ports: ['0.0.0.0:${JUEX_HTTPS_PORT:-443}:443']
@@ -124,7 +130,7 @@ services:
       - ${JUEX_DEPLOY_ROOT}/tls:/run/juex/tls:ro
     networks:
       platform: {ipv4_address: '${JUEX_PLATFORM_PREFIX:-172.30.0}.11'}
-    extra_hosts: ['execution:${JUEX_PLATFORM_PREFIX:-172.30.0}.1']
+    extra_hosts: *platform-hosts
     depends_on: [management, execution]
     logging: {driver: none}
 

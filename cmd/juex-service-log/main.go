@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -13,12 +15,39 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func runService(args []string, directory string, waitDelay time.Duration) (result error) {
+func runService(args []string, directory string, waitDelay time.Duration) error {
 	logs, err := servicelog.New(directory)
 	if err != nil {
 		return err
 	}
-	defer func() { result = errors.Join(result, logs.Close()) }()
+	return runLoggedService(args, logs, waitDelay)
+}
+
+type processLogs interface {
+	io.Writer
+	Prune() error
+	Close() error
+}
+
+func runLoggedService(args []string, sink processLogs, waitDelay time.Duration) error {
+	logs := servicelog.NewBuffered(sink)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), waitDelay)
+		defer cancel()
+		if err := logs.Close(ctx); err != nil {
+			// A log outage must neither change a clean service exit into a
+			// restart-on-failure nor hang exit on a blocked supervisor pipe.
+			done := make(chan struct{})
+			go func() {
+				fmt.Fprintln(os.Stderr, "process logs:", err)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}()
 	child := exec.Command(args[0], args[1:]...)
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, logs, logs
 	// Bound pipe draining only after the main process exits. This never adds
@@ -32,8 +61,6 @@ func runService(args []string, directory string, waitDelay time.Duration) (resul
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- child.Wait() }()
-	timer := time.NewTicker(time.Hour)
-	defer timer.Stop()
 	for {
 		select {
 		case err := <-exited:
@@ -41,10 +68,6 @@ func runService(args []string, directory string, waitDelay time.Duration) (resul
 		case sig := <-signals:
 			if err := child.Process.Signal(sig); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				return err
-			}
-		case <-timer.C:
-			if err := logs.Prune(); err != nil {
-				fmt.Fprintln(os.Stderr, "process log retention:", err)
 			}
 		}
 	}

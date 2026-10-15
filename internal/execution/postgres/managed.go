@@ -10,11 +10,11 @@ import (
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
 )
 
-const managedColumns = `h.environment_id,h.agent_id,e.tenant_id,e.user_id,e.credential_hash,COALESCE(h.slot,0),COALESCE(h.memory_bytes,0),COALESCE(h.nano_cpus,0),h.running,h.last_activity,COALESCE(e.online_until>clock_timestamp(),false),EXISTS(SELECT 1 FROM execution.operations o WHERE o.environment_id=e.id AND (NOT o.acknowledged OR o.state IN ('waiting','dispatched','accepted','running'))),COALESCE(h.storage_identity::text,''),COALESCE(h.project_id,0),COALESCE(h.workspace_bytes,0),COALESCE(h.workspace_inodes,0),h.provisioned,h.purging,h.purge_data,h.backend,e.os,e.working_directory,h.home_directory,EXISTS(SELECT 1 FROM execution.operations o WHERE o.environment_id=e.id AND o.state IN ('dispatched','accepted','running','unknown'))`
+const managedColumns = `h.environment_id,h.agent_id,e.tenant_id,e.user_id,e.credential_hash,COALESCE(h.slot,0),COALESCE(h.memory_bytes,0),COALESCE(h.nano_cpus,0),h.running,h.last_activity,COALESCE(e.online_until>clock_timestamp(),false),EXISTS(SELECT 1 FROM execution.operations o WHERE o.environment_id=e.id AND (NOT o.acknowledged OR o.state IN ('waiting','dispatched','accepted','running'))),COALESCE(h.storage_identity::text,''),COALESCE(h.project_id,0),COALESCE(h.workspace_bytes,0),COALESCE(h.workspace_inodes,0),h.provisioned,h.purging,h.purge_data,h.backend,e.os,e.working_directory,h.home_directory,EXISTS(SELECT 1 FROM execution.operations o WHERE o.environment_id=e.id AND o.state IN ('dispatched','accepted','running','unknown')),h.stopping`
 
 func scanManaged(row pgx.Row) (execution.ManagedResource, error) {
 	var h execution.ManagedResource
-	err := row.Scan(&h.EnvironmentID, &h.AgentID, &h.TenantID, &h.UserID, &h.CredentialHash, &h.Slot, &h.Memory, &h.NanoCPUs, &h.Running, &h.LastActivity, &h.Online, &h.Busy, &h.StorageIdentity, &h.ProjectID, &h.WorkspaceBytes, &h.WorkspaceInodes, &h.Provisioned, &h.Purging, &h.PurgeData, &h.Backend, &h.OS, &h.WorkingDirectory, &h.HomeDirectory, &h.Unconfirmed)
+	err := row.Scan(&h.EnvironmentID, &h.AgentID, &h.TenantID, &h.UserID, &h.CredentialHash, &h.Slot, &h.Memory, &h.NanoCPUs, &h.Running, &h.LastActivity, &h.Online, &h.Busy, &h.StorageIdentity, &h.ProjectID, &h.WorkspaceBytes, &h.WorkspaceInodes, &h.Provisioned, &h.Purging, &h.PurgeData, &h.Backend, &h.OS, &h.WorkingDirectory, &h.HomeDirectory, &h.Unconfirmed, &h.Stopping)
 	return h, err
 }
 
@@ -40,7 +40,7 @@ func (s *Store) EnsureManaged(ctx context.Context, scope execution.Scope, candid
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('juex.execution.managed_environments.allocate'))`); err != nil {
 		return execution.ManagedResource{}, err
 	}
-	h, err := scanManaged(tx.QueryRow(ctx, `SELECT `+managedColumns+` FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE h.agent_id=$1 FOR UPDATE OF e`, scope.AgentID))
+	h, err := scanManaged(tx.QueryRow(ctx, `SELECT `+managedColumns+` FROM execution.managed_environments h JOIN execution.environments e ON e.id=h.environment_id WHERE h.agent_id=$1`, scope.AgentID))
 	if err == nil {
 		if selected != "" && selected != h.EnvironmentID {
 			return h, execprotocol.ErrConflict
@@ -53,7 +53,9 @@ func (s *Store) EnsureManaged(ctx context.Context, scope execution.Scope, candid
 		}
 		// Rejoining restores the owned workspace, never an old external-device
 		// grant. Existing operations still carry their original authority epoch.
-		if _, err := tx.Exec(ctx, `UPDATE execution.environments SET removal_epoch=$2 WHERE id=$1 AND fleet_id=$3 AND status='active'`, h.EnvironmentID, scope.RemovalEpoch, scope.FleetID); err != nil {
+		// A delayed list must not roll back a newer epoch or lock/write the row
+		// when authority has not changed.
+		if _, err := tx.Exec(ctx, `UPDATE execution.environments SET removal_epoch=$2 WHERE id=$1 AND fleet_id=$3 AND status='active' AND removal_epoch<$2`, h.EnvironmentID, scope.RemovalEpoch, scope.FleetID); err != nil {
 			return h, err
 		}
 		return h, tx.Commit(ctx)
@@ -157,7 +159,20 @@ func (s *Store) LockManaged(ctx context.Context, id string, action func(executio
 		}
 		return tx.Commit(ctx)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE execution.managed_environments SET running=$2,last_error=$3,provisioned=provisioned OR $4 WHERE environment_id=$1`, id, result.Running, result.Error, result.Provisioned); err != nil {
+	if h.Stopping && !result.Stopping {
+		if result.Running {
+			return execprotocol.ErrConflict
+		}
+		// Fence every connection from the stopped instance. Take environment
+		// before managed activity, matching admission and receipt lock order.
+		if _, err := tx.Exec(ctx, `UPDATE execution.environments SET connection_epoch=connection_epoch+1,online_until=NULL WHERE id=$1`, id); err != nil {
+			return err
+		}
+	}
+	// Reconciliation also polls stopped environments; unchanged results must not
+	// turn an idle deployment into a continuous source of tuple and WAL writes.
+	if _, err := tx.Exec(ctx, `UPDATE execution.managed_environments SET running=$2,last_error=$3,provisioned=provisioned OR $4,stopping=$5
+ WHERE environment_id=$1 AND (running,last_error,provisioned,stopping) IS DISTINCT FROM ($2,$3,provisioned OR $4,$5)`, id, result.Running, result.Error, result.Provisioned, result.Stopping); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

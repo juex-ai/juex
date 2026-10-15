@@ -20,9 +20,11 @@ private JSON/YAML file with this shape:
 For provider-default ordinary requests, set `max_output` to zero and supply a
 positive `output_reserve`. A positive cap may omit the reserve to use the same
 value. Anthropic zero-cap fixtures require at least 4096 reserved tokens.
+An optional model `headers` map carries provider routing headers through the
+production configuration path, including Runtime identity templates.
 
 No personal runtime configuration is discovered automatically. Keep credentials
-outside Git with mode 0600. Reports redact selected API keys; temporary selected
+outside Git with mode 0600. Reports redact selected API keys and header values; temporary selected
 model files are deleted after every outcome. Selection is seeded and reproducible;
 `--only provider:model` and `--all-models` make the scope explicit.
 

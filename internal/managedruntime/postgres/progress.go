@@ -28,7 +28,7 @@ func (s *Store) WriteProgress(ctx context.Context, lease managedruntime.Lease, a
 		return err
 	}
 	var active bool
-	if err := tx.QueryRow(ctx, `SELECT a.state='started' AND t.state='running' AND t.activation_epoch=$2 AND (a.request->>'generation')::bigint=th.generation FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id JOIN runtime.threads th ON th.id=t.thread_id WHERE a.id=$1`, attempt, lease.Epoch).Scan(&active); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT a.state='started' AND t.state='running' AND t.activation_epoch=$2 AND a.request_generation=th.generation FROM runtime.attempts a JOIN runtime.turns t ON t.id=a.turn_id JOIN runtime.threads th ON th.id=t.thread_id WHERE a.id=$1`, attempt, lease.Epoch).Scan(&active); err != nil {
 		return classify(err)
 	}
 	if !active {
@@ -47,11 +47,11 @@ func (s *Store) WriteProgress(ctx context.Context, lease managedruntime.Lease, a
 }
 
 func readProgress(ctx context.Context, tx pgx.Tx, thread managedruntime.Thread) ([]managedruntime.ModelProgress, error) {
-	rows, err := tx.Query(ctx, `SELECT a.id,a.turn_id,(a.request->>'generation')::bigint,p.start_sequence,(a.request->'model'->>'provider')||':'||(a.request->'model'->>'model'),
+	rows, err := tx.Query(ctx, `SELECT a.id,a.turn_id,a.request_generation,p.start_sequence,(a.request_model->>'provider')||':'||(a.request_model->>'model'),
 CASE WHEN t.state='cancelled' THEN 'cancelled' WHEN a.state='started' AND (ag.epoch<>t.activation_epoch OR ag.lease_until<=clock_timestamp()) THEN 'unknown' WHEN a.state='started' THEN 'running' ELSE a.state END,
 a.started_at,p.updated_at,p.snapshot
 FROM runtime.attempt_progress p JOIN runtime.attempts a ON a.id=p.attempt_id JOIN runtime.turns t ON t.id=a.turn_id JOIN runtime.agents ag ON ag.id=$3
-WHERE t.thread_id=$1 AND (a.request->>'generation')::bigint=$2 AND p.revision>0 ORDER BY a.started_at DESC,a.ordinal DESC LIMIT 4`, thread.ID, thread.Generation, thread.AgentID)
+WHERE t.thread_id=$1 AND a.request_generation=$2 AND p.revision>0 ORDER BY a.started_at DESC,a.ordinal DESC LIMIT 4`, thread.ID, thread.Generation, thread.AgentID)
 	if err != nil {
 		return nil, err
 	}

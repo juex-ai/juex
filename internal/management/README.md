@@ -15,8 +15,14 @@ public registration endpoint. Adapters must obtain actor IDs from authenticated
 sessions. Roles supplied to membership operations are desired changes, not
 proof of the caller's authority.
 
-Every membership writer locks the Tenant row before reading current permissions
-and checking the last active administrator. Membership changes, actor/owner
+Authority checks and membership writers acquire the same transaction-level Tenant
+advisory lock before reading permissions or checking the last active administrator.
+Agent/Fleet authorization, Fleet overviews and model plan/admission reads use shared locks so one
+slow reader cannot serialize other readers. Authority mutations remain exclusive;
+waiting readers observe committed revocations before continuing.
+Pure owner authorization does not dirty a Tenant row or require a WAL commit.
+Management instances share this lock protocol and upgrade together while writers
+are drained. Membership changes, actor/owner
 audit facts and execution epochs commit together. Restoring access never rolls
 back an epoch; Runtime, Execution and applications recheck it to invalidate old
 work even when suspension and restoration occur between their checks. Audit

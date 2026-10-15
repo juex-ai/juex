@@ -69,7 +69,8 @@ def run_live(args,kind):
                 except subprocess.TimeoutExpired as error:
                     status=1;log=(error.stdout or b'').decode(errors='replace') if isinstance(error.stdout,bytes) else (error.stdout or '')
                     log+='\nmanaged live evaluation timed out\n'
-                log=log.replace(model['api_key'],'[REDACTED]')
+                for secret in sorted({model['api_key'],*model.get('headers',{}).values()},key=len,reverse=True):
+                    log=log.replace(secret,'[REDACTED]')
                 log_path=report/(str(len(results)+1)+'.log');log_path.write_text(log);log_path.chmod(0o600)
                 passed=status==0 and 'MANAGED_LIVE_EVIDENCE' in log
                 results.append(dict(provider_model=candidate.ref,status='pass' if passed else 'fail',log=str(log_path)))

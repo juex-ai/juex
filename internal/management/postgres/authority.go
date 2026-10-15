@@ -12,7 +12,10 @@ func (d *Directory) AuthorizeFleet(ctx context.Context, actor, tenant, owner str
 		return management.FleetAuthority{}, err
 	}
 	defer rollback(tx)
-	fleet, member, err := authorizeFleet(ctx, tx, actor, tenant, owner, execute)
+	if err := lockTenantShared(ctx, tx, tenant); err != nil {
+		return management.FleetAuthority{}, err
+	}
+	fleet, member, err := authorizeFleetLocked(ctx, tx, actor, tenant, owner, execute)
 	if err != nil {
 		return management.FleetAuthority{}, err
 	}

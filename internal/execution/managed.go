@@ -20,7 +20,7 @@ type ManagedResource struct {
 	Backend, OS, WorkingDirectory, HomeDirectory             string
 	Slot                                                     uint16
 	Memory, NanoCPUs                                         int64
-	Running, Busy, Online                                    bool
+	Running, Busy, Online, Stopping                          bool
 	LastActivity                                             time.Time
 	StorageIdentity                                          string
 	ProjectID                                                uint32
@@ -32,6 +32,7 @@ type ManagedResource struct {
 
 type ManagedResult struct {
 	Running     bool
+	Stopping    bool
 	Error       string
 	Provisioned bool
 	Purged      bool
@@ -150,70 +151,83 @@ func (h *ManagedManager) Reconcile(ctx context.Context) error {
 	}
 	var failures []error
 	for _, id := range ids {
-		err := h.Store.LockManaged(ctx, id, func(resource ManagedResource) (ManagedResult, error) {
-			result := ManagedResult{Running: resource.Running, Provisioned: resource.Provisioned}
-			if err := h.matches(resource); err != nil {
-				return result, err
-			}
-			if resource.Purging {
-				if resource.Backend == "host" && resource.Unconfirmed {
-					// Keep the original journal connected until cancellation is
-					// confirmed. A native stop cannot prove external processes died.
-					if !resource.Online {
-						if err := h.Backend.Ensure(ctx, resource, h.credential(resource.EnvironmentID, resource.Backend)); err != nil {
-							return result, err
-						}
-						result.Provisioned = true
-					}
-					result.Running = true
-					return result, nil
+		// Commit the stop intent before touching the external process. A second
+		// transaction confirms it; cancellation or a crash leaves dispatch fenced.
+		for range 2 {
+			finishStop := false
+			err := h.Store.LockManaged(ctx, id, func(resource ManagedResource) (ManagedResult, error) {
+				result := ManagedResult{Running: resource.Running, Stopping: resource.Stopping, Provisioned: resource.Provisioned}
+				if err := h.matches(resource); err != nil {
+					return result, err
 				}
-				if resource.PurgeData {
-					// Purge owns stopping and removal, including retries after files
-					// were removed but the database transaction did not commit.
-					if err := h.Backend.Purge(ctx, resource); err != nil {
+				if resource.Stopping && (resource.Backend != "host" || !resource.Unconfirmed) {
+					if err := h.Backend.Stop(ctx, resource); err != nil {
 						return result, err
 					}
-					result.Purged = true
-				} else if err := h.Backend.Stop(ctx, resource); err != nil {
+					result.Running, result.Stopping = false, false
+					return result, nil
+				}
+				if resource.Purging {
+					if resource.Backend == "host" && resource.Unconfirmed {
+						// Keep the original journal connected until cancellation is
+						// confirmed. A native stop cannot prove external processes died.
+						if !resource.Online {
+							if err := h.Backend.Ensure(ctx, resource, h.credential(resource.EnvironmentID, resource.Backend)); err != nil {
+								return result, err
+							}
+							result.Provisioned = true
+						}
+						result.Running = true
+						return result, nil
+					}
+					if resource.PurgeData {
+						// Purge owns stopping and removal, including retries after files
+						// were removed but the database transaction did not commit.
+						if err := h.Backend.Purge(ctx, resource); err != nil {
+							return result, err
+						}
+						result.Purged = true
+					} else if err := h.Backend.Stop(ctx, resource); err != nil {
+						return result, err
+					}
+					result.Running = false
+					return result, nil
+				}
+				scope, err := h.Authority.Agent(ctx, resource.UserID, resource.TenantID, resource.AgentID, true)
+				if err != nil && !errors.Is(err, execprotocol.ErrDenied) {
 					return result, err
 				}
-				result.Running = false
-				return result, nil
-			}
-			scope, err := h.Authority.Agent(ctx, resource.UserID, resource.TenantID, resource.AgentID, true)
-			if err != nil && !errors.Is(err, execprotocol.ErrDenied) {
-				return result, err
-			}
-			active := err == nil && scope.CanExecute
-			if resource.Busy {
-				// Even a suspended Agent may need its existing journal to drain
-				// cancellations/results. The broker independently rejects new work.
-				if resource.Online {
+				active := err == nil && scope.CanExecute
+				if resource.Busy {
+					// Even a suspended Agent may need its existing journal to drain
+					// cancellations/results. The broker independently rejects new work.
+					if resource.Online {
+						result.Running = true
+						return result, nil
+					}
+					credential := h.credential(resource.EnvironmentID, resource.Backend)
+					if len(h.Key) != 32 || Digest(credential) != resource.CredentialHash {
+						return result, errors.New("managed enrollment key mismatch")
+					}
+					if err := h.Backend.Ensure(ctx, resource, credential); err != nil {
+						result.Error = "managed environment could not start; check Execution service logs"
+						failures = append(failures, err)
+						return result, nil
+					}
 					result.Running = true
-					return result, nil
+					result.Provisioned = true
+				} else if resource.Running && (!active || time.Since(resource.LastActivity) >= idle) {
+					result.Stopping, finishStop = true, true
 				}
-				credential := h.credential(resource.EnvironmentID, resource.Backend)
-				if len(h.Key) != 32 || Digest(credential) != resource.CredentialHash {
-					return result, errors.New("managed enrollment key mismatch")
-				}
-				if err := h.Backend.Ensure(ctx, resource, credential); err != nil {
-					result.Error = "managed environment could not start; check Execution service logs"
-					failures = append(failures, err)
-					return result, nil
-				}
-				result.Running = true
-				result.Provisioned = true
-			} else if resource.Running && (!active || time.Since(resource.LastActivity) >= idle) {
-				if err := h.Backend.Stop(ctx, resource); err != nil {
-					return result, err
-				}
-				result.Running = false
+				return result, nil
+			})
+			if err != nil {
+				failures = append(failures, err)
+				break
 			}
-			return result, nil
-		})
-		if err != nil {
-			failures = append(failures, err)
+			if !finishStop {
+				break
+			}
 		}
 	}
 	return errors.Join(failures...)

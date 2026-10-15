@@ -56,7 +56,35 @@ sudo python3 /opt/juex/operator.py --root /var/lib/juex-management init \
 sudo python3 /opt/juex/operator.py --root /var/lib/juex-management resume
 ```
 
-平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有公共网关端口绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
+平台 bridge 默认使用 `172.30.0.0/24`，Hosted 使用 `172.31.0.0/16`。如果与已有路由冲突，必须覆盖。只有公共网关端口绑定 `0.0.0.0`。Execution 的主机网络端点受运维工具配置的防火墙限制；数据库与其他 RPC 不发布端口。
+平台容器将 Management、PostgreSQL 和 Execution 名称映射到部署拥有的固定地址，
+使这些连接无需 Docker DNS。Runtime、Memory 和 Calendar 的发现仍使用 Docker DNS；
+服务 mTLS 继续独立于地址验证服务身份。Guest DNS 仍使用显式的 Hosted 配置。
+直接运行 `docker compose up` 会绕过恢复检查，启动服务应使用 `operator.py up/resume`。
+
+### 开机启动顺序
+
+启用平台启动前，用 systemd mount 单元配置专用文件系统。loop 文件系统使用已有的
+后备文件，指定 `loop,prjquota,nosuid,nodev` 和 `ReadWriteOnly=yes`，不要固定
+`/dev/loopN` 编号。`up` 先验证已登记的文件系统 UUID，再刷新块设备绑定并启动容器；
+不会创建或格式化文件系统。初始化和升级会重新生成自有 Compose 文件，运维设置应保留
+在文档指定的配置文件中。
+
+使用 root 所有的 systemd service，设置 `Type=oneshot`、`RemainAfterExit=yes`、
+`RequiresMountsFor=/srv/juex-workspaces`，并为 `docker.service` 和精确的 mount 单元
+同时设置 `BindsTo=` 与 `After=`。通过
+`systemd-escape --path --suffix=mount /srv/juex-workspaces` 获取 mount 单元名称。
+`ExecStart` 使用已安装 operator 的 `up`，`ExecStop` 使用 `down`，都带部署的绝对
+`--root`；设置 `TimeoutStartSec=infinity`、`TimeoutStopSec=infinity` 和
+`WantedBy=multi-user.target`。启用前运行 `systemd-analyze verify`。由该 service
+拉起挂载，不要把此数据卷或 JueX 设为 Docker 的全局依赖。
+
+容器使用 `on-failure` 重启异常退出的进程，避免 daemon 启动时绕过 operator。
+Docker 意外重启后，需要显式启动平台 service。`up` 保留维护状态；此前的 `down`、
+失败备份或恢复仍需正常的显式 `resume` 流程。不要在开机单元中使用 `resume`。
+正常卸载/重挂载测试前，须证明平台空闲并将其停止，禁止强制卸载活动存储。
+若忙碌状态导致 `down` 失败，systemd 排序不会取消整机关机。空闲状态下的挂载/启动
+演练不能证明整机重启或灾难恢复。
 
 使用 `sudo python3 /opt/juex/operator.py --root /var/lib/juex-management manage bootstrap --email admin@example.com` 生成首位管理员设置链接；运维工具为每个 Management 命令应用部署的传输策略。这是一次性秘密 URL，必须私下交付。未配置 SMTP 时仍能复制邀请链接。模型凭据通过 Management 运维 CLI 配置。不能向 Agent 暴露部署私有文件和服务证书。
 
@@ -73,7 +101,7 @@ unset JUEX_SMTP_CREDENTIAL
 
 将输出的 `JUEX_SMTP_CONFIG=...` 一行保存到 `secrets/management.env`，替换已有值，再使用 `operator.py up` 按新配置重建 Management。整个 SMTP 配置使用部署主密钥加密，不能持久保存密码输入。重新运行即可替换凭据；删除配置并重建 Management 即停用邮件。已有邮件队列仍会持久保存。主密钥须放入下述独立恢复归档，恢复时需要匹配的密钥。
 
-普通进程日志放在 `logs/SERVICE/juex-*.log`，保留七天、每文件上限 10 MiB、每服务最多七份。空闲服务每小时清理过期日志。Docker 不重复存储进程日志。业务回执、用量和审计使用独立的数据库保留规则。
+普通进程日志放在 `logs/SERVICE/juex-*.log`，保留七天、每文件上限 10 MiB、每服务最多七份。空闲服务每小时清理过期日志。每个服务使用 512 KiB 缓冲（含正在写入的块），隔离普通日志写入与服务输出。日志存储过慢或失败时可能丢弃字节，恢复和退出时报告丢弃量；退出最多等待五秒排空日志，并保留服务退出状态。Docker 不重复存储进程日志。业务回执、用量和审计使用独立的数据库保留规则。
 
 ## 生产 HTTPS
 

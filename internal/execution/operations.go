@@ -113,9 +113,6 @@ func (s *Service) submit(ctx context.Context, actor, tenant, environment string,
 	if !permits(device, scope, request) {
 		return Operation{}, execprotocol.ErrDenied
 	}
-	if err := s.authorizeHandle(ctx, scope, environment, request); err != nil {
-		return Operation{}, err
-	}
 	return s.Store.Enqueue(ctx, device, scope, request, wait, fence != nil && (request.Kind == "mcp_connect" || request.Kind == "observe_command" || request.Kind == "read_agent_instructions"))
 }
 
@@ -188,6 +185,9 @@ func (s *Service) EffectiveGrants(ctx context.Context, device Device) (map[strin
 	}
 	owner, err := s.Authority.Owner(ctx, device.UserID, device.TenantID, device.UserID, true)
 	if err != nil {
+		if errors.Is(err, execprotocol.ErrDenied) {
+			return grants, nil
+		}
 		return nil, err
 	}
 	if owner.RemovalEpoch != device.RemovalEpoch || owner.FleetID != device.FleetID {
@@ -199,7 +199,12 @@ func (s *Service) EffectiveGrants(ctx context.Context, device Device) (map[strin
 	for agent, capabilities := range device.Grants {
 		scope, err := s.Authority.Agent(ctx, device.UserID, device.TenantID, agent, true)
 		if err != nil {
-			continue
+			if errors.Is(err, execprotocol.ErrDenied) {
+				continue
+			}
+			// A partial result would revoke unrelated running operations when
+			// the device applies it as a complete grants snapshot.
+			return nil, err
 		}
 		if scope.FleetID == device.FleetID {
 			grants[agent] = permittedCapabilities(scope.Capabilities, capabilities)

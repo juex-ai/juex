@@ -21,6 +21,10 @@ func openRegular(string, int, os.FileMode) (*os.File, error) {
 func openRootRegular(*os.Root, string) (*os.File, error) {
 	return nil, errors.New("native file execution requires Linux or macOS")
 }
-func startTerminal(*exec.Cmd, io.Writer) (io.WriteCloser, <-chan struct{}, error) {
+func startTerminal(*exec.Cmd, io.Writer, int64, func()) (io.WriteCloser, func() error, error) {
 	return nil, nil, errors.New("PTY execution requires Linux or macOS")
+}
+
+func startProcessOutput(*exec.Cmd, io.Writer, io.Writer, func()) (func() error, error) {
+	return nil, errors.New("process execution requires Linux or macOS")
 }

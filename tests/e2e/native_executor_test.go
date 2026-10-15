@@ -9,13 +9,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/juex-ai/juex/internal/execution/native"
 	"github.com/juex-ai/juex/internal/foundation/execprotocol"
+	"golang.org/x/sys/unix"
 )
 
 func TestNativeExecutorConcurrentDeliveryRunsOnce(t *testing.T) {
@@ -333,6 +336,52 @@ func TestNativeExecutorPTYStdinCursorAndCancellation(t *testing.T) {
 	}
 	if result := nativeEventually(t, engine, long.ID, func(snapshot execprotocol.Snapshot) bool { return snapshot.State.Terminal() }); result.State != execprotocol.Cancelled {
 		t.Fatal(result)
+	}
+}
+
+func TestNativeExecutorPTYInheritedTerminalDoesNotDelayReceipt(t *testing.T) {
+	for _, child := range []string{"read -r line < blocker", "while printf 'background-output\\n'; do :; done 2>/dev/null"} {
+		t.Run(child, func(t *testing.T) {
+			config := nativeConfig(t)
+			config.OutputLimit = 4096
+			if err := unix.Mkfifo(filepath.Join(config.WorkingDirectory, "blocker"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			engine := openNative(t, config)
+			t.Cleanup(func() {
+				data, err := os.ReadFile(filepath.Join(config.WorkingDirectory, "descendant"))
+				if err != nil {
+					return
+				}
+				pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+				if err == nil && pid > 0 {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			})
+			args := native.CommandArguments{TTY: true, TimeoutMS: 3000, Command: "trap '' HUP; printf 'parent-done\\n'; /bin/sh -c " + strconv.Quote("printf 'child-ready\\n'; : > ready; "+child) + " & printf '%s' $! > descendant; while [ ! -e ready ]; do :; done"}
+			result := nativeRun(t, engine, nativeRequest(t, "inherited-terminal", "exec_command", args))
+			if result.State != execprotocol.Completed || result.ExitCode == nil || *result.ExitCode != 0 || !strings.Contains(result.Text(), "parent-done") {
+				t.Fatal("inherited terminal prevented a successful receipt", result)
+			}
+		})
+	}
+}
+
+func TestNativeExecutorPTYOutputQuotaRetainsPrefix(t *testing.T) {
+	config := nativeConfig(t)
+	config.OutputLimit = 4096
+	engine := openNative(t, config)
+	result := nativeRun(t, engine, nativeRequest(t, "pty-output-quota", "exec_command", native.CommandArguments{TTY: true, Command: "printf 'prefix\\n'; head -c 131072 /dev/zero"}))
+	if result.State != execprotocol.Completed || !result.Truncated || result.OutputBytes != config.OutputLimit || !strings.HasPrefix(result.Text(), "prefix\r\n") {
+		t.Fatal("PTY did not preserve output quota semantics", result.State, result.Truncated, result.OutputBytes)
+	}
+}
+
+func TestNativeExecutorPTYClosedStreamsPreserveProcessExit(t *testing.T) {
+	engine := openNative(t, nativeConfig(t))
+	result := nativeRun(t, engine, nativeRequest(t, "pty-closed-streams", "exec_command", native.CommandArguments{TTY: true, Command: "printf before; exec 0<&- 1>&- 2>&-; sleep 0.2; exit 7"}))
+	if result.State != execprotocol.Failed || result.ExitCode == nil || *result.ExitCode != 7 || result.Text() != "before" {
+		t.Fatal("terminal EOF changed the process exit", result)
 	}
 }
 

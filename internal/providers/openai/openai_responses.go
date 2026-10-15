@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -184,11 +185,7 @@ func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, 
 		}
 		return llm.Response{}, fmt.Errorf("openai responses stream: %w", err), false
 	}
-	if len(items) == 0 {
-		return llm.Response{}, fmt.Errorf("openai responses stream closed before response.completed"), false
-	}
-	finalResp := responses.Response{Status: responses.ResponseStatusCompleted, Output: items}
-	return p.responseFromResponses(&finalResp), nil, false
+	return llm.Response{}, fmt.Errorf("openai responses stream closed before terminal event: %w", io.ErrUnexpectedEOF), false
 }
 
 func (p *openAIResponsesProvider) emitOpenAIResponsesRetryDiagnostic(opts llm.CompleteOptions, err error, attempt int, delay time.Duration, willRetry, exhausted bool) {

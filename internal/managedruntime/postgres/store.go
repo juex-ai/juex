@@ -112,6 +112,12 @@ var agentControlSchema string
 //go:embed input_tracking_schema.sql
 var inputTrackingSchema string
 
+//go:embed model_origins_schema.sql
+var modelOriginsSchema string
+
+//go:embed progress_generation_schema.sql
+var progressGenerationSchema string
+
 type Store struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -126,7 +132,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE SCHEMA IF NOT EXISTS runtime; CREATE TABLE IF NOT EXISTS runtime.schema_versions(version integer PRIMARY KEY,checksum text NOT NULL)`); err != nil {
 		return err
 	}
-	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, outputBudgetSchema, mainTriggersSchema, applicationBudgetSchema, importSchema, threadApplicationSchema, threadStateSchema, inputImagesSchema, progressSchema, observerManagementSchema, threadDeletionSchema, inputTrackingSchema, lifecycleSchema, agentControlSchema}
+	migrations := []string{schema, toolsSchema, toolCancellationSchema, observationsSchema, modelsSchema, compactionSchema, collaborationSchema, applicationsSchema, evidenceSchema, recallSchema, noticesSchema, noticeAttemptsSchema, notificationsSchema, usageSchema, purgeSchema, hooksSchema, extensionsSchema, instructionsSchema, outputBudgetSchema, mainTriggersSchema, applicationBudgetSchema, importSchema, threadApplicationSchema, threadStateSchema, inputImagesSchema, progressSchema, observerManagementSchema, threadDeletionSchema, inputTrackingSchema, lifecycleSchema, agentControlSchema, modelOriginsSchema, progressGenerationSchema}
 	rows, err := tx.Query(ctx, `SELECT version,checksum FROM runtime.schema_versions ORDER BY version`)
 	if err != nil {
 		return err
@@ -214,6 +220,16 @@ func (s *Store) EnsureAgent(ctx context.Context, scope managedruntime.Scope) (ma
 	if err := runtimePurgeGate(ctx, tx, scope.FleetID, scope.AgentID); err != nil {
 		return managedruntime.Thread{}, err
 	}
+	// Existing conversations need no initialization writes. Even a no-op
+	// INSERT ON CONFLICT can wait for Activation updates to the Agent row.
+	thread, err := scanThread(tx.QueryRow(ctx, `SELECT `+threadColumns+` FROM runtime.threads t JOIN runtime.agents a ON a.id=t.agent_id
+WHERE a.id=$1 AND a.tenant_id=$2 AND a.user_id=$3 AND a.fleet_id=$4 AND NOT a.purging AND t.kind='main'`, scope.AgentID, scope.TenantID, scope.UserID, scope.FleetID))
+	if err == nil {
+		return thread, tx.Commit(ctx)
+	}
+	if !errors.Is(err, managedruntime.ErrDenied) {
+		return managedruntime.Thread{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO runtime.agents(id,tenant_id,user_id,fleet_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, scope.AgentID, scope.TenantID, scope.UserID, scope.FleetID); err != nil {
 		return managedruntime.Thread{}, classify(err)
 	}
@@ -230,7 +246,7 @@ func (s *Store) EnsureAgent(ctx context.Context, scope managedruntime.Scope) (ma
 			return managedruntime.Thread{}, err
 		}
 	}
-	thread, err := readThread(ctx, tx, scope.AgentID, "")
+	thread, err = readThread(ctx, tx, scope.AgentID, "")
 	if err != nil {
 		return thread, err
 	}
@@ -447,7 +463,9 @@ func (s *Store) Timeline(ctx context.Context, scope managedruntime.Scope, thread
 	if after < 0 || limit < 1 || limit > 500 {
 		return managedruntime.Timeline{}, managedruntime.ErrInvalid
 	}
-	tx, err := s.begin(ctx)
+	// Keep the watermark, events and progress in one committed snapshot without
+	// waiting for Activation writers or holding them up while a page is read.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return managedruntime.Timeline{}, err
 	}
@@ -455,7 +473,13 @@ func (s *Store) Timeline(ctx context.Context, scope managedruntime.Scope, thread
 	if err := checkScope(ctx, tx, scope); err != nil {
 		return managedruntime.Timeline{}, err
 	}
-	thread, err := readThread(ctx, tx, scope.AgentID, threadID)
+	query := `SELECT ` + threadColumns + ` FROM runtime.threads t WHERE t.agent_id=$1 AND t.id=$2`
+	args := []any{scope.AgentID, threadID}
+	if threadID == "" {
+		query = `SELECT ` + threadColumns + ` FROM runtime.threads t WHERE t.agent_id=$1 AND t.kind='main'`
+		args = args[:1]
+	}
+	thread, err := scanThread(tx.QueryRow(ctx, query, args...))
 	if err != nil {
 		return managedruntime.Timeline{}, err
 	}

@@ -80,6 +80,10 @@ func TestManagedRuntimeCompactionCheckpointSurvivesRestartAndQueuedInput(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	partial := managedruntime.ProgressSnapshot{Revision: 1, Blocks: []managedruntime.ProgressBlock{{Kind: "text", Text: "Unfinished old-generation summary"}}}
+	if err := store.WriteProgress(ctx, lease, attempt.ID, partial); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.PrepareCompaction(ctx, lease, work, "automatic", ""); !errors.Is(err, managedruntime.ErrConflict) {
 		t.Fatal("prepared during provider attempt", err)
 	}
@@ -96,6 +100,10 @@ func TestManagedRuntimeCompactionCheckpointSurvivesRestartAndQueuedInput(t *test
 	}
 	if recovered.Compaction == nil || recovered.Compaction.ID != request.Compaction.JobID || recovered.Compaction.Attempts != 1 || recovered.ContextSequence != work.ContextSequence {
 		t.Fatal("lost compaction source", recovered)
+	}
+	beforeCompaction, err := store.Timeline(ctx, scope, main.ID, 0, 200)
+	if err != nil || len(beforeCompaction.Progress) != 1 || beforeCompaction.Progress[0].State != "unknown" {
+		t.Fatal("recovery lost partial summary", beforeCompaction.Progress, err)
 	}
 	if _, err := store.BeginAttempt(ctx, replacement, work.TurnID, managedruntime.ModelRequest{MaxOutputTokens: work.Config.Models[work.ModelIndex].MaxOutput, Purpose: "conversation"}); !errors.Is(err, managedruntime.ErrConflict) {
 		t.Fatal("bypassed pending compaction", err)
@@ -120,6 +128,21 @@ func TestManagedRuntimeCompactionCheckpointSurvivesRestartAndQueuedInput(t *test
 	}
 	if current.Generation != 2 || current.Compaction != nil || len(current.History) != 2 || current.History[0].Kind != llm.MessageKindCompact || current.History[1].ID != work.InputID {
 		t.Fatal("incorrect recovered checkpoint", current)
+	}
+	// Compaction advances the same Turn's generation; the abandoned attempt
+	// still belongs to the immutable generation of its request.
+	for name, read := range map[string]func(context.Context, managedruntime.Scope, string, int64, int) (managedruntime.Timeline, error){"timeline": store.Timeline, "history": store.History} {
+		page, err := read(ctx, scope, main.ID, 0, 200)
+		if err != nil || page.Thread.Generation != 2 || len(page.Progress) != 0 {
+			t.Fatal(name, "old partial leaked into new generation", page.Progress, err)
+		}
+	}
+	if err := store.WriteProgress(ctx, replacement, attempt.ID, partial); !errors.Is(err, managedruntime.ErrConflict) {
+		t.Fatal("late old-generation progress accepted", err)
+	}
+	var retainedProgress int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.attempt_progress WHERE attempt_id=$1 AND revision=1`, attempt.ID).Scan(&retainedProgress); err != nil || retainedProgress != 1 {
+		t.Fatal("old partial evidence was deleted", retainedProgress, err)
 	}
 	for _, message := range current.History {
 		if message.ID == queued.ID {

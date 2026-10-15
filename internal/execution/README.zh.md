@@ -42,6 +42,9 @@ Runtime 可在接纳到达 Execution 前持久取消已准备的请求。取消�
 原生设备主动建立加密连接。配对先在 Dashboard 绑定所属用户选择的 Agent／能力，再在本机核对 Tenant 和账号并确认。
 仅 Web 批准不会激活设备凭据。设备凭据独立于人的登录会话；每个 Tenant/User 绑定使用独立私有状态目录。
 
+设备在线状态使用可续期租约，与操作授权分开。持久心跳合并写入，但每次交互仍检查连接代际。
+`last_seen` 记录最近持久化的心跳，而非每次派发轮询；断连立即清除在线状态。
+
 `juex-execution serve --blob-root /var/lib/juex/execution/blobs` 运行平台服务。`juex-executor --state /absolute/private/directory pair --server https://platform.example` 绑定 Linux/macOS 设备，`run` 维持前台连接。
 HTTPS 反向代理将 `/device/` 路由到 Execution，将 Dashboard/API 路由到 Management。
 
@@ -60,7 +63,8 @@ Linux 需要可用的用户服务管理器；CLI 不自动启用 lingering 或�
 
 部署管理的 Host 与 Hosted 环境共享同一生命周期，每个 Agent 拥有一个持久环境身份、
 Workspace 与 Home。列出环境不会启动执行器，待执行操作按需启动它；
-未完成进程、MCP 连接和未确认结果阻止空闲回收。默认空闲五分钟后回收，生命周期锁在回收期间阻止派发，新操作仍可提交到持久队列。
+未完成进程、MCP 连接和未确认结果阻止空闲回收。默认空闲五分钟后回收；停止执行器前先提交停止意图，
+请求超时或协调器重启后仍阻止派发，新操作仍可提交到持久队列。确认停止后使旧连接失效，再由新执行器处理该队列。
 用户重新加入 Tenant 后保留其 Workspace，但不会重新授权较早代际的操作。
 
 `juex-execution serve --host-config /absolute/operator-config.json` 在 Linux/macOS
@@ -116,6 +120,8 @@ Runtime 创建的 MCP 连接还必须等待 Runtime 持久确认消费游标，�
 
 出站连接通过 TLS 协商协议，拒绝不兼容版本；重连保留执行引擎。平台授权只能收紧设备本地批准的 Agent／能力上限，不能扩大它。
 设备收到撤销后停止相关排队与进行中的操作。
+权限查询暂时不可用时暂停派发并重连，不改变设备授权，也不取消已有操作。
+只有明确拒绝或授权代际变化才撤销工作；恢复后查询原操作身份。
 
 永久清理 Agent 时，会请求取消自身操作和依赖其 Artifact 的传输，包括其他 Agent
 环境中的导入。保留原操作身份直到实际结果确认；未知结果继续显示未确认。不删除

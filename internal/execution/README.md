@@ -73,6 +73,11 @@ confirmation showing Tenant and account. Browser approval alone creates no
 device credential. The device holds the credential independently of human
 sessions. Each Tenant/User enrollment has its own private state directory.
 
+Device presence is a renewable lease, separate from operation authorization.
+Durable heartbeats are coalesced while each exchange retains connection-epoch
+fencing. `last_seen` records the last persisted heartbeat, not each dispatch poll;
+disconnect clears presence immediately.
+
 `juex-execution serve --blob-root /var/lib/juex/execution/blobs` runs the platform service. `juex-executor --state
 /absolute/private/directory pair --server https://platform.example` enrolls a
 Linux/macOS device; `run` maintains its foreground connection. An HTTPS reverse
@@ -129,8 +134,11 @@ Deployment-managed Host and Hosted environments share one lifecycle. Each Agent
 has one durable environment identity, Workspace and Home. Listing environments
 does not start executors. Pending operations start them on demand; unfinished
 processes, MCP connections and unacknowledged results prevent idle reclamation.
-The default idle timeout is five minutes. Lifecycle locks fence dispatch during
-reclamation while new operations commit to the durable queue. Rejoining a Tenant preserves the
+The default idle timeout is five minutes. Reclamation commits a stop intent before
+stopping the executor; it fences dispatch across request timeouts and coordinator
+restarts while new operations commit to the durable queue. Confirming the stop
+invalidates the old connections before a new executor can consume that queue.
+Rejoining a Tenant preserves the
 owned Workspace but never reauthorizes operations from an earlier epoch.
 
 `juex-execution serve --host-config /absolute/operator-config.json` enables Host
@@ -213,6 +221,9 @@ The outbound connector negotiates the protocol over TLS and rejects incompatible
 versions. Reconnection preserves the engine. Platform grants can restrict the
 locally approved Agent/capability ceiling; they cannot expand it. Revocation
 stops related queued and running operations when received by the device.
+An unavailable authority check suspends dispatch and reconnects without changing
+device grants or cancelling existing operations. Only a confirmed denial or a
+changed authority epoch revokes work; recovery queries its original identity.
 
 Permanent Agent cleanup cancels owned operations and transfers depending on its
 Artifacts, including imports running in another Agent's environment. Their

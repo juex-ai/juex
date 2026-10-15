@@ -81,7 +81,7 @@ func (e *Engine) command(ctx context.Context, operation *operation) (*int, error
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", args.Command)
-	cmd.Dir, cmd.Env, cmd.WaitDelay = directory, environment, 2*time.Second
+	cmd.Dir, cmd.Env = directory, environment
 	if err := e.extensionCommand(cmd, operation.record.Request.AgentID, args.Extension); err != nil {
 		return nil, err
 	}
@@ -90,16 +90,15 @@ func (e *Engine) command(ctx context.Context, operation *operation) (*int, error
 	}
 	writer := outputWriter{engine: e, operation: operation}
 	var input io.WriteCloser
-	var outputDone <-chan struct{}
+	var finishOutput func() error
 	if args.TTY {
 		command.ConfigureTerminalContext(cmd)
-		input, outputDone, err = startTerminal(cmd, writer)
+		input, finishOutput, err = startTerminal(cmd, writer, e.config.OutputLimit, cancel)
 	} else {
 		command.ConfigureContext(cmd)
-		cmd.Stdout, cmd.Stderr = writer, writer
 		input, err = cmd.StdinPipe()
 		if err == nil {
-			err = cmd.Start()
+			finishOutput, err = startProcessOutput(cmd, writer, writer, cancel)
 		}
 	}
 	if err != nil {
@@ -118,22 +117,21 @@ func (e *Engine) command(ctx context.Context, operation *operation) (*int, error
 		cancel()
 	}
 	waitErr := cmd.Wait()
-	if outputDone != nil {
-		// A child can inherit the terminal after the shell exits. Closing the
-		// owned PTY bounds shutdown instead of waiting on an unrelated daemon.
-		select {
-		case <-outputDone:
-		case <-time.After(time.Second):
-			_ = input.Close()
-			<-outputDone
-		}
+	contextErr := ctx.Err()
+	cancel()
+	var outputErr error
+	if finishOutput != nil {
+		outputErr = finishOutput()
 	}
 	code := cmd.ProcessState.ExitCode()
 	if err != nil {
 		return &code, err
 	}
-	if ctx.Err() != nil {
-		return &code, ctx.Err()
+	if outputErr != nil {
+		return &code, errors.Join(waitErr, outputErr)
+	}
+	if contextErr != nil {
+		return &code, contextErr
 	}
 	return &code, waitErr
 }

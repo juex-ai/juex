@@ -16,7 +16,16 @@ export async function api<T>(path: string, body?: unknown, method?: string, sign
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
   })
-  const value = await response.json()
+  let value
+  try {
+    value = await response.json()
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    // A gateway can return HTML without reaching the JSON API boundary.
+    throw new APIError(response.status, response.ok ? 'invalid_response' : 'http_error', response.ok
+      ? '服务返回了无法识别的响应，请稍后重试。'
+      : `请求失败（HTTP ${response.status}），请稍后重试。`)
+  }
   if (!response.ok) throw new APIError(response.status, value.code ?? 'error', value.error ?? '请求失败')
   return value as T
 }

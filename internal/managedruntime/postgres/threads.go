@@ -197,7 +197,14 @@ func cancelThread(ctx context.Context, tx pgx.Tx, scope managedruntime.Scope, th
 }
 
 func (s *Store) WorkActive(ctx context.Context, lease managedruntime.Lease, turnID string) (bool, error) {
-	var active bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.turns t JOIN runtime.threads th ON th.id=t.thread_id JOIN runtime.agents a ON a.id=th.agent_id WHERE t.id=$1 AND a.id=$2 AND a.holder=$3 AND a.epoch=$4 AND a.lease_until>clock_timestamp() AND t.activation_epoch=$4 AND t.state='running')`, turnID, lease.AgentID, lease.Holder, lease.Epoch).Scan(&active)
+	// An expired snapshot can race an in-flight renewal. Preserve recovery
+	// authority instead of treating that observation as a cancelled Turn.
+	var valid, active bool
+	err := s.pool.QueryRow(ctx, `SELECT a.run_mode='running' AND a.holder=$2 AND a.epoch=$3 AND a.lease_until>clock_timestamp(),
+	EXISTS(SELECT 1 FROM runtime.turns t JOIN runtime.threads th ON th.id=t.thread_id WHERE t.id=$4 AND th.agent_id=a.id AND t.activation_epoch=$3 AND t.state='running')
+	FROM runtime.agents a WHERE a.id=$1`, lease.AgentID, lease.Holder, lease.Epoch, turnID).Scan(&valid, &active)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !valid {
+		return false, managedruntime.ErrFence
+	}
 	return active, err
 }

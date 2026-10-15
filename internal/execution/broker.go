@@ -38,11 +38,6 @@ func callDevice(ctx context.Context, exchange Exchange, request execprotocol.Env
 }
 
 func (s *Service) Connected(ctx context.Context, device Device, exchange Exchange) error {
-	defer func() {
-		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Store.Touch(stop, device.ID, device.ConnectionEpoch, false)
-	}()
 	var grants map[string][]execprotocol.Capability
 	var status string
 	ticker := time.NewTicker(250 * time.Millisecond)
@@ -57,7 +52,7 @@ func (s *Service) Connected(ctx context.Context, device Device, exchange Exchang
 		}
 		current, err := s.EffectiveGrants(ctx, fresh)
 		if err != nil {
-			current = map[string][]execprotocol.Capability{}
+			return err
 		}
 		if grants == nil || status != fresh.Status || !reflect.DeepEqual(grants, current) {
 			if _, err := callDevice(ctx, exchange, execprotocol.Envelope{Type: "grants", Grants: current, Revoked: fresh.Status != "active"}); err != nil {
@@ -90,6 +85,9 @@ func (s *Service) reconcileDeviceOperation(ctx context.Context, device Device, g
 	terminal := execprotocol.State(operation.State).Terminal()
 	if !terminal {
 		fresh, err := s.Authority.Agent(ctx, operation.Scope.ActorID, operation.Scope.TenantID, operation.Scope.AgentID, true)
+		if err != nil && !errors.Is(err, execprotocol.ErrDenied) {
+			return err
+		}
 		if err != nil || !fresh.SameAuthority(operation.Scope) || !permits(device, fresh, operation.Request) || operation.Request.AuthorizationVersion > 0 && operation.Request.AuthorizationVersion != device.Version || !slices.Contains(grants[operation.Scope.AgentID], execprotocol.RequiredCapability(operation.Request.Kind)) {
 			if err := s.Store.CancelOperation(ctx, device.ID, operation.ID); err != nil {
 				return err
