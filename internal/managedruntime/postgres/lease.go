@@ -103,12 +103,20 @@ func (s *Store) NextInputs(ctx context.Context, lease managedruntime.Lease, excl
 	if excluded == nil {
 		excluded = []string{}
 	}
-	tx, err := s.begin(ctx)
+	// Discovery grants no execution authority: BeginTurn fences the selected
+	// input again. A polling read must not queue behind an Activation writer and
+	// stall the scheduler's renewal of other Agents.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, err
 	}
 	defer rollback(tx)
-	if err := fence(ctx, tx, lease); err != nil {
+	var valid bool
+	err = tx.QueryRow(ctx, `SELECT run_mode='running' AND NOT purging AND holder=$2 AND epoch=$3 AND lease_until>clock_timestamp() FROM runtime.agents WHERE id=$1`, lease.AgentID, lease.Holder, lease.Epoch).Scan(&valid)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !valid {
+		return nil, managedruntime.ErrFence
+	}
+	if err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `SELECT a.tenant_id,a.user_id,a.fleet_id,a.id,i.actor_id,i.membership_version,i.membership_execution_epoch,i.agent_execution_epoch,i.actor_authorization_epoch,i.id,t.id,i.state

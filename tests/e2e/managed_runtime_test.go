@@ -56,6 +56,97 @@ func runtimeConfig() managedruntime.TurnConfig {
 	return managedruntime.TurnConfig{AgentVersion: 1, Instructions: "Be precise", Models: []managedruntime.ModelConfig{{ModelID: "00000000-0000-4000-8000-000000000001", Provider: "fixture", Model: "small", Protocol: llm.ProtocolOpenAIChat, Endpoint: "https://provider.example.test/v1", ContextWindow: 32768, MaxOutput: 4096, OutputReserve: 4096}}}
 }
 
+func TestManagedRuntimeCandidateReadDoesNotBlockOnLeaseWriter(t *testing.T) {
+	pool, store, scope, main := runtimeDatabase(t)
+	ctx := context.Background()
+	input, err := store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: "candidate", Text: "Hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.Claim(ctx, scope.AgentID, "runtime", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback(ctx)
+	if _, err := writer.Exec(ctx, `UPDATE runtime.agents SET epoch=epoch+1 WHERE id=$1`, scope.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	bounded, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	items, err := store.NextInputs(bounded, lease, nil, 1)
+	if err != nil || len(items) != 1 || items[0].InputID != input.ID || items[0].ThreadID != main.ID {
+		t.Fatal("candidate discovery waited for an uncommitted lease writer", items, err)
+	}
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NextInputs(ctx, lease, nil, 1); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("candidate discovery accepted a committed stale lease", err)
+	}
+	if _, err := store.BeginTurn(ctx, lease, items[0].Scope, input.ID, runtimeConfig()); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("a previously discovered candidate bypassed admission fencing", err)
+	}
+	var state string
+	var turns int
+	if err := pool.QueryRow(ctx, `SELECT state,(SELECT count(*) FROM runtime.turns WHERE input_id=$1) FROM runtime.inputs WHERE id=$1`, input.ID).Scan(&state, &turns); err != nil || state != "queued" || turns != 0 {
+		t.Fatal("stale candidate changed durable admission", state, turns, err)
+	}
+}
+
+func TestManagedRuntimeCandidateReadIsReadOnly(t *testing.T) {
+	pool, store, scope, main := runtimeDatabase(t)
+	ctx := context.Background()
+	input, err := store.AcceptInput(ctx, scope, managedruntime.InputRequest{RequestID: "candidate", Text: "Hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.Claim(ctx, scope.AgentID, "runtime", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := pool.Config()
+	config.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
+	readPool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readPool.Close()
+	reader := runtimepg.New(readPool)
+	items, err := reader.NextInputs(ctx, lease, nil, 1)
+	if err != nil || len(items) != 1 || items[0].InputID != input.ID {
+		t.Fatal("candidate discovery requires a writable transaction", items, err)
+	}
+	items, err = reader.NextInputs(ctx, lease, []string{main.ID}, 1)
+	if err != nil || len(items) != 0 {
+		t.Fatal("running Thread was not excluded", items, err)
+	}
+	stale := lease
+	stale.Epoch++
+	if _, err := reader.NextInputs(ctx, stale, nil, 1); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("read-only discovery ignored the lease epoch", err)
+	}
+	stale = lease
+	stale.Holder = "another-runtime"
+	if _, err := reader.NextInputs(ctx, stale, nil, 1); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("read-only discovery ignored the lease holder", err)
+	}
+	stale = lease
+	stale.AgentID = "00000000-0000-4000-8000-000000000099"
+	if _, err := reader.NextInputs(ctx, stale, nil, 1); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("missing Agent did not reject discovery", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runtime.agents SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1`, scope.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.NextInputs(ctx, lease, nil, 1); !errors.Is(err, managedruntime.ErrFence) {
+		t.Fatal("read-only discovery ignored expiry", err)
+	}
+}
+
 func TestManagedRuntimeActivationAllowsConcurrentForeignKeyChecks(t *testing.T) {
 	pool, store, scope, _ := runtimeDatabase(t)
 	ctx := context.Background()
