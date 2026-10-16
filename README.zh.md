@@ -6,6 +6,11 @@ Juex 是一个使用 Go 编写、长期运行、local-first 的 Agent Runtime。
 Agent 拥有一个永久 Main Thread，也可以运行多个独立 Worker Thread。CLI
 与 Web client 使用同一套持久 Input 和 Event 接口。
 
+本仓库是验证 Agent 流程的本地参考实现，采用简单架构和文件系统状态存储。
+[JueX Managed](https://github.com/juex-ai/juex-managed) 将经过验证的成熟能力
+转化为可部署的多用户服务。两个项目按各自节奏演进，在出现明确复用需求时
+再提取公共组件。
+
 Juex 是 Agent Runtime，不是 RPC 或 Workflow Engine。发送 Input 表示该
 Input 被 Thread 持久接受，并不意味着下一条 Assistant 消息与它一一对应。
 
