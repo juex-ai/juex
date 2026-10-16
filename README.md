@@ -6,6 +6,12 @@ Juex is a long-running, local-first Agent runtime written in Go. An Agent owns
 one permanent Main Thread and may run independent Worker Threads. CLI and Web
 clients use the same durable input and event interfaces.
 
+This repository is the local reference implementation for validating Agent
+workflows with a simple architecture and filesystem-backed state.
+[JueX Managed](https://github.com/juex-ai/juex-managed) adapts proven capabilities
+into deployable, multi-user services. The two projects evolve at their own pace;
+shared components are extracted when concrete reuse warrants them.
+
 Juex is an agent runtime, not an RPC or workflow engine. Sending an Input means
 durable acceptance into a Thread; it does not imply that the next Assistant
 message is a one-to-one response.
